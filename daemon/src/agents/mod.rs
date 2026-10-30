@@ -2079,18 +2079,16 @@ pub(crate) async fn open_pr(
     Ok(AgentOpenPrResult { url })
 }
 
-/// `pr/view` (PLX-318): one of a run's linked pull requests, read with `gh`. Not through the
-/// run's actor, so a slow GitHub never holds up a running agent.
+/// `pr/view` (PLX-318): one of a run's linked pull requests, from the read every window, agent,
+/// and watch shares (0086, PLX-1151). Not through the run's actor, so a slow GitHub never holds
+/// up a running agent.
 pub(crate) async fn view_pr(
     daemon: Arc<Daemon>,
     params: PrViewParams,
 ) -> Result<PullRequest, ErrorObject> {
     let PrViewParams { run_id, url } = params;
     linked(&daemon, run_id, &url).await?;
-    daemon
-        .agents
-        .worktrees
-        .view_pr(&url)
+    crate::pr_watch::view(&daemon, &url, false)
         .await
         .map_err(|error| pr_error(&error))
 }
@@ -2132,22 +2130,21 @@ pub(crate) async fn shared_diff(
         .map_err(|error| pr_error(&error))
 }
 
-/// `pr/act` (PLX-318): does an action to one of a run's linked pull requests with `gh`, as
-/// `pr/view` reads one.
+/// `pr/act` (PLX-318): does an action to one of a run's linked pull requests through plxd's paced
+/// write queue (PLX-1151), then reads it fresh, as `pr/view` serves it.
 pub(crate) async fn act_pr(
     daemon: Arc<Daemon>,
     params: PrActParams,
 ) -> Result<PullRequest, ErrorObject> {
+    linked(&daemon, params.run_id, &params.url).await?;
+    crate::pr_write::act(&daemon, &params).await?;
     let PrActParams {
         run_id,
         url,
         action,
+        ..
     } = params;
-    linked(&daemon, run_id, &url).await?;
-    let acted = daemon
-        .agents
-        .worktrees
-        .act_pr(&url, action)
+    let acted = crate::pr_watch::view(&daemon, &url, true)
         .await
         .map_err(|error| pr_error(&error))?;
     info!(run = %run_id, %url, ?action, "acted on a pull request");

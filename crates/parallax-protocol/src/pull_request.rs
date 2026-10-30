@@ -6,6 +6,10 @@
 //! Behind the `prDiff` capability (PLX-328), `pr/diff` reads its unified diff. Each takes only a
 //! URL linked to the run. Behind `threadTools` (0041), `pr/link` and `pr/unlink` add or remove a
 //! GitHub pull request URL from a run's list, as a thread's Parallax tools do.
+//!
+//! Behind `prActions` (PLX-1151), `pr/view` serves plxd's shared GraphQL read (0086) with review
+//! threads, readiness, and check ids, and `pr/act` also rebases, updates the branch, re-runs or
+//! cancels checks, and deletes the head branch, each through plxd's paced write queue.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -33,7 +37,9 @@ pub enum PrAction {
     Merge,
     /// Squashes it into one commit and merges that now.
     Squash,
-    /// Turns on auto-merge, with a merge commit, once its requirements pass.
+    /// Rebases its commits onto the base branch now.
+    Rebase,
+    /// Turns on auto-merge once its requirements pass, with `method`, else a merge commit.
     AutoMerge,
     /// Turns auto-merge off.
     DisableAutoMerge,
@@ -43,6 +49,17 @@ pub enum PrAction {
     Ready,
     /// Closes it without merging.
     Close,
+    /// Brings the base branch's new commits into the head branch: by merge, or by rebase when
+    /// `method` is `rebase`.
+    UpdateBranch,
+    /// Re-runs the failed jobs of GitHub Actions run `workflowRunId`.
+    RerunFailed,
+    /// Re-runs GitHub Actions job `jobId`.
+    RerunJob,
+    /// Cancels GitHub Actions run `workflowRunId`.
+    CancelRun,
+    /// Deletes its head branch. Refused while it is open.
+    DeleteBranch,
     /// An action this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -59,6 +76,27 @@ pub struct PrActParams {
     pub url: String,
     /// What to do.
     pub action: PrAction,
+    /// How `autoMerge` merges, and whether `updateBranch` rebases. Absent means a merge commit
+    /// (PLX-1151).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub method: Option<PrMergeMethod>,
+    /// Whether `merge`, `squash`, or `rebase` also deletes the head branch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub delete_branch: bool,
+    /// The head commit the user saw: `merge`, `squash`, and `rebase` merge only while the head is
+    /// still this commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_sha: Option<String>,
+    /// The GitHub Actions run for `rerunFailed` and `cancelRun`, as a check's `runId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workflow_run_id: Option<u64>,
+    /// The GitHub Actions job for `rerunJob`, as a check's `jobId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub job_id: Option<u64>,
 }
 
 /// Where a pull request is.
@@ -172,6 +210,17 @@ pub struct PrCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub completed_at: Option<Timestamp>,
+    /// Whether branch protection requires it (PLX-1151).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    /// Its GitHub Actions workflow run, for `rerunFailed` and `cancelRun`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run_id: Option<u64>,
+    /// Its GitHub Actions job, for `rerunJob`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub job_id: Option<u64>,
 }
 
 /// A comment on a pull request, or a review's text.
@@ -180,6 +229,115 @@ pub struct PrCheck {
 pub struct PrComment {
     /// Its author's login.
     pub author: String,
+    /// Its Markdown.
+    pub body: String,
+    /// When it was written, in RFC 3339 UTC.
+    pub created_at: Timestamp,
+    /// Its GitHub node id (PLX-1151).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    /// Its web URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    /// Whether it is a comment or a review's text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<PrCommentKind>,
+    /// Its author's avatar image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub avatar_url: Option<String>,
+}
+
+/// What a [`PrComment`] is.
+///
+/// A newer plxd may send a kind this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PrCommentKind {
+    /// A comment on the conversation.
+    Comment,
+    /// A submitted review's text.
+    Review,
+    /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// A pull request's review decision, as GitHub's `reviewDecision` says.
+///
+/// A newer plxd may send a decision this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PrReviewDecision {
+    /// Approved by the reviews the repository requires.
+    Approved,
+    /// A reviewer asked for changes.
+    ChangesRequested,
+    /// The repository requires a review it doesn't have yet.
+    ReviewRequired,
+    /// A decision this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// A label and its color.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrLabel {
+    /// Its name.
+    pub name: String,
+    /// Its color, as six hex digits without `#`.
+    pub color: String,
+}
+
+/// A review thread on a pull request's diff, resolved or not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrReviewThread {
+    /// Its GitHub node id, for `pr/write`'s `replyToThread`.
+    pub id: String,
+    /// The file it is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+    /// The line it is on, or was on when written once it is outdated. Absent for a thread on the
+    /// whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub line: Option<u64>,
+    /// The diff down to its line, from its first comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub diff_hunk: Option<String>,
+    /// Whether the code it is on changed since.
+    pub is_outdated: bool,
+    /// Whether someone resolved it.
+    pub is_resolved: bool,
+    /// Its comments, oldest first.
+    pub comments: Vec<PrThreadComment>,
+}
+
+/// A comment in a [`PrReviewThread`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrThreadComment {
+    /// Its GitHub node id.
+    pub id: String,
+    /// Its web URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    /// Its author's login, `ghost` for a deleted account.
+    pub author: String,
+    /// Its author's avatar image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub avatar_url: Option<String>,
     /// Its Markdown.
     pub body: String,
     /// When it was written, in RFC 3339 UTC.
@@ -333,6 +491,40 @@ pub struct PullRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub auto_merge: Option<PrMergeMethod>,
+    /// Its review decision, when the repository asks for reviews (PLX-1151). This field and the
+    /// rest below are absent from a plxd without `prActions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review_decision: Option<PrReviewDecision>,
+    /// Whether it merges without conflicts. Absent while GitHub works it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mergeable: Option<bool>,
+    /// Commits on the base branch its head doesn't have. Absent once it isn't open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub behind_by: Option<u64>,
+    /// Open, not a draft, no conflict, not behind, every check passed, no unresolved thread, and
+    /// no change request, as `pr/status` judges it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ready: Option<bool>,
+    /// Why it isn't ready, one line each. Absent when it is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+    /// Its head commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_sha: Option<String>,
+    /// The merge methods its repository allows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merge_methods: Vec<PrMergeMethod>,
+    /// Its labels with their colors, in `labels`' order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_colors: Vec<PrLabel>,
+    /// Its review threads, resolved ones included, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_threads: Vec<PrReviewThread>,
 }
 
 /// Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's

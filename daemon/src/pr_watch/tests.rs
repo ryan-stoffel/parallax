@@ -5,10 +5,13 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::{
     Change, Check, CheckState, Detail, Merging, Remark, Watch, Watches, blockers, evaluate, judged,
-    message, parse, try_merge, verdict,
+    message, parse, try_merge, verdict, viewed,
 };
 use crate::pr_write::Refusal;
-use parallax_protocol::{PrStatusCheck, PrStatusFile, PrStatusThread};
+use parallax_protocol::{
+    PrCheckState, PrCommentKind, PrMergeMethod, PrMergeState, PrReviewDecision, PrReviewState,
+    PrState, PrStatusCheck, PrStatusFile, PrStatusThread,
+};
 
 fn start() -> Timestamp {
     "2026-10-09T10:00:00Z".parse().unwrap()
@@ -706,4 +709,235 @@ fn a_watch_stored_before_merge_when_ready_still_reads() {
     assert!(!stored.contains("merge"), "{stored}");
     let read: Watch = serde_json::from_str(&stored).unwrap();
     assert_eq!(read.merge, None);
+}
+
+/// GitHub's answer to `QUERY` with everything `pr/view` reads (PLX-1151).
+const FULL: &str = r#"{"data": {
+      "viewer": {"login": "agent-bot"},
+      "rateLimit": {"remaining": 4990, "resetAt": "2026-10-09T11:00:00Z"},
+      "repository": {
+        "mergeCommitAllowed": false, "squashMergeAllowed": true, "rebaseMergeAllowed": true,
+        "pullRequest": {
+          "number": 7, "url": "https://github.com/me/app/pull/7", "title": "Add a thing",
+          "body": "Adds it.", "state": "OPEN", "isDraft": false,
+          "createdAt": "2026-10-09T09:00:00Z", "updatedAt": "2026-10-09T10:09:00Z",
+          "closedAt": null, "mergedAt": null, "mergedBy": null,
+          "mergeStateStatus": "BLOCKED", "reviewDecision": "CHANGES_REQUESTED",
+          "author": {"login": "ryan", "avatarUrl": "https://avatars/ryan"},
+          "baseRefName": "develop", "headRefName": "feature/PLX-7-thing",
+          "headRefOid": "abc1234def", "headRepository": {"nameWithOwner": "me/app"},
+          "mergeable": "MERGEABLE", "isMergeQueueEnabled": false,
+          "additions": 3, "deletions": 1, "changedFiles": 1,
+          "autoMergeRequest": {"mergeMethod": "SQUASH"},
+          "labels": {"nodes": [{"name": "daemon", "color": "0e8a16"}]},
+          "reviewRequests": {"nodes": [
+            {"requestedReviewer": {"login": "rev"}},
+            {"requestedReviewer": {"name": "docs"}},
+            {"requestedReviewer": null}
+          ]},
+          "files": {"nodes": [{"path": "src/main.rs", "additions": 3, "deletions": 1}]},
+          "history": {"nodes": [
+            {"commit": {"oid": "abc1234def", "messageHeadline": "feat: a thing",
+              "committedDate": "2026-10-09T09:58:00Z",
+              "author": {"name": "Ryan", "user": {"login": "ryan"}}}},
+            {"commit": {"oid": "fff0000", "messageHeadline": "fix: it",
+              "committedDate": "2026-10-09T09:59:00Z", "author": {"name": "Ann", "user": null}}}
+          ]},
+          "commits": {"nodes": [{"commit": {
+            "checkSuites": {"pageInfo": {"hasNextPage": false}, "nodes": []},
+            "statusCheckRollup": {"contexts": {"nodes": [
+              {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED",
+               "conclusion": "FAILURE", "detailsUrl": "https://ci/1", "databaseId": 501,
+               "startedAt": "2026-10-09T10:01:00Z", "completedAt": "2026-10-09T10:03:00Z",
+               "isRequired": true,
+               "checkSuite": {"workflowRun": {"databaseId": 42, "workflow": {"name": "CI"}}}},
+              {"__typename": "CheckRun", "name": "docs", "status": "COMPLETED",
+               "conclusion": "SKIPPED", "detailsUrl": "", "databaseId": 502,
+               "startedAt": null, "completedAt": null, "isRequired": false,
+               "checkSuite": {"workflowRun": {"databaseId": 42, "workflow": {"name": "CI"}}}},
+              {"__typename": "CheckRun", "name": "app", "status": "QUEUED", "conclusion": null,
+               "detailsUrl": null, "databaseId": 900, "isRequired": false,
+               "checkSuite": {"workflowRun": null}},
+              {"__typename": "StatusContext", "context": "deploy", "state": "SUCCESS",
+               "targetUrl": "https://deploy/1", "createdAt": "2026-10-09T10:02:00Z",
+               "isRequired": false}
+            ]}}
+          }}]},
+          "comments": {"nodes": [
+            {"id": "IC_1", "author": {"login": "bot", "avatarUrl": "https://avatars/bot"},
+             "body": "Deployed.", "createdAt": "2026-10-09T10:05:00Z", "lastEditedAt": null,
+             "url": "https://github.com/me/app/pull/7#issuecomment-1"}
+          ]},
+          "reviews": {"nodes": [
+            {"id": "PRR_1", "author": {"login": "rev", "avatarUrl": "https://avatars/rev"},
+             "body": "Please split it.", "state": "CHANGES_REQUESTED",
+             "submittedAt": "2026-10-09T10:04:00Z", "lastEditedAt": null,
+             "url": "https://github.com/me/app/pull/7#pullrequestreview-1"},
+            {"id": "PRR_2", "author": {"login": "rev"}, "body": "draft", "state": "PENDING",
+             "submittedAt": null, "lastEditedAt": null, "url": null}
+          ]},
+          "reviewThreads": {"nodes": [
+            {"id": "PRRT_1", "path": "src/main.rs", "line": 12, "originalLine": 10,
+             "isOutdated": false, "isResolved": false, "comments": {"nodes": [
+              {"id": "PRRC_1", "author": {"login": "rev", "avatarUrl": "https://avatars/rev"},
+               "body": "nit", "createdAt": "2026-10-09T10:04:00Z", "lastEditedAt": null,
+               "url": "https://github.com/me/app/pull/7#discussion_r1",
+               "diffHunk": "@@ -8,3 +8,5 @@ fn main() {"},
+              {"id": "PRRC_2", "author": null, "body": "fixed", "createdAt":
+               "2026-10-09T10:06:00Z", "lastEditedAt": null, "url": null,
+               "diffHunk": "@@ -8,3 +8,5 @@ fn main() {"}
+            ]}},
+            {"id": "PRRT_2", "path": "src/lib.rs", "line": null, "originalLine": 4,
+             "isOutdated": true, "isResolved": true, "comments": {"nodes": [
+              {"id": "PRRC_3", "author": {"login": "rev"}, "body": "done", "createdAt":
+               "2026-10-09T10:03:00Z", "lastEditedAt": null, "url": null, "diffHunk": "@@"}
+            ]}}
+          ]}
+        }
+      }
+    }}"#;
+
+#[test]
+fn githubs_answer_reads_into_what_pr_view_serves() {
+    let detail = parse(FULL).unwrap();
+    assert_eq!(detail.head_repo.as_deref(), Some("me/app"));
+    let pr = viewed("https://github.com/me/app/pull/7", detail, Some(3)).unwrap();
+    assert_eq!((pr.number, pr.repo.as_str()), (7, "me/app"));
+    assert_eq!(pr.state, PrState::Open);
+    assert_eq!(pr.author, "ryan");
+    assert_eq!(pr.head_sha.as_deref(), Some("abc1234def"));
+    assert_eq!(pr.review_decision, Some(PrReviewDecision::ChangesRequested));
+    assert_eq!(pr.mergeable, Some(true));
+    assert_eq!(pr.merge_state, Some(PrMergeState::Blocked));
+    assert_eq!(pr.auto_merge, Some(PrMergeMethod::Squash));
+    assert_eq!(
+        pr.merge_methods,
+        [PrMergeMethod::Squash, PrMergeMethod::Rebase]
+    );
+    assert_eq!(pr.labels, ["daemon"]);
+    assert_eq!(pr.label_colors[0].color, "0e8a16");
+    assert_eq!(pr.review_requests, ["rev", "docs"]);
+    let commits: Vec<_> = pr
+        .commits
+        .iter()
+        .map(|commit| (commit.oid.as_str(), commit.author.as_str()))
+        .collect();
+    assert_eq!(commits, [("abc1234def", "ryan"), ("fff0000", "Ann")]);
+    assert_eq!(pr.behind_by, Some(3));
+    assert_eq!(pr.ready, Some(false));
+    assert_eq!(
+        pr.reasons,
+        [
+            "3 commits behind develop",
+            "failing: lint",
+            "pending: app",
+            "1 unresolved review thread",
+            "changes requested"
+        ]
+    );
+}
+
+/// The `pr/view` that [`FULL`] reads into, with its head 3 commits behind its base.
+fn full() -> parallax_protocol::PullRequest {
+    viewed(
+        "https://github.com/me/app/pull/7",
+        parse(FULL).unwrap(),
+        Some(3),
+    )
+    .unwrap()
+}
+
+#[test]
+fn pr_view_s_checks_carry_whether_required_and_their_run_and_job() {
+    let pr = full();
+    let checks: Vec<_> = pr
+        .checks
+        .iter()
+        .map(|check| {
+            (
+                check.name.as_str(),
+                check.state,
+                check.required,
+                check.run_id,
+                check.job_id,
+            )
+        })
+        .collect();
+    assert_eq!(
+        checks,
+        [
+            ("lint", PrCheckState::Failed, true, Some(42), Some(501)),
+            ("docs", PrCheckState::Skipped, false, Some(42), Some(502)),
+            ("app", PrCheckState::Pending, false, None, None),
+            ("deploy", PrCheckState::Passed, false, None, None),
+        ],
+        "only an Actions check run is a job"
+    );
+    assert_eq!(pr.checks[0].workflow.as_deref(), Some("CI"));
+    assert_eq!(pr.checks[0].conclusion.as_deref(), Some("failure"));
+    assert_eq!(pr.checks[1].url, None, "an empty link is none");
+    assert_eq!(
+        pr.checks[3].started_at,
+        Some("2026-10-09T10:02:00Z".parse().unwrap())
+    );
+    assert_eq!(pr.checks_state, Some(PrCheckState::Failed));
+}
+
+#[test]
+fn pr_view_s_comments_and_review_threads_carry_their_ids() {
+    let pr = full();
+    let comments: Vec<_> = pr
+        .comments
+        .iter()
+        .map(|comment| (comment.id.as_deref(), comment.kind, comment.url.is_some()))
+        .collect();
+    assert_eq!(
+        comments,
+        [
+            (Some("PRR_1"), Some(PrCommentKind::Review), true),
+            (Some("IC_1"), Some(PrCommentKind::Comment), true),
+        ],
+        "oldest first, without the pending review"
+    );
+    assert_eq!(
+        pr.comments[0].avatar_url.as_deref(),
+        Some("https://avatars/rev")
+    );
+    assert_eq!(pr.reviews.len(), 1);
+    assert_eq!(pr.reviews[0].state, PrReviewState::ChangesRequested);
+
+    let open = &pr.review_threads[0];
+    assert_eq!(
+        (
+            open.id.as_str(),
+            open.line,
+            open.is_resolved,
+            open.is_outdated
+        ),
+        ("PRRT_1", Some(12), false, false)
+    );
+    assert_eq!(
+        open.diff_hunk.as_deref(),
+        Some("@@ -8,3 +8,5 @@ fn main() {")
+    );
+    let replies: Vec<_> = open
+        .comments
+        .iter()
+        .map(|comment| (comment.id.as_str(), comment.author.as_str()))
+        .collect();
+    assert_eq!(replies, [("PRRC_1", "rev"), ("PRRC_2", "ghost")]);
+    let resolved = &pr.review_threads[1];
+    assert_eq!(
+        (resolved.line, resolved.is_resolved, resolved.is_outdated),
+        (Some(4), true, true),
+        "an outdated thread keeps the line it was written on"
+    );
+}
+
+#[test]
+fn an_answer_without_what_pr_view_needs_still_serves_the_watches() {
+    let detail = parse(ANSWER).unwrap();
+    assert!(detail.view.is_none());
+    let error = viewed("https://github.com/me/app/pull/1", detail, None).unwrap_err();
+    assert!(error.to_string().contains("left out"), "{error}");
 }

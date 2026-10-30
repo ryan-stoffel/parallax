@@ -2,11 +2,11 @@ use std::path::Path;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
-use parallax_protocol::{PrReviewEvent, PrWrite};
+use parallax_protocol::{PrAction, PrMergeMethod, PrReviewEvent, PrWrite};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use super::{BUDGET, Failed, GAP, QUEUE_WAIT, commands, paced};
+use super::{BUDGET, Failed, GAP, QUEUE_WAIT, act_args, commands, paced};
 use crate::pr_media::{Limit, limit};
 use crate::worktree::PrError;
 
@@ -219,4 +219,35 @@ fn each_write_becomes_gh_commands_with_the_body_in_a_file() {
     .unwrap();
     assert_eq!(steps.len(), 1);
     assert!(steps[0][3].contains("resolveReviewThread"));
+}
+
+#[test]
+fn deleting_a_branch_names_it_in_its_own_repository() {
+    let params = parallax_protocol::PrActParams {
+        run_id: parallax_protocol::RunId::generate(),
+        url: "https://github.com/me/app/pull/7".to_owned(),
+        action: PrAction::DeleteBranch,
+        method: None,
+        delete_branch: false,
+        head_sha: None,
+        workflow_run_id: None,
+        job_id: None,
+    };
+    let head = Some(("fork/app".to_owned(), "feature/a b#1".to_owned()));
+    assert_eq!(
+        act_args(&params, head).unwrap(),
+        [
+            "api",
+            "-X",
+            "DELETE",
+            "repos/fork/app/git/refs/heads/feature/a%20b%231"
+        ],
+        "a fork's branch is deleted from the fork, its name escaped"
+    );
+    let unknown = parallax_protocol::PrActParams {
+        action: PrAction::AutoMerge,
+        method: Some(PrMergeMethod::Unknown),
+        ..params
+    };
+    assert!(act_args(&unknown, None).is_err());
 }

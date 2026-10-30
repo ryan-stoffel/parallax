@@ -1,7 +1,8 @@
 //! `pr/write` (PLX-1022, 0086): comments, reviews, title and body edits, and review-thread replies
-//! and resolves on a GitHub pull request, and `merge_when_ready`'s merges ([`merge`]), all sent by
-//! plxd through one queue per host, so agents writing in parallel don't trip GitHub's secondary
-//! "submitted too quickly" limit.
+//! and resolves on a GitHub pull request, `merge_when_ready`'s merges ([`merge`]), and the app's
+//! `pr/act` merges, branch updates and deletes, and check re-runs and cancels ([`act`], PLX-1151),
+//! all sent by plxd through one queue per host, so writes in parallel don't trip GitHub's
+//! secondary "submitted too quickly" limit.
 //!
 //! A write waits its turn in [`QUEUE`] at most [`QUEUE_WAIT`] and starts at least [`GAP`] after
 //! the last write ended. It backs off a secondary limit with [`BACKOFF`] only while its
@@ -15,7 +16,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{PrMergeMethod, PrReviewEvent, PrWrite, PrWriteParams, PrWriteResult};
+use parallax_protocol::{
+    PrActParams, PrAction, PrMergeMethod, PrReviewEvent, PrWrite, PrWriteParams, PrWriteResult,
+};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::warn;
@@ -89,6 +92,129 @@ pub(crate) async fn write(
         })
         .map_err(|error| crate::agents::pr_error(&error))?;
     Ok(PrWriteResult { url })
+}
+
+/// `pr/act` (PLX-1151): does `params.action` to its pull request with `gh`, through [`QUEUE`],
+/// within [`BUDGET`]. Deleting the head branch reads the pull request fresh first.
+pub(crate) async fn act(daemon: &Daemon, params: &PrActParams) -> Result<(), ErrorObject> {
+    let url = params.url.as_str();
+    if github_pr_urls(url) != [url] {
+        return Err(ErrorObject::invalid_params(format!(
+            "{url:?} is not a GitHub pull request URL"
+        )));
+    }
+    let head = if params.action == PrAction::DeleteBranch {
+        Some(
+            crate::pr_watch::head_to_delete(daemon, url)
+                .await
+                .map_err(|error| crate::agents::pr_error(&error))?,
+        )
+    } else {
+        None
+    };
+    let args = act_args(params, head).map_err(ErrorObject::invalid_params)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let deadline = Instant::now() + BUDGET;
+    let gh = daemon.agents.worktrees();
+    tokio::time::timeout_at(deadline, send(gh, &args, deadline))
+        .await
+        .unwrap_or_else(|_| {
+            Err(PrError::Gh(format!(
+                "GitHub didn't answer within {BUDGET:?}; it may have gone through, so look at the \
+                 pull request before trying again"
+            )))
+        })
+        .map(drop)
+        .map_err(|error| crate::agents::pr_error(&error))
+}
+
+/// The `gh` command that does `params.action`, given the head branch's repository and name for
+/// `deleteBranch`. Values go as `--flag=value` or in a path, so none is read as a flag.
+fn act_args(params: &PrActParams, head: Option<(String, String)>) -> Result<Vec<String>, String> {
+    let url = params.url.as_str();
+    // `https://github.com/<owner>/<name>/pull/<n>`, checked by the caller.
+    let repo = url.split('/').skip(3).take(2).collect::<Vec<_>>().join("/");
+    let flag = |method: PrMergeMethod| match method {
+        PrMergeMethod::Merge => Ok("--merge"),
+        PrMergeMethod::Squash => Ok("--squash"),
+        PrMergeMethod::Rebase => Ok("--rebase"),
+        PrMergeMethod::Unknown => Err("method must be merge, squash, or rebase".to_owned()),
+    };
+    let merge = |method| -> Result<Vec<String>, String> {
+        let mut args = vec!["pr".to_owned(), "merge".to_owned(), url.to_owned()];
+        args.push(flag(method)?.to_owned());
+        args.extend(
+            params
+                .head_sha
+                .as_ref()
+                .map(|head| format!("--match-head-commit={head}")),
+        );
+        if params.delete_branch {
+            args.push("--delete-branch".to_owned());
+        }
+        Ok(args)
+    };
+    let post = |path: String| ["api", "-X", "POST", &path].map(str::to_owned).to_vec();
+    let run = || {
+        params
+            .workflow_run_id
+            .ok_or_else(|| "workflowRunId is required".to_owned())
+    };
+    let gh = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect();
+    Ok(match params.action {
+        PrAction::Merge => merge(PrMergeMethod::Merge)?,
+        PrAction::Squash => merge(PrMergeMethod::Squash)?,
+        PrAction::Rebase => merge(PrMergeMethod::Rebase)?,
+        PrAction::AutoMerge => {
+            let method = flag(params.method.unwrap_or(PrMergeMethod::Merge))?;
+            gh(&["pr", "merge", url, "--auto", method])
+        }
+        PrAction::DisableAutoMerge => gh(&["pr", "merge", url, "--disable-auto"]),
+        PrAction::Draft => gh(&["pr", "ready", url, "--undo"]),
+        PrAction::Ready => gh(&["pr", "ready", url]),
+        PrAction::Close => gh(&["pr", "close", url]),
+        PrAction::UpdateBranch if params.method == Some(PrMergeMethod::Rebase) => {
+            gh(&["pr", "update-branch", url, "--rebase"])
+        }
+        PrAction::UpdateBranch => gh(&["pr", "update-branch", url]),
+        PrAction::RerunFailed => post(format!(
+            "repos/{repo}/actions/runs/{}/rerun-failed-jobs",
+            run()?
+        )),
+        PrAction::RerunJob => {
+            let job = params
+                .job_id
+                .ok_or_else(|| "jobId is required".to_owned())?;
+            post(format!("repos/{repo}/actions/jobs/{job}/rerun"))
+        }
+        PrAction::CancelRun => post(format!("repos/{repo}/actions/runs/{}/cancel", run()?)),
+        PrAction::DeleteBranch => {
+            let (head_repo, branch) =
+                head.ok_or_else(|| "the head branch isn't known".to_owned())?;
+            let branch = escape_path(&branch);
+            gh(&[
+                "api",
+                "-X",
+                "DELETE",
+                &format!("repos/{head_repo}/git/refs/heads/{branch}"),
+            ])
+        }
+        PrAction::Unknown => return Err("unknown pull request action".to_owned()),
+    })
+}
+
+/// `branch` with each byte but letters, digits, `-`, `.`, `_`, and `/` percent-encoded, for a
+/// REST path.
+fn escape_path(branch: &str) -> String {
+    branch
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'/' => {
+                char::from(byte).to_string()
+            }
+            byte => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 /// Why [`merge`] didn't merge.

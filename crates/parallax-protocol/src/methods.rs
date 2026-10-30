@@ -498,11 +498,15 @@ method_table! {
         /// `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
         /// thread starts from. Gated on the `repoRefs` capability.
         RepoRefs = "repo/refs": RepoRefsParams => RepoRefsResult;
-        /// `pr/view`: one of a run's linked pull requests as GitHub has it now, read with `gh`
-        /// (PLX-318). Gated on the `pullRequests` capability, like `pr/act`.
+        /// `pr/view`: one of a run's linked pull requests from the host's shared GraphQL read,
+        /// refreshed at most every 30 s (PLX-318, PLX-1151). Gated on the `pullRequests`
+        /// capability, like `pr/act`. A plxd without `prActions` leaves the newer fields out.
         PrView = "pr/view": PrViewParams => PullRequest;
-        /// `pr/act`: merges, squashes, sets auto-merge on or off, drafts, readies, or closes one
-        /// of a run's linked pull requests with `gh`, and returns it as it is after.
+        /// `pr/act`: merges, squashes, rebases, sets auto-merge on or off, drafts, readies,
+        /// closes, updates the branch, reruns or cancels CI, or deletes the merged branch of one
+        /// of a run's linked pull requests through the host's paced write queue, and returns it
+        /// as a fresh read after. A plxd without `prActions` refuses `rebase` and the actions after
+        /// `close`.
         PrAct = "pr/act": PrActParams => PullRequest;
         /// `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
         /// and cut at a size cap (PLX-328). Gated on the `prDiff` capability.

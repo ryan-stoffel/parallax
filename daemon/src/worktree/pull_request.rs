@@ -5,9 +5,10 @@
 //! sign-in, returns the branch's open pull request, or opens one against the GitHub repository's
 //! default branch. `gh` is found on the same `PATH` as every other tool plxd runs.
 //!
-//! [`WorktreeManager::view_pr`] and [`WorktreeManager::act_pr`] read and change a run's linked pull
-//! request by its URL (PLX-318), and [`WorktreeManager::diff_pr`] reads its diff (PLX-328), in
-//! plxd's temp folder rather than any checkout, and [`github_pr_urls`] finds the pull requests an agent's `gh pr create` printed.
+//! [`WorktreeManager::view_pr`] reads a pull request by its URL for the merged-worktree sweep
+//! (`pr/view` serves `crate::pr_watch`'s shared read instead, PLX-1151), and
+//! [`WorktreeManager::diff_pr`] reads its diff (PLX-328), in plxd's temp folder rather than any
+//! checkout, and [`github_pr_urls`] finds the pull requests an agent's `gh pr create` printed.
 //! [`WorktreeManager::shared_diff`] reads a diff once per head for every run's `pull_request_diff`
 //! (PLX-1021), and [`agent_diff`] cuts it to the paths the agent asked for.
 
@@ -18,8 +19,8 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use parallax_protocol::{
-    PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrFile, PrMergeMethod,
-    PrMergeState, PrReview, PrReviewState, PrState, PullRequest,
+    PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrFile, PrMergeMethod, PrMergeState,
+    PrReview, PrReviewState, PrState, PullRequest,
 };
 use serde::Deserialize;
 use tokio::time::timeout;
@@ -197,27 +198,6 @@ impl WorktreeManager {
                 SHARED_DIFF_TIMEOUT.as_secs()
             )))
         })
-    }
-
-    /// Does `action` to pull request `url` and returns it as it is after.
-    ///
-    /// # Errors
-    ///
-    /// [`PrError`]: `gh` is missing, not signed in, or failed, such as for a merge GitHub
-    /// refuses.
-    pub async fn act_pr(&self, url: &str, action: PrAction) -> Result<PullRequest, PrError> {
-        let args: &[&str] = match action {
-            PrAction::Merge => &["pr", "merge", url, "--merge"],
-            PrAction::Squash => &["pr", "merge", url, "--squash"],
-            PrAction::AutoMerge => &["pr", "merge", url, "--auto", "--merge"],
-            PrAction::DisableAutoMerge => &["pr", "merge", url, "--disable-auto"],
-            PrAction::Draft => &["pr", "ready", url, "--undo"],
-            PrAction::Ready => &["pr", "ready", url],
-            PrAction::Close => &["pr", "close", url],
-            PrAction::Unknown => return Err(PrError::Gh("unknown pull request action".to_owned())),
-        };
-        self.gh(&std::env::temp_dir(), args).await?;
-        self.view_pr(url).await
     }
 
     /// Runs `gh args` in `repo_root` and returns its stdout, turning a missing `gh`, a sign-in
@@ -433,6 +413,10 @@ fn discussion(comments: Vec<Comment>, reviews: Vec<Review>) -> (Vec<PrComment>, 
                 created_at: comment.created_at?,
                 author: login(comment.author),
                 body: comment.body,
+                id: None,
+                url: None,
+                kind: None,
+                avatar_url: None,
             })
         })
         .collect();
@@ -446,6 +430,10 @@ fn discussion(comments: Vec<Comment>, reviews: Vec<Review>) -> (Vec<PrComment>, 
             author: author.clone(),
             body: review.body,
             created_at: submitted_at,
+            id: None,
+            url: None,
+            kind: None,
+            avatar_url: None,
         });
         verdicts.push(PrReview {
             author,
@@ -552,6 +540,15 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
                 "REBASE" => PrMergeMethod::Rebase,
                 _ => PrMergeMethod::Unknown,
             }),
+        review_decision: None,
+        mergeable: None,
+        behind_by: None,
+        ready: None,
+        reasons: Vec::new(),
+        head_sha: None,
+        merge_methods: Vec::new(),
+        label_colors: Vec::new(),
+        review_threads: Vec::new(),
     })
 }
 
@@ -598,6 +595,9 @@ fn check(check: Check) -> PrCheck {
         workflow: check.workflow_name.filter(|name| !name.is_empty()),
         started_at: time(check.started_at),
         completed_at: time(check.completed_at),
+        required: false,
+        run_id: None,
+        job_id: None,
     }
 }
 

@@ -1,7 +1,8 @@
 //! Linked pull requests end to end (PLX-318): an agent's `gh pr create` links what it prints,
 //! the link survives a restart, `pr/view`, `pr/diff` (PLX-328), and `pr/act` reach only a
-//! linked one, and a merge through `pr/act` archives its thread (PLX-839), through `open_pr`'s
-//! fake `gh`.
+//! linked one, `pr/view` serves the shared GraphQL read and `pr/act` sends each action through
+//! the paced queue (PLX-1151), and a merge through `pr/act` archives its thread (PLX-839),
+//! through `open_pr`'s fake `gh`.
 
 use std::time::{Duration, Instant};
 
@@ -10,8 +11,8 @@ use parallax_protocol::methods::{
     AgentList, AgentStart, PrAct, PrDiff, PrView, ThreadList, ThreadStart,
 };
 use parallax_protocol::{
-    AgentListParams, AgentStatus, ErrorKind, ParallaxEvent, PrActParams, PrAction, PrState,
-    PrViewParams, RunId, ThreadListParams,
+    AgentListParams, AgentStatus, ErrorKind, ParallaxEvent, PrActParams, PrAction, PrMergeMethod,
+    PrState, PrViewParams, RunId, ThreadListParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{Event, ToolStatus};
@@ -56,10 +57,64 @@ async fn linked(client: &mut Conn) -> Vec<String> {
         .pull_requests
 }
 
+/// GitHub's answer to plxd's pull request read for pull request 1, in `state`, with a required
+/// failing Actions job and an open review thread.
+fn answer(state: &str) -> String {
+    let merged_at = jiff::Timestamp::now();
+    r#"{"data": {
+      "viewer": {"login": "me"},
+      "repository": {
+        "mergeCommitAllowed": false, "squashMergeAllowed": true, "rebaseMergeAllowed": true,
+        "pullRequest": {
+          "number": 1, "url": "https://github.com/me/app/pull/1", "title": "Add a README",
+          "body": "", "state": "STATE", "isDraft": false, "updatedAt": "2026-10-02T12:00:00Z",
+          "mergedAt": "MERGED_AT", "author": {"login": "me", "avatarUrl": "https://avatars/me"},
+          "baseRefName": "main", "headRefName": "parallax/x", "headRefOid": "abc123",
+          "headRepository": {"nameWithOwner": "me/app"},
+          "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED",
+          "reviewDecision": "REVIEW_REQUIRED", "changedFiles": 1, "additions": 3, "deletions": 0,
+          "commits": {"nodes": [{"commit": {
+            "checkSuites": {"pageInfo": {"hasNextPage": false}, "nodes": []},
+            "statusCheckRollup": {"contexts": {"nodes": [
+              {"__typename": "CheckRun", "name": "test", "status": "COMPLETED",
+               "conclusion": "FAILURE", "detailsUrl": "https://ci/7", "databaseId": 7,
+               "isRequired": true, "checkSuite": {"workflowRun": {"databaseId": 70}}}
+            ]}}
+          }}]},
+          "comments": {"nodes": []},
+          "reviews": {"nodes": []},
+          "reviewThreads": {"nodes": [{
+            "id": "th1", "path": "README.md", "line": 2, "isOutdated": false,
+            "isResolved": false, "comments": {"nodes": [{
+              "id": "t1", "author": {"login": "rev"}, "body": "Typo",
+              "createdAt": "2026-10-02T12:01:00Z", "url": "https://gh/t1",
+              "diffHunk": "@@ -1 +1,2 @@"
+            }]}
+          }]}
+        }
+      }
+    }}"#
+    .replace("STATE", state)
+    .replace("MERGED_AT", &merged_at.to_string())
+}
+
 fn view(run_id: RunId, url: &str) -> PrViewParams {
     PrViewParams {
         run_id,
         url: url.to_owned(),
+    }
+}
+
+fn act(run_id: RunId, url: &str, action: PrAction) -> PrActParams {
+    PrActParams {
+        run_id,
+        url: url.to_owned(),
+        action,
+        method: None,
+        delete_branch: false,
+        head_sha: None,
+        workflow_run_id: None,
+        job_id: None,
     }
 }
 
@@ -76,11 +131,7 @@ async fn refuses_unlinked(client: &mut Conn, run_id: RunId) {
         .unwrap_err();
     assert_eq!(refused.code, INVALID_PARAMS);
     let refused = client
-        .call::<PrAct>(PrActParams {
-            run_id,
-            url: "--help".to_owned(),
-            action: PrAction::Close,
-        })
+        .call::<PrAct>(act(run_id, "--help", PrAction::Close))
         .await
         .unwrap_err();
     assert_eq!(refused.code, INVALID_PARAMS);
@@ -159,20 +210,37 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
     );
     assert_eq!(linked(&mut client).await, [FIRST, SECOND, SUBAGENT_S]);
 
-    tools.view(
-        &json!({
-            "number": 1, "title": "Add a README", "url": FIRST, "state": "OPEN",
-            "isDraft": false, "author": {"login": "me"}, "updatedAt": "2026-10-02T12:00:00Z",
-            "baseRefName": "main", "headRefName": "parallax/x", "changedFiles": 1,
-            "additions": 3, "deletions": 0, "body": "", "comments": [], "reviews": [],
-            "reviewRequests": [], "labels": [], "statusCheckRollup": [],
-            "mergeStateStatus": "CLEAN", "autoMergeRequest": null
-        })
-        .to_string(),
-    );
+    tools.graphql(&answer("OPEN"));
     let viewed = client.call::<PrView>(view(run_id, FIRST)).await.unwrap();
     assert_eq!((viewed.number, viewed.repo.as_str()), (1, "me/app"));
     assert_eq!(viewed.state, PrState::Open);
+    assert_eq!(viewed.behind_by, Some(2));
+    assert_eq!(viewed.ready, Some(false));
+    assert_eq!(
+        viewed.reasons,
+        [
+            "2 commits behind main",
+            "failing: test",
+            "1 unresolved review thread"
+        ]
+    );
+    assert_eq!(
+        viewed.merge_methods,
+        [PrMergeMethod::Squash, PrMergeMethod::Rebase]
+    );
+    let check = &viewed.checks[0];
+    assert_eq!(
+        (check.required, check.run_id, check.job_id),
+        (true, Some(70), Some(7))
+    );
+    assert_eq!(viewed.review_threads[0].id, "th1");
+    let reads = tools.log().len();
+    client.call::<PrView>(view(run_id, FIRST)).await.unwrap();
+    assert_eq!(
+        tools.log().len(),
+        reads,
+        "a second window's read shares the first's"
+    );
     let diff = client.call::<PrDiff>(view(run_id, FIRST)).await.unwrap();
     assert_eq!(
         (diff.diff.as_str(), diff.truncated),
@@ -186,48 +254,15 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
         before,
         "a URL the run never linked never reaches gh"
     );
-
-    for action in [
-        PrAction::Merge,
-        PrAction::Squash,
-        PrAction::AutoMerge,
-        PrAction::DisableAutoMerge,
-        PrAction::Draft,
-        PrAction::Ready,
-        PrAction::Close,
-    ] {
-        let acted = client
-            .call::<PrAct>(PrActParams {
-                run_id,
-                url: SECOND.to_owned(),
-                action,
-            })
-            .await
-            .unwrap();
-        assert_eq!(acted.number, 1, "the fresh view gh printed");
-    }
-    let acts: Vec<String> = tools
-        .log()
-        .into_iter()
-        .skip(before)
-        .filter(|line| !line.starts_with("pr view"))
-        .collect();
-    assert_eq!(
-        acts,
-        [
-            format!("pr merge {SECOND} --merge"),
-            format!("pr merge {SECOND} --squash"),
-            format!("pr merge {SECOND} --auto --merge"),
-            format!("pr merge {SECOND} --disable-auto"),
-            format!("pr ready {SECOND} --undo"),
-            format!("pr ready {SECOND}"),
-            format!("pr close {SECOND}"),
-        ]
-    );
+    acts_reach_gh(&mut client, &tools, run_id).await;
 
     tools.mode("signed-out");
+    client
+        .call::<PrView>(view(run_id, SECOND))
+        .await
+        .expect("the last act's read still serves it");
     let error = client
-        .call::<PrView>(view(run_id, FIRST))
+        .call::<PrView>(view(run_id, SUBAGENT_S))
         .await
         .unwrap_err();
     assert_eq!(kind(&error), ErrorKind::GhUnavailable);
@@ -237,6 +272,97 @@ async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_vie
     let mut client = host.client().await;
     assert_eq!(linked(&mut client).await, [FIRST, SECOND, SUBAGENT_S]);
     host.server.stop().await;
+}
+
+/// `pr/act` sends each action to `gh`, one after another through the paced queue, and refuses
+/// one missing what it needs.
+async fn acts_reach_gh(client: &mut Conn, tools: &Tools, run_id: RunId) {
+    let before = tools.log().len();
+    let pinned = PrActParams {
+        head_sha: Some("abc123".to_owned()),
+        delete_branch: true,
+        ..act(run_id, SECOND, PrAction::Rebase)
+    };
+    let squash = PrActParams {
+        method: Some(PrMergeMethod::Squash),
+        ..act(run_id, SECOND, PrAction::AutoMerge)
+    };
+    let rebase = PrActParams {
+        method: Some(PrMergeMethod::Rebase),
+        ..act(run_id, SECOND, PrAction::UpdateBranch)
+    };
+    let run = |action| PrActParams {
+        workflow_run_id: Some(70),
+        ..act(run_id, SECOND, action)
+    };
+    let job = PrActParams {
+        job_id: Some(7),
+        ..act(run_id, SECOND, PrAction::RerunJob)
+    };
+    let mut acts: Vec<PrActParams> = [
+        PrAction::Merge,
+        PrAction::Squash,
+        PrAction::AutoMerge,
+        PrAction::DisableAutoMerge,
+        PrAction::Draft,
+        PrAction::Ready,
+        PrAction::Close,
+        PrAction::UpdateBranch,
+    ]
+    .into_iter()
+    .map(|action| act(run_id, SECOND, action))
+    .collect();
+    acts.extend([
+        pinned,
+        squash,
+        rebase,
+        run(PrAction::RerunFailed),
+        job,
+        run(PrAction::CancelRun),
+    ]);
+    for params in acts {
+        let acted = client.call::<PrAct>(params).await.unwrap();
+        assert_eq!(acted.number, 1, "the fresh read GitHub answered");
+    }
+    let sent: Vec<String> = tools
+        .log()
+        .into_iter()
+        .skip(before)
+        .filter(|line| line != "api graphql")
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            format!("pr merge {SECOND} --merge"),
+            format!("pr merge {SECOND} --squash"),
+            format!("pr merge {SECOND} --auto --merge"),
+            format!("pr merge {SECOND} --disable-auto"),
+            format!("pr ready {SECOND} --undo"),
+            format!("pr ready {SECOND}"),
+            format!("pr close {SECOND}"),
+            format!("pr update-branch {SECOND}"),
+            format!("pr merge {SECOND} --rebase --match-head-commit=abc123 --delete-branch"),
+            format!("pr merge {SECOND} --auto --squash"),
+            format!("pr update-branch {SECOND} --rebase"),
+            "api -X POST repos/me/app/actions/runs/70/rerun-failed-jobs".to_owned(),
+            "api -X POST repos/me/app/actions/jobs/7/rerun".to_owned(),
+            "api -X POST repos/me/app/actions/runs/70/cancel".to_owned(),
+        ]
+    );
+    let refused = client
+        .call::<PrAct>(act(run_id, SECOND, PrAction::RerunJob))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS, "a job re-run needs its job");
+    let refused = client
+        .call::<PrAct>(act(run_id, SECOND, PrAction::DeleteBranch))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        kind(&refused),
+        ErrorKind::PrFailed,
+        "an open pull request keeps its branch"
+    );
 }
 
 #[tokio::test]
@@ -265,12 +391,9 @@ async fn merging_with_pr_act_archives_the_thread_before_the_next_sweep() {
         })
         .to_string(),
     );
+    tools.graphql(&answer("MERGED"));
     client
-        .call::<PrAct>(PrActParams {
-            run_id,
-            url: FIRST.to_owned(),
-            action: PrAction::Squash,
-        })
+        .call::<PrAct>(act(run_id, FIRST, PrAction::Squash))
         .await
         .unwrap();
     // The next timed sweep is a minute away.
