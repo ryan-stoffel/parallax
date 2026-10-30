@@ -319,32 +319,49 @@ async fn websocket(
     path: &str,
     headers: &[(&'static str, &str)],
 ) -> Result<WebSocketStream<Stream>, Error> {
+    upgrade(url, path, headers)
+        .await
+        .map_err(|(_, error)| error)
+}
+
+/// [`websocket`], with the HTTP status the relay refused the upgrade with, if it answered one.
+async fn upgrade(
+    url: &str,
+    path: &str,
+    headers: &[(&'static str, &str)],
+) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-    let base = Base::parse(url)?;
-    let stream = base.connect().await?;
+    let base = Base::parse(url).map_err(|e| (None, e.into()))?;
+    let stream = base.connect().await.map_err(|e| (None, e.into()))?;
     let scheme = if base.tls { "wss" } else { "ws" };
     let address = format!("{scheme}://{}{path}", base.authority());
     let mut request = address
         .into_client_request()
-        .map_err(|e| Error::Protocol(e.to_string()))?;
+        .map_err(|e| (None, Error::Protocol(e.to_string())))?;
     for (name, value) in headers {
         let value = value
             .parse()
-            .map_err(|_| Error::Protocol(format!("a bad {name} header")))?;
+            .map_err(|_| (None, Error::Protocol(format!("a bad {name} header"))))?;
         request.headers_mut().insert(*name, value);
     }
     let config = Some(remote::websocket_config());
     let (socket, _) = tokio_tungstenite::client_async_with_config(request, stream, config)
         .await
-        .map_err(|error| match error {
-            tungstenite::Error::Http(response) if response.status() == 404 => Error::Refused,
-            tungstenite::Error::Http(response) if response.status() == 401 => {
-                match relay_clock(&response) {
+        .map_err(|error| {
+            let tungstenite::Error::Http(response) = error else {
+                let error = Error::Protocol(format!("the relay's WebSocket failed: {error}"));
+                return (None, error);
+            };
+            let status = response.status().as_u16();
+            let error = match status {
+                404 => Error::Refused,
+                401 => match relay_clock(&response) {
                     Some(relay_ms) => Error::Clock(relay_ms),
                     None => Error::Protocol("the relay refused this host's proof".to_owned()),
-                }
-            }
-            other => Error::Protocol(format!("the relay's WebSocket failed: {other}")),
+                },
+                _ => Error::Protocol(format!("the relay's WebSocket failed: HTTP {status}")),
+            };
+            (Some(status), error)
         })?;
     Ok(socket)
 }
@@ -404,15 +421,20 @@ pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
             "the relay route needs a sign-in (PLXD_RELAY_TOKEN)".to_owned(),
         ));
     };
+    stream_at(url, token, host_id).await
+}
+
+/// [`open_stream`] through the relay at `url`, signed in with `token`. A relay from before 0091
+/// refuses the header with 401, 404, or 426 before any stream opens. Then this asks it for a
+/// ticket and opens `/connect?ticket=`, as such a relay expects. Once a stream opened, nothing is
+/// tried again.
+async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream, Error> {
     let path = format!("/v1/hosts/{host_id}/connect");
     let authorization = format!("Bearer {token}");
-    let mut socket = match websocket(url, &path, &[("authorization", &authorization)]).await {
-        Err(Error::Refused) => {
-            return Err(Error::Protocol(
-                "the relay doesn't know that host".to_owned(),
-            ));
-        }
-        other => other?,
+    let mut socket = match upgrade(url, &path, &[("authorization", &authorization)]).await {
+        Ok(socket) => socket,
+        Err((Some(401 | 404 | 426), _)) => ticketed(url, token, host_id).await?,
+        Err((_, error)) => return Err(error),
     };
     // The relay says so once the host joined the stream.
     match socket.next().await {
@@ -420,6 +442,23 @@ pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
         _ => Err(Error::Protocol(
             "the host didn't join the relay's stream".to_owned(),
         )),
+    }
+}
+
+/// A WebSocket to `host_id` opened with a ticket, as a relay from before 0091 expects.
+async fn ticketed(url: &str, token: &str, host_id: &str) -> Result<WebSocketStream<Stream>, Error> {
+    let path = format!("/v1/hosts/{host_id}/tickets");
+    let (status, body) = http(url, "POST", &path, Some(token), None).await?;
+    let Some(ticket) = body["ticket"].as_str().filter(|_| status == 200) else {
+        return Err(Error::Protocol(format!(
+            "the relay answered {status}: {}",
+            body["error"].as_str().unwrap_or("no ticket")
+        )));
+    };
+    let path = format!("/v1/hosts/{host_id}/connect?ticket={ticket}");
+    match websocket(url, &path, &[]).await {
+        Err(Error::Refused) => Err(Error::Protocol("the relay refused the ticket".to_owned())),
+        other => other,
     }
 }
 
@@ -1186,6 +1225,69 @@ mod tests {
             },
         };
         assert_eq!(state(failed), Some(json!("failed")));
+    }
+
+    /// A relay from before 0091, on loopback: `/connect` without a ticket is 401, `POST
+    /// /tickets` with the token answers `t1`, and `/connect?ticket=t1` says `ready` and echoes.
+    /// Each request's first line goes to `seen`.
+    async fn ticket_only_relay(seen: Arc<Mutex<Vec<String>>>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let (mut tcp, _) = listener.accept().await.unwrap();
+                let mut head = vec![0; 4096];
+                let read = tcp.peek(&mut head).await.unwrap();
+                let head = String::from_utf8_lossy(&head[..read]).into_owned();
+                let line = head.lines().next().unwrap_or_default().to_owned();
+                seen.lock().unwrap().push(line.clone());
+                if line.starts_with("POST /v1/hosts/h/tickets ") {
+                    let mut drain = vec![0; read];
+                    tcp.read_exact(&mut drain).await.unwrap();
+                    let (status, body) = if head.contains("Authorization: Bearer tok\r\n") {
+                        ("200 OK", r#"{"ticket":"t1"}"#)
+                    } else {
+                        ("401 Unauthorized", r#"{"error":"unauthorized"}"#)
+                    };
+                    let answer = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    tcp.write_all(answer.as_bytes()).await.unwrap();
+                } else if line.starts_with("GET /v1/hosts/h/connect?ticket=t1 ") {
+                    let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    socket.send(Message::text("ready")).await.unwrap();
+                    while let Some(Ok(frame)) = socket.next().await {
+                        if frame.is_binary() {
+                            socket.send(frame).await.unwrap();
+                        }
+                    }
+                } else {
+                    let answer = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n";
+                    tcp.write_all(answer.as_bytes()).await.unwrap();
+                }
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_only_knows_tickets_gets_one_after_refusing_the_header() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let url = ticket_only_relay(Arc::clone(&seen)).await;
+        let mut stream = stream_at(&url, "tok", "h").await.unwrap();
+        stream.write_all(b"ping").await.unwrap();
+        let mut echoed = [0; 4];
+        stream.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"ping");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                "GET /v1/hosts/h/connect HTTP/1.1",
+                "POST /v1/hosts/h/tickets HTTP/1.1",
+                "GET /v1/hosts/h/connect?ticket=t1 HTTP/1.1",
+            ]
+        );
     }
 
     #[test]

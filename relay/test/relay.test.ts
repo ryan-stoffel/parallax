@@ -1,4 +1,4 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { sha256 } from "../src/crypto";
@@ -577,6 +577,30 @@ describe("cost ceilings", () => {
     const refused = await connect(host, token);
     expect(refused instanceof Response && refused.status).toBe(429);
     expect((await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token })).status).toBe(429);
+  });
+
+  it("keep a stream's unreported count across hibernation", async () => {
+    const { host, token, control } = await online();
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, open));
+    await client.next();
+    await side.next();
+    const send = async (byte: number) => {
+      client.ws.send(new Uint8Array([byte]));
+      expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(new Uint8Array([byte]));
+    };
+    for (let i = 0; i < 3; i++) await send(i);
+    // Its in-memory state goes; the WebSockets hibernate, open.
+    await evictDurableObject(streamObject(host, open.stream));
+    await send(3);
+    client.ws.close(1000);
+    await side.closed;
+    const traffic = () =>
+      runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (_: HostRelay, state) =>
+        (await state.storage.get<{ bytes: number }>("traffic"))?.bytes,
+      );
+    await expect.poll(traffic).toBe(4 * MIN_FRAME_BYTES);
   });
 
   it("key anonymous limits by IPv4 address or IPv6 /64", () => {
