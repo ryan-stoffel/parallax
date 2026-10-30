@@ -32,6 +32,8 @@ function fakes(state = {}, answers = []) {
   /** @type {import("../src/connect.mjs").Deps} */
   const deps = {
     signIn: async () => (signIns++, "good-token"),
+    // Never runs this computer's real shell: Windows PowerShell can stall on its first start.
+    details: async (_runner, os) => ({ os, arch: "arm64", label: "Test", version: "1" }),
     install: async (_runner, target, name, channel) => void installed.push(`${name} ${target.os} ${channel}`),
     plxd: async () => attach(spawn(process.execPath, [FAKE], { stdio: ["pipe", "pipe", "inherit"], env })),
     prompt: async (question) => (asked.push(question), answers.shift() ?? ""),

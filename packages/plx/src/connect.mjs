@@ -5,7 +5,7 @@
 
 import https from "node:https";
 
-import { findInstaller, localOs, readDetails, sshTarget, step, StepFailed } from "./install.mjs";
+import { findInstaller, localOs, sshTarget, step, StepFailed } from "./install.mjs";
 import { localRunner, sshRunner } from "./run.mjs";
 import { installScript, REMOTE_PORT } from "./scripts.mjs";
 
@@ -19,6 +19,8 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
  * What the commands reach outside this process, so tests can fake each.
  * @typedef {object} Deps
  * @property {() => Promise<string>} signIn Signs in and resolves to a Clerk access token.
+ * @property {(runner: Runner, os: Os) => Promise<Target>} details Finds the OS details of the
+ *   computer `runner` reaches.
  * @property {(runner: Runner, target: Target, name: string, channel: Channel) => Promise<void>} install
  *   Installs plxd with its login service on `target` through `runner`.
  * @property {(runner: Runner, os: Os) => Promise<Plxd>} plxd Opens `plxd attach` through
@@ -83,7 +85,7 @@ export function connect(options, deps) {
     if (!os) throw new Error(`Parallax doesn't run on ${process.platform}.`);
     const token = await step("Signing in to Parallax", async () => [`Signed in to Parallax Connect`, await deps.signIn()]);
     const target = await step("Finding this computer's OS", async () => {
-      const target = await readDetails(runner, os);
+      const target = await deps.details(runner, os);
       return [`${target.label}: ${target.version} (${target.arch})`, target];
     });
     await deps.install(runner, target, "this computer", options.channel);

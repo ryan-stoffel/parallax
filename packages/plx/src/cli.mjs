@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 
 import * as connect from "./connect.mjs";
 import { doctor } from "./doctor.mjs";
+import { readDetails } from "./install.mjs";
 import { attach, VERSION } from "./plxd.mjs";
 import { canOpenBrowser, clerkOf, codePage, openBrowser, signIn } from "./signin.mjs";
 import { add, setup } from "./tailscale-setup.mjs";
@@ -74,6 +75,7 @@ const realDeps = (noBrowser) => ({
       open: openBrowser,
       prompt,
     }),
+  details: readDetails,
   install: connect.install,
   plxd: (runner, os) => attach(runner.attach(os)),
   prompt,
