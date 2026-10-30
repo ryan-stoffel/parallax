@@ -94,6 +94,11 @@ export function passwordStore(
 export type Account = {
   accessToken(): Promise<string | undefined>;
   currentToken(): string | undefined;
+  /**
+   * A token just issued, for one sign-in to a computer on the account (0091), which takes one
+   * issued in the last minute. It's never the one the relay gets, nor kept.
+   */
+  freshToken(): Promise<string | undefined>;
   /** Calls `listener` each time someone signs in here. */
   onSignIn(listener: () => void): void;
 };
@@ -158,12 +163,11 @@ export function startAccount(): Account {
     };
   }
 
-  // One refresh at a time: Clerk may rotate the refresh token on each use.
-  let refreshing: Promise<string | undefined> | undefined;
-  /** A current access token, refreshed a minute before it expires, or undefined signed out. */
-  function accessToken(): Promise<string | undefined> {
-    if (access && access.expiresAt - 60_000 > Date.now()) return Promise.resolve(access.token);
-    refreshing ??= (async () => {
+  // One refresh at a time, in turn: Clerk may rotate the refresh token on each use.
+  let turn: Promise<unknown> = Promise.resolve();
+  /** A new access token from the refresh token, or undefined signed out or failed. */
+  function refresh(): Promise<{ token: string; expiresAt: number } | undefined> {
+    const next = turn.then(async () => {
       const held = epoch;
       if (!session) return undefined;
       try {
@@ -172,9 +176,8 @@ export function startAccount(): Account {
           refresh_token: session.refreshToken,
         });
         if (epoch !== held || !session) return undefined;
-        access = fresh.access;
         if (fresh.refreshToken) save({ ...session, refreshToken: fresh.refreshToken });
-        return access.token;
+        return fresh.access;
       } catch (error) {
         // Revoked, such as by signing out everywhere: signed out here too.
         if (error instanceof ClerkError && error.revoked && epoch === held) {
@@ -184,6 +187,20 @@ export function startAccount(): Account {
         }
         return undefined;
       }
+    });
+    turn = next;
+    return next;
+  }
+  let refreshing: Promise<string | undefined> | undefined;
+  /** A current access token, refreshed a minute before it expires, or undefined signed out. */
+  function accessToken(): Promise<string | undefined> {
+    if (access && access.expiresAt - 60_000 > Date.now()) return Promise.resolve(access.token);
+    refreshing ??= (async () => {
+      const held = epoch;
+      const fresh = await refresh();
+      if (!fresh || epoch !== held) return undefined;
+      access = fresh;
+      return access.token;
     })().finally(() => (refreshing = undefined));
     return refreshing;
   }
@@ -337,6 +354,7 @@ export function startAccount(): Account {
       void accessToken();
       return undefined;
     },
+    freshToken: async () => (await refresh())?.token,
     onSignIn: (listener) => void signedIn.push(listener),
   };
 }

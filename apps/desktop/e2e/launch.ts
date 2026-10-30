@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -26,7 +26,8 @@ export interface Launched {
  * given, records the window as Playwright's option of that name does. `dataDir`, when given, is
  * an earlier launch's, for plxd to start from its data again. plxd stops when the app exits
  * (PLX-990), unless `outliveApp`, for a test that reopens the app on a plxd still running: then it
- * stops when this test process exits, or at `close`.
+ * stops when this test process exits, or at `close`. `settings`, when given, is the app's
+ * settings.json to start from, such as hosts it already has.
  */
 export async function launch(
   script: string,
@@ -34,6 +35,7 @@ export async function launch(
   recordVideo?: { dir: string; size?: { width: number; height: number } },
   dataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-")),
   outliveApp = false,
+  settings?: object,
 ): Promise<Launched> {
   if (!existsSync(plxd)) throw new Error(`no plxd at ${plxd}; see the top of launch.ts`);
   const env: NodeJS.ProcessEnv = {
@@ -55,9 +57,14 @@ export async function launch(
   if (outliveApp) env["PLXD_EXIT_WITH"] = String(process.pid);
   // Unset variables are undefined in `process.env`, and launch skips them.
   // Its own userData too, so a local run never shares the developer's app profile or hosts.
-  const userData = `--user-data-dir=${mkdtempSync(path.join(tmpdir(), "parallax-e2e-app-"))}`;
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-app-"));
+  if (settings)
+    writeFileSync(
+      path.join(userDataDir, "settings.json"),
+      JSON.stringify({ hosts: [], ...settings }),
+    );
   const app = await _electron.launch({
-    args: [desktop, userData],
+    args: [desktop, `--user-data-dir=${userDataDir}`],
     env: env as Record<string, string>,
     ...(recordVideo && { recordVideo }),
   });

@@ -155,6 +155,13 @@ const bridge: ParallaxBridge = {
   setDeviceEnabled: (hostId, enabled) =>
     ipcRenderer.invoke("parallax:setDeviceEnabled", hostId, enabled),
   removeDevice: (hostId) => ipcRenderer.invoke("parallax:removeDevice", hostId),
+  discoverAccount: () => ipcRenderer.invoke("parallax:discoverAccount"),
+  enterSetupCode: (hostId, code) => ipcRenderer.invoke("parallax:enterSetupCode", hostId, code),
+  askAgain: (hostId) => ipcRenderer.invoke("parallax:askAgain", hostId),
+  onAccessRequests: (listener) => follow("parallax:accessRequests", listener),
+  answerAccess: (id, allow) => ipcRenderer.invoke("parallax:answerAccess", id, allow),
+  revokeDevice: (id) => ipcRenderer.invoke("parallax:revokeDevice", id),
+  turnOnReach: (hostId) => ipcRenderer.invoke("parallax:turnOnReach", hostId),
 
   acpRegistry: () => ipcRenderer.invoke("parallax:acpRegistry"),
 
@@ -215,6 +222,13 @@ const bridge: ParallaxBridge = {
 };
 
 contextBridge.exposeInMainWorld("parallax", bridge);
+
+// Main has no network events, so each window tells it when the network comes back or changes:
+// account discovery and route re-checks run then (0091).
+const networkChanged = () => ipcRenderer.send("parallax:network");
+const page = globalThis as unknown as EventTarget & { navigator: { connection?: EventTarget } };
+page.addEventListener("online", networkChanged);
+page.navigator.connection?.addEventListener("change", networkChanged);
 
 // <browser-action-list>, the side panel browser's extension buttons (Extensions.tsx).
 injectBrowserAction();

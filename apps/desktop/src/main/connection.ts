@@ -169,6 +169,10 @@ export type ConnectionOptions = {
   device?: string;
   /** A LAN computer's name, reached with `plxd dial --remote` (PLX-641), which its errors name. */
   lan?: string;
+  /** An account computer's name, reached with `plxd dial --account` (0091), which its errors name. */
+  account?: string;
+  /** Hears the route `plxd dial` says it connected over, before the handshake (0091). */
+  onRoute?: (route: string) => void;
   /** The app's version, sent in `initialize`. */
   clientVersion: string;
   onState: (state: ConnectionState) => void;
@@ -253,6 +257,16 @@ export class Connection {
   /** Reconnects now if the connection failed, whether or not it would retry by itself. */
   retry(): void {
     if (this.state.status !== "failed") return;
+    this.failures = 0;
+    this.connect();
+  }
+
+  /**
+   * Ends the current attempt or connection and connects again now, as when a better route answers
+   * (0091). Subscriptions, watches, and shells carry over as after any reconnect.
+   */
+  reconnect(): void {
+    this.teardown();
     this.failures = 0;
     this.connect();
   }
@@ -508,6 +522,9 @@ export class Connection {
     child.stdin.on("error", ignore); // EPIPE once attach exits; "close" reports that.
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString("utf8")).slice(-4000);
+      // `plxd dial: connected over <route>`, once, before plxd's frames.
+      const route = /connected over (\S+)/.exec(chunk.toString("utf8"))?.[1];
+      if (route && child === this.child) this.options.onRoute?.(route);
     });
     child.stdout.on("data", (chunk: Buffer) => {
       if (child !== this.child) return;
@@ -539,6 +556,7 @@ export class Connection {
             process.platform,
             this.options.device,
             this.options.lan,
+            this.options.account,
           ),
         );
     });
@@ -814,8 +832,8 @@ const ignore = () => {};
 
 /**
  * Why `plxd attach` exited (0010), ssh for the host at `destination` (0022), or `plxd dial` for
- * the Connect device named `device` (0056) or the LAN computer named `lan` (PLX-641), in words
- * that say what to do. ssh exits 255 for its
+ * the Connect device named `device` (0056), the LAN computer named `lan` (PLX-641), or the account
+ * computer named `account` (0091), in words that say what to do. ssh exits 255 for its
  * own errors, and the remote shell 127 for a missing command. The raw stderr rides along for the
  * tooltip.
  */
@@ -827,6 +845,7 @@ export function exitError(
   platform = process.platform,
   device?: string,
   lan?: string,
+  account?: string,
 ): ConnectionError {
   const details = { exitCode: code, ...(stderr.trim() && { stderr: stderr.trim() }) };
   const error = (reason: ConnectionError["reason"], message: string): ConnectionError => ({
@@ -886,6 +905,14 @@ export function exitError(
       "refused",
       `${lan} doesn't know this computer anymore. Remove it, then pair again with a new code.`,
     );
+  if (account !== undefined && code === 4)
+    return error(
+      "exited",
+      `Couldn't reach ${account}. Check that it's on, and that \`plx connect status\` there says it's connected.`,
+    );
+  // No session there yet, or a revoked one: hosts.ts signs in, or asks for the computer's code.
+  if (account !== undefined && code === 5)
+    return error("refused", `${account} hasn't let this computer in yet.`);
   if (device !== undefined && code === 4)
     return error(
       "exited",

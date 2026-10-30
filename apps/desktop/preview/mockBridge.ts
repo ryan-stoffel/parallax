@@ -3,6 +3,7 @@
 // events plxd would, so a sent message or an answered question shows up as it does in the app.
 import {
   iconFor,
+  type AccessPrompt,
   type ConnectionState,
   type ConnectState,
   type DeviceHost,
@@ -749,10 +750,6 @@ const handlers: { [M in Method]?: Handler<M> } = {
     pairing: lan.on && !lan.sessions.length,
     ...(lan.relay && { relay: relayStatus() }),
   }),
-  "remote/revoke": (p) => {
-    lan.sessions = lan.sessions.filter((s) => s.id !== p.id);
-    return { sessions: lan.sessions, listening: lan.on, pairing: false };
-  },
   "connect/devices": () => ({
     tailscale: "running",
     port: 7340,
@@ -1538,6 +1535,8 @@ const tailnet: (TailnetDevice & {
   repos?: (here: Repo[]) => Repo[];
   off?: boolean;
   removed?: boolean;
+  /** Reach from anywhere turned on from Settings. */
+  reach?: boolean;
 })[] = [
   {
     id: "nMini7Q2kX",
@@ -1642,8 +1641,37 @@ function hostOf(runId: string): string {
   return device ? deviceId(device) : LOCAL;
 }
 
+// `#accounts` (0091): two computers on the account, one connected and one new that asks for its
+// code (482913 works), and a phone asking to sign in.
+const accountsShown = location.hash.includes("accounts");
+const accounts: DeviceHost[] = accountsShown
+  ? [
+      {
+        id: "account:alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o",
+        name: "studio",
+        icon: "desktop",
+        detected: "laptop",
+        hostName: "studio",
+        enabled: true,
+      },
+      {
+        id: "account:Q2s9vX1k7d0b8Lr4mT6pWc3eYh5uNz2aFgJ_iK-oPqR",
+        name: "build-box",
+        icon: "server",
+        detected: "server",
+        hostName: "build-box",
+        enabled: true,
+        access: { step: "needsCode" },
+      },
+    ]
+  : [];
+let accessRequests: AccessPrompt[] = accountsShown
+  ? [{ id: "req-1", name: "Ryan's iPhone", code: "731905", host: "studio" }]
+  : [];
+const accessListeners = new Set<(requests: AccessPrompt[]) => void>();
+
 function deviceHosts(): DeviceHost[] {
-  if (!connect.on) return [];
+  if (!connect.on) return [...accounts];
   return tailnet
     .filter((d) => d.parallax && !d.removed)
     .map((d) => ({
@@ -1717,8 +1745,16 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
       }
       return { thread, run };
     }
+    // The Windows PC was kept on Tailscale only, so Settings offers Reach from anywhere (0091).
     case "host/settings/get":
-      return { autoResume: true, connect: true, deviceName: device.name, deviceIcon: device.icon };
+      return {
+        autoResume: true,
+        connect: true,
+        relay: device.os !== "windows" || !!device.reach,
+        remote: true,
+        deviceName: device.name,
+        deviceIcon: device.icon,
+      };
     case "host/version":
       return {
         plxd: "0.0.0-preview",
@@ -2202,6 +2238,37 @@ export const mockBridge: ParallaxBridge = {
     if (device) device.removed = true;
     connectChanged();
     return delay(undefined);
+  },
+  discoverAccount: () => delay(undefined),
+  enterSetupCode: async (hostId, code) => {
+    await delay(undefined, 600);
+    const computer = accounts.find((a) => a.id === hostId);
+    if (code !== "482913" || !computer)
+      return "That code is wrong, used, or expired. Check it, then type it again.";
+    delete computer.access;
+    connectChanged();
+    return undefined;
+  },
+  askAgain: () => delay(undefined),
+  turnOnReach: (hostId) => {
+    const device = deviceOf(hostId);
+    if (device) device.reach = true;
+    return delay(undefined, 400);
+  },
+  revokeDevice: (id) => {
+    lan.sessions = lan.sessions.filter((s) => s.id !== id);
+    return delay({ sessions: lan.sessions, listening: lan.on, pairing: false });
+  },
+  onAccessRequests: (listener) => {
+    listener([...accessRequests]);
+    accessListeners.add(listener);
+    return () => accessListeners.delete(listener);
+  },
+  answerAccess: async (id) => {
+    await delay(undefined, 400);
+    accessRequests = accessRequests.filter((r) => r.id !== id);
+    for (const l of accessListeners) l([...accessRequests]);
+    return undefined;
   },
 
   acpRegistry: () => delay([]),
