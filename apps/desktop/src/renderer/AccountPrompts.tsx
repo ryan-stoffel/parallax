@@ -9,7 +9,8 @@ export const spacedCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)
 
 /**
  * The prompts account sign-in raises anywhere in the app (0091): a new computer's code, asked
- * for when one shows up on the account, and "Allow <device>?" when one of the user's devices
+ * for when one shows up on the account and answers (an offline one waits in Settings >
+ * Connections), and "Allow <device>?" when one of the user's devices
  * asks to sign in. One at a time, a device's request first. Closing one leaves it for Settings >
  * Connections, which shows the computer's state and asks for its code again.
  */
@@ -25,7 +26,9 @@ export function AccountPrompts() {
   if (request)
     return <AllowDialog key={request.id} request={request} onClose={() => close(request.id)} />;
   const computer = devices.find(
-    (d) => (d.access?.step === "needsCode" || d.access?.step === "pairing") && !closed.has(d.id),
+    (d) =>
+      ((d.access?.step === "needsCode" && !d.access.offline) || d.access?.step === "pairing") &&
+      !closed.has(d.id),
   );
   if (computer)
     return (

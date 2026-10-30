@@ -157,7 +157,7 @@ function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode:
 export function accessLabel({ access }: Pick<DeviceHost, "access">): string | undefined {
   switch (access?.step) {
     case "needsCode":
-      return "Needs the code it shows";
+      return access.offline ? "Offline · needs the code it shows" : "Needs the code it shows";
     case "pairing":
     case "signingIn":
       return "Connecting…";

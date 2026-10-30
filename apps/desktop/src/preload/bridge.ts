@@ -722,7 +722,11 @@ export type DeviceHost = {
  * for the user to ask again.
  */
 export type AccountAccess =
-  | { step: "needsCode"; error?: string }
+  /**
+   * `offline` while the computer is offline or doesn't answer, as a leftover from an old install
+   * would: no dialog asks for its code then, unless the user picks Enter code.
+   */
+  | { step: "needsCode"; error?: string; offline?: true }
   | { step: "pairing" }
   | { step: "signingIn" }
   | { step: "pending"; code: string }
