@@ -1,4 +1,4 @@
-// The Traditional sidebar's head (0090, 0091): New thread, New project, and Search as rows, then
+// The Traditional sidebar's head (0090, 0094): New thread, New project, and Search as rows, then
 // the pages Settings shows there and More. Its Pinned section, which folds, sits atop the list.
 import {
   ChartNoAxesColumn,
@@ -120,7 +120,7 @@ export function SidebarNav({
 }
 
 /**
- * The Traditional sidebar's Pinned section (0091, 0093): one heading that folds its cards, the
+ * The Traditional sidebar's Pinned section (0093, 0094): one heading that folds its cards, the
  * pinned Projects, orchestrator threads, and threads, as one list.
  */
 export function PinnedSection({ children }: { children: ReactNode }) {

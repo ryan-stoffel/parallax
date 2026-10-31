@@ -2906,7 +2906,7 @@ export function RowPlace({
 }
 
 /**
- * A row's details (0091), the same for a thread's card and an orchestrator's: its branch, cut in the
+ * A row's details (0094), the same for a thread's card and an orchestrator's: its branch, cut in the
  * middle to fit (`shortBranch`), its git status, its linked pull requests (the number of one, or +N
  * for more) and their checks, its computer, and its run's provider, in color while open. With only
  * the computer and provider to show, they go at the title's end as `aside`, so they never take a
