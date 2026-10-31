@@ -1341,6 +1341,27 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
+test("an orchestrator row reads its git status only when its repo is listed", async () => {
+  const listed = { ...orchestrator("parallax", "2026-09-29T10:00:00Z"), run: "r-listed" };
+  const unlisted = { ...orchestrator("photon", "2026-09-29T09:00:00Z"), run: "r-unlisted" };
+  const run = (id: string, project: string): AgentRun => ({
+    ...orchestratorRun(id, "Plan"),
+    project,
+    status: "completed",
+    branch: "main",
+  });
+  answers["orchestrator/list"] = () => ({ result: { orchestrators: [listed, unlisted], seq: 7 } });
+  answers["agent/list"] = () => ({
+    result: { runs: [run("r-listed", listed.id), run("r-unlisted", unlisted.id)], seq: 7 },
+  });
+  answers["agent/gitStatus"] = () => ({
+    result: { branch: "main", changes: 0, upstream: null, ahead: 0, behind: 0 },
+  });
+  await renderApp();
+  expect(orchestratorRows()).toEqual(["parallax", "photon"]);
+  expect(calls("agent/gitStatus").map((p) => p["runId"])).toEqual(["r-listed"]);
+});
+
 test("Inbox has a Projects button beside its search and Pull requests in the footer but no Projects drawer, and Traditional lists each orchestrator as a row in its folder with Projects in its head", async () => {
   sidebarMode.set("inbox");
   // photon works in parallax; ember's repo isn't listed.

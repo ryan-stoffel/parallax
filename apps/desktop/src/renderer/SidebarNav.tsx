@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useId, type ReactNode } from "react";
 
+import { icons } from "./icons";
 import { useShortcutLabel } from "./keybindings";
 import { navDefaults, sidebarNav, type NavRow } from "./sidebarPrefs";
 import { Fold } from "./SidebarParts";
@@ -136,7 +137,7 @@ export function PinnedSection({ children }: { children: ReactNode }) {
         className="flex h-7 items-center gap-1 rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground"
       >
         Pinned
-        <ChevronDown
+        <icons.expand
           aria-hidden
           className={`size-3 transition-transform ${folded ? "-rotate-90" : ""}`}
         />

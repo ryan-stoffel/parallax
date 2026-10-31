@@ -1,6 +1,6 @@
 // The Projects page (0090, 0093): every host's Projects as cards, the row card the sidebar draws,
 // with a search, a filter, a sort, and New project.
-import { Check, Ellipsis, MessagesSquare, Pin, PinOff, X } from "lucide-react";
+import { MessagesSquare } from "lucide-react";
 import { useId, useRef, useState, type CSSProperties, type Ref, type RefObject } from "react";
 
 import type { ChosenIcon, Repo } from "../protocol/generated/protocol";
@@ -26,6 +26,7 @@ import {
   Menu,
   menuItem,
   openOnContextMenu,
+  searchField,
   Segmented,
 } from "./ui";
 
@@ -44,8 +45,7 @@ const filters: { value: ProjectFilter; name: string }[] = [
 ];
 
 /** What a filter that keeps nothing says, with no search typed. */
-const filteredOut: Record<ProjectFilter, string> = {
-  all: "No projects yet.",
+const filteredOut: Record<Exclude<ProjectFilter, "all">, string> = {
   pinned: "No pinned projects. Pin one from its card.",
   files: "No projects with files.",
   instructions: "No projects with instructions.",
@@ -150,7 +150,7 @@ export function ProjectsPage({
         ) : (
           <>
             <div className="mt-5 flex flex-wrap items-center gap-2">
-              <label className="flex h-8 min-w-48 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+              <label className={`min-w-48 flex-1 ${searchField}`}>
                 <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
                 <input
                   type="search"
@@ -193,7 +193,7 @@ export function ProjectsPage({
                     className={menuItem}
                   >
                     <span className="flex-1">{s.label}</span>
-                    {s.value === sort && <Check aria-hidden className="text-accent" />}
+                    {s.value === sort && <icons.done aria-hidden className="text-accent" />}
                   </button>
                 ))}
               </Menu>
@@ -204,7 +204,9 @@ export function ProjectsPage({
                 className="mt-12"
                 icon={<icons.search aria-hidden />}
                 title="No matching projects"
-                body={typed ? `Nothing matches “${typed}”.` : filteredOut[filter]}
+                body={
+                  typed || filter === "all" ? `Nothing matches “${typed}”.` : filteredOut[filter]
+                }
                 action={
                   <Button
                     variant="outline"
@@ -317,7 +319,7 @@ export function ProjectCard({
               onClick={onTogglePin}
               className={rowTool}
             >
-              <Pin aria-hidden className="size-3.5" />
+              <icons.pin aria-hidden className="size-3.5" />
             </button>
           )}
           <ProjectMenu
@@ -339,7 +341,7 @@ export function ProjectCard({
             onClick={onTogglePin}
             className={rowTool}
           >
-            <Pin aria-hidden className="size-3.5" />
+            <icons.pin aria-hidden className="size-3.5" />
           </button>
         )
       }
@@ -380,7 +382,7 @@ export function ProjectMenu({
         onClick={() => setActions(actionsFor())}
         className={className}
       >
-        <Ellipsis className="size-4" />
+        <icons.more className="size-4" />
       </button>
       <Menu id={menu} label={`${entry.name} actions`} align="end" className="w-52 p-1">
         <button
@@ -391,7 +393,7 @@ export function ProjectMenu({
           onClick={onTogglePin}
           className={menuItem}
         >
-          {pinned ? <PinOff aria-hidden /> : <Pin aria-hidden />}
+          {pinned ? <icons.unpin aria-hidden /> : <icons.pin aria-hidden />}
           {pinned ? "Unpin" : "Pin"}
         </button>
         {actions.map((a) => (
@@ -469,7 +471,7 @@ export function NewChatProject({
             onClick={(e) => e.currentTarget.closest("dialog")?.close()}
             className="-mr-1.5 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
           >
-            <X className="size-4" />
+            <icons.close className="size-4" />
           </button>
         </div>
         <p className="px-5 pt-1 text-body text-muted-foreground">

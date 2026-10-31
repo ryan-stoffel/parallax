@@ -172,6 +172,7 @@ import {
   openOnContextMenu,
   RowBadge,
   rowShortcut,
+  searchField,
   shortcut,
   TopBar,
   useModHeld,
@@ -1849,7 +1850,7 @@ export function ThreadList({
     <>
       {inbox ? (
         <div className="flex items-center gap-1 px-2">
-          <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+          <label className={`sky-search min-w-0 flex-1 ${searchField}`}>
             <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
             {searchInput(
               "min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none",
@@ -2799,6 +2800,7 @@ function OrchestratorRow({
     selected,
     compact,
     words,
+    noRepo: !repo || repo.scratch,
   });
   return (
     <RowCard

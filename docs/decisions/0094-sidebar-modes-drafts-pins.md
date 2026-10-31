@@ -1,6 +1,6 @@
 # 0094: Inbox and Traditional sidebars, with drafts and pins on top
 
-- Status: accepted; amends [0087](0087-sidebar-rows-no-areas-or-folders.md)'s "no separator" and its pinned thread cards, and [0090](0090-projects-page-and-spaces.md)'s New sidebar switch; amended by [0093](0093-orchestrator-threads-and-projects.md), where a Project row is an orchestrator thread's
+- Status: accepted; amends [0087](0087-sidebar-rows-no-areas-or-folders.md)'s "no separator" and its pinned thread cards, and [0090](0090-projects-page-and-spaces.md)'s New sidebar switch; amended by [0093](0093-orchestrator-threads-and-projects.md), whose rules win where this record differs: an orchestrator's row is a thread's card in every mode, Traditional's Pinned is one folding section of Project cards then pinned orchestrator threads and threads (not a line per Project in the head), and Inbox lists every orchestrator by activity
 - Date: 2026-10-29
 - Issue: PLX-1150
 
