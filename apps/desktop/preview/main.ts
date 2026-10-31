@@ -4,6 +4,7 @@ import "./install";
 import "./pinsSeed";
 import "../src/renderer/main.tsx";
 import { openFromHash } from "./hash";
+import "./lab/lab";
 
 openFromHash();
 window.addEventListener("hashchange", openFromHash);
