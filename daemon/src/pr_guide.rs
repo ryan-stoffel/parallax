@@ -9,6 +9,7 @@
 //! replaces the guide before it.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -218,10 +219,11 @@ async fn written(daemon: &Daemon, key: &Key, params: &PrGuideParams) -> Result<P
         pr.body.trim()
     );
     if !omitted.is_empty() {
-        prompt.push_str(&format!(
+        let _ = write!(
+            prompt,
             "\n[Left out for size: {}. Don't write steps for them.]\n",
             omitted.join(", ")
-        ));
+        );
     }
     let answer = ask(daemon, &prompt, &params.model).await?;
     let paths: HashSet<String> = diff_sections(&diff)
@@ -437,6 +439,7 @@ fn diagram(raw: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fmt::Write as _;
     use std::time::Duration;
 
     use jiff::Timestamp;
@@ -516,7 +519,7 @@ mod tests {
                 "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,{lines} @@\n"
             );
             for n in 0..lines {
-                section.push_str(&format!("+line {n}\n"));
+                let _ = writeln!(section, "+line {n}");
             }
             section
         };

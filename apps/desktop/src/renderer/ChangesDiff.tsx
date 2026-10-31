@@ -192,7 +192,7 @@ export function ChangesDiff({
                     </div>
                   ) : (
                     <div
-                      className={`font-mono text-meta leading-5 ${focused(to, path, row.line) ? "shadow-[inset_2px_0_0_var(--accent)]" : ""}`}
+                      className={`font-mono text-meta leading-5 ${focused(to, path, row.line) ? "bg-accent/10" : ""}`}
                     >
                       {row.line ? (
                         <DiffLineView line={row.line} />

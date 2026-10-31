@@ -343,6 +343,9 @@ test("guideView: the head's guide is ready, an older head's is stale until the n
   });
   expect(guideView({ generating: true }, "b").kind).toBe("loading");
   expect(guideView(undefined, "b").kind).toBe("loading");
-  expect(guideView({ generating: false, error: "no" }, "b")).toEqual({ kind: "error", error: "no" });
+  expect(guideView({ generating: false, error: "no" }, "b")).toEqual({
+    kind: "error",
+    error: "no",
+  });
   expect(guideView(undefined, "b", "offline")).toEqual({ kind: "error", error: "offline" });
 });

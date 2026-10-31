@@ -169,7 +169,7 @@ export function Guide({
 }
 
 /**
- * Mermaid `source` drawn by Pele at its container's width, colored by the theme through `.pele`'s
+ * Mermaid `source` drawn by Pele at the width it has, vertical when that's narrow, colored by the theme through `.pele`'s
  * variables (index.css). Links and images are off, since an agent wrote it. One that doesn't
  * render leaves nothing.
  */
@@ -179,12 +179,14 @@ function Diagram({ source }: { source: string }) {
   const [svg, setSvg] = useState("");
   useEffect(() => {
     let live = true;
-    const el = box.current;
+    // The box is hidden while empty, so its parent says how wide it can be.
+    const el = box.current?.parentElement;
     renderAsync(source, {
       links: false,
       images: false,
       idPrefix: prefix,
-      maxWidth: el?.clientWidth || undefined,
+      maxWidth: el ? el.clientWidth - 26 : undefined,
+      fontSize: 13,
       fontFamily: el ? getComputedStyle(el).fontFamily : undefined,
     }).then(
       (drawn) => live && setSvg(drawn.svg),
@@ -199,7 +201,7 @@ function Diagram({ source }: { source: string }) {
       ref={box}
       role={svg ? "img" : undefined}
       aria-label={svg ? "Diagram" : undefined}
-      className="overflow-x-auto rounded-lg border border-border bg-surface p-3 empty:hidden"
+      className="overflow-x-auto rounded-lg border border-border bg-surface p-3 empty:hidden [&>svg]:mx-auto [&>svg]:block"
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
