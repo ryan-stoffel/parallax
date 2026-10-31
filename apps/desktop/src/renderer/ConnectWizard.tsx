@@ -20,8 +20,8 @@ export const connectCommand = (channel: "stable" | "nightly") =>
 /**
  * Add computer (0091), a modal dialog open while it's mounted: the command to run on the computer
  * to add, which signs it in to the account and shows a code, then this account's computers as
- * they show up, each connected, waiting for its code, or waiting for approval. Opening it asks the
- * account for its computers.
+ * they show up, including removed ones. Each can take a setup code, even when already connected.
+ * Opening it asks the account for its computers.
  */
 export function ConnectWizard({
   channel,
@@ -34,16 +34,19 @@ export function ConnectWizard({
   /** The devices this app lists. */
   devices: DeviceHost[];
   onClose: () => void;
-  /** Opens the code dialog for a new computer. */
+  /** Opens the computer's setup-code dialog. */
   onEnterCode: (device: DeviceHost) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [copied, setCopied] = useState(false);
+  const [discovered, setDiscovered] = useState<DeviceHost[]>([]);
   useEffect(() => dialog.current?.showModal(), []);
-  useEffect(() => void window.parallax.discoverAccount(), []);
+  useEffect(() => void window.parallax.discoverAccount().then(setDiscovered), []);
   const command = connectCommand(channel);
-  const computers = devices.filter((d) => d.id.startsWith("account:"));
+  const byId = new Map(discovered.map((d) => [d.id, d]));
+  for (const device of devices) if (device.id.startsWith("account:")) byId.set(device.id, device);
+  const computers = [...byId.values()];
 
   return (
     <dialog
@@ -90,7 +93,7 @@ export function ConnectWizard({
               Parallax's service, which starts at login, so your other computers reach it.
             </Plan>
             <Plan icon={<Hash aria-hidden />} title="Shows a 6-digit code">
-              Type it here when Parallax asks, to let this computer in.
+              Choose Enter code beside that computer below, then type its code.
             </Plan>
           </ul>
           <section aria-label="Your computers">
@@ -112,7 +115,7 @@ export function ConnectWizard({
           <div className="flex-1">
             <button
               type="button"
-              onClick={() => void window.parallax.discoverAccount()}
+              onClick={() => void window.parallax.discoverAccount().then(setDiscovered)}
               className={`${quietButton} -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
             >
               <RefreshCw aria-hidden />
@@ -132,16 +135,16 @@ export function ConnectWizard({
 function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode: () => void }) {
   const state = useConnection(device.id);
   const { access } = device;
-  const status = accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…");
+  const status = !device.enabled
+    ? "Not in use"
+    : (accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…"));
+  const busy =
+    access?.step === "pairing" || access?.step === "signingIn" || access?.step === "pending";
   return (
     <li className="flex items-center gap-3 border-border px-3 py-2.5 not-last:border-b">
       <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
       <p className="min-w-0 flex-1 truncate text-body font-medium">{device.name}</p>
-      {access?.step === "needsCode" ? (
-        <button type="button" className={primaryButton} onClick={onEnterCode}>
-          Enter code
-        </button>
-      ) : state?.status === "connected" ? (
+      {device.enabled && state?.status === "connected" ? (
         <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
           <CircleCheck aria-hidden />
           Connected
@@ -149,6 +152,9 @@ function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode:
       ) : (
         <span className="text-body text-muted-foreground">{status}</span>
       )}
+      <button type="button" className={primaryButton} disabled={busy} onClick={onEnterCode}>
+        Enter code
+      </button>
     </li>
   );
 }

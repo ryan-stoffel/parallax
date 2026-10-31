@@ -65,7 +65,7 @@ beforeEach(() => {
     onConnect: () => () => {},
     onDevices: () => () => {},
     onAccessRequests: () => () => {},
-    discoverAccount: async () => {},
+    discoverAccount: async () => [],
     onLocalName: (listener: (name: string) => void) => {
       listener("This Mac");
       return () => {};

@@ -145,3 +145,73 @@ test("a new account computer takes its code in a dialog, then installs and signs
   await expect(card).toContainText("build-box");
   await expect(card).toContainText("Connected");
 });
+
+test("Add computer takes a removed computer's code and can finish setup again after connecting", async () => {
+  const port = await freePort();
+  const box = await startBuildBox(port);
+  const hostId = `account:${box.hostId}`;
+  process.env["PLXD_RELAY_URL"] = "http://127.0.0.1:9";
+  launched = await launch("agent.json", undefined, undefined, undefined, false, {
+    accounts: [
+      { hostId: box.hostId, name: "build-box", routes: [`127.0.0.1:${port}`], removed: true },
+    ],
+  });
+  const { page, app } = launched;
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  // Only the profile is synthetic. Both daemons, the dialogs, and code verification are real.
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.send("parallax:profile", {
+      name: "Pairing test",
+      firstName: "Pairing",
+      lastName: "test",
+      email: "pairing@example.test",
+    });
+  });
+  const card = page.locator(`li[data-device="${hostId}"]`);
+  await expect(card).toHaveCount(0);
+  await page.getByRole("button", { name: "Add computer", exact: true }).first().click();
+  const wizard = page.getByRole("dialog", { name: "Add a computer", exact: true });
+  await expect(wizard.getByText("build-box", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath("add-computer.png"),
+    animations: "disabled",
+  });
+  await wizard.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(card).toHaveCount(0);
+
+  const pair = async () => {
+    const { code } = await box.result<{ code: string }>("access/setupCode", {});
+    await wizard.getByRole("button", { name: "Enter code", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Connect build-box", exact: true });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveCount(1);
+    await page.screenshot({
+      path: test.info().outputPath("enter-code.png"),
+      animations: "disabled",
+    });
+    await dialog.getByRole("textbox", { name: "Code", exact: true }).fill(code);
+    await dialog.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(
+        async () => (await box.result<{ setupApproved?: string }>("access/get", {})).setupApproved,
+      )
+      .toBeTruthy();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          `window.parallax.connectionState(${JSON.stringify(hostId)}).then((state) => state?.status)`,
+        ),
+      )
+      .toBe("connected");
+  };
+
+  await pair();
+  await expect(wizard.getByText("Connected", { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("connected.png"), animations: "disabled" });
+  await pair();
+  await wizard.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(card).toContainText("Connected");
+});
