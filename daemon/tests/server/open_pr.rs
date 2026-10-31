@@ -41,7 +41,11 @@ impl Tools {
             r#"#!/bin/sh
 # Builtins only: nothing else is on the PATH.
 dir='{dir}'
-printf '%s\n' "$*" >> "$dir/gh.log"
+# A GraphQL read logs as `api graphql`, without its query.
+case "$1 $2" in
+  'api graphql') echo 'api graphql' >> "$dir/gh.log" ;;
+  *) printf '%s\n' "$*" >> "$dir/gh.log" ;;
+esac
 mode=; [ -f "$dir/gh-mode" ] && read -r mode < "$dir/gh-mode"
 case "$mode" in
   signed-out) echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4 ;;
@@ -63,7 +67,12 @@ case "$1 $2" in
       *) while IFS= read -r line; do printf '%s\n' "$line"; done < "$dir/view.json" ;;
     esac ;;
   'pr diff') echo 'diff --git a/README.md b/README.md' ;;
-  'pr merge' | 'pr ready' | 'pr close') ;;
+  'pr merge' | 'pr ready' | 'pr close' | 'pr update-branch' | 'api -X') ;;
+  'api graphql')
+    case "$*" in
+      *behindBy*) echo '{{"data":{{"repository":{{"ref":{{"compare":{{"behindBy":2}}}}}}}}}}' ;;
+      *) while IFS= read -r line; do printf '%s\n' "$line"; done < "$dir/graphql.json" ;;
+    esac ;;
   *) exit 1 ;;
 esac
 "#,
@@ -93,6 +102,11 @@ esac
     /// What `gh pr view` prints.
     pub(crate) fn view(&self, json: &str) {
         fs::write(self.0.path().join("view.json"), format!("{json}\n")).unwrap();
+    }
+
+    /// What `gh api graphql` prints for a pull request read, other than a compare.
+    pub(crate) fn graphql(&self, json: &str) {
+        fs::write(self.0.path().join("graphql.json"), format!("{json}\n")).unwrap();
     }
 
     /// What `gh pr view --jq=.state` prints.

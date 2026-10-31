@@ -176,6 +176,10 @@ pub(crate) fn initialize(
 /// `agent.updated`, which an older plxd never fills.
 /// `prDiff` (PLX-328): `pr/diff`, and `createdAt`, `closedAt`, `mergedAt`, `mergedBy`, `commits`,
 /// and `reviews` on `PullRequest`, which an older plxd never fills.
+/// `prActions` (PLX-1151): `pr/view` serves the shared GraphQL read (0086) with readiness, review
+/// threads, and check ids, and `pr/act` takes `rebase`, `updateBranch`, `rerunFailed`,
+/// `rerunJob`, `cancelRun`, and `deleteBranch`, and `method`, `deleteBranch`, and `headSha`, which
+/// an older plxd refuses or ignores.
 /// `composerMenus` (PLX-359): `agent/commands` and `repo/files`, for the composer's `/` and `@`
 /// menus.
 /// `githubStatus` (PLX-336): `github/status`.
@@ -371,6 +375,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "orchestratorTasks",
     "peerGit",
     "pins",
+    "prActions",
     "prDiff",
     "prWatch",
     "projectContext",

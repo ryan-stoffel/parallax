@@ -539,13 +539,17 @@ export type ParallaxRequests = {
 	 */
 	"repo/refs": { params: RepoRefsParams, result: RepoRefsResult },
 	/**
-	 * `pr/view`: one of a run's linked pull requests as GitHub has it now, read with `gh`
-	 * (PLX-318). Gated on the `pullRequests` capability, like `pr/act`.
+	 * `pr/view`: one of a run's linked pull requests from the host's shared GraphQL read,
+	 * refreshed at most every 30 s (PLX-318, PLX-1151). Gated on the `pullRequests`
+	 * capability, like `pr/act`. A plxd without `prActions` leaves the newer fields out.
 	 */
 	"pr/view": { params: PrViewParams, result: PullRequest },
 	/**
-	 * `pr/act`: merges, squashes, sets auto-merge on or off, drafts, readies, or closes one
-	 * of a run's linked pull requests with `gh`, and returns it as it is after.
+	 * `pr/act`: merges, squashes, rebases, sets auto-merge on or off, drafts, readies,
+	 * closes, updates the branch, reruns or cancels CI, or deletes the merged branch of one
+	 * of a run's linked pull requests through the host's paced write queue, and returns it
+	 * as a fresh read after. A plxd without `prActions` refuses `rebase` and the actions after
+	 * `close`.
 	 */
 	"pr/act": { params: PrActParams, result: PullRequest },
 	/**
@@ -7301,6 +7305,48 @@ export type PullRequest = {
 	 * How it merges once its requirements pass, when auto-merge is on. Absent means off.
 	 */
 	autoMerge?: PrMergeMethod,
+	/**
+	 * Its review decision, when the repository asks for reviews (PLX-1151). This field and the
+	 * rest below are absent from a plxd without `prActions`.
+	 */
+	reviewDecision?: PrReviewDecision,
+	/**
+	 * Whether it merges without conflicts. Absent while GitHub works it out.
+	 */
+	mergeable?: boolean,
+	/**
+	 * Commits on the base branch its head doesn't have. Absent once it isn't open.
+	 */
+	behindBy?: number,
+	/**
+	 * Open, not a draft, no conflict, not behind, every check passed, no unresolved thread, and
+	 * no change request, as `pr/status` judges it.
+	 */
+	ready?: boolean,
+	/**
+	 * Why it isn't ready, one line each. Absent when it is.
+	 */
+	reasons?: Array<string>,
+	/**
+	 * Its head commit.
+	 */
+	headSha?: string,
+	/**
+	 * The merge methods its repository allows.
+	 */
+	mergeMethods?: Array<PrMergeMethod>,
+	/**
+	 * Its labels with their colors, in `labels`' order.
+	 */
+	labelColors?: Array<PrLabel>,
+	/**
+	 * Its review threads, resolved ones included, oldest first.
+	 */
+	reviewThreads?: Array<PrReviewThread>,
+	/**
+	 * It has older review threads than `review_threads` holds (the newest 100).
+	 */
+	reviewThreadsTruncated?: boolean,
 };
 
 /**
@@ -7336,6 +7382,18 @@ export type PrCheck = {
 	 * When it finished. Absent while it runs.
 	 */
 	completedAt?: string,
+	/**
+	 * Whether branch protection requires it (PLX-1151).
+	 */
+	required?: boolean,
+	/**
+	 * Its GitHub Actions workflow run, for `rerunFailed` and `cancelRun`.
+	 */
+	runId?: number,
+	/**
+	 * Its GitHub Actions job, for `rerunJob`.
+	 */
+	jobId?: number,
 };
 
 /**
@@ -7361,7 +7419,30 @@ export type PrComment = {
 	 * When it was written, in RFC 3339 UTC.
 	 */
 	createdAt: string,
+	/**
+	 * Its GitHub node id (PLX-1151).
+	 */
+	id?: string,
+	/**
+	 * Its web URL.
+	 */
+	url?: string,
+	/**
+	 * Whether it is a comment or a review's text.
+	 */
+	kind?: PrCommentKind,
+	/**
+	 * Its author's avatar image.
+	 */
+	avatarUrl?: string,
 };
+
+/**
+ * What a [`PrComment`] is.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
+ */
+export type PrCommentKind = "comment" | "review";
 
 /**
  * A commit on a pull request.
@@ -7404,6 +7485,20 @@ export type PrFile = {
 };
 
 /**
+ * A label and its color.
+ */
+export type PrLabel = {
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Its color, as six hex digits without `#`.
+	 */
+	color: string,
+};
+
+/**
  * How a pull request merges.
  *
  * A newer plxd may send a method this version does not know; treat it as unknown.
@@ -7443,6 +7538,82 @@ export type PrReview = {
 export type PrReviewState = "approved" | "changesRequested" | "commented" | "dismissed";
 
 /**
+ * A pull request's review decision, as GitHub's `reviewDecision` says.
+ *
+ * A newer plxd may send a decision this version does not know; treat it as unknown.
+ */
+export type PrReviewDecision = "approved" | "changesRequested" | "reviewRequired";
+
+/**
+ * A review thread on a pull request's diff, resolved or not.
+ */
+export type PrReviewThread = {
+	/**
+	 * Its GitHub node id, for `pr/write`'s `replyToThread`.
+	 */
+	id: string,
+	/**
+	 * The file it is on.
+	 */
+	path?: string,
+	/**
+	 * The line it is on, or was on when written once it is outdated. Absent for a thread on the
+	 * whole file.
+	 */
+	line?: number,
+	/**
+	 * The diff down to its line, from its first comment.
+	 */
+	diffHunk?: string,
+	/**
+	 * Whether the code it is on changed since.
+	 */
+	isOutdated: boolean,
+	/**
+	 * Whether someone resolved it.
+	 */
+	isResolved: boolean,
+	/**
+	 * Its comments, oldest first.
+	 */
+	comments: Array<PrThreadComment>,
+	/**
+	 * GitHub has more comments on it than `comments` holds (the first 50).
+	 */
+	truncated?: boolean,
+};
+
+/**
+ * A comment in a [`PrReviewThread`].
+ */
+export type PrThreadComment = {
+	/**
+	 * Its GitHub node id.
+	 */
+	id: string,
+	/**
+	 * Its web URL.
+	 */
+	url?: string,
+	/**
+	 * Its author's login, `ghost` for a deleted account.
+	 */
+	author: string,
+	/**
+	 * Its author's avatar image.
+	 */
+	avatarUrl?: string,
+	/**
+	 * Its Markdown.
+	 */
+	body: string,
+	/**
+	 * When it was written, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
  * Where a pull request is.
  *
  * A newer plxd may send a state this version does not know; treat it as unknown.
@@ -7465,6 +7636,28 @@ export type PrActParams = {
 	 * What to do.
 	 */
 	action: PrAction,
+	/**
+	 * How `autoMerge` merges, and whether `updateBranch` rebases. Absent means a merge commit
+	 * (PLX-1151).
+	 */
+	method?: PrMergeMethod,
+	/**
+	 * Whether `merge`, `squash`, or `rebase` also deletes the head branch.
+	 */
+	deleteBranch?: boolean,
+	/**
+	 * The head commit the user saw: `merge`, `squash`, `rebase`, and `autoMerge` merge only while
+	 * the head is still this commit.
+	 */
+	headSha?: string,
+	/**
+	 * The GitHub Actions run for `rerunFailed` and `cancelRun`, as a check's `runId`.
+	 */
+	workflowRunId?: number,
+	/**
+	 * The GitHub Actions job for `rerunJob`, as a check's `jobId`.
+	 */
+	jobId?: number,
 };
 
 /**
@@ -7472,7 +7665,7 @@ export type PrActParams = {
  *
  * A newer client may send an action this version does not know; plxd refuses it.
  */
-export type PrAction = "merge" | "squash" | "autoMerge" | "disableAutoMerge" | "draft" | "ready" | "close";
+export type PrAction = "merge" | "squash" | "rebase" | "autoMerge" | "disableAutoMerge" | "draft" | "ready" | "close" | "updateBranch" | "rerunFailed" | "rerunJob" | "cancelRun" | "deleteBranch";
 
 /**
  * Result of `pr/diff`: a pull request's changes as one unified diff, as `gh pr diff` prints it.

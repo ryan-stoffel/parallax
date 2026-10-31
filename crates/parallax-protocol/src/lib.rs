@@ -217,9 +217,10 @@ pub use provider::{
     ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
 };
 pub use pull_request::{
-    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrFile,
-    PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewEvent, PrReviewState,
-    PrState, PrViewParams, PrWrite, PrWriteParams, PrWriteResult, PullRequest,
+    PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommentKind, PrCommit, PrDiffResult,
+    PrFile, PrLabel, PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview,
+    PrReviewDecision, PrReviewEvent, PrReviewState, PrReviewThread, PrState, PrThreadComment,
+    PrViewParams, PrWrite, PrWriteParams, PrWriteResult, PullRequest,
 };
 pub use question::{
     Question, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,

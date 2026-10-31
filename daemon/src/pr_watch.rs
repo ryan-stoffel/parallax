@@ -32,9 +32,11 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ParallaxEvent, PrMergeMethod, PrMergeWhenReadyParams, PrStatusCheck, PrStatusFile,
-    PrStatusResult, PrStatusThread, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
-    RunId, ScopeId, TurnId,
+    ParallaxEvent, PrCheck, PrCheckState, PrComment, PrCommentKind, PrCommit, PrFile, PrLabel,
+    PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewDecision, PrReviewState,
+    PrReviewThread, PrState, PrStatusCheck, PrStatusFile, PrStatusResult, PrStatusThread,
+    PrThreadComment, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
+    PullRequest as PrView, RunId, ScopeId, TurnId,
 };
 use parallax_store::Store;
 use serde::{Deserialize, Serialize};
@@ -68,30 +70,53 @@ const LISTED: usize = 10;
 const SNIPPET: usize = 200;
 
 /// One `gh api graphql` read: the viewer, the GraphQL quota left (for the `gh` shim, PLX-1023),
-/// and the pull request's title, body, state, draft, head and base, changed files, checks with
-/// whether each is required and its Actions run, the head's check suites, mergeability, merge
-/// state, whether the base has a merge queue, review decision, and its newest comments, reviews,
-/// and review threads with whether each is resolved.
-// ponytail: reads the first 100 files and the newest 50 comments, reviews, and threads (20
-// comments each) per read; page them if a pull request ever gets more than that.
+/// the repository's allowed merge methods, and the pull request's title, body, state, draft,
+/// times, head and base, size, labels, review requests, commits, auto-merge, changed files, checks
+/// with whether each is required and its Actions run and job, the head's check suites,
+/// mergeability, merge state, whether the base has a merge queue, review decision, and its newest
+/// comments, reviews, and review threads, resolved or not. It serves `pr/view` too (PLX-1151), at
+/// about two points of the GraphQL quota.
+// ponytail: reads the first 100 files, 20 labels and review requests, the newest 100 commits,
+// comments, reviews, and threads, and each thread's first 50 comments per read; page them if a
+// pull request ever gets more than that.
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
   rateLimit { remaining resetAt }
   repository(owner: $owner, name: $name) {
+    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
     pullRequest(number: $number) {
+      number
+      url
       title
       body
       state
       isDraft
+      createdAt
+      updatedAt
+      closedAt
+      mergedAt
+      mergedBy { login }
       mergeStateStatus
       reviewDecision
-      author { login }
+      author { login avatarUrl }
       baseRefName
       headRefName
       headRefOid
+      headRepository { nameWithOwner }
       mergeable
       isMergeQueueEnabled
+      additions
+      deletions
+      changedFiles
+      autoMergeRequest { mergeMethod }
+      labels(first: 20) { nodes { name color } }
+      reviewRequests(first: 20) { nodes { requestedReviewer {
+        ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { name }
+      } } }
       files(first: 100) { nodes { path additions deletions } }
+      history: commits(last: 100) { nodes { commit {
+        oid messageHeadline committedDate author { name user { login } }
+      } } }
       commits(last: 1) { nodes { commit {
         checkSuites(first: 50) {
           pageInfo { hasNextPage } nodes { status workflowRun { databaseId } }
@@ -99,16 +124,27 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
         statusCheckRollup { contexts(first: 100) { nodes {
         __typename
         ... on CheckRun {
-          name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
-          checkSuite { workflowRun { databaseId } }
+          name status conclusion detailsUrl startedAt completedAt databaseId
+          isRequired(pullRequestNumber: $number)
+          checkSuite { workflowRun { databaseId workflow { name } } }
         }
-        ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
+        ... on StatusContext {
+          context state targetUrl createdAt isRequired(pullRequestNumber: $number)
+        }
       } } } } } }
-      comments(last: 50) { nodes { id author { login } body createdAt lastEditedAt url } }
-      reviews(last: 50) { nodes { id author { login } body state submittedAt lastEditedAt url } }
-      reviewThreads(last: 50) { nodes { id path isResolved comments(last: 20) { nodes {
-        id author { login } body createdAt lastEditedAt url
-      } } } }
+      comments(last: 100) { nodes {
+        id author { login avatarUrl } body createdAt lastEditedAt url
+      } }
+      reviews(last: 100) { nodes {
+        id author { login avatarUrl } body state submittedAt lastEditedAt url
+      } }
+      reviewThreads(last: 100) { pageInfo { hasPreviousPage } nodes {
+        id path line originalLine isOutdated isResolved comments(first: 50) {
+          pageInfo { hasNextPage } nodes {
+            id author { login avatarUrl } body createdAt lastEditedAt url diffHunk
+          }
+        }
+      } }
     }
   }
 }";
@@ -158,13 +194,14 @@ impl Watches {
         reads.insert(url.to_owned(), (at, detail.clone()));
     }
 
-    /// Adds `behind_by` to `url`'s last read while it is still of `head`, so a status served from
-    /// it needs no second call.
-    fn compared(&self, url: &str, head: &str, behind_by: u64) {
+    /// Adds `compared`, how far `head` is behind the base or why GitHub couldn't say, to `url`'s
+    /// last read while it is still of `head`, so a call served from it needs no second compare,
+    /// even one that failed.
+    fn compared(&self, url: &str, head: &str, compared: Result<u64, String>) {
         if let Some((_, detail)) = self.reads().get_mut(url)
             && detail.head_sha.as_deref() == Some(head)
         {
-            detail.behind_by = Some(behind_by);
+            detail.compared = Some(compared);
         }
     }
 }
@@ -215,8 +252,9 @@ struct Detail {
     head_sha: Option<String>,
     head_branch: String,
     base_branch: String,
-    /// How far the head is behind the base, once [`status`] has asked.
-    behind_by: Option<u64>,
+    /// How far the head is behind the base, or why GitHub couldn't compare them, once
+    /// [`behind_of`] has asked.
+    compared: Option<Result<u64, String>>,
     files: Vec<PrStatusFile>,
     checks: Vec<Check>,
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
@@ -235,6 +273,11 @@ struct Detail {
     viewer: Option<String>,
     author: Option<String>,
     remarks: Vec<Remark>,
+    /// The head branch's repository, as `owner/name`. Absent once a fork is deleted.
+    head_repo: Option<String>,
+    /// The pull request as `pr/view` serves it, but for what [`view`] adds. Absent when GitHub's
+    /// answer left out what it needs.
+    view: Option<PrView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -501,20 +544,81 @@ pub(crate) async fn status(
     let url = &url;
     let fresh = move || async move { fetch(daemon, url).await.map_err(unreadable) };
     let judge = move |detail: Detail| async move {
-        let behind_by = match (detail.state.as_str(), &detail.head_sha, detail.behind_by) {
-            ("OPEN", Some(_), Some(behind_by)) => behind_by,
-            ("OPEN", Some(head), None) => {
-                let behind_by = behind(daemon, url, &detail.base_branch, head)
-                    .await
-                    .map_err(unreadable)?;
-                daemon.pr_watches.compared(url, head, behind_by);
-                behind_by
-            }
-            _ => 0,
-        };
+        let behind_by = behind_of(daemon, url, &detail).await.map_err(unreadable)?;
         Ok(verdict(url.clone(), detail, behind_by, watching))
     };
     judged(shared, fresh, judge).await
+}
+
+/// How far `detail`'s head is behind its base: 0 unless it is open, else from the read, or from
+/// one compare kept on the shared read, failed or not, for every later caller of the same head.
+async fn behind_of(daemon: &Daemon, url: &str, detail: &Detail) -> Result<u64, PrError> {
+    match (detail.state.as_str(), &detail.head_sha, &detail.compared) {
+        ("OPEN", Some(_), Some(compared)) => compared.clone().map_err(PrError::Gh),
+        ("OPEN", Some(head), None) => {
+            let compared = behind(daemon, url, &detail.base_branch, head)
+                .await
+                .map_err(|error| error.to_string());
+            daemon.pr_watches.compared(url, head, compared.clone());
+            compared.map_err(PrError::Gh)
+        }
+        _ => Ok(0),
+    }
+}
+
+/// `pr/view` (PLX-1151): pull request `url` from the shared read, or a fresh one with `fresh`,
+/// with how far it is behind its base and [`verdict`]'s readiness. Unlike `pr/status`, a ready
+/// answer may come from a shared read: the app pins its merge to the head it shows.
+pub(crate) async fn view(daemon: &Daemon, url: &str, fresh: bool) -> Result<PrView, PrError> {
+    let detail = if fresh {
+        fetch(daemon, url).await?
+    } else {
+        read(daemon, url).await?
+    };
+    // A base branch that is gone can't be compared; the rest still shows.
+    let behind_by = behind_of(daemon, url, &detail)
+        .await
+        .inspect_err(|error| warn!(%url, %error, "could not compare a pull request with its base"))
+        .ok();
+    viewed(url, detail, behind_by)
+}
+
+/// `detail`'s pull request with `behind_by` and [`verdict`]'s readiness added. An open one whose
+/// compare failed (`behind_by` absent) isn't ready, with that as a reason.
+fn viewed(url: &str, detail: Detail, behind_by: Option<u64>) -> Result<PrView, PrError> {
+    let open = detail.state == "OPEN";
+    let mut pr = detail.view.clone().ok_or_else(|| {
+        PrError::Gh("GitHub's answer left out the pull request's details".to_owned())
+    })?;
+    let uncompared = open && behind_by.is_none();
+    let base = detail.base_branch.clone();
+    let mut reasons = verdict(url.to_owned(), detail, behind_by.unwrap_or(0), false).reasons;
+    if uncompared {
+        reasons.push(format!("couldn't tell how far it is behind {base}"));
+    }
+    pr.behind_by = behind_by.filter(|_| open);
+    pr.ready = Some(reasons.is_empty());
+    pr.reasons = reasons;
+    Ok(pr)
+}
+
+/// The head branch and its repository (`owner/name`) of `url`, read fresh, for deleting the
+/// branch: refused while the pull request is open, or once its fork is gone.
+pub(crate) async fn head_to_delete(
+    daemon: &Daemon,
+    url: &str,
+) -> Result<(String, String), PrError> {
+    let detail = fetch(daemon, url).await?;
+    if detail.state == "OPEN" {
+        return Err(PrError::Gh(
+            "the pull request is still open; merge or close it before deleting its branch"
+                .to_owned(),
+        ));
+    }
+    let repo = detail
+        .head_repo
+        .ok_or_else(|| PrError::Gh("the head branch's repository is gone".to_owned()))?;
+    Ok((repo, detail.head_branch))
 }
 
 /// Judges a pull request with `judge`, from `shared`, its shared read, while that isn't ready, and
@@ -1376,6 +1480,10 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
             error.unwrap_or_else(|| "GitHub answered with no data".to_owned()),
         ));
     };
+    let merge_methods = repository
+        .as_ref()
+        .map(Repository::merge_methods)
+        .unwrap_or_default();
     let Some(pr) = repository.and_then(|repository| repository.pull_request) else {
         return Err(PrError::Gh(
             error.unwrap_or_else(|| "GitHub has no such pull request".to_owned()),
@@ -1386,6 +1494,12 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
     if let Some(error) = error {
         warn!(%error, "GitHub left part of a pull request out");
     }
+    let pr_checks = pr
+        .commits
+        .iter()
+        .flat_map(|node| node.commit.pr_checks())
+        .collect();
+    let view = pr_view(&pr, merge_methods, pr_checks);
     let commits: Vec<Commit> = pr
         .commits
         .nodes
@@ -1442,7 +1556,7 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
         head_sha: pr.head_ref_oid,
         head_branch: pr.head_ref_name,
         base_branch: pr.base_ref_name,
-        behind_by: None,
+        compared: None,
         files: pr
             .files
             .map(|files| files.nodes.into_iter().flatten().collect())
@@ -1457,7 +1571,239 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
         viewer: viewer.map(|viewer| viewer.login),
         author: pr.author.map(|author| author.login),
         remarks,
+        head_repo: pr.head_repository.map(|repo| repo.name_with_owner),
+        view,
     })
+}
+
+/// [`QUERY`]'s pull request `pr` as `pr/view` serves it, but for what [`viewed`] adds, with the
+/// repository's `merge_methods` and the head's `checks`. `None` when GitHub's answer lacks its
+/// number, URL, or last change.
+fn pr_view(
+    pr: &PullRequest,
+    merge_methods: Vec<PrMergeMethod>,
+    checks: Vec<PrCheck>,
+) -> Option<PrView> {
+    let (number, url, updated_at) = (pr.number?, pr.url.clone()?, pr.updated_at?);
+    let any = |state| checks.iter().any(|check: &PrCheck| check.state == state);
+    let checks_state = (!checks.is_empty()).then(|| {
+        if any(PrCheckState::Failed) {
+            PrCheckState::Failed
+        } else if any(PrCheckState::Pending) {
+            PrCheckState::Pending
+        } else {
+            PrCheckState::Passed
+        }
+    });
+    let (comments, reviews) = discussion(pr);
+    let labels: Vec<PrLabel> = pr
+        .labels
+        .iter()
+        .flat_map(Nodes::iter)
+        .map(|label| PrLabel {
+            name: label.name.clone(),
+            color: label.color.clone(),
+        })
+        .collect();
+    Some(PrView {
+        number,
+        title: pr.title.clone(),
+        // `https://github.com/<owner>/<name>/pull/<n>`.
+        repo: url.split('/').skip(3).take(2).collect::<Vec<_>>().join("/"),
+        url,
+        state: match pr.state.as_str() {
+            "OPEN" => PrState::Open,
+            "CLOSED" => PrState::Closed,
+            "MERGED" => PrState::Merged,
+            _ => PrState::Unknown,
+        },
+        draft: pr.is_draft,
+        author: login(pr.author.as_ref()),
+        updated_at,
+        base_branch: pr.base_ref_name.clone(),
+        head_branch: pr.head_ref_name.clone(),
+        changed_files: pr.changed_files,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        files: pr
+            .files
+            .iter()
+            .flat_map(Nodes::iter)
+            .map(|file| PrFile {
+                path: file.path.clone(),
+                additions: file.additions,
+                deletions: file.deletions,
+            })
+            .collect(),
+        body: pr.body.clone(),
+        comments,
+        review_requests: pr
+            .review_requests
+            .iter()
+            .flat_map(Nodes::iter)
+            .filter_map(|request| request.requested_reviewer.as_ref())
+            .filter_map(|reviewer| reviewer.login.clone().or_else(|| reviewer.name.clone()))
+            .collect(),
+        labels: labels.iter().map(|label| label.name.clone()).collect(),
+        checks,
+        checks_state,
+        created_at: pr.created_at,
+        closed_at: pr.closed_at,
+        merged_at: pr.merged_at,
+        merged_by: pr.merged_by.as_ref().map(|by| by.login.clone()),
+        commits: history(pr),
+        reviews,
+        merge_state: merge_state(&pr.merge_state_status),
+        auto_merge: pr
+            .auto_merge_request
+            .as_ref()
+            .map(|auto| merge_method(&auto.merge_method)),
+        review_decision: pr
+            .review_decision
+            .as_deref()
+            .map(|decision| match decision {
+                "APPROVED" => PrReviewDecision::Approved,
+                "CHANGES_REQUESTED" => PrReviewDecision::ChangesRequested,
+                "REVIEW_REQUIRED" => PrReviewDecision::ReviewRequired,
+                _ => PrReviewDecision::Unknown,
+            }),
+        mergeable: match pr.mergeable.as_str() {
+            "MERGEABLE" => Some(true),
+            "CONFLICTING" => Some(false),
+            _ => None,
+        },
+        behind_by: None,
+        ready: None,
+        reasons: Vec::new(),
+        head_sha: pr.head_ref_oid.clone(),
+        merge_methods,
+        label_colors: labels,
+        review_threads: pr.review_threads.iter().map(review_thread).collect(),
+        review_threads_truncated: pr.review_threads.cut(),
+    })
+}
+
+/// `pr`'s newest commits, oldest first, each by its author's login, or name without a GitHub
+/// account.
+fn history(pr: &PullRequest) -> Vec<PrCommit> {
+    pr.history
+        .iter()
+        .flat_map(Nodes::iter)
+        .filter_map(|node| {
+            let commit = &node.commit;
+            let author = commit.author.as_ref();
+            Some(PrCommit {
+                oid: commit.oid.clone(),
+                headline: commit.message_headline.clone(),
+                author: author
+                    .and_then(|author| author.user.as_ref().map(|user| user.login.clone()))
+                    .or_else(|| author.and_then(|author| author.name.clone()))
+                    .unwrap_or_default(),
+                committed_at: commit.committed_date?,
+            })
+        })
+        .collect()
+}
+
+/// GitHub's `mergeStateStatus` as a [`PrMergeState`], `None` while it is `UNKNOWN`.
+fn merge_state(state: &str) -> Option<PrMergeState> {
+    match state {
+        "CLEAN" => Some(PrMergeState::Clean),
+        "UNSTABLE" => Some(PrMergeState::Unstable),
+        "HAS_HOOKS" => Some(PrMergeState::HasHooks),
+        "BEHIND" => Some(PrMergeState::Behind),
+        "BLOCKED" => Some(PrMergeState::Blocked),
+        "DIRTY" => Some(PrMergeState::Dirty),
+        "DRAFT" => Some(PrMergeState::Draft),
+        _ => None,
+    }
+}
+
+/// GitHub's name for a merge method as a [`PrMergeMethod`].
+fn merge_method(method: &str) -> PrMergeMethod {
+    match method {
+        "MERGE" => PrMergeMethod::Merge,
+        "SQUASH" => PrMergeMethod::Squash,
+        "REBASE" => PrMergeMethod::Rebase,
+        _ => PrMergeMethod::Unknown,
+    }
+}
+
+/// A deleted account is GitHub's `ghost`.
+fn login(author: Option<&Login>) -> String {
+    author.map_or_else(|| "ghost".to_owned(), |author| author.login.clone())
+}
+
+/// `pr`'s comments and the texts of its reviews that say something, and its reviews' verdicts,
+/// each oldest first. A pending review has no `submittedAt`, so it is left out of both.
+fn discussion(pr: &PullRequest) -> (Vec<PrComment>, Vec<PrReview>) {
+    let said = |comment: &Comment, created_at, kind| PrComment {
+        author: login(comment.author.as_ref()),
+        body: comment.body.clone(),
+        created_at,
+        id: Some(comment.id.clone()),
+        url: comment.url.clone(),
+        kind: Some(kind),
+        avatar_url: comment.avatar_url(),
+    };
+    let mut comments: Vec<PrComment> = pr
+        .comments
+        .iter()
+        .filter_map(|comment| Some(said(comment, comment.created_at?, PrCommentKind::Comment)))
+        .collect();
+    let mut reviews = Vec::new();
+    for review in pr.reviews.iter() {
+        let Some(submitted_at) = review.submitted_at else {
+            continue;
+        };
+        comments.push(said(review, submitted_at, PrCommentKind::Review));
+        reviews.push(PrReview {
+            author: login(review.author.as_ref()),
+            state: match review.state.as_deref() {
+                Some("APPROVED") => PrReviewState::Approved,
+                Some("CHANGES_REQUESTED") => PrReviewState::ChangesRequested,
+                Some("COMMENTED") => PrReviewState::Commented,
+                Some("DISMISSED") => PrReviewState::Dismissed,
+                _ => PrReviewState::Unknown,
+            },
+            submitted_at,
+        });
+    }
+    comments.retain(|comment| !comment.body.trim().is_empty());
+    comments.sort_by_key(|comment| comment.created_at);
+    reviews.sort_by_key(|review| review.submitted_at);
+    (comments, reviews)
+}
+
+/// A review thread as `pr/view` serves it. Its line is where it was written once it is outdated.
+fn review_thread(thread: &Thread) -> PrReviewThread {
+    PrReviewThread {
+        id: thread.id.clone(),
+        path: thread.path.clone(),
+        line: thread.line.or(thread.original_line),
+        diff_hunk: thread
+            .comments
+            .iter()
+            .next()
+            .and_then(|first| first.diff_hunk.clone()),
+        is_outdated: thread.is_outdated,
+        is_resolved: thread.is_resolved,
+        comments: thread
+            .comments
+            .iter()
+            .filter_map(|comment| {
+                Some(PrThreadComment {
+                    id: comment.id.clone(),
+                    url: comment.url.clone(),
+                    author: login(comment.author.as_ref()),
+                    avatar_url: comment.avatar_url(),
+                    body: comment.body.clone(),
+                    created_at: comment.created_at?,
+                })
+            })
+            .collect(),
+        truncated: thread.comments.cut(),
+    }
 }
 
 fn check_state(context: &RollupNode) -> CheckState {
@@ -1523,12 +1869,36 @@ struct Data {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Repository {
+    #[serde(default)]
+    merge_commit_allowed: bool,
+    #[serde(default)]
+    squash_merge_allowed: bool,
+    #[serde(default)]
+    rebase_merge_allowed: bool,
     pull_request: Option<PullRequest>,
 }
 
+impl Repository {
+    /// The merge methods it allows.
+    fn merge_methods(&self) -> Vec<PrMergeMethod> {
+        [
+            (self.merge_commit_allowed, PrMergeMethod::Merge),
+            (self.squash_merge_allowed, PrMergeMethod::Squash),
+            (self.rebase_merge_allowed, PrMergeMethod::Rebase),
+        ]
+        .into_iter()
+        .filter_map(|(allowed, method)| allowed.then_some(method))
+        .collect()
+    }
+}
+
+/// [`QUERY`]'s pull request. What only `pr/view` reads is optional, so an answer without it still
+/// serves `pr/status` and the watches.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PullRequest {
+    number: Option<u64>,
+    url: Option<String>,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -1536,6 +1906,11 @@ struct PullRequest {
     state: String,
     #[serde(default)]
     is_draft: bool,
+    created_at: Option<Timestamp>,
+    updated_at: Option<Timestamp>,
+    closed_at: Option<Timestamp>,
+    merged_at: Option<Timestamp>,
+    merged_by: Option<Login>,
     #[serde(default)]
     merge_state_status: String,
     review_decision: Option<String>,
@@ -1544,12 +1919,24 @@ struct PullRequest {
     #[serde(default)]
     head_ref_name: String,
     head_ref_oid: Option<String>,
+    head_repository: Option<HeadRepository>,
     mergeable: String,
     #[serde(default)]
     is_merge_queue_enabled: bool,
+    #[serde(default)]
+    additions: u64,
+    #[serde(default)]
+    deletions: u64,
+    #[serde(default)]
+    changed_files: u64,
+    auto_merge_request: Option<AutoMerge>,
+    labels: Option<Nodes<Label>>,
+    review_requests: Option<Nodes<ReviewRequest>>,
     /// Null when GitHub can't list them, such as for a huge diff.
     #[serde(default)]
     files: Option<Nodes<PrStatusFile>>,
+    /// Its newest commits, for `pr/view`; `commits` holds only the head, for its checks.
+    history: Option<Nodes<HistoryNode>>,
     commits: Nodes<CommitNode>,
     comments: Nodes<Comment>,
     reviews: Nodes<Comment>,
@@ -1557,14 +1944,87 @@ struct PullRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Login {
     login: String,
+    avatar_url: Option<String>,
 }
 
-/// A connection's `nodes`, any of which GitHub may answer as null.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeadRepository {
+    name_with_owner: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoMerge {
+    merge_method: String,
+}
+
+#[derive(Deserialize)]
+struct Label {
+    name: String,
+    color: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewRequest {
+    requested_reviewer: Option<Reviewer>,
+}
+
+/// A user, bot, or mannequin, by `login`, or a team, by `name`.
+#[derive(Deserialize)]
+struct Reviewer {
+    login: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HistoryNode {
+    commit: HistoryCommit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryCommit {
+    oid: String,
+    #[serde(default)]
+    message_headline: String,
+    committed_date: Option<Timestamp>,
+    author: Option<GitActor>,
+}
+
+/// A commit's author: a GitHub `user` when git's email matches an account, else just a `name`.
+#[derive(Deserialize)]
+struct GitActor {
+    name: Option<String>,
+    user: Option<Login>,
+}
+
+/// A connection's `nodes`, any of which GitHub may answer as null, and its `pageInfo` where
+/// [`QUERY`] asks for it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Nodes<T> {
     nodes: Vec<Option<T>>,
+    #[serde(default)]
+    page_info: Option<PageInfo>,
+}
+
+impl<T> Nodes<T> {
+    /// GitHub has more of them than this page holds, before or after it.
+    fn cut(&self) -> bool {
+        self.page_info
+            .as_ref()
+            .is_some_and(|page| page.has_next_page || page.has_previous_page)
+    }
+
+    /// Its nodes that aren't null.
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.nodes.iter().flatten()
+    }
 }
 
 #[derive(Deserialize)]
@@ -1595,6 +2055,55 @@ impl Commit {
                     .check_suite
                     .and_then(|suite| suite.workflow_run)
                     .and_then(|run| run.database_id),
+            })
+    }
+
+    /// Its checks as `pr/view` serves them. A GitHub Actions check run is a job, whose id is the
+    /// check run's.
+    fn pr_checks(&self) -> impl Iterator<Item = PrCheck> {
+        self.status_check_rollup
+            .iter()
+            .flat_map(|rollup| rollup.contexts.iter())
+            .map(|context| {
+                let state = check_state(context);
+                let conclusion = (state != CheckState::Pending)
+                    .then(|| context.conclusion.as_deref().or(context.state.as_deref()))
+                    .flatten()
+                    .map(str::to_lowercase);
+                let run = context
+                    .check_suite
+                    .as_ref()
+                    .and_then(|suite| suite.workflow_run.as_ref());
+                let run_id = run.and_then(|run| run.database_id);
+                PrCheck {
+                    name: context
+                        .name
+                        .clone()
+                        .or_else(|| context.context.clone())
+                        .unwrap_or_default(),
+                    state: match state {
+                        CheckState::Pending => PrCheckState::Pending,
+                        CheckState::Failed(_) => PrCheckState::Failed,
+                        CheckState::Passed if conclusion.as_deref() == Some("skipped") => {
+                            PrCheckState::Skipped
+                        }
+                        CheckState::Passed => PrCheckState::Passed,
+                    },
+                    conclusion,
+                    url: context
+                        .details_url
+                        .clone()
+                        .or_else(|| context.target_url.clone())
+                        .filter(|url| !url.is_empty()),
+                    workflow: run
+                        .and_then(|run| run.workflow.as_ref())
+                        .map(|workflow| workflow.name.clone()),
+                    started_at: context.started_at.or(context.created_at),
+                    completed_at: context.completed_at,
+                    required: context.is_required,
+                    run_id,
+                    job_id: run_id.and(context.database_id),
+                }
             })
     }
 
@@ -1640,7 +2149,10 @@ struct Suites {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PageInfo {
+    #[serde(default)]
     has_next_page: bool,
+    #[serde(default)]
+    has_previous_page: bool,
 }
 
 /// A check suite on the head: one per app, and one per GitHub Actions workflow run.
@@ -1671,6 +2183,12 @@ struct RollupNode {
     #[serde(default)]
     is_required: bool,
     check_suite: Option<CheckSuite>,
+    /// A check run's id: its job's, for a GitHub Actions one.
+    database_id: Option<u64>,
+    started_at: Option<Timestamp>,
+    completed_at: Option<Timestamp>,
+    /// When a commit status was first set.
+    created_at: Option<Timestamp>,
 }
 
 #[derive(Deserialize)]
@@ -1683,6 +2201,12 @@ struct CheckSuite {
 #[serde(rename_all = "camelCase")]
 struct WorkflowRun {
     database_id: Option<u64>,
+    workflow: Option<Workflow>,
+}
+
+#[derive(Deserialize)]
+struct Workflow {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -1697,6 +2221,16 @@ struct Comment {
     last_edited_at: Option<Timestamp>,
     url: Option<String>,
     state: Option<String>,
+    /// A review-thread comment's diff, down to its line.
+    diff_hunk: Option<String>,
+}
+
+impl Comment {
+    fn avatar_url(&self) -> Option<String> {
+        self.author
+            .as_ref()
+            .and_then(|author| author.avatar_url.clone())
+    }
 }
 
 #[derive(Deserialize)]
@@ -1704,6 +2238,11 @@ struct Comment {
 struct Thread {
     id: String,
     path: Option<String>,
+    /// Null once the thread is outdated, or for a thread on the whole file.
+    line: Option<u64>,
+    original_line: Option<u64>,
+    #[serde(default)]
+    is_outdated: bool,
     #[serde(default)]
     is_resolved: bool,
     comments: Nodes<Comment>,
