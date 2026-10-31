@@ -48,7 +48,7 @@ export function useHosts(): Host[] {
       ),
     [],
   );
-  const icon = connect?.on ? connect.icon : undefined;
+  const icon = connect?.icon;
   // The same array until the hosts change, so lists built from it can be kept.
   return useMemo(
     () => [

@@ -908,6 +908,28 @@ const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (repo, number)
         );",
     },
+    // Preserve provider switches for sidebar cards (PLX-1214). Read historical metadata once,
+    // rather than replaying every thread's transcript whenever the sidebar connects.
+    Migration {
+        version: 59,
+        sql: "ALTER TABLE runs ADD COLUMN backends TEXT NOT NULL DEFAULT '';
+        CREATE TEMP TABLE provider_history AS
+        SELECT json_extract(payload, '$.runId') AS id,
+               CASE type WHEN 'agent.started' THEN json_extract(payload, '$.run.backend')
+                         ELSE json_extract(payload, '$.state.backend') END AS backend,
+               seq
+        FROM events WHERE type IN ('agent.started', 'agent.updated') AND json_valid(payload);
+        INSERT INTO provider_history SELECT id, backend, 9223372036854775807 FROM runs;
+        CREATE INDEX provider_history_id ON provider_history (id);
+        UPDATE runs SET backends = (
+            SELECT group_concat(backend, char(10)) FROM (
+                SELECT backend FROM provider_history WHERE provider_history.id = runs.id
+                    AND backend IS NOT NULL AND backend != ''
+                GROUP BY backend ORDER BY min(seq)
+            )
+        );
+        DROP TABLE provider_history;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

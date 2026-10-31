@@ -247,6 +247,7 @@ mod tests {
                     policy: AgentPolicy::WorkspaceWrite,
                     status: AgentStatus::Running,
                     backend: "fake".to_owned(),
+                    backends: vec!["fake".to_owned()],
                     account_id: "fake".to_owned(),
                     branch: None,
                     worktree_path: None,

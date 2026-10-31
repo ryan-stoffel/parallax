@@ -819,3 +819,56 @@ async fn a_message_on_another_backends_account_moves_the_thread_there() {
     );
     host.server.stop().await;
 }
+
+/// A provider whose CLI cannot start did not participate in the thread.
+#[tokio::test]
+async fn a_failed_provider_switch_restores_the_used_provider_history() {
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let other = Other::new(fake_backend(editing()), &prompts);
+    other.first.lock().unwrap().push_back(None);
+    let mut backends = fake(editing());
+    backends.register(Provider::Openai, Arc::new(other));
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let params = start_params(None, "Write the notes");
+    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
+    let scope = scope(started.thread.repo);
+    client.subscribe(0, Some(scope)).await;
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let failed = client
+        .call::<AgentSend>(AgentSendParams {
+            account: Some(AccountChoice::Subscription {
+                backend: "other".to_owned(),
+            }),
+            ..message(params.run_id, "Now the tests")
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(failed.backend, started.run.backend);
+    assert_eq!(failed.backends, started.run.backends);
+    let events = client.until(|event| matches!(&event.event,
+        ParallaxEvent::AgentUpdated { state, .. }
+            if state.status == AgentStatus::Failed && state.backend.as_deref() == Some(&started.run.backend)
+    )).await;
+    let last = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.event {
+            ParallaxEvent::AgentUpdated { state, .. } => Some(state),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last.backends, started.run.backends);
+    let listed = client
+        .call::<AgentList>(AgentListParams {
+            project: Some(scope),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        listed.runs[0].backends, started.run.backends,
+        "the stored snapshot also rolls back"
+    );
+    host.server.stop().await;
+}

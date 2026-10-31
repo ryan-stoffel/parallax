@@ -427,3 +427,79 @@ fn user_turns_are_the_users_own_newest_last() {
     );
     assert_eq!(store.user_turns(run, 2).unwrap(), ["Second.", "Third."]);
 }
+
+#[test]
+fn provider_history_survives_switches_repeats_and_reopening() {
+    let (dir, store) = open();
+    let id = Uuid::now_v7();
+    let mut options = fields(Uuid::now_v7());
+    assert_eq!(
+        store
+            .create_run(id, &options, &starting())
+            .unwrap()
+            .backends,
+        ["claude"]
+    );
+    options.backend = "codex".into();
+    assert_eq!(
+        store.set_run_options(id, &options).unwrap().backends,
+        ["claude", "codex"]
+    );
+    options.backend = "claude".into();
+    store.set_run_options(id, &options).unwrap();
+    drop(store);
+    let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
+    assert_eq!(
+        store.get_run(id).unwrap().unwrap().backends,
+        ["claude", "codex"]
+    );
+    assert_eq!(
+        store.list_runs_with_worktrees(None).unwrap()[0].0.backends,
+        ["claude", "codex"]
+    );
+}
+
+#[test]
+fn provider_history_upgrade_recovers_historical_switches_and_current_backend() {
+    let (dir, store) = open();
+    let id = Uuid::now_v7();
+    let plain = Uuid::now_v7();
+    store
+        .create_run(id, &fields(Uuid::now_v7()), &starting())
+        .unwrap();
+    store
+        .create_run(plain, &fields(Uuid::now_v7()), &starting())
+        .unwrap();
+    for (seq, payload) in [
+        format!(r#"{{"kind":"agent.started","runId":"{id}","run":{{"backend":"cursor"}}}}"#),
+        format!(r#"{{"kind":"agent.updated","runId":"{id}","state":{{"backend":"codex"}}}}"#),
+        format!(r#"{{"kind":"agent.updated","runId":"{id}","state":{{"backend":"cursor"}}}}"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut e = event(seq as u64 + 1, Some(id));
+        e.kind = if seq == 0 {
+            "agent.started"
+        } else {
+            "agent.updated"
+        }
+        .into();
+        e.payload = payload;
+        store.append_event(&e).unwrap();
+    }
+    drop(store);
+    let path = dir.path().join("parallax.sqlite3");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE runs DROP COLUMN backends; DELETE FROM schema_version WHERE version = 59;",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.get_run(id).unwrap().unwrap().backends,
+        ["cursor", "codex", "claude"]
+    );
+    assert_eq!(store.get_run(plain).unwrap().unwrap().backends, ["claude"]);
+}

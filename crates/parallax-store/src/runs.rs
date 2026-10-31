@@ -96,6 +96,8 @@ pub struct RunAccept {
 /// A run row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Run {
+    /// Distinct backends used by this run, in first-use order.
+    pub backends: Vec<String>,
     pub id: Uuid,
     pub fields: RunFields,
     pub state: RunState,
@@ -108,13 +110,14 @@ const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backen
                        deletions, created_at, updated_at, accept_id, merge_commit, \
                        merge_into, merge_how, orchestrator_thread, model, effort, permission, \
                        approvals, checkout, context_window, fast, pull_requests, parent, \
-                       auto_resume, resume_at, resume_tries, notify_parent, explore";
+                       auto_resume, resume_at, resume_tries, notify_parent, explore, backends";
 
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent facts about a run, not states of one thing"
 )]
 struct RawRun {
+    backends: String,
     id: String,
     project_id: String,
     prompt: String,
@@ -190,6 +193,7 @@ impl RawRun {
             resume_tries: row.get(32)?,
             notify_parent: row.get(33)?,
             explore: row.get(34)?,
+            backends: row.get(35)?,
         })
     }
 
@@ -209,6 +213,11 @@ impl RawRun {
             _ => None,
         };
         Ok(Run {
+            backends: if self.backends.is_empty() {
+                vec![self.backend.clone()]
+            } else {
+                self.backends.lines().map(str::to_owned).collect()
+            },
             id: Uuid::parse_str(&self.id)?,
             fields: RunFields {
                 project_id: Uuid::parse_str(&self.project_id)?,
@@ -441,8 +450,36 @@ impl Store {
     ///
     /// [`StoreError::NotFound`] if no run has `id`, or a database error.
     pub fn set_run_options(&self, id: Uuid, fields: &RunFields) -> Result<Run, StoreError> {
+        self.run_options(id, fields, None)
+    }
+
+    /// Restores the options and provider history from before a CLI failed to start.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no run has `id`, or a database error.
+    pub fn restore_run_options(
+        &self,
+        id: Uuid,
+        fields: &RunFields,
+        backends: &[String],
+    ) -> Result<Run, StoreError> {
+        self.run_options(id, fields, Some(&backends.join("\n")))
+    }
+
+    fn run_options(
+        &self,
+        id: Uuid,
+        fields: &RunFields,
+        backends: Option<&str>,
+    ) -> Result<Run, StoreError> {
         let changed = self.conn.execute(
-            "UPDATE runs SET backend = ?2, model = ?3, effort = ?4, permission = ?5,
+            "UPDATE runs SET backends = COALESCE(?9, CASE
+                WHEN backend = ?2 THEN backends
+                WHEN backends = '' THEN backend || char(10) || ?2
+                WHEN instr(char(10) || backends || char(10), char(10) || ?2 || char(10)) > 0 THEN backends
+                ELSE backends || char(10) || ?2 END),
+                             backend = ?2, model = ?3, effort = ?4, permission = ?5,
                              context_window = ?6, fast = ?7, updated_at = ?8
              WHERE id = ?1",
             params![
@@ -453,7 +490,8 @@ impl Store {
                 fields.permission,
                 fields.context_window,
                 fields.fast,
-                timestamp::now()
+                timestamp::now(),
+                backends
             ],
         )?;
         updated(&self.conn, id, changed)
