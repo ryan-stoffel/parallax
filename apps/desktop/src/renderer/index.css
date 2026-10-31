@@ -309,21 +309,13 @@
    cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons.
 
    The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
-   it blends into the sidebar's color in oklab, so it merges cleanly into any theme's. Dark mode
-   is night, deepening into the sidebar behind the Search row, and the top row's text turns white
-   over it. Light mode is dawn: periwinkle with a rose glow, paling into the sidebar by the Search
-   row's bottom, with faint indigo stars, white clouds, and the theme's own dark text. */
+   it fades into each theme's sidebar behind the Search row. Both themes share the dark sky,
+   white header text, stars, and indigo clouds. */
 
 :root.nightly .night-sky-host {
   background:
-    linear-gradient(in oklab, #c3c9fb, #d9d6fb 35%, #ebe7fb 65%, var(--sidebar)) top / 100% 104px
+    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, transparent) top / 100% 104px
       no-repeat,
-    var(--pane-sidebar);
-}
-:root.nightly.dark .night-sky-host {
-  background:
-    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, #191741 52%, var(--sidebar)) top /
-      100% 104px no-repeat,
     var(--pane-sidebar);
 }
 /* The Search field sits on the sidebar's own color over the sky, so its text keeps the contrast
@@ -336,16 +328,6 @@
 }
 /* The stars, the glow behind them, and the clouds' bodies and lit tops, far to near. */
 :root.nightly .night-sky {
-  --star: #4f46e5;
-  --sky-glow: #ec4899;
-  --cloud-far: #d3d4fa;
-  --cloud-far-lit: #e2e2fc;
-  --cloud-mid: #e6e4fc;
-  --cloud-mid-lit: #f3f2fe;
-  --cloud-near: #f1effd;
-  --cloud-near-lit: #ffffff;
-}
-:root.nightly.dark .night-sky {
   --star: #ffffff;
   --sky-glow: #7c3aed;
   --cloud-far: #2c2a6e;
@@ -370,11 +352,11 @@
   width: 100%;
   height: 56px;
 }
-:root.nightly.dark .night-sky-text {
+:root.nightly .night-sky-text {
   --foreground: #ffffff;
   --muted-foreground: rgb(255 255 255 / 75%);
   --hover: rgb(255 255 255 / 12%);
-  /* The logo's overlap, light as it is in dark mode, so it shows on the sky. */
+  /* Keep the logo's overlap visible on the sky. */
   --mark-overlap: #e4e4e7;
 }
 :root.nightly .send-sky {
@@ -729,6 +711,60 @@ body {
   --pane-card: var(--surface);
 }
 
+/* Slide the sidebar as one piece, keeping its rows stable while the workspace follows it. */
+#sidebar {
+  width: var(--sidebar-width);
+  margin-left: 0;
+  transition:
+    margin-left 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    display 240ms allow-discrete;
+}
+#sidebar[hidden] {
+  margin-left: calc(-1 * var(--sidebar-width));
+  pointer-events: none;
+}
+@starting-style {
+  #sidebar:not([hidden]) {
+    margin-left: calc(-1 * var(--sidebar-width));
+  }
+}
+
+/* The workspace is one surface beside the sidebar, including an expanded side panel. */
+.workspace-shell[data-sidebar-open="true"] {
+  border-radius: 16px 0 0 16px;
+  box-shadow: -6px 0 18px -8px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 30%));
+}
+.workspace-shell[data-sidebar-open="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: inherit;
+}
+/* Underlap the rounded edge by a pixel so its antialiasing never exposes a seam. */
+#sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0 -24px 0 auto;
+  width: 24px;
+  pointer-events: none;
+  background: inherit;
+  mask:
+    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top left / 17px 17px no-repeat,
+    radial-gradient(circle at 16px 1px, transparent 15px, #000 16px) bottom left / 17px 17px
+      no-repeat;
+}
+:root.nightly #sidebar > .night-sky {
+  right: -24px;
+  mask:
+    linear-gradient(#000 0 0) left / calc(100% - 24px) 100% no-repeat,
+    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top right 7px / 17px 17px
+      no-repeat;
+}
+
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
    through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
@@ -800,19 +836,6 @@ body {
    glass: its side borders and a second layer of fill. Through glass it starts where the box ends. */
 :root.translucent .tucked {
   mask-image: linear-gradient(transparent 1rem, #000 1rem);
-}
-/* A nightly's sky fades into the glass rather than into the sidebar's solid color. */
-:root.nightly.translucent .night-sky-host {
-  background:
-    linear-gradient(in oklab, rgb(195 201 251 / 90%), rgb(217 214 251 / 60%) 40%, transparent) top /
-      100% 104px no-repeat,
-    var(--pane-sidebar);
-}
-:root.nightly.dark.translucent .night-sky-host {
-  background:
-    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, transparent) top / 100% 104px
-      no-repeat,
-    var(--pane-sidebar);
 }
 :root.nightly.translucent .night-sky-host .sky-search {
   background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
