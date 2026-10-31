@@ -263,8 +263,8 @@ impl Backend for CodexBackend {
         }))
     }
 
-    /// `codex exec` on this backend's login, ephemeral and read-only, answering in
-    /// [`namer::schema`]'s shape ([`namer::codex`]). The instance's arguments are `app-server`'s,
+    /// `codex exec` on this backend's login, ephemeral and read-only, answering in the shape of
+    /// the schema in `dir` ([`namer::codex`]). The instance's arguments are `app-server`'s,
     /// so it gets only its program and variables.
     fn namer(
         &self,

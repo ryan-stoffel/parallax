@@ -470,6 +470,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         PrUploadMedia => |p| crate::pr_media::upload(daemon, p),
         PrSharedDiff => |p| agents::shared_diff(Arc::clone(daemon), p),
         PrWrite => |p| crate::pr_write::write(daemon, p),
+        PrGuide => |p| crate::pr_guide::guide(daemon, p),
         PrMergeWhenReady => |p| crate::pr_watch::merge_when_ready(daemon, p),
         RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
         TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),

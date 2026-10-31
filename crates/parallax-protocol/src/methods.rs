@@ -73,20 +73,20 @@ use crate::{
     OrchestratorDeleteParams, OrchestratorDeleteResult, OrchestratorFreshParams,
     OrchestratorFromThreadsParams, OrchestratorFromThreadsResult, OrchestratorListParams,
     OrchestratorListResult, OrchestratorStartParams, OrchestratorUpdateParams,
-    OrchestratorUpdateResult, PrActParams, PrDiffResult, PrMergeWhenReadyParams, PrStatusResult,
-    PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PrWriteParams, PrWriteResult,
-    PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
-    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
-    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    PromptImage, ProvidersListParams, ProvidersListResult, ProvidersRemoveParams,
-    ProvidersSaveParams, ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams,
-    ProvidersUpgradeResult, PullRequest, QuestionAnswerParams, QuestionAskParams,
-    QuestionEscalateParams, QuestionListParams, QuestionListResult, QuestionResult,
-    QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams, QueueResult,
-    QueueSteerParams, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
-    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams,
-    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
-    RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
+    OrchestratorUpdateResult, PrActParams, PrDiffResult, PrGuideParams, PrGuideResult,
+    PrMergeWhenReadyParams, PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams,
+    PrWatchesResult, PrWriteParams, PrWriteResult, PreviewCallParams, PreviewCallResult,
+    PreviewFrameParams, PreviewFrameResult, PreviewInputParams, PreviewInputResult,
+    PreviewListParams, PreviewListResult, ProjectCreateParams, ProjectCreateResult,
+    ProjectDeleteParams, ProjectDeleteResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
+    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
+    RelayIdParams, RelayIdResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
+    RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
+    RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
     RepoCloneProgressResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
     RepoGrepResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
     RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
@@ -743,6 +743,12 @@ method_table! {
         /// `prFailed` when GitHub refuses or rate limits it or the queue stays busy, and with
         /// `ghUnavailable` without a signed-in `gh`. Gated on `prWatch`.
         PrWrite = "pr/write": PrWriteParams => PrWriteResult;
+        /// `pr/guide` (PLX-1188, 0095): a GitHub pull request's guide, as plxd last wrote it, and
+        /// whether one for the given head is being written. With none for that head, none being
+        /// written, and no failed try, it starts writing one in the background; `regenerate`
+        /// starts one regardless. Never reads GitHub itself, so the app polls it while one is
+        /// written. Gated on `prGuide`.
+        PrGuide = "pr/guide": PrGuideParams => PrGuideResult;
         /// `pr/mergeWhenReady` (PLX-1022): watches a pull request for a run, as `pr/watch` does,
         /// and has plxd merge it, pinned to the head it judged, once it is ready, then wake the
         /// run with the result. Unwatching cancels the merge. Gated on `prWatch`.

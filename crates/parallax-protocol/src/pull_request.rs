@@ -10,6 +10,9 @@
 //! Behind `prActions` (PLX-1151), `pr/view` serves plxd's shared GraphQL read (0086) with review
 //! threads, readiness, and check ids, and `pr/act` also rebases, updates the branch, re-runs or
 //! cancels checks, and deletes the head branch, each through plxd's paced write queue.
+//!
+//! Behind `prGuide` (PLX-1188, 0095), `pr/guide` reads, and writes in the background, a pull
+//! request's guide.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -414,6 +417,90 @@ pub struct PrDiffResult {
     pub diff: String,
     /// Whether `diff` was cut short, at a line's end, at plxd's size cap.
     pub truncated: bool,
+}
+
+/// Params of `pr/guide` (PLX-1188, 0095): a GitHub pull request's guide, at the head commit the
+/// app shows. It needn't be linked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrGuideParams {
+    /// The pull request's web URL.
+    pub url: String,
+    /// The head commit the app shows. plxd writes a guide for it when it has none.
+    pub head_sha: String,
+    /// The model that writes it: the user's default.
+    pub model: crate::ThreadNaming,
+    /// Writes a new guide for `head_sha` even when one exists or the last try failed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub regenerate: bool,
+}
+
+/// Result of `pr/guide`: what plxd has now. A guide for an older head than `headSha` is out of
+/// date, and shows until the new one is written.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrGuideResult {
+    /// The newest guide written for the pull request. Absent before the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub guide: Option<PrGuide>,
+    /// Whether a guide for `headSha` is being written.
+    pub generating: bool,
+    /// Why the last try at `headSha`'s guide failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+/// An agent-written walkthrough of a pull request: an overview, then its changes in reading
+/// order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrGuide {
+    /// The head commit it was written for.
+    pub head_sha: String,
+    /// What the pull request does and the main parts it touches.
+    pub overview: String,
+    /// Mermaid source of a diagram for the overview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub diagram: Option<String>,
+    /// Its steps, in reading order.
+    pub steps: Vec<PrGuideStep>,
+    /// Files the model didn't read, to fit the diff into its prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<String>,
+    /// When it was written, in RFC 3339 UTC.
+    pub created_at: Timestamp,
+}
+
+/// One step of a [`PrGuide`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrGuideStep {
+    /// A short title.
+    pub title: String,
+    /// What changed and why, in plain language.
+    pub explanation: String,
+    /// The changes it explains.
+    pub hunks: Vec<PrGuideHunk>,
+    /// Mermaid source of a diagram.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub diagram: Option<String>,
+}
+
+/// Lines of one file in the pull request's diff, by their numbers in the new file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrGuideHunk {
+    /// The file's path, as the diff names it.
+    pub path: String,
+    /// The first line.
+    pub start: u32,
+    /// The last line, at or after `start`.
+    pub end: u32,
 }
 
 /// A pull request as GitHub has it now: the result of `pr/view` and `pr/act`.

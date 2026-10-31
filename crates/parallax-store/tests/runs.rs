@@ -204,8 +204,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // dispatcher's tables (PLX-643's migration 39), delegation's (PLX-648's migrations 42
     // and 43), the project computer
     // column (PLX-909's migration 48), the board items table (PLX-940's migration 49), the
-    // orchestrator sessions table (PLX-937's migration 51), or the You entries table (PLX-946's
-    // migration 52).
+    // orchestrator sessions table (PLX-937's migration 51), the You entries table (PLX-946's
+    // migration 52), or the pull request guides table (PLX-1188's migration 58).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -220,7 +220,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              DROP TABLE command_receipts;
              DROP TABLE attached_seen;
              DROP TABLE orchestration_receipts; DROP TABLE effects; DROP TABLE projection_meta;
-             DROP TABLE scheduled_tasks; DROP TABLE pr_watches;
+             DROP TABLE scheduled_tasks; DROP TABLE pr_watches; DROP TABLE pr_guides;
              DROP TABLE thread_runs; DROP TABLE run_attempts; DROP TABLE nodes;
              DROP TABLE runtime_requests; DROP TABLE graph_imports;
              DROP TABLE thread_lineage; DROP TABLE context_transfers; DROP TABLE secret_refs;

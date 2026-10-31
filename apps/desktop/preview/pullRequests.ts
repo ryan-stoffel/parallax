@@ -1,9 +1,10 @@
 // Made-up pull requests for the preview, shaped as plxd reports them: `pr/view`, `pr/status`,
-// `pr/failureLog`, `pr/diff`, `pr/act`, and `pr/write`. #588 is open with a failed check, a
+// `pr/failureLog`, `pr/diff`, `pr/guide`, `pr/act`, and `pr/write`. #588 is open with a failed check, a
 // review thread, and a rich description; #591 is merged; #612 is clean; #41 is behind.
 import type {
   PrAction,
   PrCheck,
+  PrGuide,
   PrStatusResult,
   PrWrite,
   PullRequest,
@@ -124,6 +125,7 @@ function view(url: string): PullRequest {
     additions: 87,
     deletions: 21,
     files,
+    headSha: "a41c09d2e3f4",
     body: number === 588 ? body : "Copy-only change. No behavior moves.",
     comments: [
       {
@@ -303,6 +305,55 @@ const merge = (n: number, change: Partial<PullRequest>) => {
   return pr;
 };
 
+/** #588's guide, as plxd writes it (0095): written a moment after the view first asks. */
+const guide: PrGuide = {
+  headSha: "a41c09d2e3f4",
+  overview:
+    "Each build now follows the release channel it was built for. The channel is written into the build's own update metadata, the updater reads it at start, and a nightly keeps following nightlies.",
+  diagram: `flowchart LR
+  CI[Release workflow] -->|CHANNEL| EB[electron-builder]
+  EB --> Y[app-update.yml]
+  Y --> U[Updater]
+  U -->|nightly| N[Nightly feed]
+  U -->|latest| S[Stable feed]`,
+  steps: [
+    {
+      title: "Write the channel into the build",
+      explanation:
+        "electron-builder takes the channel and release type from the workflow's environment, so a nightly build carries `channel: nightly` in its app-update.yml instead of always publishing as a release.",
+      hunks: [{ path: "apps/desktop/electron-builder.yml", start: 12, end: 16 }],
+    },
+    {
+      title: "Read it back in the updater",
+      explanation:
+        "The updater stops hard-coding Latest. It reads the channel from the build's metadata and allows prereleases only on nightly, so a stable build never jumps to a nightly.",
+      hunks: [{ path: "apps/desktop/src/main/updater.ts", start: 80, end: 97 }],
+      diagram: `sequenceDiagram
+  participant App
+  participant Updater
+  participant Feed as app-update.yml
+  App->>Updater: startUpdater()
+  Updater->>Feed: channelOf(feedPath)
+  Feed-->>Updater: nightly
+  Updater->>Updater: allowPrerelease = true`,
+    },
+    {
+      title: "Test the channel and the path",
+      explanation:
+        "A new test reads the channel from a nightly feed and checks where the feed lives. This is the test that fails on Windows: the path is joined with a slash.",
+      hunks: [{ path: "apps/desktop/src/main/updater.test.ts", start: 36, end: 47 }],
+    },
+    {
+      title: "Record the decision",
+      explanation: "Decision record 0028 says a build's channel lives in its own metadata.",
+      hunks: [{ path: "docs/decisions/0028-release-channels.md", start: 20, end: 28 }],
+    },
+  ],
+  omitted: [],
+  createdAt: at(2),
+};
+let guideAsked: number | undefined;
+
 /** The preview's pull request handlers, keyed by method. */
 export const pullRequestHandlers = {
   "pr/view": (p: { url: string }) => view(p.url),
@@ -323,6 +374,11 @@ export const pullRequestHandlers = {
       })),
   }),
   "pr/diff": () => ({ diff, truncated: false }),
+  "pr/guide": (p: { url: string }) => {
+    if (view(p.url).number !== 588) return { generating: false, error: "No guide in the preview." };
+    guideAsked ??= Date.now();
+    return Date.now() - guideAsked < 1500 ? { generating: true } : { guide, generating: false };
+  },
   "pr/act": (p: { url: string; action: PrAction }) => {
     const n = view(p.url).number;
     if (p.action === "merge" || p.action === "squash")

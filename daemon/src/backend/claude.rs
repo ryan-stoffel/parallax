@@ -1073,15 +1073,18 @@ pub fn permission_mode(permission: Option<AgentPermission>) -> Result<&'static s
 ///
 /// [`StartError::Invalid`] for a model that could be read as an option, and
 /// [`StartError::Unsupported`] for an effort this version doesn't know.
-fn namer_arguments(model: &str, effort: Option<AgentEffort>) -> Result<Vec<OsString>, StartError> {
+fn namer_arguments(
+    model: &str,
+    effort: Option<AgentEffort>,
+    schema: &str,
+) -> Result<Vec<OsString>, StartError> {
     check_argument("model", model)?;
-    let schema = namer::schema().to_string();
     let mut args: Vec<OsString> = [
         "-p",
         "--output-format",
         "json",
         "--json-schema",
-        &schema,
+        schema,
         "--model",
         model,
         "--tools",
@@ -1249,15 +1252,17 @@ impl Backend for ClaudeBackend {
         Ok(Some(self.control_process(cwd, &login)?))
     }
 
-    /// `claude -p` on the user's login ([`namer_arguments`]), answering in [`namer::schema`]'s
-    /// shape ([`namer::claude`]).
+    /// `claude -p` on the user's login ([`namer_arguments`]), answering in the shape of the
+    /// schema in `dir` ([`namer::claude`]).
     fn namer(
         &self,
         dir: &Path,
         model: &str,
         effort: Option<AgentEffort>,
     ) -> Result<Option<NameProbe>, StartError> {
-        let mut spec = self.probe_spec(dir, namer_arguments(model, effort)?)?;
+        let schema = std::fs::read_to_string(dir.join(namer::SCHEMA_FILE))
+            .map_err(|error| StartError::Invalid(format!("no answer schema: {error}")))?;
+        let mut spec = self.probe_spec(dir, namer_arguments(model, effort, &schema)?)?;
         self.pin_gateway_model(&mut spec, Some(model));
         Ok(Some(NameProbe {
             process: self.launcher.spawn(&spec)?,

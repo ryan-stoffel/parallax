@@ -11,10 +11,47 @@ import { Checkbox } from "./ui";
 
 type Row = { file: DiffFile; header?: boolean; line?: DiffLine; threads?: ThreadView[] };
 
+/** Where a focus or jump scrolls: a file, and a line of its new side, from `line` to `end`. */
+export type DiffFocus = { path?: string; line?: number; end?: number };
+
+/**
+ * The row `to` scrolls to: its file's first line at or after `to.line` on the new side, or the
+ * file's header when it has no line, its lines are folded, or none is that far. -1 for a file not
+ * in `rows`.
+ */
+export function focusRow(
+  rows: readonly Pick<Row, "file" | "header" | "line">[],
+  to?: DiffFocus,
+): number {
+  const header = rows.findIndex((r) => r.header && r.file.path === to?.path);
+  if (header < 0 || to?.line === undefined) return header;
+  const at = rows.findIndex(
+    (r, i) =>
+      i > header &&
+      r.file.path === to.path &&
+      !!r.line &&
+      r.line.op !== "-" &&
+      r.line.op !== "@" &&
+      r.line.new !== undefined &&
+      r.line.new >= to.line!,
+  );
+  return at < 0 ? header : at;
+}
+
+/** Whether `line` of `path` is in `to`'s lines. */
+const focused = (to: DiffFocus | undefined, path: string, line?: DiffLine) =>
+  !!to?.line &&
+  to.path === path &&
+  !!line &&
+  line.op !== "-" &&
+  line.new !== undefined &&
+  line.new >= to.line &&
+  line.new <= (to.end ?? to.line);
+
 /**
  * The one diff renderer, for the Changes view (0062) and a pull request's Files tab: every file in
  * one virtualized window, so a huge file and many small ones both stay cheap. A new `focus`
- * scrolls to its file. With `onViewed`, each file has Viewed, and a viewed file folds. `threads`
+ * scrolls to its file, or to its lines, which it marks (a guide's step, PLX-1188). With `onViewed`, each file has Viewed, and a viewed file folds. `threads`
  * sit under their line, or under their file's header when plxd doesn't say the line, drawn by
  * `renderThread`. With `tree`, a file tree that jumps to a file shows beside the diff once its
  * container (an `@container`) is at least 900px wide.
@@ -31,7 +68,7 @@ export function ChangesDiff({
 }: {
   diff: string;
   truncated?: boolean;
-  focus?: { path?: string };
+  focus?: DiffFocus;
   viewed?: ReadonlySet<string>;
   onViewed?: (path: string, viewed: boolean) => void;
   threads?: readonly ThreadView[];
@@ -40,7 +77,7 @@ export function ChangesDiff({
 }) {
   const files = useMemo(() => parseDiff(diff), [diff]);
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
-  const [jump, setJump] = useState<{ path?: string }>();
+  const [jump, setJump] = useState<DiffFocus>();
   const scroll = useRef<HTMLDivElement>(null);
   const shut = (path: string) => folded.has(path) || !!viewed?.has(path);
   const rows = useMemo(() => {
@@ -70,8 +107,8 @@ export function ChangesDiff({
   });
   const to = jump ?? focus;
   useEffect(() => {
-    const at = rows.findIndex((r) => r.header && r.file.path === to?.path);
-    if (at >= 0) virtualizer.scrollToIndex(at, { align: "start" });
+    const at = focusRow(rows, to);
+    if (at >= 0) virtualizer.scrollToIndex(at, { align: rows[at]!.header ? "start" : "center" });
     // Only a new focus or jump scrolls, not folding a file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [to, files]);
@@ -154,7 +191,9 @@ export function ChangesDiff({
                       ))}
                     </div>
                   ) : (
-                    <div className="font-mono text-meta leading-5">
+                    <div
+                      className={`font-mono text-meta leading-5 ${focused(to, path, row.line) ? "bg-accent/10" : ""}`}
+                    >
                       {row.line ? (
                         <DiffLineView line={row.line} />
                       ) : (

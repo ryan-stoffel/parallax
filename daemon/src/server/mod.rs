@@ -341,6 +341,8 @@ pub(crate) struct Daemon {
     pub schedules: crate::schedules::Schedules,
     /// The pull request watches' sweep (0063).
     pub pr_watches: crate::pr_watch::Watches,
+    /// Pull request guides being written, and failed tries (0095).
+    pub(crate) pr_guides: crate::pr_guide::Guides,
     /// Wakes the merge sweep when plxd merges a pull request itself (PLX-839).
     pub(crate) merged: tokio::sync::Notify,
     /// `host/update`'s install and handover (PLX-700).
@@ -518,6 +520,7 @@ impl Server {
             clerk: crate::clerk::Clerk::new(config.clerk.clone()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
+            pr_guides: crate::pr_guide::Guides::default(),
             merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
             secrets: crate::secrets::Secrets::default(),
@@ -916,6 +919,7 @@ impl Daemon {
             clerk: crate::clerk::Clerk::new(crate::clerk::Config::from_env()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
+            pr_guides: crate::pr_guide::Guides::default(),
             merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher),
             secrets: crate::secrets::Secrets::default(),

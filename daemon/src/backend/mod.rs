@@ -170,9 +170,9 @@ pub trait Backend: Send + Sync {
     }
 
     /// Starts the CLI in `dir`, an empty folder of the call's own that holds
-    /// [`namer::SCHEMA_FILE`], to name a thread (0058): `model` at `effort`, on the login a thread
-    /// on this backend gets, with no tools, for [`namer::ask`]. `None` for a backend that can't,
-    /// the default.
+    /// [`namer::SCHEMA_FILE`], for one hidden call such as naming a thread (0058) or writing a pull
+    /// request's guide (0095): `model` at `effort`, on the login a thread on this backend gets,
+    /// with no tools, for [`namer::ask`]. `None` for a backend that can't, the default.
     ///
     /// # Errors
     ///

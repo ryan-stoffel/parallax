@@ -5,13 +5,18 @@ import type {
   PrActParams,
   PrDiffResult,
   PrFailureLogResult,
+  PrGuideResult,
   PrStatusResult,
   PrWrite,
+  ProvidersListResult,
   PullRequest,
+  ThreadNaming,
 } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { icons } from "./icons";
+import { newThreadPrefs, type NewThreadPrefs } from "./prefs";
+import { listedProviders } from "./providers";
 import type { PrActExtra, PrActionMore } from "./pr/model";
 import { ago, PrRow } from "./pr/parts";
 import { menuItem } from "./ui";
@@ -51,6 +56,15 @@ export interface PullRequests {
   write?: (url: string, write: PrWrite) => Promise<RpcError | undefined>;
   /** Whether plxd takes PLX-1151's actions (`prActions`): re-run, update and delete branch, a method. */
   actions?: boolean;
+  /**
+   * Reads `pr/guide` at head `headSha`, which starts one in the background when plxd has none
+   * for it, or a new one with `regenerate` (0095). Needs `prGuide`.
+   */
+  guide?: (
+    url: string,
+    headSha: string,
+    regenerate?: boolean,
+  ) => Promise<{ result?: PrGuideResult; error?: RpcError }>;
 }
 
 /**
@@ -75,6 +89,7 @@ export function usePullRequests(
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const watch = !!capabilities && "prWatch" in capabilities;
   const actions = !!capabilities && "prActions" in capabilities;
+  const guides = !!capabilities && "prGuide" in capabilities;
   const put = useCallback(
     (url: string, next: (prev?: Linked) => Linked) =>
       setRead((all) => ({ ...all, [`${runId} ${url}`]: next(all[`${runId} ${url}`]) })),
@@ -120,6 +135,18 @@ export function usePullRequests(
     async (url: string, w: PrWrite) => {
       const answer = await window.parallax.request(hostId, "pr/write", { url, write: w });
       return "error" in answer ? answer.error : undefined;
+    },
+    [hostId],
+  );
+  const guide = useCallback(
+    async (url: string, headSha: string, regenerate?: boolean) => {
+      const answer = await window.parallax.request(hostId, "pr/guide", {
+        url,
+        headSha,
+        model: guideModel(newThreadPrefs.get(), listedProviders(hostId)),
+        regenerate,
+      });
+      return "error" in answer ? { error: answer.error } : { result: answer.result };
     },
     [hostId],
   );
@@ -194,7 +221,26 @@ export function usePullRequests(
     failureLog: watch ? failureLog : undefined,
     write: watch ? write : undefined,
     actions,
+    guide: guides && diffs ? guide : undefined,
   };
+}
+
+/**
+ * The model that writes a pull request's guide (0095): the user's default at its effort, or the
+ * naming model at its effort when there's no default or the default's instance can't make the
+ * hidden call, which only Claude Code and Codex instances can. An instance `providers` doesn't
+ * list yet keeps the default.
+ */
+export function guideModel(
+  prefs: Pick<NewThreadPrefs, "model" | "effort" | "naming" | "namingEffort">,
+  providers?: ProvidersListResult,
+): ThreadNaming {
+  const kind = providers?.providers.find((p) => p.instance.id === prefs.model?.provider)?.instance
+    .kind;
+  const namer = !providers || kind === "claude" || kind === "codex";
+  return prefs.model && namer
+    ? { backend: prefs.model.provider, model: prefs.model.id, effort: prefs.effort }
+    : { backend: prefs.naming.provider, model: prefs.naming.id, effort: prefs.namingEffort };
 }
 
 /** How often an open linked pull request is read again. */
