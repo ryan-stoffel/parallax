@@ -25,9 +25,9 @@ import { sectionsStore } from "./Sidebar";
 import { moreShown } from "./SidebarNav";
 import {
   navDefaults,
-  newSidebar,
   pinnedProjects,
   sidebarDefaults,
+  sidebarMode,
   sidebarNav,
   sidebarPrefs,
 } from "./sidebarPrefs";
@@ -104,8 +104,8 @@ beforeEach(() => {
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
   sidebarNav.set(navDefaults);
-  // These tests are the new sidebar's (0090); one below covers the classic one.
-  newSidebar.set(true);
+  // These tests are Traditional's head (0090); one below covers Inbox and Traditional's list (0094).
+  sidebarMode.set("traditional");
   pinnedProjects.set([]);
   moreShown.set(false);
   sectionsStore.set({});
@@ -210,8 +210,7 @@ const projectRows = () => {
 };
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
-const dialog = () =>
-  document.querySelector<HTMLDialogElement>('dialog[aria-label="New project or Space"]')!;
+const dialog = () => document.querySelector<HTMLDialogElement>('dialog[aria-label="New project"]')!;
 const inDialog = (name: string) =>
   [...dialog().querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
@@ -250,14 +249,22 @@ const paletteOption = (name: string) =>
 // The sidebar's row under New thread (0090).
 const openPalette = async () => {
   await click(
-    [...document.querySelectorAll("#sidebar button")].find(
-      (b) => b.textContent === "New project or Space",
-    ),
+    [...document.querySelectorAll("#sidebar button")].find((b) => b.textContent === "New project"),
   );
 };
+// A Project, an orchestrator thread from 0093 on, starts from New thread's picker.
 const openNewProject = async () => {
-  await openPalette();
-  await click(paletteOption("New Project"));
+  await click(
+    [...document.querySelectorAll("#sidebar button")].find((b) =>
+      b.textContent?.startsWith("New thread"),
+    ),
+  );
+  const picker = document.querySelector('dialog[aria-label="New thread in"]')!;
+  await click(
+    [...picker.querySelectorAll('[role="option"]')].find((o) =>
+      o.textContent?.startsWith("New orchestrator thread"),
+    ),
+  );
 };
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
@@ -278,18 +285,6 @@ test("lists plxd's Projects as rows, most recently active first, and adds one fr
     }),
   );
   expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
-});
-
-test("Projects live on the Projects page, not in the sidebar's list, even when one matches a search or needs the user", async () => {
-  await renderApp();
-  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
-  expect(
-    [...document.querySelectorAll("#sidebar summary")].map((s) => s.textContent),
-  ).not.toContain("Projects2");
-  const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
-  typeInto(search, "emb");
-  await settle();
-  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
 });
 
 test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
@@ -758,8 +753,6 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   });
   expect(pinned()!.textContent).toContain("Subagent: Write the docs");
   expect(pinned()!.textContent).toContain("git tag v1.2.0");
-  // Waiting on the user, ember still stays out of the list unless pinned (0090).
-  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
   await openView("Agents");
   expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
 
@@ -913,13 +906,22 @@ test("Usage waits under More until Settings shows it in the head, and pinned pro
   await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
   expect(sidebarButton("Usage")!.closest("[inert]")).toBeNull();
 
-  // Pinning from a card lists the Project under Pinned, and its row opens it.
+  // Pinning a Project from its card lists it as a card with the pinned threads, out of its folder,
+  // and its row opens it. Under Pinned in the head are only Spaces.
   openProjectsPage();
   await click(document.querySelector('main button[aria-label="Pin ember"]'));
   expect(pinnedProjects.get()).toEqual(["local/p-ember"]);
-  const pinned = document.querySelector('#sidebar section[aria-label="Pinned"]')!;
-  expect([...pinned.querySelectorAll("li > button")].map((b) => b.textContent)).toEqual(["ember"]);
-  await click(pinned.querySelector("li > button"));
+  expect(document.querySelector('#sidebar section[aria-label="Pinned"]')).toBeNull();
+  const pinned = document.querySelector('#sidebar ul[aria-label="Pinned orchestrator threads"]')!;
+  expect([...pinned.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual(["ember"]);
+  expect(
+    [
+      ...document.querySelectorAll(
+        '#sidebar ul[aria-label="Threads"] li[data-kind="project"] [data-title]',
+      ),
+    ].map((t) => t.textContent),
+  ).not.toContain("ember");
+  await click(pinned.querySelector("button[data-row]"));
   expect(crumbs()).toEqual(["This Mac", "ember"]);
 });
 
@@ -1179,28 +1181,32 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
-test("the classic sidebar keeps Projects in a drawer and Pull requests in the footer until Beta turns on the new one", async () => {
-  newSidebar.set(false);
-  sectionsStore.set({ all: { projects: true } });
+test("Inbox has a Projects button beside its search and Pull requests in the footer but no Projects drawer, and Traditional lists each Project as a row in its folder with Projects in its head", async () => {
+  sidebarMode.set("inbox");
   await renderApp();
   const sidebar = document.getElementById("sidebar")!;
-  const drawer = [...sidebar.querySelectorAll("details")].find((d) =>
-    d.querySelector("summary")?.textContent?.startsWith("Projects"),
-  )!;
   expect(
-    [...drawer.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),
-  ).toEqual(["photon", "ember"]);
+    [...sidebar.querySelectorAll("details summary")].some((s) =>
+      s.textContent?.startsWith("Projects"),
+    ),
+  ).toBe(false);
+  expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
   expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
-  expect(sidebarButton("Projects")).toBeUndefined();
+  const projectsButton = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Projects"]')!;
+  await click(projectsButton);
+  expect(projectsButton.getAttribute("aria-pressed")).toBe("true");
 
-  await act(async () => newSidebar.set(true));
-  expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
+  await act(async () => sidebarMode.set("traditional"));
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
+  const list = sidebar.querySelector('ul[aria-label="Threads"]')!;
+  expect(
+    [...list.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),
+  ).toEqual(["photon", "ember"]);
   expect(sidebarButton("Projects")).toBeDefined();
 });
 
-test("the add palette offers New Space after New Project where the host makes Spaces, and it opens Create Space", async () => {
+test("the add palette offers New Space first where the host makes Spaces, and it opens Create Space; New orchestrator thread is in New thread's picker", async () => {
   await renderApp();
   await openPalette();
   expect(paletteOption("New Space")).toBeUndefined();
@@ -1210,7 +1216,8 @@ test("the add palette offers New Space after New Project where the host makes Sp
   unmount();
   await renderApp();
   await openPalette();
-  expect(paletteOptions().indexOf(paletteOption("New Space")!)).toBe(1);
+  expect(paletteOptions().indexOf(paletteOption("New Space")!)).toBe(0);
+  expect(paletteOption("New Project")).toBeUndefined();
   await click(paletteOption("New Space"));
   expect(dialog().open).toBe(false);
   const create = [...document.querySelectorAll("dialog")].find(

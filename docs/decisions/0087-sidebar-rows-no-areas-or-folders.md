@@ -1,6 +1,6 @@
 # 0087: Projects list as rows, finished work rises, and areas and folders are gone
 
-- Status: accepted; amends [0075](0075-arc-sidebar.md) and supersedes [0073](0073-areas.md)'s areas; its Projects drawer and Projects atop the list are replaced by the Projects page and Pinned in [0090](0090-projects-page-and-spaces.md)
+- Status: accepted; amends [0075](0075-arc-sidebar.md) and supersedes [0073](0073-areas.md)'s areas; its Projects drawer and Projects atop the list are replaced by the Projects page and Pinned in [0090](0090-projects-page-and-spaces.md); [0094](0094-sidebar-modes-drafts-pins.md) puts drafts and pinned threads on top under thin lines, and moves a pinned card's pin to its top-right
 - Date: 2026-10-25
 - Issue: PLX-1043
 

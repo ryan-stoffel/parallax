@@ -5,7 +5,6 @@ import {
   Folder,
   FolderGit2,
   FolderOpen,
-  Layers,
   MessagesSquare,
   Search,
 } from "lucide-react";
@@ -56,8 +55,8 @@ export type AddDialogHandle = { open: (start?: "project") => void };
 
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
- * offers New Project, New Space (0090), New repository, Local folder, and Clone from GitHub. New
- * Space hands off to `onNewSpace`'s dialog; the rest open a step of their own in the same dialog,
+ * offers New Space (0090), New repository, Local folder, and Clone from GitHub; `open("project")`
+ * starts on Create Project, which New thread's picker opens (0093). New Space hands off to `onNewSpace`'s dialog; the rest open a step of their own in the same dialog,
  * and Back returns to the step before. With more than one computer,
  * Local folder first asks which (PLX-769). The first three make or find a repository and
  * register it with its computer's plxd (`repo/add`), then close, or, when Create Project's
@@ -122,7 +121,7 @@ export function AddDialog({
   return (
     <dialog
       ref={dialog}
-      aria-label="New project or Space"
+      aria-label="New project"
       onClose={() => {
         setStack([{ kind: "menu" }]);
         setWorkspace(undefined);
@@ -254,8 +253,11 @@ export function CloneDialog({
 
 type StepProps = { onBack: () => void; onAdded: (hostId: string, repo: Repo) => void };
 
-/** What the menu step picks: New Project, New Space, or a way to add a repository. */
-type MenuKind = WorkspaceSource | "project" | "space";
+/**
+ * What the menu step picks: New Space or a way to add a repository. A Project, an orchestrator
+ * thread from 0093 on, starts from New thread's picker, which opens this palette on its step.
+ */
+type MenuKind = WorkspaceSource | "space";
 
 const menu: {
   kind: MenuKind;
@@ -263,12 +265,6 @@ const menu: {
   detail: string;
   icon: ReactNode;
 }[] = [
-  {
-    kind: "project",
-    name: "New Project",
-    detail: "A focused chat where agents coordinate work",
-    icon: <Layers />,
-  },
   {
     kind: "space",
     name: "New Space",

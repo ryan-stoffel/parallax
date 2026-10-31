@@ -40,9 +40,10 @@ import { NewThread } from "./NewThread";
 import { DevicePanel } from "./DevicePanel";
 import { DocumentView } from "./DocumentView";
 import type { DocRef } from "./documents";
+import { freshDraftId } from "./drafts";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
-import { NewThreadPicker } from "./NewThreadPicker";
+import { NewThreadPicker, type PickerOrchestrator } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { Onboarding } from "./Onboarding";
 import { Splash } from "./Splash";
@@ -767,8 +768,9 @@ export function App() {
     setOpening({ hostId, projectId });
   };
 
-  // New Thread's draft, which picking where it runs keeps (PLX-788).
-  const draft = selection.kind === "new" ? selection.draft : undefined;
+  // New Thread's draft, which picking where it runs keeps (PLX-788). A fresh New thread gets its
+  // own, so opening another leaves this one as a draft (PLX-1150).
+  const draft = selection.kind === "new" ? (selection.draft ?? freshDraftId(selection)) : undefined;
   // Runs New Thread on another computer: opens that host, keeping the repository if it lists one
   // of the same name (each host's entries have their own ids). A host whose list is in but lacks
   // it adds the repository at the same path first, or `at`, where New Thread's clone dialog put
@@ -868,6 +870,18 @@ export function App() {
     setSettings(null);
     setMainPage(next);
   };
+  // The orchestrator threads New thread's picker offers to continue, on every computer listed, most
+  // recently active first (0093): orchestrators start and continue from New thread.
+  const pickerOrchestrators: PickerOrchestrator[] = projectEntries(listed)
+    .filter((e) => e.kind === "project")
+    .sort((a, b) => Date.parse(b.activeAt) - Date.parse(a.activeAt))
+    .map((e) => ({
+      key: e.key,
+      name: e.name,
+      icon: <ProjectIcon icon={e.icon} className="size-4 shrink-0" />,
+      hint: [listed.length > 1 ? e.host.name : undefined, e.branch].filter(Boolean).join(" · "),
+      open: () => openProject(e.host.id, e.id),
+    }));
   // The repositories a new thread can start in, the computer new threads start on's first.
   const menuRepos: MenuItem[] = [
     ...startGroups
@@ -1366,6 +1380,8 @@ export function App() {
           start.id === host.id ? newThread(groupId) : pickRepoOn(start.id, groupId)
         }
         onPickElsewhere={pickRepoOn}
+        orchestrators={pickerOrchestrators}
+        onNewOrchestrator={() => openAdd("project")}
       />
       {settings && (
         <SettingsDialog
@@ -1677,7 +1693,7 @@ export function App() {
                     </div>
                   ) : selection.kind === "new" ? (
                     <NewThread
-                      // Opening a draft opens a new screen, which leaves the one open as a draft.
+                      // Each draft is its own screen, so opening another leaves this one as a draft.
                       key={draft}
                       draftId={draft}
                       hostId={host.id}
@@ -1733,7 +1749,7 @@ export function App() {
                                 (r) => r.space && r.name === spaceRepo.name,
                               );
                               if (id !== host.id && there)
-                                openOnHost(id, { kind: "new", groupId: there.id });
+                                openOnHost(id, { kind: "new", groupId: there.id, draft });
                             }}
                           />
                         )

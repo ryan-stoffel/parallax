@@ -4,8 +4,9 @@ import { merged, stored } from "./stored";
 export const archivePageSize = 25;
 
 /**
- * Sidebar behavior kept on this computer (0033). Both default to the sections: a Working drawer
- * while a thread runs, and archived threads a page at a time. Off is the earlier list.
+ * Sidebar behavior kept on this computer (0033), set in Settings › Appearance › Sidebar. Both
+ * default to the sections: a Working drawer while a thread runs, and archived threads a page at a
+ * time. Off is the earlier list.
  */
 export type SidebarPrefs = {
   /** While a top-level thread is working, list it and its children under Working. */
@@ -48,10 +49,35 @@ export function togglePinnedProject(key: string) {
 }
 
 /**
- * Whether the sidebar is the new one (0090): New thread, Search, and Projects as rows, Pinned
- * projects, and the Projects page. Off, the default, it's the classic sidebar. Settings › Beta
- * switches it.
+ * Which sidebar shows (0094). Inbox, the default, is 0087's: the search box and its buttons in its
+ * head and the threads as one list, most recently active first. Traditional has 0090's head (New
+ * thread, Search, and Projects as rows, and Pinned projects) and lists the threads in a folder per
+ * repo. Settings › Appearance › Sidebar switches it.
  */
-export const newSidebar = stored<boolean>("parallax.beta.newSidebar", false, (raw, fallback) =>
-  typeof raw === "boolean" ? raw : fallback,
+export type SidebarMode = "inbox" | "traditional";
+
+/**
+ * A stored mode, read from any name it had: Classic is Inbox, and Beta and Folders, the two with
+ * 0090's head, are Traditional.
+ */
+export function readMode(raw: unknown): SidebarMode | undefined {
+  if (raw === "inbox" || raw === "classic") return "inbox";
+  if (raw === "traditional" || raw === "beta" || raw === "folders") return "traditional";
+  return undefined;
+}
+
+/** The mode before 0094, when the new sidebar was Settings › Beta's switch: on reads as Traditional. */
+export function legacyMode(): SidebarMode {
+  try {
+    return localStorage.getItem("parallax.beta.newSidebar") === "true" ? "traditional" : "inbox";
+  } catch {
+    return "inbox";
+  }
+}
+
+/** The sidebar's mode, kept on this computer. */
+export const sidebarMode = stored<SidebarMode>(
+  "parallax.sidebarMode",
+  legacyMode(),
+  (raw, fallback) => readMode(raw) ?? fallback,
 );

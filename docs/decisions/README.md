@@ -115,3 +115,4 @@ What we will do.
 
 What becomes easier, what becomes harder, and what follows from it.
 ```
+| [0094](0094-sidebar-modes-drafts-pins.md) | Settings › Appearance › Sidebar picks Inbox (default), by activity, or Traditional, which lists threads in a folder per `host/repo`, by name, No repo last, in denser rows; drafts, several at once, list on top, then pinned threads with a permanent pin that unpins, each under a thin line; thread, Project, and draft rows share one `RowCard` |

@@ -126,10 +126,6 @@ export const settingsIndex: SettingEntry[] = [
     ],
     ["Naming model", "Names a new thread and its branch", "title rename branch name auto"],
   ]),
-  ...entries("threads", "Sidebar", [
-    ["Working section", "List working threads under Working", "sidebar running active busy list"],
-    ["Archive pages", "Show archived threads a page at a time", "archived show more pagination"],
-  ]),
   ...entries("threads", "Resuming threads", [
     [
       "Resume after a usage limit",
@@ -202,11 +198,17 @@ export const settingsIndex: SettingEntry[] = [
       "diff colors colorblind red green blue orange",
     ],
   ]),
-  ...entries("beta", "Sidebar", [
-    ["New sidebar", "The new sidebar, or the classic one", "sidebar nav pinned projects page"],
+  ...entries("appearance", "Sidebar", [
+    [
+      "Layout",
+      "Inbox, by activity, or Traditional, in a folder per repo",
+      "sidebar inbox traditional classic beta folders repos group nav pinned projects",
+    ],
     ["Projects", "In the sidebar's head, or under More", "sidebar nav pages edit"],
     ["Pull requests", "In the sidebar's head, or under More", "sidebar nav pages edit prs"],
     ["Usage", "In the sidebar's head, or under More", "sidebar nav pages edit limits"],
+    ["Working section", "List working threads under Working", "sidebar running active busy list"],
+    ["Archive pages", "Show archived threads a page at a time", "archived show more pagination"],
   ]),
   // Browser (PLX-974)
   ...entries("browser", "Appearance", [

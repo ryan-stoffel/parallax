@@ -31,6 +31,7 @@ import {
   HardDrive,
   Keyboard,
   Layers,
+  LayoutGrid,
   ListFilter,
   LoaderCircle,
   MessageSquare,
@@ -100,13 +101,10 @@ import {
   type Scope,
 } from "./scope";
 import {
-  activeAt,
-  attentionOf,
   shortBranch,
   initials,
   lastUserPrompt,
   mostUrgent,
-  projectAttention,
   snoozeChoices,
   snoozed,
   type Attention,
@@ -129,11 +127,23 @@ import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import {
   archivePageSize,
-  newSidebar,
   pinnedProjects,
+  sidebarMode,
   sidebarPrefs,
   type NavRow,
 } from "./sidebarPrefs";
+import {
+  draftItems,
+  folderGroups,
+  placeOf,
+  sidebarItems,
+  todayGroups,
+  type DraftItem,
+  type Group,
+  type HostThreads,
+  type Item,
+} from "./sidebarItems";
+import { RowCard, rowTool } from "./RowCard";
 import { SidebarNav, navRow } from "./SidebarNav";
 import { spaceChoices, SpacePicker } from "./SpaceMenu";
 import { projectEntries, type ProjectEntry } from "./projectList";
@@ -142,13 +152,9 @@ import { stored } from "./stored";
 import { useFlip } from "./flip";
 import { draggedThread, dragThread } from "./threadDrag";
 import {
-  asksOf,
   groupOf,
-  waitingOf,
-  projectRuns,
   repoIconOf,
   setRepoIcons,
-  threadProjects,
   type ForkChoice,
   type ProjectChange,
   type ThreadsView,
@@ -192,6 +198,7 @@ import {
   pinUnread,
   todayGroup,
   todayFolded,
+  folderFolded,
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
 import { close, Fold, quietFor, shownRows, Tick, ViewOptions } from "./SidebarParts";
@@ -266,11 +273,7 @@ export function Sidebar({
   );
 }
 
-/** A host and its threads and Projects, as the sidebar merges them. */
-export interface HostThreads {
-  host: Host;
-  view: ThreadsView;
-}
+export type { HostThreads } from "./sidebarItems";
 
 interface ThreadListProps {
   /** Every host's list, this computer first. */
@@ -393,12 +396,10 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
 const cardDelay = 450;
 
 /**
- * A scope's drawers, by whether each is open. Working stays tucked away until asked for. Projects
- * is the classic sidebar's (0090).
+ * A scope's drawers, by whether each is open. Working stays tucked away until asked for.
  */
-type Sections = Record<"projects" | "working" | "snoozed" | "archived", boolean>;
+type Sections = Record<"working" | "snoozed" | "archived", boolean>;
 const sectionDefaults: Sections = {
-  projects: false,
   working: false,
   snoozed: false,
   archived: false,
@@ -413,34 +414,6 @@ export const sectionsStore = stored<Record<string, Partial<Sections>>>(
 );
 /** Each scope's last open row, by key, so switching back reopens it. */
 const lastOpenStore = stored<Record<string, string>>("parallax:lastOpen", {}, record);
-
-/** One row of the list: a thread, or a Project, with its host and what it asks of the user. */
-type Item = (
-  | { kind: "thread"; thread: Thread; run?: AgentRun }
-  | { kind: "project"; project: Project; runs: AgentRun[] }
-) & {
-  key: string;
-  host: Host;
-  view: ThreadsView;
-  repo?: Repo;
-  attention: Attention;
-  /** When it was last active (`activeAt`), for the order. */
-  at: string;
-  title: string;
-  /** What search reads besides its messages: its title, repo, branch, and pull request numbers. */
-  text: string;
-};
-
-/**
- * A thread's attention, Done or Failed again while it's marked unread (pins.ts) and finished, as
- * though never seen.
- */
-const markedUnread = (attention: Attention, run: AgentRun | undefined, marked: boolean) =>
-  marked && attention === "settled" && run && !isRunning(run.status) && run.status !== "waiting"
-    ? run.status === "failed"
-      ? "failed"
-      : "done"
-    : attention;
 
 /**
  * Why Local folder can't browse a computer, by id. This computer's folders are read by main, so it
@@ -547,8 +520,11 @@ export function ThreadList({
   // The Space the delete dialog asks about, and its host's view.
   const [spaceToDelete, setSpaceToDelete] = useState<ProjectEntry>();
   const pins = pinnedProjects.use();
-  // The classic sidebar, as before 0090, unless Settings › Beta turns on the new one.
-  const classic = !newSidebar.use();
+  // Which sidebar shows (0094): Inbox's head is the search box and its buttons, and its threads one
+  // list; Traditional's head is rows, and it lists the threads in a folder per repo.
+  const mode = sidebarMode.use();
+  const inbox = mode === "inbox";
+  const folders = mode === "traditional";
   // The thread or Project the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
@@ -624,64 +600,7 @@ export function ThreadList({
     };
   }, [loaded]);
 
-  const items: Item[] = hosts.flatMap(({ host: h, view }) => {
-    const { state } = view;
-    const repoOf = (id: string) => state.repos.find((r) => r.id === id);
-    // A Project's children show only inside it, and count toward its row's status (0042).
-    const inProject = threadProjects(state);
-    const threads = state.threads
-      .filter((t) => !inProject.get(t.id))
-      .map((t): Item => {
-        const run = state.runs[t.id];
-        const repo = repoOf(t.repo);
-        const title = state.titles[t.id] ?? "Thread";
-        return {
-          kind: "thread",
-          thread: t,
-          run,
-          key: `${h.id}/${t.id}`,
-          host: h,
-          view,
-          repo,
-          attention: markedUnread(
-            attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
-            run,
-            unread.includes(`${h.id}/${t.id}`),
-          ),
-          at: activeAt(t, run, state.stoppedAt[t.id]),
-          title,
-          text: [
-            title,
-            repo && !repo.scratch ? repo.name : "No repo",
-            run?.branch,
-            ...(run?.pullRequests ?? []).map((url) => `#${numberOf(url)}`),
-          ].join(" "),
-        };
-      });
-    const projects = state.projects.map((p): Item => {
-      const runs = projectRuns(state, p.id, inProject);
-      return {
-        kind: "project",
-        project: p,
-        runs,
-        key: `${h.id}/${p.id}`,
-        host: h,
-        view,
-        repo: state.repos.find((r) => r.path === p.repoPath),
-        attention: projectAttention(runs, (id) => asksOf(state, id)),
-        // Its last change, or when one of its runs last stopped, so finished work raises it too.
-        at: runs.reduce((at, r) => {
-          const stopped = state.stoppedAt[r.id];
-          return stopped && !isRunning(r.status) && Date.parse(stopped) > Date.parse(at)
-            ? stopped
-            : at;
-        }, p.updatedAt),
-        title: p.name,
-        text: p.name,
-      };
-    });
-    return [...threads, ...projects];
-  });
+  const items = sidebarItems(hosts, unread);
   const byKey = new Map(items.map((i) => [i.key, i]));
   // The thread at the top of `key`'s family, as far up as it lists; `key` for one no thread started.
   const topOf = (key: string) => {
@@ -713,17 +632,8 @@ export function ThreadList({
   }
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
-  // Where a thread is, for its card: its repo, or No repo.
   // The Space a thread was added to (0090), which it shows and filters as, over where it works.
   const addedTo = (item: Item) => (item.kind === "thread" ? item.thread.space : undefined);
-  const placeOf = (item: Item) => {
-    const space = addedTo(item);
-    const repo = (space && item.view.state.repos.find((r) => r.id === space)) || item.repo;
-    return {
-      name: repo && !repo.scratch ? repo.name : "No repo",
-      icon: <RepoIcon repo={repo} />,
-    };
-  };
 
   const inScope = (item: Item, s: Scope) => {
     const p = parseScope(s);
@@ -803,12 +713,18 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // In the classic sidebar, Projects, most recently active first, as threads are (PLX-1043). They
-  // live in their drawer, except one that needs the user, or matches a search, which shows atop
-  // the list. The new sidebar lists them only under Pinned and on the Projects page (0090).
-  const allProjects = classic ? shown.flatMap((i) => (i.kind === "project" ? [i] : [])) : [];
-  const projects = allProjects.filter((p) => p.attention === "needsYou" || words.length > 0);
-  const drawerProjects = allProjects.filter((p) => !projects.includes(p));
+  // Projects, most recently active first, as threads are (PLX-1043). Inbox lists only one that
+  // needs the user, or matches a search, atop Today; the rest are on the Projects page.
+  // Traditional lists each as one row in its repo's folder (0094).
+  const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
+  const projects = inbox
+    ? allProjects.filter((p) => p.attention === "needsYou" || words.length > 0)
+    : [];
+  // Traditional's pinned Projects (orchestrator threads from 0093), as cards with its pinned threads,
+  // in the order pinned, and so out of their folders. Its pinned Spaces stay in its head.
+  const pinnedOrchestrators = folders
+    ? pins.flatMap((key) => allProjects.filter((p) => p.key === key))
+    : [];
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
@@ -818,18 +734,8 @@ export function ThreadList({
   const pool = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
-  // Unsent New Thread prompts (PLX-788), above the threads, on hosts still listed.
-  const draftRows = drafts.use().flatMap((d) => {
-    const view = hosts.find((h) => h.host.id === d.hostId)?.view;
-    if (!view) return [];
-    const repo = view.state.repos.find((r) => r.id === d.groupId);
-    const inRepo =
-      scope === "all" ||
-      (scope === "none" ? !repo || repo.scratch : scope === `repo:${d.hostId}/${repo?.id}`);
-    return inRepo && words.every((w) => d.text.toLowerCase().includes(w))
-      ? [{ draft: d, repo }]
-      : [];
-  });
+  // Unsent New Thread prompts (PLX-788), atop the list, on hosts still listed.
+  const draftRows = draftItems(drafts.use(), hosts, scope, words);
 
   // Pinned threads stay put; the rest sit in Working while they work (PLX-777: a thread waiting on
   // background work or a watched pull request stays there too).
@@ -870,47 +776,34 @@ export function ThreadList({
     if (selectedKey && unread.includes(selectedKey))
       pinUnread.set(pinUnread.get().filter((k) => k !== selectedKey));
   }, [selectedKey, unread.includes(selectedKey ?? "")]);
-  // Today, grouped as its View says: under each repo, most recent first, or under each day, as a
-  // list over time reads.
-  const groupBy = todayGroup.use();
+  // Today, grouped as its View says, under each repo or each day (Inbox), or Traditional's
+  // folders, a repo's threads and Projects in each, by name (0094). Each kind folds in its own store.
+  const todayBy = todayGroup.use();
   const compact = compactRows.use();
-  const foldedGroups = todayFolded.use();
+  const todayShut = todayFolded.use();
+  const foldersShut = folderFolded.use();
+  const foldStore = folders ? folderFolded : todayFolded;
+  const foldedGroups = folders ? foldersShut : todayShut;
   // A search shows every match, folded or not.
   const isFolded = (key: string) => !words.length && foldedGroups.includes(key);
-  const dayOf = (at: string) => {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const day = new Date(at);
-    day.setHours(0, 0, 0, 0);
-    const days = Math.round((start.getTime() - day.getTime()) / 864e5);
-    return days <= 0
-      ? "Today"
-      : days === 1
-        ? "Yesterday"
-        : days < 7
-          ? "Earlier this week"
-          : "Older";
-  };
-  const repoOfRow = (i: Item) => (i.repo && !i.repo.scratch ? i.repo : undefined);
-  const groupKey = (i: Item) =>
-    groupBy === "repo" ? `${i.host.id}/${repoOfRow(i)?.id ?? "none"}` : dayOf(i.at);
-  // Today's rows in the order they show: each group where its newest row falls, and none from a
-  // folded group.
-  const groupPlace = new Map<string, number>();
-  for (const i of topThreads)
-    if (!groupPlace.has(groupKey(i))) groupPlace.set(groupKey(i), groupPlace.size);
-  const todayRows =
-    groupBy === "none"
-      ? topThreads
-      : topThreads
-          .filter((i) => !isFolded(groupKey(i)))
-          .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
+  const groups: Group[] | undefined = folders
+    ? folderGroups(
+        [...allProjects.filter((p) => !pinnedOrchestrators.includes(p)), ...topThreads].sort(
+          (a, b) => Date.parse(b.at) - Date.parse(a.at),
+        ),
+        many,
+      )
+    : todayBy === "none"
+      ? undefined
+      : todayGroups(topThreads, todayBy, now, many);
+  // Today's rows in the order they show, none from a folded group.
+  const todayRows = groups ? groups.flatMap((g) => (isFolded(g.key) ? [] : g.rows)) : topThreads;
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // classic sidebar's Projects' rows, the pinned threads' rows, then Today's threads, then
-  // Working's, while it's open.
+  // pinned threads' rows, Inbox's Projects' rows, then Today's, then Working's, while it's open.
   const listed = [
-    ...projects,
+    ...pinnedOrchestrators,
     ...pinnedRows,
+    ...projects,
     ...todayRows,
     ...(sections.working ? workingTops : []),
   ];
@@ -1199,10 +1092,17 @@ export function ThreadList({
     }
     actionFailed(errors.find(Boolean), `Couldn't ${action} every thread`);
   };
+  // Down or Up from the focused row to the next or previous one shown, drafts among them.
+  const stepRows = (e: ReactKeyboardEvent<HTMLElement>) => {
+    e.preventDefault();
+    const rows = shownRows();
+    const next = rows[rows.indexOf(e.currentTarget) + (e.key === "ArrowDown" ? 1 : -1)];
+    next?.focus();
+    next?.scrollIntoView({ block: "nearest" });
+  };
   const rowKeys = (e: ReactKeyboardEvent<HTMLElement>, item: Item) => {
     if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return;
-    const rows = shownRows();
-    const at = rows.indexOf(e.currentTarget);
+    const at = shownRows().indexOf(e.currentTarget);
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const thread = item.kind === "thread";
     const can = (capability: string) => thread && capability in item.view.capabilities;
@@ -1211,12 +1111,8 @@ export function ThreadList({
       focusNext.current = after;
       run();
     };
-    if (key === "ArrowDown" || key === "ArrowUp") {
-      e.preventDefault();
-      const next = rows[at + (key === "ArrowDown" ? 1 : -1)];
-      next?.focus();
-      next?.scrollIntoView({ block: "nearest" });
-    } else if (key === "e" && thread) act(() => void archive(item, at));
+    if (key === "ArrowDown" || key === "ArrowUp") stepRows(e);
+    else if (key === "e" && thread) act(() => void archive(item, at));
     else if (key === "s" && can("threadAttention") && !e.shiftKey)
       act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000), at));
     else if (key === "p" && thread && pinsOn(item.view) && !item.thread.parent)
@@ -1247,7 +1143,7 @@ export function ThreadList({
     return (
       <ThreadRow
         key={item.key}
-        look={compact ? "compact" : undefined}
+        look={compact ? "compact" : folders ? "dense" : undefined}
         at={item.at}
         {...(pinDrag && { pinDrag })}
         rowKey={item.key}
@@ -1330,10 +1226,11 @@ export function ThreadList({
   const restCard = (item: Item) => (el: HTMLElement) => {
     if (item.kind !== "thread" || item.key === selectedKey) return;
     prefetchThread(item.host.id, item.thread.id);
+    const place = placeOf(item);
     card.current?.show(el, {
       title: item.title,
       run: item.run,
-      repo: placeOf(item),
+      repo: { name: place?.name ?? "No repo", icon: <RepoIcon repo={place} /> },
       host: item.host,
       snoozedUntil: item.thread.snoozedUntil,
     });
@@ -1434,7 +1331,7 @@ export function ThreadList({
   // A favorite's square: its chosen icon, else its repo's, its status, and its thread's actions.
   const pinOf = (i: Item & { kind: "thread" }) => {
     const chosen = pinIconsNow[i.key];
-    const repo = repoOfRow(i);
+    const repo = i.repo && !i.repo.scratch ? i.repo : undefined;
     return {
       icon: chosen ? (
         <ProjectIcon icon={chosen} className="size-4" />
@@ -1523,107 +1420,151 @@ export function ThreadList({
     done: "bg-added",
     needsYou: "bg-warning",
   };
-  // Opening a thread in a folded group opens the group, so its row shows.
-  const openGroup = groupBy === "none" ? undefined : topThreads.find((i) => i.key === openKey);
-  const openGroupKey = openGroup && groupKey(openGroup);
+  // Opening a row in a folded group opens the group, so its row shows.
+  const openGroupKey = groups?.find((g) => g.rows.some((i) => i.key === openKey))?.key;
   useEffect(() => {
-    if (openGroupKey && todayFolded.get().includes(openGroupKey))
-      todayFolded.set(todayFolded.get().filter((k) => k !== openGroupKey));
-  }, [openKey]);
-  const grouped = (rows: Item[]): ReactNode => {
-    if (groupBy === "none") return rows.map((i) => row(i));
-    const groups = new Map<string, { label: ReactNode; rows: Item[] }>();
-    for (const i of rows) {
-      const repo = repoOfRow(i);
-      const key = groupKey(i);
-      const label =
-        groupBy === "repo" ? (
-          <>
-            <RepoIcon repo={repo} />
-            <span className="min-w-0 truncate">{repo?.name ?? "No repo"}</span>
-            {/* Repos on two computers can share a name. */}
-            {many && (
-              <span className="min-w-0 truncate font-normal text-faint-foreground">
-                {i.host.name}
-              </span>
-            )}
-          </>
-        ) : (
-          key
-        );
-      groups.set(key, { label, rows: [...(groups.get(key)?.rows ?? []), i] });
-    }
-    // Each group under a heading that folds it, which while folded shows whether anything in it
-    // finished or failed, and sticks to the top while its rows scroll under it. Alt-click folds or
-    // opens them all.
-    return [...groups].map(([key, g]) => {
-      const open = !isFolded(key);
+    if (openGroupKey && foldStore.get().includes(openGroupKey))
+      foldStore.set(foldStore.get().filter((k) => k !== openGroupKey));
+  }, [openKey, mode]);
+  // A row of the list: a thread's, or in Folders, a Project's.
+  const rowOf = (i: Item, nested = false) =>
+    i.kind === "project" ? projectCard(i, nested) : row(i, nested);
+  // Each group under a heading that folds it, which while folded shows whether anything in it
+  // finished or failed, and sticks to the top while its rows scroll under it. Alt-click folds or
+  // opens them all. Today's headings are quiet labels on a rule; Traditional's are rows, as a repo's
+  // folder is in Codex, with its rows set in under it.
+  const groupList = (list: Group[]) => {
+    const keys = list.map((g) => g.key);
+    const fold = (key: string, open: boolean, all: boolean) =>
+      foldStore.set(
+        all
+          ? open
+            ? [...new Set([...foldedGroups, ...keys])]
+            : foldedGroups.filter((k) => !keys.includes(k))
+          : open
+            ? [...foldedGroups, key]
+            : foldedGroups.filter((k) => k !== key),
+      );
+    return list.map((g) => {
+      const open = !isFolded(g.key);
       const urgent = mostUrgent(g.rows.map(rowAttention));
+      const news = !open && newsDot[urgent] && (
+        <span aria-hidden className={`dot-in size-1.5 shrink-0 rounded-full ${newsDot[urgent]}`} />
+      );
+      const count = <Tick value={g.rows.length} />;
+      const label = (
+        <>
+          {g.byRepo && <RepoIcon repo={g.repo} />}
+          <span className="min-w-0 truncate">{g.label}</span>
+          {/* Repos on two computers can share a name. */}
+          {g.host && (
+            <span className="min-w-0 truncate font-normal text-faint-foreground">{g.host}</span>
+          )}
+        </>
+      );
       return (
-        <li key={key} className="mt-2 first:mt-0">
+        <li key={g.key} className={folders ? "mt-0.5 first:mt-0" : "mt-2 first:mt-0"}>
           <div className="sticky top-0 z-10 bg-sidebar">
             <button
               type="button"
               aria-expanded={open}
               disabled={words.length > 0}
-              onClick={(e) =>
-                todayFolded.set(
-                  e.altKey
-                    ? open
-                      ? [...new Set([...foldedGroups, ...groups.keys()])]
-                      : foldedGroups.filter((k) => !groups.has(k))
-                    : open
-                      ? [...foldedGroups, key]
-                      : foldedGroups.filter((k) => k !== key),
-                )
-              }
-              className="group/heading flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-meta font-medium text-muted-foreground transition-colors outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0"
+              onClick={(e) => fold(g.key, open, e.altKey)}
+              className={folders ? folderHeading : groupHeading}
             >
-              {g.label}
-              <span className="shrink-0 overflow-hidden rounded-full bg-foreground/[0.06] px-1.5 text-caption leading-4 text-faint-foreground">
-                <Tick value={g.rows.length} />
-              </span>
-              {!open && newsDot[urgent] && (
-                <span aria-hidden className={`dot-in size-1.5 rounded-full ${newsDot[urgent]}`} />
+              {folders ? (
+                <>
+                  {label}
+                  {news}
+                  <span className="ml-auto shrink-0 text-meta font-normal text-faint-foreground">
+                    {count}
+                  </span>
+                  <ChevronRight
+                    aria-hidden
+                    className={`size-3.5 shrink-0 text-faint-foreground transition-transform duration-200 ${open ? "rotate-90" : ""}`}
+                  />
+                </>
+              ) : (
+                <>
+                  {label}
+                  <span className="shrink-0 overflow-hidden rounded-full bg-foreground/[0.06] px-1.5 text-caption leading-4 text-faint-foreground">
+                    {count}
+                  </span>
+                  {news}
+                  <span aria-hidden className="mx-1 h-px flex-1 bg-border" />
+                  <ChevronDown
+                    aria-hidden
+                    className={`text-faint-foreground transition-[transform,opacity] duration-200 ${open ? "opacity-0 group-enabled/heading:group-hover/heading:opacity-100" : "-rotate-90"}`}
+                  />
+                </>
               )}
-              <span aria-hidden className="mx-1 h-px flex-1 bg-border" />
-              <ChevronDown
-                aria-hidden
-                className={`text-faint-foreground transition-[transform,opacity] duration-200 ${open ? "opacity-0 group-enabled/heading:group-hover/heading:opacity-100" : "-rotate-90"}`}
-              />
             </button>
           </div>
           <Fold open={open}>
             {/* Under its repo's heading, a row needn't name the repo: title and status, then details. */}
-            <ul className={cardGap}>{g.rows.map((i) => row(i, groupBy === "repo"))}</ul>
+            <ul className={folders ? "flex flex-col gap-0.5 py-0.5 pl-3" : cardGap}>
+              {g.rows.map((i) => rowOf(i, g.byRepo))}
+            </ul>
           </Fold>
         </li>
       );
     });
   };
   // With nothing left, Today is blank (PLX-1043); a search that finds nothing says so.
-  const threadList = (rows: Item[]) => {
-    const empty = draftRows.length === 0 && rows.length === 0;
+  const threadList = () => {
+    const empty = draftRows.length === 0 && todayRows.length === 0 && !groups?.length;
     return (
       // It fills the space left, so a pinned, archived, or snoozed thread can drop anywhere in it.
       <div {...listZone} className={`flex-1 rounded-lg transition-colors ${listLook}`}>
         <ul aria-label="Threads" className={cardGap}>
-          {draftRows.map(({ draft, repo }) => (
-            <DraftRow
-              key={draft.id}
-              draft={draft}
-              repo={repo}
-              onOpen={() =>
-                onSelect(draft.hostId, { kind: "new", groupId: draft.groupId, draft: draft.id })
-              }
-            />
-          ))}
-          {grouped(rows)}
+          {groups ? groupList(groups) : topThreads.map((i) => row(i))}
         </ul>
         {empty && words.length > 0 && <p className={emptyNote}>Nothing matches</p>}
       </div>
     );
   };
+  // Discards a draft, with Undo.
+  const discardDraft = (draft: Draft) => {
+    drafts.remove(draft.id);
+    toast("Discarded the draft", () => drafts.put(draft));
+  };
+  // A draft's keys: Up and Down move through the rows, and Backspace or Delete discards it.
+  const draftKeys = (e: ReactKeyboardEvent<HTMLElement>, d: DraftItem) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") stepRows(e);
+    else if (e.key === "Backspace" || e.key === "Delete") {
+      e.preventDefault();
+      focusNext.current = { index: shownRows().indexOf(e.currentTarget), skip: d.key };
+      discardDraft(d.draft);
+    }
+  };
+  // The unsent New Thread prompts, atop the list under a line (0094).
+  const draftList = draftRows.length > 0 && (
+    <>
+      <ul aria-label="Drafts" className={cardGap}>
+        {draftRows.map((d) => (
+          <DraftRow
+            key={d.key}
+            rowKey={d.key}
+            draft={d.draft}
+            repo={d.repo}
+            compact={compact}
+            dense={folders}
+            onOpen={() =>
+              onSelect(d.draft.hostId, {
+                kind: "new",
+                groupId: d.draft.groupId,
+                draft: d.draft.id,
+              })
+            }
+            onDiscard={() => discardDraft(d.draft)}
+            onKeys={(e) => draftKeys(e, d)}
+          />
+        ))}
+      </ul>
+      <Rule />
+    </>
+  );
 
   // What auto-archive may archive: a finished thread in Today already seen, but not one waiting
   // out a usage limit (0049), which resumes on its own, or one whose family is still at work.
@@ -1768,14 +1709,17 @@ export function ThreadList({
       };
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
-  // A Project's card in the classic sidebar (PLX-1043).
-  const projectCard = (p: Item & { kind: "project" }) => {
+  // A Project's card in the Inbox sidebar (PLX-1043).
+  // A Project's card, dense in Traditional, as its threads' are. `nested`, under a folder, it's its
+  // icon and name on one line, then its details; pinned, it keeps its first line, as a thread does.
+  const projectCard = (p: Item & { kind: "project" }, nested = false) => {
     const n = modHeld ? listed.indexOf(p) : -1;
     return (
       <ProjectRow
         key={p.key}
         rowKey={p.key}
-        look={compact ? "compact" : undefined}
+        look={compact ? "compact" : folders ? "dense" : undefined}
+        nested={nested}
         project={p.project}
         runs={p.runs}
         device={many && p.host.icon ? p.host : undefined}
@@ -1793,16 +1737,17 @@ export function ThreadList({
       />
     );
   };
-  // The Projects that need the user, or match a search, atop the list.
+  // Inbox's Projects that need the user, or match a search, atop Today.
   const projectList = projects.length > 0 && (
     <ul aria-label="Projects" className={`mb-1 ${cardGap}`}>
-      {projects.map(projectCard)}
+      {projects.map((p) => projectCard(p))}
     </ul>
   );
-  // No line or Clear between what's kept and Today (PLX-1043); View lives in the filter menu.
+  // In every mode (0094): the drafts, then the favorites and pinned threads, each under a line, then
+  // the rest. View lives in the filter menu.
   const list = (
     <>
-      {projectList}
+      {draftList}
       <Favorites
         items={favorites}
         onReorder={
@@ -1829,8 +1774,17 @@ export function ThreadList({
         }}
         onRemove={unfavorite}
       />
+      {pinnedOrchestrators.length > 0 && (
+        <ul aria-label="Pinned orchestrator threads" className={`mb-1 ${cardGap}`}>
+          {pinnedOrchestrators.map((p) => projectCard(p))}
+        </ul>
+      )}
       {pinList}
-      {threadList(topThreads)}
+      {(favorites.length > 0 || pinnedRows.length > 0 || pinnedOrchestrators.length > 0) && (
+        <Rule />
+      )}
+      {projectList}
+      {threadList()}
     </>
   );
 
@@ -1843,7 +1797,7 @@ export function ThreadList({
     !archived.length &&
     !draftRows.length;
 
-  // The search box and the filter, which the classic head and the new Search row each lay out.
+  // The search box and the filter, which Inbox's head and Traditional's Search row each lay out.
   const searchInput = (className: string) => (
     <input
       ref={search}
@@ -1880,14 +1834,14 @@ export function ThreadList({
       many={many}
       needs={needsIn}
       outside={outside}
-      tucked={!classic}
+      tucked={!inbox}
       view={
         <ViewOptions
           autoHours={autoHours}
           onAutoHours={(hours) => autoClear.set(hours)}
           compact={compact}
           onCompact={(on) => compactRows.set(on)}
-          group={groupBy}
+          group={folders ? undefined : todayBy}
           onGroup={(next) => todayGroup.set(next)}
         />
       }
@@ -1896,7 +1850,7 @@ export function ThreadList({
 
   return (
     <>
-      {classic ? (
+      {inbox ? (
         <div className="flex items-center gap-1 px-2">
           <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
             <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
@@ -1905,6 +1859,14 @@ export function ThreadList({
             )}
           </label>
           {scopeMenu}
+          {/* The Projects page, which Inbox has instead of a Projects drawer; pressed while open. */}
+          <IconButton
+            label="Projects"
+            aria-pressed={page === "projects"}
+            onClick={() => onOpenPage("projects")}
+          >
+            <LayoutGrid />
+          </IconButton>
           <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
             <FolderPlus />
           </IconButton>
@@ -1915,7 +1877,7 @@ export function ThreadList({
       ) : (
         <SidebarNav
           current={page}
-          pinned={pinnedEntries}
+          pinned={pinnedEntries.filter((e) => e.kind === "space")}
           openKey={openSpace ?? (selection.kind === "project" ? openKey : undefined)}
           onNewThread={onNewThread}
           onOpen={onOpenPage}
@@ -1990,19 +1952,6 @@ export function ThreadList({
         onDrop={dropOn("archived")}
         pageSize={pageArchived ? archivePageSize : undefined}
       />
-      {/* Projects aren't a thread state, so a rule sets their drawer apart (PLX-1087). */}
-      {drawerProjects.length > 0 && (
-        <div aria-hidden className="mx-4 my-1 border-t border-border" />
-      )}
-      {classic && (
-        <Drawer
-          label="Projects"
-          items={drawerProjects}
-          row={(p) => (p.kind === "project" ? projectCard(p) : null)}
-          open={sections.projects}
-          onOpenChange={(o) => toggleSection("projects", o)}
-        />
-      )}
       {pickedItems.length > 0 && (
         <BulkBar
           count={pickedItems.length}
@@ -2014,7 +1963,7 @@ export function ThreadList({
           onClear={() => setPicked(new Set())}
         />
       )}
-      <RowCard ref={card} />
+      <RowPeek ref={card} />
       <Toasts />
       <AddDialog
         ref={addDialog}
@@ -2060,7 +2009,7 @@ export function ThreadList({
         <Footer
           listed={hosts}
           onOpenSettings={onOpenSettings}
-          onOpenPage={classic ? onOpenPage : undefined}
+          onOpenPage={inbox ? onOpenPage : undefined}
         />
       </div>
     </>
@@ -2257,15 +2206,17 @@ function Drawer<T>({
         })
       }
       data-flip-scroll
-      className={`group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto rounded-lg px-2 pb-1 transition-colors ${over ? dropLook : ""}`}
+      className={`group/drawer mx-2 max-h-[40%] min-h-0 shrink-0 overflow-y-auto border-t border-border pb-1 transition-colors ${over ? `rounded-lg ${dropLook}` : ""}`}
     >
+      {/* A line above each drawer sets its rows apart from the list's and the next drawer's; an
+          open drawer's heading reads brighter, so it's clear which rows are under it. */}
       <summary
         onClick={(e) => {
           e.preventDefault();
           setOpened(!open);
           onOpenChange(!open);
         }}
-        className="group/summary sticky top-0 z-10 flex cursor-default list-none items-center gap-1.5 bg-sidebar px-2 py-1.5 text-meta font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden"
+        className="group/summary sticky top-0 z-10 flex cursor-default list-none items-center gap-1.5 bg-sidebar px-2 pt-2 pb-1.5 text-meta font-medium text-muted-foreground select-none group-open/drawer:text-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
         {label}
         <span className="ml-auto text-faint-foreground tabular-nums group-hover/summary:text-muted-foreground">
@@ -2536,7 +2487,7 @@ function Footer({
   onOpenPage,
 }: Pick<ThreadListProps, "onOpenSettings"> & {
   listed: HostThreads[];
-  /** The classic sidebar's Pull requests and Usage buttons, which the new one lists in its head. */
+  /** Inbox's Pull requests and Usage buttons, which Traditional lists in its head. */
   onOpenPage?: (page: NavRow) => void;
 }) {
   return (
@@ -2776,62 +2727,17 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 export const backendLogo = (backend: string) => backendLogos[backend] ?? instanceLogo(backend);
 
 /**
- * A row's first line: `icon`, if any, its title, then `status`: what it asks of the user, or how
- * long ago it was last active. Hovering or focusing the row hides the status and keeps the title
- * clear of the row's actions.
- */
-function RowHead({
-  icon,
-  title,
-  titleColor = "text-foreground",
-  status,
-  renaming = false,
-  oneAction = false,
-}: {
-  /** Where it is, on a one-line row. */
-  icon?: ReactNode;
-  title: ReactNode;
-  titleColor?: string;
-  status: ReactNode;
-  /** While its title is edited in place, the line is the box's, with the actions hidden. */
-  renaming?: boolean;
-  /** Whether the row shows only its actions button, so the title keeps more of the line. */
-  oneAction?: boolean;
-}) {
-  const clear = renaming
-    ? ""
-    : oneAction
-      ? "group-has-[:focus-visible]/row:pr-7 group-hover/row:pr-7"
-      : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34";
-  return (
-    <span className={`flex w-full items-center gap-2 ${clear}`}>
-      {icon}
-      <span
-        data-title
-        className={`min-w-0 flex-1 truncate text-body font-medium transition-colors ${titleColor}`}
-      >
-        {title}
-      </span>
-      <span
-        data-status
-        className="shrink-0 text-meta text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
-      >
-        {status}
-      </span>
-    </span>
-  );
-}
-
-/**
- * The classic sidebar's Project card (PLX-1043, 0090), shaped like a thread's: its icon, "Project", and how many threads it
- * holds, with its status at the end (what it asks of the user, how many of its runs work, or how
- * long ago it was last active), then its name in bold, then its branch, its computer, and its
- * coordinator's provider, in color while it's open. Hovering or focusing it shows its actions button, whose menu also opens by
- * right-clicking the row, or with A: Rename, Change icon, and the rest its plxd allows.
+ * A Project's card (PLX-1043, 0090), in Inbox's list and in its repo's folder in Traditional: its
+ * icon, "Project", and how many threads it holds, with its status at the end (what it asks of the
+ * user, how many of its runs work, or how long ago it was last active), then its name, then its
+ * branch, its computer, and its coordinator's provider, in color while it's open. Hovering or
+ * focusing it shows its actions button, whose menu also opens by right-clicking the row, or with
+ * A: Rename, Change icon, and the rest its plxd allows.
  */
 function ProjectRow({
   rowKey,
   look,
+  nested = false,
   project,
   runs,
   device,
@@ -2846,8 +2752,11 @@ function ProjectRow({
 }: {
   /** Its key in the list, for keyboard moves and sliding when the list moves. */
   rowKey: string;
-  /** Today's one-line look (pins.ts): its icon, name, and status. */
-  look?: "compact";
+  /** Today's one-line look (pins.ts): its icon, name, and status. Dense is a card with less padding,
+   *  as every row in the Traditional sidebar is. */
+  look?: "compact" | "dense";
+  /** Under its repo's folder, which names the repo: its icon and name lead, with no first line. */
+  nested?: boolean;
   project: Project;
   /** Its coordinator's and children's runs (0042). */
   runs: readonly AgentRun[];
@@ -2868,7 +2777,6 @@ function ProjectRow({
   onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
 }) {
   const menuId = useId();
-  const row = useRef<HTMLLIElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const working = runs.filter((r) => isRunning(r.status)).length;
   const status =
@@ -2880,121 +2788,117 @@ function ProjectRow({
   const branch = project.integrationBranch ?? project.branch;
   const coordinator = runs.find((r) => r.id === project.coordinator);
   const Logo = coordinator?.backend ? backendLogo(coordinator.backend) : undefined;
-  const titleColor =
-    selected || attention !== "settled"
-      ? "text-foreground"
-      : "text-foreground/70 group-hover/row:text-foreground";
   return (
-    <li
-      ref={row}
-      data-kind="project"
-      data-flip={rowKey}
-      className={`group/row relative rounded-lg transition-colors duration-100 ${selected ? current : "group-hover/row:bg-hover"}`}
-    >
-      <button
-        type="button"
-        aria-current={selected ? "page" : undefined}
-        data-row={rowKey}
-        data-kind="project"
-        onClick={onOpen}
-        onKeyDown={onKeys}
-        onContextMenu={actions.length ? (e) => openOnContextMenu(e, trigger.current) : undefined}
-        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2.5 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${oneLine ? "py-[5px]" : "py-2"}`}
-      >
-        {oneLine ? (
-          <RowHead
-            icon={icon}
-            title={<Marked text={project.name} words={words} />}
-            titleColor={titleColor}
-            status={status}
-            oneAction
-          />
+    <RowCard
+      rowKey={rowKey}
+      kind="project"
+      compact={oneLine}
+      dense={look === "dense"}
+      place={
+        nested && !oneLine ? undefined : oneLine ? (
+          icon
         ) : (
+          <span className="flex min-w-0 items-center gap-1.5">
+            {icon}
+            <span className="min-w-0 truncate">
+              Project
+              {runs.length > 0 && ` · ${runs.length} ${runs.length === 1 ? "thread" : "threads"}`}
+            </span>
+          </span>
+        )
+      }
+      status={status}
+      title={
+        nested && !oneLine ? (
           <>
-            <RowTop
-              place={
-                <span className="flex min-w-0 items-center gap-1.5">
-                  {icon}
-                  <span className="min-w-0 truncate">
-                    Project
-                    {runs.length > 0 &&
-                      ` · ${runs.length} ${runs.length === 1 ? "thread" : "threads"}`}
-                  </span>
-                </span>
-              }
-              status={status}
-              oneAction
-            />
-            <RowTitle title={<Marked text={project.name} words={words} />} color={titleColor} />
-            {(branch || device?.icon || Logo) && (
-              <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
-                <span className="flex min-w-0 flex-1 items-center gap-1">
-                  {branch && (
-                    <>
-                      <GitBranch aria-hidden className="size-3 shrink-0" />
-                      <BranchName branch={branch} words={words} />
-                    </>
-                  )}
-                </span>
-                {device?.icon && (
-                  <span
-                    title={device.name}
-                    role="img"
-                    aria-label={device.name}
-                    className="flex shrink-0"
-                  >
-                    <DeviceIcon icon={device.icon} className="size-3.5" />
-                  </span>
-                )}
-                {Logo && (
-                  <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />
-                )}
+            <ProjectIcon icon={project.icon} className="mr-1.5 inline-block size-4 align-[-3px]" />
+            <Marked text={project.name} words={words} />
+          </>
+        ) : (
+          <Marked text={project.name} words={words} />
+        )
+      }
+      dim={attention === "settled"}
+      selected={selected}
+      main={{
+        onClick: onOpen,
+        onKeyDown: onKeys,
+        onContextMenu: actions.length ? (e) => openOnContextMenu(e, trigger.current) : undefined,
+      }}
+      details={
+        !oneLine &&
+        (branch || device?.icon || Logo) && (
+          <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
+            <span className="flex min-w-0 flex-1 items-center gap-1">
+              {branch && (
+                <>
+                  <GitBranch aria-hidden className="size-3 shrink-0" />
+                  <BranchName branch={branch} words={words} />
+                </>
+              )}
+            </span>
+            {device?.icon && (
+              <span
+                title={device.name}
+                role="img"
+                aria-label={device.name}
+                className="flex shrink-0"
+              >
+                <DeviceIcon icon={device.icon} className="size-3.5" />
               </span>
             )}
-          </>
-        )}
-      </button>
-      {actions.length > 0 && (
-        <>
+            {Logo && (
+              <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />
+            )}
+          </span>
+        )
+      }
+      actions={
+        actions.length > 0 && (
           <button
             ref={trigger}
             type="button"
             aria-label="Project actions"
             title="More (or right-click)"
             popoverTarget={menuId}
-            className="absolute top-1 right-1 grid size-5.5 cursor-pointer place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-4"
+            className={rowTool}
           >
-            <Ellipsis />
+            <Ellipsis className="size-4" />
           </button>
-          <Menu
-            id={menuId}
-            label="Project actions"
-            align="end"
-            focus='[role^="menuitem"]'
-            className="min-w-56 p-1"
-          >
-            {actions.map((a, n) => (
-              <Fragment key={a.label}>
-                {/* Delete sits apart, as in a thread's menu. */}
-                {a.danger && n > 0 && <div role="separator" className="my-1 h-px bg-border" />}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={`${menuItem} ${a.danger ? "text-danger" : ""}`}
-                  onClick={close(() => row.current && a.run(row.current))}
-                >
-                  {a.icon}
-                  {a.label}
-                </button>
-              </Fragment>
-            ))}
-          </Menu>
-        </>
+        )
+      }
+    >
+      {actions.length > 0 && (
+        <Menu
+          id={menuId}
+          label="Project actions"
+          align="end"
+          focus='[role^="menuitem"]'
+          className="min-w-56 p-1"
+        >
+          {actions.map((a, n) => (
+            <Fragment key={a.label}>
+              {/* Delete sits apart, as in a thread's menu. */}
+              {a.danger && n > 0 && <div role="separator" className="my-1 h-px bg-border" />}
+              <button
+                type="button"
+                role="menuitem"
+                className={`${menuItem} ${a.danger ? "text-danger" : ""}`}
+                onClick={close(() => {
+                  const row = trigger.current?.closest("li");
+                  if (row) a.run(row);
+                })}
+              >
+                {a.icon}
+                {a.label}
+              </button>
+            </Fragment>
+          ))}
+        </Menu>
       )}
-    </li>
+    </RowCard>
   );
 }
-
 /** Where a row's thread is, at the start of its second line: its repo's icon and name, or No repo. */
 function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[] }) {
   return (
@@ -3003,51 +2907,6 @@ function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[]
       <span className="min-w-0 truncate">
         <Marked text={repo && !repo.scratch ? repo.name : "No repo"} words={words} />
       </span>
-    </span>
-  );
-}
-
-/**
- * A card's top line (PLX-1043): where it is, its icon and name, then `status` at the end, what it
- * asks of the user or how long ago it was last active. Hovering or focusing the card hides the
- * status for its actions and keeps the place clear of them.
- */
-function RowTop({
-  place,
-  status,
-  oneAction = false,
-}: {
-  place?: ReactNode;
-  status: ReactNode;
-  /** Whether the card shows only its actions button. */
-  oneAction?: boolean;
-}) {
-  const clear = oneAction
-    ? "group-has-[:focus-visible]/row:pr-7 group-hover/row:pr-7"
-    : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34";
-  return (
-    <span
-      className={`flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground ${clear}`}
-    >
-      <span className="flex min-w-0 flex-1 items-center">{place}</span>
-      <span
-        data-status
-        className="shrink-0 group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
-      >
-        {status}
-      </span>
-    </span>
-  );
-}
-
-/** A card's title (PLX-1043): bold, and bolder while hovered. */
-function RowTitle({ title, color }: { title: ReactNode; color: string }) {
-  return (
-    <span
-      data-title
-      className={`w-full min-w-0 truncate text-body font-semibold transition-colors group-hover/row:font-bold ${color}`}
-    >
-      {title}
     </span>
   );
 }
@@ -3089,6 +2948,18 @@ function BranchName({ branch, words }: { branch: string; words: readonly string[
 /** The space between cards in a list. */
 const cardGap = "flex flex-col gap-1";
 
+/** The thin line under the drafts and under the pins (0094). */
+function Rule() {
+  return <div role="separator" className="mx-2 my-2 h-px bg-border" />;
+}
+
+/** Today's group heading: a quiet label on a rule. */
+const groupHeading =
+  "group/heading flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-meta font-medium text-muted-foreground transition-colors outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0";
+/** A Traditional folder's heading: a row with its repo's icon and name, its count, and a chevron. */
+const folderHeading =
+  "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body font-medium text-foreground/90 transition-colors outline-none enabled:hover:bg-hover enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
+
 /**
  * The look of a thread's linked pull requests: that of the most common state among those read,
  * and the newest linked one on a tie.
@@ -3104,9 +2975,6 @@ function majorityLook(prs: PullRequests) {
   return lookOf(best);
 }
 
-/** Space between a draft's outlined row and its neighbors, so the outline doesn't touch them. */
-const draftGap = "my-1 first:mt-0 last:mb-0";
-
 /** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
 function DraftStatus() {
   return (
@@ -3119,37 +2987,71 @@ function DraftStatus() {
 
 /**
  * An unsent New Thread prompt's card (PLX-788): its repo and a Draft status, then its first line,
- * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
- * Thread with it, which takes it off the list.
+ * outlined in the warning color (PLX-932). Opening it reopens New Thread with it, which takes it
+ * off the list; its X, shown on hover, discards it.
  */
-function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: () => void }) {
+function DraftRow({
+  rowKey,
+  draft,
+  repo,
+  compact,
+  dense = false,
+  onOpen,
+  onDiscard,
+  onKeys,
+}: {
+  rowKey: string;
+  draft: Draft;
+  repo?: Repo;
+  /** Today's one-line look (pins.ts). */
+  compact: boolean;
+  /** The denser card, as every row in the Traditional sidebar is. */
+  dense?: boolean;
+  onOpen: () => void;
+  onDiscard: () => void;
+  /** Keyboard moves on the focused row. */
+  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
+}) {
   const attached = draft.images.length + draft.files.length + draft.threads.length;
   const title =
     draft.text.trim().split("\n")[0] ||
     `${attached} ${attached === 1 ? "attachment" : "attachments"}`;
   return (
-    <li data-kind="draft" className={draftGap}>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="group/row flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2.5 py-2 text-left hover:bg-hover"
-      >
-        <RowTop place={<RowPlace repo={repo} />} status={<DraftStatus />} oneAction />
-        <RowTitle title={title} color="text-foreground" />
-      </button>
-    </li>
+    <RowCard
+      rowKey={rowKey}
+      kind="draft"
+      compact={compact}
+      dense={dense}
+      place={compact ? <RepoIcon repo={repo} /> : <RowPlace repo={repo} />}
+      status={<DraftStatus />}
+      title={title}
+      outlined
+      main={{ onClick: onOpen, onKeyDown: onKeys }}
+      actions={
+        <button
+          type="button"
+          aria-label="Discard draft"
+          title="Discard (⌫)"
+          onClick={onDiscard}
+          className={rowTool}
+        >
+          <X className="size-3.5" />
+        </button>
+      }
+    />
   );
 }
 
 /**
  * A thread's card (0033, 0075, PLX-1043): its repo's icon and name with its status at the end (what
  * it asks of the user, or how long ago it was last active), its title in bold, then its branch (not
- * a Chat's), cut in the middle (`shortBranch`), its git status, a pin, linked pull requests (the
- * number of one, or +N for more) and their checks, its computer, and its provider, in color while
- * it's open. Under a search, the words found are marked, and a match only in its messages shows a
- * line of them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
- * Archive, and more actions, which also open by right-clicking the row: native popovers, so
- * Escape and clicking away close them. Double-clicking the title renames it in place.
+ * a Chat's), cut in the middle (`shortBranch`), its git status, linked pull requests (the number
+ * of one, or +N for more) and their checks, its computer, and its provider, in color while it's
+ * open. A pinned one keeps its pin in its top-right, which unpins it (0094). Under a search, the
+ * words found are marked, and a match only in its messages shows a line of them. Resting on it
+ * shows its card; hovering or focusing it swaps the status for Snooze, Archive, and more actions,
+ * which also open by right-clicking the row: native popovers, so Escape and clicking away close
+ * them. Double-clicking the title renames it in place.
  */
 function ThreadRow({
   look,
@@ -3192,8 +3094,9 @@ function ThreadRow({
   onLeave,
   pinDrag,
 }: {
-  /** Today's one-line look (pins.ts): where it is, its title, and its status. */
-  look?: "compact";
+  /** Today's one-line look (pins.ts): where it is, its title, and its status. Dense is a card with
+   *  less padding, as every row in the Traditional sidebar is. */
+  look?: "compact" | "dense";
   /** A pinned row's move among the pins (PinList.tsx). */
   pinDrag?: PinDrag;
   /** When it was last active (`activeAt`), for its age. */
@@ -3325,12 +3228,23 @@ function ThreadRow({
   // A thread with no repo leaves out its scratch branch, and a Space's thread the branch plxd made
   // in its repository.
   const branch = repo && !repo.scratch && !repo.space ? run?.branch : undefined;
-  const hasDetails = !!(
-    (git && (git.ahead || git.changes)) ||
-    prs.urls.length ||
-    Logo ||
-    device ||
-    thread.pinned
+  // Its pin isn't a detail: it sits in the row's top-right, so pinning doesn't change its height.
+  const hasDetails = !!((git && (git.ahead || git.changes)) || prs.urls.length || Logo || device);
+  // With no branch, git, pull request, or Remote Control to show, its computer and provider marks
+  // go at its title's end, so they never take a line of their own.
+  const marksOnly =
+    !branch && !(git && (git.ahead || git.changes)) && !prs.urls.length && !isRemoteControl(run);
+  // Its computer, then its provider's logo: in gray, so a list isn't striped with providers' colors,
+  // but in color while open.
+  const marks = (
+    <>
+      {device?.icon && (
+        <span title={device.name} role="img" aria-label={device.name} className="flex shrink-0">
+          <DeviceIcon icon={device.icon} className="size-3.5" />
+        </span>
+      )}
+      {Logo && <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />}
+    </>
   );
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
@@ -3357,20 +3271,6 @@ function ThreadRow({
     ) : (
       <AttentionBadge attention={attention} since={lastUserPrompt(thread)} />
     ));
-  // A one-line row has no details line for its pin, so the pin leads its status.
-  const shownStatus =
-    look === "compact" && thread.pinned && !badge ? (
-      <span className="flex items-center gap-1.5">
-        <Pin aria-label="Pinned" className="size-3" />
-        {status}
-      </span>
-    ) : (
-      status
-    );
-  const titleColor =
-    selected || attention !== "settled"
-      ? "text-foreground"
-      : "text-foreground/70 group-hover/row:text-foreground";
   const titleText = renaming ? (
     <input
       aria-label="Thread name"
@@ -3405,177 +3305,177 @@ function ThreadRow({
       <Marked text={title} words={words} />
     </span>
   );
-  // A rename's input can't sit in a button, so the row is a plain box while it's open.
-  const Main = renaming ? "div" : "button";
-  // A one-line row leads with where it is, unless it's under its repo's heading.
-  const oneLine = look === "compact" && !nested;
-  // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887), and
-  // spaces it off its neighbors. An open thread holds its own draft, so neither shows while it's open.
-  const rowLook = picked
-    ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
-    : selected
-      ? current
-      : `group-hover/row:bg-hover ${drafted ? "ring-1 ring-warning ring-inset" : ""}`;
+  const compact = look === "compact";
+  // A pinned thread's pin, in its top-right whether hovered or not; clicking it unpins.
+  const pin =
+    thread.pinned &&
+    (onPin ? (
+      <button
+        type="button"
+        aria-label="Unpin"
+        title="Unpin (P)"
+        onClick={() => {
+          onLeave();
+          onPin();
+        }}
+        className={rowTool}
+      >
+        <Pin aria-hidden className="size-3.5" />
+      </button>
+    ) : (
+      <span
+        title="Pinned"
+        role="img"
+        aria-label="Pinned"
+        className={`${rowTool} hover:bg-transparent`}
+      >
+        <Pin className="size-3.5" />
+      </span>
+    ));
   return (
-    <li
-      data-kind="thread"
-      data-flip={rowKey}
-      className={`group/row relative rounded-lg transition-[background-color,opacity] duration-100 ${rowLook} ${drafted ? draftGap : ""} ${flash ? "row-flash" : ""} ${pinDrag?.dragging ? "opacity-40" : ""}`}
-      onMouseEnter={(e) => onRest(e.currentTarget)}
-      onMouseLeave={onLeave}
-      {...(pinDrag && {
-        onDragOver: pinDrag.onDragOver,
-        onDragLeave: pinDrag.onDragLeave,
-        onDrop: pinDrag.onDrop,
-      })}
-    >
-      {pinDrag?.drop && <DropLine edge={pinDrag.drop} />}
-      <Main
-        {...(!renaming && { type: "button" as const })}
-        aria-current={selected ? "page" : undefined}
-        aria-description={picked ? "Selected" : undefined}
-        data-row={rowKey}
-        data-kind="thread"
-        onClick={renaming ? undefined : onOpen}
-        onKeyDown={renaming ? undefined : onKeys}
-        onContextMenu={(e) => {
+    // A card (PLX-1043): where it is and its status, its title, then its branch and details, or one
+    // line of its repo's icon, title, and status. Under its repo's heading, it leaves out the repo.
+    // A draft outlines it in the warning color, as a New Thread draft's row is (PLX-887); an open
+    // thread holds its own draft, so that doesn't show while it's open.
+    <RowCard
+      rowKey={rowKey}
+      kind="thread"
+      compact={compact}
+      dense={look === "dense"}
+      place={
+        compact
+          ? !nested && <RepoIcon repo={space ?? repo} />
+          : !nested && <RowPlace repo={space ?? repo} words={words} />
+      }
+      status={status}
+      title={titleText}
+      aside={!compact && marksOnly && hasDetails && marks}
+      dim={attention === "settled"}
+      selected={selected}
+      picked={picked}
+      outlined={drafted}
+      flash={flash}
+      faded={pinDrag?.dragging}
+      editing={renaming}
+      before={pinDrag?.drop && <DropLine edge={pinDrag.drop} />}
+      li={{
+        onMouseEnter: (e) => onRest(e.currentTarget),
+        onMouseLeave: onLeave,
+        ...(pinDrag && {
+          onDragOver: pinDrag.onDragOver,
+          onDragLeave: pinDrag.onDragLeave,
+          onDrop: pinDrag.onDrop,
+        }),
+      }}
+      main={{
+        "aria-description": picked ? "Selected" : undefined,
+        onClick: renaming ? undefined : onOpen,
+        onKeyDown: renaming ? undefined : onKeys,
+        onContextMenu: (e) => {
           onLeave();
           openOnContextMenu(e, actions.current);
-        }}
+        },
         // Dropped on the composer, it attaches the thread to the message (PLX-378).
-        draggable={!renaming}
-        onDragStart={(e) => {
+        draggable: !renaming,
+        onDragStart: (e) => {
           onLeave();
           dragThread(e.dataTransfer, hostId, thread.id);
           pinDrag?.onDragStart(e);
-        }}
-        onDragEnd={pinDrag?.onDragEnd}
-        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-2"}`}
-      >
-        {look === "compact" ? (
-          <RowHead
-            icon={oneLine && <RepoIcon repo={space ?? repo} />}
-            title={titleText}
-            titleColor={titleColor}
-            status={shownStatus}
-            renaming={!oneLine && renaming}
-          />
-        ) : (
-          // A card (PLX-1043): where it is and its status, its title in bold, then its branch and
-          // details. Under its repo's heading, it leaves out the repo.
-          <>
-            <RowTop
-              place={!nested && <RowPlace repo={space ?? repo} words={words} />}
-              status={shownStatus}
-            />
-            <RowTitle title={titleText} color={titleColor} />
-            {(branch || hasDetails) && (
-              <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
-                <span className="flex min-w-0 flex-1 items-center gap-1">
-                  {branch && (
-                    <>
-                      <GitBranch aria-hidden className="size-3 shrink-0" />
-                      <BranchName branch={branch} words={words} />
-                    </>
-                  )}
-                  {git && <GitCounts git={git} />}
-                </span>
-                {thread.pinned && (
-                  <span title="Pinned" role="img" aria-label="Pinned" className="flex shrink-0">
-                    <Pin className="size-3" />
-                  </span>
+        },
+        onDragEnd: pinDrag?.onDragEnd,
+      }}
+      details={
+        <>
+          {!compact && (branch || hasDetails) && !marksOnly && (
+            <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
+              <span className="flex min-w-0 flex-1 items-center gap-1">
+                {branch && (
+                  <>
+                    <GitBranch aria-hidden className="size-3 shrink-0" />
+                    <BranchName branch={branch} words={words} />
+                  </>
                 )}
-                {prs.urls.length > 0 && (
-                  <span
-                    title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
-                    className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
-                  >
-                    <prLook.Icon aria-hidden className="size-3.5" />
-                    {prs.urls.length > 1 ? (
-                      <span>+{prs.urls.length - 1}</span>
-                    ) : (
-                      // Inside the row's button, so a span: clicking it opens the thread with the PR
-                      // in its side panel, not GitHub.
-                      <span
-                        className="hover:underline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenPr(prs.urls[0]!);
-                        }}
-                      >
-                        <Marked text={`#${numberOf(prs.urls[0]!)}`} words={words} />
-                      </span>
-                    )}
-                    {checksState && <ChecksMark state={checksState} />}
-                  </span>
-                )}
-                {device?.icon && (
-                  <span
-                    title={device.name}
-                    role="img"
-                    aria-label={device.name}
-                    className="flex shrink-0"
-                  >
-                    <DeviceIcon icon={device.icon} className="size-3.5" />
-                  </span>
-                )}
-                {/* A Claude Remote Control thread (PLX-1140): its session runs on another computer. */}
-                {isRemoteControl(run) && <RemoteControlBadge />}
-                {/* In gray, so a list isn't striped with providers' colors, but in color while open. */}
-                {Logo && (
-                  <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />
-                )}
+                {git && <GitCounts git={git} />}
               </span>
-            )}
-          </>
-        )}
-        {snippet && (
-          <span className="flex w-full min-w-0 items-center gap-1.5 text-meta text-faint-foreground">
-            <Search aria-hidden className="size-3 shrink-0" />
-            <span className="min-w-0 truncate">
-              <Marked text={snippet} words={words} />
+              {prs.urls.length > 0 && (
+                <span
+                  title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
+                  className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
+                >
+                  <prLook.Icon aria-hidden className="size-3.5" />
+                  {prs.urls.length > 1 ? (
+                    <span>+{prs.urls.length - 1}</span>
+                  ) : (
+                    // Inside the row's button, so a span: clicking it opens the thread with the PR
+                    // in its side panel, not GitHub.
+                    <span
+                      className="hover:underline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenPr(prs.urls[0]!);
+                      }}
+                    >
+                      <Marked text={`#${numberOf(prs.urls[0]!)}`} words={words} />
+                    </span>
+                  )}
+                  {checksState && <ChecksMark state={checksState} />}
+                </span>
+              )}
+              {/* A Claude Remote Control thread (PLX-1140): its session runs on another computer. */}
+              {isRemoteControl(run) && <RemoteControlBadge />}
+              {marks}
             </span>
-          </span>
-        )}
-      </Main>
-      <div
-        className={`absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 [&_button]:cursor-pointer ${renaming && !oneLine ? "hidden" : ""}`}
-      >
-        {snoozable && (
+          )}
+          {snippet && (
+            <span className="flex w-full min-w-0 items-center gap-1.5 text-meta text-faint-foreground">
+              <Search aria-hidden className="size-3 shrink-0" />
+              <span className="min-w-0 truncate">
+                <Marked text={snippet} words={words} />
+              </span>
+            </span>
+          )}
+        </>
+      }
+      actions={
+        <>
+          {snoozable && (
+            <button
+              type="button"
+              aria-label={snoozedNow ? "Snoozed" : "Snooze"}
+              title={snoozedNow ? `Snoozed until ${clock(thread.snoozedUntil!)}` : "Snooze (S)"}
+              popoverTarget={snoozeId}
+              onClick={onLeave}
+              className={rowTool}
+            >
+              <AlarmClock className="size-3.5" />
+            </button>
+          )}
           <button
             type="button"
-            aria-label={snoozedNow ? "Snoozed" : "Snooze"}
-            title={snoozedNow ? `Snoozed until ${clock(thread.snoozedUntil!)}` : "Snooze (S)"}
-            popoverTarget={snoozeId}
-            onClick={onLeave}
-            className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+            title={`${thread.archived ? "Unarchive" : "Archive"} (E)`}
+            onClick={() => {
+              onLeave();
+              onArchive();
+            }}
+            className="flex h-5.5 items-center gap-1 rounded-md px-1.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
           >
-            <AlarmClock />
+            {mainLabel}
           </button>
-        )}
-        <button
-          type="button"
-          title={`${thread.archived ? "Unarchive" : "Archive"} (E)`}
-          onClick={() => {
-            onLeave();
-            onArchive();
-          }}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-        >
-          {mainLabel}
-        </button>
-        <button
-          ref={actions}
-          type="button"
-          aria-label="Thread actions"
-          title="More (or right-click)"
-          popoverTarget={menuId}
-          onClick={onLeave}
-          className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-        >
-          <Ellipsis />
-        </button>
-      </div>
+          <button
+            ref={actions}
+            type="button"
+            aria-label="Thread actions"
+            title="More (or right-click)"
+            popoverTarget={menuId}
+            onClick={onLeave}
+            className={rowTool}
+          >
+            <Ellipsis className="size-4" />
+          </button>
+        </>
+      }
+      trailing={pin}
+    >
       {snoozable && (
         <Menu
           ref={snoozeMenu}
@@ -3784,7 +3684,7 @@ function ThreadRow({
           spaces={spacePicker.spaces}
         />
       )}
-    </li>
+    </RowCard>
   );
 }
 
@@ -3937,7 +3837,7 @@ type CardHandle = { show: (row: HTMLElement, content: CardContent) => void; hide
  * The card of the thread row the pointer rests on, which the rows show and hide through `ref`, so
  * resting on one re-renders only the card, not the list.
  */
-function RowCard({ ref }: { ref: RefObject<CardHandle | null> }) {
+function RowPeek({ ref }: { ref: RefObject<CardHandle | null> }) {
   const [card, setCard] = useState<ComponentProps<typeof ThreadCard>>();
   const timer = useRef<number>(undefined);
   // The row it's for. One that went away under the pointer, as a pin moved into the favorites or
