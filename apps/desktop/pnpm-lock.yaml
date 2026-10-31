@@ -151,6 +151,9 @@ importers:
       pdfjs-dist:
         specifier: ^6.4.299
         version: 6.4.299
+      pele:
+        specifier: 1.12.0
+        version: 1.12.0
       prosemirror-markdown:
         specifier: ^1.13.9
         version: 1.13.9
@@ -2597,6 +2600,10 @@ packages:
   pe-library@0.4.1:
     resolution: {integrity: sha512-eRWB5LBz7PpDu4PUlwT0PhnQfTQJlDDdPa35urV4Osrm0t0AqQFGn+UIkU3klZvwJ8KPO3VbBFsXquA6p6kqZw==}
     engines: {node: '>=12', npm: '>=6'}
+
+  pele@1.12.0:
+    resolution: {integrity: sha512-3OdOK6rvkaTB569R4/I8U0H82MqPRxj7vfkbowa2rRhgSBPFhvWlfFy5eae0jP+2A6hE8abE17nsdyxJz2VBiQ==}
+    engines: {node: '>=20'}
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
@@ -5738,6 +5745,8 @@ snapshots:
       '@napi-rs/canvas': 1.0.11
 
   pe-library@0.4.1: {}
+
+  pele@1.12.0: {}
 
   picocolors@1.1.1: {}
 

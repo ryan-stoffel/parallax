@@ -946,6 +946,14 @@ export type ParallaxRequests = {
 	 */
 	"pr/write": { params: PrWriteParams, result: PrWriteResult },
 	/**
+	 * `pr/guide` (PLX-1188, 0095): a GitHub pull request's guide, as plxd last wrote it, and
+	 * whether one for the given head is being written. With none for that head, none being
+	 * written, and no failed try, it starts writing one in the background; `regenerate`
+	 * starts one regardless. Never reads GitHub itself, so the app polls it while one is
+	 * written. Gated on `prGuide`.
+	 */
+	"pr/guide": { params: PrGuideParams, result: PrGuideResult },
+	/**
 	 * `pr/mergeWhenReady` (PLX-1022): watches a pull request for a run, as `pr/watch` does,
 	 * and has plxd merge it, pinned to the head it judged, once it is ready, then wake the
 	 * run with the result. Unwatching cancels the merge. Gated on `prWatch`.
@@ -1245,6 +1253,7 @@ export const REQUEST_METHODS = [
 	"pr/uploadMedia",
 	"pr/sharedDiff",
 	"pr/write",
+	"pr/guide",
 	"pr/mergeWhenReady",
 	"repo/scripts",
 	"repo/saveScripts",
@@ -10379,6 +10388,119 @@ export type PrWriteResult = {
 	 * The pull request's URL.
 	 */
 	url: string,
+};
+
+/**
+ * Params of `pr/guide` (PLX-1188, 0095): a GitHub pull request's guide, at the head commit the
+ * app shows. It needn't be linked.
+ */
+export type PrGuideParams = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * The head commit the app shows. plxd writes a guide for it when it has none.
+	 */
+	headSha: string,
+	/**
+	 * The model that writes it: the user's default.
+	 */
+	model: ThreadNaming,
+	/**
+	 * Writes a new guide for `head_sha` even when one exists or the last try failed.
+	 */
+	regenerate?: boolean,
+};
+
+/**
+ * Result of `pr/guide`: what plxd has now. A guide for an older head than `headSha` is out of
+ * date, and shows until the new one is written.
+ */
+export type PrGuideResult = {
+	/**
+	 * The newest guide written for the pull request. Absent before the first.
+	 */
+	guide?: PrGuide,
+	/**
+	 * Whether a guide for `headSha` is being written.
+	 */
+	generating: boolean,
+	/**
+	 * Why the last try at `headSha`'s guide failed.
+	 */
+	error?: string,
+};
+
+/**
+ * An agent-written walkthrough of a pull request: an overview, then its changes in reading
+ * order.
+ */
+export type PrGuide = {
+	/**
+	 * The head commit it was written for.
+	 */
+	headSha: string,
+	/**
+	 * What the pull request does and the main parts it touches.
+	 */
+	overview: string,
+	/**
+	 * Mermaid source of a diagram for the overview.
+	 */
+	diagram?: string,
+	/**
+	 * Its steps, in reading order.
+	 */
+	steps: Array<PrGuideStep>,
+	/**
+	 * Files the model didn't read, to fit the diff into its prompt.
+	 */
+	omitted?: Array<string>,
+	/**
+	 * When it was written, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * One step of a [`PrGuide`].
+ */
+export type PrGuideStep = {
+	/**
+	 * A short title.
+	 */
+	title: string,
+	/**
+	 * What changed and why, in plain language.
+	 */
+	explanation: string,
+	/**
+	 * The changes it explains.
+	 */
+	hunks: Array<PrGuideHunk>,
+	/**
+	 * Mermaid source of a diagram.
+	 */
+	diagram?: string,
+};
+
+/**
+ * Lines of one file in the pull request's diff, by their numbers in the new file.
+ */
+export type PrGuideHunk = {
+	/**
+	 * The file's path, as the diff names it.
+	 */
+	path: string,
+	/**
+	 * The first line.
+	 */
+	start: number,
+	/**
+	 * The last line, at or after `start`.
+	 */
+	end: number,
 };
 
 /**

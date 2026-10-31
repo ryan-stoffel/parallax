@@ -671,6 +671,14 @@ fn of_paths(diff: &str, paths: &[String]) -> String {
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
         })
     };
+    sections(diff)
+        .into_iter()
+        .filter(|section| files(section).any(wanted))
+        .collect()
+}
+
+/// `diff`'s `diff --git` sections, in order.
+pub(crate) fn sections(diff: &str) -> Vec<String> {
     let mut sections: Vec<String> = Vec::new();
     for line in diff.split_inclusive('\n') {
         match sections.last_mut() {
@@ -679,14 +687,11 @@ fn of_paths(diff: &str, paths: &[String]) -> String {
         }
     }
     sections
-        .into_iter()
-        .filter(|section| files(section).any(wanted))
-        .collect()
 }
 
 /// The paths a `diff --git` section names: both sides of its header when they are the same path,
 /// and its `---`, `+++`, rename, and copy lines before its first hunk.
-fn files(section: &str) -> impl Iterator<Item = &str> {
+pub(crate) fn files(section: &str) -> impl Iterator<Item = &str> {
     let mut lines = section.lines();
     // `a/X b/Y` is ambiguous when a path holds " b/", but not when X is Y.
     let header = lines

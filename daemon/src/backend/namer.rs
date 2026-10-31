@@ -1,6 +1,8 @@
-//! A thread's name from the user's own model (0058): [`Backend::namer`](super::Backend::namer)
-//! starts the CLI with no tools in an empty folder, [`ask`] writes it the prompt on stdin and
-//! reads its output until one line holds the answer, a JSON object in [`schema`]'s shape:
+//! A short hidden call to the user's own model, for a thread's name (0058) and a pull request's
+//! guide (0095): [`Backend::namer`](super::Backend::namer) starts the CLI with no tools in an
+//! empty folder that holds the answer's JSON schema ([`SCHEMA_FILE`]), [`ask`] writes it the
+//! prompt on stdin and reads its output until one line holds the answer, a JSON object in that
+//! schema's shape:
 //!
 //! - **Claude Code**: `claude -p --output-format json --json-schema <schema>`, whose one line is
 //!   the `result` message, with the answer as its `structured_output`.
@@ -10,13 +12,14 @@
 use std::time::Duration;
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
 use super::commands::{Parsed, read_answer, text, within};
 use super::process::Process;
 
-/// The file in the CLI's folder that holds [`schema`], for a CLI that reads it from a file.
+/// The file in the CLI's folder that holds the answer's JSON schema, such as [`schema`].
 pub const SCHEMA_FILE: &str = "schema.json";
 
 /// What the model answers.
@@ -28,16 +31,16 @@ pub struct Name {
     pub branch: String,
 }
 
-/// A CLI started to name a thread.
+/// A CLI started for one hidden call.
 #[derive(Debug)]
 pub struct NameProbe {
     /// The CLI. Dropping it kills its process group.
     pub process: Process,
     /// Reads one line of its output.
-    pub parse: fn(&Value) -> Parsed<Name>,
+    pub parse: fn(&Value) -> Parsed<Value>,
 }
 
-/// The JSON schema of [`Name`], which both CLIs hold the answer to.
+/// The JSON schema of [`Name`], a thread's name.
 #[must_use]
 pub fn schema() -> Value {
     json!({
@@ -49,12 +52,17 @@ pub fn schema() -> Value {
 }
 
 /// Writes `prompt` to `probe`'s stdin, closes it, and reads lines until one holds the answer, for
-/// at most `limit`. The CLI is killed with its process group once this returns.
+/// at most `limit`, as a `T`. The CLI is killed with its process group once this returns.
 ///
 /// # Errors
 ///
-/// What the CLI answered instead, or that it exited or ran out of time first.
-pub async fn ask(mut probe: NameProbe, prompt: &str, limit: Duration) -> Result<Name, String> {
+/// What the CLI answered instead, an answer that isn't a `T`, or that it exited or ran out of
+/// time first.
+pub async fn ask<T: DeserializeOwned>(
+    mut probe: NameProbe,
+    prompt: &str,
+    limit: Duration,
+) -> Result<T, String> {
     let stdin = probe.process.take_stdin();
     let read = async {
         if let Some(mut pipe) = stdin {
@@ -64,24 +72,25 @@ pub async fn ask(mut probe: NameProbe, prompt: &str, limit: Duration) -> Result<
         }
         read_answer(&mut probe.process, probe.parse).await
     };
-    within(limit, read).await
+    let answer = within(limit, read).await?;
+    serde_json::from_value(answer).map_err(|e| e.to_string())
 }
 
 /// Claude Code's `result` message: its `structured_output`, or its `result` text when it failed.
 #[must_use]
-pub fn claude(message: &Value) -> Parsed<Name> {
+pub fn claude(message: &Value) -> Parsed<Value> {
     if message["type"] != "result" {
         return None;
     }
     if message["is_error"] == true {
         return Some(Err(text(&message["result"])));
     }
-    Some(serde_json::from_value(message["structured_output"].clone()).map_err(|e| e.to_string()))
+    Some(Ok(message["structured_output"].clone()))
 }
 
 /// Codex's `agent_message` item, whose text is the answer, or its failed turn.
 #[must_use]
-pub fn codex(message: &Value) -> Parsed<Name> {
+pub fn codex(message: &Value) -> Parsed<Value> {
     match message["type"].as_str()? {
         "item.completed" if message["item"]["type"] == "agent_message" => {
             let answer = message["item"]["text"].as_str().unwrap_or_default();

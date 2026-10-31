@@ -14,11 +14,12 @@ import type {
   PrComment,
   PrCommit,
   PrDiffResult,
+  PrGuideResult,
   PrStatusResult,
   PrWrite,
   PullRequest,
 } from "../../protocol/generated/protocol";
-import { ChangesDiff } from "../ChangesDiff";
+import { ChangesDiff, type DiffFocus } from "../ChangesDiff";
 import { describeError, githubProblem } from "../errors";
 import { shotName } from "../github";
 import { icons } from "../icons";
@@ -38,12 +39,15 @@ import {
   menuItem,
   SetUpGithub,
   Segmented,
+  Spinner,
 } from "../ui";
 import type { CheckActions } from "./CheckGroup";
 import { GithubMarkdown } from "./GithubMarkdown";
+import { Guide } from "./Guide";
 import { MergeBox } from "./MergeBox";
 import {
   checksOf,
+  guideView,
   lineBreakdown,
   threadsOf,
   type Check,
@@ -57,14 +61,17 @@ import { ReviewThread } from "./ReviewThread";
 /** How long a read stays fresh enough that opening the view doesn't read it again. */
 const FRESH_MS = 15_000;
 
-// The tab bar's tabs, in order. Guide (PLX-1188) joins them as one more entry and its body.
-type Tab = "summary" | "timeline" | "code";
+/** How often `pr/guide` is read again while a guide is written. */
+const GUIDE_POLL_MS = 4_000;
+
+type Tab = "summary" | "guide" | "timeline" | "code";
 
 /**
  * One linked pull request in the side panel (PLX-1153, PLX-1182). A header that stays put: its
  * title and `#n`; its author, age, and `base ← head`; its state, size, Open in GitHub, Refresh, and
  * a … menu. Under it a segmented tab bar that stays put too: Summary (the status box with its
- * checks, reviews, and merge button, then the description, editable in place), Timeline
+ * checks, reviews, and merge button, then the description, editable in place), Guide (an
+ * agent-written walkthrough, PLX-1188, which plxd starts writing when the view opens), Timeline
  * (unresolved threads, the timeline, and a box to comment or review), and Code (the diff, with
  * Viewed, a file tree when wide, and review threads at their lines; and its commits). Only the
  * tab's body scrolls. It reads `pr/status` beside `pr/view` for what's required, why it
@@ -95,6 +102,11 @@ export function PullRequestView({
   const [shots, setShots] = useState<{ images: { src: string; name: string }[]; index: number }>();
   const [diff, setDiff] = useState<{ for: string; result?: PrDiffResult; error?: string }>();
   const [viewed, setViewed] = useState<ReadonlySet<string>>(new Set());
+  const [codeFocus, setCodeFocus] = useState<DiffFocus>();
+  const [guide, setGuide] = useState<{ url: string; result?: PrGuideResult; error?: string }>();
+  // Bumped by Regenerate, which the next read asks for.
+  const [guideTick, setGuideTick] = useState(0);
+  const regenerate = useRef(false);
   const [status, setStatus] = useState<PrStatusResult>();
   // Bumped after a write or an action, so `pr/status` is read again.
   const [statusTick, setStatusTick] = useState(0);
@@ -137,6 +149,34 @@ export function PullRequestView({
       live = false;
     };
   }, [tab, readDiff, url, updatedAt, diff?.for]);
+
+  // `pr/guide` when it opens and when its head moves, which starts a guide when plxd has none for
+  // the head, then again every GUIDE_POLL_MS while one is written.
+  const readGuide = prs.guide;
+  const headSha = pr?.headSha;
+  useEffect(() => {
+    if (!readGuide || !headSha) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const again = regenerate.current;
+      regenerate.current = false;
+      const read = await readGuide(url, headSha, again);
+      if (!live) return;
+      setGuide((prev) => ({
+        url,
+        // A failed read keeps the guide it had.
+        result: read.result ?? (prev?.url === url ? prev.result : undefined),
+        error: read.error && describeError(read.error),
+      }));
+      if (read.result?.generating) timer = setTimeout(() => void poll(), GUIDE_POLL_MS);
+    };
+    void poll();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [readGuide, url, headSha, guideTick]);
 
   // Runs `fn`, closing the menu first; its error shows in a notification, with Set up GitHub when
   // `gh` is missing or signed out, until one works. Resolves to whether it worked.
@@ -269,8 +309,19 @@ export function PullRequestView({
       ? (runId) => act("rerunFailed", { workflowRunId: runId })
       : undefined,
   };
+  const mine = guide?.url === url ? guide : undefined;
+  const guiding = guideView(mine?.result, pr.headSha, mine?.error);
   const tabs: { id: Tab; label: string; count?: ReactNode }[] = [
     { id: "summary", label: "Summary" },
+    ...(prs.guide
+      ? [
+          {
+            id: "guide" as const,
+            label: "Guide",
+            count: mine?.result?.generating ? <Spinner size="sm" /> : undefined,
+          },
+        ]
+      : []),
     {
       id: "timeline",
       label: "Timeline",
@@ -362,6 +413,20 @@ export function PullRequestView({
         </div>
       )}
 
+      {tab === "guide" && (
+        <Guide
+          view={guiding}
+          onOpen={(h) => {
+            setCodeFocus({ path: h.path, line: h.start, end: h.end });
+            setTab("code");
+          }}
+          onRegenerate={() => {
+            regenerate.current = true;
+            setGuideTick((n) => n + 1);
+          }}
+        />
+      )}
+
       {tab === "code" && (
         <CodeTab commits={pr.commits ?? []}>
           {!prs.diff ? (
@@ -389,6 +454,7 @@ export function PullRequestView({
                 else next.delete(path);
                 setViewed(next);
               }}
+              focus={codeFocus}
               threads={threads}
               renderThread={(t) => <ReviewThread bare {...threadProps(t)} />}
               tree

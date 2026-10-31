@@ -231,7 +231,9 @@ pub(crate) fn initialize(
 /// as an unknown method. `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener
 /// serves. `prWatch` (0063): `pr/watch`, `pr/unwatch`, `pr/watches`, `pr/status` (PLX-837),
 /// `pr/failureLog` (PLX-1019), `pr/uploadMedia` (PLX-1020), `pr/sharedDiff` (PLX-1021), and
-/// `pr/write` and `pr/mergeWhenReady` (PLX-1022). `setupScripts` (PLX-650): `repo/scripts`,
+/// `pr/write` and `pr/mergeWhenReady` (PLX-1022).
+/// `prGuide` (PLX-1188, 0095): `pr/guide`, a pull request's agent-written guide.
+/// `setupScripts` (PLX-650): `repo/scripts`,
 /// `repo/saveScripts`, and the `thread.script` event. `fileUploads` (PLX-779, 0071): `host/upload`,
 /// which saves a file attached to a message on the host for the agent to read, and
 /// `host/readUpload`, which reads it back for the transcript. Its option `maxBytes` is the cap on
@@ -377,6 +379,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "pins",
     "prActions",
     "prDiff",
+    "prGuide",
     "prWatch",
     "projectContext",
     "projectThreads",

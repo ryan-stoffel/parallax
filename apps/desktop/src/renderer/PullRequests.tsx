@@ -5,6 +5,7 @@ import type {
   PrActParams,
   PrDiffResult,
   PrFailureLogResult,
+  PrGuideResult,
   PrStatusResult,
   PrWrite,
   PullRequest,
@@ -12,6 +13,7 @@ import type {
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { icons } from "./icons";
+import { newThreadPrefs } from "./prefs";
 import type { PrActExtra, PrActionMore } from "./pr/model";
 import { ago, PrRow } from "./pr/parts";
 import { menuItem } from "./ui";
@@ -51,6 +53,15 @@ export interface PullRequests {
   write?: (url: string, write: PrWrite) => Promise<RpcError | undefined>;
   /** Whether plxd takes PLX-1151's actions (`prActions`): re-run, update and delete branch, a method. */
   actions?: boolean;
+  /**
+   * Reads `pr/guide` at head `headSha`, which starts one in the background when plxd has none
+   * for it, or a new one with `regenerate` (0095). Needs `prGuide`.
+   */
+  guide?: (
+    url: string,
+    headSha: string,
+    regenerate?: boolean,
+  ) => Promise<{ result?: PrGuideResult; error?: RpcError }>;
 }
 
 /**
@@ -75,6 +86,7 @@ export function usePullRequests(
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const watch = !!capabilities && "prWatch" in capabilities;
   const actions = !!capabilities && "prActions" in capabilities;
+  const guides = !!capabilities && "prGuide" in capabilities;
   const put = useCallback(
     (url: string, next: (prev?: Linked) => Linked) =>
       setRead((all) => ({ ...all, [`${runId} ${url}`]: next(all[`${runId} ${url}`]) })),
@@ -120,6 +132,21 @@ export function usePullRequests(
     async (url: string, w: PrWrite) => {
       const answer = await window.parallax.request(hostId, "pr/write", { url, write: w });
       return "error" in answer ? answer.error : undefined;
+    },
+    [hostId],
+  );
+  // The user's default model writes it, or the naming model when there's no default.
+  const guide = useCallback(
+    async (url: string, headSha: string, regenerate?: boolean) => {
+      const prefs = newThreadPrefs.get();
+      const model = prefs.model ?? prefs.naming;
+      const answer = await window.parallax.request(hostId, "pr/guide", {
+        url,
+        headSha,
+        model: { backend: model.provider, model: model.id, effort: prefs.effort },
+        regenerate,
+      });
+      return "error" in answer ? { error: answer.error } : { result: answer.result };
     },
     [hostId],
   );
@@ -194,6 +221,7 @@ export function usePullRequests(
     failureLog: watch ? failureLog : undefined,
     write: watch ? write : undefined,
     actions,
+    guide: guides && diffs ? guide : undefined,
   };
 }
 

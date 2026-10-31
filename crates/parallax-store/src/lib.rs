@@ -26,6 +26,7 @@ mod orchestration;
 mod orchestrator;
 mod orchestrator_sessions;
 mod placements;
+mod pr_guides;
 mod questions;
 mod queue;
 mod receipts;

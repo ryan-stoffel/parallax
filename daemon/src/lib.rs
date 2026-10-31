@@ -79,6 +79,7 @@ mod methods;
 mod naming;
 pub mod paths;
 pub mod peer;
+mod pr_guide;
 mod pr_media;
 mod pr_watch;
 mod pr_write;

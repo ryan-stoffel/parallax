@@ -1957,3 +1957,23 @@ body {
     transform: scale(0.97);
   }
 }
+
+/* A guide's diagrams (PLX-1188): Pele's colors and fonts from the theme, so they follow light and
+   dark without drawing again. */
+.pele {
+  --pele-bg: var(--background);
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--surface);
+  --pele-surface-alt: var(--hover);
+  --pele-border: var(--border);
+  --pele-accent: var(--accent);
+  --pele-critical: var(--danger);
+  --pele-error: var(--danger);
+  --pele-font: var(--font-sans);
+  --pele-font-mono: var(--font-mono);
+  --pele-radius: 6px;
+  max-width: 100%;
+  height: auto;
+}

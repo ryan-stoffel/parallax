@@ -897,6 +897,17 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE repos RENAME COLUMN space TO project;
         ALTER TABLE threads RENAME COLUMN space_id TO project_id;",
     },
+    // A pull request's guide (0095, PLX-1188): the newest one plxd wrote, as JSON with its head
+    // commit, which a guide for a newer head replaces.
+    Migration {
+        version: 58,
+        sql: "CREATE TABLE pr_guides (
+            repo TEXT NOT NULL,
+            number INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (repo, number)
+        );",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

@@ -106,8 +106,8 @@ pub use checkpoint::{DiffFormat, parse_numstat_z};
 pub use checks::{CHECKS_TIMEOUT, Checked};
 pub use folder::RunFolder;
 pub use landing::Merged;
-pub(crate) use pull_request::agent_diff;
 pub use pull_request::{PrError, github_pr_urls};
+pub(crate) use pull_request::{agent_diff, files as diff_files, sections as diff_sections};
 pub use review::{AcceptError, MAX_BLOB_BYTES, MergeHow, validate_repo_path};
 
 use std::collections::{HashMap, VecDeque};

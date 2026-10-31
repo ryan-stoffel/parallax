@@ -91,6 +91,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "pins",
     "prActions",
     "prDiff",
+    "prGuide",
     "prWatch",
     "orchestratorAutonomy",
     "orchestratorDelete",

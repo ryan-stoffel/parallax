@@ -1,10 +1,11 @@
 import { expect, test } from "vite-plus/test";
 
-import type { PrCheck, PullRequest } from "../../protocol/generated/protocol";
+import type { PrCheck, PrGuide, PullRequest } from "../../protocol/generated/protocol";
 import {
   checkRollup,
   commitPreview,
   groupChecks,
+  guideView,
   mergeGate,
   mergeTone,
   methodHint,
@@ -320,4 +321,28 @@ test("commitPreview writes GitHub's default message for each method", () => {
       { oid: "bbbbbbb", headline: "test: tray" },
     ],
   });
+});
+
+test("guideView: the head's guide is ready, an older head's is stale until the new one lands", () => {
+  const guide = (headSha: string): PrGuide => ({
+    headSha,
+    overview: "o",
+    steps: [],
+    createdAt: "2026-10-30T00:00:00Z",
+  });
+  expect(guideView({ guide: guide("b"), generating: false }, "b").kind).toBe("ready");
+  expect(guideView({ guide: guide("a"), generating: true }, "b")).toEqual({
+    kind: "stale",
+    guide: guide("a"),
+    generating: true,
+    error: undefined,
+  });
+  expect(guideView({ guide: guide("a"), generating: false, error: "no" }, "b")).toMatchObject({
+    kind: "stale",
+    error: "no",
+  });
+  expect(guideView({ generating: true }, "b").kind).toBe("loading");
+  expect(guideView(undefined, "b").kind).toBe("loading");
+  expect(guideView({ generating: false, error: "no" }, "b")).toEqual({ kind: "error", error: "no" });
+  expect(guideView(undefined, "b", "offline")).toEqual({ kind: "error", error: "offline" });
 });
