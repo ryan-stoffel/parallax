@@ -120,8 +120,8 @@ export function MergeBox({
   }, [running]);
 
   const chosen = methods.includes(method) ? method : methods[0]!;
-  const tone = mergeTone(gate);
-  const rows = statusRows(pr, checks, gate, chosen, status);
+  const tone = mergeTone(gate, checks);
+  const rows = statusRows(pr, checks, gate, status);
   const commits = pr.commits?.length;
   const extra = (): PrActExtra =>
     actions ? { method: chosen, deleteBranch, headSha: status?.headSha ?? more(pr).headSha } : {};
@@ -156,18 +156,19 @@ export function MergeBox({
               aria-expanded={folds ? checksOpen : undefined}
               title={[row.label, row.detail].filter(Boolean).join(" · ")}
               onClick={onRow[row.key]}
-              className="flex h-11 w-full items-center gap-2.5 px-3.5 text-left transition-colors hover:bg-hover"
+              className="flex w-full items-start gap-2.5 px-3.5 py-3 text-left transition-colors hover:bg-hover"
             >
-              <look.Icon aria-hidden className={`size-4 shrink-0 ${look.color}`} />
-              <span className="min-w-0 flex-1 truncate text-body font-medium">{row.label}</span>
-              {row.detail && (
-                <span className="max-w-[35%] truncate text-meta text-muted-foreground tabular-nums">
-                  {row.detail}
-                </span>
-              )}
+              <look.Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${look.color}`} />
+              {/* The detail sits at the row's end, or wraps under the label when there's no room. */}
+              <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                <span className="min-w-0 text-body font-medium wrap-break-word">{row.label}</span>
+                {row.detail && (
+                  <span className="text-meta text-muted-foreground tabular-nums">{row.detail}</span>
+                )}
+              </span>
               <icons.next
                 aria-hidden
-                className={`size-3.5 shrink-0 text-faint-foreground transition-transform duration-base ${folds && checksOpen ? "rotate-90" : ""}`}
+                className={`mt-[3px] size-3.5 shrink-0 text-faint-foreground transition-transform duration-base ${folds && checksOpen ? "rotate-90" : ""}`}
               />
             </button>
             {folds && (
@@ -221,17 +222,16 @@ export function MergeBox({
           </div>
         )}
         <div className="flex gap-2">
-          {/* GitHub's split button: the merge, a thin rule, and the method's chevron, one fill. */}
-          <div
-            data-tone={tone}
-            className={`flex h-8 min-w-0 flex-1 overflow-hidden rounded-md text-body font-medium ${fills[tone]}`}
-          >
+          {/* GitHub's split button: the merge, a thin rule, and the method's chevron. Each part
+              takes the fill, so a merge GitHub won't take dims (0092) while the method can still
+              change. */}
+          <div data-tone={tone} className="flex h-8 min-w-0 flex-1 text-body font-medium">
             <button
               type="button"
               disabled={busy || !gate.canMerge}
               title={gate.canMerge ? undefined : gate.title}
               onClick={() => onAct(chosen, extra())}
-              className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-3 transition-colors enabled:hover:bg-current/10 disabled:cursor-not-allowed [&_svg]:size-4 [&_svg]:shrink-0"
+              className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 px-3 transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 [&_svg]:size-4 [&_svg]:shrink-0 ${fills[tone]} ${open ? "rounded-l-md" : "rounded-md"}`}
             >
               {busy ? (
                 <Spinner className="text-current" />
@@ -250,7 +250,6 @@ export function MergeBox({
             </button>
             {open && (
               <>
-                <span aria-hidden className="w-px shrink-0 bg-current opacity-25" />
                 {/* GitHub lets the method change while merging waits, as auto-merge takes it. */}
                 <button
                   type="button"
@@ -258,7 +257,7 @@ export function MergeBox({
                   aria-haspopup="menu"
                   popoverTarget={`${id}-method`}
                   disabled={busy || methods.length < 2}
-                  className="grid w-8 shrink-0 place-items-center transition-colors enabled:hover:bg-current/10 disabled:opacity-50 [&_svg]:size-4"
+                  className={`grid w-8 shrink-0 place-items-center rounded-r-md border-l border-current/25 transition-opacity enabled:hover:opacity-90 disabled:opacity-60 [&_svg]:size-4 ${fills[tone]}`}
                 >
                   <icons.expand aria-hidden />
                 </button>

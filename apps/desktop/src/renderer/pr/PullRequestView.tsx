@@ -307,6 +307,7 @@ export function PullRequestView({
             <Button
               size="sm"
               variant="outline"
+              aria-label={`Open ${pr.repo}#${pr.number} on GitHub`}
               title={`Open ${pr.repo}#${pr.number} on GitHub`}
               onClick={() => openOnGithub(pr.url)}
               className="rounded-full pr-2.5 pl-3"

@@ -179,7 +179,7 @@ test("threadsOf takes PLX-1151's full threads when sent, else pr/status's unreso
   expect(threadsOf(full, status)).toMatchObject([{ id: "T2", line: 4, resolved: true }]);
 });
 
-const rows = (p: PullRequest) => statusRows(p, p.checks, mergeGate(p), "squash");
+const rows = (p: PullRequest) => statusRows(p, p.checks, mergeGate(p));
 
 test("statusRows reads checks, reviews, and mergeability as the reference's rows", () => {
   const commit = { oid: "a", headline: "h", author: "me", committedAt: "2026-10-02T12:00:00Z" };
@@ -199,7 +199,7 @@ test("statusRows reads checks, reviews, and mergeability as the reference's rows
       key: "merge",
       tone: "passed",
       label: "No conflicts with main",
-      detail: "squash · 2 commits",
+      detail: "2 commits",
     },
   ]);
 });
@@ -268,8 +268,15 @@ test("methodHint says GitHub's line for each method, with the commits when known
 });
 
 test("mergeTone colors the merge button by the merge gate", () => {
-  const tone = (more: Partial<PullRequest>) => mergeTone(mergeGate(pr(more)));
+  const tone = (more: Partial<PullRequest>) => {
+    const p = pr(more);
+    return mergeTone(mergeGate(p), p.checks);
+  };
   expect(tone({ mergeState: "clean" })).toBe("ready");
+  // A check still running is yellow even when GitHub would take the merge.
+  const running: Partial<PullRequest> = { mergeState: "unstable", checks: [check("t", "pending")] };
+  expect(tone(running)).toBe("running");
+  expect(mergeGate(pr(running)).canMerge).toBe(true);
   expect(tone({ mergeState: "blocked", checks: [check("t", "pending")] })).toBe("running");
   expect(tone({ mergeState: undefined })).toBe("running");
   expect(tone({ mergeState: "blocked", checks: [check("t", "failed")] })).toBe("blocked");
@@ -298,10 +305,11 @@ test("commitPreview writes GitHub's default message for each method", () => {
     title: "Add a tray (#7)",
     body: "* feat: tray\n\n* test: tray",
   });
+  // One commit takes its own title, as GitHub's default does; none falls back to the PR's.
   expect(commitPreview({ ...two, commits: [commit("a", "feat: tray")] }, "squash")).toEqual({
-    title: "Add a tray (#7)",
-    body: "feat: tray",
+    title: "feat: tray (#7)",
   });
+  expect(commitPreview({ ...two, commits: [] }, "squash")).toEqual({ title: "Add a tray (#7)" });
   expect(commitPreview(two, "merge")).toEqual({
     title: "Merge pull request #7 from me/tray",
     body: "Add a tray",

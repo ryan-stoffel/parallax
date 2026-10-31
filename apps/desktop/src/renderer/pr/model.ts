@@ -301,13 +301,11 @@ const names = (who: string[]) =>
 /**
  * The status box's rows, each only when it applies: checks when any ran, reviews when one was
  * given, asked for, or required, and, while open, whether it merges cleanly into its base.
- * `method` is the chosen merge method, which the clean row names, as GitHub's does.
  */
 export function statusRows(
   pr: PullRequest,
   checks: readonly Pick<PrCheck, "state">[],
   gate: Gate,
-  method: PrMergeMethod,
   status?: PrStatusResult,
 ): StatusRow[] {
   const rows: StatusRow[] = [];
@@ -385,25 +383,22 @@ export function statusRows(
   else if (pr.mergeState === undefined) merge("running", "Checking for conflicts");
   else if (pr.mergeState === "blocked") merge("waiting", "Merging is blocked");
   else
-    merge(
-      "passed",
-      `No conflicts with ${base}`,
-      [method, commits && plural(commits, "commit")].filter(Boolean).join(" · "),
-    );
+    merge("passed", `No conflicts with ${base}`, commits ? plural(commits, "commit") : undefined);
   return rows;
 }
 
 /**
  * The merge button's color, from the merge gate: ready (green) when it can merge, running
- * (yellow) while it waits on checks or GitHub, blocked (red) when something stops it, merged
- * (purple), and neutral (gray) for a draft or a closed one.
+ * (yellow) while any check runs or it waits on GitHub, blocked (red) when something stops it,
+ * merged (purple), and neutral (gray) for a draft or a closed one. A check still running turns it
+ * yellow even when GitHub would take the merge (unstable), and the button stays enabled.
  */
 export type MergeTone = "ready" | "running" | "blocked" | "merged" | "neutral";
 
-export function mergeTone(gate: Gate): MergeTone {
+export function mergeTone(gate: Gate, checks: readonly Pick<PrCheck, "state">[]): MergeTone {
   if (gate.tone === "merged") return "merged";
   if (gate.tone === "closed" || gate.draft) return "neutral";
-  if (gate.canMerge) return "ready";
+  if (gate.canMerge) return checkRollup(checks).pending ? "running" : "ready";
   return gate.tone === "pending" ? "running" : "blocked";
 }
 
@@ -418,8 +413,9 @@ export interface CommitPreview {
 
 /**
  * The commit `method` makes, with GitHub's default messages (plxd doesn't report a repository's
- * own squash message setting): a squash is titled `<title> (#n)` over its commits' headlines, or
- * its one commit's; a merge commit is GitHub's "Merge pull request #n from <owner>/<head>" over
+ * own squash message setting): a squash of one commit takes that commit's title, `<headline>
+ * (#n)`, and of several the pull request's, `<title> (#n)`, over their headlines (none sent, the
+ * pull request's title); a merge commit is GitHub's "Merge pull request #n from <owner>/<head>" over
  * the title; a rebase replays the commits as they are. The owner is the base repository's, as
  * plxd doesn't say a fork's.
  */
@@ -432,12 +428,11 @@ export function commitPreview(pr: PullRequest, method: PrMergeMethod): CommitPre
       title: `Merge pull request #${pr.number} from ${pr.repo.split("/")[0]}/${pr.headBranch}`,
       body: pr.title,
     };
+  // plxd sends only headlines, so a one-commit squash has no body to show.
+  if (commits.length === 1) return { title: `${commits[0]!.headline} (#${pr.number})` };
   return {
     title: `${pr.title} (#${pr.number})`,
-    body:
-      commits.length > 1
-        ? commits.map((c) => `* ${c.headline}`).join("\n\n")
-        : commits[0]?.headline,
+    body: commits.length ? commits.map((c) => `* ${c.headline}`).join("\n\n") : undefined,
   };
 }
 
