@@ -510,14 +510,15 @@ export function lineBreakdown(
 }
 
 /**
- * What the Guide tab shows (0095): `ready` for a guide written at `headSha`; `stale` for an older
+ * What the Guide tab shows (0095): `ready` for a guide written at `headSha`, `generating` while
+ * Regenerate writes another; `stale` for an older
  * head's, out of date, while a new one is written or after it failed; else `error` for a failed
  * try or read, or `loading` while the first is written.
  */
 export type GuideView =
   | { kind: "loading" }
   | { kind: "error"; error: string }
-  | { kind: "ready"; guide: PrGuide }
+  | { kind: "ready"; guide: PrGuide; generating: boolean }
   | { kind: "stale"; guide: PrGuide; generating: boolean; error?: string };
 
 export function guideView(
@@ -526,7 +527,8 @@ export function guideView(
   failed?: string,
 ): GuideView {
   const guide = read?.guide;
-  if (guide && guide.headSha === headSha) return { kind: "ready", guide };
+  if (guide && guide.headSha === headSha)
+    return { kind: "ready", guide, generating: !!read?.generating };
   const error = read?.error ?? failed;
   if (guide) return { kind: "stale", guide, generating: !!read?.generating, error };
   return error ? { kind: "error", error } : { kind: "loading" };

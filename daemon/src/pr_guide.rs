@@ -68,10 +68,23 @@ else null. Keep diagrams small, with short labels, and don't style or color them
 Pull request:
 ";
 
-/// Tries under way and failed ones, by pull request and head.
+/// Tries under way and failed ones, by pull request and head, and the newest head a try started
+/// for per pull request, which is the only one whose guide is kept.
 #[derive(Default)]
 pub(crate) struct Guides {
-    tries: Mutex<HashMap<Key, Try>>,
+    state: Mutex<State>,
+}
+
+#[derive(Default)]
+struct State {
+    tries: HashMap<Key, Try>,
+    newest: HashMap<(String, u64), String>,
+}
+
+impl Guides {
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 /// A pull request's repository (`owner/name`), number, and head commit.
@@ -111,37 +124,40 @@ pub(crate) async fn guide(
         .is_some_and(|guide| guide.head_sha == params.head_sha);
     let key = (repo, number, params.head_sha.clone());
     let start = {
-        let mut tries = daemon
-            .pr_guides
-            .tries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let start = match tries.get(&key) {
+        let mut state = daemon.pr_guides.lock();
+        let start = match state.tries.get(&key) {
             Some(Try::Running) => false,
             Some(Try::Failed(_)) => params.regenerate,
             None => params.regenerate || !current,
         };
         if start {
-            tries.insert(key.clone(), Try::Running);
+            started(&mut state, &key);
         }
         start
     };
     if start {
         write(daemon, key.clone(), params);
     }
-    let tries = daemon
-        .pr_guides
-        .tries
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let state = daemon.pr_guides.lock();
     Ok(PrGuideResult {
         guide,
-        generating: matches!(tries.get(&key), Some(Try::Running)),
-        error: match tries.get(&key) {
+        generating: matches!(state.tries.get(&key), Some(Try::Running)),
+        error: match state.tries.get(&key) {
             Some(Try::Failed(why)) => Some(why.clone()),
             _ => None,
         },
     })
+}
+
+/// Marks `key`'s try under way and its head the pull request's newest, and forgets failed tries
+/// at the pull request's other heads.
+fn started(state: &mut State, key: &Key) {
+    let (repo, number, head) = key;
+    state.tries.retain(|(r, n, h), try_| {
+        !(r == repo && n == number && h != head && matches!(try_, Try::Failed(_)))
+    });
+    state.tries.insert(key.clone(), Try::Running);
+    state.newest.insert((repo.clone(), *number), head.clone());
 }
 
 /// Writes `key`'s guide in the background, and keeps it, or why it failed.
@@ -150,34 +166,48 @@ fn write(daemon: &Arc<Daemon>, key: Key, params: PrGuideParams) {
     daemon.agents.background(async move {
         let written = written(&owned, &key, &params).await;
         let outcome = match written {
-            Ok(guide) => keep(&owned, &key, &guide).await,
+            Ok(guide) => keep(&owned, &key, guide).await,
             Err(error) => Err(error),
         };
-        let mut tries = owned
-            .pr_guides
-            .tries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut state = owned.pr_guides.lock();
         match outcome {
-            Ok(()) => {
-                info!(url = %params.url, "wrote a pull request's guide");
-                tries.remove(&key);
+            Ok(kept) => {
+                if kept {
+                    info!(url = %params.url, "wrote a pull request's guide");
+                } else {
+                    info!(url = %params.url, "dropped a guide for a head that's no longer the newest");
+                }
+                state.tries.remove(&key);
             }
             Err(error) => {
                 warn!(url = %params.url, %error, "could not write a pull request's guide");
-                tries.insert(key, Try::Failed(error));
+                state.tries.insert(key, Try::Failed(error));
             }
         }
     });
 }
 
-/// Stores `guide` as the pull request's newest.
-async fn keep(daemon: &Daemon, key: &Key, guide: &PrGuide) -> Result<(), String> {
-    let payload = serde_json::to_string(guide).map_err(|error| error.to_string())?;
-    let (repo, number) = (key.0.clone(), key.1);
+/// Stores `guide`, written for `key`'s head, as the pull request's guide, unless a try has
+/// started for another head since: an older head's try that finishes last never replaces a newer
+/// head's guide. Checked in the store's job, which runs writes one at a time, so a try that starts
+/// later writes after it. Says whether it stored it.
+async fn keep(daemon: &Arc<Daemon>, key: &Key, guide: PrGuide) -> Result<bool, String> {
+    let payload = serde_json::to_string(&guide).map_err(|error| error.to_string())?;
+    let (owned, key) = (Arc::clone(daemon), key.clone());
     store(daemon, move |db| {
-        db.put_pr_guide(&repo, number, &payload)
-            .map_err(|e| store_error(&e))
+        let (repo, number, head) = &key;
+        let newest = owned
+            .pr_guides
+            .lock()
+            .newest
+            .get(&(repo.clone(), *number))
+            .is_none_or(|newest| newest == head);
+        if !newest {
+            return Ok(false);
+        }
+        db.put_pr_guide(repo, *number, &payload)
+            .map_err(|e| store_error(&e))?;
+        Ok(true)
     })
     .await
     .map_err(|error| error.message)
@@ -445,7 +475,7 @@ mod tests {
     use jiff::Timestamp;
     use parallax_protocol::{PrGuide, PrGuideParams, ThreadNaming};
 
-    use super::{Answer, checked, fit, guide, parts};
+    use super::{Answer, Try, checked, fit, guide, keep, parts, started};
     use crate::server::Daemon;
     use crate::threads::{store, store_error};
 
@@ -594,6 +624,46 @@ mod tests {
         assert_eq!(failed.guide.as_ref(), Some(&old));
 
         assert!(ask("new", true).await.unwrap().generating);
+    }
+
+    /// Tries for two heads, the older one finishing last: only the newer head's guide is kept.
+    /// Starting a try forgets the pull request's failed tries at other heads.
+    #[tokio::test]
+    async fn an_older_heads_try_that_finishes_last_keeps_the_newer_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let key = |head: &str| ("o/r".to_owned(), 1, head.to_owned());
+        let written = |head: &str| PrGuide {
+            head_sha: head.to_owned(),
+            overview: format!("At {head}."),
+            diagram: None,
+            steps: Vec::new(),
+            omitted: Vec::new(),
+            created_at: Timestamp::UNIX_EPOCH,
+        };
+        {
+            let mut state = daemon.pr_guides.lock();
+            state
+                .tries
+                .insert(key("failed"), Try::Failed("no".to_owned()));
+            started(&mut state, &key("old"));
+            started(&mut state, &key("new"));
+            assert!(!state.tries.contains_key(&key("failed")));
+            assert!(matches!(state.tries.get(&key("old")), Some(Try::Running)));
+        }
+
+        assert!(keep(&daemon, &key("new"), written("new")).await.unwrap());
+        assert!(!keep(&daemon, &key("old"), written("old")).await.unwrap());
+        let kept = store(&daemon, |db| {
+            db.pr_guide("o/r", 1).map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<PrGuide>(&kept).unwrap(),
+            written("new")
+        );
     }
 
     #[test]

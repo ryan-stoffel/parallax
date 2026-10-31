@@ -331,6 +331,11 @@ test("guideView: the head's guide is ready, an older head's is stale until the n
     createdAt: "2026-10-30T00:00:00Z",
   });
   expect(guideView({ guide: guide("b"), generating: false }, "b").kind).toBe("ready");
+  expect(guideView({ guide: guide("b"), generating: true }, "b")).toEqual({
+    kind: "ready",
+    guide: guide("b"),
+    generating: true,
+  });
   expect(guideView({ guide: guide("a"), generating: true }, "b")).toEqual({
     kind: "stale",
     guide: guide("a"),

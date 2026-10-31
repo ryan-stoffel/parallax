@@ -7,21 +7,25 @@ import { Badge, Button, EmptyState, IconButton, Spinner } from "../ui";
 import type { GuideView } from "./model";
 
 /**
- * The PR view's Guide tab (PLX-1188, 0095): an agent-written walkthrough, the overview first and
- * then one step at a time, with Prev and Next or Left and Right. A step's hunks open in Code with
- * one click (`onOpen`). An older head's guide shows marked out of date while the new one is
- * written. `onRegenerate` writes a new one, or tries again after a failure.
+ * The PR view's Guide tab (PLX-1188, 0095): an agent-written walkthrough, the overview first
+ * (`page` 0) and then one step at a time, with Prev and Next or Left and Right. The view keeps
+ * `page`, so it survives a trip to Code. A step's hunks open in Code with one click (`onOpen`). An
+ * older head's guide shows marked out of date while the new one is written. `onRegenerate` writes
+ * a new one, or tries again after a failure, with a spinner while it runs.
  */
 export function Guide({
   view,
+  page,
+  onPage,
   onOpen,
   onRegenerate,
 }: {
   view: GuideView;
+  page: number;
+  onPage: (page: number) => void;
   onOpen: (hunk: PrGuideHunk) => void;
   onRegenerate: () => void;
 }) {
-  const [page, setPage] = useState(0);
   if (view.kind === "loading")
     return (
       <div className="grid flex-1 place-items-center pb-16">
@@ -52,7 +56,7 @@ export function Guide({
   const last = guide.steps.length;
   const at = Math.min(page, last);
   const step = at > 0 ? guide.steps[at - 1] : undefined;
-  const go = (to: number) => setPage(Math.max(0, Math.min(last, to)));
+  const go = (to: number) => onPage(Math.max(0, Math.min(last, to)));
   const keys = (e: KeyboardEvent) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (e.key === "ArrowLeft") go(at - 1);
@@ -60,7 +64,7 @@ export function Guide({
     else return;
     e.preventDefault();
   };
-  const generating = view.kind === "stale" && view.generating;
+  const generating = view.generating;
 
   return (
     <div
@@ -80,7 +84,6 @@ export function Guide({
                   ? `Couldn't write one for the new commit: ${view.error}`
                   : "Written for an older commit."}
             </span>
-            {generating && <Spinner size="sm" />}
           </p>
         )}
 
@@ -95,6 +98,7 @@ export function Guide({
             {at === 0 ? "Overview" : `Step ${at} of ${last}`}
           </span>
           <span className="flex-1" />
+          {generating && <Spinner size="sm" label="Writing a new guide" />}
           <IconButton
             label={generating ? "Writing a new guide" : "Regenerate"}
             disabled={generating}

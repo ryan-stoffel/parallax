@@ -104,6 +104,11 @@ export function PullRequestView({
   const [viewed, setViewed] = useState<ReadonlySet<string>>(new Set());
   const [codeFocus, setCodeFocus] = useState<DiffFocus>();
   const [guide, setGuide] = useState<{ url: string; result?: PrGuideResult; error?: string }>();
+  // The guide's page, kept here so a trip to Code comes back to it. A new pull request or a new
+  // guide starts at the overview.
+  const [guidePage, setGuidePage] = useState(0);
+  const guideHead = guide?.url === url ? guide.result?.guide?.headSha : undefined;
+  useEffect(() => setGuidePage(0), [url, guideHead]);
   // Bumped by Regenerate, which the next read asks for.
   const [guideTick, setGuideTick] = useState(0);
   const regenerate = useRef(false);
@@ -416,6 +421,8 @@ export function PullRequestView({
       {tab === "guide" && (
         <Guide
           view={guiding}
+          page={guidePage}
+          onPage={setGuidePage}
           onOpen={(h) => {
             setCodeFocus({ path: h.path, line: h.start, end: h.end });
             setTab("code");

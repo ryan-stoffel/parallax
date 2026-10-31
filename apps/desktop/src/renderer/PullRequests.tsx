@@ -8,12 +8,15 @@ import type {
   PrGuideResult,
   PrStatusResult,
   PrWrite,
+  ProvidersListResult,
   PullRequest,
+  ThreadNaming,
 } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { icons } from "./icons";
-import { newThreadPrefs } from "./prefs";
+import { newThreadPrefs, type NewThreadPrefs } from "./prefs";
+import { listedProviders } from "./providers";
 import type { PrActExtra, PrActionMore } from "./pr/model";
 import { ago, PrRow } from "./pr/parts";
 import { menuItem } from "./ui";
@@ -135,15 +138,12 @@ export function usePullRequests(
     },
     [hostId],
   );
-  // The user's default model writes it, or the naming model when there's no default.
   const guide = useCallback(
     async (url: string, headSha: string, regenerate?: boolean) => {
-      const prefs = newThreadPrefs.get();
-      const model = prefs.model ?? prefs.naming;
       const answer = await window.parallax.request(hostId, "pr/guide", {
         url,
         headSha,
-        model: { backend: model.provider, model: model.id, effort: prefs.effort },
+        model: guideModel(newThreadPrefs.get(), listedProviders(hostId)),
         regenerate,
       });
       return "error" in answer ? { error: answer.error } : { result: answer.result };
@@ -223,6 +223,24 @@ export function usePullRequests(
     actions,
     guide: guides && diffs ? guide : undefined,
   };
+}
+
+/**
+ * The model that writes a pull request's guide (0095): the user's default at its effort, or the
+ * naming model at its effort when there's no default or the default's instance can't make the
+ * hidden call, which only Claude Code and Codex instances can. An instance `providers` doesn't
+ * list yet keeps the default.
+ */
+export function guideModel(
+  prefs: Pick<NewThreadPrefs, "model" | "effort" | "naming" | "namingEffort">,
+  providers?: ProvidersListResult,
+): ThreadNaming {
+  const kind = providers?.providers.find((p) => p.instance.id === prefs.model?.provider)?.instance
+    .kind;
+  const namer = !providers || kind === "claude" || kind === "codex";
+  return prefs.model && namer
+    ? { backend: prefs.model.provider, model: prefs.model.id, effort: prefs.effort }
+    : { backend: prefs.naming.provider, model: prefs.naming.id, effort: prefs.namingEffort };
 }
 
 /** How often an open linked pull request is read again. */

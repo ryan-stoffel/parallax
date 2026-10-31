@@ -5,9 +5,20 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/pull-requests.json";
 import type { ParallaxBridge } from "../preload/bridge";
-import type { PrFailureLog, PrStatusResult, PullRequest } from "../protocol/generated/protocol";
+import type {
+  PrFailureLog,
+  PrGuideResult,
+  PrStatusResult,
+  PullRequest,
+} from "../protocol/generated/protocol";
 import { githubText } from "./github";
-import { LinkedPullRequests, linkedPr, PullRequestView, usePullRequests } from "./PullRequests";
+import {
+  guideModel,
+  LinkedPullRequests,
+  linkedPr,
+  PullRequestView,
+  usePullRequests,
+} from "./PullRequests";
 import { parseDiff } from "./parseDiff";
 import "./markdownTest";
 import { Notifications } from "./notifications";
@@ -38,6 +49,7 @@ let read: Record<string, PullRequest>;
 let actions: Record<string, () => object>;
 let status: Partial<PrStatusResult> | undefined;
 let logs: PrFailureLog[];
+let guide: PrGuideResult | undefined;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
   if (method === "pr/view") return { logId: "l", result: read[params["url"] as string] };
   if (method === "pr/act") return { logId: "l", ...actions[params["action"] as string]!() };
@@ -48,6 +60,8 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
           result: { url: params["url"], reasons: [], unresolvedThreads: [], ...status },
         }
       : { logId: "l", error: { code: -32601, message: "no" } };
+  if (method === "pr/guide") return { logId: "l", result: guide };
+  if (method === "pr/diff") return { logId: "l", result: { diff: "", truncated: false } };
   if (method === "pr/failureLog")
     return { logId: "l", result: { url: params["url"], failures: logs } };
   return { logId: "l", result: {} };
@@ -62,6 +76,7 @@ beforeEach(() => {
   actions = {};
   status = undefined;
   logs = [];
+  guide = undefined;
   capabilities = { pullRequests: {}, prDiff: {}, prWatch: {} };
   window.parallax = {
     platform: "darwin",
@@ -381,4 +396,68 @@ test("without prWatch the view still reads, with no status, logs, or writes", as
   act(() => tab("Timeline").click());
   expect(document.body.textContent).toContain("Commenting and reviewing need a newer plxd");
   expect(sent("pr/status")).toEqual([]);
+});
+
+test("the Guide keeps its step across a trip to Code, and Regenerate spins while it writes", async () => {
+  capabilities = { ...capabilities, prGuide: {} };
+  read = { [url(42)]: prOf(42, { headSha: "h1" }) };
+  guide = {
+    generating: true,
+    guide: {
+      headSha: "h1",
+      overview: "Adds a README.",
+      steps: [
+        {
+          title: "Write it",
+          explanation: "The steps.",
+          hunks: [{ path: "README.md", start: 1, end: 2 }],
+        },
+        { title: "Link it", explanation: "From the docs.", hunks: [] },
+      ],
+      createdAt: "2026-10-02T12:00:00Z",
+    },
+  };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  expect(sent("pr/guide")).toMatchObject([{ url: url(42), headSha: "h1" }]);
+  act(() => tab("Guide").click());
+  expect(button("Writing a new guide")?.disabled).toBe(true);
+  act(() => button("Next step")!.click());
+  expect(document.querySelector('[aria-label="Guide steps"]')!.textContent).toContain(
+    "Step 1 of 2",
+  );
+  await act(async () =>
+    document
+      .querySelector<HTMLButtonElement>('ul[aria-label="Changes in this step"] button')!
+      .click(),
+  );
+  await settle();
+  expect(tab("Code").getAttribute("aria-selected")).toBe("true");
+  act(() => tab("Guide").click());
+  expect(document.querySelector('[aria-label="Guide steps"]')!.textContent).toContain(
+    "Step 1 of 2",
+  );
+});
+
+test("guideModel falls back to the naming model when the default's instance can't write guides", () => {
+  const prefs = {
+    model: { provider: "pi", id: "pi-model" },
+    effort: "high" as const,
+    naming: { provider: "codex", id: "gpt-6-luna" },
+    namingEffort: "low" as const,
+  };
+  const listed = (kind: string) =>
+    ({ providers: [{ instance: { id: "pi", kind } }] }) as unknown as Parameters<
+      typeof guideModel
+    >[1];
+  expect(guideModel(prefs, listed("pi"))).toEqual({
+    backend: "codex",
+    model: "gpt-6-luna",
+    effort: "low",
+  });
+  expect(guideModel(prefs, listed("claude"))).toEqual({
+    backend: "pi",
+    model: "pi-model",
+    effort: "high",
+  });
+  expect(guideModel({ ...prefs, model: undefined }, listed("claude")).effort).toBe("low");
 });
