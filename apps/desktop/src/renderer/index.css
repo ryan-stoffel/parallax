@@ -165,6 +165,13 @@
   --merge-blocked: #cf222e;
   --merge-merged: #8250df;
   --merge-neutral: #656d76;
+  /* A merge GitHub won't take: the whole button on a 12% tint of these, with them as its text,
+     as a Badge is. Darker than the fills in light, so the text reads (at least 5.3:1). */
+  --merge-ready-soft: #116329;
+  --merge-running-soft: #92400e;
+  --merge-blocked-soft: #b42318;
+  --merge-merged-soft: #6d28d9;
+  --merge-neutral-soft: #4a4868;
   --merge-ready-foreground: color(
     from var(--merge-ready) srgb-linear var(--black-or-white) var(--black-or-white)
       var(--black-or-white)
@@ -248,6 +255,11 @@
   --merge-blocked: #da3633;
   --merge-merged: #8957e5;
   --merge-neutral: #3d444d;
+  --merge-ready-soft: #4ade80;
+  --merge-running-soft: #f59e0b;
+  --merge-blocked-soft: #ff6b4a;
+  --merge-merged-soft: #a78bfa;
+  --merge-neutral-soft: #a3a3a3;
   --code: #0a0a0a;
   --syntax-keyword: #7b9bff;
   --syntax-string: #ff8a65;
@@ -659,14 +671,19 @@ svg.lucide[stroke-width="2"] * {
   --color-project-violet: var(--project-violet);
   --color-merge-ready: var(--merge-ready);
   --color-merge-ready-foreground: var(--merge-ready-foreground);
+  --color-merge-ready-soft: var(--merge-ready-soft);
   --color-merge-running: var(--merge-running);
   --color-merge-running-foreground: var(--merge-running-foreground);
+  --color-merge-running-soft: var(--merge-running-soft);
   --color-merge-blocked: var(--merge-blocked);
   --color-merge-blocked-foreground: var(--merge-blocked-foreground);
+  --color-merge-blocked-soft: var(--merge-blocked-soft);
   --color-merge-merged: var(--merge-merged);
   --color-merge-merged-foreground: var(--merge-merged-foreground);
+  --color-merge-merged-soft: var(--merge-merged-soft);
   --color-merge-neutral: var(--merge-neutral);
   --color-merge-neutral-foreground: var(--merge-neutral-foreground);
+  --color-merge-neutral-soft: var(--merge-neutral-soft);
   --color-project-pink: var(--project-pink);
   --color-project-gray: var(--project-gray);
   --color-mark-blue: var(--mark-blue);

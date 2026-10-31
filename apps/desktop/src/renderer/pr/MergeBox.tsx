@@ -43,13 +43,21 @@ const rowLook: Record<RowTone, { Icon: typeof icons.success; color: string }> = 
   neutral: { Icon: icons.skipped, color: "text-faint-foreground" },
 };
 
-// The merge button's fill by mergeTone, each with its readable black or white text (index.css).
+// The merge button's look by mergeTone (index.css): a solid fill with black or white text while
+// it can merge, else a tint of its tone with the tone as its text, as a Badge is.
 const fills: Record<MergeTone, string> = {
   ready: "bg-merge-ready text-merge-ready-foreground",
   running: "bg-merge-running text-merge-running-foreground",
   blocked: "bg-merge-blocked text-merge-blocked-foreground",
   merged: "bg-merge-merged text-merge-merged-foreground",
   neutral: "bg-merge-neutral text-merge-neutral-foreground",
+};
+const tints: Record<MergeTone, string> = {
+  ready: "bg-merge-ready-soft/12 text-merge-ready-soft",
+  running: "bg-merge-running-soft/12 text-merge-running-soft",
+  blocked: "bg-merge-blocked-soft/12 text-merge-blocked-soft",
+  merged: "bg-merge-merged-soft/12 text-merge-merged-soft",
+  neutral: "bg-merge-neutral-soft/12 text-merge-neutral-soft",
 };
 
 /** How long after merging a pull request still says "just now". */
@@ -121,6 +129,7 @@ export function MergeBox({
 
   const chosen = methods.includes(method) ? method : methods[0]!;
   const tone = mergeTone(gate, checks);
+  const look = gate.canMerge ? fills[tone] : tints[tone];
   const rows = statusRows(pr, checks, gate, status);
   const commits = pr.commits?.length;
   const extra = (): PrActExtra =>
@@ -222,16 +231,15 @@ export function MergeBox({
           </div>
         )}
         <div className="flex gap-2">
-          {/* GitHub's split button: the merge, a thin rule, and the method's chevron. Each part
-              takes the fill, so a merge GitHub won't take dims (0092) while the method can still
-              change. */}
+          {/* GitHub's split button: the merge, a thin rule, and the method's chevron, both parts
+              solid while it can merge and tinted while it can't. The method can still change. */}
           <div data-tone={tone} className="flex h-8 min-w-0 flex-1 text-body font-medium">
             <button
               type="button"
               disabled={busy || !gate.canMerge}
               title={gate.canMerge ? undefined : gate.title}
               onClick={() => onAct(chosen, extra())}
-              className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 px-3 transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 [&_svg]:size-4 [&_svg]:shrink-0 ${fills[tone]} ${open ? "rounded-l-md" : "rounded-md"}`}
+              className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 px-3 transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed [&_svg]:size-4 [&_svg]:shrink-0 ${look} ${open ? "rounded-l-md" : "rounded-md"}`}
             >
               {busy ? (
                 <Spinner className="text-current" />
@@ -257,7 +265,7 @@ export function MergeBox({
                   aria-haspopup="menu"
                   popoverTarget={`${id}-method`}
                   disabled={busy || methods.length < 2}
-                  className={`grid w-8 shrink-0 place-items-center rounded-r-md border-l border-current/25 transition-opacity enabled:hover:opacity-90 disabled:opacity-60 [&_svg]:size-4 ${fills[tone]}`}
+                  className={`grid w-8 shrink-0 place-items-center rounded-r-md border-l border-current/25 transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed [&_svg]:size-4 ${look}`}
                 >
                   <icons.expand aria-hidden />
                 </button>
