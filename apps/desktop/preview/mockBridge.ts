@@ -2246,7 +2246,7 @@ export const mockBridge: ParallaxBridge = {
     connectChanged();
     return delay(undefined);
   },
-  discoverAccount: () => delay(undefined),
+  discoverAccount: () => delay([...accounts]),
   enterSetupCode: async (hostId, code) => {
     await delay(undefined, 600);
     const computer = accounts.find((a) => a.id === hostId);
