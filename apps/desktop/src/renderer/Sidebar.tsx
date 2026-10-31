@@ -2992,14 +2992,10 @@ function useRowDetails({
           role="img"
           aria-label={`Providers: ${providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}`}
           title={providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}
-          className={`group/providers flex shrink-0 items-center -space-x-px hover:space-x-1 group-has-[:focus-visible]/row:space-x-1 ${selected ? "" : "opacity-80 grayscale"}`}
+          className={`flex shrink-0 items-center gap-1 ${selected ? "" : "opacity-80 grayscale"}`}
         >
           {providers.map(({ backend, Logo }) => (
-            <Logo
-              key={backend}
-              aria-hidden
-              className={`size-3.5 shrink-0 transition-[margin,transform,translate] duration-150 motion-reduce:transition-none ${providers.length > 1 ? "first:-translate-y-0.5 last:translate-y-0.5 group-hover/providers:translate-y-0! group-has-[:focus-visible]/row:translate-y-0!" : ""}`}
-            />
+            <Logo key={backend} aria-hidden className="size-3.5 shrink-0" />
           ))}
         </span>
       )}
