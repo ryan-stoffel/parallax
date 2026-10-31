@@ -22,11 +22,12 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
     let mut client = Client::ready(&plxd.socket).await;
+    // plxd's start-up jobs go first: one still to run would wait on the lock ahead of the create.
+    let before = settled(&mut client).await;
     let lock = WriteLock::take(dir.path());
 
     // The create starts and waits for SQLite's lock; the second create queues behind it. Lists
     // read on their own thread (PLX-457), so only a write can queue here.
-    let before = store_queue(&mut client).await.jobs;
     let params = create_params(dir.path(), "parallax");
     let create = client.send::<OrchestratorCreate>(params.clone()).await;
     let deadline = Instant::now() + PATIENCE;
@@ -68,6 +69,26 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
         .await
         .unwrap();
     assert_eq!(listed.orchestrators, [created.orchestrator]);
+}
+
+/// The store's started jobs once plxd's start-up jobs are done: nothing queued and none started
+/// over [`SETTLE`]. Background tasks start theirs as plxd starts, which on a busy runner can be
+/// after the socket is up.
+async fn settled(client: &mut Client) -> u64 {
+    let deadline = Instant::now() + PATIENCE;
+    let mut last = store_queue(client).await;
+    loop {
+        sleep(SETTLE).await;
+        let now = store_queue(client).await;
+        if now.queued == 0 && now.jobs == last.jobs {
+            return now.jobs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "plxd's start-up jobs never settled"
+        );
+        last = now;
+    }
 }
 
 /// The store's job queue, from `host/health`.
