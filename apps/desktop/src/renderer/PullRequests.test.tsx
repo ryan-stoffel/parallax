@@ -185,7 +185,11 @@ test("https images in the description and comments load wherever they're hosted,
     }),
   };
   await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
-  const images = () => [...document.querySelectorAll("img")].map((img) => [img.alt, img.src]);
+  const images = () =>
+    [...document.querySelectorAll(".gh-markdown img")].map((img) => [
+      img.getAttribute("alt"),
+      img.getAttribute("src"),
+    ]);
   expect(images()).toEqual([
     ["The toast", "https://raw.githubusercontent.com/me/app/1/toast.gif"],
     ["Badge", "https://files.example.com/a.png"],
@@ -194,7 +198,7 @@ test("https images in the description and comments load wherever they're hosted,
     (a) => a.textContent === "Plain",
   );
   expect(plain?.getAttribute("href")).toBe("http://example.com/b.png");
-  act(() => tab("Activity").click());
+  act(() => tab("Timeline").click());
   expect(images()).toEqual([["Shot", "https://github.com/user-attachments/assets/1"]]);
 });
 
@@ -285,11 +289,12 @@ test("a failed check opens its log from pr/failureLog, marked required, and Fix 
   await render([url(42)], (prs) => (
     <PullRequestView url={url(42)} prs={prs} onCompose={onCompose} />
   ));
-  expect(tab("Checks").textContent).toBe("Checks1");
-  act(() => tab("Checks").click());
-  // Failing is chosen, so only the failed one shows, in its workflow.
+  // The status box's checks row folds open to every check, the failed one first.
+  const checksRow = button("1 check failed1 of 2 passed")!;
+  expect(checksRow.getAttribute("aria-expanded")).toBe("false");
+  act(() => checksRow.click());
   const rows = [...document.querySelectorAll('section[aria-label="CI"] li')];
-  expect(rows.map((r) => r.querySelector("[title]")!.textContent)).toEqual(["test"]);
+  expect(rows.map((r) => r.querySelector("[title]")!.textContent)).toEqual(["test", "build"]);
   expect(rows[0]!.textContent).toContain("Required");
   await act(async () => rows[0]!.querySelector<HTMLButtonElement>("[aria-expanded]")!.click());
   await settle();
@@ -303,15 +308,15 @@ test("a failed check opens its log from pr/failureLog, marked required, and Fix 
   expect(prompt).not.toMatch(/\bgh\b/);
 });
 
-test("Activity puts unresolved threads first, and replies, resolves, and comments through pr/write", async () => {
+test("Timeline puts unresolved threads first, and replies, resolves, and comments through pr/write", async () => {
   read = { [url(42)]: prOf(42) };
   status = {
     mergeState: "BLOCKED",
     unresolvedThreads: [{ id: "T1", path: "README.md", author: "rev", body: "Say which Node." }],
   };
   await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
-  expect(tab("Activity").textContent).toBe("Activity2");
-  act(() => tab("Activity").click());
+  expect(tab("Timeline").textContent).toBe("Timeline2");
+  act(() => tab("Timeline").click());
   const sections = [...document.querySelectorAll("section")].map((s) =>
     s.getAttribute("aria-label"),
   );
@@ -334,11 +339,43 @@ test("Activity puts unresolved threads first, and replies, resolves, and comment
   ]);
 });
 
+test("the merge menu lists GitHub's methods with their lines, and the choice relabels Merge", async () => {
+  read = { [url(42)]: prOf(42, { mergeState: "clean", mergeMethods: ["merge", "squash"] }) };
+  status = { mergeState: "CLEAN" };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  expect(button("Create a merge commit")).toBeDefined();
+  const options = [
+    ...document.querySelectorAll('[aria-label="Merge method"] [role="menuitemradio"]'),
+  ];
+  expect(options.map((o) => [o.textContent, o.getAttribute("aria-checked")])).toEqual([
+    [
+      "Create a merge commitAll commits from this branch will be added to the base branch via a merge commit.",
+      "true",
+    ],
+    [
+      "Squash and mergeThe commits from this branch will be combined into one commit in the base branch.",
+      "false",
+    ],
+  ]);
+  act(() => (options[1] as HTMLButtonElement).click());
+  expect(button("Squash and merge")!.disabled).toBe(false);
+});
+
+test("the description's pencil edits the body in place and saves it through pr/write", async () => {
+  read = { [url(42)]: prOf(42) };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  act(() => button("Edit description")!.click());
+  type(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]')!, "New");
+  await act(async () => button("Save")!.click());
+  await settle();
+  expect(sent("pr/write")).toEqual([{ url: url(42), write: { kind: "edit", body: "New" } }]);
+});
+
 test("without prWatch the view still reads, with no status, logs, or writes", async () => {
   capabilities = { pullRequests: {} };
   read = { [url(42)]: prOf(42) };
   await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
-  act(() => tab("Activity").click());
+  act(() => tab("Timeline").click());
   expect(document.body.textContent).toContain("Commenting and reviewing need a newer plxd");
   expect(sent("pr/status")).toEqual([]);
 });
