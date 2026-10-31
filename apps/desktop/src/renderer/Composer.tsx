@@ -1882,7 +1882,7 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
         data-back={back || undefined}
-        className={`relative z-10 rounded-prompt border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] hover:bg-[color-mix(in_oklab,var(--foreground)_7%,var(--surface))]" : "bg-surface shadow-composer"}`}
+        className={`relative z-10 rounded-prompt border transition-[background-color,border-color,box-shadow] duration-200 ease-out focus-within:border-foreground/20 motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] hover:bg-[color-mix(in_oklab,var(--foreground)_7%,var(--surface))]" : "bg-surface shadow-composer"}`}
       >
         {menuOpen && (
           <div
@@ -2114,16 +2114,14 @@ export function Composer({
         // A thin tray tucked under the line, as low as it can be, inset and rounded as the tabs over
         // the box are (ComposerTabs). Stepped back, it's gray, as the line is, and takes any tab's
         // place; narrow, the tab follows the pickers.
-        <div
-          className={`tucked mx-4 -mt-4 flex min-w-0 items-center gap-2 rounded-b-xl border border-t-0 border-border px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5 ${back ? "bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))]" : "bg-surface"}`}
-        >
+        <div className="composer-tray tucked mx-3 -mt-4 flex min-w-0 items-center gap-2 rounded-b-prompt border border-t-0 px-1.5 pt-5 pb-1 [&_button[aria-haspopup]]:rounded-lg [&_button[aria-haspopup]]:py-1">
           {pickers}
           {!back && tab && <div className="ml-auto flex min-w-0 items-center gap-2">{tab}</div>}
         </div>
       ) : (
         tab && (
           // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-4 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+          <div className="composer-tray tucked mx-3 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-prompt border border-t-0 px-1.5 pt-5 pb-1 [&_button[aria-haspopup]]:rounded-lg [&_button[aria-haspopup]]:py-1">
             {tab}
           </div>
         )

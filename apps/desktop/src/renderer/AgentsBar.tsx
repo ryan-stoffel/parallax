@@ -1,7 +1,7 @@
-import { ChevronUp, CircleAlert, GitBranch, ShieldQuestion } from "lucide-react";
+import { ChevronUp, CircleAlert, GitBranch, MessageCircleQuestion } from "lucide-react";
 import { useId, useState, type ComponentType, type SVGProps } from "react";
 
-import { DoneMark } from "./AttentionMark";
+import { DoneMark, WorkingMark } from "./AttentionMark";
 import { childOrder, runAttention, type Attention } from "./attention";
 import type { OrchestratorAgentsView } from "./OrchestratorAgents";
 import { OpenHint } from "./OpenHint";
@@ -63,8 +63,8 @@ export function orchestratorAgentRows(
 /**
  * Agents at work, tucked over the composer as the plan is: an orchestrator's children, or a
  * thread's own subagents. While any of them works or waits on the user, the providers of the first
- * three as stacked logos, a count of the rest, and the agent that matters most. It opens a card
- * over the chat listing them, those that need the user first, then those working, then the latest
+ * three as bare logos, a count of the rest, and the agent that matters most. It opens a card
+ * grouped by those that need the user, those working, then the latest
  * finished; each opens its chat. Hidden while none is going. `rows` go oldest first. `compact`
  * leaves out the lead agent's title, for a place beside other tabs.
  */
@@ -88,7 +88,9 @@ export function AgentsBar({
   if (going.length === 0) return null;
   const finished = children.filter((c) => !isGoing(c)).slice(0, finishedShown);
   const lead = going[0]!;
-  const waiting = going.filter((c) => c.attention === "needsYou").length;
+  const needsYou = going.filter((c) => c.attention === "needsYou");
+  const working = going.filter((c) => c.attention === "working");
+  const waiting = needsYou.length;
   const extra = going.length - 3;
   const openRow = (runId: string) => {
     document.getElementById(id)?.hidePopover();
@@ -101,11 +103,12 @@ export function AgentsBar({
         type="button"
         popoverTarget={id}
         aria-expanded={open}
+        aria-haspopup="dialog"
         title={open ? `Hide the ${label.toLowerCase()}` : `Show the ${label.toLowerCase()}`}
-        className={`flex min-w-0 items-center gap-2.5 text-left text-body hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-0.5 pr-3.5 pl-2"}`}
+        className={`flex min-w-0 items-center gap-2.5 rounded-lg text-left text-body text-muted-foreground transition-colors hover:bg-hover hover:text-foreground ${compact ? "h-7 px-2" : "w-full py-1 pr-2.5 pl-2"}`}
       >
         {/* The providers at work, as one quiet group. */}
-        <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2 [&_svg]:size-3.5">
+        <span className="flex h-5 shrink-0 items-center gap-2 text-foreground/80 [&_svg]:size-3.5">
           {going
             .slice(0, 3)
             .map((c) =>
@@ -127,18 +130,18 @@ export function AgentsBar({
         </span>
         {!compact && (
           <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate">{lead.title}</span>
+            <span className="truncate text-foreground/90">{lead.title}</span>
           </span>
         )}
-        <span className="flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground tabular-nums">
+        <span className="flex shrink-0 items-center gap-1.5 text-meta tabular-nums [&_svg]:size-3.5">
           {waiting > 0 ? (
             <>
-              <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+              <MessageCircleQuestion aria-hidden className="text-warning" />
               {waiting} need you
             </>
           ) : (
             <>
-              <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-working" />
+              <WorkingMark />
               {going.length} working
             </>
           )}
@@ -153,13 +156,28 @@ export function AgentsBar({
       <div
         id={id}
         popover="auto"
+        role="dialog"
+        aria-label={label}
         onBeforeToggle={(e) => setOpen(e.newState === "open")}
-        className={`inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-xl border border-border bg-surface p-1.5 text-foreground shadow-composer [position-try-fallbacks:flip-block] ${compact ? popoverBeside : "w-[anchor-size(width)] [position-area:top_span-right]"}`}
+        className={`inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-prompt border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block] ${compact ? popoverBeside : "w-[anchor-size(width)] max-w-[min(36rem,calc(100vw-2rem))] [position-area:top_span-right]"}`}
       >
         {open && (
           <>
-            <CardGroup label="Working" items={going} onOpen={openRow} />
-            {finished.length > 0 && <CardGroup label="Done" items={finished} onOpen={openRow} />}
+            <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <h2 className="text-body font-medium">{label}</h2>
+              <span className="text-meta text-faint-foreground tabular-nums">
+                {going.length} active
+              </span>
+            </header>
+            <div className="p-1.5">
+              {needsYou.length > 0 && (
+                <CardGroup label="Needs you" items={needsYou} onOpen={openRow} />
+              )}
+              {working.length > 0 && <CardGroup label="Working" items={working} onOpen={openRow} />}
+              {finished.length > 0 && (
+                <CardGroup label="Recent" items={finished} onOpen={openRow} />
+              )}
+            </div>
           </>
         )}
       </div>
@@ -178,7 +196,7 @@ function CardGroup({
 }) {
   return (
     <section aria-label={label}>
-      <h3 className="px-2.5 pt-2 pb-1 text-meta text-muted-foreground">
+      <h3 className="flex items-center gap-2 px-2.5 pt-2 pb-1 text-caption font-medium text-faint-foreground">
         {label} <span className="text-faint-foreground tabular-nums">{items.length}</span>
       </h3>
       <ul>
@@ -187,15 +205,15 @@ function CardGroup({
             <button
               type="button"
               onClick={() => onOpen(c.id)}
-              className="group flex w-full min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-hover"
+              className="group flex w-full min-w-0 items-start gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors hover:bg-hover"
             >
-              <span className="grid size-5 shrink-0 place-items-center [&_svg]:size-4">
+              <span className="grid size-5 shrink-0 place-items-center text-foreground/80 [&_svg]:size-4">
                 {c.Logo ? <c.Logo aria-hidden /> : null}
               </span>
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate text-body">{c.title}</span>
-                <span className="flex min-w-0 items-center gap-2 font-mono text-caption text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
-                  <State attention={c.attention} />
+                <span className="truncate text-body font-medium">{c.title}</span>
+                <span className="flex min-w-0 items-center gap-2 text-meta text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
+                  {c.detail && <span className="max-w-40 truncate">{c.detail}</span>}
                   {c.branch && (
                     <span className="flex min-w-0 items-center gap-1">
                       <GitBranch aria-hidden />
@@ -210,11 +228,15 @@ function CardGroup({
                   )}
                 </span>
               </span>
-              <span className="flex shrink-0 flex-col items-end gap-0.5 font-mono text-caption text-faint-foreground">
-                {c.updatedAt && <span className="tabular-nums">{age(c.updatedAt)}</span>}
-                {c.detail && <span>{c.detail}</span>}
+              <span className="flex shrink-0 flex-col items-end gap-0.5 text-meta text-faint-foreground [&_svg]:size-3.5">
+                <State attention={c.attention} />
+                {c.updatedAt && (
+                  <span className="text-caption tabular-nums">{age(c.updatedAt)}</span>
+                )}
               </span>
-              <OpenHint />
+              <span className="self-center">
+                <OpenHint />
+              </span>
             </button>
           </li>
         ))}
@@ -227,14 +249,14 @@ function State({ attention }: { attention: Attention }) {
   if (attention === "needsYou")
     return (
       <span className="flex shrink-0 items-center gap-1 text-warning">
-        <ShieldQuestion aria-hidden />
+        <MessageCircleQuestion aria-hidden />
         Needs you
       </span>
     );
   if (attention === "working")
     return (
-      <span className="flex shrink-0 items-center gap-1.5 text-working">
-        <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-working" />
+      <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+        <WorkingMark />
         Working
       </span>
     );

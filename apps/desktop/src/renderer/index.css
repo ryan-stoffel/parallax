@@ -498,8 +498,8 @@ svg.lucide[stroke-width="2"] * {
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
-  /* 16px since PLX-1089 found 24px too round (0092). */
-  --radius-prompt: 16px;
+  /* Match native macOS window corners, including the trays around a prompt box. */
+  --radius-prompt: 12px;
 }
 
 /* Motion and stacking (docs/decisions/0092-shared-ui-and-motion.md). Static, so plain CSS can use
@@ -1150,6 +1150,12 @@ body {
    transcript is. */
 [data-pane] [role="log"] {
   scrollbar-width: none;
+}
+
+/* The trays above and below the composer share one quiet surface. */
+.composer-tray {
+  border-color: var(--border);
+  background-color: color-mix(in oklab, var(--foreground) 2%, var(--surface));
 }
 
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
