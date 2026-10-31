@@ -1138,7 +1138,7 @@ export function ThreadList({
         rowKey={item.key}
         thread={t}
         hostId={item.host.id}
-        device={many && item.host.icon ? item.host : undefined}
+        device={item.host}
         title={item.title}
         run={item.run}
         repo={item.repo}
@@ -1705,7 +1705,7 @@ export function ThreadList({
         repo={p.repo}
         runs={p.runs}
         hostId={p.host.id}
-        device={many && p.host.icon ? p.host : undefined}
+        device={p.host}
         at={p.at}
         attention={p.attention}
         selected={p.key === openKey}
@@ -2937,7 +2937,12 @@ function useRowDetails({
   /** A thread with no repo, whose git status isn't read. */
   noRepo?: boolean;
 }): { aside?: ReactNode; line?: ReactNode } {
-  const Logo = run?.backend ? backendLogo(run.backend) : undefined;
+  const providers = [
+    ...new Set([...(run?.backends ?? []), ...(run?.backend ? [run.backend] : [])]),
+  ].flatMap((backend) => {
+    const Logo = backendLogo(backend);
+    return Logo ? [{ backend, Logo }] : [];
+  });
   // Read once, not polled: a row's state is as of when the sidebar loaded it.
   const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
   // A worktree's or checkout's status is read, for what's unpushed and uncommitted, again as its
@@ -2972,7 +2977,7 @@ function useRowDetails({
         : undefined;
   const changed = !!git && !!(git.ahead || git.changes);
   // A pin isn't a detail: it sits in the row's top-right, so pinning doesn't change its height.
-  const hasDetails = changed || prs.urls.length > 0 || !!Logo || !!device;
+  const hasDetails = changed || prs.urls.length > 0 || providers.length > 0 || !!device?.icon;
   // Its computer, then its provider's logo: in gray, so a list isn't striped with providers' colors,
   // but in color while open.
   const marks = (
@@ -2982,7 +2987,18 @@ function useRowDetails({
           <DeviceIcon icon={device.icon} className="size-3.5" />
         </span>
       )}
-      {Logo && <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />}
+      {providers.length > 0 && (
+        <span
+          role="img"
+          aria-label={`Providers: ${providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}`}
+          title={providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}
+          className={`flex shrink-0 items-center gap-1 ${selected ? "" : "opacity-80 grayscale"}`}
+        >
+          {providers.map(({ backend, Logo }) => (
+            <Logo key={backend} aria-hidden className="size-3.5 shrink-0" />
+          ))}
+        </span>
+      )}
     </>
   );
   if (!branch && !changed && !prs.urls.length && !isRemoteControl(run))

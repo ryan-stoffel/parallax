@@ -2955,7 +2955,7 @@ impl Actor {
         &mut self,
         backend: &dyn Backend,
         mut changes: RunOptions,
-    ) -> Result<Option<parallax_store::RunFields>, ErrorObject> {
+    ) -> Result<Option<(parallax_store::RunFields, Vec<String>)>, ErrorObject> {
         if let Some(mode) = super::orchestrator_mode(&self.daemon, self.project).await? {
             let permission = super::in_mode(backend, mode)?;
             changes.permission =
@@ -3015,8 +3015,9 @@ impl Actor {
                 .map_err(|error| store_error(&error))
         })
         .await?;
+        let backends = std::mem::replace(&mut self.row.backends, row.backends);
         let before = std::mem::replace(&mut self.row.fields, row.fields);
-        Ok(moving.then_some(before))
+        Ok(moving.then_some((before, backends)))
     }
 
     /// What a CLI needs to resume `session_id`: it, and the usage it has reported so far.
@@ -3176,19 +3177,20 @@ impl Actor {
 
     /// Moves the run back to the backend and options it had, `fields`, after its move to another
     /// backend failed before a CLI started there.
-    async fn move_back(&mut self, fields: Option<parallax_store::RunFields>) {
-        let Some(fields) = fields else {
+    async fn move_back(&mut self, fields: Option<(parallax_store::RunFields, Vec<String>)>) {
+        let Some((fields, backends)) = fields else {
             return;
         };
         let id = self.row.id;
         let moved = store(&self.daemon, move |db| {
-            db.set_run_options(id, &fields)
+            db.restore_run_options(id, &fields, &backends)
                 .map_err(|error| store_error(&error))
         })
         .await;
         match moved {
             Ok(row) => {
                 self.row.fields = row.fields;
+                self.row.backends = row.backends;
                 self.save().await;
             }
             Err(error) => {
@@ -4567,6 +4569,7 @@ mod tests {
         let now = jiff::Timestamp::now();
         let id = uuid::Uuid::from(RunId::generate());
         let row = RunRow {
+            backends: vec!["fake".to_owned()],
             id,
             fields: RunFields {
                 prompt: "flood".to_owned(),

@@ -148,6 +148,50 @@ test("every connected host's threads are one list, newest prompt first, each ope
   expect(rows()[0]!.getAttribute("aria-current")).toBe("page");
 });
 
+test("a single local host keeps its Connect icon and a thread's provider history", async () => {
+  window.parallax.hosts = async () => [];
+  window.parallax.onConnect = (listener) => {
+    listener({ on: false, icon: "desktop", channel: "nightly" });
+    return () => {};
+  };
+  request.mockImplementation(async (_host: string, method: string) =>
+    method === "thread/list"
+      ? {
+          result: {
+            repos: [{ id: "r-1", name: "parallax", path: "/src/parallax", createdAt: t0 }],
+            threads: [{ id: "t-1", repo: "r-1", createdAt: t0 }],
+            seq: 1,
+          },
+          logId: "log",
+        }
+      : method === "agent/list"
+        ? {
+            result: {
+              runs: [
+                {
+                  id: "t-1",
+                  project: "r-1",
+                  prompt: "Switch providers",
+                  status: "completed",
+                  backend: "codex",
+                  backends: ["claude", "codex", "claude"],
+                },
+              ],
+              seq: 1,
+            },
+            logId: "log",
+          }
+        : method === "orchestrator/list"
+          ? { result: { orchestrators: [], seq: 1 }, logId: "log" }
+          : { error: { code: -32601, message: `${method} isn't faked` } },
+  );
+  await renderApp();
+  const row = rows()[0]!;
+  expect(row.querySelector('[aria-label="This Mac"] svg.lucide-monitor')).not.toBeNull();
+  const providers = row.querySelector('[aria-label="Providers: claude, codex"]')!;
+  expect(providers.querySelectorAll("svg")).toHaveLength(2);
+});
+
 const openConnections = async () => {
   await renderApp();
   const mac = window.parallax.platform === "darwin";

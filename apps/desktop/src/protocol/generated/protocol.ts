@@ -3521,6 +3521,10 @@ export type AgentRun = {
 	 */
 	backend: string,
 	/**
+	 * Distinct backends used by this run, in first-use order (PLX-1214). Older daemons omit it.
+	 */
+	backends?: Array<string>,
+	/**
 	 * The account it is charged to now: the backend's name for a subscription, or a key
 	 * account's id. It changes on `agent.accountFallback`.
 	 */
@@ -4595,6 +4599,10 @@ export type AgentRunState = {
 	 * without `sendAccount`, whose runs never move.
 	 */
 	backend?: string,
+	/**
+	 * The run's provider history, as `AgentRun.backends` (PLX-1214).
+	 */
+	backends?: Array<string>,
 	/**
 	 * The vendor's session id, once the CLI reported it.
 	 */

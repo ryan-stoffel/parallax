@@ -932,6 +932,10 @@ export function createFixtures(now = Date.now()): Fixtures {
     diff: { files: 6, insertions: 211, deletions: 88 },
     pullRequests: ["https://github.com/ryan-stoffel/parallax/pull/588"],
   });
+  // This thread changed providers midway; its card keeps both marks after reconnecting.
+  updater.backends = ["claude", "codex"];
+  updater.backend = "codex";
+  updater.accountId = "codex";
   log(updater)
     .out(
       ago(300),

@@ -221,6 +221,9 @@ pub struct AgentRun {
     pub status: AgentStatus,
     /// The backend running it, such as `claude`.
     pub backend: String,
+    /// Distinct backends used by this run, in first-use order (PLX-1214). Older daemons omit it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backends: Vec<String>,
     /// The account it is charged to now: the backend's name for a subscription, or a key
     /// account's id. It changes on `agent.accountFallback`.
     pub account_id: String,
@@ -328,6 +331,9 @@ pub struct AgentRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub backend: Option<String>,
+    /// The run's provider history, as `AgentRun.backends` (PLX-1214).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backends: Vec<String>,
     /// The vendor's session id, once the CLI reported it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
