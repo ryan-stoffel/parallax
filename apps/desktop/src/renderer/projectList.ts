@@ -1,9 +1,9 @@
 // Every host's Projects as one list, for the sidebar's Pinned and the Projects page (0090, 0093):
 // a Project groups threads and gives each its instructions and files.
 import type { ChosenIcon } from "../protocol/generated/protocol";
-import { activeAt, attentionOf, mostUrgent, type Attention } from "./attention";
+import { activeAt } from "./attention";
 import type { Host } from "./hosts";
-import { asksOf, projectOf, waitingOf, type ThreadsView } from "./threads";
+import { projectOf, type ThreadsView } from "./threads";
 
 export interface ProjectEntry {
   /** `<host>/<id>`, as pins keep it. */
@@ -18,48 +18,30 @@ export interface ProjectEntry {
   createdAt: string;
   /** Its last change, or its latest thread's. */
   activeAt: string;
-  /** Its most urgent state across its threads, as the sidebar's cards show it. */
-  attention: Attention;
-  /** How many of its threads work now. */
-  working: number;
-  needsYou: boolean;
   /** How many files it gives its threads. */
   files: number;
   /** Whether it gives its threads instructions. */
   instructions: boolean;
-  /** Its most recently active thread's title. */
-  latest?: string;
 }
 
-/** A thread's title, else its first message's first line. */
-const titleOf = (titles: Record<string, string>, id: string, prompt?: string) =>
-  titles[id] ?? prompt?.split("\n")[0];
+/** The Projects page's orders: by latest activity, name, creation, or most threads. */
+export type ProjectSort = "activity" | "name" | "created" | "threads";
 
-export type ProjectSort = "activity" | "name" | "created";
+/** Which Projects the Projects page shows: all, the pinned, or those with files or instructions. */
+export type ProjectFilter = "all" | "pinned" | "files" | "instructions";
 
 /** Every host's Projects, most recently active first. */
 export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): ProjectEntry[] {
   const entries = hosts.flatMap(({ host, view }) => {
     const { state } = view;
-    const projects = state.repos
+    return state.repos
       .filter((r) => r.project)
       .map((r): ProjectEntry => {
-        const projectThreads = state.threads.filter(
-          (t) => projectOf(state, t) === r.id && !t.parent,
-        );
-        let latest = r.createdAt;
-        let latestThread: string | undefined;
-        const attentions: Attention[] = [];
-        for (const t of projectThreads) {
-          const run = state.runs[t.id];
-          const at = activeAt(t, run, state.stoppedAt[t.id]);
-          if (Date.parse(at) > Date.parse(latest)) {
-            latest = at;
-            latestThread = titleOf(state.titles, t.id, run?.prompt);
-          }
-          attentions.push(attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)));
-        }
-        const attention = mostUrgent(attentions);
+        const threads = state.threads.filter((t) => projectOf(state, t) === r.id && !t.parent);
+        const latest = threads.reduce((at, t) => {
+          const active = activeAt(t, state.runs[t.id], state.stoppedAt[t.id]);
+          return Date.parse(active) > Date.parse(at) ? active : at;
+        }, r.createdAt);
         return {
           key: `${host.id}/${r.id}`,
           host,
@@ -67,28 +49,45 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
           id: r.id,
           name: r.name,
           icon: r.icon,
-          threads: projectThreads.length,
+          threads: threads.length,
           createdAt: r.createdAt,
           activeAt: latest,
-          attention,
-          working: attentions.filter((a) => a === "working").length,
-          needsYou: attention === "needsYou",
           files: r.files?.length ?? 0,
           instructions: !!r.instructions,
-          latest: latestThread,
         };
       });
-    return projects;
   });
   return sortProjects(entries, "activity");
 }
 
-/** `entries` in `sort`'s order: newest first by activity or creation, or by name. */
+/**
+ * `entries` in `sort`'s order: newest first by activity or creation, by name, or most threads
+ * first. Ties go by name.
+ */
 export function sortProjects(entries: ProjectEntry[], sort: ProjectSort): ProjectEntry[] {
+  const byName = (a: ProjectEntry, b: ProjectEntry) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   const time = (e: ProjectEntry) => Date.parse(sort === "created" ? e.createdAt : e.activeAt);
   return entries.toSorted((a, b) =>
     sort === "name"
-      ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
-      : time(b) - time(a) || a.name.localeCompare(b.name),
+      ? byName(a, b)
+      : (sort === "threads" ? b.threads - a.threads : time(b) - time(a)) || byName(a, b),
   );
+}
+
+/** The `entries` `filter` keeps, given the `pins`, whose names hold every word of `query`. */
+export function filterProjects(
+  entries: ProjectEntry[],
+  filter: ProjectFilter,
+  pins: readonly string[],
+  query: string,
+): ProjectEntry[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const kept = {
+    all: () => true,
+    pinned: (e: ProjectEntry) => pins.includes(e.key),
+    files: (e: ProjectEntry) => e.files > 0,
+    instructions: (e: ProjectEntry) => e.instructions,
+  }[filter];
+  return entries.filter((e) => kept(e) && words.every((w) => e.name.toLowerCase().includes(w)));
 }

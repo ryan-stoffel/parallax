@@ -35,8 +35,8 @@ export const navDefaults: Record<NavRow, boolean> = {
 export const sidebarNav = stored("parallax.sidebarNav", navDefaults, merged);
 
 /**
- * Pinned projects, orchestrators and Projects alike, by `<host>/<id>`, in the order pinned (0090).
- * They list under the nav rows and lead the Projects page.
+ * Pinned Projects and orchestrator threads, by `<host>/<id>`, in the order pinned (0090). They list
+ * in the Traditional sidebar's Pinned section, Projects first, and the Projects page filters by them.
  */
 export const pinnedProjects = stored<string[]>("parallax.pinnedProjects", [], (raw, fallback) =>
   Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : fallback,

@@ -1465,10 +1465,8 @@ export function App() {
         <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
           {mainPage === "projects" ? (
             <>
-              <TopBar className={topBarInset}>
-                {showSidebar}
-                <Breadcrumb items={[{ label: "Projects" }]} />
-              </TopBar>
+              {/* The page's own heading names it, so the bar doesn't. */}
+              <TopBar className={topBarInset}>{showSidebar}</TopBar>
               <ProjectsPage
                 entries={projectEntries(listed)}
                 pins={pins}

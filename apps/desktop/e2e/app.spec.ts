@@ -222,10 +222,10 @@ test("creates an orchestrator on a repository it adds, and opens it (PLX-166)", 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // The Projects page lists Projects only (0093); the Inbox sidebar finds the orchestrator by its
-  // name, and its row goes back to it.
+  // The Projects page lists Projects only (0093); the Inbox sidebar lists the orchestrator as a
+  // thread, finds it by its name, and its row goes back to it.
   await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
-  await expect(page.locator("li[data-project]")).toHaveCount(0);
+  await expect(page.locator('main li[data-kind="project"]')).toHaveCount(0);
   await page.locator('#sidebar input[type="search"]').fill("ember");
   const rows = page.locator('#sidebar li[data-kind="orchestrator"]');
   await expect(rows).toHaveCount(1);

@@ -1,87 +1,80 @@
-// The Projects page (0090): every host's orchestrators and Projects as cards, pinned ones
-// first, with a search, a sort, and New orchestrator or Project.
-import {
-  ArrowDownUp,
-  Check,
-  Ellipsis,
-  MessageSquare,
-  MessagesSquare,
-  Paperclip,
-  Pin,
-  PinOff,
-  Plus,
-  ScrollText,
-  Search,
-  X,
-} from "lucide-react";
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-  type Ref,
-  type RefObject,
-} from "react";
+// The Projects page (0090, 0093): every host's Projects as cards, the row card the sidebar draws,
+// with a search, a filter, a sort, and New project.
+import { MessagesSquare } from "lucide-react";
+import { useId, useRef, useState, type CSSProperties, type Ref, type RefObject } from "react";
 
 import type { ChosenIcon, Repo } from "../protocol/generated/protocol";
 import type { FavoriteAction } from "./Favorites";
+import { icons } from "./icons";
 import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { iconLook } from "./projectIcons";
-import { sortProjects, type ProjectEntry, type ProjectSort } from "./projectList";
+import {
+  filterProjects,
+  sortProjects,
+  type ProjectEntry,
+  type ProjectFilter,
+  type ProjectSort,
+} from "./projectList";
+import { RowCard, rowTool } from "./RowCard";
+import { age, RowPlace } from "./Sidebar";
 import { stored } from "./stored";
-import { AttentionBadge } from "./AttentionMark";
-import { toolButton } from "./PullRequestsPage";
-import { age } from "./Sidebar";
-import { IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
+import {
+  Button,
+  buttonClass,
+  EmptyState,
+  Menu,
+  menuItem,
+  openOnContextMenu,
+  searchField,
+  Segmented,
+} from "./ui";
 
 const sorts: { value: ProjectSort; label: string }[] = [
-  { value: "activity", label: "Recent" },
+  { value: "activity", label: "Recent activity" },
   { value: "name", label: "Name" },
   { value: "created", label: "Created" },
+  { value: "threads", label: "Most threads" },
 ];
+
+const filters: { value: ProjectFilter; name: string }[] = [
+  { value: "all", name: "All" },
+  { value: "pinned", name: "Pinned" },
+  { value: "files", name: "With files" },
+  { value: "instructions", name: "With instructions" },
+];
+
+/** What a filter that keeps nothing says, with no search typed. */
+const filteredOut: Record<Exclude<ProjectFilter, "all">, string> = {
+  pinned: "No pinned projects. Pin one from its card.",
+  files: "No projects with files.",
+  instructions: "No projects with instructions.",
+};
 
 const projectSort = stored<ProjectSort>("parallax.projectSort", "activity", (raw, fallback) =>
   sorts.some((s) => s.value === raw) ? (raw as ProjectSort) : fallback,
 );
 
-/**
- * A Project's color, as a CSS value: an uploaded image's own (`imageTint`), its icon's, else gray.
- */
-function tint(entry: Pick<ProjectEntry, "icon">, imageTint?: string) {
-  if (entry.icon?.image) return imageTint ?? "var(--faint-foreground)";
+/** A Project's color, as a CSS value: its icon's, the accent for an icon with none, else gray. */
+function tint(entry: Pick<ProjectEntry, "icon">) {
   if (entry.icon?.color) return `var(--project-${entry.icon.color})`;
   return entry.icon ? "var(--accent)" : "var(--project-gray)";
 }
 
 /**
- * A Project's icon on a tile tinted with its color: its uploaded image, its glyph, or a chat
- * bubble when it has none.
+ * A Project's icon: its uploaded image, its glyph, or two speech bubbles when it has none. `mark`
+ * draws only its glyph, large and in its color, as a Project's header shows it; `lg` draws it on a
+ * tile tinted with its color, as Create Project does.
  */
 export function ProjectTile({
   entry,
-  size = "md",
+  size = "lg",
 }: {
   entry: Pick<ProjectEntry, "icon">;
-  /**
-   * `glyph` draws only its glyph, the size of an icon beside text, with its color as `--tint`
-   * for the row to show when it chooses. `mark` draws only its glyph, large and in its color, as a
-   * Project's header shows it.
-   */
-  size?: "glyph" | "mark" | "sm" | "md" | "lg";
+  size?: "mark" | "lg";
 }) {
-  const box = {
-    glyph: "size-4 rounded-sm",
-    mark: "size-7 rounded-md",
-    sm: "size-5 rounded-sm",
-    md: "size-10 rounded-lg",
-    lg: "size-12 rounded-xl",
-  }[size];
-  const glyph = { glyph: "size-4", mark: "size-7", sm: "size-3.5", md: "size-5", lg: "size-6" }[
-    size
-  ];
+  const box = size === "mark" ? "size-7 rounded-md" : "size-12 rounded-xl";
+  const glyph = size === "mark" ? "size-7" : "size-6";
   if (entry.icon?.image)
     return (
       <img
@@ -95,14 +88,6 @@ export function ProjectTile({
   const color = tint(entry);
   if (size === "mark")
     return <Glyph aria-hidden style={{ color }} className={`${glyph} shrink-0`} />;
-  if (size === "glyph")
-    return (
-      <Glyph
-        aria-hidden
-        style={{ "--tint": color } as CSSProperties}
-        className={`${glyph} shrink-0`}
-      />
-    );
   return (
     <span
       aria-hidden
@@ -114,57 +99,10 @@ export function ProjectTile({
   );
 }
 
-// Each uploaded icon's color, by its data URL, read once.
-const imageTints = new Map<string, string>();
-
 /**
- * An uploaded icon's color for its card: the average of a 16px copy, each pixel weighted by how
- * vivid it is, so a logo's color wins over its white or black. Undefined until it's read, or for
- * no image.
+ * The Projects page: a search, a filter (All, Pinned, With files, With instructions), a sort kept on
+ * this computer, and New project over the Projects as cards in a grid.
  */
-function useImageTint(icon?: ChosenIcon): string | undefined {
-  const url = icon?.image ? imageUrl(icon.image) : undefined;
-  const [read, setRead] = useState<{ url: string; color: string }>();
-  useEffect(() => {
-    if (!url || imageTints.has(url)) return;
-    let live = true;
-    const image = new Image();
-    image.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = canvas.height = 16;
-      const context = canvas.getContext("2d", { willReadFrequently: true });
-      if (!context) return;
-      context.drawImage(image, 0, 0, 16, 16);
-      const pixels = context.getImageData(0, 0, 16, 16).data;
-      let [r, g, b, total] = [0, 0, 0, 0];
-      for (let i = 0; i < pixels.length; i += 4) {
-        const [pr, pg, pb, pa] = [pixels[i]!, pixels[i + 1]!, pixels[i + 2]!, pixels[i + 3]!];
-        const weight = ((Math.max(pr, pg, pb) - Math.min(pr, pg, pb)) / 255 + 0.05) * (pa / 255);
-        r += pr * weight;
-        g += pg * weight;
-        b += pb * weight;
-        total += weight;
-      }
-      if (!total) return;
-      const color = `rgb(${Math.round(r / total)} ${Math.round(g / total)} ${Math.round(b / total)})`;
-      imageTints.set(url, color);
-      if (live) setRead({ url, color });
-    };
-    image.src = url;
-    return () => {
-      live = false;
-    };
-  }, [url]);
-  return url ? (imageTints.get(url) ?? (read?.url === url ? read.color : undefined)) : undefined;
-}
-
-/** A card's color, washing down from the top. */
-const wash =
-  "linear-gradient(180deg, color-mix(in srgb, var(--tint) 9%, transparent), transparent 70%)";
-/** A card's hover light: its color from the top left corner, fading out across it. */
-const glow =
-  "radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--tint) 16%, transparent), transparent 70%)";
-
 export function ProjectsPage({
   entries,
   pins,
@@ -178,112 +116,126 @@ export function ProjectsPage({
   pins: string[];
   onOpen: (entry: ProjectEntry) => void;
   onTogglePin: (key: string) => void;
-  /** A project's menu: Rename, Change icon, Delete, and what else its plxd allows. */
+  /** A Project's menu: Rename, Change icon, Delete, and what else its plxd allows. */
   actionsFor: (entry: ProjectEntry) => FavoriteAction[];
   /** Opens Create Project, or undefined where no host makes Projects. */
   onNewProject?: () => void;
 }) {
   const sort = projectSort.use();
+  const [filter, setFilter] = useState<ProjectFilter>("all");
   const [query, setQuery] = useState("");
   const sortMenu = useId();
-  const words = query.trim().toLowerCase();
-  const shown = sortProjects(
-    entries.filter((e) => !words || e.name.toLowerCase().includes(words)),
-    sort,
-  );
-  const pinned = pins.flatMap((key) => shown.filter((e) => e.key === key));
-  const others = shown.filter((e) => !pins.includes(e.key));
-  const card = (e: ProjectEntry) => (
-    <ProjectCard
-      key={e.key}
-      entry={e}
-      pinned={pins.includes(e.key)}
-      onOpen={() => onOpen(e)}
-      onTogglePin={() => onTogglePin(e.key)}
-      actionsFor={() => actionsFor(e)}
-    />
-  );
+  const shown = sortProjects(filterProjects(entries, filter, pins, query), sort);
+  const typed = query.trim();
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
-        <header className="flex items-center gap-2">
+        <header className="flex items-center gap-3">
           <h1 className="mr-auto text-heading font-semibold">Projects</h1>
           {onNewProject && (
-            <button type="button" onClick={onNewProject} className={toolButton}>
-              <Plus aria-hidden />
+            <Button variant="primary" onClick={onNewProject}>
+              <icons.add aria-hidden />
               New project
-            </button>
+            </Button>
           )}
         </header>
 
-        {entries.length > 0 && (
-          <div className="mt-5 flex items-center gap-2">
-            <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-surface px-3 focus-within:outline-2 focus-within:outline-ring">
-              <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-              <input
-                type="search"
-                aria-label="Search projects"
-                placeholder="Search projects"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-                className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
-              />
-            </label>
-            <button
-              type="button"
-              popoverTarget={sortMenu}
-              aria-haspopup="menu"
-              className={toolButton}
-            >
-              <ArrowDownUp aria-hidden />
-              {sorts.find((s) => s.value === sort)?.label}
-            </button>
-            <Menu
-              id={sortMenu}
-              label="Sort by"
-              align="end"
-              focus='[role="menuitemradio"]'
-              className="w-40 p-1"
-            >
-              {sorts.map((s) => (
-                <button
-                  key={s.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={s.value === sort}
-                  popoverTarget={sortMenu}
-                  popoverTargetAction="hide"
-                  onClick={() => projectSort.set(s.value)}
-                  className={menuItem}
-                >
-                  <span className="flex-1">{s.label}</span>
-                  {s.value === sort && <Check aria-hidden className="text-accent" />}
-                </button>
-              ))}
-            </Menu>
-          </div>
-        )}
-
         {entries.length === 0 ? (
-          <div className="mt-24 flex flex-col items-center text-center">
-            <ProjectTile entry={{}} size="lg" />
-            <h2 className="mt-5 text-reading font-semibold">No projects yet</h2>
-            <p className="mt-1 max-w-sm text-body text-muted-foreground">
-              A Project keeps threads together with the instructions and files they share.
-            </p>
-          </div>
-        ) : shown.length === 0 ? (
-          <p className="mt-16 text-center text-body text-muted-foreground">
-            No projects match “{query.trim()}”.
-          </p>
+          <EmptyState
+            className="mt-16"
+            icon={<icons.projects aria-hidden />}
+            title="No projects yet"
+            body="A Project keeps threads together with the instructions and files they share."
+          />
         ) : (
           <>
-            {pinned.length > 0 && <Section title="Pinned">{pinned.map(card)}</Section>}
-            {others.length > 0 && (
-              <Section title={pinned.length > 0 ? "Other projects" : undefined}>
-                {others.map(card)}
-              </Section>
+            <div className="mt-5 flex flex-wrap items-center gap-2">
+              <label className={`min-w-48 flex-1 ${searchField}`}>
+                <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+                <input
+                  type="search"
+                  aria-label="Search projects"
+                  placeholder="Search projects"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+                  className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
+                />
+              </label>
+              <Segmented label="Show" options={filters} value={filter} onChange={setFilter} />
+              <button
+                type="button"
+                popoverTarget={sortMenu}
+                aria-haspopup="menu"
+                title="Sort by"
+                className={buttonClass("outline")}
+              >
+                <icons.sort aria-hidden />
+                {sorts.find((s) => s.value === sort)?.label}
+                <icons.expand aria-hidden className="text-faint-foreground" />
+              </button>
+              <Menu
+                id={sortMenu}
+                label="Sort by"
+                align="end"
+                focus='[role="menuitemradio"]'
+                className="w-44 p-1"
+              >
+                {sorts.map((s) => (
+                  <button
+                    key={s.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={s.value === sort}
+                    popoverTarget={sortMenu}
+                    popoverTargetAction="hide"
+                    onClick={() => projectSort.set(s.value)}
+                    className={menuItem}
+                  >
+                    <span className="flex-1">{s.label}</span>
+                    {s.value === sort && <icons.done aria-hidden className="text-accent" />}
+                  </button>
+                ))}
+              </Menu>
+            </div>
+
+            {shown.length === 0 ? (
+              <EmptyState
+                className="mt-12"
+                icon={<icons.search aria-hidden />}
+                title="No matching projects"
+                body={
+                  typed || filter === "all" ? `Nothing matches “${typed}”.` : filteredOut[filter]
+                }
+                action={
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setQuery("");
+                      setFilter("all");
+                    }}
+                  >
+                    Show all projects
+                  </Button>
+                }
+              />
+            ) : (
+              <ul
+                aria-label="Projects"
+                className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-2"
+              >
+                {shown.map((e) => (
+                  <ProjectCard
+                    key={e.key}
+                    entry={e}
+                    pinned={pins.includes(e.key)}
+                    framed
+                    onOpen={() => onOpen(e)}
+                    onTogglePin={() => onTogglePin(e.key)}
+                    actionsFor={() => actionsFor(e)}
+                  />
+                ))}
+              </ul>
             )}
           </>
         )}
@@ -292,117 +244,113 @@ export function ProjectsPage({
   );
 }
 
-function Section({ title, children }: { title?: string; children: ReactNode }) {
-  return (
-    <section aria-label={title ?? "Projects"} className="mt-8">
-      {title && <h2 className="mb-3 text-reading font-medium">{title}</h2>}
-      <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">{children}</ul>
-    </section>
-  );
-}
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
- * A project's card: its tile and its status or age, its name, what its latest thread is, then its
- * branch or a Project's files and instructions, and how many threads it has. It's washed in its own
- * color, which lights up from the corner on hover, and Pin and its menu show then.
+ * A Project's card (0093), the row card a thread's is: its icon and "Project", then its name. It
+ * opens the Project's page. A pinned one keeps its pin in its top-right, which unpins it; hovering
+ * shows Pin, for one that isn't, and its menu, which a right-click opens too. Traditional's Pinned
+ * draws it `dense`, with nothing more, the size of a pinned thread's card; the Projects page draws
+ * it `framed`, with its age at its first line's end and its threads, files, and instructions under
+ * its name.
  */
-function ProjectCard({
+export function ProjectCard({
   entry,
   pinned,
+  selected = false,
+  dense = false,
+  framed = false,
   onOpen,
   onTogglePin,
   actionsFor,
 }: {
   entry: ProjectEntry;
   pinned: boolean;
+  /** Its page is open. */
+  selected?: boolean;
+  dense?: boolean;
+  framed?: boolean;
   onOpen: () => void;
   onTogglePin: () => void;
   actionsFor: () => FavoriteAction[];
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
-  const imageTint = useImageTint(entry.icon);
-  const status = entry.attention === "settled" ? undefined : entry.attention;
-  const n = entry.threads;
+  const repo = entry.view.state.repos.find((r) => r.id === entry.id);
   return (
-    <li
-      data-project={entry.key}
-      onContextMenu={(e) => openOnContextMenu(e, trigger.current)}
-      style={{ "--tint": tint(entry, imageTint) } as CSSProperties}
-      className="group/card relative"
-    >
-      <button
-        type="button"
-        onClick={onOpen}
-        style={{ backgroundImage: wash }}
-        className="relative flex h-full w-full flex-col overflow-hidden rounded-xl bg-surface p-4 text-left ring-1 ring-border/60 transition-[box-shadow,translate] duration-200 hover:-translate-y-px hover:shadow-composer hover:ring-[color-mix(in_srgb,var(--tint)_40%,transparent)] motion-reduce:hover:translate-y-0"
-      >
-        <span
-          aria-hidden
-          style={{ background: glow }}
-          className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover/card:opacity-100"
-        />
-        <span className="relative flex items-start justify-between gap-2">
-          <ProjectTile entry={entry} size="md" />
-          <span className="pt-1 text-meta text-faint-foreground transition-opacity group-focus-within/card:opacity-0 group-hover/card:opacity-0">
-            {status ? (
-              <AttentionBadge attention={status} count={entry.working} />
-            ) : (
-              age(entry.activeAt)
+    <RowCard
+      rowKey={entry.key}
+      kind="project"
+      dense={dense}
+      framed={framed}
+      place={<RowPlace repo={repo} label="Project" />}
+      status={framed && age(entry.activeAt)}
+      title={entry.name}
+      selected={selected}
+      main={{ onClick: onOpen, onContextMenu: (e) => openOnContextMenu(e, trigger.current) }}
+      details={
+        framed && (
+          <span className="flex w-full items-center gap-3 text-meta text-faint-foreground [&_svg]:size-3.5 [&_svg]:shrink-0">
+            <span className="flex items-center gap-1">
+              <icons.thread aria-hidden />
+              {plural(entry.threads, "thread")}
+            </span>
+            {entry.files > 0 && (
+              <span className="flex items-center gap-1">
+                <icons.files aria-hidden />
+                {plural(entry.files, "file")}
+              </span>
+            )}
+            {entry.instructions && (
+              <span className="flex items-center gap-1">
+                <icons.instructions aria-hidden />
+                Instructions
+              </span>
             )}
           </span>
-        </span>
-        <span className="relative mt-4 min-w-0">
-          <span data-title className="block truncate text-reading font-semibold tracking-tight">
-            {entry.name}
-          </span>
-          <span className="mt-0.5 block truncate text-body text-muted-foreground">
-            {entry.latest ?? "No threads yet"}
-          </span>
-        </span>
-        <span className="relative mt-4 flex items-center gap-3 border-t border-border/60 pt-3 text-meta text-faint-foreground [&_svg]:size-3.5 [&_svg]:shrink-0">
-          <span className="flex items-center gap-1.5">
-            <Paperclip aria-hidden />
-            {entry.files === 0
-              ? "No files"
-              : `${entry.files} ${entry.files === 1 ? "file" : "files"}`}
-          </span>
-          {entry.instructions && (
-            <span className="flex items-center gap-1.5">
-              <ScrollText aria-hidden />
-              Instructions
-            </span>
+        )
+      }
+      actions={
+        <>
+          {!pinned && (
+            <button
+              type="button"
+              aria-label={`Pin ${entry.name}`}
+              title="Pin"
+              onClick={onTogglePin}
+              className={rowTool}
+            >
+              <icons.pin aria-hidden className="size-3.5" />
+            </button>
           )}
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            <MessageSquare aria-hidden />
-            {n} {n === 1 ? "thread" : "threads"}
-          </span>
-        </span>
-      </button>
-      <div className="absolute top-3.5 right-3 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 has-[[aria-expanded=true]]:opacity-100">
-        <IconButton
-          label={pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
-          onClick={onTogglePin}
-        >
-          {pinned ? <PinOff /> : <Pin />}
-        </IconButton>
-        <ProjectMenu
-          entry={entry}
-          pinned={pinned}
-          onTogglePin={onTogglePin}
-          actionsFor={actionsFor}
-          trigger={trigger}
-          className={cardTool}
-        />
-      </div>
-    </li>
+          <ProjectMenu
+            entry={entry}
+            pinned={pinned}
+            onTogglePin={onTogglePin}
+            actionsFor={actionsFor}
+            trigger={trigger}
+            className={rowTool}
+          />
+        </>
+      }
+      trailing={
+        pinned && (
+          <button
+            type="button"
+            aria-label={`Unpin ${entry.name}`}
+            title="Unpin"
+            onClick={onTogglePin}
+            className={rowTool}
+          >
+            <icons.pin aria-hidden className="size-3.5" />
+          </button>
+        )
+      }
+    />
   );
 }
 
-const cardTool =
-  "grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground";
-
 /**
- * A project's actions button and its menu: Pin or Unpin, then `actionsFor`'s, read as it opens.
+ * A Project's actions button and its menu: Pin or Unpin, then `actionsFor`'s, read as it opens.
  * `trigger` lets a right-click elsewhere open it (openOnContextMenu).
  */
 export function ProjectMenu({
@@ -434,7 +382,7 @@ export function ProjectMenu({
         onClick={() => setActions(actionsFor())}
         className={className}
       >
-        <Ellipsis className="size-4" />
+        <icons.more className="size-4" />
       </button>
       <Menu id={menu} label={`${entry.name} actions`} align="end" className="w-52 p-1">
         <button
@@ -445,7 +393,7 @@ export function ProjectMenu({
           onClick={onTogglePin}
           className={menuItem}
         >
-          {pinned ? <PinOff aria-hidden /> : <Pin aria-hidden />}
+          {pinned ? <icons.unpin aria-hidden /> : <icons.pin aria-hidden />}
           {pinned ? "Unpin" : "Pin"}
         </button>
         {actions.map((a) => (
@@ -523,7 +471,7 @@ export function NewChatProject({
             onClick={(e) => e.currentTarget.closest("dialog")?.close()}
             className="-mr-1.5 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
           >
-            <X className="size-4" />
+            <icons.close className="size-4" />
           </button>
         </div>
         <p className="px-5 pt-1 text-body text-muted-foreground">

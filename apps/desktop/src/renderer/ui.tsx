@@ -151,6 +151,10 @@ export function SetUpGithub({ onClick }: { onClick: () => void }) {
   );
 }
 
+/** A search box: a label around a search icon and its input. Callers add the width. */
+export const searchField =
+  "flex h-8 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring";
+
 /** A segmented control's option: a label around a visually hidden radio. */
 export const segment =
   "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-body text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";

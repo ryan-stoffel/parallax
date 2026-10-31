@@ -1,5 +1,5 @@
-// The sidebar's head (0090): New thread, New project, and Search as rows, then the
-// pages Settings shows there, More, and the projects pinned under them.
+// The Traditional sidebar's head (0090, 0094): New thread, New project, and Search as rows, then
+// the pages Settings shows there and More. Its Pinned section, which folds, sits atop the list.
 import {
   ChartNoAxesColumn,
   ChevronDown,
@@ -9,27 +9,19 @@ import {
   SquarePen,
   type LucideIcon,
 } from "lucide-react";
-import { useId, useRef, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
+import { icons } from "./icons";
 import { useShortcutLabel } from "./keybindings";
-import type { ProjectEntry } from "./projectList";
-import type { FavoriteAction } from "./Favorites";
-import { ProjectMenu, ProjectTile } from "./ProjectsPage";
-import { navDefaults, sidebarNav, togglePinnedProject, type NavRow } from "./sidebarPrefs";
+import { navDefaults, sidebarNav, type NavRow } from "./sidebarPrefs";
+import { Fold } from "./SidebarParts";
 import { stored } from "./stored";
-import { openOnContextMenu } from "./ui";
 
 /** A row in the sidebar's head: its icon and label, and something at its end. */
 const navBase =
   "group/nav flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-body text-foreground/90 hover:bg-hover hover:text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground [&>svg]:transition-colors";
 export const navRow = `${navBase} hover:[&>svg]:text-foreground`;
 const navCurrent = "bg-selected text-foreground [&>svg]:text-foreground";
-/** More's and Pinned's headings, which fold what's under them. */
-const sectionToggle =
-  "flex h-7 items-center gap-1 self-start rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground";
-
-/** A pinned project's row: its glyph gray, or its image grayscale, until hovered, focused, or open. */
-const pinRow = `${navBase} hover:[&>svg]:text-(--tint) focus-visible:[&>svg]:text-(--tint) aria-[current=page]:bg-selected aria-[current=page]:text-foreground aria-[current=page]:[&>svg]:text-(--tint) [&>img]:opacity-70 [&>img]:grayscale [&>img]:transition hover:[&>img]:opacity-100 hover:[&>img]:grayscale-0 focus-visible:[&>img]:grayscale-0 aria-[current=page]:[&>img]:opacity-100 aria-[current=page]:[&>img]:grayscale-0`;
 
 /** The pages Settings › Appearance › Sidebar chooses between, in the order they list. */
 export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
@@ -43,40 +35,28 @@ export const moreShown = stored("parallax.moreShown", false, (raw, fallback) =>
   typeof raw === "boolean" ? raw : fallback,
 );
 
-/** Whether the Pinned list is folded, on this computer. */
-const pinnedFolded = stored("parallax.pinnedFolded", false, (raw, fallback) =>
+/** Whether the Traditional sidebar's Pinned section is folded, on this computer. */
+export const pinnedFolded = stored("parallax.pinnedFolded", false, (raw, fallback) =>
   typeof raw === "boolean" ? raw : fallback,
 );
 
 export function SidebarNav({
   search,
   current,
-  pinned,
-  openKey,
   onNewThread,
   onOpen,
-  onOpenProject,
   onAdd,
-  pinActions,
 }: {
   /** The search box, which reads as a row. */
   search: ReactNode;
   /** The page open in the main pane, which its row shows as selected. */
   current?: NavRow;
-  /** The pinned projects that still exist, in the order pinned. */
-  pinned: ProjectEntry[];
-  /** The open project's key, which its pinned row shows as selected. */
-  openKey?: string;
   onNewThread: () => void;
   onOpen: (row: NavRow) => void;
-  onOpenProject: (entry: ProjectEntry) => void;
-  /** Opens the add palette: a new orchestrator thread, Project, or repository. */
+  /** Opens the add palette: a new Project or repository. */
   onAdd: () => void;
-  /** A pinned project's menu items after Unpin. */
-  pinActions: (entry: ProjectEntry) => FavoriteAction[];
 }) {
   const shown = { ...navDefaults, ...sidebarNav.use() };
-  const folded = pinnedFolded.use();
   const newKeys = useShortcutLabel("newThread");
   const moreList = useId();
   const moreOpen = moreShown.use();
@@ -93,7 +73,6 @@ export function SidebarNav({
       {label}
     </button>
   );
-  const pinnedList = useId();
   const hidden = navChoices.filter((c) => !shown[c.id]);
   return (
     <div className="flex flex-col px-2">
@@ -137,74 +116,37 @@ export function SidebarNav({
         />
         <span aria-hidden className="ml-1.5 h-px flex-1 bg-border" />
       </button>
-      {pinned.length > 0 && (
-        <section aria-label="Pinned" className="mt-3">
-          <button
-            type="button"
-            aria-expanded={!folded}
-            aria-controls={pinnedList}
-            onClick={() => pinnedFolded.set(!folded)}
-            className={sectionToggle}
-          >
-            Pinned
-            <ChevronDown
-              aria-hidden
-              className={`size-3 transition-transform duration-150 ${folded ? "-rotate-90" : ""}`}
-            />
-          </button>
-          {!folded && (
-            <ul id={pinnedList} className="flex flex-col">
-              {pinned.map((p) => (
-                <PinnedRow
-                  key={p.key}
-                  entry={p}
-                  open={p.key === openKey}
-                  onOpen={() => onOpenProject(p)}
-                  actionsFor={() => pinActions(p)}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
     </div>
   );
 }
 
-/** A pinned Project's row: its glyph and name, and its menu on hover. It opens the Project's page. */
-function PinnedRow({
-  entry,
-  open,
-  onOpen,
-  actionsFor,
-}: {
-  entry: ProjectEntry;
-  open: boolean;
-  onOpen: () => void;
-  actionsFor: () => FavoriteAction[];
-}) {
-  const trigger = useRef<HTMLButtonElement>(null);
+/**
+ * The Traditional sidebar's Pinned section (0093, 0094): one heading that folds its cards, the
+ * pinned Projects, orchestrator threads, and threads, as one list.
+ */
+export function PinnedSection({ children }: { children: ReactNode }) {
+  const folded = pinnedFolded.use();
+  const list = useId();
   return (
-    <li onContextMenu={(e) => openOnContextMenu(e, trigger.current)} className="group/pin relative">
+    <section aria-label="Pinned" className="mb-1">
       <button
         type="button"
-        aria-current={open ? "page" : undefined}
-        onClick={onOpen}
-        className={`${pinRow} group-focus-within/pin:pr-8 group-hover/pin:pr-8`}
+        aria-expanded={!folded}
+        aria-controls={list}
+        onClick={() => pinnedFolded.set(!folded)}
+        className="flex h-7 items-center gap-1 rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground"
       >
-        <ProjectTile entry={entry} size="glyph" />
-        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-      </button>
-      <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-focus-within/pin:opacity-100 group-hover/pin:opacity-100 has-[[aria-expanded=true]]:opacity-100">
-        <ProjectMenu
-          entry={entry}
-          pinned
-          onTogglePin={() => togglePinnedProject(entry.key)}
-          actionsFor={actionsFor}
-          trigger={trigger}
-          className="grid size-6 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
+        Pinned
+        <icons.expand
+          aria-hidden
+          className={`size-3 transition-transform ${folded ? "-rotate-90" : ""}`}
         />
-      </div>
-    </li>
+      </button>
+      <Fold open={!folded}>
+        <div id={list} className="flex flex-col gap-1">
+          {children}
+        </div>
+      </Fold>
+    </section>
   );
 }

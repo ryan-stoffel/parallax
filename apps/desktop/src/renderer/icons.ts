@@ -1,4 +1,5 @@
 import {
+  ArrowDownUp,
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
@@ -16,14 +17,17 @@ import {
   GitBranch,
   GitPullRequest,
   Info,
+  LayoutGrid,
   LoaderCircle,
   MessageCircleQuestion,
   MessagesSquare,
+  Paperclip,
   Pencil,
   Pin,
   PinOff,
   Plus,
   RefreshCw,
+  ScrollText,
   Search,
   Server,
   Settings,
@@ -83,4 +87,12 @@ export const icons = {
   folder: Folder,
   host: Server,
   agent: Bot,
+  /** Projects (0093): a folder of threads with shared files and instructions. */
+  projects: LayoutGrid,
+  /** Files attached or given, as a Project gives its threads. */
+  files: Paperclip,
+  /** Instructions a Project gives its threads. */
+  instructions: ScrollText,
+  /** The order a list sorts in. */
+  sort: ArrowDownUp,
 } as const satisfies Record<string, LucideIcon>;
