@@ -65,6 +65,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type CSSProperties,
   type ComponentType,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -241,13 +242,18 @@ export function Sidebar({
   width = 288,
   onResize,
 }: SidebarProps) {
+  // The layout releases its sidebar width on close; keep it while the exit transition runs.
+  const lastWidth = useRef(width);
+  useLayoutEffect(() => {
+    if (open) lastWidth.current = width;
+  }, [open, width]);
   return (
     <nav
       id="sidebar"
       aria-label="Sidebar"
       hidden={!open}
-      style={{ width }}
-      className="night-sky-host relative flex min-w-0 shrink-0 flex-col border-r border-border bg-pane-sidebar"
+      style={{ "--sidebar-width": `${open ? width : lastWidth.current}px` } as CSSProperties}
+      className="night-sky-host relative flex min-w-0 shrink-0 flex-col bg-pane-sidebar"
     >
       <NightSky />
       {onResize && <PanelResize side="left" width={width} onResize={onResize} />}

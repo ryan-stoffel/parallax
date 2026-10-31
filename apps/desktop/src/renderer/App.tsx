@@ -1460,565 +1460,586 @@ export function App() {
         />
       </Sidebar>
 
-      {/* An expanded side panel takes the main pane's place. */}
-      <OpenDocumentContext value={openDoc}>
-        <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
-          {mainPage === "projects" ? (
-            <>
-              {/* The page's own heading names it, so the bar doesn't. */}
-              <TopBar className={topBarInset}>{showSidebar}</TopBar>
-              <ProjectsPage
-                entries={projectEntries(listed)}
-                pins={pins}
-                onOpen={(entry) => {
-                  setMainPage(undefined);
-                  openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
-                }}
-                onTogglePin={togglePinnedProject}
-                actionsFor={orchestratorActions}
-                onNewProject={newProject}
-              />
-            </>
-          ) : mainPage === "usage" ? (
-            <>
-              <TopBar className={topBarInset}>
-                {showSidebar}
-                <Breadcrumb items={[{ label: "Usage" }]} />
-              </TopBar>
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
-                  <UsagePage hosts={hosts} />
+      <div
+        className="workspace-shell relative flex min-w-0 flex-1 overflow-clip"
+        data-sidebar-open={sidebarOpen}
+      >
+        {/* An expanded side panel takes the main pane's place. */}
+        <OpenDocumentContext value={openDoc}>
+          <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
+            {mainPage === "projects" ? (
+              <>
+                {/* The page's own heading names it, so the bar doesn't. */}
+                <TopBar className={topBarInset}>{showSidebar}</TopBar>
+                <ProjectsPage
+                  entries={projectEntries(listed)}
+                  pins={pins}
+                  onOpen={(entry) => {
+                    setMainPage(undefined);
+                    openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
+                  }}
+                  onTogglePin={togglePinnedProject}
+                  actionsFor={orchestratorActions}
+                  onNewProject={newProject}
+                />
+              </>
+            ) : mainPage === "usage" ? (
+              <>
+                <TopBar className={topBarInset}>
+                  {showSidebar}
+                  <Breadcrumb items={[{ label: "Usage" }]} />
+                </TopBar>
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
+                    <UsagePage hosts={hosts} />
+                  </div>
                 </div>
-              </div>
-            </>
-          ) : mainPage === "pullRequests" ? (
-            <>
-              <TopBar className={topBarInset}>
-                {showSidebar}
-                <Breadcrumb items={[{ label: "Pull Requests" }]} />
-              </TopBar>
-              <PullRequestsPage
-                entries={prEntries}
-                onOpenThread={(e) => {
-                  setMainPage(undefined);
-                  openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
-                }}
-              />
-            </>
-          ) : (
-            <>
-              <TopBar className={`@container ${topBarInset}`}>
-                {showSidebar}
-                <div className="-ml-1 flex shrink-0 items-center">
-                  <IconButton
-                    label="Back"
-                    command="back"
-                    disabled={stepTo(-1) === undefined}
-                    onClick={() => step(-1)}
-                    className={stepButton}
-                  >
-                    <ChevronLeft />
-                  </IconButton>
-                  <IconButton
-                    label="Forward"
-                    command="forward"
-                    disabled={stepTo(1) === undefined}
-                    onClick={() => step(1)}
-                    className={stepButton}
-                  >
-                    <ChevronRight />
-                  </IconButton>
-                </div>
-                <Breadcrumb items={crumbs} />
-                <div className="ml-auto flex shrink-0 items-center gap-2">
-                  {!group.project && !tiled && (
-                    <ThreadDetailsButton
-                      open={details.mode !== "hidden"}
-                      onToggle={() => details.toggle()}
-                    />
-                  )}
-                  <IconButton
-                    label={pane === "browser" ? "Hide browser" : "Browser"}
-                    command="browser"
-                    aria-pressed={pane === "browser"}
-                    onClick={toggleBrowser}
-                  >
-                    <Globe />
-                  </IconButton>
-                  {folder && (
+              </>
+            ) : mainPage === "pullRequests" ? (
+              <>
+                <TopBar className={topBarInset}>
+                  {showSidebar}
+                  <Breadcrumb items={[{ label: "Pull Requests" }]} />
+                </TopBar>
+                <PullRequestsPage
+                  entries={prEntries}
+                  onOpenThread={(e) => {
+                    setMainPage(undefined);
+                    openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
+                  }}
+                />
+              </>
+            ) : (
+              <>
+                <TopBar className={`@container ${topBarInset}`}>
+                  {showSidebar}
+                  <div className="-ml-1 flex shrink-0 items-center">
                     <IconButton
-                      label={drawerOpen ? "Hide terminal" : "Show terminal"}
-                      command="terminal"
-                      aria-pressed={drawerOpen}
-                      aria-controls="terminal-drawer"
-                      onClick={toggleDrawer}
+                      label="Back"
+                      command="back"
+                      disabled={stepTo(-1) === undefined}
+                      onClick={() => step(-1)}
+                      className={stepButton}
                     >
-                      <PanelBottom />
+                      <ChevronLeft />
                     </IconButton>
-                  )}
-                  {/* Shown only while the panel's views are hidden; their top bar has it otherwise. */}
-                  {!panelOpen && (
                     <IconButton
-                      label="Show side panel"
-                      command="panel"
-                      aria-expanded={false}
-                      aria-controls="side-panel"
-                      onClick={() => setPanelOpen(true)}
+                      label="Forward"
+                      command="forward"
+                      disabled={stepTo(1) === undefined}
+                      onClick={() => step(1)}
+                      className={stepButton}
                     >
-                      <PanelRight />
+                      <ChevronRight />
                     </IconButton>
-                  )}
-                </div>
-              </TopBar>
-              <div ref={details.ref} className="relative flex min-h-0 flex-1">
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                  {selection.kind === "thread" ? (
-                    <div className="relative flex min-h-0 flex-1">
-                      <SplitTiles
-                        tiled={tiled}
-                        focused={panes.indexOf(selection.threadId)}
-                        ratios={tiled ? split.ratios : []}
-                        onResize={(ratios) => split && setSplit({ ...split, ratios })}
-                        maximized={tiled && !!split.maximized}
-                        onMaximize={(maximized) => split && setSplit({ ...split, maximized })}
-                        onFocus={(index) => openThreadId(panes[index]!)}
-                        onClose={(index) => closePane(panes[index]!)}
-                        details={
-                          tiled && !group.project
-                            ? {
-                                node: threadDetails(
-                                  details.mode === "hidden" ? "hidden" : "floating",
-                                ),
-                                open: (index) => details.isOpen(detailsKeyOf(panes[index]!)),
-                                onToggle: toggleTileDetails,
-                              }
-                            : undefined
-                        }
-                        // A sidebar thread dragged over the open thread, not over a composer,
-                        // which takes it to attach (PLX-378).
-                        drop={{
-                          accepts: (e) =>
-                            !e.defaultPrevented && e.dataTransfer.types.includes(threadDragType),
-                          onDrop: (at, e) => {
-                            const thread = draggedThread(e.dataTransfer);
-                            // A split's threads are one computer's.
-                            if (thread?.hostId === host.id) openBeside(thread.runId, at);
-                          },
-                        }}
-                        items={panes.map((threadId, side) => {
-                          const focused = threadId === selection.threadId;
-                          const paneThread = threads.state.threads.find((t) => t.id === threadId);
-                          const paneParent =
-                            "threadLineage" in threads.capabilities && paneThread
-                              ? lineageOf(threads.state, paneThread)?.parent?.id
-                              : undefined;
-                          const title = threads.state.titles[threadId];
-                          // Keyed, so another run starts from an empty transcript.
-                          return {
-                            key: `${host.id}/${threadId}`,
-                            title: title ?? "Thread",
-                            icon: (
-                              <RepoIcon
-                                repo={threads.state.repos.find((r) => r.id === paneThread?.repo)}
-                              />
-                            ),
-                            node: (
-                              <section
-                                data-pane={tiled ? side : undefined}
-                                data-focused={tiled && focused ? "" : undefined}
-                                aria-label={tiled ? (title ?? "Thread") : undefined}
-                                // Clicking or tabbing into a tile focuses it.
-                                onPointerDownCapture={() => !focused && openThreadId(threadId)}
-                                // A link to a pull request the thread links opens its view, not GitHub,
-                                // unless a modifier key asks for the browser; the setting swaps the two.
-                                onClickCapture={(e) => {
-                                  const href = (e.target as Element)
-                                    .closest?.("a[href]")
-                                    ?.getAttribute("href");
-                                  const pr =
-                                    linksPrs &&
-                                    href &&
-                                    linkedPr(
-                                      href,
-                                      threads.state.runs[threadId]?.pullRequests ?? [],
-                                    );
-                                  const modified = e.metaKey || e.ctrlKey || e.shiftKey;
-                                  const inApp = behaviorPrefs.get().prLinkClick === "parallax";
-                                  if (!pr || modified === inApp) return;
-                                  // Never reaching the link's own handler, which opens the browser.
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  openPr(pr);
-                                }}
-                                // Not focus the window or the app gives with nothing focused before, such as a
-                                // notification's click or an approval card's.
-                                onFocusCapture={(e) =>
-                                  !focused && e.relatedTarget && openThreadId(threadId)
-                                }
-                                className="flex min-h-0 min-w-0 flex-1 flex-col"
-                              >
-                                <AgentChat
-                                  hostId={host.id}
-                                  runId={threadId}
-                                  prompt={threads.state.runs[threadId]?.prompt}
-                                  // The list's status goes stale once the run moves on, so only a start says so.
-                                  going={focused && selection.started}
-                                  quiet={tiled && !focused}
-                                  listed={threads.state.runs[threadId]}
-                                  compose={focused ? compose : undefined}
-                                  onComposed={composed}
-                                  threadLinks={threadLinks}
-                                  subagent={focused ? selection.subagent : undefined}
-                                  onOpenSubagent={openSubagent}
-                                  onSubagents={reportNative}
-                                  onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
-                                  onDevice={(runId, deviceId) =>
-                                    void showAgentDevice(runId, deviceId)
-                                  }
-                                  strip={
-                                    paneParent
-                                      ? {
-                                          key: "parent",
-                                          node: (
-                                            <ChildStrip
-                                              name={threads.state.titles[paneParent] ?? "Thread"}
-                                              onOpenName={() => openThreadId(paneParent)}
-                                              onBack={() => openThreadId(paneParent)}
-                                            />
-                                          ),
-                                        }
-                                      : undefined
-                                  }
-                                  forked={!!paneThread?.forkedFrom}
-                                  // The open thread's, the one App reads; another pane's chips stay neutral.
-                                  pullRequests={threadRun?.id === threadId ? prs : undefined}
-                                  onOpenChanges={(turn, path) => {
-                                    setPanelOpen(true);
-                                    setShowChanges({ runId: threadId, turn, path });
-                                  }}
-                                  onFork={
-                                    "threadFork" in threads.capabilities
-                                      ? (turnId, choice) => forkThread(threadId, turnId, choice)
-                                      : undefined
-                                  }
-                                />
-                              </section>
-                            ),
-                          };
-                        })}
+                  </div>
+                  <Breadcrumb items={crumbs} />
+                  <div className="ml-auto flex shrink-0 items-center gap-2">
+                    {!group.project && !tiled && (
+                      <ThreadDetailsButton
+                        open={details.mode !== "hidden"}
+                        onToggle={() => details.toggle()}
                       />
-                    </div>
-                  ) : selection.kind === "new" ? (
-                    <NewThread
-                      // Each draft is its own screen, so opening another leaves this one as a draft.
-                      key={draft}
-                      draftId={draft}
-                      hostId={host.id}
-                      hosts={hosts}
-                      onHostChange={pickHost}
-                      groups={groups}
-                      groupId={group.id}
-                      onGroupChange={(groupId) => setSelection({ kind: "new", groupId, draft })}
-                      elsewhere={elsewhere}
-                      onPickElsewhere={(hostId, groupId) =>
-                        openOnHost(hostId, { kind: "new", groupId, draft })
-                      }
-                      missing={
-                        new Set(
-                          hosts.filter((h) => lacksRepo(views[h.id], group.name)).map((h) => h.id),
-                        )
-                      }
-                      shared={hosts.some(
-                        (h) =>
-                          h.id !== host.id &&
-                          views[h.id]?.state.repos.some(
-                            (r) => isRepository(r) && r.name === group.name,
-                          ),
-                      )}
-                      local={host.id === localId}
-                      addRepo={threads.addRepo}
-                      start={threads.start}
-                      runOptions={connected && "runOptions" in connection.capabilities}
-                      onStarted={(threadId, background) => {
-                        if (!background) setSelection({ kind: "thread", threadId, started: true });
-                      }}
-                      disabledReason={offline}
-                      threadLinks={threadLinks}
-                      settingsClosed={settingsClosed.count}
-                      header={
-                        projectEntry && (
-                          <ProjectHeader
-                            entry={projectEntry}
-                            onBack={() => openMainPage("projects")}
-                            pinned={pins.includes(projectEntry.key)}
-                            onTogglePin={() => togglePinnedProject(projectEntry.key)}
-                            actionsFor={() => orchestratorActions(projectEntry)}
-                          />
-                        )
-                      }
-                      tray={
-                        projectRepo && (
-                          <RunTargetMenu
-                            hosts={projectHosts}
-                            hostId={host.id}
-                            onHostChange={(id) => {
-                              const there = views[id]?.state.repos.find(
-                                (r) => r.project && r.name === projectRepo.name,
-                              );
-                              if (id !== host.id && there)
-                                openOnHost(id, { kind: "new", groupId: there.id, draft });
-                            }}
-                          />
-                        )
-                      }
-                      aside={
-                        projectRepo &&
-                        "projectContext" in threads.capabilities && (
-                          <ProjectContext hostId={host.id} project={projectRepo} view={threads} />
-                        )
-                      }
-                      below={
-                        projectRepo && (
-                          <ProjectThreads
-                            host={host}
-                            project={projectRepo}
-                            view={threads}
-                            onOpenThread={(threadId) => setSelection({ kind: "thread", threadId })}
-                          />
-                        )
-                      }
-                    />
-                  ) : agentId ? (
-                    <AgentChat
-                      key={`${host.id}/${agentId}`}
-                      hostId={host.id}
-                      runId={agentId}
-                      prompt={agent?.prompt}
-                      // An orchestrator's subagents are kept current.
-                      going={isRunning(agent?.status)}
-                      others={othersAsked(agentId)}
-                      orchestratorMode={orchestrator?.permission}
-                      threadLinks={threadLinks}
-                      strip={
-                        orchestrator && {
-                          key: "parent",
-                          node: (
-                            <ChildStrip
-                              name={orchestrator.name}
-                              icon={
-                                <ProjectIcon
-                                  icon={orchestrator.icon}
-                                  className="size-3.5 shrink-0"
+                    )}
+                    <IconButton
+                      label={pane === "browser" ? "Hide browser" : "Browser"}
+                      command="browser"
+                      aria-pressed={pane === "browser"}
+                      onClick={toggleBrowser}
+                    >
+                      <Globe />
+                    </IconButton>
+                    {folder && (
+                      <IconButton
+                        label={drawerOpen ? "Hide terminal" : "Show terminal"}
+                        command="terminal"
+                        aria-pressed={drawerOpen}
+                        aria-controls="terminal-drawer"
+                        onClick={toggleDrawer}
+                      >
+                        <PanelBottom />
+                      </IconButton>
+                    )}
+                    {/* Shown only while the panel's views are hidden; their top bar has it otherwise. */}
+                    {!panelOpen && (
+                      <IconButton
+                        label="Show side panel"
+                        command="panel"
+                        aria-expanded={false}
+                        aria-controls="side-panel"
+                        onClick={() => setPanelOpen(true)}
+                      >
+                        <PanelRight />
+                      </IconButton>
+                    )}
+                  </div>
+                </TopBar>
+                <div ref={details.ref} className="relative flex min-h-0 flex-1">
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                    {selection.kind === "thread" ? (
+                      <div className="relative flex min-h-0 flex-1">
+                        <SplitTiles
+                          tiled={tiled}
+                          focused={panes.indexOf(selection.threadId)}
+                          ratios={tiled ? split.ratios : []}
+                          onResize={(ratios) => split && setSplit({ ...split, ratios })}
+                          maximized={tiled && !!split.maximized}
+                          onMaximize={(maximized) => split && setSplit({ ...split, maximized })}
+                          onFocus={(index) => openThreadId(panes[index]!)}
+                          onClose={(index) => closePane(panes[index]!)}
+                          details={
+                            tiled && !group.project
+                              ? {
+                                  node: threadDetails(
+                                    details.mode === "hidden" ? "hidden" : "floating",
+                                  ),
+                                  open: (index) => details.isOpen(detailsKeyOf(panes[index]!)),
+                                  onToggle: toggleTileDetails,
+                                }
+                              : undefined
+                          }
+                          // A sidebar thread dragged over the open thread, not over a composer,
+                          // which takes it to attach (PLX-378).
+                          drop={{
+                            accepts: (e) =>
+                              !e.defaultPrevented && e.dataTransfer.types.includes(threadDragType),
+                            onDrop: (at, e) => {
+                              const thread = draggedThread(e.dataTransfer);
+                              // A split's threads are one computer's.
+                              if (thread?.hostId === host.id) openBeside(thread.runId, at);
+                            },
+                          }}
+                          items={panes.map((threadId, side) => {
+                            const focused = threadId === selection.threadId;
+                            const paneThread = threads.state.threads.find((t) => t.id === threadId);
+                            const paneParent =
+                              "threadLineage" in threads.capabilities && paneThread
+                                ? lineageOf(threads.state, paneThread)?.parent?.id
+                                : undefined;
+                            const title = threads.state.titles[threadId];
+                            // Keyed, so another run starts from an empty transcript.
+                            return {
+                              key: `${host.id}/${threadId}`,
+                              title: title ?? "Thread",
+                              icon: (
+                                <RepoIcon
+                                  repo={threads.state.repos.find((r) => r.id === paneThread?.repo)}
                                 />
-                              }
-                              onOpenName={() =>
-                                setSelection({
-                                  kind: "orchestrator",
-                                  orchestratorId: orchestrator.id,
-                                })
-                              }
-                              onBack={() => openAgent()}
-                            />
-                          ),
-                        }
-                      }
-                    />
-                  ) : (
-                    orchestrator && (
-                      <OrchestratorChat
-                        key={`${host.id}/${orchestrator.id}`}
+                              ),
+                              node: (
+                                <section
+                                  data-pane={tiled ? side : undefined}
+                                  data-focused={tiled && focused ? "" : undefined}
+                                  aria-label={tiled ? (title ?? "Thread") : undefined}
+                                  // Clicking or tabbing into a tile focuses it.
+                                  onPointerDownCapture={() => !focused && openThreadId(threadId)}
+                                  // A link to a pull request the thread links opens its view, not GitHub,
+                                  // unless a modifier key asks for the browser; the setting swaps the two.
+                                  onClickCapture={(e) => {
+                                    const href = (e.target as Element)
+                                      .closest?.("a[href]")
+                                      ?.getAttribute("href");
+                                    const pr =
+                                      linksPrs &&
+                                      href &&
+                                      linkedPr(
+                                        href,
+                                        threads.state.runs[threadId]?.pullRequests ?? [],
+                                      );
+                                    const modified = e.metaKey || e.ctrlKey || e.shiftKey;
+                                    const inApp = behaviorPrefs.get().prLinkClick === "parallax";
+                                    if (!pr || modified === inApp) return;
+                                    // Never reaching the link's own handler, which opens the browser.
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    openPr(pr);
+                                  }}
+                                  // Not focus the window or the app gives with nothing focused before, such as a
+                                  // notification's click or an approval card's.
+                                  onFocusCapture={(e) =>
+                                    !focused && e.relatedTarget && openThreadId(threadId)
+                                  }
+                                  className="flex min-h-0 min-w-0 flex-1 flex-col"
+                                >
+                                  <AgentChat
+                                    hostId={host.id}
+                                    runId={threadId}
+                                    prompt={threads.state.runs[threadId]?.prompt}
+                                    // The list's status goes stale once the run moves on, so only a start says so.
+                                    going={focused && selection.started}
+                                    quiet={tiled && !focused}
+                                    listed={threads.state.runs[threadId]}
+                                    compose={focused ? compose : undefined}
+                                    onComposed={composed}
+                                    threadLinks={threadLinks}
+                                    subagent={focused ? selection.subagent : undefined}
+                                    onOpenSubagent={openSubagent}
+                                    onSubagents={reportNative}
+                                    onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
+                                    onDevice={(runId, deviceId) =>
+                                      void showAgentDevice(runId, deviceId)
+                                    }
+                                    strip={
+                                      paneParent
+                                        ? {
+                                            key: "parent",
+                                            node: (
+                                              <ChildStrip
+                                                name={threads.state.titles[paneParent] ?? "Thread"}
+                                                onOpenName={() => openThreadId(paneParent)}
+                                                onBack={() => openThreadId(paneParent)}
+                                              />
+                                            ),
+                                          }
+                                        : undefined
+                                    }
+                                    forked={!!paneThread?.forkedFrom}
+                                    // The open thread's, the one App reads; another pane's chips stay neutral.
+                                    pullRequests={threadRun?.id === threadId ? prs : undefined}
+                                    onOpenChanges={(turn, path) => {
+                                      setPanelOpen(true);
+                                      setShowChanges({ runId: threadId, turn, path });
+                                    }}
+                                    onFork={
+                                      "threadFork" in threads.capabilities
+                                        ? (turnId, choice) => forkThread(threadId, turnId, choice)
+                                        : undefined
+                                    }
+                                  />
+                                </section>
+                              ),
+                            };
+                          })}
+                        />
+                      </div>
+                    ) : selection.kind === "new" ? (
+                      <NewThread
+                        // Each draft is its own screen, so opening another leaves this one as a draft.
+                        key={draft}
+                        draftId={draft}
                         hostId={host.id}
-                        orchestrator={orchestrator}
-                        prompt={orchestrator.run && threads.state.runs[orchestrator.run]?.prompt}
-                        startOrchestrator={threads.startOrchestrator}
-                        updateOrchestrator={threads.updateOrchestrator}
-                        host={host}
-                        repo={threads.state.repos.find((r) => r.path === orchestrator.repoPath)?.id}
-                        others={othersAsked(orchestrator.run)}
-                        agents={agents}
-                        titles={threads.state.titles}
-                        needs={needs}
-                        onOpenRun={(id) => openAgent(id === orchestrator.run ? undefined : id)}
+                        hosts={hosts}
+                        onHostChange={pickHost}
+                        groups={groups}
+                        groupId={group.id}
+                        onGroupChange={(groupId) => setSelection({ kind: "new", groupId, draft })}
+                        elsewhere={elsewhere}
+                        onPickElsewhere={(hostId, groupId) =>
+                          openOnHost(hostId, { kind: "new", groupId, draft })
+                        }
+                        missing={
+                          new Set(
+                            hosts
+                              .filter((h) => lacksRepo(views[h.id], group.name))
+                              .map((h) => h.id),
+                          )
+                        }
+                        shared={hosts.some(
+                          (h) =>
+                            h.id !== host.id &&
+                            views[h.id]?.state.repos.some(
+                              (r) => isRepository(r) && r.name === group.name,
+                            ),
+                        )}
+                        local={host.id === localId}
+                        addRepo={threads.addRepo}
+                        start={threads.start}
+                        runOptions={connected && "runOptions" in connection.capabilities}
+                        onStarted={(threadId, background) => {
+                          if (!background)
+                            setSelection({ kind: "thread", threadId, started: true });
+                        }}
+                        disabledReason={offline}
                         threadLinks={threadLinks}
                         settingsClosed={settingsClosed.count}
+                        header={
+                          projectEntry && (
+                            <ProjectHeader
+                              entry={projectEntry}
+                              onBack={() => openMainPage("projects")}
+                              pinned={pins.includes(projectEntry.key)}
+                              onTogglePin={() => togglePinnedProject(projectEntry.key)}
+                              actionsFor={() => orchestratorActions(projectEntry)}
+                            />
+                          )
+                        }
+                        tray={
+                          projectRepo && (
+                            <RunTargetMenu
+                              hosts={projectHosts}
+                              hostId={host.id}
+                              onHostChange={(id) => {
+                                const there = views[id]?.state.repos.find(
+                                  (r) => r.project && r.name === projectRepo.name,
+                                );
+                                if (id !== host.id && there)
+                                  openOnHost(id, { kind: "new", groupId: there.id, draft });
+                              }}
+                            />
+                          )
+                        }
+                        aside={
+                          projectRepo &&
+                          "projectContext" in threads.capabilities && (
+                            <ProjectContext hostId={host.id} project={projectRepo} view={threads} />
+                          )
+                        }
+                        below={
+                          projectRepo && (
+                            <ProjectThreads
+                              host={host}
+                              project={projectRepo}
+                              view={threads}
+                              onOpenThread={(threadId) =>
+                                setSelection({ kind: "thread", threadId })
+                              }
+                            />
+                          )
+                        }
                       />
-                    )
-                  )}
+                    ) : agentId ? (
+                      <AgentChat
+                        key={`${host.id}/${agentId}`}
+                        hostId={host.id}
+                        runId={agentId}
+                        prompt={agent?.prompt}
+                        // An orchestrator's subagents are kept current.
+                        going={isRunning(agent?.status)}
+                        others={othersAsked(agentId)}
+                        orchestratorMode={orchestrator?.permission}
+                        threadLinks={threadLinks}
+                        strip={
+                          orchestrator && {
+                            key: "parent",
+                            node: (
+                              <ChildStrip
+                                name={orchestrator.name}
+                                icon={
+                                  <ProjectIcon
+                                    icon={orchestrator.icon}
+                                    className="size-3.5 shrink-0"
+                                  />
+                                }
+                                onOpenName={() =>
+                                  setSelection({
+                                    kind: "orchestrator",
+                                    orchestratorId: orchestrator.id,
+                                  })
+                                }
+                                onBack={() => openAgent()}
+                              />
+                            ),
+                          }
+                        }
+                      />
+                    ) : (
+                      orchestrator && (
+                        <OrchestratorChat
+                          key={`${host.id}/${orchestrator.id}`}
+                          hostId={host.id}
+                          orchestrator={orchestrator}
+                          prompt={orchestrator.run && threads.state.runs[orchestrator.run]?.prompt}
+                          startOrchestrator={threads.startOrchestrator}
+                          updateOrchestrator={threads.updateOrchestrator}
+                          host={host}
+                          repo={
+                            threads.state.repos.find((r) => r.path === orchestrator.repoPath)?.id
+                          }
+                          others={othersAsked(orchestrator.run)}
+                          agents={agents}
+                          titles={threads.state.titles}
+                          needs={needs}
+                          onOpenRun={(id) => openAgent(id === orchestrator.run ? undefined : id)}
+                          threadLinks={threadLinks}
+                          settingsClosed={settingsClosed.count}
+                        />
+                      )
+                    )}
+                  </div>
+                  {!tiled && threadDetails(group.project ? "hidden" : details.mode)}
                 </div>
-                {!tiled && threadDetails(group.project ? "hidden" : details.mode)}
-              </div>
-            </>
-          )}
-          {/* Outside the views, so the terminals live on behind the other pages. */}
-          <TerminalDrawer
-            open={drawerOpen}
-            folder={folder}
-            deleted={deleted}
-            onClose={toggleDrawer}
-          />
-        </main>
-      </OpenDocumentContext>
+              </>
+            )}
+            {/* Outside the views, so the terminals live on behind the other pages. */}
+            <TerminalDrawer
+              open={drawerOpen}
+              folder={folder}
+              deleted={deleted}
+              onClose={toggleDrawer}
+            />
+          </main>
+        </OpenDocumentContext>
 
-      <SidePanel
-        scope={panelKey}
-        width={rightWidth}
-        onResize={(width) => resizePanel(1, width)}
-        open={sidePanelOpen}
-        onClose={() => setPanelOpen(false)}
-        expanded={expanded}
-        onExpandedChange={setPanelExpanded}
-        leading={expanded && showSidebar}
-        topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
-        remoteHost={host.id === localId ? undefined : host.name}
-        browse={browse}
-        browsing={pane === "browser"}
-        changes={showChanges}
-        agentTabs={
-          threadRun && agentTabs?.runId === threadRun.id
-            ? { hostId: host.id, backend: threadRun.backend, ...agentTabs }
-            : undefined
-        }
-        pullRequest={showPr}
-        showDevice={showDevice}
-        showOrchestrator={showHome}
-        showFiles={showFiles}
-        device={(shown) => (
-          <DevicePanel hostId={host.id} runId={threadRun?.id} shown={shown} request={showDevice} />
-        )}
-        documents={{
-          runId: filesRunId,
-          open: showDoc,
-          view: (doc) => (
-            <DocumentView key={`${host.id}/${doc.runId}/${doc.path}`} hostId={host.id} doc={doc} />
-          ),
-        }}
-        orchestrator={
-          orchestrator && {
-            waiting: waitingCount(orchestrator, agents, inbox),
-            home: (
-              <OrchestratorHome
-                key={`${host.id}/${orchestrator.id}`}
+        <SidePanel
+          scope={panelKey}
+          width={rightWidth}
+          onResize={(width) => resizePanel(1, width)}
+          open={sidePanelOpen}
+          onClose={() => setPanelOpen(false)}
+          expanded={expanded}
+          onExpandedChange={setPanelExpanded}
+          leading={expanded && showSidebar}
+          topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
+          remoteHost={host.id === localId ? undefined : host.name}
+          browse={browse}
+          browsing={pane === "browser"}
+          changes={showChanges}
+          agentTabs={
+            threadRun && agentTabs?.runId === threadRun.id
+              ? { hostId: host.id, backend: threadRun.backend, ...agentTabs }
+              : undefined
+          }
+          pullRequest={showPr}
+          showDevice={showDevice}
+          showOrchestrator={showHome}
+          showFiles={showFiles}
+          device={(shown) => (
+            <DevicePanel
+              hostId={host.id}
+              runId={threadRun?.id}
+              shown={shown}
+              request={showDevice}
+            />
+          )}
+          documents={{
+            runId: filesRunId,
+            open: showDoc,
+            view: (doc) => (
+              <DocumentView
+                key={`${host.id}/${doc.runId}/${doc.path}`}
                 hostId={host.id}
-                context={context}
-                orchestrator={orchestrator}
-                agents={agents}
-                titles={threads.state.titles}
-                inbox={inbox}
-                answerable={answerable}
-                onOpen={openAgent}
+                doc={doc}
               />
             ),
+          }}
+          orchestrator={
+            orchestrator && {
+              waiting: waitingCount(orchestrator, agents, inbox),
+              home: (
+                <OrchestratorHome
+                  key={`${host.id}/${orchestrator.id}`}
+                  hostId={host.id}
+                  context={context}
+                  orchestrator={orchestrator}
+                  agents={agents}
+                  titles={threads.state.titles}
+                  inbox={inbox}
+                  answerable={answerable}
+                  onOpen={openAgent}
+                />
+              ),
+            }
           }
-        }
-        pullRequests={
-          linksPrs && threadRun
-            ? {
-                urls: prs.urls,
-                get: prs.get,
-                list: <PullRequestList prs={prs} onOpen={openPr} />,
-                view: (url) => (
-                  <PullRequestView
-                    key={`${host.id}/${threadRun.id}`}
-                    url={url}
-                    prs={prs}
-                    onSetUpGithub={setUpGithub}
-                    onBrowse={(page) => {
-                      setPane("browser");
-                      setBrowse({ url: page });
-                    }}
-                    onCompose={(text, send) => {
-                      // The chat is under an expanded panel.
-                      setPanelExpanded(false);
-                      setCompose({ text, send });
-                    }}
-                  />
-                ),
-              }
-            : undefined
-        }
-        agents={
-          orchestrator && (
-            <AgentsPanel
-              // Another orchestrator's start box starts empty, with its own retry id.
-              key={`${host.id}/${orchestrator.id}`}
-              agents={agents}
-              titles={threads.state.titles}
-              openId={agentId}
-              onOpen={openAgent}
-              disabledReason={offline}
+          pullRequests={
+            linksPrs && threadRun
+              ? {
+                  urls: prs.urls,
+                  get: prs.get,
+                  list: <PullRequestList prs={prs} onOpen={openPr} />,
+                  view: (url) => (
+                    <PullRequestView
+                      key={`${host.id}/${threadRun.id}`}
+                      url={url}
+                      prs={prs}
+                      onSetUpGithub={setUpGithub}
+                      onBrowse={(page) => {
+                        setPane("browser");
+                        setBrowse({ url: page });
+                      }}
+                      onCompose={(text, send) => {
+                        // The chat is under an expanded panel.
+                        setPanelExpanded(false);
+                        setCompose({ text, send });
+                      }}
+                    />
+                  ),
+                }
+              : undefined
+          }
+          agents={
+            orchestrator && (
+              <AgentsPanel
+                // Another orchestrator's start box starts empty, with its own retry id.
+                key={`${host.id}/${orchestrator.id}`}
+                agents={agents}
+                titles={threads.state.titles}
+                openId={agentId}
+                onOpen={openAgent}
+                disabledReason={offline}
+              />
+            )
+          }
+          changesView={
+            threadRun && (
+              <ChangesPanel
+                key={`${host.id}/${threadRun.id}`}
+                hostId={host.id}
+                runId={threadRun.id}
+                prompt={threadRun.prompt}
+                backend={threadRun.backend}
+                sessionId={threadRun.sessionId}
+                running={isRunning(threadRun.status)}
+                version={threads.state.checkpoints[threadRun.id]}
+                request={showChanges}
+                onRequestShown={() => setShowChanges(undefined)}
+                unavailable={
+                  offline ??
+                  (connected && "checkpoints" in connection.capabilities
+                    ? undefined
+                    : "Update Parallax on this host to see a thread's changes.")
+                }
+                onCompose={(text) => {
+                  // The chat is under an expanded panel.
+                  setPanelExpanded(false);
+                  setCompose({ text, send: false });
+                }}
+              />
+            )
+          }
+          files={
+            filesRunId && (
+              <FilesPanel
+                key={`${host.id}/${filesRunId}`}
+                hostId={host.id}
+                runId={filesRunId}
+                unavailable={
+                  offline ??
+                  (connected && "files" in connection.capabilities
+                    ? undefined
+                    : "Update Parallax on this host to browse a thread's files.")
+                }
+                editable={connected && "fileEdit" in connection.capabilities}
+                reveal={revealFile?.runId === filesRunId ? revealFile : undefined}
+              />
+            )
+          }
+          knowledge={
+            (orchestrator || memory) && (
+              <KnowledgePanel
+                key={`${host.id}/${orchestrator?.id ?? memoryRepo}`}
+                hostId={host.id}
+                orchestrator={orchestrator?.id}
+                repo={memoryRepo}
+                orchestratorRun={
+                  orchestrator?.run ? agents.runs.find((r) => r.id === orchestrator.run) : undefined
+                }
+                titles={threads.state.titles}
+                memory={!!memory}
+                expanded={panelExpanded}
+              />
+            )
+          }
+          terminal={(shown, empty) => (
+            <TerminalPool
+              prefix="panel"
+              label="Side panel terminal"
+              active={shown ? folder : undefined}
+              deleted={deleted}
+              empty={empty}
             />
-          )
-        }
-        changesView={
-          threadRun && (
-            <ChangesPanel
-              key={`${host.id}/${threadRun.id}`}
-              hostId={host.id}
-              runId={threadRun.id}
-              prompt={threadRun.prompt}
-              backend={threadRun.backend}
-              sessionId={threadRun.sessionId}
-              running={isRunning(threadRun.status)}
-              version={threads.state.checkpoints[threadRun.id]}
-              request={showChanges}
-              onRequestShown={() => setShowChanges(undefined)}
-              unavailable={
-                offline ??
-                (connected && "checkpoints" in connection.capabilities
-                  ? undefined
-                  : "Update Parallax on this host to see a thread's changes.")
-              }
-              onCompose={(text) => {
-                // The chat is under an expanded panel.
-                setPanelExpanded(false);
-                setCompose({ text, send: false });
-              }}
-            />
-          )
-        }
-        files={
-          filesRunId && (
-            <FilesPanel
-              key={`${host.id}/${filesRunId}`}
-              hostId={host.id}
-              runId={filesRunId}
-              unavailable={
-                offline ??
-                (connected && "files" in connection.capabilities
-                  ? undefined
-                  : "Update Parallax on this host to browse a thread's files.")
-              }
-              editable={connected && "fileEdit" in connection.capabilities}
-              reveal={revealFile?.runId === filesRunId ? revealFile : undefined}
-            />
-          )
-        }
-        knowledge={
-          (orchestrator || memory) && (
-            <KnowledgePanel
-              key={`${host.id}/${orchestrator?.id ?? memoryRepo}`}
-              hostId={host.id}
-              orchestrator={orchestrator?.id}
-              repo={memoryRepo}
-              orchestratorRun={
-                orchestrator?.run ? agents.runs.find((r) => r.id === orchestrator.run) : undefined
-              }
-              titles={threads.state.titles}
-              memory={!!memory}
-              expanded={panelExpanded}
-            />
-          )
-        }
-        terminal={(shown, empty) => (
-          <TerminalPool
-            prefix="panel"
-            label="Side panel terminal"
-            active={shown ? folder : undefined}
-            deleted={deleted}
-            empty={empty}
-          />
-        )}
-      />
+          )}
+        />
+      </div>
     </div>
   );
   return <SharedRepoIcons value={repoIcons}>{page}</SharedRepoIcons>;
