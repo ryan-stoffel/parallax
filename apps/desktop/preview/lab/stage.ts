@@ -559,6 +559,8 @@ export class Stage {
 
     this.tickers.add((t) => {
       const m = this.main.s;
+      // The melt narrows as the ends shrink, so the pill settles with no swelling at its ends.
+      for (const end of this.ends) end.k = 6 + 24 * clamp((end.s.hw.value - 4) / 22);
       this.buttons.forEach((b, i) => {
         b.s.x.to(m.x.value + (i ? 1 : -1) * (m.hw.value - 20), springs.snap);
         b.s.y.to(m.y.value, springs.snap);
