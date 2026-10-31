@@ -192,7 +192,7 @@ const gate = (tone: GateTone, title: string, reasons: string[] = [], more: Parti
 });
 
 /**
- * Whether `pr` can merge, from GitHub's merge state and, when read, `pr/status`'s reasons (or
+ * Whether `pr` can merge, from GitHub's merge state and, when read, matching `pr/status` (or
  * PLX-1151's on the pull request). Merge is offered only when GitHub would take it: clean, with
  * hooks, or unstable (a check that isn't required failed). Auto-merge is offered while it waits on
  * checks, reviews, or the base.
@@ -205,15 +205,22 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
       draft: true,
     });
   const extra = more(pr);
-  const reasons = status?.reasons ?? extra.reasons ?? [];
-  const mergeable = status?.mergeable ?? extra.mergeable;
-  if (mergeable === "CONFLICTING" || pr.mergeState === "dirty")
+  const matchingStatus =
+    status?.url === pr.url &&
+    (!status.headSha || !extra.headSha || status.headSha === extra.headSha)
+      ? status
+      : undefined;
+  const reasons = matchingStatus?.reasons ?? extra.reasons ?? [];
+  const mergeable = matchingStatus?.mergeable ?? extra.mergeable;
+  const mergeState =
+    matchingStatus?.mergeState?.replaceAll("_", "").toLowerCase() ?? pr.mergeState?.toLowerCase();
+  if (mergeable === "CONFLICTING" || mergeState === "dirty")
     return gate("blocked", "This branch has conflicts", [
       `Resolve its conflicts with ${pr.baseBranch} to merge.`,
     ]);
   const checks = checkRollup(pr.checks);
-  if (pr.mergeState === "behind") {
-    const by = status?.behindBy ?? extra.behindBy;
+  if (mergeState === "behind") {
+    const by = matchingStatus?.behindBy ?? extra.behindBy;
     const commits = by ? `${by} ${by === 1 ? "commit" : "commits"}` : "Commits";
     return gate(
       "blocked",
@@ -222,9 +229,9 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
       { behind: true, canAutoMerge: true },
     );
   }
-  if (pr.mergeState === undefined)
+  if (mergeState === undefined)
     return gate("pending", "Checking whether it can merge", [], { canAutoMerge: true });
-  if (pr.mergeState === "blocked") {
+  if (mergeState === "blocked") {
     const why = reasons.length
       ? reasons
       : [
@@ -240,9 +247,9 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
           canAutoMerge: true,
         });
   }
-  if (pr.mergeState === "unstable")
+  if (mergeState === "unstable")
     return gate("warning", "Some checks didn't pass", reasons, { canMerge: true });
-  if (pr.mergeState === "clean" || pr.mergeState === "hasHooks")
+  if (mergeState === "clean" || mergeState === "hashooks")
     return reasons.length
       ? gate("warning", "Can merge", reasons, { canMerge: true })
       : gate("ready", "Ready to merge", [], { canMerge: true });

@@ -99,6 +99,56 @@ test("mergeGate offers Merge only when GitHub would take it, and says why not", 
   expect(mergeGate(pr({ state: "merged" }))).toMatchObject({ tone: "merged", canMerge: false });
 });
 
+type Status = NonNullable<Parameters<typeof mergeGate>[1]>;
+
+const statusOf = (more: Partial<Status> = {}): Status => ({
+  url: pr({}).url,
+  state: "OPEN",
+  draft: false,
+  baseBranch: "main",
+  behindBy: 0,
+  mergeable: "MERGEABLE",
+  mergeState: "BLOCKED",
+  failing: [],
+  pending: [],
+  passed: [],
+  unresolvedThreads: [],
+  watching: false,
+  ready: false,
+  reasons: ["Required review missing"],
+  ...more,
+});
+
+test.each([
+  ["BLOCKED", "Merging is blocked"],
+  ["DIRTY", "This branch has conflicts"],
+  ["BEHIND", "This branch is behind main"],
+  ["UNKNOWN", "Checking whether it can merge"],
+])("mergeGate uses matching status %s over a cached clean view", (mergeState, title) => {
+  expect(mergeGate(pr({ mergeState: "clean" }), statusOf({ mergeState }))).toMatchObject({
+    title,
+    canMerge: false,
+  });
+});
+
+test("mergeGate normalizes status states and falls back when status is absent or mismatched", () => {
+  expect(mergeGate(pr({ mergeState: "clean" }), statusOf())).toMatchObject({
+    reasons: ["Required review missing"],
+    canMerge: false,
+  });
+  for (const mergeState of ["CLEAN", "HAS_HOOKS", "UNSTABLE"])
+    expect(
+      mergeGate(pr({ mergeState: "blocked" }), statusOf({ mergeState, reasons: [] })).canMerge,
+    ).toBe(true);
+  const current = Object.assign(pr({ mergeState: "clean" }), { headSha: "new-head" });
+  for (const status of [
+    undefined,
+    statusOf({ url: "https://github.com/me/app/pull/2" }),
+    statusOf({ headSha: "old-head" }),
+  ])
+    expect(mergeGate(current, status).canMerge).toBe(true);
+});
+
 test("threadsOf takes PLX-1151's full threads when sent, else pr/status's unresolved ones", () => {
   const status = {
     unresolvedThreads: [{ id: "T1", path: "a.ts", author: "rev", body: "Rename" }],
