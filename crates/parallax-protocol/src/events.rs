@@ -118,24 +118,24 @@ pub struct Compacted {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all_fields = "camelCase")]
 pub enum ParallaxEvent {
-    /// An orchestrator was created. Host-level. Was `orchestrator.created` (0093).
-    #[serde(rename = "orchestrator.created", alias = "orchestrator.created")]
+    /// An orchestrator was created. Host-level. Was `project.created` (0093).
+    #[serde(rename = "orchestrator.created", alias = "project.created")]
     OrchestratorCreated {
         /// The new orchestrator.
         #[serde(alias = "project")]
         orchestrator: Orchestrator,
     },
     /// `orchestrator/update` renamed an orchestrator or changed its icon (PLX-227). Host-level,
-    /// like `orchestrator.created`. Was `orchestrator.updated` (0093).
-    #[serde(rename = "orchestrator.updated", alias = "orchestrator.updated")]
+    /// like `orchestrator.created`. Was `project.updated` (0093).
+    #[serde(rename = "orchestrator.updated", alias = "project.updated")]
     OrchestratorUpdated {
         /// The orchestrator as it stands.
         #[serde(alias = "project")]
         orchestrator: Orchestrator,
     },
     /// `orchestrator/delete` deleted an orchestrator with every run in it (PLX-338). Host-level,
-    /// like `orchestrator.created`. Was `orchestrator.deleted` (0093).
-    #[serde(rename = "orchestrator.deleted", alias = "orchestrator.deleted")]
+    /// like `orchestrator.created`. Was `project.deleted` (0093).
+    #[serde(rename = "orchestrator.deleted", alias = "project.deleted")]
     OrchestratorDeleted {
         /// The deleted orchestrator's id.
         #[serde(alias = "project")]

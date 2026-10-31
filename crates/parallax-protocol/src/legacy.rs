@@ -239,6 +239,29 @@ mod tests {
     }
 
     #[test]
+    fn old_event_kinds_decode_as_their_orchestrator_variants() {
+        use crate::ParallaxEvent;
+
+        let orchestrator = json!({
+            "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae", "name": "parallax", "repoPath": "/r",
+            "createdAt": "2026-09-24T12:00:00Z", "updatedAt": "2026-09-24T12:00:00Z"
+        });
+        let created: ParallaxEvent =
+            serde_json::from_value(json!({"kind": "project.created", "project": orchestrator}))
+                .unwrap();
+        assert!(matches!(created, ParallaxEvent::OrchestratorCreated { .. }));
+        let updated: ParallaxEvent =
+            serde_json::from_value(json!({"kind": "project.updated", "project": orchestrator}))
+                .unwrap();
+        assert!(matches!(updated, ParallaxEvent::OrchestratorUpdated { .. }));
+        let deleted: ParallaxEvent = serde_json::from_value(json!({
+            "kind": "project.deleted", "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae"
+        }))
+        .unwrap();
+        assert!(matches!(deleted, ParallaxEvent::OrchestratorDeleted { .. }));
+    }
+
+    #[test]
     fn a_run_provider_default_and_memory_scope_take_the_old_names() {
         let mut run = json!({"run": {"id": "r2", "project": "o1", "orchestratorThread": "r1"}});
         to_legacy("agent/start", &mut run);

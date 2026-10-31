@@ -101,6 +101,7 @@ fn check_file(path: &Path, mode: Mode, coverage: &mut Coverage) {
     };
     let mut transcript = Transcript {
         exact,
+        legacy: mode == Mode::Legacy,
         at: String::new(),
         pending: HashMap::new(),
         coverage,
@@ -119,6 +120,8 @@ fn check_file(path: &Path, mode: Mode, coverage: &mut Coverage) {
 
 struct Transcript<'a> {
     exact: bool,
+    /// From [`Mode::Legacy`]: every event kind must decode to a known one.
+    legacy: bool,
     at: String,
     pending: HashMap<RequestId, Expect>,
     coverage: &'a mut Coverage,
@@ -174,6 +177,12 @@ impl Transcript<'_> {
             None => assert!(!self.exact, "{at}: unknown notification in an exact sample"),
             Some((_, Err(error))) => panic!("{at}: {error}"),
             Some((method, Ok(encoded))) => {
+                if self.legacy && params.is_some_and(|params| params["event"]["kind"].is_string()) {
+                    assert_ne!(
+                        encoded["event"]["kind"], "Unknown",
+                        "{at}: an old event kind decodes to `Unknown`"
+                    );
+                }
                 if self.exact {
                     assert_eq!(Some(&encoded), params, "{at}: the params changed");
                     self.coverage.notifications.insert(method);
