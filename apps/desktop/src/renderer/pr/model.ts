@@ -178,6 +178,7 @@ export interface Gate {
   canAutoMerge: boolean;
   behind: boolean;
   draft: boolean;
+  conflicts: boolean;
 }
 
 const gate = (tone: GateTone, title: string, reasons: string[] = [], more: Partial<Gate> = {}) => ({
@@ -188,6 +189,7 @@ const gate = (tone: GateTone, title: string, reasons: string[] = [], more: Parti
   canAutoMerge: false,
   behind: false,
   draft: false,
+  conflicts: false,
   ...more,
 });
 
@@ -215,9 +217,12 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
   const mergeState =
     matchingStatus?.mergeState?.replaceAll("_", "").toLowerCase() ?? pr.mergeState?.toLowerCase();
   if (mergeable === "CONFLICTING" || mergeState === "dirty")
-    return gate("blocked", "This branch has conflicts", [
-      `Resolve its conflicts with ${pr.baseBranch} to merge.`,
-    ]);
+    return gate(
+      "blocked",
+      "This branch has conflicts",
+      [`Resolve its conflicts with ${pr.baseBranch} to merge.`],
+      { conflicts: true },
+    );
   const checks = checkRollup(pr.checks);
   if (mergeState === "behind") {
     const by = matchingStatus?.behindBy ?? extra.behindBy;
@@ -266,6 +271,170 @@ export const methodLabels: Record<PrMergeMethod, string> = {
   merge: "Create a merge commit",
   rebase: "Rebase and merge",
 };
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** GitHub's line under a merge method in its menu, with the branch's commits when known. */
+export function methodHint(method: PrMergeMethod, commits?: number): string {
+  const these = commits ? `The ${plural(commits, "commit")}` : "The commits";
+  if (method === "merge")
+    return "All commits from this branch will be added to the base branch via a merge commit.";
+  if (method === "squash")
+    return `${these} from this branch will be combined into one commit in the base branch.`;
+  return `${these} from this branch will be rebased and added to the base branch.`;
+}
+
+/** How a status row's icon looks: passed, failed, running, waiting on someone, or neither. */
+export type RowTone = "passed" | "failed" | "running" | "waiting" | "neutral";
+
+/** A row of the Summary's status box: what it's about, its state, and a muted detail. */
+export interface StatusRow {
+  key: "checks" | "reviews" | "merge";
+  tone: RowTone;
+  label: string;
+  detail?: string;
+}
+
+const names = (who: string[]) =>
+  who.length <= 2 ? who.join(" and ") : `${who[0]} and ${who.length - 1} others`;
+
+/**
+ * The status box's rows, each only when it applies: checks when any ran, reviews when one was
+ * given, asked for, or required, and, while open, whether it merges cleanly into its base.
+ */
+export function statusRows(
+  pr: PullRequest,
+  checks: readonly Pick<PrCheck, "state">[],
+  gate: Gate,
+  status?: PrStatusResult,
+): StatusRow[] {
+  const rows: StatusRow[] = [];
+
+  const c = checkRollup(checks);
+  const of = `${c.passed} of ${c.total}`;
+  if (c.state === "passed")
+    rows.push({ key: "checks", tone: "passed", label: "All checks passed", detail: of });
+  else if (c.state === "failed")
+    rows.push({
+      key: "checks",
+      tone: "failed",
+      label: `${plural(c.failed, "check")} failed`,
+      detail: `${of} passed`,
+    });
+  else if (c.state === "pending")
+    rows.push({
+      key: "checks",
+      tone: "running",
+      label: `${plural(c.pending, "check")} running`,
+      detail: `${of} passed`,
+    });
+  else if (c.state === "skipped")
+    rows.push({ key: "checks", tone: "neutral", label: "Checks skipped" });
+
+  // Each reviewer's latest verdict; a later comment doesn't undo an approval.
+  const latest = new Map<string, string>();
+  for (const r of pr.reviews ?? [])
+    if (r.state !== "commented" || !latest.has(r.author)) latest.set(r.author, r.state);
+  const by = (state: string) => [...latest].filter(([, s]) => s === state).map(([who]) => who);
+  const [approvers, blockers] = [by("approved"), by("changesRequested")];
+  // `pr/view` says "changesRequested"; `pr/status` says GitHub's "CHANGES_REQUESTED".
+  const decision = (pr.reviewDecision ?? status?.reviewDecision)?.replaceAll("_", "").toLowerCase();
+  // Those asked who haven't reviewed yet, by name, as the reviewers panel listed them.
+  const waiting = pr.reviewRequests.filter((who) => !latest.has(who));
+  const detail =
+    [
+      approvers.length && plural(approvers.length, "approval"),
+      waiting.length && `${names(waiting)} requested`,
+    ]
+      .filter(Boolean)
+      .join(" · ") || undefined;
+  if (decision === "changesrequested" || blockers.length)
+    rows.push({
+      key: "reviews",
+      tone: "failed",
+      label: blockers.length ? `Changes requested by ${names(blockers)}` : "Changes requested",
+      detail,
+    });
+  else if (decision === "approved" || (!decision && approvers.length))
+    rows.push({
+      key: "reviews",
+      tone: "passed",
+      label: approvers.length ? `Approved by ${names(approvers)}` : "Approved",
+      detail,
+    });
+  else if (decision === "reviewrequired" || pr.reviewRequests.length)
+    rows.push({
+      key: "reviews",
+      tone: "waiting",
+      label: decision === "reviewrequired" ? "Review required" : "Waiting for review",
+      detail,
+    });
+
+  if (pr.state !== "open") return rows;
+  const base = pr.baseBranch;
+  const behindBy = status?.behindBy ?? more(pr).behindBy;
+  const commits = pr.commits?.length;
+  const merge = (tone: RowTone, label: string, detail?: string) =>
+    rows.push({ key: "merge", tone, label, detail });
+  if (gate.draft) merge("neutral", "This pull request is a draft");
+  else if (gate.conflicts) merge("failed", `Conflicts with ${base}`);
+  else if (gate.behind)
+    merge("waiting", `Behind ${base}`, behindBy ? plural(behindBy, "commit") : undefined);
+  else if (pr.mergeState === undefined) merge("running", "Checking for conflicts");
+  else if (pr.mergeState === "blocked") merge("waiting", "Merging is blocked");
+  else
+    merge("passed", `No conflicts with ${base}`, commits ? plural(commits, "commit") : undefined);
+  return rows;
+}
+
+/**
+ * The merge button's color, from the merge gate: ready (green) when it can merge, running
+ * (yellow) while any check runs or it waits on GitHub, blocked (red) when something stops it,
+ * merged (purple), and neutral (gray) for a draft or a closed one. A check still running turns it
+ * yellow even when GitHub would take the merge (unstable), and the button stays enabled.
+ */
+export type MergeTone = "ready" | "running" | "blocked" | "merged" | "neutral";
+
+export function mergeTone(gate: Gate, checks: readonly Pick<PrCheck, "state">[]): MergeTone {
+  if (gate.tone === "merged") return "merged";
+  if (gate.tone === "closed" || gate.draft) return "neutral";
+  if (gate.canMerge) return checkRollup(checks).pending ? "running" : "ready";
+  return gate.tone === "pending" ? "running" : "blocked";
+}
+
+/** The commit a merge makes, as GitHub would write it, for a read-only preview. */
+export interface CommitPreview {
+  /** Its title; none for a rebase, which keeps each commit's own. */
+  title?: string;
+  body?: string;
+  /** The commits a rebase replays, as they are. */
+  replayed?: { oid: string; headline: string }[];
+}
+
+/**
+ * The commit `method` makes, with GitHub's default messages (plxd doesn't report a repository's
+ * own squash message setting): a squash of one commit takes that commit's title, `<headline>
+ * (#n)`, and of several the pull request's, `<title> (#n)`, over their headlines (none sent, the
+ * pull request's title); a merge commit is GitHub's "Merge pull request #n from <owner>/<head>" over
+ * the title; a rebase replays the commits as they are. The owner is the base repository's, as
+ * plxd doesn't say a fork's.
+ */
+export function commitPreview(pr: PullRequest, method: PrMergeMethod): CommitPreview {
+  const commits = pr.commits ?? [];
+  if (method === "rebase")
+    return { replayed: commits.map((c) => ({ oid: c.oid.slice(0, 7), headline: c.headline })) };
+  if (method === "merge")
+    return {
+      title: `Merge pull request #${pr.number} from ${pr.repo.split("/")[0]}/${pr.headBranch}`,
+      body: pr.title,
+    };
+  // plxd sends only headlines, so a one-commit squash has no body to show.
+  if (commits.length === 1) return { title: `${commits[0]!.headline} (#${pr.number})` };
+  return {
+    title: `${pr.title} (#${pr.number})`,
+    body: commits.length ? commits.map((c) => `* ${c.headline}`).join("\n\n") : undefined,
+  };
+}
 
 /** A review thread as the view draws it, from PLX-1151's full threads or `pr/status`'s first lines. */
 export interface ThreadView {

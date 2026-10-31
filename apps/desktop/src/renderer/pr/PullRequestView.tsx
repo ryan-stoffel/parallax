@@ -12,6 +12,7 @@ import {
 import type { RpcError } from "../../preload/bridge";
 import type {
   PrComment,
+  PrCommit,
   PrDiffResult,
   PrStatusResult,
   PrWrite,
@@ -22,6 +23,7 @@ import { describeError, githubProblem } from "../errors";
 import { shotName } from "../github";
 import { icons } from "../icons";
 import { Lightbox } from "../Lightbox";
+import { GitHubLogo } from "../logos";
 import { dismiss, notify } from "../notifications";
 import { behaviorPrefs } from "../prefs";
 import type { PullRequests } from "../PullRequests";
@@ -37,13 +39,11 @@ import {
   SetUpGithub,
   Segmented,
 } from "../ui";
-import { CheckGroup, type CheckActions } from "./CheckGroup";
+import type { CheckActions } from "./CheckGroup";
 import { GithubMarkdown } from "./GithubMarkdown";
 import { MergeBox } from "./MergeBox";
 import {
-  checkRollup,
   checksOf,
-  groupChecks,
   lineBreakdown,
   threadsOf,
   type Check,
@@ -51,22 +51,23 @@ import {
   type PrActionMore,
   type ThreadView,
 } from "./model";
-import { ago, BranchPair, DiffStat, StateBadge } from "./parts";
+import { ago, Avatar, BranchChips, DiffStat, StateBadge } from "./parts";
 import { ReviewThread } from "./ReviewThread";
 
 /** How long a read stays fresh enough that opening the view doesn't read it again. */
 const FRESH_MS = 15_000;
 
-type Tab = "overview" | "checks" | "files" | "activity";
+// The tab bar's tabs, in order. Guide (PLX-1188) joins them as one more entry and its body.
+type Tab = "summary" | "timeline" | "code";
 
 /**
- * One linked pull request in the side panel (PLX-1153). A header that stays put: its state,
- * `repo#n` (to GitHub), Refresh, and a … menu; its title on up to two lines; its author, branches,
- * and size. Under it tabs that stay put too: Overview (its description, and the merge box,
- * reviewers, and labels, in a right rail once the panel is 900px wide), Checks (by workflow, with
- * logs and re-run), Files (the diff, with Viewed, a file tree when wide, and review threads at
- * their lines), and Activity (unresolved threads, the timeline, and a box to comment or review).
- * Only the tab's body scrolls. It reads `pr/status` beside `pr/view` for what's required, why it
+ * One linked pull request in the side panel (PLX-1153, PLX-1182). A header that stays put: its
+ * title and `#n`; its author, age, and `base ← head`; its state, size, Open in GitHub, Refresh, and
+ * a … menu. Under it a segmented tab bar that stays put too: Summary (the status box with its
+ * checks, reviews, and merge button, then the description, editable in place), Timeline
+ * (unresolved threads, the timeline, and a box to comment or review), and Code (the diff, with
+ * Viewed, a file tree when wide, and review threads at their lines; and its commits). Only the
+ * tab's body scrolls. It reads `pr/status` beside `pr/view` for what's required, why it
  * can't merge, and its threads, and writes through `pr/write`, where plxd has them. A screenshot
  * opens in the Lightbox with the others beside it. `onCompose` hands a message to this thread's
  * chat: sent, or put in the composer to finish.
@@ -90,7 +91,7 @@ export function PullRequestView({
   const menu = useRef<HTMLDivElement>(null);
   const closeDialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("summary");
   const [shots, setShots] = useState<{ images: { src: string; name: string }[]; index: number }>();
   const [diff, setDiff] = useState<{ for: string; result?: PrDiffResult; error?: string }>();
   const [viewed, setViewed] = useState<ReadonlySet<string>>(new Set());
@@ -129,7 +130,7 @@ export function PullRequestView({
 
   const readDiff = prs.diff;
   useEffect(() => {
-    if (tab !== "files" || !readDiff || !updatedAt || diff?.for === updatedAt) return;
+    if (tab !== "code" || !readDiff || !updatedAt || diff?.for === updatedAt) return;
     let live = true;
     void readDiff(url).then((read) => live && setDiff({ for: updatedAt, ...read }));
     return () => {
@@ -224,7 +225,6 @@ export function PullRequestView({
     );
 
   const checks = checksOf(pr, status);
-  const rollup = checkRollup(checks);
   const threads = threadsOf(pr, status);
   const unresolved = threads.filter((t) => !t.resolved);
   const open = pr.state === "open";
@@ -249,161 +249,121 @@ export function PullRequestView({
         ? () => write({ kind: "replyToThread", reviewThreadId: t.id!, resolve: true })
         : undefined,
   });
+  const checkActions: CheckActions = {
+    onOpen: openOnGithub,
+    onFix: fixCheck,
+    log: prs.failureLog
+      ? async (c) => {
+          const read = await prs.failureLog!(url, c.name);
+          if (read.error) return { error: describeError(read.error) };
+          const mine = read.result?.failures.find((f) => f.name === c.name);
+          return mine
+            ? { result: mine }
+            : { error: "GitHub has no failed log for this check now. It may be re-running." };
+        }
+      : undefined,
+    onRerun: prs.actions
+      ? (c) => act(c.jobId ? "rerunJob" : "rerunFailed", { jobId: c.jobId, workflowRunId: c.runId })
+      : undefined,
+    onRerunFailed: prs.actions
+      ? (runId) => act("rerunFailed", { workflowRunId: runId })
+      : undefined,
+  };
+  const tabs: { id: Tab; label: string; count?: ReactNode }[] = [
+    { id: "summary", label: "Summary" },
+    {
+      id: "timeline",
+      label: "Timeline",
+      count: <Count n={pr.comments.length + unresolved.length} />,
+    },
+    { id: "code", label: "Code", count: <Count n={pr.changedFiles} /> },
+  ];
 
   return (
     <div className="@container flex min-h-0 flex-1 flex-col" onClick={(e) => showShot(e.target)}>
-      <header className="shrink-0 border-b border-border px-4 pt-3">
-        <div className="flex h-7 items-center gap-2">
-          <StateBadge pr={pr} />
-          <a
-            href={pr.url}
-            target="_blank"
-            rel="noreferrer"
-            title="Open on GitHub"
-            onClick={(e) => {
-              e.preventDefault();
-              openOnGithub(pr.url);
-            }}
-            className="flex min-w-0 flex-1 items-center gap-1 text-body text-muted-foreground hover:text-foreground"
+      <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
+        <div className="mx-auto max-w-3xl">
+          <h2
+            className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
+            title={pr.title}
           >
-            <span className="truncate">{pr.repo}</span>
-            <span className="shrink-0 tabular-nums">#{pr.number}</span>
-            <icons.external aria-hidden className="size-3.5 shrink-0" />
-          </a>
-          <IconButton
-            label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
-            disabled={busy}
-            onClick={refresh}
-          >
-            <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
-          </IconButton>
-          <IconButton
-            label="Pull request actions"
-            aria-haspopup="menu"
-            popoverTarget={`${id}-menu`}
-          >
-            <icons.more aria-hidden />
-          </IconButton>
+            {pr.title}{" "}
+            <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
+          </h2>
+          <div className="mt-2 flex min-w-0 items-center gap-2 text-body">
+            <Avatar login={pr.author} />
+            <span className="shrink-0 font-medium">{pr.author}</span>
+            {pr.createdAt && (
+              <span className="shrink-0 text-meta text-muted-foreground">{ago(pr.createdAt)}</span>
+            )}
+            <span className="ml-auto flex min-w-0 justify-end">
+              <BranchChips head={pr.headBranch} base={pr.baseBranch} />
+            </span>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <StateBadge pr={pr} />
+            <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
+            <span className="flex-1" />
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label={`Open ${pr.repo}#${pr.number} on GitHub`}
+              title={`Open ${pr.repo}#${pr.number} on GitHub`}
+              onClick={() => openOnGithub(pr.url)}
+              className="rounded-full pr-2.5 pl-3"
+            >
+              Open in
+              <GitHubLogo className="size-4" />
+            </Button>
+            <IconButton
+              label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
+              disabled={busy}
+              onClick={refresh}
+            >
+              <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
+            </IconButton>
+            <IconButton
+              label="Pull request actions"
+              aria-haspopup="menu"
+              popoverTarget={`${id}-menu`}
+            >
+              <icons.more aria-hidden />
+            </IconButton>
+          </div>
+          <Tabs tab={tab} onTab={setTab} tabs={tabs} />
         </div>
-        <h2
-          className="mt-2 line-clamp-2 text-reading leading-snug font-semibold wrap-break-word"
-          title={pr.title}
-        >
-          {pr.title}
-        </h2>
-        <p className="mt-1.5 flex min-w-0 items-baseline gap-1.5 text-meta text-muted-foreground">
-          <span className="shrink-0 font-medium text-foreground">{pr.author}</span>
-          <span aria-hidden className="text-faint-foreground">
-            ·
-          </span>
-          <BranchPair head={pr.headBranch} base={pr.baseBranch} />
-          <span aria-hidden className="text-faint-foreground">
-            ·
-          </span>
-          <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
-        </p>
-        <Tabs
-          tab={tab}
-          onTab={setTab}
-          tabs={[
-            { id: "overview", label: "Overview" },
-            {
-              id: "checks",
-              label: "Checks",
-              count: rollup.failed ? (
-                <Badge shape="count" tone="danger">
-                  {rollup.failed}
-                </Badge>
-              ) : undefined,
-            },
-            { id: "files", label: "Files", count: <Count n={pr.changedFiles} /> },
-            {
-              id: "activity",
-              label: "Activity",
-              count: <Count n={pr.comments.length + unresolved.length} />,
-            },
-          ]}
-        />
       </header>
 
-      {tab === "overview" && (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="grid gap-5 px-4 py-4 @min-[900px]:grid-cols-[minmax(0,1fr)_18rem] @min-[900px]:gap-8">
-            <aside className="flex min-w-0 flex-col gap-5 @min-[900px]:sticky @min-[900px]:top-4 @min-[900px]:order-2 @min-[900px]:self-start">
-              <MergeBox
-                pr={pr}
-                status={status}
-                actions={!!prs.actions}
-                busy={busy}
-                onAct={act}
-                onChecks={() => setTab("checks")}
-              />
-              <People pr={pr} />
-              <section aria-label="Labels">
-                <GroupHeading className="px-0!">Labels</GroupHeading>
-                {pr.labels.length ? (
-                  <div className="flex flex-wrap gap-1">
-                    {pr.labels.map((l) => (
-                      <Badge key={l} shape="pill">
-                        {l}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-meta text-faint-foreground">None</p>
-                )}
+      {tab === "summary" && (
+        <div className="min-h-0 flex-1 overflow-y-auto px-4">
+          <div className="mx-auto flex max-w-3xl flex-col gap-6 py-4">
+            <MergeBox
+              pr={pr}
+              status={status}
+              checks={checks}
+              checkActions={checkActions}
+              actions={!!prs.actions}
+              busy={busy}
+              onAct={act}
+              onReviews={() => setTab("timeline")}
+              onCommits={() => setTab("code")}
+            />
+            <Description pr={pr} write={write} onOpen={openOnGithub} />
+            {pr.labels.length > 0 && (
+              <section aria-label="Labels" className="flex flex-wrap gap-1">
+                {pr.labels.map((l) => (
+                  <Badge key={l} shape="pill">
+                    {l}
+                  </Badge>
+                ))}
               </section>
-            </aside>
-            <article aria-label="Description" className="min-w-0">
-              {pr.body.trim() ? (
-                <GithubMarkdown text={pr.body} repo={pr.repo} onOpen={openOnGithub} />
-              ) : (
-                <EmptyState
-                  icon={<icons.edit aria-hidden />}
-                  title="No description"
-                  body="The author didn't write one."
-                  className="py-8"
-                />
-              )}
-            </article>
+            )}
           </div>
         </div>
       )}
 
-      {tab === "checks" && (
-        <ChecksTab
-          checks={checks}
-          actions={{
-            onOpen: openOnGithub,
-            onFix: fixCheck,
-            log: prs.failureLog
-              ? async (c) => {
-                  const read = await prs.failureLog!(url, c.name);
-                  if (read.error) return { error: describeError(read.error) };
-                  const mine = read.result?.failures.find((f) => f.name === c.name);
-                  return mine
-                    ? { result: mine }
-                    : {
-                        error: "GitHub has no failed log for this check now. It may be re-running.",
-                      };
-                }
-              : undefined,
-            onRerun: prs.actions
-              ? (c) =>
-                  act(c.jobId ? "rerunJob" : "rerunFailed", {
-                    jobId: c.jobId,
-                    workflowRunId: c.runId,
-                  })
-              : undefined,
-            onRerunFailed: prs.actions
-              ? (runId) => act("rerunFailed", { workflowRunId: runId })
-              : undefined,
-          }}
-        />
-      )}
-
-      {tab === "files" && (
-        <div className="flex min-h-0 flex-1 flex-col">
+      {tab === "code" && (
+        <CodeTab commits={pr.commits ?? []}>
           {!prs.diff ? (
             <EmptyState
               icon={<icons.diff aria-hidden />}
@@ -434,10 +394,10 @@ export function PullRequestView({
               tree
             />
           )}
-        </div>
+        </CodeTab>
       )}
 
-      {tab === "activity" && (
+      {tab === "timeline" && (
         <Activity
           pr={pr}
           unresolved={unresolved}
@@ -547,8 +507,8 @@ function Count({ n }: { n: number }) {
 }
 
 /**
- * The view's tabs, with a bar under the chosen one that slides to the next. Left and Right move
- * between them, as a tablist does.
+ * The view's tabs as a segmented control: a rounded track, the chosen tab raised on a thumb that
+ * slides to the next. Left and Right move between them, as a tablist does.
  */
 function Tabs({
   tab,
@@ -560,13 +520,13 @@ function Tabs({
   tabs: { id: Tab; label: string; count?: ReactNode }[];
 }) {
   const list = useRef<HTMLDivElement>(null);
-  const [bar, setBar] = useState<{ left: number; width: number }>();
+  const [thumb, setThumb] = useState<{ left: number; width: number }>();
   useLayoutEffect(() => {
     const el = list.current;
     if (!el) return;
     const measure = () => {
       const chosen = el.querySelector<HTMLElement>('[aria-selected="true"]');
-      if (chosen) setBar({ left: chosen.offsetLeft, width: chosen.offsetWidth });
+      if (chosen) setThumb({ left: chosen.offsetLeft, width: chosen.offsetWidth });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -586,8 +546,15 @@ function Tabs({
         onTab(next.id);
         list.current?.querySelector<HTMLElement>(`[data-tab="${next.id}"]`)?.focus();
       }}
-      className="relative mt-2 -mb-px flex gap-4"
+      className="relative mt-3 grid auto-cols-fr grid-flow-col rounded-lg bg-hover p-0.5"
     >
+      {thumb && (
+        <span
+          aria-hidden
+          className="absolute top-0.5 bottom-0.5 left-0 rounded-md border border-border bg-surface shadow-xs transition-[translate,width] duration-base ease-in-out"
+          style={{ translate: `${thumb.left}px 0`, width: thumb.width }}
+        />
+      )}
       {tabs.map((t) => (
         <button
           key={t.id}
@@ -597,115 +564,127 @@ function Tabs({
           aria-selected={tab === t.id}
           tabIndex={tab === t.id ? 0 : -1}
           onClick={() => onTab(t.id)}
-          className="flex h-9 items-center gap-1.5 text-body text-muted-foreground transition-colors hover:text-foreground aria-selected:font-medium aria-selected:text-foreground"
+          className="relative flex h-8 items-center justify-center gap-1.5 rounded-md text-body text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-selected:font-medium aria-selected:text-foreground"
         >
           {t.label}
           {t.count}
         </button>
       ))}
-      {bar && (
-        <span
-          aria-hidden
-          className="absolute bottom-0 left-0 h-0.5 rounded-full bg-foreground transition-[translate,width] duration-base ease-in-out"
-          style={{ translate: `${bar.left}px 0`, width: bar.width }}
-        />
-      )}
     </div>
   );
 }
 
-/** The rail's reviewers: each one's latest verdict, then those asked who haven't reviewed. */
-function People({ pr }: { pr: PullRequest }) {
-  const latest = new Map<string, string>();
-  for (const r of pr.reviews ?? [])
-    if (r.state !== "commented" || !latest.has(r.author)) latest.set(r.author, r.state);
-  const waiting = pr.reviewRequests.filter((who) => !latest.has(who));
-  const verdict: Record<string, { Icon: typeof icons.success; color: string; text: string }> = {
-    approved: { Icon: icons.success, color: "text-added", text: "Approved" },
-    changesRequested: { Icon: icons.error, color: "text-danger", text: "Changes requested" },
-    commented: { Icon: icons.comment, color: "text-muted-foreground", text: "Commented" },
-    dismissed: { Icon: icons.skipped, color: "text-faint-foreground", text: "Dismissed" },
+/**
+ * The Summary's description: a heading with a pencil that edits the body in place, saved through
+ * `pr/write`'s edit where plxd has it, then GitHub's Markdown, or a line when there's none.
+ */
+function Description({
+  pr,
+  write,
+  onOpen,
+}: {
+  pr: PullRequest;
+  write?: (w: PrWrite) => Promise<boolean>;
+  onOpen: (url: string) => void;
+}) {
+  const [draft, setDraft] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    if (await write!({ kind: "edit", body: draft })) setDraft(undefined);
+    setSaving(false);
   };
   return (
-    <section aria-label="Reviewers">
-      <GroupHeading className="px-0!">Reviewers</GroupHeading>
-      {latest.size + waiting.length === 0 ? (
-        <p className="text-meta text-faint-foreground">None</p>
+    <section aria-label="Description" className="min-w-0">
+      <div className="mb-2 flex h-7 items-center gap-2">
+        <h3 className="min-w-0 flex-1 text-reading font-semibold">Description</h3>
+        {write && draft === undefined && (
+          <IconButton label="Edit description" onClick={() => setDraft(pr.body)}>
+            <icons.edit aria-hidden />
+          </IconButton>
+        )}
+      </div>
+      {draft !== undefined ? (
+        <form
+          aria-label="Edit description"
+          className="overflow-hidden rounded-xl border border-border bg-surface focus-within:border-faint-foreground/60"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <textarea
+            aria-label="Description"
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
+                e.currentTarget.form?.requestSubmit();
+              if (e.key === "Escape") setDraft(undefined);
+            }}
+            className="field-sizing-content block max-h-[60vh] min-h-32 w-full resize-none bg-transparent px-3 py-2.5 font-mono text-body placeholder:text-faint-foreground focus-visible:outline-none"
+          />
+          <div className="flex justify-end gap-1.5 border-t border-border px-2 py-2">
+            <Button size="sm" disabled={saving} onClick={() => setDraft(undefined)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              type="submit"
+              disabled={saving || draft === pr.body}
+            >
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </form>
+      ) : pr.body.trim() ? (
+        <GithubMarkdown text={pr.body} repo={pr.repo} onOpen={onOpen} />
       ) : (
-        <ul className="flex flex-col gap-1.5 text-body">
-          {[...latest].map(([who, state]) => {
-            const v = verdict[state] ?? verdict["commented"]!;
-            return (
-              <li key={who} className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate">{who}</span>
-                <v.Icon role="img" aria-label={v.text} className={`size-3.5 shrink-0 ${v.color}`} />
-              </li>
-            );
-          })}
-          {waiting.map((who) => (
-            <li key={who} className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate">{who}</span>
-              <span className="text-meta text-faint-foreground">Requested</span>
-            </li>
-          ))}
-        </ul>
+        <p className="text-body text-faint-foreground">No description provided.</p>
       )}
     </section>
   );
 }
 
-/**
- * The Checks tab: its rollup, Failing and All, and the checks by workflow (CheckGroup). It opens
- * on Failing when one failed. Running times tick.
- */
-function ChecksTab({ checks, actions }: { checks: Check[]; actions: CheckActions }) {
-  const rollup = checkRollup(checks);
-  const [filter, setFilter] = useState<"failing" | "all">(rollup.failed ? "failing" : "all");
-  const running = rollup.pending > 0;
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!running) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [running]);
-  const shown = filter === "failing" ? checks.filter((c) => c.state === "failed") : checks;
-  if (!checks.length)
-    return (
-      <EmptyState
-        icon={<icons.skipped aria-hidden />}
-        title="No checks"
-        body="Nothing runs on this pull request's head commit."
-        className="flex-1"
-      />
-    );
+/** The Code tab: the diff, and Files and Commits to switch between when it has commits. */
+function CodeTab({ commits, children }: { commits: PrCommit[]; children: ReactNode }) {
+  const [show, setShow] = useState<"files" | "commits">("files");
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="flex items-center gap-3 px-4 pt-3 pb-1">
-        <p className="min-w-0 flex-1 truncate text-body text-muted-foreground">{rollup.words}</p>
-        <Segmented
-          label="Show"
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: "failing", name: `Failing ${rollup.failed}` },
-            { value: "all", name: `All ${checks.length}` },
-          ]}
-        />
-      </div>
-      {shown.length === 0 ? (
-        <EmptyState
-          icon={<icons.success aria-hidden />}
-          title="Nothing failing"
-          body={
-            rollup.pending ? `${rollup.pending} still running.` : "Every check that ran passed."
-          }
-        />
-      ) : (
-        <div className="flex flex-col gap-3 px-4 pt-2 pb-6">
-          {groupChecks(shown).map((g) => (
-            <CheckGroup key={g.name} group={g} now={now} actions={actions} />
-          ))}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {commits.length > 0 && (
+        <div className="flex shrink-0 px-4 pt-3 pb-1">
+          <Segmented
+            label="Show"
+            value={show}
+            onChange={setShow}
+            options={[
+              { value: "files", name: "Files" },
+              { value: "commits", name: `Commits ${commits.length}` },
+            ]}
+          />
         </div>
+      )}
+      {show === "files" || !commits.length ? (
+        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+      ) : (
+        <ol aria-label="Commits" className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-6">
+          {commits.map((c) => (
+            <li key={c.oid} className="flex items-start gap-2.5 rounded-lg px-2 py-2">
+              <icons.commit aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-body font-medium">{c.headline}</span>
+                <span className="mt-0.5 block text-meta text-faint-foreground">
+                  {c.author} · {ago(c.committedAt)}
+                </span>
+              </span>
+              <span className="shrink-0 font-mono text-meta text-muted-foreground">
+                {c.oid.slice(0, 7)}
+              </span>
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );
@@ -791,7 +770,7 @@ function TimelineEvent({
 }
 
 /**
- * The Activity tab: unresolved review threads first, each with reply and resolve; then the
+ * The Timeline tab: unresolved review threads first, each with reply and resolve; then the
  * timeline of commits, comments, reviews, and the merge, newest first unless flipped; then a box
  * to comment, approve, or request changes, through `pr/write` where plxd has it.
  */
@@ -959,7 +938,7 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
 }
 
 /**
- * The box at the end of Activity: a comment, sent as one, or as a review that approves or asks
+ * The box at the end of Timeline: a comment, sent as one, or as a review that approves or asks
  * for changes. Asking for changes needs words; approving doesn't. The text stays until GitHub
  * takes it. Without `write` (a plxd without `prWatch`) it says why it's missing.
  */
@@ -1076,18 +1055,14 @@ function Skeleton() {
       aria-label="Loading the pull request"
       className="flex min-h-0 flex-1 flex-col"
     >
-      <div className="border-b border-border px-4 pt-3 pb-3">
-        <div className="flex h-7 items-center gap-2">
+      <div className="border-b border-border px-4 pt-4 pb-3">
+        <div className={`${bone} h-5 w-4/5`} />
+        <div className={`${bone} mt-3 h-3.5 w-3/5`} />
+        <div className="mt-3 flex h-7 items-center gap-2">
           <span className={`${bone} h-5 w-14`} />
-          <span className={`${bone} h-3.5 w-40`} />
+          <span className={`${bone} ml-auto h-7 w-24 rounded-full`} />
         </div>
-        <div className={`${bone} mt-3 h-4 w-4/5`} />
-        <div className={`${bone} mt-2 h-3 w-3/5`} />
-        <div className="mt-4 flex gap-4">
-          {[16, 14, 10, 14].map((w, i) => (
-            <span key={i} className={`${bone} h-3.5`} style={{ width: `${w * 4}px` }} />
-          ))}
-        </div>
+        <div className={`${bone} mt-3 h-9 w-full rounded-lg`} />
       </div>
       <div className="flex flex-col gap-2.5 px-4 py-5">
         <div className={`${bone} h-24 w-full rounded-xl`} />
@@ -1099,7 +1074,7 @@ function Skeleton() {
   );
 }
 
-/** The Files tab while its diff is read. */
+/** The Code tab while its diff is read. */
 function DiffSkeleton() {
   return (
     <div role="status" aria-label="Loading the diff" className="flex flex-col gap-2 px-3 py-3">

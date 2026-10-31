@@ -88,18 +88,33 @@ export function DiffStat({
   );
 }
 
-/** A pull request's branches, the way it merges: `head → base`, the head truncating first. */
-export function BranchPair({ head, base }: { head: string; base: string }) {
+/** A pull request's branches as GitHub's chips, `base ← head`, the head truncating first. */
+export function BranchChips({ head, base }: { head: string; base: string }) {
+  const chip =
+    "truncate rounded-md bg-hover px-1.5 py-0.5 font-mono text-meta text-muted-foreground";
+  return (
+    <span title={`Merges ${head} into ${base}`} className="flex min-w-0 items-center gap-1">
+      <span className={`${chip} max-w-[45%] shrink-0`}>{base}</span>
+      <icons.back aria-label="from" className="size-3.5 shrink-0 text-faint-foreground" />
+      <span className={`${chip} min-w-0`}>{head}</span>
+    </span>
+  );
+}
+
+/** A GitHub user's avatar, 20px, over their initial while it loads or when it can't. */
+export function Avatar({ login }: { login: string }) {
   return (
     <span
-      title={`Merges ${head} into ${base}`}
-      className="flex min-w-0 items-baseline gap-1 font-mono text-meta"
+      aria-hidden
+      className="relative grid size-5 shrink-0 place-items-center overflow-hidden rounded-full bg-accent text-micro font-semibold text-accent-foreground uppercase"
     >
-      <span className="min-w-0 truncate">{head}</span>
-      <span aria-label="into" className="shrink-0 text-faint-foreground">
-        →
-      </span>
-      <span className="max-w-[45%] shrink-0 truncate">{base}</span>
+      {login[0]}
+      <img
+        src={`https://github.com/${encodeURIComponent(login)}.png?size=40`}
+        alt=""
+        onError={(e) => e.currentTarget.remove()}
+        className="absolute inset-0 size-full object-cover"
+      />
     </span>
   );
 }

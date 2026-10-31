@@ -1,7 +1,16 @@
 import { expect, test } from "vite-plus/test";
 
 import type { PrCheck, PullRequest } from "../../protocol/generated/protocol";
-import { checkRollup, groupChecks, mergeGate, threadsOf } from "./model";
+import {
+  checkRollup,
+  commitPreview,
+  groupChecks,
+  mergeGate,
+  mergeTone,
+  methodHint,
+  statusRows,
+  threadsOf,
+} from "./model";
 
 const check = (name: string, state: PrCheck["state"], workflow?: string): PrCheck => ({
   name,
@@ -168,4 +177,147 @@ test("threadsOf takes PLX-1151's full threads when sent, else pr/status's unreso
     ],
   } as Partial<PullRequest>);
   expect(threadsOf(full, status)).toMatchObject([{ id: "T2", line: 4, resolved: true }]);
+});
+
+const rows = (p: PullRequest) => statusRows(p, p.checks, mergeGate(p));
+
+test("statusRows reads checks, reviews, and mergeability as the reference's rows", () => {
+  const commit = { oid: "a", headline: "h", author: "me", committedAt: "2026-10-02T12:00:00Z" };
+  expect(
+    rows(
+      pr({
+        mergeState: "clean",
+        checks: [check("a", "passed"), check("b", "passed"), check("c", "skipped")],
+        reviews: [{ author: "julius", state: "approved", submittedAt: "2026-10-02T12:00:00Z" }],
+        commits: [commit, { ...commit, oid: "b" }],
+      }),
+    ),
+  ).toEqual([
+    { key: "checks", tone: "passed", label: "All checks passed", detail: "2 of 2" },
+    { key: "reviews", tone: "passed", label: "Approved by julius", detail: "1 approval" },
+    {
+      key: "merge",
+      tone: "passed",
+      label: "No conflicts with main",
+      detail: "2 commits",
+    },
+  ]);
+});
+
+test("statusRows leaves out what doesn't apply and names what blocks", () => {
+  // No checks and no reviews: only the merge row.
+  expect(rows(pr({ mergeState: "dirty" }))).toEqual([
+    { key: "merge", tone: "failed", label: "Conflicts with main", detail: undefined },
+  ]);
+  const blocked = rows(
+    pr({
+      mergeState: "behind",
+      behindBy: 3,
+      checks: [check("a", "failed"), check("b", "passed")],
+      reviewDecision: "reviewRequired",
+      reviewRequests: ["ana"],
+    }),
+  );
+  expect(blocked.map((r) => [r.tone, r.label, r.detail])).toEqual([
+    ["failed", "1 check failed", "1 of 2 passed"],
+    ["waiting", "Review required", "ana requested"],
+    ["waiting", "Behind main", "3 commits"],
+  ]);
+  // A later comment doesn't undo changes requested; a merged one has no merge row.
+  const merged = rows(
+    pr({
+      state: "merged",
+      reviews: [
+        { author: "bo", state: "changesRequested", submittedAt: "2026-10-02T12:00:00Z" },
+        { author: "bo", state: "commented", submittedAt: "2026-10-02T13:00:00Z" },
+      ],
+    }),
+  );
+  expect(merged).toEqual([
+    { key: "reviews", tone: "failed", label: "Changes requested by bo", detail: undefined },
+  ]);
+});
+
+test("statusRows names requested reviewers who haven't reviewed beside the approvals", () => {
+  const review = { state: "approved", submittedAt: "2026-10-02T12:00:00Z" } as const;
+  const [row] = rows(
+    pr({
+      state: "merged",
+      reviews: [{ author: "julius", ...review }],
+      reviewRequests: ["julius", "ana", "bo", "cy"],
+    }),
+  );
+  expect(row).toEqual({
+    key: "reviews",
+    tone: "passed",
+    label: "Approved by julius",
+    detail: "1 approval · ana and 2 others requested",
+  });
+});
+
+test("methodHint says GitHub's line for each method, with the commits when known", () => {
+  expect(methodHint("merge")).toBe(
+    "All commits from this branch will be added to the base branch via a merge commit.",
+  );
+  expect(methodHint("squash", 8)).toBe(
+    "The 8 commits from this branch will be combined into one commit in the base branch.",
+  );
+  expect(methodHint("rebase", 1)).toBe(
+    "The 1 commit from this branch will be rebased and added to the base branch.",
+  );
+});
+
+test("mergeTone colors the merge button by the merge gate", () => {
+  const tone = (more: Partial<PullRequest>) => {
+    const p = pr(more);
+    return mergeTone(mergeGate(p), p.checks);
+  };
+  expect(tone({ mergeState: "clean" })).toBe("ready");
+  // A check still running is yellow even when GitHub would take the merge.
+  const running: Partial<PullRequest> = { mergeState: "unstable", checks: [check("t", "pending")] };
+  expect(tone(running)).toBe("running");
+  expect(mergeGate(pr(running)).canMerge).toBe(true);
+  expect(tone({ mergeState: "blocked", checks: [check("t", "pending")] })).toBe("running");
+  expect(tone({ mergeState: undefined })).toBe("running");
+  expect(tone({ mergeState: "blocked", checks: [check("t", "failed")] })).toBe("blocked");
+  expect(tone({ mergeState: "blocked", reviewDecision: "changesRequested" })).toBe("blocked");
+  expect(tone({ mergeState: "dirty" })).toBe("blocked");
+  expect(tone({ mergeState: "behind" })).toBe("blocked");
+  expect(tone({ state: "merged" })).toBe("merged");
+  expect(tone({ draft: true, mergeState: "draft" })).toBe("neutral");
+  expect(tone({ state: "closed" })).toBe("neutral");
+});
+
+test("commitPreview writes GitHub's default message for each method", () => {
+  const commit = (oid: string, headline: string) => ({
+    oid,
+    headline,
+    author: "me",
+    committedAt: "2026-10-02T12:00:00Z",
+  });
+  const two = pr({
+    number: 7,
+    title: "Add a tray",
+    headBranch: "tray",
+    commits: [commit("aaaaaaa1", "feat: tray"), commit("bbbbbbb2", "test: tray")],
+  });
+  expect(commitPreview(two, "squash")).toEqual({
+    title: "Add a tray (#7)",
+    body: "* feat: tray\n\n* test: tray",
+  });
+  // One commit takes its own title, as GitHub's default does; none falls back to the PR's.
+  expect(commitPreview({ ...two, commits: [commit("a", "feat: tray")] }, "squash")).toEqual({
+    title: "feat: tray (#7)",
+  });
+  expect(commitPreview({ ...two, commits: [] }, "squash")).toEqual({ title: "Add a tray (#7)" });
+  expect(commitPreview(two, "merge")).toEqual({
+    title: "Merge pull request #7 from me/tray",
+    body: "Add a tray",
+  });
+  expect(commitPreview(two, "rebase")).toEqual({
+    replayed: [
+      { oid: "aaaaaaa", headline: "feat: tray" },
+      { oid: "bbbbbbb", headline: "test: tray" },
+    ],
+  });
 });
