@@ -1,21 +1,8 @@
 /* The composer lab's own rules (PLX-1206), loaded only by the preview with `lab` in the hash. */
 
-/* A covered box clips to its eased height, and its own contents fade under the concept's layer. */
-form[data-lab="cover"] {
-  overflow: clip;
-}
-form[data-lab="cover"] > :not([data-lab-layer], [data-lab-host]) {
-  opacity: 0;
-  transition: opacity var(--transition-duration-fast, 120ms) var(--ease-in);
-}
-
-/* A place opening for a dragged file. */
-.lab-place {
-  animation: lab-place var(--transition-duration-base, 180ms) var(--ease-out) backwards;
-}
-@keyframes lab-place {
-  from {
-    opacity: 0;
-    scale: 0.97;
-  }
+/* The liquid body draws the box's fill, border, and shadow, so the form's own are cleared. */
+form[data-liquid] {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
 }

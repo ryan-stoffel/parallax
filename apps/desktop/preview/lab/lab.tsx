@@ -1,109 +1,164 @@
-// The composer lab (PLX-1206): concepts for a composer that morphs with what it reacts to, each
-// played on the real composer of the open thread. Preview only, and only with `lab` in the hash:
+// The composer lab (PLX-1206): the real composer of the open thread, redrawn as one liquid body
+// that each state reshapes. Preview only, and only with `lab` in the hash:
 //
 //   #thread=Tahoe icon variants&lab            the switcher, in the window's corner
-//   #thread=Tahoe icon variants&lab=voice      and plays a concept as the thread opens
+//   #thread=Tahoe icon variants&lab=tour       and plays the whole flow as the thread opens
 //   …&lab=voice&labui=0                        without the switcher, for recordings
 //
-// `window.lab.play(name)` and `window.lab.stop()` drive it from a script.
-import { type ComponentType, useCallback, useEffect, useState } from "react";
+// `window.lab.play(name)` plays a state or the tour from a script, and `window.lab.stop()` gives
+// the composer back.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Button } from "../../src/renderer/ui";
-import { Approval } from "./Approval";
-import { Drop } from "./Drop";
-import { type ConceptProps, clearEditor, composerBox } from "./morph";
-import { Queue } from "./Queue";
-import { SendTrace } from "./SendTrace";
-import { Stream } from "./Stream";
-import { Voice } from "./Voice";
+import { clearEditor, composerBox, insertText, sleep, typeInto } from "./dom";
+import { clock } from "./spring";
+import { Stage } from "./stage";
 import "./lab.css";
 
-const concepts = {
-  voice: { label: "Voice", View: Voice },
-  stream: { label: "Stream trace", View: Stream },
-  approval: { label: "Approval", View: Approval },
-  queue: { label: "Queue", View: Queue },
-  drop: { label: "File drop", View: Drop },
-  send: { label: "Send trace", View: SendTrace },
-} satisfies Record<string, { label: string; View: ComponentType<ConceptProps> }>;
-type Name = keyof typeof concepts;
+const said = "Make the composer feel like one liquid body, and keep it monotone.";
+const command = "pnpm exec icon-preview --sizes 32,128 build/icon/Assets.car";
 
-interface Playing {
-  name: Name;
-  box: HTMLFormElement;
-  controller: AbortController;
-  /** Bumped on each play, so playing the same concept again starts it over. */
-  key: number;
-}
+/** Each state's script: what a person would do to get there, then the morph. */
+const scripts = {
+  idle: async (stage: Stage) => stage.idle(),
+  focus: async (stage: Stage) => stage.focusIn(),
+  voice: async (stage: Stage, signal: AbortSignal) => {
+    stage.voice();
+    await sleep(3200, signal);
+    await stage.voiceDone(said);
+  },
+  send: async (stage: Stage, signal: AbortSignal) => {
+    if (!composerText(stage)) insertText(stage.form, said);
+    await sleep(250, signal);
+    stage.send();
+  },
+  working: async (stage: Stage) => stage.working(),
+  queue: async (stage: Stage, signal: AbortSignal) => {
+    stage.working();
+    await typeInto(stage.form, "Also record it in light mode", signal);
+    await sleep(350, signal);
+    stage.queue();
+  },
+  approval: async (stage: Stage, signal: AbortSignal) => {
+    stage.approval(command);
+    await sleep(2200, signal);
+    stage.decide(true);
+  },
+  drag: (stage: Stage, signal: AbortSignal) => stage.drag(signal),
+  error: async (stage: Stage, signal: AbortSignal) => {
+    stage.focusIn();
+    await sleep(300, signal);
+    stage.error();
+  },
+  tour: async (stage: Stage, signal: AbortSignal) => {
+    clearEditor(stage.form);
+    stage.idle();
+    await sleep(1200, signal);
+    stage.focusIn();
+    await sleep(1100, signal);
+    stage.voice();
+    await sleep(3400, signal);
+    await stage.voiceDone(said);
+    await sleep(1500, signal);
+    stage.send();
+    await sleep(1300, signal);
+    stage.working();
+    await sleep(1800, signal);
+    await typeInto(stage.form, "Also record it in light mode", signal);
+    await sleep(300, signal);
+    stage.queue();
+    await sleep(2200, signal);
+    stage.approval(command);
+    await sleep(2400, signal);
+    stage.decide(true);
+    await sleep(1200, signal);
+    await stage.drag(signal);
+    await sleep(1500, signal);
+    stage.focusIn();
+    await typeInto(stage.form, "Ship it", signal);
+    await sleep(300, signal);
+    stage.error();
+    await sleep(1200, signal);
+    clearEditor(stage.form);
+    stage.idle();
+    await sleep(1500, signal);
+  },
+} satisfies Record<string, (stage: Stage, signal: AbortSignal) => Promise<void>>;
+type Name = keyof typeof scripts;
 
-let plays = 0;
+const composerText = (stage: Stage) =>
+  stage.form.querySelector('[contenteditable="true"]')?.textContent?.trim();
 
 /** Waits up to 8 s for the thread's composer. */
 async function findBox() {
   for (let i = 0; i < 80; i++) {
     const box = composerBox();
     if (box) return box;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
   }
 }
 
 function Lab({ ui }: { ui: boolean }) {
-  const [playing, setPlaying] = useState<Playing>();
+  const stage = useRef<Stage>(undefined);
+  const run = useRef<AbortController>(undefined);
+  const [playing, setPlaying] = useState<Name>();
 
   const stop = useCallback(() => {
-    setPlaying((now) => {
-      now?.controller.abort();
-      return undefined;
-    });
+    run.current?.abort();
+    stage.current?.destroy();
+    stage.current = undefined;
+    setPlaying(undefined);
   }, []);
 
-  /** Plays a concept, resolving once it ends or another takes its place. */
+  /** Plays a state's script, resolving once it ends or another takes its place. */
   const play = useCallback(async (name: Name) => {
     const box = await findBox();
     if (!box) return console.warn("lab: no composer on screen");
-    // Each concept starts from an empty box.
-    clearEditor(box);
-    (document.activeElement as HTMLElement | null)?.blur();
+    if (stage.current?.form !== box) {
+      stage.current?.destroy();
+      stage.current = new Stage(box);
+    }
+    run.current?.abort();
     const controller = new AbortController();
-    setPlaying((now) => {
-      now?.controller.abort();
-      return { name, box, controller, key: ++plays };
-    });
-    await new Promise((resolve) => controller.signal.addEventListener("abort", resolve));
+    run.current = controller;
+    setPlaying(name);
+    try {
+      await scripts[name](stage.current, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    }
   }, []);
 
   useEffect(() => {
-    const api = { play, stop, concepts: Object.keys(concepts) };
-    Object.assign(window, { lab: api });
+    Object.assign(window, {
+      lab: { play, stop, states: Object.keys(scripts), stage: () => stage.current, clock },
+    });
   }, [play, stop]);
 
   useEffect(() => {
     const name = new URLSearchParams(location.hash.slice(1)).get("lab");
-    if (name && name in concepts) void play(name as Name);
+    if (name && name in scripts) void play(name as Name);
+    else if (name !== null) void play("idle");
   }, [play]);
 
-  const View = playing && concepts[playing.name].View;
+  if (!ui) return null;
   return (
-    <>
-      {View && (
-        <View key={playing.key} box={playing.box} signal={playing.controller.signal} done={stop} />
-      )}
-      {ui && (
-        <div className="fixed bottom-3 left-3 z-popover flex items-center gap-0.5 rounded-xl border border-border bg-surface p-1 shadow-composer">
-          {(Object.keys(concepts) as Name[]).map((name) => (
-            <Button
-              key={name}
-              size="sm"
-              onClick={() => void play(name)}
-              className={playing?.name === name ? "bg-selected" : ""}
-            >
-              {concepts[name].label}
-            </Button>
-          ))}
-        </div>
-      )}
-    </>
+    <div className="fixed bottom-3 left-3 z-popover flex flex-wrap items-center gap-0.5 rounded-xl border border-border bg-surface p-1 shadow-composer">
+      {(Object.keys(scripts) as Name[]).map((name) => (
+        <Button
+          key={name}
+          size="sm"
+          onClick={() => void play(name)}
+          className={playing === name ? "bg-selected" : ""}
+        >
+          {name}
+        </Button>
+      ))}
+      <Button size="sm" onClick={stop}>
+        off
+      </Button>
+    </div>
   );
 }
 
