@@ -527,7 +527,8 @@ svg.lucide[stroke-width="2"] * {
   dialog {
     scale: 0.97;
   }
-  :is(dialog[open], dialog[open]::backdrop) {
+  dialog[open],
+  dialog[open]::backdrop {
     transition-duration: var(--transition-duration-base);
     transition-timing-function: var(--ease-out);
     opacity: 1;
@@ -536,7 +537,8 @@ svg.lucide[stroke-width="2"] * {
     scale: 1;
   }
   @starting-style {
-    :is(dialog[open], dialog[open]::backdrop) {
+    dialog[open],
+    dialog[open]::backdrop {
       opacity: 0;
     }
     dialog[open] {

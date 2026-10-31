@@ -182,6 +182,20 @@ test("Escape closes a dialog opened in Settings, and leaves Settings open (PLX-1
   await settings.getByRole("button", { name: "Add provider" }).click();
   const add = page.getByRole("dialog", { name: "Add provider" });
   await expect(add).toBeVisible();
+  // Both modal backdrops must finish fading in for their blur to be visible (PLX-1212).
+  for (const dialog of [settings, add]) {
+    await expect
+      .poll(() =>
+        dialog.evaluate((element) => {
+          const backdrop = element.ownerDocument.defaultView!.getComputedStyle(
+            element,
+            "::backdrop",
+          );
+          return { opacity: backdrop.opacity, blur: backdrop.backdropFilter };
+        }),
+      )
+      .toEqual({ opacity: "1", blur: "blur(8px)" });
+  }
   await page.keyboard.press("Escape");
   await expect(add).toBeHidden();
   await expect(settings).toBeVisible();
