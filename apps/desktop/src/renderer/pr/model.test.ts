@@ -211,7 +211,7 @@ test("statusRows leaves out what doesn't apply and names what blocks", () => {
   );
   expect(blocked.map((r) => [r.tone, r.label, r.detail])).toEqual([
     ["failed", "1 check failed", "1 of 2 passed"],
-    ["waiting", "Review required", "1 requested"],
+    ["waiting", "Review required", "ana requested"],
     ["waiting", "Behind main", "3 commits"],
   ]);
   // A later comment doesn't undo changes requested; a merged one has no merge row.
@@ -227,6 +227,23 @@ test("statusRows leaves out what doesn't apply and names what blocks", () => {
   expect(merged).toEqual([
     { key: "reviews", tone: "failed", label: "Changes requested by bo", detail: undefined },
   ]);
+});
+
+test("statusRows names requested reviewers who haven't reviewed beside the approvals", () => {
+  const review = { state: "approved", submittedAt: "2026-10-02T12:00:00Z" } as const;
+  const [row] = rows(
+    pr({
+      state: "merged",
+      reviews: [{ author: "julius", ...review }],
+      reviewRequests: ["julius", "ana", "bo", "cy"],
+    }),
+  );
+  expect(row).toEqual({
+    key: "reviews",
+    tone: "passed",
+    label: "Approved by julius",
+    detail: "1 approval · ana and 2 others requested",
+  });
 });
 
 test("methodHint says GitHub's line for each method, with the commits when known", () => {

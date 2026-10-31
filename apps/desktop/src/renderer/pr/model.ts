@@ -341,27 +341,35 @@ export function statusRows(
   const [approvers, blockers] = [by("approved"), by("changesRequested")];
   // `pr/view` says "changesRequested"; `pr/status` says GitHub's "CHANGES_REQUESTED".
   const decision = (pr.reviewDecision ?? status?.reviewDecision)?.replaceAll("_", "").toLowerCase();
-  const approvals = approvers.length ? plural(approvers.length, "approval") : undefined;
+  // Those asked who haven't reviewed yet, by name, as the reviewers panel listed them.
+  const waiting = pr.reviewRequests.filter((who) => !latest.has(who));
+  const detail =
+    [
+      approvers.length && plural(approvers.length, "approval"),
+      waiting.length && `${names(waiting)} requested`,
+    ]
+      .filter(Boolean)
+      .join(" · ") || undefined;
   if (decision === "changesrequested" || blockers.length)
     rows.push({
       key: "reviews",
       tone: "failed",
       label: blockers.length ? `Changes requested by ${names(blockers)}` : "Changes requested",
-      detail: approvals,
+      detail,
     });
   else if (decision === "approved" || (!decision && approvers.length))
     rows.push({
       key: "reviews",
       tone: "passed",
       label: approvers.length ? `Approved by ${names(approvers)}` : "Approved",
-      detail: approvals,
+      detail,
     });
   else if (decision === "reviewrequired" || pr.reviewRequests.length)
     rows.push({
       key: "reviews",
       tone: "waiting",
       label: decision === "reviewrequired" ? "Review required" : "Waiting for review",
-      detail: pr.reviewRequests.length ? `${pr.reviewRequests.length} requested` : undefined,
+      detail,
     });
 
   if (pr.state !== "open") return rows;

@@ -140,13 +140,14 @@ export function MergeBox({
             <button
               type="button"
               aria-expanded={folds ? checksOpen : undefined}
+              title={[row.label, row.detail].filter(Boolean).join(" · ")}
               onClick={onRow[row.key]}
               className="flex h-11 w-full items-center gap-2.5 px-3.5 text-left transition-colors hover:bg-hover"
             >
               <look.Icon aria-hidden className={`size-4 shrink-0 ${look.color}`} />
               <span className="min-w-0 flex-1 truncate text-body font-medium">{row.label}</span>
               {row.detail && (
-                <span className="shrink-0 text-meta text-muted-foreground tabular-nums">
+                <span className="max-w-[35%] truncate text-meta text-muted-foreground tabular-nums">
                   {row.detail}
                 </span>
               )}

@@ -282,58 +282,60 @@ export function PullRequestView({
   return (
     <div className="@container flex min-h-0 flex-1 flex-col" onClick={(e) => showShot(e.target)}>
       <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
-        <h2
-          className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
-          title={pr.title}
-        >
-          {pr.title}{" "}
-          <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
-        </h2>
-        <div className="mt-2 flex min-w-0 items-center gap-2 text-body">
-          <Avatar login={pr.author} />
-          <span className="shrink-0 font-medium">{pr.author}</span>
-          {pr.createdAt && (
-            <span className="shrink-0 text-meta text-muted-foreground">{ago(pr.createdAt)}</span>
-          )}
-          <span className="ml-auto flex min-w-0 justify-end">
-            <BranchChips head={pr.headBranch} base={pr.baseBranch} />
-          </span>
+        <div className="mx-auto max-w-3xl">
+          <h2
+            className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
+            title={pr.title}
+          >
+            {pr.title}{" "}
+            <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
+          </h2>
+          <div className="mt-2 flex min-w-0 items-center gap-2 text-body">
+            <Avatar login={pr.author} />
+            <span className="shrink-0 font-medium">{pr.author}</span>
+            {pr.createdAt && (
+              <span className="shrink-0 text-meta text-muted-foreground">{ago(pr.createdAt)}</span>
+            )}
+            <span className="ml-auto flex min-w-0 justify-end">
+              <BranchChips head={pr.headBranch} base={pr.baseBranch} />
+            </span>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <StateBadge pr={pr} />
+            <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
+            <span className="flex-1" />
+            <Button
+              size="sm"
+              variant="outline"
+              title={`Open ${pr.repo}#${pr.number} on GitHub`}
+              onClick={() => openOnGithub(pr.url)}
+              className="rounded-full pr-2.5 pl-3"
+            >
+              Open in
+              <GitHubLogo className="size-4" />
+            </Button>
+            <IconButton
+              label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
+              disabled={busy}
+              onClick={refresh}
+            >
+              <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
+            </IconButton>
+            <IconButton
+              label="Pull request actions"
+              aria-haspopup="menu"
+              popoverTarget={`${id}-menu`}
+            >
+              <icons.more aria-hidden />
+            </IconButton>
+          </div>
+          <Tabs tab={tab} onTab={setTab} tabs={tabs} />
         </div>
-        <div className="mt-3 flex items-center gap-2">
-          <StateBadge pr={pr} />
-          <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
-          <span className="flex-1" />
-          <Button
-            size="sm"
-            variant="outline"
-            title={`Open ${pr.repo}#${pr.number} on GitHub`}
-            onClick={() => openOnGithub(pr.url)}
-            className="rounded-full pr-2.5 pl-3"
-          >
-            Open in
-            <GitHubLogo className="size-4" />
-          </Button>
-          <IconButton
-            label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
-            disabled={busy}
-            onClick={refresh}
-          >
-            <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
-          </IconButton>
-          <IconButton
-            label="Pull request actions"
-            aria-haspopup="menu"
-            popoverTarget={`${id}-menu`}
-          >
-            <icons.more aria-hidden />
-          </IconButton>
-        </div>
-        <Tabs tab={tab} onTab={setTab} tabs={tabs} />
       </header>
 
       {tab === "summary" && (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4">
+          <div className="mx-auto flex max-w-3xl flex-col gap-6 py-4">
             <MergeBox
               pr={pr}
               status={status}
