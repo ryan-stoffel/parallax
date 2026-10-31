@@ -9,13 +9,13 @@ import type {
   Capabilities,
   AgentRun,
   LoggedEvent,
-  Project,
-  ProjectIcon as ProjectIconValue,
-  ProjectAutonomy,
-  ProjectPermission,
+  Orchestrator,
+  ChosenIcon,
+  OrchestratorAutonomy,
+  OrchestratorPermission,
   InboxItem,
-  ProjectStartParams,
-  ProjectUpdateParams,
+  OrchestratorStartParams,
+  OrchestratorUpdateParams,
   PromptImage,
   Repo,
   RepoUpdateParams,
@@ -32,17 +32,17 @@ import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./tra
 import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
 
-/** A host's projects, repo entries, and normal threads (0017), and each thread's title and run. */
+/** A host's orchestrators, repo entries, and normal threads (0017), and each thread's title and run. */
 export interface ThreadsState {
-  projects: Project[];
+  orchestrators: Orchestrator[];
   repos: Repo[];
   threads: Thread[];
   /**
    * By run id: a thread's own title from plxd (0041), or else its run's (`titleOf`). Runs with no
-   * thread, such as a Project's, have their run's.
+   * thread, such as an orchestrator's, have their run's.
    */
   titles: Readonly<Record<string, string>>;
-  /** By run id: each run, kept current by its repo's or Project's own events. */
+  /** By run id: each run, kept current by its repo's or orchestrator's own events. */
   runs: Readonly<Record<string, AgentRun>>;
   /** By run id: the permission requests each run waits on (0033's "needs you"). */
   approvals: ApprovalsByRun;
@@ -152,7 +152,7 @@ export function holdQuiet(apply: (event: ParallaxEvent) => void, ms = QUIET_MS) 
 }
 
 export const emptyThreads: ThreadsState = {
-  projects: [],
+  orchestrators: [],
   repos: [],
   threads: [],
   titles: {},
@@ -188,17 +188,17 @@ function setWaiting(
 export type ThreadsAction =
   | {
       type: "snapshot";
-      projects: Project[];
+      orchestrators: Orchestrator[];
       repos: Repo[];
       threads: Thread[];
       runs: AgentRun[];
       waiting?: RunWaiting[];
     }
   | { type: "runs"; runs: AgentRun[] }
-  /** A Project's new coordinator, which no host-level event announces (0024). */
-  | { type: "coordinator"; run: AgentRun }
+  /** An orchestrator's new orchestrator, which no host-level event announces (0024). */
+  | { type: "orchestrator"; run: AgentRun }
   | { type: "event"; event: ParallaxEvent }
-  /** A repo's or a Project's own events: its runs and their permission requests. */
+  /** A repo's or an orchestrator's own events: its runs and their permission requests. */
   | { type: "scope"; events: LoggedEvent[] }
   /** The permission requests runs wait on, from the shell's snapshot. */
   | { type: "approvals"; events: LoggedEvent[] };
@@ -208,7 +208,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
   switch (action.type) {
     case "snapshot":
       return {
-        projects: action.projects,
+        orchestrators: action.orchestrators,
         repos: action.repos,
         threads: action.threads,
         titles: withThreadTitles(titlesOf(action.runs), action.threads),
@@ -230,11 +230,11 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         runs: { ...state.runs, ...byId(action.runs) },
         stoppedAt: stops(state.stoppedAt, state.runs, action.runs),
       };
-    case "coordinator":
+    case "orchestrator":
       return {
         ...threadsReducer(state, { type: "runs", runs: [action.run] }),
-        projects: state.projects.map((p) =>
-          p.id === action.run.project ? { ...p, coordinator: action.run.id } : p,
+        orchestrators: state.orchestrators.map((p) =>
+          p.id === action.run.project ? { ...p, run: action.run.id } : p,
         ),
       };
     case "scope": {
@@ -271,15 +271,15 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
     case "event": {
       const e = action.event;
       switch (e.kind) {
-        case "project.created":
-        case "project.updated":
-          return { ...state, projects: upsert(state.projects, e.project) };
-        case "project.deleted":
+        case "orchestrator.created":
+        case "orchestrator.updated":
+          return { ...state, orchestrators: upsert(state.orchestrators, e.orchestrator) };
+        case "orchestrator.deleted":
           return {
             ...state,
-            projects: state.projects.filter((p) => p.id !== e.project),
+            orchestrators: state.orchestrators.filter((p) => p.id !== e.orchestrator),
             runs: Object.fromEntries(
-              Object.entries(state.runs).filter(([, r]) => r.project !== e.project),
+              Object.entries(state.runs).filter(([, r]) => r.project !== e.orchestrator),
             ),
           };
         case "repo.added":
@@ -383,14 +383,14 @@ export interface ThreadGroup {
   /** A repo entry's id, or `noRepo`. */
   id: string;
   name: string;
-  /** A Space (0069): threads with no repository of the user's. */
-  space?: boolean;
+  /** A Project (0069): threads with no repository of the user's. */
+  project?: boolean;
 }
 
 /** The sidebar's groups: each repository, oldest first, then No repo, always there. */
 export function groupThreads({ repos }: ThreadsState): ThreadGroup[] {
   return [
-    ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, space: r.space })),
+    ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, project: r.project })),
     { id: noRepo, name: "No repo" },
   ];
 }
@@ -443,8 +443,8 @@ export const lacksRepo = (view: ThreadsView | undefined, name: string) =>
 export function sharedRepoIcons(
   hosts: Host[],
   views: Readonly<Record<string, ThreadsView>>,
-): ReadonlyMap<string, ProjectIconValue> {
-  const icons = new Map<string, ProjectIconValue>();
+): ReadonlyMap<string, ChosenIcon> {
+  const icons = new Map<string, ChosenIcon>();
   for (const host of hosts)
     for (const repo of views[host.id]?.state.repos ?? [])
       if (isRepository(repo) && repo.icon && !icons.has(repo.name)) icons.set(repo.name, repo.icon);
@@ -452,7 +452,7 @@ export function sharedRepoIcons(
 }
 
 /** A repo's icon: its own, or else its namesake's on another computer (`sharedRepoIcons`). */
-export const repoIconOf = (repo: Repo, shared: ReadonlyMap<string, ProjectIconValue>) =>
+export const repoIconOf = (repo: Repo, shared: ReadonlyMap<string, ChosenIcon>) =>
   repo.icon ?? (isRepository(repo) ? shared.get(repo.name) : undefined);
 
 /**
@@ -460,7 +460,7 @@ export const repoIconOf = (repo: Repo, shared: ReadonlyMap<string, ProjectIconVa
  * (0033), so every copy draws the same one. An image goes only where its plxd takes one that big
  * (0038).
  */
-export function setRepoIcons(views: ThreadsView[], name: string, icon: ProjectIconValue) {
+export function setRepoIcons(views: ThreadsView[], name: string, icon: ChosenIcon) {
   for (const view of views) {
     if (!("threadAttention" in view.capabilities)) continue;
     if (icon.image && icon.image.data.length > (view.iconImageBytes ?? -1)) continue;
@@ -469,42 +469,43 @@ export function setRepoIcons(views: ThreadsView[], name: string, icon: ProjectIc
   }
 }
 
-/** Whether a group holds chats with no repository of the user's: Chat, or a Space. */
-export const repoless = (g: { id: string; space?: boolean }) => g.id === noRepo || !!g.space;
+/** Whether a group holds chats with no repository of the user's: Chat, or a Project. */
+export const repoless = (g: { id: string; project?: boolean }) => g.id === noRepo || !!g.project;
 
-/** A repo entry that is a repository of the user's: not Chat's scratch entry, nor a Space. */
-export const isRepository = (r: { scratch?: boolean; space?: boolean }) => !r.scratch && !r.space;
+/** A repo entry that is a repository of the user's: not Chat's scratch entry, nor a Project. */
+export const isRepository = (r: { scratch?: boolean; project?: boolean }) =>
+  !r.scratch && !r.project;
 
-/** The Space a thread is in: the one it started in, or the one the user added it to (0090). */
-export const spaceOf = (state: ThreadsState, thread: Thread) =>
-  thread.space ??
-  (state.repos.some((r) => r.id === thread.repo && r.space) ? thread.repo : undefined);
+/** The Project a thread is in: the one it started in, or the one the user added it to (0090). */
+export const projectOf = (state: ThreadsState, thread: Thread) =>
+  thread.project ??
+  (state.repos.some((r) => r.id === thread.repo && r.project) ? thread.repo : undefined);
 
 /** A thread's group id: its repository's, or `noRepo`. */
 export const groupOf = (state: ThreadsState, thread: Thread) =>
   state.repos.some((r) => r.id === thread.repo && !r.scratch) ? thread.repo : noRepo;
 
-/** A thread's parent thread (0041), if it's listed. A Project coordinator's run is no thread. */
+/** A thread's parent thread (0041), if it's listed. An orchestrator's own run is no thread. */
 export const parentOf = (state: ThreadsState, thread: Thread) =>
   thread.parent === undefined ? undefined : state.threads.find((t) => t.id === thread.parent);
 
 /**
- * By thread id: the Project each thread is in (0042), where its own run or an ancestor's is one of
- * a Project's, as a coordinator's child's parent is. Threads in no Project are left out. Such a
- * thread shows only inside its Project, never in the main sidebar. A loop of parents stops where
- * it repeats.
+ * By thread id: the orchestrator each thread is in (0042), where its own run or an ancestor's is
+ * one of an orchestrator's, as an orchestrator's child's parent is. Threads in no orchestrator are
+ * left out. Such a thread shows only inside its orchestrator, never in the main sidebar. A loop of
+ * parents stops where it repeats.
  */
-export function threadProjects(state: ThreadsState): Map<string, string> {
-  const projects = new Set(state.projects.map((p) => p.id));
+export function threadOrchestrators(state: ThreadsState): Map<string, string> {
+  const orchestrators = new Set(state.orchestrators.map((p) => p.id));
   const parents = new Map(state.threads.map((t) => [t.id, t.parent]));
   const found = new Map<string, string>();
   for (const thread of state.threads) {
     const seen = new Set<string>();
     for (let id = thread.id as string | undefined; id && !seen.has(id); id = parents.get(id)) {
       seen.add(id);
-      const project = state.runs[id]?.project;
-      if (project && projects.has(project)) {
-        found.set(thread.id, project);
+      const orchestrator = state.runs[id]?.project;
+      if (orchestrator && orchestrators.has(orchestrator)) {
+        found.set(thread.id, orchestrator);
         break;
       }
     }
@@ -513,15 +514,17 @@ export function threadProjects(state: ThreadsState): Map<string, string> {
 }
 
 /**
- * Project `project`'s runs: its own, coordinators included, and those of the threads in it
- * (`threadProjects`). Its side panel and its sidebar row count the same runs.
+ * Orchestrator `orchestrator`'s runs: its own, orchestrators included, and those of the threads in
+ * it (`threadOrchestrators`). Its side panel and its sidebar row count the same runs.
  */
-export const projectRuns = (
+export const orchestratorRuns = (
   state: ThreadsState,
-  project: string,
-  inProject: ReadonlyMap<string, string>,
+  orchestrator: string,
+  inOrchestrator: ReadonlyMap<string, string>,
 ) =>
-  Object.values(state.runs).filter((r) => r.project === project || inProject.get(r.id) === project);
+  Object.values(state.runs).filter(
+    (r) => r.project === orchestrator || inOrchestrator.get(r.id) === orchestrator,
+  );
 
 /** The threads `id` launched, oldest first, so their order holds as they start. */
 export const childrenOf = (state: ThreadsState, id: string) =>
@@ -607,40 +610,43 @@ export interface ThreadsView {
   archive: (runId: string, archived: boolean) => Promise<string | undefined>;
   remove: (thread: Thread) => Promise<string | undefined>;
   /**
-   * Creates a project on a repository's path, with `icon` if one was chosen and `permission` and
-   * `autonomy` where the host keeps them. Reuse `id`, with the same name, path, icon, mode, and
-   * autonomy, to retry. Resolves to the project or an error message.
+   * Creates an orchestrator on a repository's path, with `icon` if one was chosen and `permission`
+   * and `autonomy` where the host keeps them. Reuse `id`, with the same name, path, icon, mode, and
+   * autonomy, to retry. Resolves to the orchestrator or an error message.
    */
-  createProject: (
+  createOrchestrator: (
     id: string,
     name: string,
     repoPath: string,
-    icon?: ProjectIconValue,
-    permission?: ProjectPermission,
-    autonomy?: ProjectAutonomy,
-  ) => Promise<Project | string>;
+    icon?: ChosenIcon,
+    permission?: OrchestratorPermission,
+    autonomy?: OrchestratorAutonomy,
+  ) => Promise<Orchestrator | string>;
   /**
-   * Renames a project or sets its icon, which replaces the whole icon (0032). Resolves to an error
+   * Renames an orchestrator or sets its icon, which replaces the whole icon (0032). Resolves to an
+   * error message, or undefined.
+   */
+  updateOrchestrator: (
+    orchestrator: string,
+    change: OrchestratorChange,
+  ) => Promise<string | undefined>;
+  /**
+   * Deletes an orchestrator with every run in it, once plxd has stopped them. Resolves to an error
    * message, or undefined.
    */
-  updateProject: (project: string, change: ProjectChange) => Promise<string | undefined>;
+  removeOrchestrator: (orchestrator: string) => Promise<string | undefined>;
   /**
-   * Deletes a Project with every run in it, once plxd has stopped them. Resolves to an error
-   * message, or undefined.
+   * Starts an orchestrator with `prompt` and its `images`, or starts it over with a new
+   * `runId` (0024), then keeps it as the orchestrator's. Reusing `runId` to retry is safe with any
+   * prompt or options: a failed `orchestrator/start` creates nothing, and one whose answer was lost
+   * shows up in `orchestrator/list` after a reconnect. Resolves to plxd's error, or undefined.
    */
-  removeProject: (project: string) => Promise<string | undefined>;
-  /**
-   * Starts a Project's coordinator with `prompt` and its `images`, or starts it over with a new
-   * `runId` (0024), then keeps it as the Project's. Reusing `runId` to retry is safe with any
-   * prompt or options: a failed `project/start` creates nothing, and one whose answer was lost
-   * shows up in `project/list` after a reconnect. Resolves to plxd's error, or undefined.
-   */
-  startCoordinator: (
-    project: string,
+  startOrchestrator: (
+    orchestrator: string,
     runId: string,
     prompt: string,
     images: PromptImage[],
-    options: CoordinatorOptions,
+    options: OrchestratorOptions,
   ) => Promise<RpcError | undefined>;
   /** The host's plxd's capabilities, or none while it isn't connected. */
   capabilities: Capabilities;
@@ -652,19 +658,19 @@ export interface ThreadsView {
    */
   update: (runId: string, change: ThreadChange) => Promise<string | undefined>;
   /**
-   * Sets a repo entry's icon, or a Space's name, instructions, or files (0090). Resolves to an
+   * Sets a repo entry's icon, or a Project's name, instructions, or files (0090). Resolves to an
    * error message, or undefined.
    */
   updateRepo: (repo: string, change: RepoChange) => Promise<string | undefined>;
-  /** Makes a Space, a project of threads with no repository (0069, 0090). Resolves to its entry or an error message. */
-  createSpace: (name: string, icon?: ProjectIconValue) => Promise<Repo | string>;
-  /** Deletes a Space and every chat in it. Resolves to an error message, or undefined. */
-  removeSpace: (space: string) => Promise<string | undefined>;
+  /** Makes a Project, an orchestrator of threads with no repository (0069, 0090). Resolves to its entry or an error message. */
+  createProject: (name: string, icon?: ChosenIcon) => Promise<Repo | string>;
+  /** Deletes a Project and every chat in it. Resolves to an error message, or undefined. */
+  removeProject: (project: string) => Promise<string | undefined>;
   /**
-   * Adds threads to a Space, or with no `space` takes them out of theirs, where each keeps working
+   * Adds threads to a Project, or with no `project` takes them out of theirs, where each keeps working
    * (0090). Resolves to an error message, or undefined.
    */
-  setSpace: (threads: string[], space?: string) => Promise<string | undefined>;
+  setProject: (threads: string[], project?: string) => Promise<string | undefined>;
 }
 
 export type RepoChange = Omit<RepoUpdateParams, "repo">;
@@ -680,34 +686,34 @@ export type ThreadChange = {
   title?: string;
 };
 
-/** What `project/update` changes: a project's name, icon, permission mode, or autonomy. */
-export type ProjectChange = Omit<ProjectUpdateParams, "project">;
+/** What `orchestrator/update` changes: an orchestrator's name, icon, permission mode, or autonomy. */
+export type OrchestratorChange = Omit<OrchestratorUpdateParams, "orchestrator">;
 
-/** What a new coordinator runs on: its model, effort, permission, and account (`project/start`'s). */
-export type CoordinatorOptions = Pick<
-  ProjectStartParams,
+/** What a new orchestrator runs on: its model, effort, permission, and account (`orchestrator/start`'s). */
+export type OrchestratorOptions = Pick<
+  OrchestratorStartParams,
   "model" | "effort" | "permission" | "account"
 >;
 
 /**
- * A host's threads and projects, kept live through `orchestration/subscribeShell` (0059): a
- * snapshot of its projects, repo entries, threads, runs, and the permission requests runs wait
+ * A host's threads and orchestrators, kept live through `orchestration/subscribeShell` (0059): a
+ * snapshot of its orchestrators, repo entries, threads, runs, and the permission requests runs wait
  * on, then what a sidebar shows of every scope's events (0033). It opens once the host connects,
  * which is when plxd's `capabilities` are known, and stays open across disconnects: a reconnect
  * resumes after the last event, and a fresh snapshot replaces the state only when the gap is
  * too long to replay (`useWatchKey`). An older plxd has no shell to load.
- * With `approvals`, the threads and coordinators started here forward their permission
+ * With `approvals`, the threads and orchestrators started here forward their permission
  * requests (PLX-196, 0031); with `threadLineage`, titles kept in this app move to plxd once
  * (0041); with `threadNaming`, plxd names new threads and their branches (0058). The view carries
- * them all for the sidebar and top bar. A Project's new Needs you inbox item (0043) goes to
+ * them all for the sidebar and top bar. An orchestrator's new Needs you inbox item (0043) goes to
  * `onNeedsYou`.
  */
 export function useThreads(
   hostId: string,
   capabilities: Capabilities | undefined,
   iconImageBytes: number | undefined,
-  /** Called for each new Needs you item in one of the host's Projects' inboxes (0043). */
-  onNeedsYou: (project: string, item: InboxItem) => void,
+  /** Called for each new Needs you item in one of the host's orchestrators' inboxes (0043). */
+  onNeedsYou: (orchestrator: string, item: InboxItem) => void,
 ): ThreadsView {
   const has = (key: string) => !!capabilities && key in capabilities;
   const connected = !!capabilities;
@@ -762,9 +768,9 @@ export function useThreads(
         return setError(old ? undefined : message.error.message);
       }
       if (message.type === "snapshot") {
-        const { projects, repos, threads, runs, requests, waiting } = message.snapshot;
+        const { orchestrators, repos, threads, runs, requests, waiting } = message.snapshot;
         quiet.clear();
-        dispatch({ type: "snapshot", projects, repos, threads, runs, waiting });
+        dispatch({ type: "snapshot", orchestrators, repos, threads, runs, waiting });
         dispatch({ type: "approvals", events: requests });
         setError(undefined);
         setOutdated(false);
@@ -876,15 +882,15 @@ export function useThreads(
         return undefined;
       },
 
-      async createProject(
+      async createOrchestrator(
         id: string,
         name: string,
         repoPath: string,
-        icon?: ProjectIconValue,
-        permission?: ProjectPermission,
-        autonomy?: ProjectAutonomy,
+        icon?: ChosenIcon,
+        permission?: OrchestratorPermission,
+        autonomy?: OrchestratorAutonomy,
       ) {
-        const answer = await window.parallax.request(hostId, "project/create", {
+        const answer = await window.parallax.request(hostId, "orchestrator/create", {
           id,
           name,
           repoPath,
@@ -895,40 +901,42 @@ export function useThreads(
         if ("error" in answer) return describeError(answer.error);
         dispatch({
           type: "event",
-          event: { kind: "project.created", project: answer.result.project },
+          event: { kind: "orchestrator.created", orchestrator: answer.result.orchestrator },
         });
-        return answer.result.project;
+        return answer.result.orchestrator;
       },
 
-      async updateProject(project: string, change: ProjectChange) {
-        const answer = await window.parallax.request(hostId, "project/update", {
-          project,
+      async updateOrchestrator(orchestrator: string, change: OrchestratorChange) {
+        const answer = await window.parallax.request(hostId, "orchestrator/update", {
+          orchestrator,
           ...change,
         });
         if ("error" in answer) return describeError(answer.error);
         dispatch({
           type: "event",
-          event: { kind: "project.updated", project: answer.result.project },
+          event: { kind: "orchestrator.updated", orchestrator: answer.result.orchestrator },
         });
         return undefined;
       },
 
-      async removeProject(project: string) {
-        const answer = await window.parallax.request(hostId, "project/delete", { project });
+      async removeOrchestrator(orchestrator: string) {
+        const answer = await window.parallax.request(hostId, "orchestrator/delete", {
+          orchestrator,
+        });
         if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "event", event: { kind: "project.deleted", project } });
+        dispatch({ type: "event", event: { kind: "orchestrator.deleted", orchestrator } });
         return undefined;
       },
 
-      async startCoordinator(
-        project: string,
+      async startOrchestrator(
+        orchestrator: string,
         runId: string,
         prompt: string,
         images: PromptImage[],
-        options: CoordinatorOptions,
+        options: OrchestratorOptions,
       ) {
-        const answer = await window.parallax.request(hostId, "project/start", {
-          project,
+        const answer = await window.parallax.request(hostId, "orchestrator/start", {
+          orchestrator,
           runId,
           prompt,
           ...(images.length > 0 && { images }),
@@ -936,7 +944,7 @@ export function useThreads(
           ...(approvals && { approvals }),
         });
         if ("error" in answer) return answer.error;
-        dispatch({ type: "coordinator", run: answer.result.run });
+        dispatch({ type: "orchestrator", run: answer.result.run });
         return undefined;
       },
 
@@ -957,8 +965,8 @@ export function useThreads(
         return undefined;
       },
 
-      async createSpace(name: string, icon?: ProjectIconValue) {
-        const answer = await window.parallax.request(hostId, "space/create", {
+      async createProject(name: string, icon?: ChosenIcon) {
+        const answer = await window.parallax.request(hostId, "project/create", {
           id: uuidv7(),
           name,
           ...(icon && { icon }),
@@ -968,17 +976,17 @@ export function useThreads(
         return answer.result.repo;
       },
 
-      async removeSpace(space: string) {
-        const answer = await window.parallax.request(hostId, "space/delete", { space });
+      async removeProject(project: string) {
+        const answer = await window.parallax.request(hostId, "project/delete", { project });
         if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "event", event: { kind: "repo.removed", repo: space } });
+        dispatch({ type: "event", event: { kind: "repo.removed", repo: project } });
         return undefined;
       },
 
-      async setSpace(threads: string[], space?: string) {
-        const answer = await window.parallax.request(hostId, "thread/setSpace", {
+      async setProject(threads: string[], project?: string) {
+        const answer = await window.parallax.request(hostId, "thread/setProject", {
           threads,
-          ...(space && { space }),
+          ...(project && { project }),
         });
         if ("error" in answer) return describeError(answer.error);
         for (const thread of answer.result.threads)
@@ -1017,13 +1025,13 @@ export const idleThreads: ThreadsView = {
   fork: async () => ({ code: -32000, message: notConnected }),
   archive: async () => notConnected,
   remove: async () => notConnected,
-  createProject: async () => notConnected,
-  updateProject: async () => notConnected,
-  removeProject: async () => notConnected,
-  startCoordinator: async () => ({ code: -32000, message: notConnected }),
+  createOrchestrator: async () => notConnected,
+  updateOrchestrator: async () => notConnected,
+  removeOrchestrator: async () => notConnected,
+  startOrchestrator: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,
-  createSpace: async () => notConnected,
-  removeSpace: async () => notConnected,
-  setSpace: async () => notConnected,
+  createProject: async () => notConnected,
+  removeProject: async () => notConnected,
+  setProject: async () => notConnected,
 };

@@ -1,7 +1,7 @@
 // The agent's permission requests (PLX-196, decision 0031): the card pinned over the composer while
 // one waits, and the line it leaves in the transcript once it's answered. The pinned card queues
-// the run's own requests and, in a Project, those of its other runs. Tool input is untrusted: it
-// renders only as text, and a plan only through the transcript's safe Markdown. Pure helpers
+// the run's own requests and, in an orchestrator, those of its other runs. Tool input is untrusted:
+// it renders only as text, and a plan only through the transcript's safe Markdown. Pure helpers
 // first, then the components.
 import { TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import {
@@ -997,12 +997,12 @@ function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNod
 
 /**
  * The requests waiting on the user, pinned over the composer so they can't scroll away: the oldest
- * as a card, with its place in the queue, and the next in its place once it's answered. The card
- * on screen stays for as long as it waits: requests that arrive after it queue behind it, older or
- * not, as a Project's other runs' can once their logs are read. Another run's names the run. A new
- * card takes focus only from nothing, or from the card just answered, never from someone typing;
- * once the last goes, focus that was in it returns by `returnFocus`. A polite status says what
- * came, how it was answered, and when more wait.
+ * as a card, with its place in the queue, and the next in its place once it's answered. The card on
+ * screen stays for as long as it waits: requests that arrive after it queue behind it, older or
+ * not, as an orchestrator's other runs' can once their logs are read. Another run's names the run.
+ * A new card takes focus only from nothing, or from the card just answered, never from someone
+ * typing; once the last goes, focus that was in it returns by `returnFocus`. A polite status says
+ * what came, how it was answered, and when more wait.
  */
 export function ApprovalQueue({
   asked,

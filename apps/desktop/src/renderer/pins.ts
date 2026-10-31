@@ -1,7 +1,7 @@
 // The sidebar's pins (0075): the order of pinned threads, the favorites' order, and an icon per
 // pinned thread, with how Today shows its threads. They live on this computer until plxd keeps them
 // (PLX-858); a pin itself is `pinned` on the thread, in plxd.
-import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
+import type { ChosenIcon } from "../protocol/generated/protocol";
 import { stored } from "./stored";
 
 /** The pins' order, by pin key (`<host>/<id>`). Pins it doesn't place go last. */
@@ -34,12 +34,12 @@ export function readLayout(raw: unknown, fallback: PinLayout): PinLayout {
 export const pinLayout = stored<PinLayout>("parallax:pinLayout", { order: [] }, readLayout);
 
 /** An icon per pinned thread, by pin key, chosen from its menu. */
-export const pinIcons = stored<Record<string, ProjectIconValue>>(
+export const pinIcons = stored<Record<string, ChosenIcon>>(
   "parallax:pinIcons",
   {},
   (raw, fallback) =>
     raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, ProjectIconValue>)
+      ? (raw as Record<string, ChosenIcon>)
       : fallback,
 );
 

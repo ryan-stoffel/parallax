@@ -1,7 +1,7 @@
-//! The question tools (PLX-402, decision 0043): a Project's child gets `ask`, and its coordinator
-//! gets `answer` and `escalate`. Which ones a caller gets follows its run as plxd reports it, and
-//! the server passes that run as the asker or the answerer, so no tool takes it. plxd checks the
-//! same roles again in `question/*`.
+//! The question tools (PLX-402, decision 0043): an orchestrator's child gets `ask`, and its
+//! orchestrator gets `answer` and `escalate`. Which ones a caller gets follows its run as plxd
+//! reports it, and the server passes that run as the asker or the answerer, so no tool takes it.
+//! plxd checks the same roles again in `question/*`.
 
 use parallax_protocol::methods::{QuestionAnswer, QuestionAsk, QuestionEscalate};
 use parallax_protocol::{
@@ -13,17 +13,17 @@ use serde_json::{Value, json};
 use super::thread::Binding;
 use super::{object, parse, pretty, tool};
 
-/// What a Project's child gets.
+/// What an orchestrator's child gets.
 pub const CHILD_TOOLS: &[&str] = &["ask"];
 
-/// What a Project's coordinator gets.
-pub const COORDINATOR_TOOLS: &[&str] = &["answer", "escalate"];
+/// What an orchestrator gets.
+pub const ORCHESTRATOR_TOOLS: &[&str] = &["answer", "escalate"];
 
-/// The tools of a caller in a Project, by whether it is the coordinator.
+/// The tools of a caller in an orchestrator, by whether it is the orchestrator.
 #[must_use]
-pub fn tools(coordinator: bool) -> &'static [&'static str] {
-    if coordinator {
-        COORDINATOR_TOOLS
+pub fn tools(orchestrator: bool) -> &'static [&'static str] {
+    if orchestrator {
+        ORCHESTRATOR_TOOLS
     } else {
         CHILD_TOOLS
     }
@@ -31,12 +31,12 @@ pub fn tools(coordinator: bool) -> &'static [&'static str] {
 
 /// `tools/list` entries for [`tools`].
 #[must_use]
-pub fn definitions(coordinator: bool) -> Vec<Value> {
+pub fn definitions(orchestrator: bool) -> Vec<Value> {
     let question = json!({"type": "string", "description": "The question's id, from the message that woke you."});
-    if !coordinator {
+    if !orchestrator {
         return vec![tool(
             "ask",
-            "Ask your Project's coordinator a question without waiting. Choose the answer you think most likely, say it as the assumption, and go on working on it at once: if the coordinator or the user decides otherwise, a message tells you.",
+            "Ask your orchestrator a question without waiting. Choose the answer you think most likely, say it as the assumption, and go on working on it at once: if the orchestrator or the user decides otherwise, a message tells you.",
             object(
                 json!({
                     "question": {"type": "string", "description": "The question, at most 4 KiB."},
@@ -113,7 +113,7 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Str
                 .await?
                 .question;
             Ok(format!(
-                "Recorded question {}. Go on now with your assumption: {}\nIf the coordinator or \
+                "Recorded question {}. Go on now with your assumption: {}\nIf the orchestrator or \
                  the user decides otherwise, a message will tell you.",
                 asked.id, asked.assumption
             ))

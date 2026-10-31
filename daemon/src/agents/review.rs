@@ -18,7 +18,7 @@ use parallax_protocol::{
     AgentDiffFile, AgentDiffResult, AgentDiffStats, AgentEntry, AgentEntryKind,
     AgentFileCreateParams, AgentFileDeleteParams, AgentFileEditResult, AgentFileParams,
     AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentFilesParams,
-    AgentFilesResult, ErrorKind, ProjectId, RunId,
+    AgentFilesResult, ErrorKind, RunId, ScopeId,
 };
 use parallax_store::{Run as RunRow, Worktree};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
@@ -48,7 +48,7 @@ async fn reviewable(daemon: &Arc<Daemon>, id: RunId) -> Result<(RunRow, Worktree
     let Some(worktree) = worktree else {
         if row.fields.policy == convert::NO_WRITE {
             return Err(ErrorObject::invalid_params(format!(
-                "run {id} is a project's coordinator, which changes no files to review"
+                "run {id} is an orchestrator, which changes no files to review"
             )));
         }
         return Err(no_worktree(id));
@@ -232,7 +232,7 @@ pub(crate) async fn run_folder(
             return Ok((worktree.path.into(), Some(worktree.git_dir.into())));
         }
         if row.fields.checkout
-            && let Ok(scope) = ProjectId::try_from(row.fields.project_id)
+            && let Ok(scope) = ScopeId::try_from(row.fields.project_id)
             && db
                 .get_repo(row.fields.project_id)
                 .map_err(|error| store_error(&error))?

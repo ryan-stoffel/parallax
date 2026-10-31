@@ -13,7 +13,9 @@
 //!
 //! Changes must be additive: new methods, notifications, event kinds, optional fields, and enum
 //! values keep [`PROTOCOL_VERSION`]. Receivers ignore anything unknown, and every enum that Rust
-//! receives has a fallback variant for values it does not know.
+//! receives has a fallback variant for values it does not know. The one exception is 0093's
+//! rename of a Project and its coordinator to an orchestrator, which keeps the old names for one
+//! release ([`legacy`]); the old messages moved to `samples/v1/legacy/`, which only decode.
 //!
 //! The committed samples in `samples/v<N>/`, one directory per protocol version, enforce this in
 //! `cargo test`. Each file is one scenario: a JSON array of the messages on the wire, in order.
@@ -54,12 +56,13 @@ mod import;
 mod inbox;
 pub mod jsonrpc;
 mod land;
+pub mod legacy;
 mod memory;
 pub mod methods;
 mod orchestration;
+mod orchestrator;
 mod pr_media;
 mod preview;
-mod project;
 mod provider;
 mod pull_request;
 mod question;
@@ -90,8 +93,8 @@ pub use agent::{
     AgentRun, AgentRunResult, AgentRunState, AgentSendParams, AgentSetPermissionParams,
     AgentStartParams, AgentStatus, AgentStopTaskParams, AgentStopTaskResult, AgentSubagentStatus,
     AgentTodoItem, AgentTodoStatus, AgentToolStatus, AgentWaitParams, AgentWaitResult,
-    AgentWaitUntil, CoordinatorSessionEnd, CoordinatorThreadId, DiffSummary, ImageId,
-    ImageMediaType, LoggedEvent, PromptImage, RunId, SecretStatus, TurnId,
+    AgentWaitUntil, DiffSummary, ImageId, ImageMediaType, LoggedEvent, OrchestratorSessionEnd,
+    OrchestratorThreadId, PromptImage, RunId, SecretStatus, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
@@ -193,17 +196,18 @@ pub use orchestration::{
     ThreadHistoryParams, ThreadHistoryResult, ThreadRun, ThreadRunStatus, ThreadRunsParams,
     ThreadRunsResult, ThreadSnapshot, TurnCheckpoint, TurnDiffParams, TurnDiffResult,
 };
+pub use orchestrator::{
+    ChosenIcon, Orchestrator, OrchestratorAutonomy, OrchestratorCreateParams,
+    OrchestratorCreateResult, OrchestratorDeleteParams, OrchestratorDeleteResult,
+    OrchestratorFreshParams, OrchestratorFromThreadsParams, OrchestratorFromThreadsResult,
+    OrchestratorListParams, OrchestratorListResult, OrchestratorPermission,
+    OrchestratorStartParams, OrchestratorUpdateParams, OrchestratorUpdateResult, ScopeId,
+};
 pub use pr_media::{PrMediaFile, PrMediaUploaded, PrUploadMediaParams, PrUploadMediaResult};
 pub use preview::{
     PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInput,
     PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult, PreviewMouse,
     PreviewTab,
-};
-pub use project::{
-    CoordinatorFreshParams, Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult,
-    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
     CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
@@ -260,15 +264,15 @@ pub use terminal::{
     TerminalWriteParams,
 };
 pub use thread::{
-    ForkedFrom, MAX_SPACE_FILES, MAX_SPACE_INSTRUCTIONS_BYTES, MAX_SPACE_NAME_BYTES,
-    MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult, RepoCloneParams,
+    ForkedFrom, MAX_PROJECT_FILES, MAX_PROJECT_INSTRUCTIONS_BYTES, MAX_PROJECT_NAME_BYTES,
+    MAX_THREAD_TITLE_BYTES, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, Repo, RepoAddParams, RepoAddResult, RepoCloneParams,
     RepoCloneProgressParams, RepoCloneProgressResult, RepoId, RepoMatchParams, RepoMatchResult,
     RepoRef, RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams,
-    RepoUpdateResult, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
-    Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming, ThreadSearchParams,
-    ThreadSearchResult, ThreadSetSpaceParams, ThreadSetSpaceResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
+    RepoUpdateResult, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming,
+    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,

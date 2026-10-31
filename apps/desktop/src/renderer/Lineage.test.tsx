@@ -92,11 +92,11 @@ beforeEach(() => {
     "thread/list": () => ({ result: { repos: [parallax], threads, seq: 7 } }),
     "agent/list": (p) => ({
       result: {
-        runs: p["project"] ? runs.filter((r) => r.project === p["project"]) : runs,
+        runs: p["orchestrator"] ? runs.filter((r) => r.project === p["orchestrator"]) : runs,
         seq: 7,
       },
     }),
-    "project/list": () => ({ result: { projects: [], seq: 7 } }),
+    "orchestrator/list": () => ({ result: { orchestrators: [], seq: 7 } }),
   };
   window.parallax = {
     onProfile: () => () => {},

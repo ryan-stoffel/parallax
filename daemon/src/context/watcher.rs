@@ -14,7 +14,7 @@
 use std::path::{Component, Path};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use parallax_protocol::ProjectId;
+use parallax_protocol::ScopeId;
 use tracing::warn;
 
 use super::{MAX_PROJECT_BYTES, context_file, validate_relative_path};
@@ -58,13 +58,13 @@ fn handle(daemon: &Daemon, context_root: &Path, event: &Event) {
 /// The project and path, joined with `/`, that a changed path names inside one project's context
 /// folder. Anything else (the project folder itself, or a folder name that isn't a project id,
 /// such as `you`) is ignored here; [`observe`] then checks the path as plxd's own calls do.
-fn relative_file(context_root: &Path, path: &Path) -> Option<(ProjectId, String)> {
+fn relative_file(context_root: &Path, path: &Path) -> Option<(ScopeId, String)> {
     let relative = path.strip_prefix(context_root).ok()?;
     let mut components = relative.components();
     let Component::Normal(project_name) = components.next()? else {
         return None;
     };
-    let project: ProjectId = project_name.to_str()?.parse().ok()?;
+    let project: ScopeId = project_name.to_str()?.parse().ok()?;
     let mut parts = Vec::new();
     for component in components {
         let Component::Normal(part) = component else {

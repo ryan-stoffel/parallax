@@ -710,7 +710,7 @@ async fn a_hubs_codex_run_gets_the_hub_as_its_model_provider() {
         permission: None,
         context_window: None,
         fast: None,
-        coordinator_tools: None,
+        orchestrator_tools: None,
         thread_tools: None,
         approvals: true,
         thread: true,

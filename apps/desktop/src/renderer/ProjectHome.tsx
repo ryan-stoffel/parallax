@@ -1,559 +1,612 @@
+// A Project's page, New thread laid out as a page (0090): its header, the composer, then its threads
+// beside the instructions and files plxd gives every thread in it.
 import {
-  ArrowUp,
-  BookOpen,
-  ChevronLeft,
-  CircleAlert,
-  CircleCheck,
-  LoaderCircle,
-  MessageCircleQuestion,
+  Archive,
+  ArrowLeft,
+  Check,
+  MessagesSquare,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  Upload,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useId, useRef, useState, type DragEvent, type Ref } from "react";
 
-import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
-import { runAttention, type Attention } from "./attention";
-import { WorkingMark } from "./AttentionMark";
-import { AllFiles, board, ContextBody, ContextReader, type ProjectContext } from "./ContextPanel";
-import { questionOf, type InboxView } from "./Inbox";
-import { dayLabel, locale } from "./locale";
+import type { Repo } from "../protocol/generated/protocol";
+import { activeAt, attentionOf } from "./attention";
+import { AttentionBadge } from "./AttentionMark";
+import { useConnection } from "./ConnectionStatus";
+import type { FavoriteAction } from "./Favorites";
+import { FileCard } from "./FileCard";
 import { notify } from "./notifications";
-import { OpenHint } from "./OpenHint";
-import { clockOptions } from "./prefs";
-import type { ProjectAgentsView } from "./ProjectAgents";
-import { age, ProjectIcon } from "./Sidebar";
-import { titleOf } from "./threads";
+import type { ProjectEntry } from "./projectList";
+import { ProjectMenu, ProjectTile } from "./ProjectsPage";
+import { quietButton } from "./settings/parts";
+import type { Host } from "./hosts";
+import { hostIcon } from "./RunTargetMenu";
+import { age, backendLogo, RepoIcon } from "./Sidebar";
+import { asksOf, projectOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
-import type { Approval } from "./transcript";
+import { toast } from "./undo";
+import { uploadBytes, uploadFiles } from "./uploads";
 
-type Group = "waiting" | "working" | "ready" | "resolved";
-
-interface Row {
-  run: AgentRun;
-  title: string;
-  group: Group;
-  attention: Attention;
-  /** Its newest inbox item, unread or not. */
-  latest?: InboxItem;
-  unread: InboxItem[];
-  question?: Question;
-  approval?: Approval;
-}
-
-const dayMs = 24 * 60 * 60 * 1000;
+const panelPart = "p-5";
+const panelHead = "mb-3 flex items-center justify-between gap-2";
 
 /**
- * A Project's home in the side panel, set like Cursor's project page. Its head is the Project's
- * icon, name, and how many of its threads are open, a chip for each open state, and a book that
- * opens All files, its context folder as a tree. Then where it stands: the coordinator's status
- * board, its tasks as circles and its pull requests, issues, and other files linked. Then Running:
- * the children working or waiting on the user, each with what it last said, a question taking its
- * answer in place. Then the log: each finished child once, newest first, under its day, with its
- * diff and the time it finished. A finish is bright until it's opened, which marks what it reported
- * read (0043).
+ * A Project's header, in place of New thread's question: a way back to Projects, then its icon and
+ * name on one line, Pin, and its menu. Where its plxd keeps icons, the icon turns to a pencil on hover
+ * and opens the icon picker.
  */
-export function ProjectHome({
-  hostId,
-  context,
-  project,
-  agents,
-  titles = {},
-  inbox,
-  answerable,
-  onOpen,
+export function ProjectHeader({
+  entry,
+  pinned,
+  onTogglePin,
+  actionsFor,
+  onBack,
 }: {
-  hostId: string;
-  /** The Project's context files: its status board, and all of them behind the book. */
-  context: ProjectContext;
-  project: Project;
-  agents: ProjectAgentsView;
-  titles?: Readonly<Record<string, string>>;
-  inbox: InboxView;
-  answerable: boolean;
-  onOpen: (runId: string) => void;
+  entry: ProjectEntry;
+  pinned: boolean;
+  onTogglePin: () => void;
+  actionsFor: () => FavoriteAction[];
+  /** Opens the orchestrators page. */
+  onBack: () => void;
 }) {
-  const [openPath, setOpenPath] = useState<string>();
-  const [browsing, setBrowsing] = useState(false);
-  const rows = rowsOf(project, agents, inbox, answerable, titles);
-  const live = rows.filter((r) => r.group === "working" || r.group === "waiting");
-  const log = rows.filter((r) => r.group === "ready" || r.group === "resolved");
-  const open = (row: Row) => {
-    onOpen(row.run.id);
-    const read = row.unread.filter((i) => i.kind !== "needsYou").map((i) => i.id);
-    if (read.length) void inbox.seen(read);
-  };
-  const answer = (row: Row) => (text: string) =>
-    row.question
-      ? inbox.answer(
-          row.unread.find((i) => i.kind === "needsYou")!,
-          row.question,
-          text,
-        )
-      : Promise.resolve(undefined);
-
-  const { files, error } = context;
-  const opened = files.find((f) => f.path === openPath);
-  const notes = files.find((f) => f.path === board);
-
-  if (opened)
-    return (
-      <ContextReader
-        hostId={hostId}
-        project={project.id}
-        files={files}
-        file={opened}
-        onOpen={setOpenPath}
-        onBack={() => setOpenPath(undefined)}
-      />
-    );
-  if (browsing)
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <button
-          type="button"
-          onClick={() => setBrowsing(false)}
-          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
-        >
-          <ChevronLeft aria-hidden className="size-4 shrink-0" />
-          <span className="truncate">{project.name}</span>
-        </button>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2">
-          <h3 className={`${sectionHeading} px-2.5`}>All files</h3>
-          <AllFiles files={files} onOpen={setOpenPath} />
-        </div>
-      </div>
-    );
+  const trigger = useRef<HTMLButtonElement>(null);
+  const changeIcon = actionsFor().find((a) => a.label === "Change icon…");
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
-      <header className="flex items-center gap-3 px-1 pt-5">
-        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border bg-surface">
-          <ProjectIcon icon={project.icon} className="size-5" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="truncate text-heading leading-tight font-semibold tracking-tight">
-            {project.name}
-          </h2>
-          <p className="mt-0.5 text-body text-muted-foreground">{openLine(rows)}</p>
-        </div>
-        {files.length > 0 && (
-          <span className="ml-auto self-start">
-            <IconButton label="All files" onClick={() => setBrowsing(true)}>
-              <BookOpen />
-            </IconButton>
-          </span>
-        )}
-      </header>
-      <OpenCounts rows={rows} />
-      <section aria-label="Where it stands" className="px-1">
-        {notes ? (
-          <ContextBody
-            hostId={hostId}
-            project={project.id}
-            files={files}
-            file={notes}
-            onOpen={setOpenPath}
-          />
+    <header className="mb-6">
+      <button
+        type="button"
+        onClick={onBack}
+        className="-ml-1 mb-4 flex items-center gap-1 rounded-md px-1 text-body text-muted-foreground hover:text-foreground [&_svg]:size-4"
+      >
+        <ArrowLeft aria-hidden />
+        Projects
+      </button>
+      <div className="flex items-center gap-3">
+        {changeIcon ? (
+          <button
+            type="button"
+            aria-label="Change icon"
+            title="Change icon"
+            onClick={(e) => changeIcon.run(e.currentTarget)}
+            className="group relative -m-1 shrink-0 rounded-md p-1"
+          >
+            <ProjectTile entry={entry} size="mark" />
+            <span className="absolute inset-0 grid place-items-center rounded-md bg-surface text-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 [&_svg]:size-4">
+              <Pencil aria-hidden />
+            </span>
+          </button>
         ) : (
-          <p className="pt-5 text-body text-muted-foreground">
-            The coordinator keeps a status board here once it starts on the work.
-          </p>
+          <ProjectTile entry={entry} size="mark" />
         )}
+        <h1 className="min-w-0 flex-1 truncate text-display leading-none font-semibold tracking-tight">
+          {entry.name}
+        </h1>
+        <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
+          {pinned ? <PinOff /> : <Pin />}
+        </IconButton>
+        <ProjectMenu
+          entry={entry}
+          pinned={pinned}
+          onTogglePin={onTogglePin}
+          actionsFor={actionsFor}
+          trigger={trigger}
+          className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
+        />
+      </div>
+    </header>
+  );
+}
+
+/**
+ * A Project's threads under the composer, newest first, as the sidebar's thread cards show them:
+ * those started in it, and those the user added. Each archives from its card, as in the sidebar,
+ * and Add opens a picker of this computer's other threads.
+ */
+export function ProjectThreads({
+  host,
+  project,
+  view,
+  onOpenThread,
+}: {
+  /** The computer the Project, and so each thread in it, is on. */
+  host: Host;
+  project: Repo;
+  view: ThreadsView;
+  onOpenThread: (threadId: string) => void;
+}) {
+  const { state } = view;
+  const picker = useRef<HTMLDialogElement>(null);
+  const canAdd = "projectThreads" in view.capabilities;
+  const archive = async (thread: string, title: string) => {
+    const failed = await view.archive(thread, true);
+    if (failed)
+      return notify({ tone: "error", title: "Couldn't archive the thread", body: failed });
+    toast(`Archived “${title}”`, () => void view.archive(thread, false));
+  };
+  const threads = state.threads
+    .filter((t) => projectOf(state, t) === project.id && !t.parent && !t.archived)
+    .map((t) => {
+      const run = state.runs[t.id];
+      return {
+        thread: t,
+        run,
+        at: activeAt(t, run, state.stoppedAt[t.id]),
+        attention: attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
+      };
+    })
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  return (
+    <section aria-label="Threads">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-reading font-medium">Threads</h2>
+        {canAdd && (
+          <IconButton label="Add threads" onClick={() => picker.current?.showModal()}>
+            <Plus />
+          </IconButton>
+        )}
+      </div>
+      {threads.length === 0 ? (
+        <div className="flex flex-col items-center px-6 py-12 text-center">
+          <span className="grid size-10 place-items-center rounded-xl bg-hover text-muted-foreground">
+            <MessagesSquare aria-hidden className="size-5" />
+          </span>
+          <p className="mt-3 text-body font-medium">No threads yet</p>
+          <p className="mt-1 max-w-xs text-body text-muted-foreground">
+            Ask anything above, or add threads you've started. Each thread here follows this
+            Project's instructions and can read its files.
+          </p>
+        </div>
+      ) : (
+        <ul className="-mx-2 flex flex-col gap-1">
+          {threads.map(({ thread, run, at, attention }) => {
+            const Logo = run?.backend ? backendLogo(run.backend) : undefined;
+            const title = state.titles[thread.id] ?? "Thread";
+            return (
+              <li key={thread.id} className="group/row relative rounded-lg hover:bg-hover">
+                <button
+                  type="button"
+                  onClick={() => onOpenThread(thread.id)}
+                  className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-2 text-left transition-transform duration-100 active:scale-[0.985]"
+                >
+                  <span className="flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground">
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <RepoIcon repo={project} />
+                      <span className="truncate">{project.name}</span>
+                    </span>
+                    <span className="shrink-0 group-focus-within/row:invisible group-hover/row:invisible">
+                      {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
+                    </span>
+                  </span>
+                  <span className="flex w-full items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-body font-semibold transition-colors group-hover/row:font-bold">
+                      {title}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3.5">
+                      {hostIcon(host)}
+                      {host.name}
+                      {Logo && (
+                        <>
+                          <span aria-hidden>·</span>
+                          <Logo className="opacity-80 grayscale" />
+                        </>
+                      )}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  title="Archive (E)"
+                  onClick={() => void archive(thread.id, title)}
+                  className="absolute top-1 right-1 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground opacity-0 transition-opacity duration-150 group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+                >
+                  <Archive aria-hidden />
+                  Archive
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {canAdd && <AddThreads ref={picker} project={project} view={view} />}
+    </section>
+  );
+}
+
+/**
+ * Add threads: this computer's threads outside the Project, newest first, to search and check, then
+ * add. A thread started in a Project lives there, and an orchestrator's in its orchestrator, so
+ * neither shows.
+ */
+function AddThreads({
+  ref,
+  project,
+  view,
+}: {
+  ref: Ref<HTMLDialogElement>;
+  project: Repo;
+  view: ThreadsView;
+}) {
+  const { state } = view;
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [error, setError] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const titleId = useId();
+  const homes = new Map(state.repos.map((r) => [r.id, r]));
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const threads = state.threads
+    .filter((t) => {
+      const home = homes.get(t.repo);
+      return home && !home.project && !t.parent && !t.archived && t.project !== project.id;
+    })
+    .map((t) => {
+      const run = state.runs[t.id];
+      const home = homes.get(t.repo)!;
+      return {
+        thread: t,
+        title: state.titles[t.id] ?? "Thread",
+        // Where it is now: the Project it was added to, else where it works.
+        place: (t.project && homes.get(t.project)) || home,
+        at: activeAt(t, run, state.stoppedAt[t.id]),
+      };
+    })
+    .filter(({ title, place }) => {
+      const text = `${title} ${place.scratch ? "No repo" : place.name}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    })
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const toggle = (id: string) => {
+    const next = new Set(picked);
+    if (!next.delete(id)) next.add(id);
+    setPicked(next);
+  };
+  const reset = () => {
+    setQuery("");
+    setPicked(new Set());
+    setError(undefined);
+  };
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby={titleId}
+      onClose={reset}
+      className="m-auto w-[min(36rem,90vw)] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+    >
+      <form
+        method="dialog"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const dialog = e.currentTarget.closest("dialog");
+          setAdding(true);
+          const failed = await view.setProject([...picked], project.id);
+          setAdding(false);
+          if (failed) return setError(failed);
+          dialog?.close();
+        }}
+        className="flex flex-col p-5"
+      >
+        <h2 id={titleId} className="text-reading font-semibold">
+          Add threads to {project.name}
+        </h2>
+        <p className="mt-1 text-body text-muted-foreground">
+          They keep working where they are, and follow this Project's instructions from their next
+          message.
+        </p>
+        <label className="mt-4 flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 focus-within:outline-2 focus-within:outline-ring">
+          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+          <input
+            type="search"
+            aria-label="Search threads"
+            placeholder="Search threads"
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
+          />
+        </label>
+        <ul
+          aria-label="Threads to add"
+          className="-mx-2 mt-3 flex h-80 flex-col gap-0.5 overflow-y-auto"
+        >
+          {threads.length === 0 && (
+            <li className="m-auto text-body text-faint-foreground">
+              {words.length ? "Nothing matches" : "No other threads on this computer"}
+            </li>
+          )}
+          {threads.map(({ thread, title, place, at }) => (
+            <li key={thread.id}>
+              <label
+                className={`flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-hover ${picked.has(thread.id) ? "bg-accent/8" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={`Add ${title}`}
+                  checked={picked.has(thread.id)}
+                  onChange={() => toggle(thread.id)}
+                  className="peer sr-only"
+                />
+                <span
+                  aria-hidden
+                  className="grid size-4 shrink-0 place-items-center rounded-sm border border-faint-foreground/50 bg-background text-accent-foreground peer-checked:border-accent peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-ring [&_svg]:invisible peer-checked:[&_svg]:visible"
+                >
+                  <Check className="size-3" strokeWidth={3} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body font-medium">{title}</span>
+                  <span className="flex items-center gap-1.5 text-meta text-faint-foreground">
+                    <RepoIcon repo={place} />
+                    <span className="truncate">{place.scratch ? "No repo" : place.name}</span>
+                    <span aria-hidden>·</span>
+                    <span className="shrink-0">{age(at)}</span>
+                  </span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
         {error && (
-          <p role="alert" className="pt-1.5 text-body text-danger">
+          <p role="alert" className="mt-2 text-meta text-danger">
             {error}
           </p>
         )}
-      </section>
-      {live.length > 0 && (
-        <section aria-label="Running">
-          <h3 className={sectionHeading}>Running</h3>
-          <ul className={group}>
-            {live.map((row) => (
-              <LiveRow key={row.run.id} row={row} onOpen={() => open(row)} onAnswer={answer(row)} />
-            ))}
-          </ul>
-        </section>
-      )}
-      {daysOf(log).map(({ label, rows }) => (
-        <section key={label} aria-label={label}>
-          <h3 className={sectionHeading}>{label}</h3>
-          <ul className={group}>
-            {rows.map((row) => (
-              <LogRow key={row.run.id} row={row} onOpen={() => open(row)} />
-            ))}
-          </ul>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-// A section's heading, and its rows grouped in one rounded list with hairlines between them.
-const sectionHeading =
-  "px-1 pt-6 pb-2 text-caption font-medium tracking-[0.08em] text-faint-foreground uppercase";
-const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
-
-/**
- * How many of a Project's threads are open, working, waiting, or done but unread, and how many
- * finished in the last week.
- */
-export function openLine(rows: readonly Pick<Row, "group" | "run">[], now = Date.now()): string {
-  const open = rows.filter((r) => r.group !== "resolved").length;
-  const done = rows.filter(
-    (r) =>
-      (r.group === "ready" || r.group === "resolved") &&
-      now - Date.parse(r.run.updatedAt) < 7 * dayMs,
-  ).length;
-  const first = open > 0 ? `${open} open ${open === 1 ? "thread" : "threads"}` : "No open threads";
-  return done > 0 ? `${first} · ${done} done this week` : first;
-}
-
-/**
- * The open threads by state, as a row of chips under the head, each with its rows' icon: working,
- * needing the user, and done but unread. Only states with threads show.
- */
-function OpenCounts({ rows }: { rows: readonly Row[] }) {
-  const count = (g: Group) => rows.filter((r) => r.group === g).length;
-  const chips = [
-    { label: "working", n: count("working"), icon: <WorkingMark /> },
-    {
-      label: count("waiting") === 1 ? "needs you" : "need you",
-      n: count("waiting"),
-      icon: <MessageCircleQuestion className="text-warning" />,
-    },
-    { label: "to review", n: count("ready"), icon: <CircleCheck className="text-added" /> },
-  ].filter((c) => c.n > 0);
-  if (chips.length === 0) return null;
-  return (
-    <ul aria-label="Open threads" className="mt-3 flex flex-wrap gap-1.5 px-1">
-      {chips.map((c) => (
-        <li
-          key={c.label}
-          className="flex h-6 items-center gap-1.5 rounded-full border border-border bg-surface pr-2.5 pl-2 text-meta text-muted-foreground [&_svg]:size-3.5"
-        >
-          <span aria-hidden className="grid">
-            {c.icon}
-          </span>
-          <span className="font-medium text-foreground tabular-nums">{c.n}</span>
-          {c.label}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** Finished rows under their day, Today, Yesterday, or the date, newest first. */
-function daysOf(rows: readonly Row[]): { label: string; rows: Row[] }[] {
-  const days: { label: string; rows: Row[] }[] = [];
-  for (const row of rows.toSorted((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt))) {
-    const label = dayLabel(Date.parse(row.run.updatedAt));
-    if (days.at(-1)?.label === label) days.at(-1)!.rows.push(row);
-    else days.push({ label, rows: [row] });
-  }
-  return days;
-}
-
-/** 1234 as "1.2k", for a diff's counts in a row. */
-const short = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`);
-
-/**
- * A title without a Conventional Commit prefix, which plxd's thread titles often lead with:
- * "fix(GH-27): x" reads "x". Any other title is left as it is.
- */
-export const plainTitle = (title: string) =>
-  /^(?:feat|fix|chore|docs|test|refactor|perf|build|ci|style|revert)(?:\([^)]+\))?!?: +(\S.*)$/.exec(
-    title,
-  )?.[1] ?? title;
-
-/**
- * Each child of `project` once, newest first, with its group: waiting on the user (a question, an
- * approval, or an unread failure) or working, which the Project tab shows in Running; or finished,
- * ready while its news is unread and resolved once read, which it shows in the log.
- */
-function rowsOf(
-  project: Project,
-  agents: ProjectAgentsView,
-  inbox: InboxView,
-  answerable: boolean,
-  titles: Readonly<Record<string, string>>,
-): Row[] {
-  return agents.runs
-    .filter((r) => r.id !== project.coordinator && r.policy !== "noWrite")
-    .map((run) => {
-      const items = inbox.items.filter((i) => i.run === run.id);
-      const unread = items.filter((i) => !i.seenAt);
-      const asking = unread.find((i) => i.kind === "needsYou");
-      const question = asking && answerable ? questionOf(asking, inbox.questions) : undefined;
-      const approval = agents.waiting[run.id]?.[0];
-      const attention = runAttention(run, (asking ? 1 : 0) + (approval ? 1 : 0));
-      const failedUnread = unread.some((i) => i.kind === "failed");
-      const group: Group =
-        attention === "needsYou" || (attention === "failed" && failedUnread)
-          ? "waiting"
-          : attention === "working"
-            ? "working"
-            : unread.length > 0
-              ? "ready"
-              : "resolved";
-      return {
-        run,
-        title: titles[run.id] ?? titleOf(run),
-        group,
-        attention,
-        latest: items.at(-1),
-        unread,
-        question,
-        approval,
-      };
-    })
-    .toSorted((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt));
-}
-
-/** How many children wait on the user, as the Project tab's header and its badge count them. */
-export const waitingCount = (project: Project, agents: ProjectAgentsView, inbox: InboxView) =>
-  rowsOf(project, agents, inbox, false, {}).filter((r) => r.group === "waiting").length;
-
-/** What a child last reported, without its title, which plxd's text leads with. */
-function subjectOf(row: Row): string | undefined {
-  if (row.question && row.question.status !== "answered") return row.question.question;
-  if (row.approval) {
-    const input = row.approval.request.input;
-    const command =
-      input &&
-      typeof input === "object" &&
-      !Array.isArray(input) &&
-      typeof input["command"] === "string"
-        ? input["command"]
-        : undefined;
-    return `Wants to run ${row.approval.request.toolName}${command ? `: ${command}` : ""}`;
-  }
-  const text = row.latest?.text;
-  if (!text) return undefined;
-  return text.startsWith(`${row.title}: `) ? text.slice(row.title.length + 2) : text;
-}
-
-/**
- * A child that works or waits on the user: its mark, its title, and what it last said; or, waiting,
- * Needs you, and its question to answer in place.
- */
-function LiveRow({
-  row,
-  onOpen,
-  onAnswer,
-}: {
-  row: Row;
-  onOpen: () => void;
-  onAnswer: (text: string) => Promise<string | undefined>;
-}) {
-  const waiting = row.group === "waiting";
-  const failed = row.attention === "failed";
-  const asking = row.question && row.question.status !== "answered";
-  const state = waiting ? (failed ? "Failed" : "Needs you") : "Working";
-  return (
-    <li>
-      <ChildButton
-        icon={
-          !waiting ? (
-            <WorkingMark />
-          ) : failed ? (
-            <CircleAlert className="text-danger" />
-          ) : (
-            <MessageCircleQuestion className="text-warning" />
-          )
-        }
-        title={plainTitle(row.title)}
-        state={state}
-        detail={asking ? undefined : subjectOf(row)}
-        end={
-          waiting ? (
-            <span className={failed ? "text-danger" : "text-warning"}>{state}</span>
-          ) : (
-            <span className="font-mono tabular-nums">
-              {age(row.latest?.createdAt ?? row.run.updatedAt)}
-            </span>
-          )
-        }
-        onOpen={onOpen}
-      />
-      {asking && row.question && (
-        <QuestionBox
-          question={row.question.question}
-          assumption={row.question.assumption || undefined}
-          onAnswer={onAnswer}
-        />
-      )}
-    </li>
-  );
-}
-
-/**
- * A finished child in the log: its check, its title, its diff, and when it finished. Bright while
- * what it reported is unread; dim once read.
- */
-function LogRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
-  const unread = row.group === "ready";
-  const failed = row.attention === "failed";
-  const diff = row.run.diff;
-  return (
-    <li>
-      <ChildButton
-        icon={
-          failed ? (
-            <CircleAlert className={unread ? "text-danger" : "text-danger/50"} />
-          ) : (
-            <CircleCheck className={unread ? "text-added" : "text-faint-foreground/60"} />
-          )
-        }
-        title={plainTitle(row.title)}
-        dim={!unread}
-        state={failed ? "Failed" : "Done"}
-        detail={
-          diff
-            ? `${diff.files} ${diff.files === 1 ? "file" : "files"}, +${short(diff.insertions)} −${short(diff.deletions)}`
-            : failed
-              ? "Failed"
-              : undefined
-        }
-        end={
-          <span aria-hidden className="font-mono tabular-nums">
-            {new Date(row.run.updatedAt).toLocaleTimeString(locale(), clockOptions())}
-          </span>
-        }
-        onOpen={onOpen}
-      />
-    </li>
-  );
-}
-
-/**
- * A child's row: its state's icon, its title, a line under it, and one thing at its end, which
- * gives way on hover to the arrow that says the row opens its chat. Screen readers hear `state`
- * after the title in place of the icon.
- */
-function ChildButton({
-  icon,
-  title,
-  dim = false,
-  state,
-  detail,
-  end,
-  onOpen,
-}: {
-  icon: ReactNode;
-  title: string;
-  dim?: boolean;
-  state: string;
-  detail?: string;
-  end: ReactNode;
-  onOpen: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group flex w-full min-w-0 items-start gap-3 px-3 py-2.5 text-left hover:bg-hover"
-    >
-      <span aria-hidden className="mt-0.5 shrink-0 [&_svg]:size-4">
-        {icon}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span
-          data-title
-          className={`block truncate text-body leading-5 font-medium ${dim ? "text-muted-foreground" : "text-foreground"}`}
-        >
-          {title}
-        </span>
-        <span className="sr-only">{state}</span>
-        {detail && (
-          <span className="block truncate text-meta leading-5 text-muted-foreground">{detail}</span>
-        )}
-      </span>
-      <span className="relative shrink-0 pt-0.5 text-meta text-faint-foreground">
-        <span
-          aria-hidden
-          className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
-        >
-          {end}
-        </span>
-        <span className="absolute inset-0 flex items-center justify-end">
-          <OpenHint />
-        </span>
-      </span>
-    </button>
-  );
-}
-
-/**
- * A child's question, answered in place as an app asks one: the question, what the child went
- * with as the first choice, and a box for any other answer. Picking the choice sends it.
- */
-function QuestionBox({
-  question,
-  assumption,
-  onAnswer,
-}: {
-  question: string;
-  assumption?: string;
-  onAnswer: (text: string) => Promise<string | undefined>;
-}) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const send = async (answer: string) => {
-    if (!answer.trim() || busy) return;
-    setBusy(true);
-    const failed = await onAnswer(answer.trim());
-    setBusy(false);
-    if (failed) notify({ tone: "error", title: "Couldn't send your answer", body: failed });
-    else setText("");
-  };
-  return (
-    <div className="mr-3 mb-3 ml-10 overflow-hidden rounded-lg border border-border bg-background">
-      <p className="px-3.5 pt-3 pb-2.5 text-body leading-snug text-foreground">{question}</p>
-      <div className="flex flex-col gap-1 px-1.5 pb-1.5">
-        {assumption && (
+        <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            disabled={busy}
-            onClick={() => void send(assumption)}
-            className="group/choice flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-body hover:bg-hover disabled:opacity-50"
+            onClick={(e) => e.currentTarget.closest("dialog")?.close()}
+            className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
           >
-            <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-caption text-muted-foreground group-hover/choice:border-foreground/25 group-hover/choice:text-foreground">
-              1
-            </span>
-            <span className="min-w-0 flex-1">{assumption}</span>
-            <span className="shrink-0 text-meta text-faint-foreground">Its pick so far</span>
+            Cancel
           </button>
-        )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send(text);
-          }}
-          className="flex items-center gap-2.5 rounded-lg px-2 py-1 focus-within:bg-hover"
-        >
-          <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-caption text-muted-foreground">
-            {assumption ? 2 : 1}
-          </span>
-          <input
-            aria-label={`Answer: ${question}`}
-            placeholder={assumption ? "Something else" : "Your answer"}
-            value={text}
-            disabled={busy}
-            onChange={(e) => setText(e.target.value)}
-            className="h-7 min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-50"
-          />
           <button
             type="submit"
-            aria-label="Send answer"
-            disabled={busy || !text.trim()}
-            className="send-sky grid size-6 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
+            disabled={adding || picked.size === 0}
+            className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
-            {busy ? (
-              <LoaderCircle className="size-3 animate-spin" />
-            ) : (
-              <ArrowUp className="size-3.5" />
-            )}
+            {adding ? "Adding…" : picked.size > 1 ? `Add ${picked.size} threads` : "Add"}
           </button>
-        </form>
-      </div>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
+/** A Project's instructions and files, beside its threads, in one panel that stays in view. */
+export function ProjectContext({
+  hostId,
+  project,
+  view,
+}: {
+  hostId: string;
+  project: Repo;
+  view: ThreadsView;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-surface lg:sticky lg:top-6">
+      <Instructions project={project} view={view} />
+      <Files hostId={hostId} project={project} view={view} />
     </div>
+  );
+}
+
+/** The panel's Instructions: what every thread here is told, edited in a dialog. */
+function Instructions({ project, view }: { project: Repo; view: ThreadsView }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const titleId = useId();
+  const open = () => {
+    setText(project.instructions ?? "");
+    setError(undefined);
+    dialog.current?.showModal();
+  };
+  return (
+    <section aria-label="Instructions" className={panelPart}>
+      <div className={panelHead}>
+        <h2 className="text-reading font-medium">Instructions</h2>
+        <button
+          type="button"
+          aria-label={project.instructions ? "Edit instructions" : "Add instructions"}
+          onClick={open}
+          className={quietButton}
+        >
+          {project.instructions ? "Edit" : "Add"}
+        </button>
+      </div>
+      {project.instructions ? (
+        <button
+          type="button"
+          onClick={open}
+          className="line-clamp-[12] text-left text-body leading-relaxed whitespace-pre-wrap text-muted-foreground hover:text-foreground"
+        >
+          {project.instructions}
+        </button>
+      ) : (
+        <p className="text-body leading-relaxed text-faint-foreground">
+          Tell every thread here how to work: who it's for, the tone and format you want, and what
+          it should know.
+        </p>
+      )}
+      <dialog
+        ref={dialog}
+        aria-labelledby={titleId}
+        className="m-auto w-[min(40rem,90vw)] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+      >
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setSaving(true);
+            const failed = await view.updateRepo(project.id, { instructions: text });
+            setSaving(false);
+            if (failed) return setError(failed);
+            dialog.current?.close();
+          }}
+          className="flex flex-col p-5"
+        >
+          <h2 id={titleId} className="text-reading font-semibold">
+            Instructions for {project.name}
+          </h2>
+          <p className="mt-1 text-body text-muted-foreground">
+            New threads in this Project follow them.
+          </p>
+          <textarea
+            aria-label="Instructions"
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Answer as a patient tutor. Show the steps, then the result."
+            className="mt-4 h-64 resize-none rounded-lg border border-border bg-background p-3 text-body leading-relaxed placeholder:text-faint-foreground focus-visible:border-transparent focus-visible:outline-2 focus-visible:outline-ring"
+          />
+          {error && (
+            <p role="alert" className="mt-2 text-meta text-danger">
+              {error}
+            </p>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => dialog.current?.close()}
+              className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </section>
+  );
+}
+
+/**
+ * The panel's Files: each file as a card with its preview and Remove, then an Add card, or a drop
+ * anywhere on it, which uploads to the host.
+ */
+function Files({ hostId, project, view }: { hostId: string; project: Repo; view: ThreadsView }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [adding, setAdding] = useState(false);
+  const [over, setOver] = useState(false);
+  const caps = uploadBytes(useConnection(hostId));
+  const files = project.files ?? [];
+  const save = async (next: string[]) => {
+    const failed = await view.updateRepo(project.id, { files: next });
+    if (failed) notify({ tone: "error", title: "Couldn't change the files", body: failed });
+  };
+  const add = async (picked: File[]) => {
+    if (!caps || picked.length === 0) return;
+    const big = picked.find((f) => f.size > caps.maxBytes);
+    if (big)
+      return notify({
+        tone: "error",
+        title: "Couldn't add the file",
+        body: `${big.name} is larger than this host takes.`,
+      });
+    setAdding(true);
+    const paths = await uploadFiles(hostId, picked, caps.chunkBytes);
+    if (typeof paths === "string")
+      notify({ tone: "error", title: "Couldn't add the file", body: paths });
+    else await save([...files, ...paths]);
+    setAdding(false);
+  };
+  const pick = () => input.current?.click();
+  const takesFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
+  return (
+    <section
+      aria-label="Files"
+      onDragOver={(e) => {
+        if (!caps || adding || !takesFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={(e) => {
+        if (!takesFiles(e)) return;
+        e.preventDefault();
+        setOver(false);
+        void add([...e.dataTransfer.files]);
+      }}
+      className={`${panelPart} border-t border-border transition-colors ${over ? "bg-accent/5" : ""}`}
+    >
+      <div className={panelHead}>
+        <h2 className="text-reading font-medium">
+          Files
+          {files.length > 0 && (
+            <span className="ml-1.5 font-normal text-faint-foreground tabular-nums">
+              {files.length}
+            </span>
+          )}
+        </h2>
+      </div>
+      {files.length === 0 ? (
+        <button
+          type="button"
+          aria-label="Add files"
+          disabled={!caps || adding}
+          onClick={pick}
+          className={`flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-6 text-center transition-colors disabled:opacity-50 ${over ? "border-accent" : "border-border hover:bg-hover"}`}
+        >
+          <Upload aria-hidden className="size-5 text-faint-foreground" />
+          <span className="text-body text-muted-foreground">
+            {adding ? "Adding…" : "Drop files here, or click to add"}
+          </span>
+          <span className="text-meta text-faint-foreground">
+            PDFs, notes, or code every thread here can read
+          </span>
+        </button>
+      ) : (
+        <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {files.map((path) => (
+            <li key={path} className="flex min-w-0 flex-col gap-1.5">
+              <FileCard
+                file={path}
+                hostId={hostId}
+                fill
+                // An add in flight saves the list as it began, which would undo a remove.
+                onRemove={adding ? undefined : () => void save(files.filter((f) => f !== path))}
+              />
+              <span className="truncate px-0.5 text-meta text-muted-foreground">
+                {path.split(/[\\/]/).at(-1)}
+              </span>
+            </li>
+          ))}
+          <li className="flex flex-col">
+            <button
+              type="button"
+              aria-label="Add files"
+              disabled={!caps || adding}
+              onClick={pick}
+              className="flex aspect-square w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border text-meta text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-4"
+            >
+              <Plus aria-hidden />
+              {adding ? "Adding…" : "Add"}
+            </button>
+          </li>
+        </ul>
+      )}
+      <input
+        ref={input}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          void add([...(e.target.files ?? [])]);
+          e.target.value = "";
+        }}
+      />
+    </section>
   );
 }

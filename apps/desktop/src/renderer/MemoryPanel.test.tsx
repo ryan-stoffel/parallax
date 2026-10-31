@@ -12,7 +12,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const you: MemoryScope = { kind: "you" };
 const repo: MemoryScope = { kind: "repo", id: "r-1" };
-const project: MemoryScope = { kind: "project", id: "p-1" };
+const orchestrator: MemoryScope = { kind: "orchestrator", id: "p-1" };
 const file = (path: string, more: Partial<MemoryFile> = {}): MemoryFile => ({
   path,
   size: 10,
@@ -25,18 +25,18 @@ const memory = (scope: MemoryScope, path: string, more: Partial<Memory> = {}): M
   scope,
 });
 
-test("sections: the Project's brief, entries by their folder, knowledge, then the user's proposals", () => {
+test("sections: the orchestrator's brief, entries by their folder, knowledge, then the user's proposals", () => {
   const s = sectionsOf([
     memory(you, "memory/preference/terse.md", { title: "Be terse" }),
     memory(repo, "brief.md"),
     memory(repo, "proposals/use-vitest.md", { writer: "thread t-1" }),
-    memory(project, "brief.md"),
-    memory(project, "knowledge/ci.md"),
-    memory(project, "memory/gotcha/flaky.md"),
-    memory(project, "proposals/from-child.md", { writer: "thread c-1" }),
-    memory(project, "proposals/rewrite.md", { writer: "coordinator k-1" }),
+    memory(orchestrator, "brief.md"),
+    memory(orchestrator, "knowledge/ci.md"),
+    memory(orchestrator, "memory/gotcha/flaky.md"),
+    memory(orchestrator, "proposals/from-child.md", { writer: "thread c-1" }),
+    memory(orchestrator, "proposals/rewrite.md", { writer: "orchestrator k-1" }),
   ]);
-  expect(s.brief?.scope).toEqual(project);
+  expect(s.brief?.scope).toEqual(orchestrator);
   expect(s.entries.map((g) => [g.label, g.files.map((f) => f.path)])).toEqual([
     ["Preferences", ["memory/preference/terse.md"]],
     ["Conventions", []],
@@ -44,7 +44,7 @@ test("sections: the Project's brief, entries by their folder, knowledge, then th
     ["Gotchas", ["memory/gotcha/flaky.md"]],
   ]);
   expect(s.knowledge.map((f) => f.path)).toEqual(["knowledge/ci.md"]);
-  // A child's proposal waits for its coordinator, not the user.
+  // A child's proposal waits for its orchestrator, not the user.
   expect(s.proposals.map((f) => f.path)).toEqual([
     "proposals/use-vitest.md",
     "proposals/rewrite.md",
@@ -104,7 +104,7 @@ async function render() {
   act(() =>
     root.render(
       <>
-        <MemoryPanel hostId="local" project="p-1" repo="r-1" />
+        <MemoryPanel hostId="local" orchestrator="p-1" repo="r-1" />
         <Notifications />
       </>,
     ),
@@ -176,14 +176,14 @@ test("a failed save of an edited proposal keeps its editor and text, and deletes
   expect(calls("memory/delete")).toEqual([]);
 });
 
-test("savedAs: You, the folder without a repo entry, the entry it replaces, and a coordinator's brief", () => {
+test("savedAs: You, the folder without a repo entry, the entry it replaces, and an orchestrator's brief", () => {
   const proposal = (more: Partial<Memory>) =>
-    memory(project, "proposals/x.md", { writer: "coordinator k-1", ...more });
+    memory(orchestrator, "proposals/x.md", { writer: "orchestrator k-1", ...more });
   expect(savedAs(proposal({ kind: "gotcha", forScope: "you" }), "r-1")?.scope).toEqual(you);
-  expect(savedAs(proposal({ kind: "gotcha", forScope: "repo" }))?.scope).toEqual(project);
+  expect(savedAs(proposal({ kind: "gotcha", forScope: "repo" }))?.scope).toEqual(orchestrator);
   const rewrite = proposal({ kind: "decision", replaces: "memory/decision/vitest.md" });
-  expect(savedAs(rewrite)).toEqual({ scope: project, path: "memory/decision/vitest.md" });
-  expect(savedAs(proposal({}))).toEqual({ scope: project, path: "brief.md" });
+  expect(savedAs(rewrite)).toEqual({ scope: orchestrator, path: "memory/decision/vitest.md" });
+  expect(savedAs(proposal({}))).toEqual({ scope: orchestrator, path: "brief.md" });
   expect(savedAs(proposal({ writer: "thread t-1" }))).toBeUndefined();
 });
 
@@ -204,7 +204,9 @@ test("promote asks before replacing an entry at the next scope", async () => {
   await click("Promote to Repo");
   await click("Replace");
   expect(calls("memory/write").map((p) => p["scope"])).toEqual([repo]);
-  expect(calls("memory/delete")).toEqual([{ scope: project, path: "memory/decision/sqlite.md" }]);
+  expect(calls("memory/delete")).toEqual([
+    { scope: orchestrator, path: "memory/decision/sqlite.md" },
+  ]);
 });
 
 test("a failed promote write deletes nothing", async () => {

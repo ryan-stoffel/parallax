@@ -96,13 +96,13 @@ export function createDuo(model: Object3D) {
       right.rotation.y = -turn;
     },
     /**
-     * The facing, in `space`'s axes, of the display that shows at hinge `angle`: the cover when
+     * The facing, in `project`'s axes, of the display that shows at hinge `angle`: the cover when
      * it's mostly shut, the inside when it's mostly open. Mid-fold, the hub can still report the
      * other one live.
      */
-    facing(space: Object3D, angle: number) {
-      space.updateWorldMatrix(true, true);
-      const inverse = space.matrixWorld.clone().invert();
+    facing(project: Object3D, angle: number) {
+      project.updateWorldMatrix(true, true);
+      const inverse = project.matrixWorld.clone().invert();
       const normal = new Vector3();
       for (const mesh of meshes[angle < 90 ? 1 : 3]) {
         relative.multiplyMatrices(inverse, mesh.matrixWorld);

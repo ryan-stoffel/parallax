@@ -1,107 +1,91 @@
 [
   {
     "jsonrpc": "2.0",
-    "id": 2,
-    "method": "project/list",
-    "params": {}
-  },
-  {
-    "jsonrpc": "2.0",
-    "id": 2,
-    "result": { "projects": [], "seq": 0 }
-  },
-  {
-    "jsonrpc": "2.0",
-    "id": 3,
+    "id": 1,
     "method": "project/create",
     "params": {
-      "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
-      "name": "parallax",
-      "repoPath": "/Users/me/src/parallax"
+      "id": "01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+      "name": "Research",
+      "icon": { "name": "book-open", "color": "blue" }
     }
   },
   {
     "jsonrpc": "2.0",
-    "id": 3,
+    "id": 1,
     "result": {
-      "project": {
-        "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
-        "name": "parallax",
-        "repoPath": "/Users/me/src/parallax",
-        "createdAt": "2026-09-24T12:00:00Z",
-        "updatedAt": "2026-09-24T12:00:00Z"
+      "repo": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "name": "Research",
+        "path": "/Users/me/.parallax/spaces/01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "project": true,
+        "icon": { "name": "book-open", "color": "blue" },
+        "createdAt": "2026-10-12T12:00:00Z"
       }
     }
   },
   {
     "jsonrpc": "2.0",
-    "id": 4,
-    "method": "project/create",
-    "params": {
-      "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
-      "name": "parallax",
-      "repoPath": "/Users/me/src/parallax"
-    }
+    "id": 2,
+    "method": "repo/update",
+    "params": { "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5f0", "name": "Reading" }
   },
   {
     "jsonrpc": "2.0",
-    "id": 4,
+    "id": 2,
     "result": {
-      "project": {
-        "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
-        "name": "parallax",
-        "repoPath": "/Users/me/src/parallax",
-        "createdAt": "2026-09-24T12:00:00Z",
-        "updatedAt": "2026-09-24T12:00:00Z"
+      "repo": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "name": "Reading",
+        "path": "/Users/me/.parallax/spaces/01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "project": true,
+        "icon": { "name": "book-open", "color": "blue" },
+        "createdAt": "2026-10-12T12:00:00Z"
       }
     }
   },
   {
     "jsonrpc": "2.0",
-    "id": 5,
-    "method": "project/create",
+    "id": 3,
+    "method": "thread/setProject",
     "params": {
-      "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
-      "name": "parallax-renamed",
-      "repoPath": "/Users/me/src/parallax"
+      "threads": ["01a0f755-f300-7000-8000-000000000001"],
+      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5f0"
     }
   },
   {
     "jsonrpc": "2.0",
-    "id": 5,
-    "error": {
-      "code": -32000,
-      "message": "project 01a0d349-6e00-7c9e-80e2-0426486a8cae exists with a different name or repository",
-      "data": { "kind": "idConflict" }
-    }
-  },
-  {
-    "jsonrpc": "2.0",
-    "id": "list-2",
-    "method": "project/list",
-    "params": {}
-  },
-  {
-    "jsonrpc": "2.0",
-    "id": "list-2",
+    "id": 3,
     "result": {
-      "projects": [
+      "threads": [
         {
-          "id": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
-          "name": "parallax",
-          "repoPath": "/Users/me/src/parallax",
-          "createdAt": "2026-09-24T12:00:00Z",
-          "updatedAt": "2026-09-24T12:00:00Z"
-        },
-        {
-          "id": "01a0d34e-01e0-7dc0-b326-598cbff22558",
-          "name": "roster",
-          "repoPath": "/Users/me/src/roster",
-          "createdAt": "2026-09-24T12:05:00Z",
-          "updatedAt": "2026-09-24T12:05:00.125Z"
+          "id": "01a0f755-f300-7000-8000-000000000001",
+          "repo": "01a0f755-f100-7000-8000-000000000001",
+          "createdAt": "2026-10-12T11:00:00Z",
+          "lastPromptAt": "2026-10-12T11:30:00Z",
+          "project": "01a0f755-f200-74dd-8cfc-06d0b225c5f0"
         }
-      ],
-      "seq": 2
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "project/delete",
+    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5f0" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f755-f5e8-74c2-993d-c1660d1cd77b",
+      "seq": 3,
+      "time": "2026-10-12T12:05:00Z",
+      "event": { "kind": "repo.removed", "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5f0" }
     }
   }
 ]

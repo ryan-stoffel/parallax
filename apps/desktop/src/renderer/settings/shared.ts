@@ -147,14 +147,14 @@ export function githubLine(
   return { detail: status.note ?? "Couldn't tell whether gh is signed in.", tone: "warn" };
 }
 
-/** An account a worker or coordinator can run on, as the account chooser lists it. */
+/** An account a worker or orchestrator can run on, as the account chooser lists it. */
 export interface AccountOption {
   label: string;
   account: AccountChoice;
 }
 
 /**
- * The host's accounts a thread or a Project's coordinator can run on: its signed-in Claude Code
+ * The host's accounts a thread or an orchestrator can run on: its signed-in Claude Code
  * login, then its Anthropic key accounts. Resolves to plxd's error, for people, when either list
  * fails.
  */

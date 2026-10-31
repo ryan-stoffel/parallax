@@ -22,8 +22,8 @@ pub(crate) const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 pub(crate) const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024;
 
 /// The longest an icon image's `data` may be, in bytes of base64: room for the 128 px square WebP
-/// the app sends, small enough that `project.updated` and `repo.updated` stay small in the event
-/// log.
+/// the app sends, small enough that `orchestrator.updated` and `repo.updated` stay small in the
+/// event log.
 pub(crate) const MAX_ICON_BYTES: usize = 64 * 1024;
 
 /// Checks a message's images against the caps, with `imageTooLarge`, and checks that each is

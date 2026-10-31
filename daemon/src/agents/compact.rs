@@ -212,7 +212,7 @@ mod tests {
     use crate::server::Daemon;
     use crate::store::StoreHandle;
     use jiff::Timestamp;
-    use parallax_protocol::{AgentOutputItem, Compacted, ParallaxEvent, ProjectId, RunId, TurnId};
+    use parallax_protocol::{AgentOutputItem, Compacted, ParallaxEvent, RunId, ScopeId, TurnId};
     use std::sync::Arc;
 
     fn delta(text: &str) -> AgentOutputItem {
@@ -251,18 +251,18 @@ mod tests {
         compact_one(daemon, daemon.log.floor(), 0).await.unwrap()
     }
 
-    async fn put(store: &StoreHandle, project: ProjectId, event: ParallaxEvent) -> u64 {
+    async fn put(store: &StoreHandle, project: ScopeId, event: ParallaxEvent) -> u64 {
         store.append(Timestamp::now(), Some(project), event).await
     }
 
     /// A stored daemon whose in-memory window holds only the newest `retention` events.
-    fn daemon(retention: usize) -> (tempfile::TempDir, Arc<Daemon>, ProjectId, RunId) {
+    fn daemon(retention: usize) -> (tempfile::TempDir, Arc<Daemon>, ScopeId, RunId) {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), retention, Duration::from_secs(90));
-        (dir, daemon, ProjectId::generate(), RunId::generate())
+        (dir, daemon, ScopeId::generate(), RunId::generate())
     }
 
-    async fn finished_turn(store: &StoreHandle, project: ProjectId, run: RunId) -> (u64, u64, u64) {
+    async fn finished_turn(store: &StoreHandle, project: ScopeId, run: RunId) -> (u64, u64, u64) {
         let first = put(
             store,
             project,

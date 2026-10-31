@@ -17,8 +17,8 @@ use parallax_protocol::framing::FrameCodec;
 use parallax_protocol::jsonrpc::{ErrorObject, Message, Request, RequestId, Response};
 use parallax_protocol::methods::{Initialize, RequestMethod};
 use parallax_protocol::{
-    Capabilities, ClientInfo, InitializeParams, InitializeResult, ProjectCreateParams, ProjectId,
-    ProtocolRange,
+    ClientInfo, InitializeParams, InitializeResult, OrchestratorCreateParams, ProtocolRange,
+    ScopeId,
 };
 use plxd::paths::DataDir;
 use rustix::process::{Pid, Signal, WaitOptions};
@@ -272,18 +272,18 @@ pub fn initialize_params() -> InitializeParams {
             version: "0.0.0".to_owned(),
             machine_id: None,
         },
-        capabilities: Capabilities::default(),
+        capabilities: parallax_protocol::legacy::client_capabilities(),
     }
 }
 
 /// Params for a new project named `name`, on a repository made for it under `dir`, which looks
 /// like one on `main` as far as plxd checks.
-pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
+pub fn create_params(dir: &Path, name: &str) -> OrchestratorCreateParams {
     let path = dir.join("repos").join(name);
     std::fs::create_dir_all(path.join(".git")).expect("make the repository");
     std::fs::write(path.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
-    ProjectCreateParams {
-        id: ProjectId::generate(),
+    OrchestratorCreateParams {
+        id: ScopeId::generate(),
         name: name.to_owned(),
         repo_path: path.to_str().expect("a UTF-8 path").to_owned(),
         icon: None,

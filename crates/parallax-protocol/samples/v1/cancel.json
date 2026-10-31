@@ -2,7 +2,7 @@
   {
     "jsonrpc": "2.0",
     "id": 12,
-    "method": "project/list",
+    "method": "orchestrator/list",
     "params": {}
   },
   {

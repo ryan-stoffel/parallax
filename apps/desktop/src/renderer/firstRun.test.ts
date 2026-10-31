@@ -27,7 +27,7 @@ const info = (
     models: [],
     permissions: [],
     efforts: false,
-    coordinator: false,
+    orchestrator: false,
     ...rest,
   };
 };

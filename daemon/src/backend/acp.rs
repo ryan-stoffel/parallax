@@ -11,7 +11,7 @@
 //! resume, whose replayed history it drops ([`stream::Translator::replaying`]). A model the agent
 //! takes over ACP is `session/set_config_option` for its model option, or else `session/set_model`;
 //! Plan, and Bypass for an agent with a bypass mode, are `session/set_mode`. Then each message is
-//! a `session/prompt`, the first one the user's message as written, after a coordinator's
+//! a `session/prompt`, the first one the user's message as written, after an orchestrator's
 //! instructions, since ACP has no system prompt (0078), with its images as image blocks before
 //! its text. A follow-up sent during a turn waits for that turn's response, then
 //! goes into the same session. ACP has no way to add to a running turn, so a steer (PLX-370)
@@ -23,7 +23,7 @@
 //! still running [`EXIT_GRACE`] after plxd closes its stdin, idle, failed, or cancelled, has its
 //! process group stopped. A finished turn still counts as completed.
 //!
-//! Only threads and a Project's coordinator run on ACP agents (`RunRequest::full_agent`, 0042):
+//! Only threads and an orchestrator run on ACP agents (`RunRequest::full_agent`, 0042):
 //! none has a worker sandbox plxd can check, so anything else is [`StartError::Unsupported`].
 //!
 //! # Credentials and configuration
@@ -262,14 +262,14 @@ pub fn authenticate(program: &OsStr, args: &[OsString], method: &str) -> Result<
 ///
 /// # Errors
 ///
-/// [`StartError::Unsupported`] for a run that isn't a thread or a coordinator, a key account or
+/// [`StartError::Unsupported`] for a run that isn't a thread or an orchestrator, a key account or
 /// another account folder, an effort, context window, or fast mode, or a permission the agent
 /// doesn't map, and [`StartError::Invalid`] for a model that could be read as an option.
 pub fn arguments(agent: &AcpAgent, request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     let label = &agent.label;
     if !request.full_agent() {
         return Err(StartError::Unsupported(format!(
-            "plxd runs only threads and coordinators on {label}: it has no worker sandbox (0036)"
+            "plxd runs only threads and orchestrators on {label}: it has no worker sandbox (0036)"
         )));
     }
     match &request.account.credential {

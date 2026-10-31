@@ -4,12 +4,10 @@
     "id": 1,
     "method": "board/add",
     "params": {
-      "project": "01a0f8a0-0000-7000-8000-000000000021",
+      "orchestrator": "01a0f8a0-0000-7000-8000-000000000021",
       "text": "**Search command**: one subagent adds it, with tests",
       "section": "now",
-      "links": {
-        "threads": ["01a0f8a0-0000-7000-8000-000000000011"]
-      }
+      "links": { "threads": ["01a0f8a0-0000-7000-8000-000000000011"] }
     }
   },
   {
@@ -21,9 +19,7 @@
         "text": "**Search command**: one subagent adds it, with tests",
         "status": "open",
         "section": "now",
-        "links": {
-          "threads": ["01a0f8a0-0000-7000-8000-000000000011"]
-        },
+        "links": { "threads": ["01a0f8a0-0000-7000-8000-000000000011"] },
         "createdAt": "2026-10-23T12:00:00Z",
         "updatedAt": "2026-10-23T12:00:00Z"
       }
@@ -34,7 +30,7 @@
     "id": 2,
     "method": "board/update",
     "params": {
-      "project": "01a0f8a0-0000-7000-8000-000000000021",
+      "orchestrator": "01a0f8a0-0000-7000-8000-000000000021",
       "id": 7,
       "status": "done",
       "links": {
@@ -68,9 +64,7 @@
     "jsonrpc": "2.0",
     "id": 3,
     "method": "board/list",
-    "params": {
-      "project": "01a0f8a0-0000-7000-8000-000000000021"
-    }
+    "params": { "orchestrator": "01a0f8a0-0000-7000-8000-000000000021" }
   },
   {
     "jsonrpc": "2.0",
@@ -98,16 +92,11 @@
     "jsonrpc": "2.0",
     "id": 4,
     "method": "board/remove",
-    "params": {
-      "project": "01a0f8a0-0000-7000-8000-000000000021",
-      "id": 7
-    }
+    "params": { "orchestrator": "01a0f8a0-0000-7000-8000-000000000021", "id": 7 }
   },
   {
     "jsonrpc": "2.0",
     "id": 4,
-    "result": {
-      "removed": true
-    }
+    "result": { "removed": true }
   }
 ]

@@ -30,10 +30,14 @@ if (localStorage.getItem("parallax:pinSeed") !== seed) {
       ],
     }),
   );
-  // Pinned projects (0090): a Project and a chat project.
+  // Pinned projects (0090): an orchestrator and a Project.
   localStorage.setItem(
     "parallax.pinnedProjects",
-    JSON.stringify([key(ids.projectParallax), key(ids.spaceCoursework), key(ids.projectDocs)]),
+    JSON.stringify([
+      key(ids.orchestratorParallax),
+      key(ids.projectCoursework),
+      key(ids.orchestratorDocs),
+    ]),
   );
   localStorage.setItem(
     "parallax:pinIcons",

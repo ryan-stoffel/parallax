@@ -1,25 +1,27 @@
-//! A Project's landing queue end to end (PLX-410, decision 0045): `land/queue`, `land/approve`,
-//! and `land/sendBack` on the fake CLI, with two children touching the same file, across a
-//! restart.
+//! An orchestrator's landing queue end to end (PLX-410, decision 0045): `land/queue`,
+//! `land/approve`, and `land/sendBack` on the fake CLI, with two children touching the same file,
+//! across a restart.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
     AgentEvents, AgentList, AgentStart, InboxList, LandApprove, LandQueue, LandSendBack,
-    ProjectUpdate,
+    OrchestratorUpdate,
 };
 use parallax_protocol::{
     AgentEventsParams, AgentListParams, AgentOutputItem, AgentRun, AgentStartParams, AgentStatus,
     ErrorKind, InboxItem, InboxKind, InboxListParams, LandApproveParams, LandQueueParams,
-    LandSendBackParams, LandingStatus, ParallaxEvent, ProjectId, ProjectUpdateParams, RunId,
+    LandSendBackParams, LandingStatus, OrchestratorUpdateParams, ParallaxEvent, RunId, ScopeId,
 };
 use plxd::backend::fake::Step;
 use plxd::routing::BackendRegistry;
 use tokio::time::{Instant, sleep};
 
-use crate::agents::{Conn, Host, create, end_turn, fake, git, init, project_params, start_params};
-use crate::support::{PATIENCE, kind, project_update, temp_dir};
+use crate::agents::{
+    Conn, Host, create, end_turn, fake, git, init, orchestrator_params, start_params,
+};
+use crate::support::{PATIENCE, kind, orchestrator_update, temp_dir};
 
 /// Every child's script: it writes `notes.txt` and finishes.
 pub(crate) fn notes() -> BackendRegistry {
@@ -33,23 +35,23 @@ pub(crate) fn notes() -> BackendRegistry {
     ])
 }
 
-async fn runs(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
+async fn runs(client: &mut Conn, orchestrator: ScopeId) -> Vec<AgentRun> {
     client
         .call::<AgentList>(AgentListParams {
-            project: Some(project),
+            project: Some(orchestrator),
         })
         .await
         .unwrap()
         .runs
 }
 
-/// Starts a run in `project` and waits until it has completed.
+/// Starts a run in `orchestrator` and waits until it has completed.
 pub(crate) async fn finished(client: &mut Conn, params: AgentStartParams) -> AgentRun {
-    let (project, id) = (params.project, params.run_id);
+    let (orchestrator, id) = (params.project, params.run_id);
     client.call::<AgentStart>(params).await.unwrap();
     let deadline = Instant::now() + PATIENCE;
     loop {
-        let run = runs(client, project)
+        let run = runs(client, orchestrator)
             .await
             .into_iter()
             .find(|run| run.id == id)
@@ -62,17 +64,17 @@ pub(crate) async fn finished(client: &mut Conn, params: AgentStartParams) -> Age
     }
 }
 
-/// The first item of `project`'s inbox about `run` that `wanted` picks, once there is one.
+/// The first item of `orchestrator`'s inbox about `run` that `wanted` picks, once there is one.
 pub(crate) async fn item(
     client: &mut Conn,
-    project: ProjectId,
+    orchestrator: ScopeId,
     run: RunId,
     mut wanted: impl FnMut(&InboxItem) -> bool,
 ) -> InboxItem {
     let deadline = Instant::now() + PATIENCE;
     loop {
         let items = client
-            .call::<InboxList>(InboxListParams { project })
+            .call::<InboxList>(InboxListParams { orchestrator })
             .await
             .unwrap()
             .items;
@@ -116,16 +118,16 @@ pub(crate) fn worktree(run: &AgentRun) -> PathBuf {
     PathBuf::from(run.worktree_path.as_deref().expect("a worktree"))
 }
 
-/// Turns on `project`'s automatic landing.
-pub(crate) async fn lands_automatically(client: &mut Conn, project: ProjectId) {
+/// Turns on `orchestrator`'s automatic landing.
+pub(crate) async fn lands_automatically(client: &mut Conn, orchestrator: ScopeId) {
     let updated = client
-        .call::<ProjectUpdate>(ProjectUpdateParams {
+        .call::<OrchestratorUpdate>(OrchestratorUpdateParams {
             auto_land: Some(true),
-            ..project_update(project)
+            ..orchestrator_update(orchestrator)
         })
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     assert!(updated.auto_land);
 }
 
@@ -141,22 +143,27 @@ fn commit(dir: &Path, content: &str, extra: &str) {
 /// restart. The second conflicts: it gets a message with the merge started in its worktree, and
 /// is queued again when that turn ends. When it conflicts again, it goes to the user.
 #[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one landing story, step by step")]
 async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_then_to_the_user() {
     let host = Host::start(temp_dir(), notes());
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    let repo = PathBuf::from(&project.repo_path);
+    let orchestrator = create(&mut client, orchestrator_params(host.dir.path())).await;
+    let repo = PathBuf::from(&orchestrator.repo_path);
     let integration = host
         .dir
         .path()
         .join("integration")
-        .join(project.id.to_string());
+        .join(orchestrator.id.to_string());
     let a = finished(
         &mut client,
-        start_params(project.id, "Write the notes\nShort ones."),
+        start_params(orchestrator.id, "Write the notes\nShort ones."),
     )
     .await;
-    let b = finished(&mut client, start_params(project.id, "Rewrite the notes")).await;
+    let b = finished(
+        &mut client,
+        start_params(orchestrator.id, "Rewrite the notes"),
+    )
+    .await;
     commit(&worktree(&b), "from b\n", "b.txt");
 
     let queued = client
@@ -165,7 +172,7 @@ async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_th
         .unwrap()
         .landing;
     assert_eq!(queued.status, LandingStatus::Waiting, "off by default");
-    let waiting = item(&mut client, project.id, a.id, |item| {
+    let waiting = item(&mut client, orchestrator.id, a.id, |item| {
         item.kind == InboxKind::NeedsYou
     })
     .await;
@@ -184,7 +191,7 @@ async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_th
         .unwrap()
         .landing;
     assert_eq!(approved.status, LandingStatus::Queued);
-    let done = item(&mut client, project.id, a.id, |item| {
+    let done = item(&mut client, orchestrator.id, a.id, |item| {
         item.text.contains("landed on the integration branch")
     })
     .await;
@@ -223,7 +230,7 @@ async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_th
         .call::<LandApprove>(LandApproveParams { run_id: b.id })
         .await
         .unwrap();
-    let requeued = item(&mut client, project.id, b.id, |item| {
+    let requeued = item(&mut client, orchestrator.id, b.id, |item| {
         item.text.ends_with("again, waiting for your approval")
     })
     .await;
@@ -237,7 +244,7 @@ async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_th
     assert!(
         sent.last()
             .unwrap()
-            .contains("conflicts with the Project's integration branch"),
+            .contains("conflicts with the orchestrator's integration branch"),
         "{sent:?}"
     );
     let b_head = &worktree(&b);
@@ -247,7 +254,7 @@ async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_th
         "the merge is concluded"
     );
 
-    send_back_then_conflict_again(&mut client, project.id, &b, &integration).await;
+    send_back_then_conflict_again(&mut client, orchestrator.id, &b, &integration).await;
     host.server.stop().await;
 }
 
@@ -256,7 +263,7 @@ async fn two_children_touching_one_file_land_in_turn_and_a_conflict_goes_back_th
 /// user.
 async fn send_back_then_conflict_again(
     client: &mut Conn,
-    project: ProjectId,
+    orchestrator: ScopeId,
     b: &AgentRun,
     integration: &Path,
 ) {
@@ -297,7 +304,7 @@ async fn send_back_then_conflict_again(
         .call::<LandApprove>(LandApproveParams { run_id: b.id })
         .await
         .unwrap();
-    let stuck = item(client, project, b.id, |item| {
+    let stuck = item(client, orchestrator, b.id, |item| {
         item.text.ends_with("again, in notes.txt")
     })
     .await;
@@ -315,11 +322,19 @@ async fn send_back_then_conflict_again(
 async fn a_resolution_that_leaves_a_conflict_marker_goes_to_the_user() {
     let host = Host::start(temp_dir(), notes());
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    lands_automatically(&mut client, project.id).await;
-    let repo = PathBuf::from(&project.repo_path);
-    let a = finished(&mut client, start_params(project.id, "Write the notes")).await;
-    let b = finished(&mut client, start_params(project.id, "Rewrite the notes")).await;
+    let orchestrator = create(&mut client, orchestrator_params(host.dir.path())).await;
+    lands_automatically(&mut client, orchestrator.id).await;
+    let repo = PathBuf::from(&orchestrator.repo_path);
+    let a = finished(
+        &mut client,
+        start_params(orchestrator.id, "Write the notes"),
+    )
+    .await;
+    let b = finished(
+        &mut client,
+        start_params(orchestrator.id, "Rewrite the notes"),
+    )
+    .await;
     for (run, side) in [(&a, "a"), (&b, "b")] {
         let dir = worktree(run);
         std::fs::write(dir.join("notes.txt"), format!("from {side}\n")).unwrap();
@@ -333,13 +348,13 @@ async fn a_resolution_that_leaves_a_conflict_marker_goes_to_the_user() {
             .await
             .unwrap();
     }
-    item(&mut client, project.id, a.id, |item| {
+    item(&mut client, orchestrator.id, a.id, |item| {
         item.text.contains("landed on the integration branch")
     })
     .await;
     let landed = git(&repo, &["rev-parse", "parallax/app"]);
 
-    let refused = item(&mut client, project.id, b.id, |item| {
+    let refused = item(&mut client, orchestrator.id, b.id, |item| {
         item.kind == InboxKind::NeedsYou
     })
     .await;
@@ -369,7 +384,7 @@ async fn a_resolution_that_leaves_a_conflict_marker_goes_to_the_user() {
     loop {
         let items = client
             .call::<InboxList>(InboxListParams {
-                project: project.id,
+                orchestrator: orchestrator.id,
             })
             .await
             .unwrap()

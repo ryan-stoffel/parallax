@@ -50,7 +50,7 @@ export function ScheduleSettings() {
               enabled: !task.enabled,
               schedule: task.schedule,
               thread: task.thread,
-              project: task.project,
+              orchestrator: task.orchestrator,
               repo: task.repo,
               account: task.account,
               model: task.model,

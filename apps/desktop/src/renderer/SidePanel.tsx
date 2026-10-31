@@ -51,8 +51,8 @@ const docIcons = {
   file: File,
 };
 
-// A Project's own views, pinned first in its panel.
-const overview: Surface = { name: "Project", icon: SquareKanban, key: "O" };
+// An orchestrator's own views, pinned first in its panel.
+const overview: Surface = { name: "Orchestrator", icon: SquareKanban, key: "O" };
 
 const surfaces: Surface[] = [
   {
@@ -67,7 +67,7 @@ const surfaces: Surface[] = [
     key: "K",
     empty: {
       title: "Nothing known here yet",
-      hint: "A Project, or a thread in a repository, keeps what its agents learn.",
+      hint: "An orchestrator, or a thread in a repository, keeps what its agents learn.",
     },
   },
   {
@@ -108,8 +108,9 @@ const terminalSurface = surfaces.find((s) => s.name === "Terminal")!;
 
 /**
  * One `scope`'s panel: its open views in tab order, and each in the order it was last shown, with
- * the thread (`documents.runId`) it was shown in, as a Project's subagents share its panel; whether
- * + is showing the list; whether its browser has opened; and the page its browser last opened.
+ * the thread (`documents.runId`) it was shown in, as an orchestrator's subagents share its panel;
+ * whether + is showing the list; whether its browser has opened; and the page its browser last
+ * opened.
  */
 interface Scoped {
   tabs: Surface[];
@@ -121,24 +122,26 @@ interface Scoped {
 const unopened: Scoped = { tabs: [], recent: [], listing: false };
 
 /**
- * The collapsible right column. Each `scope`, such as a thread or a Project, keeps its own tabs and
- * browser, so a view opened in one thread doesn't open in another (PLX-872). While `browsing`, the
- * column is the browser alone, with its page tabs in the top bar, as Chrome's, and no views; the
- * browser is apart from the panel's views (PLX-962). Each view opens as a
- * tab in its top bar, VS Code style; the + after the tabs, or closing the last one, shows the list
- * of views, where each view's letter opens it while focus is in the panel. Open tabs stay mounted, so a view keeps its state behind another.
- * The top bar keeps the hide button where the main pane shows it while the panel is closed.
- * Expanded, it fills everything right of the sidebar, and `leading` and `topBarClassName` stand in
- * for the hidden main pane's top-left corner. `agents`, `knowledge`, `files`, and `changesView` are
- * those views, such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
- * it's an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
- * state. Each new `browse` opens its url in the browser, or one of `agentTabs`. `pullRequests` are the open thread's
- * linked pull requests (PLX-319): its URLs, each one's read, the Pull requests view, and each one's
- * view, shown in a `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
- * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
- * shown only while its thread, `documents.runId`, is open, as a pull request's is. `device` draws
- * the Device view (PLX-886), told whether it's shown, and each new `showDevice` opens it. Each new
- * `showProject` shows an open Project's Project tab, and each new `showFiles` opens the Files view.
+ * The collapsible right column. Each `scope`, such as a thread or an orchestrator, keeps its own
+ * tabs and browser, so a view opened in one thread doesn't open in another (PLX-872). While
+ * `browsing`, the column is the browser alone, with its page tabs in the top bar, as Chrome's, and
+ * no views; the browser is apart from the panel's views (PLX-962). Each view opens as a tab in its
+ * top bar, VS Code style; the + after the tabs, or closing the last one, shows the list of views,
+ * where each view's letter opens it while focus is in the panel. Open tabs stay mounted, so a view
+ * keeps its state behind another. The top bar keeps the hide button where the main pane shows it
+ * while the panel is closed. Expanded, it fills everything right of the sidebar, and `leading` and
+ * `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`, `knowledge`,
+ * `files`, and `changesView` are those views, such as an orchestrator's, in place of their empty
+ * states. `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal
+ * view, told whether it's shown and given its empty state. Each new `browse` opens its url in the
+ * browser, or one of `agentTabs`. `pullRequests` are the open thread's linked pull requests
+ * (PLX-319): its URLs, each one's read, the Pull requests view, and each one's view, shown in a
+ * `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that
+ * URL's tab, or without one the Pull requests view. Each new `documents.open` opens that presented
+ * file's tab (PLX-755), shown only while its thread, `documents.runId`, is open, as a pull
+ * request's is. `device` draws the Device view (PLX-886), told whether it's shown, and each new
+ * `showDevice` opens it. Each new `showOrchestrator` shows an open orchestrator's Orchestrator tab,
+ * and each new `showFiles` opens the Files view.
  */
 export function SidePanel({
   scope,
@@ -163,10 +166,10 @@ export function SidePanel({
   pullRequests,
   pullRequest,
   documents,
-  project,
+  orchestrator,
   device,
   showDevice,
-  showProject,
+  showOrchestrator,
   showFiles,
 }: {
   scope: string;
@@ -198,13 +201,13 @@ export function SidePanel({
   };
   pullRequest?: { url?: string };
   documents?: { runId?: string; open?: DocRef; view: (doc: DocRef) => ReactNode };
-  /** An open Project, whose home the panel rests on, with Knowledge beside it, and how many
+  /** An open orchestrator, whose home the panel rests on, with Knowledge beside it, and how many
    * things wait on the user there. */
-  project?: { home: ReactNode; waiting: number };
+  orchestrator?: { home: ReactNode; waiting: number };
   device?: (shown: boolean) => ReactNode;
   showDevice?: object;
-  /** A new request shows an open Project's Project tab. */
-  showProject?: object;
+  /** A new request shows an open orchestrator's Orchestrator tab. */
+  showOrchestrator?: object;
   /** A new request opens the Files view, as the command menu's file picks do (PLX-993). */
   showFiles?: object;
 }) {
@@ -225,23 +228,23 @@ export function SidePanel({
     }));
 
   const browserStyle = useBrowserTheme();
-  const available = project
+  const available = orchestrator
     ? surfaces
     : ["Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
         surfaces.find((s) => s.name === name)!,
       );
-  const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);
+  const nameOf = (s: Surface) => (!orchestrator && s.name === "Changes" ? "Diff" : s.name);
   // The browser mounts the first time it shows, and stays.
   if (browsing && !scopes[scope]?.browsed) update(() => ({ browsed: true }));
-  // A Project pins its Overview and Knowledge first, without close buttons.
-  const pinned = project ? [overview, knowledgeSurface] : [];
+  // An orchestrator pins its Overview and Knowledge first, without close buttons.
+  const pinned = orchestrator ? [overview, knowledgeSurface] : [];
   // A pull request tab the thread no longer links stays open, but hidden.
   const shown = [
     ...pinned,
     ...tabs.filter(
       (s) =>
         !pinned.includes(s) &&
-        (project || (s.name !== "Knowledge" && s.name !== "Agents")) &&
+        (orchestrator || (s.name !== "Knowledge" && s.name !== "Agents")) &&
         (!s.url || pullRequests?.urls.includes(s.url)) &&
         (!s.doc || s.doc.runId === documents?.runId),
     ),
@@ -251,7 +254,7 @@ export function SidePanel({
     ? undefined
     : (lastShown(recent.filter(([, at]) => at === thread)) ??
       lastShown(recent) ??
-      (project ? overview : undefined));
+      (orchestrator ? overview : undefined));
 
   const openView = (s: Surface) => {
     if (pinned.includes(s)) return setActive(s);
@@ -294,10 +297,10 @@ export function SidePanel({
     setFilesShown(showFiles);
     if (showFiles) openView(surfaces.find((surface) => surface.name === "Files")!);
   }
-  const [projectShown, setProjectShown] = useState(showProject);
-  if (showProject !== projectShown) {
-    setProjectShown(showProject);
-    if (showProject && project) setActive(overview);
+  const [orchestratorShown, setOrchestratorShown] = useState(showOrchestrator);
+  if (showOrchestrator !== orchestratorShown) {
+    setOrchestratorShown(showOrchestrator);
+    if (showOrchestrator && orchestrator) setActive(overview);
   }
   const [prOpened, setPrOpened] = useState(pullRequest);
   if (pullRequest !== prOpened) {
@@ -327,8 +330,8 @@ export function SidePanel({
     </div>
   );
   const viewOf = (s: Surface) =>
-    s === overview && project
-      ? project.home
+    s === overview && orchestrator
+      ? orchestrator.home
       : s.name === "Agents" && agents
         ? agents
         : s.name === "Knowledge" && knowledge
@@ -395,9 +398,9 @@ export function SidePanel({
                     >
                       <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
                       {nameOf(s)}
-                      {s === overview && !!project?.waiting && (
+                      {s === overview && !!orchestrator?.waiting && (
                         <span className="font-mono text-caption text-warning tabular-nums">
-                          {project.waiting}
+                          {orchestrator.waiting}
                         </span>
                       )}
                     </button>

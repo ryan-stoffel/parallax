@@ -309,8 +309,8 @@ pub struct HostSettings {
     /// Turning it off stops a waiting run from resuming when its timer fires.
     pub auto_resume: bool,
     /// Whether a plain thread's turn that a plxd restart cut off gets "Continue where you left
-    /// off." once plxd is up (0060). Off by default. A Project's runs always continue. An older
-    /// plxd leaves it out.
+    /// off." once plxd is up (0060). Off by default. An orchestrator's runs always continue. An
+    /// older plxd leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub continue_after_restart: Option<bool>,

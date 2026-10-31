@@ -1,13 +1,13 @@
-//! A Project's children's questions (PLX-402, decision 0043): `question/ask`, `question/answer`,
-//! `question/escalate`, and `question/list`, behind the `questions` capability.
+//! An orchestrator's children's questions (PLX-402, decision 0043): `question/ask`,
+//! `question/answer`, `question/escalate`, and `question/list`, behind the `questions` capability.
 //!
-//! A child's `ask` records its question and returns at once; the child goes on with its
-//! assumption. The question wakes the Project's current coordinator through 0025's wake-ups, so
-//! it batches with them and counts toward their cap, or, with no coordinator or in Ask me
-//! (PLX-403), goes straight to Needs you, as do those still open when the Project switches to Ask
-//! me (PLX-474). Only the coordinator answers or escalates with `from`, and only the user answers
+//! A child's `ask` records its question and returns at once; the child goes on with its assumption.
+//! The question wakes the orchestrator's current run through 0025's wake-ups, so it
+//! batches with them and counts toward their cap, or, with no orchestrator or in Ask me (PLX-403),
+//! goes straight to Needs you, as do those still open when the orchestrator switches to Ask me
+//! (PLX-474). Only the orchestrator answers or escalates with `from`, and only the user answers
 //! without it: a thread's MCP server passes its own run, never the model. In Ask me plxd refuses
-//! the coordinator's answer. An answer reaches the child as a queued message only when it differs
+//! the orchestrator's answer. An answer reaches the child as a queued message only when it differs
 //! from what the child was last told.
 
 use std::sync::Arc;
@@ -15,9 +15,9 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, InboxKind, ProjectAutonomy, ProjectId, Question, QuestionAnswerParams,
-    QuestionAskParams, QuestionEscalateParams, QuestionId, QuestionListParams, QuestionListResult,
-    QuestionResult, QuestionStatus, RunId, TurnId,
+    ErrorKind, InboxKind, OrchestratorAutonomy, Question, QuestionAnswerParams, QuestionAskParams,
+    QuestionEscalateParams, QuestionId, QuestionListParams, QuestionListResult, QuestionResult,
+    QuestionStatus, RunId, ScopeId, TurnId,
 };
 use parallax_store::Store;
 use tracing::info;
@@ -26,10 +26,10 @@ use uuid::Uuid;
 use super::agent::plain_message;
 use super::{Context, inbox};
 use crate::agents::convert::NO_WRITE;
-use crate::agents::coordinator::coordinator_of;
+use crate::agents::orchestrator::orchestrator_of;
 use crate::agents::{self, run_not_found, wake};
 use crate::store::Tx;
-use crate::store::{project_autonomy, store_error};
+use crate::store::{orchestrator_autonomy, store_error};
 
 /// The longest question, assumption, or answer, in bytes. A wake-up quotes them whole.
 const MAX_BYTES: usize = 4 * 1024;
@@ -52,7 +52,7 @@ pub(super) async fn ask(
     check("question", &question)?;
     check("assumption", &assumption)?;
     let command_id = context.command_id;
-    let (row, prompt, coordinator, autonomy) = context
+    let (row, prompt, orchestrator_run, autonomy) = context
         .daemon
         .store
         .run(&context.cancel, move |db| {
@@ -60,27 +60,30 @@ pub(super) async fn ask(
                 .get_run(run.into())
                 .map_err(|e| store_error(&e))?
                 .ok_or_else(|| run_not_found(run))?;
-            let project = asker.fields.project_id;
-            let Some(project_row) = db.get_project(project).map_err(|e| store_error(&e))? else {
+            let orchestrator = asker.fields.project_id;
+            let Some(orchestrator_row) = db
+                .get_orchestrator(orchestrator)
+                .map_err(|e| store_error(&e))?
+            else {
                 return Err(ErrorObject::invalid_params(format!(
-                    "run {run} isn't in a Project, so it has no coordinator to ask"
+                    "run {run} isn't in an orchestrator, so it has no orchestrator to ask"
                 )));
             };
-            let autonomy = project_autonomy(&project_row.autonomy);
+            let autonomy = orchestrator_autonomy(&orchestrator_row.autonomy);
             if asker.fields.policy == NO_WRITE {
                 return Err(ErrorObject::invalid_params(
-                    "a Project's coordinator answers questions; it doesn't ask them",
+                    "an orchestrator answers questions; it doesn't ask them",
                 ));
             }
-            // In Ask me nothing wakes the coordinator: the question is the user's from the start.
-            let coordinator = coordinator_of(db, project)?.filter(|_| answers(autonomy));
+            // In Ask me nothing wakes the orchestrator: the question is the user's from the start.
+            let orchestrator_run = orchestrator_of(db, orchestrator)?.filter(|_| answers(autonomy));
             let row = parallax_store::Question {
                 id: QuestionId::generate().into(),
-                project_id: project,
+                orchestrator_id: orchestrator,
                 run_id: run.into(),
                 question,
                 assumption,
-                status: if coordinator.is_some() {
+                status: if orchestrator_run.is_some() {
                     OPEN
                 } else {
                     ESCALATED
@@ -98,15 +101,15 @@ pub(super) async fn ask(
                     question: to_wire(row.clone())?,
                 },
             )?;
-            Ok((row, asker.fields.prompt, coordinator, autonomy))
+            Ok((row, asker.fields.prompt, orchestrator_run, autonomy))
         })
         .await?;
     let asked = to_wire(row.clone())?;
     info!(question = %asked.id, %run, "a child asked a question");
-    match coordinator {
-        Some(coordinator) => wake::notify_questions(
+    match orchestrator_run {
+        Some(orchestrator_run) => wake::notify_questions(
             &context.daemon,
-            coordinator.into(),
+            orchestrator_run.into(),
             wake::question(
                 run,
                 &prompt,
@@ -142,9 +145,9 @@ pub(super) async fn answer(
             let status = match from {
                 Some(from) => {
                     open_for(db, &row, from, "answer")?;
-                    if !answers(autonomy_of(db, row.project_id)?) {
+                    if !answers(autonomy_of(db, row.orchestrator_id)?) {
                         return Err(ErrorObject::invalid_params(
-                            "the Project's autonomy is Ask me, so only the user answers its \
+                            "the orchestrator's autonomy is Ask me, so only the user answers its \
                              children's questions; pass this one to them with escalate",
                         ));
                     }
@@ -172,8 +175,9 @@ pub(super) async fn answer(
         .await?;
     let child = RunId::try_from(before.run_id)
         .map_err(|_| ErrorObject::internal_error("a stored question has an invalid run id"))?;
-    let project = ProjectId::try_from(before.project_id)
-        .map_err(|_| ErrorObject::internal_error("a stored question has an invalid project id"))?;
+    let orchestrator = ScopeId::try_from(before.orchestrator_id).map_err(|_| {
+        ErrorObject::internal_error("a stored question has an invalid orchestrator id")
+    })?;
     if from.is_some() {
         let line = format!(
             "{}: asked {}, went with {}",
@@ -181,7 +185,14 @@ pub(super) async fn answer(
             wake::quoted(&before.question),
             wake::quoted(&text)
         );
-        inbox::add(&context.daemon, project, child, InboxKind::Decided, line).await;
+        inbox::add(
+            &context.daemon,
+            orchestrator,
+            child,
+            InboxKind::Decided,
+            line,
+        )
+        .await;
     }
     let told = before.answer.as_deref().unwrap_or(&before.assumption);
     if !same(told, &text)
@@ -253,19 +264,19 @@ pub(super) async fn list(
         .daemon
         .store
         .run(&context.cancel, move |db| {
-            let project = params.project;
+            let orchestrator = params.orchestrator;
             if db
-                .get_project(project.into())
+                .get_orchestrator(orchestrator.into())
                 .map_err(|e| store_error(&e))?
                 .is_none()
             {
                 return Err(ErrorObject::parallax(
-                    ErrorKind::ProjectNotFound,
-                    format!("no project has id {project}"),
+                    ErrorKind::OrchestratorNotFound,
+                    format!("no orchestrator has id {orchestrator}"),
                 ));
             }
             let questions = db
-                .questions(project.into())
+                .questions(orchestrator.into())
                 .map_err(|e| store_error(&e))?
                 .into_iter()
                 .map(to_wire)
@@ -276,7 +287,7 @@ pub(super) async fn list(
 }
 
 /// Sends the child `row` asked the answer `text`, queued behind a running turn (PLX-370), from
-/// the coordinator `from`, or from the user.
+/// the orchestrator `from`, or from the user.
 async fn tell(
     context: &Context,
     row: &parallax_store::Question,
@@ -311,19 +322,26 @@ async fn tell(
     Ok(())
 }
 
-/// Adds a Needs you item for `row`, which the coordinator escalated or nobody can answer.
+/// Adds a Needs you item for `row`, which the orchestrator escalated or nobody can answer.
 async fn needs_you(
     daemon: &Arc<crate::server::Daemon>,
     row: &parallax_store::Question,
     prompt: &str,
 ) {
-    let (Ok(project), Ok(run)) = (
-        ProjectId::try_from(row.project_id),
+    let (Ok(orchestrator), Ok(run)) = (
+        ScopeId::try_from(row.orchestrator_id),
         RunId::try_from(row.run_id),
     ) else {
         return;
     };
-    inbox::add(daemon, project, run, InboxKind::NeedsYou, asks(row, prompt)).await;
+    inbox::add(
+        daemon,
+        orchestrator,
+        run,
+        InboxKind::NeedsYou,
+        asks(row, prompt),
+    )
+    .await;
 }
 
 /// A Needs you item's line for `row`, asked by a child whose task is `prompt`.
@@ -336,10 +354,12 @@ fn asks(row: &parallax_store::Question, prompt: &str) -> String {
     )
 }
 
-/// Escalates `project`'s open questions to Needs you, in the caller's store job, for a Project
-/// that just switched to Ask me, whose coordinator no longer answers them (PLX-474).
-pub(crate) fn escalate_open(db: &mut Tx, project: ProjectId) -> Result<(), ErrorObject> {
-    let questions = db.questions(project.into()).map_err(|e| store_error(&e))?;
+/// Escalates `orchestrator`'s open questions to Needs you, in the caller's store job, for an
+/// orchestrator that just switched to Ask me, whose orchestrator no longer answers them (PLX-474).
+pub(crate) fn escalate_open(db: &mut Tx, orchestrator: ScopeId) -> Result<(), ErrorObject> {
+    let questions = db
+        .questions(orchestrator.into())
+        .map_err(|e| store_error(&e))?;
     for row in questions.iter().filter(|row| row.status == OPEN) {
         let Ok(run) = RunId::try_from(row.run_id) else {
             continue;
@@ -351,7 +371,13 @@ pub(crate) fn escalate_open(db: &mut Tx, project: ProjectId) -> Result<(), Error
             .unwrap_or_default();
         db.set_question(row.id, ESCALATED, None)
             .map_err(|e| store_error(&e))?;
-        inbox::record(db, project, run, InboxKind::NeedsYou, asks(row, &prompt))?;
+        inbox::record(
+            db,
+            orchestrator,
+            run,
+            InboxKind::NeedsYou,
+            asks(row, &prompt),
+        )?;
     }
     Ok(())
 }
@@ -374,49 +400,55 @@ fn find(db: &Store, id: QuestionId) -> Result<(parallax_store::Question, String)
     Ok((row, child.fields.prompt))
 }
 
-/// Project `project`'s autonomy level (0043), Routine, the default, for one that is gone.
-pub(crate) fn autonomy_of(db: &Store, project: Uuid) -> Result<ProjectAutonomy, ErrorObject> {
+/// Orchestrator `orchestrator`'s autonomy level (0043), Routine, the default, for one that is gone.
+pub(crate) fn autonomy_of(
+    db: &Store,
+    orchestrator: Uuid,
+) -> Result<OrchestratorAutonomy, ErrorObject> {
     Ok(db
-        .get_project(project)
+        .get_orchestrator(orchestrator)
         .map_err(|e| store_error(&e))?
-        .map_or(ProjectAutonomy::Routine, |row| {
-            project_autonomy(&row.autonomy)
+        .map_or(OrchestratorAutonomy::Routine, |row| {
+            orchestrator_autonomy(&row.autonomy)
         }))
 }
 
-/// Whether the coordinator answers questions at `autonomy`: not in Ask me, nor at a level this
+/// Whether the orchestrator answers questions at `autonomy`: not in Ask me, nor at a level this
 /// plxd doesn't know.
-pub(crate) fn answers(autonomy: ProjectAutonomy) -> bool {
-    matches!(autonomy, ProjectAutonomy::Routine | ProjectAutonomy::Full)
+pub(crate) fn answers(autonomy: OrchestratorAutonomy) -> bool {
+    matches!(
+        autonomy,
+        OrchestratorAutonomy::Routine | OrchestratorAutonomy::Full
+    )
 }
 
-/// What the coordinator is told about `autonomy`, in its system prompt and with each question.
-pub(crate) fn level(autonomy: ProjectAutonomy) -> &'static str {
+/// What the orchestrator is told about `autonomy`, in its system prompt and with each question.
+pub(crate) fn level(autonomy: OrchestratorAutonomy) -> &'static str {
     match autonomy {
-        ProjectAutonomy::Routine => {
-            "The project's autonomy is Routine: answer only what your shared context or the code \
+        OrchestratorAutonomy::Routine => {
+            "The orchestrator's autonomy is Routine: answer only what your shared context or the code \
              clearly answers, and escalate the rest."
         }
-        ProjectAutonomy::Full => {
-            "The project's autonomy is Full: answer everything you can justify, and escalate only \
+        OrchestratorAutonomy::Full => {
+            "The orchestrator's autonomy is Full: answer everything you can justify, and escalate only \
              what you can't."
         }
-        ProjectAutonomy::Ask | ProjectAutonomy::Unknown => {
-            "The project's autonomy is Ask me: Parallax refuses answer, so escalate every question."
+        OrchestratorAutonomy::Ask | OrchestratorAutonomy::Unknown => {
+            "The orchestrator's autonomy is Ask me: Parallax refuses answer, so escalate every question."
         }
     }
 }
 
-/// Refuses unless `from` is `row`'s Project's current coordinator and `row` is still open.
+/// Refuses unless `from` is `row`'s orchestrator's current run and `row` is still open.
 fn open_for(
     db: &Store,
     row: &parallax_store::Question,
     from: RunId,
     what: &str,
 ) -> Result<(), ErrorObject> {
-    if coordinator_of(db, row.project_id)? != Some(from) {
+    if orchestrator_of(db, row.orchestrator_id)? != Some(from) {
         return Err(ErrorObject::invalid_params(format!(
-            "only the Project's coordinator can {what} a child's question"
+            "only the orchestrator can {what} a child's question"
         )));
     }
     if row.status != OPEN {
@@ -468,17 +500,17 @@ fn to_wire(row: parallax_store::Question) -> Result<Question, ErrorObject> {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::ProjectAutonomy;
+    use parallax_protocol::OrchestratorAutonomy;
 
     use super::answers;
 
     #[test]
-    fn only_routine_and_full_let_the_coordinator_answer() {
-        assert!(answers(ProjectAutonomy::Routine));
-        assert!(answers(ProjectAutonomy::Full));
-        assert!(!answers(ProjectAutonomy::Ask));
+    fn only_routine_and_full_let_the_orchestrator_answer() {
+        assert!(answers(OrchestratorAutonomy::Routine));
+        assert!(answers(OrchestratorAutonomy::Full));
+        assert!(!answers(OrchestratorAutonomy::Ask));
         assert!(
-            !answers(ProjectAutonomy::Unknown),
+            !answers(OrchestratorAutonomy::Unknown),
             "a level from a newer plxd"
         );
     }

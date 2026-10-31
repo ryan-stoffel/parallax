@@ -1,6 +1,7 @@
 // What the preview's mock plxd holds: one host, "macbook", with the parallax repository, a busy
-// Project on it with a coordinator and seven children, a quiet second Project, and a few plain
-// threads. Times are relative to when the page loads, so ages in the sidebar read as recent.
+// Orchestrator on it with an orchestrator and seven children, a quiet second orchestrator, and a
+// few plain threads. Times are relative to when the page loads, so ages in the sidebar read as
+// recent.
 import type {
   AccountLimits,
   AccountUsage,
@@ -16,7 +17,7 @@ import type {
   MemoryFile,
   MemoryKind,
   ParallaxEvent,
-  Project,
+  Orchestrator,
   ProviderInfo,
   Question,
   RemoteControlSession,
@@ -29,7 +30,7 @@ import type {
 
 export const HOME = "/Users/ryan";
 export const PARALLAX_PATH = `${HOME}/Developer/personal/parallax`;
-/** The files a Space's fixture holds, as uploads the mock serves, by path: base64. */
+/** The files a Project's fixture holds, as uploads the mock serves, by path: base64. */
 export const uploadSeeds: Record<string, string> = {
   [`${HOME}/.parallax/uploads/0199a6f0-a001/syllabus.pdf`]:
     "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MzcgPj4Kc3RyZWFtCkJUCi9GMSAyMiBUZgo1NiA3MjAgVGQKKENTQ0kgNDIzMDogRGF0YSBNaW5pbmcpIFRqCi9GMSAxMSBUZgowIC0yMCBUZAooRmFsbCAyMDI2ICB8ICBUdWUvVGh1IDEwOjMwKSBUagowIC0yMCBUZAooKSBUagowIC0yMCBUZAooQ291cnNlIGdvYWxzKSBUagowIC0yMCBUZAooLSBQcmVwcm9jZXNzIGFuZCBleHBsb3JlIHJlYWwgZGF0YXNldHMpIFRqCjAgLTIwIFRkCigtIENsYXNzaWZpY2F0aW9uLCBjbHVzdGVyaW5nLCBhc3NvY2lhdGlvbiBydWxlcykgVGoKMCAtMjAgVGQKKC0gRXZhbHVhdGUgbW9kZWxzIGhvbmVzdGx5KSBUagowIC0yMCBUZAooKSBUagowIC0yMCBUZAooR3JhZGluZykgVGoKMCAtMjAgVGQKKEhvbWV3b3JrIDQwJSAgIE1pZHRlcm0gMjUlICAgUHJvamVjdCAzNSUpIFRqCjAgLTIwIFRkCigpIFRqCjAgLTIwIFRkCihTY2hlZHVsZSkgVGoKMCAtMjAgVGQKKFdlZWsgMSAgIERhdGEgYW5kIHByZXByb2Nlc3NpbmcpIFRqCjAgLTIwIFRkCihXZWVrIDQgICBEZWNpc2lvbiB0cmVlcykgVGoKMCAtMjAgVGQKKFdlZWsgNyAgIENsdXN0ZXJpbmcpIFRqCjAgLTIwIFRkCihXZWVrIDEwICBBc3NvY2lhdGlvbiBydWxlcykgVGoKMCAtMjAgVGQKKFdlZWsgMTMgIFByb2plY3QgcHJlc2VudGF0aW9ucykgVGoKRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDA5MjkgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo5OTkKJSVFT0YK",
@@ -62,17 +63,17 @@ interface ContextDoc {
 
 interface Fixtures {
   repos: Repo[];
-  /** Hand-picked lists of threads and Projects (PLX-789). */
-  projects: Project[];
+  /** Hand-picked lists of threads and orchestrators (PLX-789). */
+  orchestrators: Orchestrator[];
   threads: Thread[];
   runs: AgentRun[];
   /** By run id, oldest first. */
   events: Record<string, RunEvent[]>;
-  /** By Project id. */
+  /** By orchestrator id. */
   inbox: Record<string, InboxItem[]>;
   questions: Record<string, Question[]>;
   context: Record<string, ContextDoc[]>;
-  /** By scope key: `you`, `repo:<id>`, `project:<id>`. */
+  /** By scope key: `you`, `repo:<id>`, `orchestrator:<id>`. */
   memory: Record<string, MemoryDoc[]>;
   providers: ProviderInfo[];
   clis: DetectedCli[];
@@ -96,12 +97,12 @@ export const ids = {
   repoParallax: uuid(1),
   repoDocs: uuid(2),
   repoScratch: uuid(3),
-  projectParallax: uuid(10),
-  projectDocs: uuid(11),
-  projectMobile: uuid(12),
-  projectInfra: uuid(13),
-  projectLanding: uuid(14),
-  coordinator: uuid(20),
+  orchestratorParallax: uuid(10),
+  orchestratorDocs: uuid(11),
+  orchestratorMobile: uuid(12),
+  orchestratorInfra: uuid(13),
+  orchestratorLanding: uuid(14),
+  orchestratorRun: uuid(20),
   retry: uuid(21),
   palette: uuid(22),
   proposals: uuid(23),
@@ -134,9 +135,9 @@ export const ids = {
   physics: uuid(123),
   essay: uuid(124),
   names: uuid(125),
-  spaceCoursework: uuid(130),
-  spaceEssays: uuid(131),
-  spaceApartment: uuid(132),
+  projectCoursework: uuid(130),
+  projectEssays: uuid(131),
+  projectApartment: uuid(132),
   repoLearnRust: uuid(140),
   rcLifetimes: uuid(141),
   rcClap: uuid(142),
@@ -193,12 +194,12 @@ export function createFixtures(now = Date.now()): Fixtures {
       scratch: true,
       createdAt: ago(60 * 24 * 40),
     },
-    // Chat projects (0090).
+    // Chat orchestrators (0090).
     {
-      id: ids.spaceCoursework,
+      id: ids.projectCoursework,
       name: "CSCI4230 · Data Mining",
-      path: `${HOME}/.parallax/spaces/${ids.spaceCoursework}`,
-      space: true,
+      path: `${HOME}/.parallax/spaces/${ids.projectCoursework}`,
+      project: true,
       icon: { name: "graduation-cap", color: "sky" },
       createdAt: ago(60 * 24 * 30),
       instructions:
@@ -206,30 +207,30 @@ export function createFixtures(now = Date.now()): Fixtures {
       files: Object.keys(uploadSeeds),
     },
     {
-      id: ids.spaceEssays,
+      id: ids.projectEssays,
       name: "Essays",
-      path: `${HOME}/.parallax/spaces/${ids.spaceEssays}`,
-      space: true,
+      path: `${HOME}/.parallax/spaces/${ids.projectEssays}`,
+      project: true,
       icon: { name: "feather", color: "orange" },
       createdAt: ago(60 * 24 * 20),
     },
     {
-      id: ids.spaceApartment,
+      id: ids.projectApartment,
       name: "Moving into my own apartment",
-      path: `${HOME}/.parallax/spaces/${ids.spaceApartment}`,
-      space: true,
+      path: `${HOME}/.parallax/spaces/${ids.projectApartment}`,
+      project: true,
       createdAt: ago(60 * 24 * 14),
     },
   ];
 
-  const projects: Project[] = [
+  const orchestrators: Orchestrator[] = [
     {
-      id: ids.projectParallax,
+      id: ids.orchestratorParallax,
       name: "parallax",
       icon: { name: "orbit", color: "violet" },
       repoPath: PARALLAX_PATH,
       branch: "develop",
-      coordinator: ids.coordinator,
+      run: ids.orchestratorRun,
       permission: "auto",
       autonomy: "routine",
       baseBranch: "develop",
@@ -238,7 +239,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       updatedAt: ago(3),
     },
     {
-      id: ids.projectDocs,
+      id: ids.orchestratorDocs,
       name: "docs-site",
       icon: { name: "book-open", color: "green" },
       repoPath: DOCS_PATH,
@@ -248,18 +249,18 @@ export function createFixtures(now = Date.now()): Fixtures {
       createdAt: ago(60 * 26),
       updatedAt: ago(60 * 26),
     },
-    // More Projects, for how the sidebar holds a handful.
+    // More orchestrators, for how the sidebar holds a handful.
     ...(
       [
-        [ids.projectMobile, "mobile-app", "smartphone", "sky"],
-        [ids.projectInfra, "infra", "server", "orange"],
-        [ids.projectLanding, "landing-page", "rocket", "pink"],
+        [ids.orchestratorMobile, "mobile-app", "smartphone", "sky"],
+        [ids.orchestratorInfra, "infra", "server", "orange"],
+        [ids.orchestratorLanding, "landing-page", "rocket", "pink"],
       ] as const
-    ).map(([id, name, icon, color], n): Project => ({
+    ).map(([id, name, icon, color], n): Orchestrator => ({
       id,
       name,
       icon:
-        id === ids.projectLanding
+        id === ids.orchestratorLanding
           ? { name: icon, image: { mediaType: "image/png", data: LANDING_ICON } }
           : { name: icon, color },
       repoPath: DOCS_PATH,
@@ -357,14 +358,14 @@ export function createFixtures(now = Date.now()): Fixtures {
     costUsdMicros: Math.round((input * 15 + output * 75) / 1),
   });
 
-  // ---- The coordinator -------------------------------------------------------------------
+  // ---- The orchestrator -------------------------------------------------------------------
 
-  const coordinatorPrompt =
+  const orchestratorPrompt =
     "Pick up the M4 inbox work and the scheduler spill. Keep me out of anything routine.";
-  const coordinator: AgentRun = {
-    id: ids.coordinator,
-    project: ids.projectParallax,
-    prompt: coordinatorPrompt,
+  const orchestratorRun: AgentRun = {
+    id: ids.orchestratorRun,
+    project: ids.orchestratorParallax,
+    prompt: orchestratorPrompt,
     policy: "noWrite",
     status: "completed",
     backend: "claude",
@@ -379,9 +380,9 @@ export function createFixtures(now = Date.now()): Fixtures {
     createdAt: ago(185),
     updatedAt: ago(6),
   };
-  runs.push(coordinator);
+  runs.push(orchestratorRun);
 
-  /** A Project child the coordinator launched: its run and its thread. */
+  /** An orchestrator child the orchestrator launched: its run and its thread. */
   const child = (c: {
     id: string;
     title: string;
@@ -398,7 +399,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     const backend = c.backend ?? "claude";
     const run: AgentRun = {
       id: c.id,
-      project: ids.projectParallax,
+      project: ids.orchestratorParallax,
       prompt: c.prompt,
       policy: "workspaceWrite",
       status: c.status,
@@ -407,7 +408,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       branch: `parallax/${c.slug}`,
       worktreePath: `${HOME}/.parallax/worktrees/parallax/${c.slug}`,
       sessionId: `sess_${c.slug.slice(0, 6)}_${c.started}`,
-      coordinatorThread: ids.coordinator,
+      orchestratorThread: ids.orchestratorRun,
       model: c.model ?? OPUS,
       effort: "high",
       contextWindow: backend === "claude" ? 1_000_000 : 272_000,
@@ -426,8 +427,8 @@ export function createFixtures(now = Date.now()): Fixtures {
     runs.push(run);
     threads.push({
       id: c.id,
-      repo: ids.projectParallax,
-      parent: ids.coordinator,
+      repo: ids.orchestratorParallax,
+      parent: ids.orchestratorRun,
       title: c.title,
       createdAt: ago(c.started),
       lastPromptAt: ago(c.started),
@@ -448,10 +449,10 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   const palette = child({
     id: ids.palette,
-    title: "Command palette for project actions",
-    slug: "project-command-palette",
+    title: "Command palette for orchestrator actions",
+    slug: "orchestrator-command-palette",
     prompt:
-      "Add a command palette (Mod+K) for project actions: open a Project, start a task, open its Context, Memory, or Agents view, and jump to any child by title. Reuse ui.tsx's menu styles and keybindings.ts, and keep it keyboard-first.",
+      "Add a command palette (Mod+K) for orchestrator actions: open an orchestrator, start a task, open its Context, Memory, or Agents view, and jump to any child by title. Reuse ui.tsx's menu styles and keybindings.ts, and keep it keyboard-first.",
     status: "running",
     started: 168,
     updated: 2,
@@ -461,7 +462,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     title: "Memory proposals from child threads",
     slug: "memory-proposals",
     prompt:
-      "Show memory proposals from a Project's children in the coordinator's wake-up, and let the coordinator save or discard each with memory_write. A plain thread's proposal waits for the user in the Memory panel (0044).",
+      "Show memory proposals from an orchestrator's children in the orchestrator's wake-up, and let the orchestrator save or discard each with memory_write. A plain thread's proposal waits for the user in the Memory panel (0044).",
     status: "running",
     started: 160,
     updated: 1,
@@ -472,7 +473,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     title: "Scheduler: spill to devbox when Claude is capped",
     slug: "scheduler-spill-devbox",
     prompt:
-      "Scheduler: when the Claude subscription on this host reports its five-hour window above 90%, start new Project children on the devbox host instead, over plxd attach. Read the limit from usage/get, keep the choice per Project, and say where each child went in its row.",
+      "Scheduler: when the Claude subscription on this host reports its five-hour window above 90%, start new orchestrator children on the devbox host instead, over plxd attach. Read the limit from usage/get, keep the choice per Orchestrator, and say where each child went in its row.",
     status: "running",
     started: 150,
     updated: 4,
@@ -482,7 +483,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     title: "Inbox read state",
     slug: "inbox-read-state",
     prompt:
-      "Inbox read state: mark a Project's inbox items seen when the user opens them or scrolls past them, with inbox/seen, and keep the unread count on the Project's sidebar row in step.",
+      "Inbox read state: mark an orchestrator's inbox items seen when the user opens them or scrolls past them, with inbox/seen, and keep the unread count on the orchestrator's sidebar row in step.",
     status: "running",
     started: 120,
     updated: 3,
@@ -494,7 +495,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     title: "Brief editor",
     slug: "brief-editor",
     prompt:
-      "Brief editor: let the user edit a Project's brief.md in the Memory panel with the same Markdown editor as the composer, saving with memory_write. Show the last writer and when.",
+      "Brief editor: let the user edit an orchestrator's brief.md in the Memory panel with the same Markdown editor as the composer, saving with memory_write. Show the last writer and when.",
     status: "completed",
     started: 110,
     updated: 23,
@@ -502,22 +503,22 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   const iconPicker = child({
     id: ids.iconPicker,
-    title: "Project icon picker in light mode",
+    title: "Orchestrator icon picker in light mode",
     slug: "icon-picker-light-mode",
     prompt:
-      "Project icon picker in light mode: the swatches for yellow and gray drop below 3:1 against the light popover. Adjust the --project-* light tokens so every swatch passes, and update IconPicker.test.tsx's contrast check.",
+      "Orchestrator icon picker in light mode: the swatches for yellow and gray drop below 3:1 against the light popover. Adjust the --project-* light tokens so every swatch passes, and update IconPicker.test.tsx's contrast check.",
     status: "failed",
     started: 95,
     updated: 52,
     error: "pnpm test failed: IconPicker.test.tsx contrast check still fails for yellow (2.7:1).",
   });
 
-  // The coordinator's transcript: the user's ask, its plan, five launches, a status board, and
+  // The orchestrator's transcript: the user's ask, its plan, five launches, a status board, and
   // a wake-up after two children finished.
   const launch = (run: AgentRun, title: string) =>
     tool(
       "mcp__plxd__thread_launch",
-      { project: ids.projectParallax, title, prompt: run.prompt },
+      { orchestrator: ids.orchestratorParallax, title, prompt: run.prompt },
       JSON.stringify({
         runId: run.id,
         status: "starting",
@@ -526,7 +527,7 @@ export function createFixtures(now = Date.now()): Fixtures {
         branch: run.branch,
       }),
     );
-  log(coordinator)
+  log(orchestratorRun)
     .out(
       ago(185),
       session(),
@@ -538,7 +539,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       ...tool("mcp__plxd__read_context", { path: "notes.md" }, "# parallax\n\n## Now\n\n(empty)"),
       ...tool(
         "mcp__plxd__thread_list",
-        { project: ids.projectParallax },
+        { orchestrator: ids.orchestratorParallax },
         JSON.stringify({ runs: [] }),
       ),
       ...tool(
@@ -547,7 +548,7 @@ export function createFixtures(now = Date.now()): Fixtures {
           command: "gh issue list --milestone M4 --state open --limit 20",
           description: "List open M4 issues",
         },
-        "PLX-488  Inbox read state                       feature  app\nPLX-489  Memory proposals from child threads    feature  daemon\nPLX-490  Brief editor                           feature  app\nPLX-491  Retry failed update downloads          bug      app\nPLX-492  Command palette for project actions    feature  app\nPLX-493  Icon picker swatches fail in light     bug      app\nPLX-497  Scheduler: spill to devbox when capped feature  daemon",
+        "PLX-488  Inbox read state                       feature  app\nPLX-489  Memory proposals from child threads    feature  daemon\nPLX-490  Brief editor                           feature  app\nPLX-491  Retry failed update downloads          bug      app\nPLX-492  Command palette for orchestrator actions    feature  app\nPLX-493  Icon picker swatches fail in light     bug      app\nPLX-497  Scheduler: spill to devbox when capped feature  daemon",
       ),
     )
     .out(ago(184), {
@@ -555,12 +556,12 @@ export function createFixtures(now = Date.now()): Fixtures {
       text: "Seven open M4 issues, and none of them overlap much. I'll run them as separate children, all in auto mode on the integration branch `parallax/parallax`:\n\n- **Inbox read state**, **Memory proposals**, and **Brief editor** for the inbox work\n- **Scheduler: spill to devbox** for the scheduler\n- **Retry failed update downloads**, **Command palette**, and the **icon picker** contrast fix, since they're small and independent\n\nI'll answer routine questions myself and only bring you the ones that change behavior you'd notice.",
     })
     .out(ago(183), ...launch(retry, "Retry failed update downloads"))
-    .out(ago(182), ...launch(palette, "Command palette for project actions"))
+    .out(ago(182), ...launch(palette, "Command palette for orchestrator actions"))
     .out(ago(181), ...launch(proposals, "Memory proposals from child threads"))
     .out(ago(180), ...launch(scheduler, "Scheduler: spill to devbox when Claude is capped"))
     .out(ago(179), ...launch(inboxRead, "Inbox read state"))
     .out(ago(178), ...launch(brief, "Brief editor"))
-    .out(ago(177), ...launch(iconPicker, "Project icon picker in light mode"))
+    .out(ago(177), ...launch(iconPicker, "Orchestrator icon picker in light mode"))
     .out(
       ago(176),
       ...tool(
@@ -584,7 +585,7 @@ export function createFixtures(now = Date.now()): Fixtures {
         kind: "turnStarted",
         turnId: uuid(90),
         wake: true,
-        text: 'Finished: Retry failed update downloads (completed, 4 files +142 -37). Command palette for project actions asked: "Should Mod+K open over an open dialog, or wait for it to close?", assuming "Wait for it to close".',
+        text: 'Finished: Retry failed update downloads (completed, 4 files +142 -37). Command palette for orchestrator actions asked: "Should Mod+K open over an open dialog, or wait for it to close?", assuming "Wait for it to close".',
       },
       {
         kind: "reasoning",
@@ -610,7 +611,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       ...tool(
         "mcp__plxd__memory_write",
         {
-          scope: "project",
+          scope: "orchestrator",
           path: "memory/convention/shortcuts-wait-for-dialogs.md",
           title: "Shortcuts wait for an open dialog to close",
         },
@@ -687,7 +688,7 @@ export function createFixtures(now = Date.now()): Fixtures {
         items: [
           { text: "Survey keybindings.ts and the existing menus", status: "completed" },
           { text: "Palette component with fuzzy search", status: "completed" },
-          { text: "Project actions as commands", status: "inProgress" },
+          { text: "Orchestrator actions as commands", status: "inProgress" },
           { text: "Jump to a child by title", status: "pending" },
           { text: "Tests and keyboard checks", status: "pending" },
         ],
@@ -708,7 +709,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       ),
       {
         kind: "text",
-        text: "The palette opens with Mod+K and lists the open Project's actions first. Wiring the child list next.",
+        text: "The palette opens with Mod+K and lists the open orchestrator's actions first. Wiring the child list next.",
       },
     )
     .out(
@@ -716,7 +717,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       {
         kind: "turnStarted",
         turnId: uuid(91),
-        from: ids.coordinator,
+        from: ids.orchestratorRun,
         text: "Wait for it to close, as Mod+N does.",
       },
       { kind: "text", text: "Got it: Mod+K now waits for an open dialog to close, like Mod+N." },
@@ -743,7 +744,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       ...tool("Read", { file_path: "docs/decisions/0044-memory.md" }, "…"),
       {
         kind: "text",
-        text: "A child's proposal already lands in `proposals/` in the Project's folder. I'm adding it to the coordinator's next wake-up text, then removing it once delivered.",
+        text: "A child's proposal already lands in `proposals/` in the orchestrator's folder. I'm adding it to the orchestrator's next wake-up text, then removing it once delivered.",
       },
       ...tool("Edit", { file_path: "daemon/src/agents/wake.rs" }, "The file has been updated."),
     )
@@ -1621,7 +1622,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     started: number;
     updated: number;
     seen?: number;
-    /** A chat project's id, for a chat in one. */
+    /** A chat orchestrator's id, for a chat in one. */
     repo?: string;
   }) => {
     const run = thread({ ...c, repo: c.repo ?? ids.repoScratch, status: "completed" });
@@ -1664,7 +1665,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     .finish(ago(12), { status: "completed" });
   chat({
     id: ids.homework,
-    repo: ids.spaceCoursework,
+    repo: ids.projectCoursework,
     title: "Linear algebra: eigenvalues walkthrough",
     slug: "eigenvalues",
     prompt:
@@ -1675,7 +1676,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.physics,
-    repo: ids.spaceCoursework,
+    repo: ids.projectCoursework,
     title: "Physics: torque and angular momentum",
     slug: "torque",
     prompt: "Explain torque and angular momentum like I'm studying for Thursday's exam.",
@@ -1686,7 +1687,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.essay,
-    repo: ids.spaceEssays,
+    repo: ids.projectEssays,
     title: "Essay outline: AI tutors and academic honesty",
     slug: "essay-outline",
     prompt: "Help me outline a 1,500 word essay on AI tutors and academic honesty.",
@@ -1745,7 +1746,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       id: uuid(100),
       kind: "decided",
       run: palette.id,
-      text: `Command palette for project actions: asked ${JSON.stringify(paletteQuestion)}, went with ${JSON.stringify("Wait for it to close, as Mod+N does.")}`,
+      text: `Command palette for orchestrator actions: asked ${JSON.stringify(paletteQuestion)}, went with ${JSON.stringify("Wait for it to close, as Mod+N does.")}`,
       createdAt: ago(41),
     },
     {
@@ -1758,8 +1759,8 @@ export function createFixtures(now = Date.now()): Fixtures {
     {
       id: uuid(102),
       kind: "learned",
-      run: ids.coordinator,
-      text: "Memory: Shortcuts wait for an open dialog to close (project scope)",
+      run: ids.orchestratorRun,
+      text: "Memory: Shortcuts wait for an open dialog to close (orchestrator scope)",
       createdAt: ago(40),
     },
     {
@@ -1773,21 +1774,21 @@ export function createFixtures(now = Date.now()): Fixtures {
       id: uuid(104),
       kind: "failed",
       run: iconPicker.id,
-      text: `Project icon picker in light mode: failed: ${iconPicker.error}`,
+      text: `Orchestrator icon picker in light mode: failed: ${iconPicker.error}`,
       createdAt: ago(52),
     },
     {
       id: uuid(106),
       kind: "learned",
-      run: ids.coordinator,
+      run: ids.orchestratorRun,
       text: "Memory: plxd on the devbox is one protocol version behind; spill needs a version gate",
       createdAt: ago(12),
     },
     {
       id: uuid(107),
       kind: "learned",
-      run: ids.coordinator,
-      text: "Memory: yellow project icons need a darker hue in light mode to reach 3:1",
+      run: ids.orchestratorRun,
+      text: "Memory: yellow orchestrator icons need a darker hue in light mode to reach 3:1",
       createdAt: ago(6),
     },
     {
@@ -1821,7 +1822,7 @@ Integration branch \`parallax/parallax\`, cut from \`develop\`. Children run in 
 
 ## Now
 
-- [ ] **Command palette for project actions**: Mod+K palette is in; wiring jump-to-child. Waits for open dialogs (decided).
+- [ ] **Command palette for orchestrator actions**: Mod+K palette is in; wiring jump-to-child. Waits for open dialogs (decided).
 - [ ] **Memory proposals from child threads**: proposals ride the next wake-up; tests running.
 - [ ] **Scheduler: spill to devbox**: waiting on approval to check plxd's version over ssh.
 - [ ] **Inbox read state**: opening marks seen; asked Ryan about scroll-past.
@@ -1836,16 +1837,16 @@ Integration branch \`parallax/parallax\`, cut from \`develop\`. Children run in 
 ## Risks
 
 - The devbox runs an older plxd; if its protocol is behind, the spill needs a version gate first.
-- **Project icon picker in light mode** failed: yellow can't reach 3:1 without reading as orange.
+- **Orchestrator icon picker in light mode** failed: yellow can't reach 3:1 without reading as orange.
 - Inbox read state and the palette both touch \`Sidebar.tsx\`; land the palette first.
 `;
   const decisions = `# Decisions
 
 | When | What | Who |
 | --- | --- | --- |
-| ${today} | Mod+K waits for an open dialog to close, like Mod+N | coordinator |
-| ${today} | Retries back off at 2s, 8s, 30s; resume with ranges when offered | coordinator |
-| ${today} | Children of this Project run in auto mode | Ryan |
+| ${today} | Mod+K waits for an open dialog to close, like Mod+N | orchestratorRun |
+| ${today} | Retries back off at 2s, 8s, 30s; resume with ranges when offered | orchestratorRun |
+| ${today} | Children of this orchestrator run in auto mode | Ryan |
 
 Open: does scrolling past an inbox item mark it seen? Asked Ryan.
 `;
@@ -1860,15 +1861,15 @@ Spill a new child to \`devbox\` when this host's Claude five-hour window is abov
 See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwork.
 `;
   const context: Record<string, ContextDoc[]> = {
-    [ids.projectParallax]: [
-      contextFile("decisions.md", decisions, 40, ids.coordinator),
-      contextFile("notes.md", notes, 6, ids.coordinator),
+    [ids.orchestratorParallax]: [
+      contextFile("decisions.md", decisions, 40, ids.orchestratorRun),
+      contextFile("notes.md", notes, 6, ids.orchestratorRun),
       contextFile("scheduler.md", scheduler_md, 140, ids.scheduler),
     ],
-    [ids.projectDocs]: [],
-    [ids.projectMobile]: [],
-    [ids.projectInfra]: [],
-    [ids.projectLanding]: [],
+    [ids.orchestratorDocs]: [],
+    [ids.orchestratorMobile]: [],
+    [ids.orchestratorInfra]: [],
+    [ids.orchestratorLanding]: [],
   };
 
   // ---- Memory -----------------------------------------------------------------------------------
@@ -1987,12 +1988,13 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         },
       ),
     ],
-    [`project:${ids.projectParallax}`]: [
+    [`orchestrator:${ids.orchestratorParallax}`]: [
       memoryDoc(
         "brief.md",
         `# parallax: M4
 
-**Goal:** finish M4: the Project inbox, memory proposals, and the brief, plus the scheduler spill to the devbox.
+**Goal:** finish M4: the orchestrator inbox, memory proposals, and the brief, plus the scheduler
+*spill to the devbox.
 
 **Scope:** the desktop app and plxd. No protocol version bump; new fields stay optional.
 
@@ -2006,7 +2008,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       ),
       memoryDoc(
         "memory/decision/children-auto-mode.md",
-        "Children of this Project run in auto mode; bypass is never used here.",
+        "Children of this orchestrator run in auto mode; bypass is never used here.",
         60 * 24 * 5,
         {
           kind: "decision",
@@ -2024,7 +2026,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
           kind: "convention",
           title: "Shortcuts wait for an open dialog to close",
           source: palette.id,
-          writer: `coordinator ${ids.coordinator}`,
+          writer: `orchestrator ${ids.orchestratorRun}`,
         },
       ),
       memoryDoc(
@@ -2035,8 +2037,8 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
           kind: "gotcha",
           title: "Land the palette before inbox read state",
           lastUsed: usedAgo(0),
-          source: ids.coordinator,
-          writer: `coordinator ${ids.coordinator}`,
+          source: ids.orchestratorRun,
+          writer: `orchestrator ${ids.orchestratorRun}`,
         },
       ),
       memoryDoc(
@@ -2045,10 +2047,10 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         60 * 24 * 4,
       ),
     ],
-    [`project:${ids.projectDocs}`]: [],
-    [`project:${ids.projectMobile}`]: [],
-    [`project:${ids.projectInfra}`]: [],
-    [`project:${ids.projectLanding}`]: [],
+    [`orchestrator:${ids.orchestratorDocs}`]: [],
+    [`orchestrator:${ids.orchestratorMobile}`]: [],
+    [`orchestrator:${ids.orchestratorInfra}`]: [],
+    [`orchestrator:${ids.orchestratorLanding}`]: [],
     [`repo:${ids.repoDocs}`]: [],
   };
 
@@ -2072,7 +2074,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     models: [],
     permissions: ["manual", "edit", "auto", "plan", "bypass"],
     efforts: true,
-    coordinator: true,
+    orchestrator: true,
     login: ["claude", "auth", "login"],
   };
   const providers: ProviderInfo[] = [
@@ -2095,7 +2097,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       models: [],
       permissions: ["manual", "edit", "auto", "bypass"],
       efforts: true,
-      coordinator: true,
+      orchestrator: true,
       login: ["codex", "login"],
     },
     {
@@ -2114,7 +2116,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       models: [],
       permissions: ["edit", "auto", "plan", "bypass"],
       efforts: false,
-      coordinator: true,
+      orchestrator: true,
     },
   ];
 
@@ -2316,23 +2318,23 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
 
   return {
     repos,
-    projects,
+    orchestrators,
     threads,
     runs,
     events,
     inbox: {
-      [ids.projectParallax]: inbox,
-      [ids.projectDocs]: [],
-      [ids.projectMobile]: [],
-      [ids.projectInfra]: [],
-      [ids.projectLanding]: [],
+      [ids.orchestratorParallax]: inbox,
+      [ids.orchestratorDocs]: [],
+      [ids.orchestratorMobile]: [],
+      [ids.orchestratorInfra]: [],
+      [ids.orchestratorLanding]: [],
     },
     questions: {
-      [ids.projectParallax]: questions,
-      [ids.projectDocs]: [],
-      [ids.projectMobile]: [],
-      [ids.projectInfra]: [],
-      [ids.projectLanding]: [],
+      [ids.orchestratorParallax]: questions,
+      [ids.orchestratorDocs]: [],
+      [ids.orchestratorMobile]: [],
+      [ids.orchestratorInfra]: [],
+      [ids.orchestratorLanding]: [],
     },
     context,
     memory,

@@ -3,10 +3,10 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
-use crate::project::{icon_columns, icon_from_row};
+use crate::orchestrator::{icon_columns, icon_from_row};
 use crate::runs::{delete_run_rows, insert_run};
 use crate::worktree::insert_worktree;
-use crate::{ProjectIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
+use crate::{ChosenIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
 
 /// What registering a repo entry takes (#110).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,8 +16,8 @@ pub struct RepoFields {
     pub path: String,
     /// Whether this is plxd's scratch entry, for threads with no repo.
     pub scratch: bool,
-    /// Whether this is a Space (0069): a named group of chats, backed by a repository plxd made.
-    pub space: bool,
+    /// Whether this is a Project (0069): a named group of chats, backed by a repository plxd made.
+    pub project: bool,
 }
 
 /// A repo entry row: a repository normal threads run in.
@@ -26,11 +26,11 @@ pub struct Repo {
     pub id: Uuid,
     pub fields: RepoFields,
     /// Its icon, in a project's shape (decision record 0033), stored as the client sent it.
-    pub icon: Option<ProjectIcon>,
+    pub icon: Option<ChosenIcon>,
     pub created_at: Timestamp,
-    /// A Space's instructions for every thread in it (decision record 0090).
+    /// A Project's instructions for every thread in it (decision record 0090).
     pub instructions: Option<String>,
-    /// The files a Space gives every thread in it, as absolute paths (decision record 0090).
+    /// The files a Project gives every thread in it, as absolute paths (decision record 0090).
     pub files: Vec<String>,
 }
 
@@ -60,8 +60,8 @@ pub struct Thread {
     pub unarchived_at: Option<Timestamp>,
     /// Whether the user pinned it to the top of the sidebar (PLX-789).
     pub pinned: bool,
-    /// The Space the user added it to (0090), apart from `repo_id`.
-    pub space_id: Option<Uuid>,
+    /// The Project the user added it to (0090), apart from `repo_id`.
+    pub project_id: Option<Uuid>,
 }
 
 /// The run and turn a thread was forked from (decision record 0041).
@@ -95,14 +95,14 @@ pub struct ThreadUpdate {
 }
 
 const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
-    icon_name, icon_color, icon_image_type, icon_image_data, space, instructions, files";
+    icon_name, icon_color, icon_image_type, icon_image_data, project, instructions, files";
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
     forked_from_turn, title, settled, unarchived_at, pinned, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id AND from_user \
         AND substr(text, 1, 22) != 'Parallax, not the user'), created_at) AS last_user_prompt_at, \
-    space_id";
+    project_id";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (
@@ -111,7 +111,7 @@ type RawRepo = (
     String,
     bool,
     String,
-    Option<ProjectIcon>,
+    Option<ChosenIcon>,
     bool,
     Option<String>,
     Option<String>,
@@ -132,14 +132,14 @@ fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
 }
 
 fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
-    let (id, name, path, scratch, created_at, icon, space, instructions, files) = raw;
+    let (id, name, path, scratch, created_at, icon, project, instructions, files) = raw;
     Ok(Repo {
         id: Uuid::parse_str(&id)?,
         fields: RepoFields {
             name,
             path,
             scratch,
-            space,
+            project,
         },
         icon,
         created_at: timestamp::parse(&created_at)?,
@@ -167,7 +167,7 @@ struct RawThread {
     unarchived_at: Option<String>,
     pinned: bool,
     last_user_prompt_at: String,
-    space_id: Option<String>,
+    project_id: Option<String>,
 }
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
@@ -187,7 +187,7 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
         unarchived_at: row.get(12)?,
         pinned: row.get(13)?,
         last_user_prompt_at: row.get(14)?,
-        space_id: row.get(15)?,
+        project_id: row.get(15)?,
     })
 }
 
@@ -222,7 +222,7 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
             .map(timestamp::parse)
             .transpose()?,
         pinned: raw.pinned,
-        space_id: uuid(raw.space_id)?,
+        project_id: uuid(raw.project_id)?,
     })
 }
 
@@ -338,14 +338,14 @@ impl Store {
             return Err(StoreError::IdConflict { id });
         }
         tx.execute(
-            "INSERT INTO repos (id, name, path, scratch, space, created_at)
+            "INSERT INTO repos (id, name, path, scratch, project, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 id.to_string(),
                 fields.name,
                 fields.path,
                 fields.scratch,
-                fields.space,
+                fields.project,
                 timestamp::now()
             ],
         )?;
@@ -632,20 +632,20 @@ impl Store {
         Ok((thread, changed > 0))
     }
 
-    /// Adds thread `id` to Space `space`, or with `None` takes it out of its Space (0090). Returns
+    /// Adds thread `id` to Project `project`, or with `None` takes it out of its Project (0090). Returns
     /// the thread and whether it changed.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no thread has `id`, or a database error.
-    pub fn set_thread_space(
+    pub fn set_thread_project(
         &self,
         id: Uuid,
-        space: Option<Uuid>,
+        project: Option<Uuid>,
     ) -> Result<(Thread, bool), StoreError> {
         let changed = self.conn.execute(
-            "UPDATE threads SET space_id = ?2 WHERE id = ?1 AND space_id IS NOT ?2",
-            params![id.to_string(), space.map(|space| space.to_string())],
+            "UPDATE threads SET project_id = ?2 WHERE id = ?1 AND project_id IS NOT ?2",
+            params![id.to_string(), project.map(|project| project.to_string())],
         )?;
         let thread = fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })?;
         Ok((thread, changed > 0))
@@ -657,7 +657,7 @@ impl Store {
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
-    pub fn set_repo_icon(&self, id: Uuid, icon: &ProjectIcon) -> Result<(Repo, bool), StoreError> {
+    pub fn set_repo_icon(&self, id: Uuid, icon: &ChosenIcon) -> Result<(Repo, bool), StoreError> {
         let before = existing_repo(&self.conn, id)?;
         if before.icon.as_ref() == Some(icon) {
             return Ok((before, false));
@@ -688,14 +688,14 @@ impl Store {
         Ok((existing_repo(&self.conn, id)?, true))
     }
 
-    /// Sets a Space's instructions and files, each when given, `None` or empty instructions and
+    /// Sets a Project's instructions and files, each when given, `None` or empty instructions and
     /// an empty list clearing them. A file path holds no newline, since the paths are stored one
     /// per line. Returns the entry and whether it changed.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
-    pub fn set_space_context(
+    pub fn set_project_context(
         &self,
         id: Uuid,
         instructions: Option<&str>,

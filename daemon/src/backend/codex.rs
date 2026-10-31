@@ -1,9 +1,9 @@
 //! The Codex backend: runs the user's own signed-in `codex` CLI headless (0004, PLX-38).
 //!
-//! plxd runs only threads on Codex (`RunRequest::full_agent`, 0017): a normal thread, a Project's
-//! child, or its coordinator (0042), on `codex app-server` as full Codex, with the user's own
-//! configuration, follow-ups, and approval requests. See [`app_server`] and 0035. The `codex exec`
-//! worker 0013 described is gone (PLX-396).
+//! plxd runs only threads on Codex (`RunRequest::full_agent`, 0017): a normal thread, an
+//! orchestrator's child, or its orchestrator (0042), on `codex app-server` as full Codex, with the
+//! user's own configuration, follow-ups, and approval requests. See [`app_server`] and 0035. The
+//! `codex exec` worker 0013 described is gone (PLX-396).
 //!
 //! # Images
 //!
@@ -305,7 +305,7 @@ impl Backend for CodexBackend {
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         if !request.full_agent() {
             return Err(StartError::Unsupported(
-                "plxd runs only threads and coordinators on Codex (decisions 0035, 0042)".into(),
+                "plxd runs only threads and orchestrators on Codex (decisions 0035, 0042)".into(),
             ));
         }
         app_server::start(&self.launcher, &self.overrides, &self.servers, request)

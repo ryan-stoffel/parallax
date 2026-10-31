@@ -43,7 +43,7 @@ fn request(cwd: &Path) -> RunRequest {
         permission: None,
         context_window: None,
         fast: None,
-        coordinator_tools: None,
+        orchestrator_tools: None,
         thread_tools: None,
         approvals: false,
         thread: false,
@@ -230,11 +230,11 @@ fn resolved_for_role(backend: Arc<dyn Backend>, role: Role, policy: ToolPolicy) 
 }
 
 #[tokio::test]
-async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
+async fn start_sends_no_write_to_the_backend_for_a_orchestrator() {
     let backend = completing();
     let resolved = resolved_for_role(
         backend.clone(),
-        Role::Coordinator,
+        Role::Orchestrator,
         ToolPolicy::WorkspaceWrite,
     );
 
@@ -249,7 +249,7 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
 
     let sent = &backend.calls()[0];
     assert_eq!(sent.policy, ToolPolicy::NoWrite);
-    assert_eq!(sent.sandbox, None, "a coordinator gets no worker sandbox");
+    assert_eq!(sent.sandbox, None, "an orchestrator gets no worker sandbox");
     let mut settings = claude::no_write_settings();
     settings["showThinkingSummaries"] = true.into();
     let settings = settings.to_string();
@@ -259,11 +259,11 @@ async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
     assert_eq!(
         claude::arguments(sent).unwrap(),
         expected,
-        "Claude runs a coordinator with exactly 0004's no-write flags, none of 0013's"
+        "Claude runs an orchestrator with exactly 0004's no-write flags, none of 0013's"
     );
 }
 
-fn coordinator_tools() -> ThreadTools {
+fn orchestrator_tools() -> ThreadTools {
     ThreadTools {
         program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
         data_dir: PathBuf::from("/Users/u/Library/Application Support/parallax"),
@@ -403,9 +403,9 @@ async fn a_lost_session_starts_once_as_a_new_one_with_the_fallback() {
 }
 
 #[tokio::test]
-async fn only_a_coordinator_keeps_the_coordinator_tools() {
+async fn only_a_orchestrator_keeps_the_orchestrator_tools() {
     for (role, policy) in [
-        (Role::Coordinator, ToolPolicy::NoWrite),
+        (Role::Orchestrator, ToolPolicy::NoWrite),
         (Role::Worker, ToolPolicy::WorkspaceWrite),
     ] {
         let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
@@ -413,19 +413,19 @@ async fn only_a_coordinator_keeps_the_coordinator_tools() {
         )]]));
         let resolved = resolved_for_role(backend.clone(), role, policy);
         let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
-        let tools = coordinator_tools();
+        let tools = orchestrator_tools();
         let request = RunRequest {
-            coordinator_tools: Some(tools.clone()),
+            orchestrator_tools: Some(tools.clone()),
             ..request(&root())
         };
 
         let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
         rest(&mut started.events).await;
 
-        let kept = backend.calls()[0].coordinator_tools.clone();
+        let kept = backend.calls()[0].orchestrator_tools.clone();
         assert_eq!(
             kept,
-            (role == Role::Coordinator).then_some(tools),
+            (role == Role::Orchestrator).then_some(tools),
             "{role:?}"
         );
     }

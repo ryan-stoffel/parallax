@@ -3,7 +3,7 @@ import { useId, useState, type ComponentType, type SVGProps } from "react";
 
 import { DoneMark } from "./AttentionMark";
 import { childOrder, runAttention, type Attention } from "./attention";
-import type { ProjectAgentsView } from "./ProjectAgents";
+import type { OrchestratorAgentsView } from "./OrchestratorAgents";
 import { OpenHint } from "./OpenHint";
 import { popoverBeside } from "./ui";
 import { instanceName } from "./providers";
@@ -13,7 +13,7 @@ import { accountLabel } from "./transcript";
 
 type Logo = ComponentType<SVGProps<SVGSVGElement>>;
 
-/** One agent the bar lists: a Project's child, or a thread's own subagent. */
+/** One agent the bar lists: an orchestrator's child, or a thread's own subagent. */
 export interface AgentRow {
   id: string;
   title: string;
@@ -34,17 +34,17 @@ export const isGoing = (row: AgentRow) =>
   row.attention === "needsYou" || row.attention === "working";
 
 /**
- * A Project's children as the bar lists them, oldest first. `needs` are the children whose
+ * An orchestrator's children as the bar lists them, oldest first. `needs` are the children whose
  * questions wait in the inbox.
  */
-export function projectAgentRows(
-  agents: ProjectAgentsView,
+export function orchestratorAgentRows(
+  agents: OrchestratorAgentsView,
   titles: Readonly<Record<string, string>>,
-  coordinator?: string,
+  orchestratorRun?: string,
   needs?: ReadonlySet<string>,
 ): AgentRow[] {
   return agents.runs
-    .filter((r) => r.id !== coordinator && r.policy !== "noWrite")
+    .filter((r) => r.id !== orchestratorRun && r.policy !== "noWrite")
     .map((run) => {
       const asks = (agents.waiting[run.id]?.length ?? 0) + (needs?.has(run.id) ? 1 : 0);
       return {
@@ -61,10 +61,10 @@ export function projectAgentRows(
 }
 
 /**
- * Agents at work, tucked over the composer as the plan is: a Project's children, or a thread's own
- * subagents. While any of them works or waits on the user, the providers of the first three as
- * stacked logos, a count of the rest, and the agent that matters most. It opens a card over the
- * chat listing them, those that need the user first, then those working, then the latest
+ * Agents at work, tucked over the composer as the plan is: an orchestrator's children, or a
+ * thread's own subagents. While any of them works or waits on the user, the providers of the first
+ * three as stacked logos, a count of the rest, and the agent that matters most. It opens a card
+ * over the chat listing them, those that need the user first, then those working, then the latest
  * finished; each opens its chat. Hidden while none is going. `rows` go oldest first. `compact`
  * leaves out the lead agent's title, for a place beside other tabs.
  */

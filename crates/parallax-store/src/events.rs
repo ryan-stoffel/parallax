@@ -21,7 +21,7 @@ pub struct StoredEvent {
     pub kind: String,
     /// The event's JSON.
     pub payload: String,
-    /// The orchestrator command that staged it, if one did (0059). Not read back.
+    /// The dispatcher command that staged it, if one did (0059). Not read back.
     pub command_id: Option<String>,
     /// The run (turn) of its thread it belongs to, if any (0059). Not read back.
     pub run_id: Option<Uuid>,
@@ -411,9 +411,9 @@ impl Store {
         Ok(deleted)
     }
 
-    /// Deletes host and project events (those with no `thread_id`, such as `project.created` and
-    /// `context.changed`) beyond the newest `keep`, to bound the table's growth (#187). An agent
-    /// run's events are never touched here: they stay as long as the run's own row does, and
+    /// Deletes host and project events (those with no `thread_id`, such as `orchestrator.created`
+    /// and `context.changed`) beyond the newest `keep`, to bound the table's growth (#187). An
+    /// agent run's events are never touched here: they stay as long as the run's own row does, and
     /// nothing removes a run's row yet. Returns how many rows were deleted.
     ///
     /// # Errors

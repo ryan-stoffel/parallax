@@ -49,14 +49,14 @@ use crate::{
     ComputerStatusParams, ConnectDevicesParams, ConnectDevicesResult, ContextListParams,
     ContextListResult, ContextReadBytesParams, ContextReadBytesResult, ContextReadParams,
     ContextReadResult, ContextSaveArtifactParams, ContextWriteParams, ContextWriteResult,
-    CoordinatorFreshParams, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
-    CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
-    CursorSignOutResult, DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams,
-    DeviceDataParams, DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult,
-    DeviceSetupParams, DeviceStateParams, DeviceStateResult, DeviceStreamParams,
-    DeviceStreamResult, DeviceTarget, DispatchResult, EventsEventParams, EventsResyncParams,
-    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
-    FullThreadDiffParams, GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
+    CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
+    DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams, DeviceDataParams,
+    DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult, DeviceSetupParams,
+    DeviceStateParams, DeviceStateResult, DeviceStreamParams, DeviceStreamResult, DeviceTarget,
+    DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams,
+    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
     HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult, HostReadUploadParams,
     HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
@@ -69,28 +69,30 @@ use crate::{
     MemoryDeleteResult, MemoryListParams, MemoryListResult, MemoryProposeParams,
     MemoryProposeResult, MemoryReadParams, MemoryReadResult, MemorySyncListParams,
     MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult, MemoryWriteParams,
-    MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult, PrMergeWhenReadyParams,
-    PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PrWriteParams,
-    PrWriteResult, PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
+    MemoryWriteResult, OrchestrationCommand, OrchestratorCreateParams, OrchestratorCreateResult,
+    OrchestratorDeleteParams, OrchestratorDeleteResult, OrchestratorFreshParams,
+    OrchestratorFromThreadsParams, OrchestratorFromThreadsResult, OrchestratorListParams,
+    OrchestratorListResult, OrchestratorStartParams, OrchestratorUpdateParams,
+    OrchestratorUpdateResult, PrActParams, PrDiffResult, PrMergeWhenReadyParams, PrStatusResult,
+    PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PrWriteParams, PrWriteResult,
+    PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
     PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
     ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
-    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
-    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
-    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
-    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
-    QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
-    RelayIdParams, RelayIdResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
-    RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
-    RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
+    PromptImage, ProvidersListParams, ProvidersListResult, ProvidersRemoveParams,
+    ProvidersSaveParams, ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams,
+    ProvidersUpgradeResult, PullRequest, QuestionAnswerParams, QuestionAskParams,
+    QuestionEscalateParams, QuestionListParams, QuestionListResult, QuestionResult,
+    QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams, QueueResult,
+    QueueSteerParams, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
+    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams,
+    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
+    RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
     RepoCloneProgressResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
     RepoGrepResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
     RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
     RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
     ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
-    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SpaceCreateParams,
-    SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult, SubscribeShellParams,
+    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
     SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
     TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
     TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
@@ -99,7 +101,7 @@ use crate::{
     ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
     ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
     ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadSetSpaceParams, ThreadSetSpaceResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
     TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
     UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
@@ -207,10 +209,10 @@ method_table! {
         /// `host/readUpload`: a file `host/upload` saved, for the transcript (PLX-779). Gated on
         /// the `fileUploads` capability, and a slice of it on `fileChunks` (decision 0074).
         HostReadUpload = "host/readUpload": HostReadUploadParams => HostReadUploadResult;
-        /// `project/list`: every project, and the event log's `seq` from before the read.
-        ProjectList = "project/list": ProjectListParams => ProjectListResult;
-        /// `project/create`: creates a project, idempotent on its client-generated id.
-        ProjectCreate = "project/create": ProjectCreateParams => ProjectCreateResult;
+        /// `orchestrator/list`: every orchestrator, and the event log's `seq` from before the read.
+        OrchestratorList = "orchestrator/list": OrchestratorListParams => OrchestratorListResult;
+        /// `orchestrator/create`: creates an orchestrator, idempotent on its client-generated id.
+        OrchestratorCreate = "orchestrator/create": OrchestratorCreateParams => OrchestratorCreateResult;
         /// `events/subscribe`: replays the events after a `seq`, then streams new ones as
         /// `events/event` notifications.
         EventsSubscribe = "events/subscribe": EventsSubscribeParams => EventsSubscribeResult;
@@ -288,7 +290,7 @@ method_table! {
         /// `usage/limits`: every subscription account's limit windows, read live from its CLI,
         /// and why a CLI didn't answer.
         UsageLimits = "usage/limits": UsageLimitsParams => UsageLimitsResult;
-        /// `accounts/defaults/get`: this host's default account for the coordinator role and for
+        /// `accounts/defaults/get`: this host's default account for the orchestrator role and for
         /// a worker role, absent where none is set (#119).
         AccountsDefaultsGet = "accounts/defaults/get": AccountsDefaultsGetParams => AccountsDefaultsGetResult;
         /// `accounts/defaults/set`: sets or clears one role's default account, and returns both
@@ -304,10 +306,10 @@ method_table! {
         /// client-generated id. The last write to a path wins when two race.
         ContextWrite = "context/write": ContextWriteParams => ContextWriteResult;
         /// `context/readBytes`: one slice of a shared context file of any type, such as an
-        /// artifact, base64-encoded. Behind `projectArtifacts`.
+        /// artifact, base64-encoded. Behind `orchestratorArtifacts`.
         ContextReadBytes = "context/readBytes": ContextReadBytesParams => ContextReadBytesResult;
-        /// `context/saveArtifact`: copies a file from a Project child's working folder into the
-        /// Project's `artifacts/<run id>/`. Behind `projectArtifacts`.
+        /// `context/saveArtifact`: copies a file from an orchestrator child's working folder into
+        /// the orchestrator's `artifacts/<run id>/`. Behind `orchestratorArtifacts`.
         ContextSaveArtifact = "context/saveArtifact": ContextSaveArtifactParams => ContextWriteResult;
         /// `agent/start`: starts a worker in its own worktree of the project's repository, with
         /// the worker sandbox (0013) and the shared context folder, idempotent on its
@@ -467,32 +469,32 @@ method_table! {
         /// `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
         /// capability.
         RepoUpdate = "repo/update": RepoUpdateParams => RepoUpdateResult;
-        /// `space/create`: makes a Space, a named group for chats with no repository, backed by a
+        /// `project/create`: makes a Project, a named group for chats with no repository, backed by a
         /// repository plxd makes (0069). Idempotent on its client-generated id. Gated on the
-        /// `spaces` capability.
-        SpaceCreate = "space/create": SpaceCreateParams => SpaceCreateResult;
-        /// `space/delete`: deletes a Space and the chats in it (0069). Gated on the `spaces`
+        /// `projects` capability.
+        ProjectCreate = "project/create": ProjectCreateParams => ProjectCreateResult;
+        /// `project/delete`: deletes a Project and the chats in it (0069). Gated on the `projects`
         /// capability.
-        SpaceDelete = "space/delete": SpaceDeleteParams => SpaceDeleteResult;
-        /// `thread/setSpace`: adds threads to a Space, or takes them out of one, leaving where
-        /// each works as it is (0090). Gated on the `spaceThreads` capability.
-        ThreadSetSpace = "thread/setSpace": ThreadSetSpaceParams => ThreadSetSpaceResult;
+        ProjectDelete = "project/delete": ProjectDeleteParams => ProjectDeleteResult;
+        /// `thread/setProject`: adds threads to a Project, or takes them out of one, leaving where
+        /// each works as it is (0090). Gated on the `projectThreads` capability.
+        ThreadSetProject = "thread/setProject": ThreadSetProjectParams => ThreadSetProjectResult;
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;
-        /// `project/start`: starts a project's coordinator chat, a no-write run in its repository
-        /// with plxd's coordinator tools (0024), idempotent on its client-generated run id. It
-        /// replaces the project's last coordinator unless that one is running. Gated on the
-        /// `coordinator` capability.
-        ProjectStart = "project/start": ProjectStartParams => AgentRunResult;
-        /// `coordinator/fresh`: ends a Project's coordinator session, so its next message starts
-        /// a new one from the Project's state (PLX-937, 0079). Gated on the `coordinatorEpochs`
+        /// `orchestrator/start`: starts an orchestrator's chat, a no-write run in its repository
+        /// with plxd's orchestrator tools (0024), idempotent on its client-generated run id. It
+        /// replaces the orchestrator's last run unless that one is running. Gated on the
+        /// `orchestrator` capability.
+        OrchestratorStart = "orchestrator/start": OrchestratorStartParams => AgentRunResult;
+        /// `orchestrator/fresh`: ends an orchestrator's session, so its next message starts a new
+        /// one from the orchestrator's state (PLX-937, 0079). Gated on the `orchestratorEpochs`
         /// capability.
-        CoordinatorFresh = "coordinator/fresh": CoordinatorFreshParams => AgentRunResult;
-        /// `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
-        /// it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
-        /// `projectEdit` capability, like `Project.icon`.
-        ProjectUpdate = "project/update": ProjectUpdateParams => ProjectUpdateResult;
+        OrchestratorFresh = "orchestrator/fresh": OrchestratorFreshParams => AgentRunResult;
+        /// `orchestrator/update`: renames an orchestrator or sets its icon, and leaves its
+        /// `updatedAt` as it is (0032). Fails with `orchestratorNotFound` for an unknown
+        /// orchestrator. Gated on the `orchestratorEdit` capability, like `Orchestrator.icon`.
+        OrchestratorUpdate = "orchestrator/update": OrchestratorUpdateParams => OrchestratorUpdateResult;
         /// `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
         /// thread starts from. Gated on the `repoRefs` capability.
         RepoRefs = "repo/refs": RepoRefsParams => RepoRefsResult;
@@ -512,10 +514,10 @@ method_table! {
         /// `pr/unlink`: removes a pull request URL from a run's links. Unlinking one that isn't
         /// linked changes nothing.
         PrUnlink = "pr/unlink": PrViewParams => AgentRunResult;
-        /// `project/delete`: deletes a project with every run in it, stopping their CLIs first
-        /// (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
-        /// Gated on the `projectDelete` capability.
-        ProjectDelete = "project/delete": ProjectDeleteParams => ProjectDeleteResult;
+        /// `orchestrator/delete`: deletes an orchestrator with every run in it, stopping their CLIs
+        /// first (PLX-338). Fails with `orchestratorNotFound` for an unknown orchestrator or a repo
+        /// entry's id. Gated on the `orchestratorDelete` capability.
+        OrchestratorDelete = "orchestrator/delete": OrchestratorDeleteParams => OrchestratorDeleteResult;
         /// `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
         /// (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
         AgentCommands = "agent/commands": AgentCommandsParams => AgentCommandsResult;
@@ -541,9 +543,9 @@ method_table! {
         /// Monitor, through the CLI. Fails with `invalidParams` when the run has no live CLI or
         /// its backend can't stop one.
         AgentStopTask = "agent/stopTask": AgentStopTaskParams => AgentStopTaskResult;
-        /// `agent/setPermission`: moves a run's live CLI to another permission mode now, and
-        /// stores it as the run's. Fails with `invalidParams` when the run has no live CLI, is in
-        /// a Project, or its backend can't switch mid-turn; send the mode with the next message
+        /// `agent/setPermission`: moves a run's live CLI to another permission mode now, and stores
+        /// it as the run's. Fails with `invalidParams` when the run has no live CLI, is in an
+        /// orchestrator, or its backend can't switch mid-turn; send the mode with the next message
         /// instead.
         AgentSetPermission = "agent/setPermission": AgentSetPermissionParams => AgentRunResult;
         /// `agent/autoResume`: sets or clears a run's auto-resume override.
@@ -595,10 +597,11 @@ method_table! {
         /// `access/setupCode`: a new code for a signed-in client to type, which replaces any
         /// pairing code waiting.
         AccessSetupCode = "access/setupCode": AccessSetupCodeParams => AccessSetupCodeResult;
-        /// `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
-        /// read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
+        /// `inbox/list`: an orchestrator's inbox, oldest first, and the event log's `seq` from
+        /// before the read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;
-        /// `inbox/seen`: marks items of a Project's inbox seen, and returns them as they stand.
+        /// `inbox/seen`: marks items of an orchestrator's inbox seen, and returns them as they
+        /// stand.
         InboxSeen = "inbox/seen": InboxSeenParams => InboxSeenResult;
         /// `github/install`: starts installing `gh` into plxd's data folder, from the latest
         /// GitHub release, and answers at once with `installing` set (PLX-423, 0050). Refused
@@ -621,20 +624,20 @@ method_table! {
         QueueCancel = "queue/cancel": QueueCancelParams => QueueResult;
         /// `queue/steer`: sends a waiting message into the turn running now.
         QueueSteer = "queue/steer": QueueSteerParams => QueueResult;
-        /// `question/ask`: records a Project child's question and wakes its coordinator; the
+        /// `question/ask`: records an orchestrator child's question and wakes its orchestrator; the
         /// child goes on with its assumption (PLX-402, 0043). Gated on the `questions`
         /// capability, like every `question/*` method.
         QuestionAsk = "question/ask": QuestionAskParams => QuestionResult;
-        /// `question/answer`: the coordinator's or the user's answer to a question.
+        /// `question/answer`: the orchestrator's or the user's answer to a question.
         QuestionAnswer = "question/answer": QuestionAnswerParams => QuestionResult;
-        /// `question/escalate`: the coordinator passes a question to the user.
+        /// `question/escalate`: the orchestrator passes a question to the user.
         QuestionEscalate = "question/escalate": QuestionEscalateParams => QuestionResult;
-        /// `question/list`: a Project's questions, oldest first.
+        /// `question/list`: an orchestrator's questions, oldest first.
         QuestionList = "question/list": QuestionListParams => QuestionListResult;
-        /// `board/list`: a Project's status board items, oldest first (PLX-940). Gated on the
+        /// `board/list`: an orchestrator's status board items, oldest first (PLX-940). Gated on the
         /// `board` capability.
         BoardList = "board/list": BoardListParams => BoardListResult;
-        /// `board/add`: adds an item to a Project's status board and renders `notes.md`
+        /// `board/add`: adds an item to an orchestrator's status board and renders `notes.md`
         /// (PLX-940). Gated on the `board` capability.
         BoardAdd = "board/add": BoardAddParams => BoardItemResult;
         /// `board/update`: changes one board item (PLX-940). Gated on the `board` capability.
@@ -647,20 +650,21 @@ method_table! {
         MemoryList = "memory/list": MemoryListParams => MemoryListResult;
         /// `memory/read`: one memory file's header and body.
         MemoryRead = "memory/read": MemoryReadParams => MemoryReadResult;
-        /// `memory/write`: writes the brief, knowledge, or an entry, as the user or a coordinator.
+        /// `memory/write`: writes the brief, knowledge, or an entry, as the user or an
+        /// orchestrator.
         MemoryWrite = "memory/write": MemoryWriteParams => MemoryWriteResult;
         /// `memory/delete`: deletes a memory file.
         MemoryDelete = "memory/delete": MemoryDeleteParams => MemoryDeleteResult;
-        /// `memory/propose`: a thread proposes an entry, for its coordinator or the user.
+        /// `memory/propose`: a thread proposes an entry, for its orchestrator or the user.
         MemoryPropose = "memory/propose": MemoryProposeParams => MemoryProposeResult;
         /// `memory/syncList`: every version plxd has recorded in You, for another of the user's
         /// plxds to pull (0082). Gated on the `youSync` capability, like `memory/syncRead`.
         MemorySyncList = "memory/syncList": MemorySyncListParams => MemorySyncListResult;
         /// `memory/syncRead`: the text that syncs of one You entry or knowledge file.
         MemorySyncRead = "memory/syncRead": MemorySyncReadParams => MemorySyncReadResult;
-        /// `land/queue`: queues a Project's finished child to land on its integration branch, as
-        /// the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
-        /// like every `land/*` method.
+        /// `land/queue`: queues an orchestrator's finished child to land on its integration branch,
+        /// as the orchestrator's `land` tool does (PLX-410, 0045). Gated on the `landing`
+        /// capability, like every `land/*` method.
         LandQueue = "land/queue": LandQueueParams => LandResult;
         /// `land/approve`: lands a child waiting for the user's approval, in its turn.
         LandApprove = "land/approve": LandApproveParams => LandResult;
@@ -669,10 +673,11 @@ method_table! {
         /// `agent/wait`: waits until any or all of up to 50 runs are idle, or for at most 60 s,
         /// without polling (PLX-451). Gated on the `agentWait` capability.
         AgentWait = "agent/wait": AgentWaitParams => AgentWaitResult;
-        /// `project/fromThreads`: makes a Project from threads on one repo entry, each with its
-        /// own worktree, starts its coordinator, and makes each thread its child (0042).
-        /// Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
-        ProjectFromThreads = "project/fromThreads": ProjectFromThreadsParams => ProjectFromThreadsResult;
+        /// `orchestrator/fromThreads`: makes an orchestrator from threads on one repo entry, each
+        /// with its own worktree, starts its orchestrator, and makes each thread its child (0042).
+        /// Idempotent on its client-generated ids. Gated on the `orchestratorFromThreads`
+        /// capability.
+        OrchestratorFromThreads = "orchestrator/fromThreads": OrchestratorFromThreadsParams => OrchestratorFromThreadsResult;
         /// `cursor/signIn`: starts a Cursor account login in the browser and answers with its
         /// URL (0053). The app opens it. `providers/list` reports the instance signed in once
         /// the browser login finishes. Gated on the `providers` capability, like

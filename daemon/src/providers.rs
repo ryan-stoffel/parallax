@@ -614,10 +614,10 @@ impl Providers {
         }
     }
 
-    /// Every instance with what placing a Project's child needs (0046), from what plxd last found
-    /// without probing anything, since a probe can take seconds: an instance's last probe however
-    /// old, or for a built-in agent the detector's fresh answer. One never probed has no sign-in
-    /// or models.
+    /// Every instance with what placing an orchestrator's child needs (0046), from what plxd last
+    /// found without probing anything, since a probe can take seconds: an instance's last probe
+    /// however old, or for a built-in agent the detector's fresh answer. One never probed has no
+    /// sign-in or models.
     pub async fn known(&self, detector: &CliDetector) -> Vec<ProviderInfo> {
         let stored = self.entries().await;
         let mut known = Vec::with_capacity(stored.len());
@@ -1280,9 +1280,9 @@ fn build(
                 overrides.program = Some(preset.program.into());
             }
             let backend = ClaudeBackend::new(launcher).with_overrides(overrides);
-            // A model service runs a Project's agents only in Bypass (0042).
+            // A model service runs an orchestrator's agents only in Bypass (0042).
             if preset.models_url.is_some() {
-                Arc::new(backend.bypass_only_in_projects())
+                Arc::new(backend.bypass_only_in_orchestrators())
             } else {
                 Arc::new(backend)
             }
@@ -1352,8 +1352,8 @@ impl Backend for WithSecrets {
         self.plain.permissions()
     }
 
-    fn project_permissions(&self) -> &[AgentPermission] {
-        self.plain.project_permissions()
+    fn orchestrator_permissions(&self) -> &[AgentPermission] {
+        self.plain.orchestrator_permissions()
     }
 
     fn full_thread(&self) -> bool {
@@ -1865,9 +1865,9 @@ fn info(entry: Stored, found: Found) -> ProviderInfo {
         Some(Driver::Opencode) => (opencode::PERMISSIONS.to_vec(), false),
         None => (vec![AgentPermission::Edit], false),
     };
-    // A kind with Auto or Bypass can run a Project's coordinator (0042). A model service's Auto
-    // isn't offered in a Project, but its Bypass is.
-    let coordinator = permissions
+    // A kind with Auto or Bypass can run an orchestrator (0042). A model service's Auto
+    // isn't offered in an orchestrator, but its Bypass is.
+    let orchestrator = permissions
         .iter()
         .any(|p| matches!(p, AgentPermission::Auto | AgentPermission::Bypass));
     // The login runs the instance's own program where it is the kind's. An agent without a
@@ -1921,7 +1921,7 @@ fn info(entry: Stored, found: Found) -> ProviderInfo {
         models: found.models,
         permissions,
         efforts,
-        coordinator,
+        orchestrator,
         login,
         login_env,
         hub,

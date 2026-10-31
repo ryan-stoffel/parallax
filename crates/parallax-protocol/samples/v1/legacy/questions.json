@@ -1,0 +1,129 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "question/ask",
+    "params": {
+      "run": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+      "question": "Should the rate limit be per user or per IP?",
+      "assumption": "Per user"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "question": {
+        "id": "01a0f755-f5e8-74c2-993d-c1660d1cd790",
+        "run": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+        "question": "Should the rate limit be per user or per IP?",
+        "assumption": "Per user",
+        "status": "open",
+        "createdAt": "2026-10-04T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "question/answer",
+    "params": {
+      "question": "01a0f755-f5e8-74c2-993d-c1660d1cd790",
+      "text": "Per IP, since most callers aren't signed in",
+      "from": "01a0f755-f200-74dd-8cfc-06d0b225c5e0"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "question": {
+        "id": "01a0f755-f5e8-74c2-993d-c1660d1cd790",
+        "run": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+        "question": "Should the rate limit be per user or per IP?",
+        "assumption": "Per user",
+        "status": "decided",
+        "answer": "Per IP, since most callers aren't signed in",
+        "createdAt": "2026-10-04T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "question/escalate",
+    "params": {
+      "question": "01a0f755-f5e8-74c2-993d-c1660d1cd791",
+      "from": "01a0f755-f200-74dd-8cfc-06d0b225c5e0"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "question": {
+        "id": "01a0f755-f5e8-74c2-993d-c1660d1cd791",
+        "run": "01a0f755-f200-74dd-8cfc-06d0b225c5e2",
+        "question": "Drop support for Node 18?",
+        "assumption": "Keep it",
+        "status": "escalated",
+        "createdAt": "2026-10-04T12:01:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "question/answer",
+    "params": {
+      "question": "01a0f755-f5e8-74c2-993d-c1660d1cd790",
+      "text": "Per user after all"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "question": {
+        "id": "01a0f755-f5e8-74c2-993d-c1660d1cd790",
+        "run": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+        "question": "Should the rate limit be per user or per IP?",
+        "assumption": "Per user",
+        "status": "answered",
+        "answer": "Per user after all",
+        "createdAt": "2026-10-04T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "question/list",
+    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5df" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "questions": [
+        {
+          "id": "01a0f755-f5e8-74c2-993d-c1660d1cd790",
+          "run": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+          "question": "Should the rate limit be per user or per IP?",
+          "assumption": "Per user",
+          "status": "answered",
+          "answer": "Per user after all",
+          "createdAt": "2026-10-04T12:00:00Z"
+        },
+        {
+          "id": "01a0f755-f5e8-74c2-993d-c1660d1cd791",
+          "run": "01a0f755-f200-74dd-8cfc-06d0b225c5e2",
+          "question": "Drop support for Node 18?",
+          "assumption": "Keep it",
+          "status": "escalated",
+          "createdAt": "2026-10-04T12:01:00Z"
+        }
+      ]
+    }
+  }
+]

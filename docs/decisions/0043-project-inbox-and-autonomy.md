@@ -1,6 +1,6 @@
 # 0043: A Project reports to an inbox, and its autonomy decides who answers its children
 
-- Status: accepted; supersedes in part [0025](0025-coordinator-wake-ups.md) (the cap of 10)
+- Status: accepted; supersedes in part [0025](0025-coordinator-wake-ups.md) (the cap of 10); amended by [0093](0093-orchestrator-threads-and-projects.md), where a Project and its coordinator are an orchestrator thread
 - Date: 2026-10-03
 - Issue: PLX-383
 

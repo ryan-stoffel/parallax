@@ -268,7 +268,7 @@ test("the card on screen stays first for as long as it waits: requests that come
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(note, "Not t");
     note.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  // A Project's subagent request, older, loads late.
+  // An orchestrator's subagent request, older, loads late.
   rerender(queue([older, shownNow]));
   expect(card()!.textContent).toContain("pnpm test b1");
   expect(pinned()!.querySelector("input")).toBe(note);

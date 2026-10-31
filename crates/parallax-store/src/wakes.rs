@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::error::StoreError;
 use crate::{Store, timestamp};
 
-/// A coordinator's wake-ups as they survive a restart (PLX-178, decision 0025): how many turns
+/// An orchestrator's wake-ups as they survive a restart (PLX-178, decision 0025): how many turns
 /// they have taken since the user last wrote, whether they are paused, and the newest stored end
 /// of a child that a wake-up turn carried to its CLI (PLX-936).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub struct WakeState {
 }
 
 impl Store {
-    /// Coordinator `run_id`'s wake-up state, the default if none was stored.
+    /// Orchestrator `run_id`'s wake-up state, the default if none was stored.
     ///
     /// # Errors
     ///
@@ -46,7 +46,7 @@ impl Store {
         })
     }
 
-    /// Replaces coordinator `run_id`'s wake-up state.
+    /// Replaces orchestrator `run_id`'s wake-up state.
     ///
     /// # Errors
     ///

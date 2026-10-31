@@ -1,5 +1,5 @@
 //! `orchestration/*` (0059 phase 2, PLX-644), behind the `orchestration` capability: commands
-//! through [`crate::orchestrator::dispatch_command`], and the shell and thread subscriptions,
+//! through [`crate::dispatcher::dispatch_command`], and the shell and thread subscriptions,
 //! which answer with a snapshot at a `seq` and then send the events after it on the connection's
 //! cursors, as `events/subscribe` does, or replay a short gap instead.
 
@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    DispatchResult, LoggedEvent, MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, OrchestrationCommand,
-    ProjectId, RunId, RunWaiting, ShellSnapshot, SubscribeShellParams, SubscribeShellResult,
+    DispatchResult, LoggedEvent, MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, OrchestrationCommand, RunId,
+    RunWaiting, ScopeId, ShellSnapshot, SubscribeShellParams, SubscribeShellResult,
     SubscribeThreadParams, SubscribeThreadResult, SubscriptionId, ThreadHistoryParams,
     ThreadHistoryResult, ThreadSnapshot,
 };
@@ -17,7 +17,7 @@ use parallax_store::Store;
 
 use super::agent::{MAX_EVENTS_PAGE_BYTES, logged};
 use super::{Context, Cursor};
-use crate::agents::{self, coordinator};
+use crate::agents::{self, orchestrator};
 use crate::event_log::entry;
 use crate::store::{self, store_error};
 use crate::{graph, threads};
@@ -34,7 +34,7 @@ pub(super) async fn dispatch(
     context: &Context,
     command: OrchestrationCommand,
 ) -> Result<DispatchResult, ErrorObject> {
-    crate::orchestrator::dispatch_command(&context.daemon, context.command_id, command).await
+    crate::dispatcher::dispatch_command(&context.daemon, context.command_id, command).await
 }
 
 /// `orchestration/subscribeShell`: every project's and the host's events, cut down as
@@ -50,6 +50,7 @@ pub(super) async fn subscribe_shell(
         after: 0,
         run: None,
         shell: true,
+        legacy: false,
     };
     if let Some(after) = params.after_seq
         && replays(context, after, &cursor)
@@ -64,12 +65,12 @@ pub(super) async fn subscribe_shell(
     let ((projects, repos, threads, runs, requests, watches), seq) = at_seq(context, |db, _| {
         let error = |error| store_error(&error);
         let projects = db
-            .list_projects()
+            .list_orchestrators()
             .map_err(error)?
             .into_iter()
             .map(|row| {
-                let coordinator = coordinator::coordinator_of(db, row.id)?;
-                store::project(row, coordinator)
+                let orchestrator = orchestrator::orchestrator_of(db, row.id)?;
+                store::orchestrator(row, orchestrator)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let repos = db
@@ -124,7 +125,7 @@ pub(super) async fn subscribe_shell(
         subscription: cursor.subscription,
         snapshot: Some(ShellSnapshot {
             seq,
-            projects,
+            orchestrators: projects,
             repos,
             threads,
             runs,
@@ -153,7 +154,7 @@ pub(super) async fn subscribe_thread(
                 .get_run(thread_id.into())
                 .map_err(|error| store_error(&error))?
                 .ok_or_else(|| agents::run_not_found(thread_id))?;
-            ProjectId::try_from(row.fields.project_id)
+            ScopeId::try_from(row.fields.project_id)
                 .map_err(|_| ErrorObject::internal_error("a stored project id is not a UUIDv7"))
         })
         .await?;
@@ -164,6 +165,7 @@ pub(super) async fn subscribe_thread(
         after: 0,
         run: Some(thread_id),
         shell: false,
+        legacy: false,
     };
     if let Some(after) = after_seq
         && replays(context, after, &cursor)

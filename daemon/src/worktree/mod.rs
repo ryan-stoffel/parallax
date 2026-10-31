@@ -18,8 +18,8 @@
 //! [`WorktreeManager::diff_commits`] and [`WorktreeManager::read_blob`] (#157), and
 //! [`WorktreeManager::open_pr`] pushes its branch and opens a pull request for it (PLX-168).
 //! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (PLX-298).
-//! `integration` keeps each Project's integration branch and its worktree (PLX-409, 0045),
-//! `coordinator` its coordinator's detached worktree at that branch's tip (PLX-397, 0042), and
+//! `integration` keeps each orchestrator's integration branch and its worktree (PLX-409, 0045),
+//! `orchestrator` its orchestrator's detached worktree at that branch's tip (PLX-397, 0042), and
 //! `landing` merges its children onto it (PLX-410). `bundle` makes and applies the bundles that
 //! move a run's commits between two plxds (0057).
 //!
@@ -69,12 +69,12 @@
 //! `/dev/null` `GIT_CONFIG_GLOBAL`, and a scrubbed, dedicated `HOME`, so the only config git can
 //! still read is the pinned repository's own local config, which the worker cannot write.
 //!
-//! [`WorktreeManager::create_named`] and [`WorktreeManager::remove`] are not scoped this way: their git
-//! commands run against `repo_root`, the user's own checkout, which a sandboxed worker never
+//! [`WorktreeManager::create_named`] and [`WorktreeManager::remove`] are not scoped this way: their
+//! git commands run against `repo_root`, the user's own checkout, which a sandboxed worker never
 //! writes, so there is no `.git` file or repo-local config of the worker's to distrust there. A
-//! coordinator or a worker in Bypass Permissions can write it, but either can already run any
-//! command as the user (0027). They still run with hooks off, like every git call plxd makes
-//! (#157, #191): once a run is accepted, the checkout's hooks can include files the worker wrote.
+//! orchestrator or a worker in Bypass Permissions can write it, but either can already run any
+//! command as the user (0027). They still run with hooks off, like every git call plxd makes (#157,
+//! #191): once a run is accepted, the checkout's hooks can include files the worker wrote.
 //!
 //! **Known gap (#175):** a `-c` override wins over a config value no matter how that value was
 //! set, including through an `include`/`includeIf`, so hooks and hooksPath stay closed either
@@ -88,10 +88,10 @@
 mod bundle;
 mod checkpoint;
 mod checks;
-mod coordinator;
 mod folder;
 mod integration;
 mod landing;
+mod orchestrator;
 mod pull_request;
 mod refs;
 mod review;
@@ -138,11 +138,12 @@ const DEFAULT_MAX_GIT_LINE_BYTES: usize = 64 * 1024 * 1024;
 
 const WORKTREES_DIR: &str = "worktrees";
 
-/// The folder under the data directory holding each Project's integration worktree (0045).
+/// The folder under the data directory holding each orchestrator's integration worktree (0045).
 const INTEGRATION_DIR: &str = "integration";
 
-/// The folder under the data directory holding each Project's coordinator's worktree (0042).
-const COORDINATORS_DIR: &str = "coordinators";
+/// The folder under the data directory holding each orchestrator's worktree (0042). It keeps its
+/// name from before 0093, since existing orchestrators' worktrees are there.
+const ORCHESTRATORS_DIR: &str = "coordinators";
 
 /// Environment variables scrubbed from every git invocation, on top of
 /// [`crate::backend::process::ALWAYS_SCRUBBED`]: anything that could redirect git to a different
@@ -420,7 +421,7 @@ pub struct WorktreeManager {
     launcher: Launcher,
     root: PathBuf,
     integration_root: PathBuf,
-    coordinator_root: PathBuf,
+    orchestrator_root: PathBuf,
     git_safe_home: PathBuf,
     max_git_line_bytes: usize,
     merge_timeout: Duration,
@@ -438,7 +439,7 @@ impl WorktreeManager {
             launcher,
             root: data_dir_root.join(WORKTREES_DIR),
             integration_root: data_dir_root.join(INTEGRATION_DIR),
-            coordinator_root: data_dir_root.join(COORDINATORS_DIR),
+            orchestrator_root: data_dir_root.join(ORCHESTRATORS_DIR),
             git_safe_home: data_dir_root.join(GIT_SAFE_HOME_DIR),
             max_git_line_bytes: DEFAULT_MAX_GIT_LINE_BYTES,
             merge_timeout: review::MERGE_TIMEOUT,

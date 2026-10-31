@@ -248,7 +248,7 @@ export function PinnedApprovals(
 
 /**
  * An agent run as a chat: its transcript, the composer, and the run's footer.
- * The same view serves normal threads, subagents, and a Project's coordinator.
+ * The same view serves normal threads, subagents, and an orchestrator.
  */
 export function AgentChat({
   hostId,
@@ -259,7 +259,7 @@ export function AgentChat({
   tab,
   strip,
   others,
-  projectMode,
+  orchestratorMode,
   compose,
   onComposed,
   threadLinks,
@@ -289,19 +289,19 @@ export function AgentChat({
   /** The run as the thread list has it, which the composer shows until the transcript loads. */
   listed?: AgentRun;
   /**
-   * The tab tucked under the composer, such as a coordinator's repository. A thread's own has
+   * The tab tucked under the composer, such as an orchestrator's repository. A thread's own has
    * none: where it runs and its branch show in Thread details, as a new thread's picker did.
    */
   tab?: ReactNode;
-  /** The back tab over the composer, behind the plan's, such as a Project's agents. */
+  /** The back tab over the composer, behind the plan's, such as an orchestrator's agents. */
   strip?: ComposerTab;
   /**
-   * Permission requests other runs wait on, pinned here with this run's own, as a Project's other
-   * runs' are in each of its chats (PLX-196).
+   * Permission requests other runs wait on, pinned here with this run's own, as an orchestrator's
+   * other runs' are in each of its chats (PLX-196).
    */
   others?: readonly Asked[];
-  /** The Project's permission mode, shown in place of Access, for a run in a Project (0042). */
-  projectMode?: ComposerProps["projectMode"];
+  /** The orchestrator's permission mode, shown in place of Access, for a run in an orchestrator (0042). */
+  orchestratorMode?: ComposerProps["orchestratorMode"];
   /**
    * A message from outside the chat, such as the PR view's: sent, or put in the composer to finish.
    * `onComposed` says it's taken, so each one is taken once.
@@ -695,15 +695,15 @@ export function AgentChat({
   else if (isRunning(box?.status) && !moves)
     optionsDisabled = "The model, effort, and access can change once it finishes";
   // The instances the run can't move to, by why: any but its own on a plxd that can't move runs,
-  // and for a coordinator, those that can't run one.
+  // and for an orchestrator, those that can't run one.
   const unavailable: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
     if (i.id === box?.backend) continue;
     else if (!moves)
       unavailable[i.id] =
         `${plainName(i)} is unavailable in this thread. Start a new thread to switch providers.`;
-    else if (box?.policy === "noWrite" && !i.coordinator)
-      unavailable[i.id] = `${plainName(i)} can't run a Project's coordinator yet.`;
+    else if (box?.policy === "noWrite" && !i.orchestrator)
+      unavailable[i.id] = `${plainName(i)} can't run an orchestrator yet.`;
   // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
@@ -910,7 +910,7 @@ export function AgentChat({
           uploadBytes={uploadBytes(connection)}
           inlineFiles={remote}
           manualDenied={manualDenied}
-          projectMode={projectMode}
+          orchestratorMode={orchestratorMode}
           insert={compose && !compose.send ? compose.text : undefined}
           cite={cite}
           menus={
@@ -1414,7 +1414,7 @@ export function TranscriptView({
           onKeyDown={(e) => {
             ending.current = false;
             if (editable(e.target)) return;
-            // Space pages down, and up with Shift.
+            // Project pages down, and up with Shift.
             const key = e.key === " " ? (e.shiftKey ? "PageUp" : "PageDown") : e.key;
             if (upKeys.has(key) && e.currentTarget.scrollTop > 0) scrolled(true);
             else if (downKeys.has(key)) scrolled(false);
@@ -1777,11 +1777,11 @@ export const RowView = memo(function RowView({
     case "musing":
       return <Musing />;
     case "epoch":
-      // A coordinator's new session (0079): the conversation before it is no longer the agent's.
+      // An orchestrator's new session (0079): the conversation before it is no longer the agent's.
       return (
         <Divider>
           <RotateCcw aria-hidden className="size-3.5" />
-          <span>New session, picked up from the Project's state</span>
+          <span>New session, picked up from the orchestrator's state</span>
         </Divider>
       );
     case "compaction":
@@ -1801,7 +1801,7 @@ export const RowView = memo(function RowView({
       );
     case "user":
     case "pending": {
-      // A wake-up is Parallax's message to the coordinator, not the user's (0025), and another
+      // A wake-up is Parallax's message to the orchestrator, not the user's (0025), and another
       // thread's message is sent with its Parallax tools (0041).
       if (row.kind === "user" && notTheUsers(row))
         return (
@@ -2000,7 +2000,7 @@ export const RowView = memo(function RowView({
     case "end": {
       const { outcome } = row;
       if (outcome.status === "failed") {
-        // A coordinator's no-write stop lists what it changed after its first line, one
+        // An orchestrator's no-write stop lists what it changed after its first line, one
         // `git status` line each (0024).
         const [first, ...changed] = outcome.message.split("\n");
         return (
@@ -3047,7 +3047,7 @@ function DiffLines({ text }: { text: string }) {
 }
 
 /**
- * Where a Project's coordinator works, in its composer's tab, as icons: the host's, then the
+ * Where an orchestrator works, in its composer's tab, as icons: the host's, then the
  * checkout's or worktree's. The hover title and accessible name read `{host} · Local checkout` or
  * `{host} · Worktree`, as New Thread's `RunTargetMenu` does.
  */

@@ -104,27 +104,27 @@ mod tests {
     fn a_role_default_is_set_replaced_and_cleared() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path().join("plxd.sqlite3")).unwrap();
-        assert_eq!(store.get_role_default("coordinator").unwrap(), None);
+        assert_eq!(store.get_role_default("orchestrator").unwrap(), None);
 
         let subscription = RoleDefault::Subscription {
             backend: "claude".to_owned(),
         };
         store
-            .set_role_default("coordinator", Some(&subscription))
+            .set_role_default("orchestrator", Some(&subscription))
             .unwrap();
         assert_eq!(
-            store.get_role_default("coordinator").unwrap(),
+            store.get_role_default("orchestrator").unwrap(),
             Some(subscription)
         );
 
         let key = RoleDefault::Key {
             account_id: Uuid::now_v7(),
         };
-        store.set_role_default("coordinator", Some(&key)).unwrap();
-        assert_eq!(store.get_role_default("coordinator").unwrap(), Some(key));
+        store.set_role_default("orchestrator", Some(&key)).unwrap();
+        assert_eq!(store.get_role_default("orchestrator").unwrap(), Some(key));
         assert_eq!(store.get_role_default("worker").unwrap(), None);
 
-        store.set_role_default("coordinator", None).unwrap();
-        assert_eq!(store.get_role_default("coordinator").unwrap(), None);
+        store.set_role_default("orchestrator", None).unwrap();
+        assert_eq!(store.get_role_default("orchestrator").unwrap(), None);
     }
 }

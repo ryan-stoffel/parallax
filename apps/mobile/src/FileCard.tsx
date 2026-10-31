@@ -178,7 +178,7 @@ const kindOf = (name: string): Kind => {
   return kinds.find(([, test]) => test.test(ext))?.[0] ?? "file";
 };
 
-/** Each kind's icon and color, from the desktop's project colors. */
+/** Each kind's icon and color, from the desktop's orchestrator colors. */
 const looks: Record<Kind, { icon: LucideIcon; color: (c: Colors) => string }> = {
   pdf: { icon: FileText, color: (c) => c.projectRed },
   image: { icon: FileImage, color: (c) => c.projectTeal },

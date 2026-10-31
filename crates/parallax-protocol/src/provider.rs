@@ -106,8 +106,8 @@ pub struct ProviderInstance {
     /// Models the user added, offered beside the ones plxd finds.
     #[serde(default)]
     pub models: Vec<ProviderModel>,
-    /// The percent of each limit window that a Project's children leave for the user, from 0 to
-    /// 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
+    /// The percent of each limit window that an orchestrator's children leave for the user, from 0
+    /// to 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reserve: Option<u8>,
@@ -161,8 +161,9 @@ pub struct ProviderInfo {
     pub permissions: Vec<AgentPermission>,
     /// Whether it takes `thread/start`'s `effort`.
     pub efforts: bool,
-    /// Whether it can run a Project's coordinator.
-    pub coordinator: bool,
+    /// Whether it can run an orchestrator.
+    #[serde(alias = "coordinator")]
+    pub orchestrator: bool,
     /// The command that signs it in, run in a terminal on the host, if it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

@@ -16,7 +16,7 @@ use plxd::backend::fake::Step;
 use uuid::Uuid;
 
 use crate::agents::{
-    Conn, Host, create, fake, has_item, init, project_params, start_params, text, until,
+    Conn, Host, create, fake, has_item, init, orchestrator_params, start_params, text, until,
 };
 use crate::support::{kind, temp_dir};
 
@@ -133,7 +133,7 @@ fn stop(thread_id: RunId) -> OrchestrationCommand {
 
 /// A thread with a turn under way, on a project.
 async fn working_thread(host: &Host, client: &mut Conn) -> RunId {
-    let project = create(client, project_params(host.dir.path())).await;
+    let project = create(client, orchestrator_params(host.dir.path())).await;
     let params = start_params(project.id, "Work for a while");
     let thread = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();

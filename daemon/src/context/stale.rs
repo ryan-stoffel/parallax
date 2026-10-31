@@ -1,4 +1,4 @@
-//! Stale memory entries (0044, PLX-407). [`check`] reads the paths each entry of a Project's
+//! Stale memory entries (0044, PLX-407). [`check`] reads the paths each entry of an orchestrator's
 //! folder and its repository's names in backticks, and marks an entry naming one its branch
 //! doesn't have for review: a `Stale:` line first in its header, naming the missing paths, which
 //! `memory/list` reports as `stale`. Rewriting the entry drops the line, and so does the
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use parallax_protocol::ProjectId;
+use parallax_protocol::ScopeId;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -17,15 +17,15 @@ use crate::server::Daemon;
 use crate::store::store_error;
 
 /// Checks the entries of `project`'s folder against its integration branch, and its repository's
-/// folder against its base branch, which every Project of that repository shares, marking and
+/// folder against its base branch, which every orchestrator of that repository shares, marking and
 /// unmarking them. Called after each landing (PLX-410). Does nothing before plxd cuts the
 /// integration branch, which records both; a failure is logged.
-pub(crate) async fn check(daemon: &Daemon, project: ProjectId) {
+pub(crate) async fn check(daemon: &Daemon, project: ScopeId) {
     let found = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
             let row = db
-                .get_project(project.into())
+                .get_orchestrator(project.into())
                 .map_err(|e| store_error(&e))?;
             let repos = db.list_repos().map_err(|e| store_error(&e))?;
             Ok(row.map(|row| (row, repos)))

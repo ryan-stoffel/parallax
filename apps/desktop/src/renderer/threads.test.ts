@@ -12,8 +12,8 @@ import {
   asksOf,
   emptyThreads,
   holdQuiet,
-  projectRuns,
-  threadProjects,
+  orchestratorRuns,
+  threadOrchestrators,
   threadsReducer,
   type ThreadsState,
 } from "./threads";
@@ -34,38 +34,38 @@ const started = messages.find((m) => m.id === 4 && m.result)!.result as ThreadSt
 const apply = (state: ThreadsState, ...list: ParallaxEvent[]) =>
   list.reduce((s, event) => threadsReducer(s, { type: "event", event }), state);
 
-test("repo.added, thread.started, and project.created add entries, and repeating one changes nothing", () => {
-  const project = {
+test("repo.added, thread.started, and orchestrator.created add entries, and repeating one changes nothing", () => {
+  const orchestrator = {
     id: "p-1",
     name: "parallax",
     repoPath: "/src/parallax",
     createdAt: "2026-09-26T12:00:00Z",
     updatedAt: "2026-09-26T12:00:00Z",
   };
-  const created: ParallaxEvent = { kind: "project.created", project };
+  const created: ParallaxEvent = { kind: "orchestrator.created", orchestrator };
   const state = apply(emptyThreads, parallaxAdded, threadStarted, created);
   expect(apply(state, parallaxAdded, threadStarted, created)).toEqual(state);
   expect(state.repos.map((r) => r.name)).toEqual(["parallax"]);
   expect(state.threads.map((t) => t.id)).toEqual([started.thread.id]);
-  expect(state.projects).toEqual([project]);
+  expect(state.orchestrators).toEqual([orchestrator]);
 });
 
-test("project.deleted drops the project and its runs, and keeps the rest", () => {
-  const project = (id: string) => ({
+test("orchestrator.deleted drops the orchestrator and its runs, and keeps the rest", () => {
+  const orchestrator = (id: string) => ({
     id,
     name: id,
     repoPath: "/src/parallax",
     createdAt: "2026-09-26T12:00:00Z",
     updatedAt: "2026-09-26T12:00:00Z",
   });
-  const run = (id: string, inProject: string) => ({ id, project: inProject }) as AgentRun;
+  const run = (id: string, inOrchestrator: string) => ({ id, project: inOrchestrator }) as AgentRun;
   const state: ThreadsState = {
     ...emptyThreads,
-    projects: [project("p-1"), project("p-2")],
+    orchestrators: [orchestrator("p-1"), orchestrator("p-2")],
     runs: { a: run("a", "p-1"), b: run("b", "p-1"), c: run("c", "p-2"), t: run("t", "r-1") },
   };
-  const after = apply(state, { kind: "project.deleted", project: "p-1" });
-  expect(after.projects.map((p) => p.id)).toEqual(["p-2"]);
+  const after = apply(state, { kind: "orchestrator.deleted", orchestrator: "p-1" });
+  expect(after.orchestrators.map((p) => p.id)).toEqual(["p-2"]);
   expect(Object.keys(after.runs)).toEqual(["c", "t"]);
 });
 
@@ -79,7 +79,7 @@ test("runs are kept by id: a later list replaces the runs it has, and keeps the 
   const other = { ...started.run, id: "other" };
   let state = threadsReducer(emptyThreads, {
     type: "snapshot",
-    projects: [],
+    orchestrators: [],
     repos: [],
     threads: [started.thread],
     runs: [started.run, other],
@@ -93,7 +93,7 @@ test("a scope's events keep a run current, stamp when it changed, and track what
   const run = { id: "r-1", prompt: "Go", status: "running", updatedAt: "2026-10-01T10:00:00Z" };
   let state = threadsReducer(emptyThreads, {
     type: "snapshot",
-    projects: [],
+    orchestrators: [],
     repos: [],
     threads: [],
     runs: [run as never],
@@ -125,7 +125,7 @@ test("an older log read for its requests never undoes a run's newer status", () 
   const done = { id: "r-1", prompt: "Go", status: "completed", updatedAt: "2026-10-01T10:05:00Z" };
   let state = threadsReducer(emptyThreads, {
     type: "snapshot",
-    projects: [],
+    orchestrators: [],
     repos: [],
     threads: [],
     runs: [done as never],
@@ -139,12 +139,12 @@ test("an older log read for its requests never undoes a run's newer status", () 
   expect(state.runs["r-1"]).toEqual(done);
 });
 
-test("a thread is in a Project when its run or an ancestor's is one of the Project's", () => {
-  const run = (id: string, project: string) => ({ id, project }) as AgentRun;
+test("a thread is in an orchestrator when its run or an ancestor's is one of the orchestrator's", () => {
+  const run = (id: string, orchestrator: string) => ({ id, project: orchestrator }) as AgentRun;
   const thread = (id: string, parent?: string) => ({ id, repo: "r", createdAt: "", parent });
   const state: ThreadsState = {
     ...emptyThreads,
-    projects: [{ id: "p", name: "p", repoPath: "/p", createdAt: "", updatedAt: "" }],
+    orchestrators: [{ id: "p", name: "p", repoPath: "/p", createdAt: "", updatedAt: "" }],
     runs: {
       coord: run("coord", "p"),
       child: run("child", "r"),
@@ -155,20 +155,20 @@ test("a thread is in a Project when its run or an ancestor's is one of the Proje
     threads: [
       thread("child", "coord"),
       thread("grandchild", "child"),
-      // Its own run is the Project's, as a child plxd starts in it may be.
+      // Its own run is the orchestrator's, as a child plxd starts in it may be.
       thread("own"),
       thread("plain"),
       thread("orphan", "gone"),
       thread("loop", "loop"),
     ],
   };
-  const inProject = threadProjects(state);
-  expect([...inProject]).toEqual([
+  const inOrchestrator = threadOrchestrators(state);
+  expect([...inOrchestrator]).toEqual([
     ["child", "p"],
     ["grandchild", "p"],
     ["own", "p"],
   ]);
-  expect(projectRuns(state, "p", inProject).map((r) => r.id)).toEqual([
+  expect(orchestratorRuns(state, "p", inOrchestrator).map((r) => r.id)).toEqual([
     "coord",
     "child",
     "grandchild",
@@ -182,7 +182,7 @@ test("holdQuiet holds the end of a run's background work until the agent has had
   const quiet = holdQuiet((e) => applied.push(e), 1000);
   const task = { taskId: "b1", kind: "command", description: "build" } as AgentBackgroundTask;
   const ended: ParallaxEvent = { kind: "agent.background", runId: "r", tasks: [] };
-  const other: ParallaxEvent = { kind: "project.deleted", project: "p1" };
+  const other: ParallaxEvent = { kind: "orchestrator.deleted", orchestrator: "p1" };
 
   quiet.pass(other);
   quiet.pass(ended);
@@ -221,7 +221,7 @@ test("a run's stop time is when it stopped, and a change after that, as a linked
   const running = { id: "r-1", prompt: "Go", status: "running", updatedAt: "2026-10-01T10:00:00Z" };
   let state = threadsReducer(emptyThreads, {
     type: "snapshot",
-    projects: [],
+    orchestrators: [],
     repos: [],
     threads: [],
     runs: [running as never],

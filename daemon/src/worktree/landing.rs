@@ -1,17 +1,17 @@
-//! The git side of landing a Project's children on its integration branch (PLX-410, decision
+//! The git side of landing an orchestrator's children on its integration branch (PLX-410, decision
 //! 0045). The queue itself is [`crate::methods::land`].
 //!
 //! A merge is built in the object store with `git merge-tree --write-tree` and committed with
 //! `git commit-tree`, so a conflict changes neither the branch nor its worktree. A clean result is
 //! checked out detached in the integration worktree, which only the landing queue writes, for the
-//! Project's checks (PLX-411), and the branch moves to it only once they pass
+//! orchestrator's checks (PLX-411), and the branch moves to it only once they pass
 //! ([`WorktreeManager::advance_integration`]). Every call runs with hooks off, as all of plxd's
 //! git calls do.
 
 use std::path::Path;
 use std::time::Duration;
 
-use parallax_protocol::ProjectId;
+use parallax_protocol::ScopeId;
 use tracing::warn;
 
 use super::review::z_tokens;
@@ -32,7 +32,7 @@ pub enum Merged {
 }
 
 impl WorktreeManager {
-    /// Puts `project`'s integration worktree back on `branch`'s tip, attached to it, dropping
+    /// Puts `orchestrator`'s integration worktree back on `branch`'s tip, attached to it, dropping
     /// whatever a landing left behind: a merge its checks failed, or one that plxd's stop
     /// interrupted. Returns the tip.
     ///
@@ -41,10 +41,10 @@ impl WorktreeManager {
     /// A git failure.
     pub async fn integration_tip(
         &self,
-        project: ProjectId,
+        orchestrator: ScopeId,
         branch: &str,
     ) -> Result<String, WorktreeError> {
-        let path = self.integration_path(project);
+        let path = self.integration_path(orchestrator);
         let reference = format!("refs/heads/{branch}");
         self.run_git_ok(&path, &["symbolic-ref", "HEAD", &reference])
             .await?;
@@ -77,30 +77,30 @@ impl WorktreeManager {
             match self.run_git_for(&repo_root, &args, FETCH_TIMEOUT).await {
                 Ok(output) if output.success() => {}
                 Ok(output) => {
-                    warn!(base, detail = %describe_failure(&output), "could not fetch a Project's base branch");
+                    warn!(base, detail = %describe_failure(&output), "could not fetch an orchestrator's base branch");
                 }
-                Err(error) => warn!(base, %error, "could not fetch a Project's base branch"),
+                Err(error) => warn!(base, %error, "could not fetch an orchestrator's base branch"),
             }
         }
         self.resolve_commit(&repo_root, base).await
     }
 
-    /// Whether `commit` is already in the history of `project`'s integration branch at `tip`.
+    /// Whether `commit` is already in the history of `orchestrator`'s integration branch at `tip`.
     ///
     /// # Errors
     ///
     /// A git failure.
     pub async fn integration_has(
         &self,
-        project: ProjectId,
+        orchestrator: ScopeId,
         tip: &str,
         commit: &str,
     ) -> Result<bool, WorktreeError> {
-        self.is_ancestor(&self.integration_path(project), commit, tip)
+        self.is_ancestor(&self.integration_path(orchestrator), commit, tip)
             .await
     }
 
-    /// Merges `theirs` into `project`'s integration branch at `tip`, with `message`. A squash
+    /// Merges `theirs` into `orchestrator`'s integration branch at `tip`, with `message`. A squash
     /// commits the result with `tip` as its only parent; otherwise it is a merge commit of both.
     /// The commit is checked out detached in the integration worktree, and the branch stays on
     /// `tip` until [`WorktreeManager::advance_integration`].
@@ -111,13 +111,13 @@ impl WorktreeManager {
     /// `user.email`, or a git failure.
     pub async fn merge_into_integration(
         &self,
-        project: ProjectId,
+        orchestrator: ScopeId,
         tip: &str,
         theirs: &str,
         message: &str,
         squash: bool,
     ) -> Result<Merged, WorktreeError> {
-        let path = self.integration_path(project);
+        let path = self.integration_path(orchestrator);
         let args = [
             "merge-tree",
             "--write-tree",
@@ -178,7 +178,7 @@ impl WorktreeManager {
         Ok(Merged::Commit(commit))
     }
 
-    /// Moves `project`'s integration `branch` from `tip` to `commit`, the merge checked out
+    /// Moves `orchestrator`'s integration `branch` from `tip` to `commit`, the merge checked out
     /// detached in its worktree, and attaches the worktree to it. Fails, moving nothing, if the
     /// branch isn't on `tip`.
     ///
@@ -187,12 +187,12 @@ impl WorktreeManager {
     /// A git failure.
     pub async fn advance_integration(
         &self,
-        project: ProjectId,
+        orchestrator: ScopeId,
         branch: &str,
         tip: &str,
         commit: &str,
     ) -> Result<(), WorktreeError> {
-        let path = self.integration_path(project);
+        let path = self.integration_path(orchestrator);
         let reference = format!("refs/heads/{branch}");
         self.run_git_ok(&path, &["update-ref", &reference, commit, tip])
             .await?;
@@ -202,9 +202,9 @@ impl WorktreeManager {
     }
 
     /// The lines `theirs` adds since its merge base with `tip` that hold a leftover conflict
-    /// marker, as `path:line`, from `git diff --check` in `project`'s integration worktree, when
-    /// `theirs` has a merge commit `tip` lacks, as a child that resolved a conflict by merging an
-    /// integration tip has. Otherwise none: a marker-like line is ordinary text in a child that
+    /// marker, as `path:line`, from `git diff --check` in `orchestrator`'s integration worktree,
+    /// when `theirs` has a merge commit `tip` lacks, as a child that resolved a conflict by merging
+    /// an integration tip has. Otherwise none: a marker-like line is ordinary text in a child that
     /// never merged. Whitespace errors `git diff --check` also reports are ignored.
     ///
     /// # Errors
@@ -212,11 +212,11 @@ impl WorktreeManager {
     /// A git failure.
     pub async fn conflict_markers(
         &self,
-        project: ProjectId,
+        orchestrator: ScopeId,
         tip: &str,
         theirs: &str,
     ) -> Result<Vec<String>, WorktreeError> {
-        let path = self.integration_path(project);
+        let path = self.integration_path(orchestrator);
         let since = format!("{tip}..{theirs}");
         let merges = self
             .run_git_ok(&path, &["rev-list", "--merges", "--max-count=1", &since])

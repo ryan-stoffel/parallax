@@ -1,22 +1,26 @@
 //! The methods plxd answers, one module per group, routed through `parallax_protocol`'s method
 //! table so every params and result type is the protocol's own.
 //!
-//! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
-//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; PLX-227
-//! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
-//! `project.rs`; 0042 `projectFromThreads`: `project/fromThreads` in `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
-//! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus` and PLX-993 `repoGrep`: `composer.rs`; PLX-336 `githubStatus`:
+//! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4 `orchestrator`:
+//! `orchestrator/start` in `orchestrator.rs`; #110 `threads`: `thread.rs`; PLX-227
+//! `orchestratorEdit`: `orchestrator/update` in `orchestrator.rs`; PLX-338 `orchestratorDelete`:
+//! `orchestrator/delete` in `orchestrator.rs`; 0042 `orchestratorFromThreads`:
+//! `orchestrator/fromThreads` in `orchestrator.rs`;
+//! PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link` and `pr/unlink`):
+//! `pr.rs`; PLX-359 `composerMenus` and PLX-993 `repoGrep`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
-//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`;
+//! PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`;
+//! PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
 //! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
 //! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, `pr/watches`, and
-//! `pr/mergeWhenReady` in `crate::pr_watch`, and `pr/write` in `crate::pr_write`; PLX-650 `setupScripts`: `repo/scripts` and `repo/saveScripts` in
-//! `crate::setup_scripts`; 0062 `checkpoints`: `orchestration/threadRuns`, `getTurnDiff`, and
-//! `getFullThreadDiff` in `crate::checkpoints`; PLX-648 `delegation`: `task/delegate`,
-//! `task/status`, and `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`:
-//! `secret/request` and `secret/answer` in `crate::secrets`; PLX-746 `providerUpdates`:
-//! `provider_updates.rs`; 0057 `peerGit`: `bundle/*` and `git/startMerge` in `bundle.rs`), and
-//! `host.rs` advertises the
+//! `pr/mergeWhenReady` in `crate::pr_watch`, and `pr/write` in `crate::pr_write`; PLX-650
+//! `setupScripts`: `repo/scripts` and `repo/saveScripts` in `crate::setup_scripts`; 0062
+//! `checkpoints`: `orchestration/threadRuns`, `getTurnDiff`, and `getFullThreadDiff` in
+//! `crate::checkpoints`; PLX-648 `delegation`: `task/delegate`, `task/status`, and
+//! `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`: `secret/request` and
+//! `secret/answer` in `crate::secrets`; PLX-746 `providerUpdates`: `provider_updates.rs`; 0057
+//! `peerGit`: `bundle/*` and `git/startMerge` in `bundle.rs`), and `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
@@ -33,8 +37,8 @@ pub(crate) mod inbox;
 pub(crate) mod land;
 pub(crate) mod memory;
 mod orchestration;
+pub(crate) mod orchestrator;
 mod pr;
-pub(crate) mod project;
 mod provider_updates;
 pub(crate) mod question;
 mod queue;
@@ -325,13 +329,13 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ContextWrite => |p| context::write(context, p),
         ContextReadBytes => |p| context::read_bytes(context, p),
         ContextSaveArtifact => |p| context::save_artifact(context, p),
-        ProjectList => |p| project::list(context, p),
-        ProjectCreate => |p| project::create(context, p),
-        ProjectStart => |p| project::start(context, p),
-        CoordinatorFresh => |p| project::fresh(context, p),
-        ProjectUpdate => |p| project::update(context, p),
-        ProjectDelete => |p| project::delete(context, p),
-        ProjectFromThreads => |p| project::from_threads(context, p),
+        OrchestratorList => |p| orchestrator::list(context, p),
+        OrchestratorCreate => |p| orchestrator::create(context, p),
+        OrchestratorStart => |p| orchestrator::start(context, p),
+        OrchestratorFresh => |p| orchestrator::fresh(context, p),
+        OrchestratorUpdate => |p| orchestrator::update(context, p),
+        OrchestratorDelete => |p| orchestrator::delete(context, p),
+        OrchestratorFromThreads => |p| orchestrator::from_threads(context, p),
         InboxList => |p| inbox::list(context, p),
         InboxSeen => |p| inbox::seen(context, p),
         ThreadList => |_| threads::list(daemon),
@@ -353,9 +357,9 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RepoRemote => |p| crate::repo_clone::remote(daemon, p),
         RepoMatch => |p| crate::repo_clone::matching(daemon, p),
         RepoUpdate => |p| threads::update_repo(daemon, p),
-        SpaceCreate => |p| crate::spaces::create(daemon, p),
-        ThreadSetSpace => |p| crate::spaces::set_space(daemon, p),
-        SpaceDelete => |p| thread::space_delete(context, p),
+        ProjectCreate => |p| crate::projects::create(daemon, p),
+        ThreadSetProject => |p| crate::projects::set_project(daemon, p),
+        ProjectDelete => |p| thread::project_delete(context, p),
         RepoRefs => |p| threads::refs(daemon, p),
         RepoGitStatus => |p| threads::git_status(daemon, p),
         RepoFiles => |p| composer::files(context, p),

@@ -1,7 +1,7 @@
 //! Turns backend usage events (0004, #113) into `parallax-store` rows (#120).
 //!
 //! [`record_event`] is a plain, synchronous function over `&mut parallax_store::Store`, the same
-//! shape [`crate::methods::project`] uses for `project/create`. The runner (`crate::agents`,
+//! shape [`crate::methods::project`] uses for `orchestrator/create`. The runner (`crate::agents`,
 //! #156) calls it once per event through the store's single-thread owner
 //! ([`crate::store::StoreHandle::run`](../store/struct.StoreHandle.html#method.run)), charged to
 //! whichever account the run is on at that point, which changes on `Event::AccountFallback`.

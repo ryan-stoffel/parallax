@@ -26,7 +26,7 @@ import {
   unavailableBadge,
 } from "./ui";
 
-/** A repository on one of Parallax's hosts: where a Project works. */
+/** A repository on one of Parallax's hosts: where an orchestrator works. */
 export type Workspace = { hostId: string; repo: Repo };
 
 /** A way the add palette makes a repository on this computer (AddDialog). */
@@ -86,12 +86,12 @@ function useListings(hosts: Host[], open: boolean): Readonly<Record<string, List
 }
 
 /**
- * Create Project's Workspace picker. Its button shows the chosen repository and its host's icon.
- * Its menu searches the repositories of every host at once, and groups them by host: this
- * computer, then the SSH hosts, then GitHub. A host that is connecting or can't be reached says
- * so in its own group. This computer's group ends with "New repository…" and "Choose folder…",
- * and GitHub's is "Clone a repository…", each calling `onAdd`. Browsing an SSH host isn't
- * available yet.
+ * Create orchestrator's Workspace picker. Its button shows the chosen repository and its host's
+ * icon. Its menu searches the repositories of every host at once, and groups them by host: this
+ * computer, then the SSH hosts, then GitHub. A host that is connecting or can't be reached says so
+ * in its own group. This computer's group ends with "New repository…" and "Choose folder…", and
+ * GitHub's is "Clone a repository…", each calling `onAdd`. Browsing an SSH host isn't available
+ * yet.
  */
 export function WorkspaceMenu({
   hosts,

@@ -37,7 +37,12 @@
       "enabled": true,
       "schedule": {
         "type": "webhook",
-        "signature": { "header": "x-hub-signature-256", "encoding": "hex", "prefix": "sha256=", "secret": "s3cret" }
+        "signature": {
+          "header": "x-hub-signature-256",
+          "encoding": "hex",
+          "prefix": "sha256=",
+          "secret": "s3cret"
+        }
       },
       "repo": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e90",
       "account": { "kind": "subscription", "backend": "claude" },
@@ -113,7 +118,7 @@
           "prompt": "Summarize yesterday's merged pull requests.",
           "enabled": false,
           "schedule": { "type": "fixed_time", "timeOfDay": "09:00", "weekdays": [1, 2, 3, 4, 5] },
-          "project": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e91",
+          "orchestrator": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e91",
           "lastRunAt": "2026-10-08T16:00:00Z",
           "lastRunStatus": "failed",
           "lastRunError": "no thread has run id 01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e92",
@@ -138,12 +143,19 @@
     "jsonrpc": "2.0",
     "id": 6,
     "method": "pr/watch",
-    "params": { "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f", "url": "https://github.com/ryan-stoffel/parallax/pull/670" }
+    "params": {
+      "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f",
+      "url": "https://github.com/ryan-stoffel/parallax/pull/670"
+    }
   },
   {
     "jsonrpc": "2.0",
     "id": 6,
-    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/670", "watching": true, "wasWatching": false }
+    "result": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/670",
+      "watching": true,
+      "wasWatching": false
+    }
   },
   {
     "jsonrpc": "2.0",
@@ -160,18 +172,28 @@
     "jsonrpc": "2.0",
     "id": 8,
     "method": "pr/unwatch",
-    "params": { "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f", "url": "https://github.com/ryan-stoffel/parallax/pull/670" }
+    "params": {
+      "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f",
+      "url": "https://github.com/ryan-stoffel/parallax/pull/670"
+    }
   },
   {
     "jsonrpc": "2.0",
     "id": 8,
-    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/670", "watching": false, "wasWatching": true }
+    "result": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/670",
+      "watching": false,
+      "wasWatching": true
+    }
   },
   {
     "jsonrpc": "2.0",
     "id": 9,
     "method": "pr/status",
-    "params": { "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f", "url": "https://github.com/ryan-stoffel/parallax/pull/670" }
+    "params": {
+      "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f",
+      "url": "https://github.com/ryan-stoffel/parallax/pull/670"
+    }
   },
   {
     "jsonrpc": "2.0",
@@ -186,13 +208,33 @@
       "mergeable": "MERGEABLE",
       "mergeState": "BEHIND",
       "reviewDecision": "CHANGES_REQUESTED",
-      "failing": [{ "name": "check-rust", "how": "failure", "required": true, "url": "https://github.com/ryan-stoffel/parallax/actions/runs/1/job/2" }],
+      "failing": [
+        {
+          "name": "check-rust",
+          "how": "failure",
+          "required": true,
+          "url": "https://github.com/ryan-stoffel/parallax/actions/runs/1/job/2"
+        }
+      ],
       "pending": ["e2e-app"],
       "passed": ["check-app", "lint"],
-      "unresolvedThreads": [{ "path": "daemon/src/pr_watch.rs", "author": "reviewer", "body": "This read needs a timeout.", "url": "https://github.com/ryan-stoffel/parallax/pull/670#discussion_r1" }],
+      "unresolvedThreads": [
+        {
+          "path": "daemon/src/pr_watch.rs",
+          "author": "reviewer",
+          "body": "This read needs a timeout.",
+          "url": "https://github.com/ryan-stoffel/parallax/pull/670#discussion_r1"
+        }
+      ],
       "watching": true,
       "ready": false,
-      "reasons": ["2 commits behind develop", "failing: check-rust", "pending: e2e-app", "1 unresolved review thread", "changes requested"]
+      "reasons": [
+        "2 commits behind develop",
+        "failing: check-rust",
+        "pending: e2e-app",
+        "1 unresolved review thread",
+        "changes requested"
+      ]
     }
   }
 ]

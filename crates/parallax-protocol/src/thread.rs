@@ -1,6 +1,6 @@
 //! Normal threads, behind the `threads` capability (0011, #110, decision 0017).
 //!
-//! A normal thread is one agent with no coordinator: an agent run (0014) that belongs to a repo
+//! A normal thread is one agent with no orchestrator: an agent run (0014) that belongs to a repo
 //! entry instead of a project. A repo entry is a lightweight record of a repository on the host,
 //! registered by path with `repo/add`. A thread with no repo, a quick chat, runs in a scratch
 //! repository plxd makes for it, and belongs to plxd's scratch entry.
@@ -13,11 +13,11 @@
 //! Since 0041, behind `threadLineage`, a thread also has a parent (the run that launched it), a
 //! fork origin, a title, and a settled flag.
 //!
-//! Since 0042, behind `projectTasks`, `thread/start` with `project` starts a Project's child: a
-//! thread whose run, and `repo`, is the Project's id, whose parent is its coordinator. Behind
-//! `projectFromThreads`, `project/fromThreads` makes existing threads a new Project's children:
-//! their runs move to the Project, so their later `agent.*` events take its id, while `repo`
-//! keeps their repo entry.
+//! Since 0042, behind `orchestratorTasks`, `thread/start` with `project` starts an orchestrator's
+//! child: a thread whose run, and `repo`, is the orchestrator's id, whose parent is its
+//! orchestrator. Behind `orchestratorFromThreads`, `orchestrator/fromThreads` makes existing
+//! threads a new orchestrator's children: their runs move to the orchestrator, so their later
+//! `agent.*` events take its id, while `repo` keeps their repo entry.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -25,8 +25,8 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
-    RunId, TurnId,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ChosenIcon, PromptImage, RunId, ScopeId,
+    TurnId,
 };
 
 /// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
@@ -52,24 +52,24 @@ pub struct Repo {
     /// folder that holds each such thread's own scratch repository.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scratch: bool,
-    /// True for a Space (0069): a group of chats the user made, with no repository of theirs.
-    /// `path` is the repository plxd made for it. Behind the `spaces` capability.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub space: bool,
+    /// True for a Project (0069): a group of chats the user made, with no repository of theirs.
+    /// `path` is the repository plxd made for it. Behind the `projects` capability.
+    #[serde(default, alias = "space", skip_serializing_if = "std::ops::Not::not")]
+    pub project: bool,
     /// The icon the user chose, in a project's shape (0032), behind the `threadAttention`
     /// capability (0033). Absent means the app's default: the name's initials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub icon: Option<ProjectIcon>,
+    pub icon: Option<ChosenIcon>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
-    /// A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
-    /// behind the `spaceContext` capability. Absent when it has none.
+    /// A Project's instructions, which plxd pins to the system prompt of every thread in it (0090),
+    /// behind the `projectContext` capability. Absent when it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub instructions: Option<String>,
-    /// The files a Space gives every thread in it (0090), as absolute paths on the host, such as
-    /// `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
+    /// The files a Project gives every thread in it (0090), as absolute paths on the host, such as
+    /// `host/upload` answers, behind `projectContext`. Each thread's system prompt lists them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub files: Vec<String>,
@@ -81,9 +81,9 @@ pub struct Repo {
 pub struct Thread {
     /// The thread's run id.
     pub id: RunId,
-    /// Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
-    /// `thread/start`'s `project` has the Project's id here instead (0042), while a thread
-    /// `project/fromThreads` made a Project's child keeps its repo entry.
+    /// Its repo entry: the scratch entry for a thread with no repo. An orchestrator's child started
+    /// with `thread/start`'s `project` has the orchestrator's id here instead (0042), while a
+    /// thread `orchestrator/fromThreads` made an orchestrator's child keeps its repo entry.
     pub repo: RepoId,
     /// Whether the user archived it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -129,12 +129,12 @@ pub struct Thread {
     /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
-    /// The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
-    /// Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
-    /// Space.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The Project the user added it to with `thread/setProject` (0090), where it works elsewhere.
+    /// Absent for a thread in no Project, and for one started in a Project, whose `repo` is the
+    /// Project.
+    #[serde(default, alias = "space", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub space: Option<RepoId>,
+    pub project: Option<RepoId>,
 }
 
 /// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
@@ -190,107 +190,109 @@ pub struct ThreadUpdateResult {
 }
 
 /// Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
-/// behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
-/// Space's instructions and files (0090), behind `spaceContext`. A change appends
+/// behind the `threadAttention` capability, renames a Project (0069), behind `projects`, or sets a
+/// Project's instructions and files (0090), behind `projectContext`. A change appends
 /// `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
-/// `name`, `instructions`, or `files` on an entry that isn't a Space.
+/// `name`, `instructions`, or `files` on an entry that isn't a Project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoUpdateParams {
     /// The entry's id.
     pub repo: RepoId,
-    /// Its new icon, checked as `project/update` checks a project's.
+    /// Its new icon, checked as `orchestrator/update` checks a project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub icon: Option<ProjectIcon>,
-    /// A Space's new name, trimmed, 1 to 128 bytes.
+    pub icon: Option<ChosenIcon>,
+    /// A Project's new name, trimmed, 1 to 128 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
-    /// A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+    /// A Project's new instructions, up to [`MAX_PROJECT_INSTRUCTIONS_BYTES`] once trimmed. Empty
     /// clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub instructions: Option<String>,
-    /// A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+    /// A Project's files in full, replacing the list: at most [`MAX_PROJECT_FILES`] absolute paths
     /// inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub files: Option<Vec<String>>,
 }
 
-/// The longest Space name `space/create` and `repo/update` take, in bytes once trimmed.
-pub const MAX_SPACE_NAME_BYTES: usize = 128;
+/// The longest Project name `project/create` and `repo/update` take, in bytes once trimmed.
+pub const MAX_PROJECT_NAME_BYTES: usize = 128;
 
-/// The longest instructions a Space keeps (0090), in bytes once trimmed.
-pub const MAX_SPACE_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+/// The longest instructions a Project keeps (0090), in bytes once trimmed.
+pub const MAX_PROJECT_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 
-/// The most files a Space keeps (0090).
-pub const MAX_SPACE_FILES: usize = 50;
+/// The most files a Project keeps (0090).
+pub const MAX_PROJECT_FILES: usize = 50;
 
-/// Params of `space/create` (0069), behind the `spaces` capability: makes a Space, a named group
+/// Params of `project/create` (0069), behind the `projects` capability: makes a Project, a named group
 /// for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry
 /// with the same name returns the entry, another name fails with `idConflict`. Appends
 /// `repo.added`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceCreateParams {
-    /// The Space's id, a version 7 UUID generated by the client.
+pub struct ProjectCreateParams {
+    /// The Project's id, a version 7 UUID generated by the client.
     pub id: RepoId,
-    /// Its name, trimmed, 1 to [`MAX_SPACE_NAME_BYTES`] bytes.
+    /// Its name, trimmed, 1 to [`MAX_PROJECT_NAME_BYTES`] bytes.
     pub name: String,
-    /// Its icon, checked as `project/create` checks a project's.
+    /// Its icon, checked as `orchestrator/create` checks a project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub icon: Option<ProjectIcon>,
+    pub icon: Option<ChosenIcon>,
 }
 
-/// Result of `space/create`.
+/// Result of `project/create`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceCreateResult {
-    /// The Space, new or existing, as a repo entry with `space` true.
+pub struct ProjectCreateResult {
+    /// The Project, new or existing, as a repo entry with `project` true.
     pub repo: Repo,
 }
 
-/// Params of `space/delete` (0069), behind the `spaces` capability: deletes a Space and every
+/// Params of `project/delete` (0069), behind the `projects` capability: deletes a Project and every
 /// chat in it, as `thread/delete` deletes each, then its repository. Appends `repo.removed`.
-/// Fails with `repoNotFound` for an unknown id or an entry that isn't a Space.
+/// Fails with `repoNotFound` for an unknown id or an entry that isn't a Project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceDeleteParams {
-    /// The Space's id.
-    pub space: RepoId,
+pub struct ProjectDeleteParams {
+    /// The Project's id.
+    #[serde(alias = "space")]
+    pub project: RepoId,
 }
 
-/// Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
-/// Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
-/// and transcript, and its next CLI process gets the Space's instructions and files. Appends
+/// Params of `thread/setProject` (0090), behind the `projectThreads` capability: adds threads to a
+/// Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+/// and transcript, and its next CLI process gets the Project's instructions and files. Appends
 /// `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
-/// thread started in a Space or a Project, and with `repoNotFound` for a `space` that isn't one.
+/// thread started in a Project or an orchestrator, and with `repoNotFound` for a `project` that isn't
+/// one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadSetSpaceParams {
+pub struct ThreadSetProjectParams {
     /// The threads, by run id.
     pub threads: Vec<RunId>,
-    /// The Space to add them to. Absent takes them out of their Space.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The Project to add them to. Absent takes them out of their Project.
+    #[serde(default, alias = "space", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub space: Option<RepoId>,
+    pub project: Option<RepoId>,
 }
 
-/// Result of `thread/setSpace`.
+/// Result of `thread/setProject`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadSetSpaceResult {
+pub struct ThreadSetProjectResult {
     /// The threads as they stand, in the order asked.
     pub threads: Vec<Thread>,
 }
 
-/// Result of `space/delete`.
+/// Result of `project/delete`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceDeleteResult {}
+pub struct ProjectDeleteResult {}
 
 /// Result of `repo/update`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -403,9 +405,9 @@ pub struct RepoRemoteResult {
 }
 
 /// Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
-/// `origin`, for a Project on another plxd whose children run here. Each entry's `origin` and this
-/// one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing slash,
-/// and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
+/// `origin`, for an orchestrator on another plxd whose children run here. Each entry's `origin` and
+/// this one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing
+/// slash, and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoMatchParams {
@@ -440,22 +442,22 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub repo: Option<RepoId>,
-    /// Starts a child of this Project instead (0042), behind `projectTasks`: it runs in the
-    /// Project's mode with `approvals`, in a new worktree cut from the Project's integration branch,
-    /// and its first message is the child's header, then `prompt`. Its parent is the Project's
-    /// current coordinator, which a batched wake-up tells of the start; with no coordinator yet it
-    /// has none. Not with `repo`, `parent`, `checkout`, `base`, or `checkoutRef`, which the Project
-    /// decides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Starts a child of this orchestrator instead (0042), behind `orchestratorTasks`: it runs in
+    /// the orchestrator's mode with `approvals`, in a new worktree cut from the orchestrator's
+    /// integration branch, and its first message is the child's header, then `prompt`. Its parent
+    /// is the orchestrator's current run, which a batched wake-up tells of the start; with
+    /// no orchestrator yet it has none. Not with `repo`, `parent`, `checkout`, `base`, or
+    /// `checkoutRef`, which the orchestrator decides.
+    #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub orchestrator: Option<ScopeId>,
     /// The run that launches it, recorded as its parent (0041). It must exist, or the start fails
     /// with `runNotFound`. Behind `threadLineage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parent: Option<RunId>,
-    /// Whether the thread wakes its `parent` when a CLI process of its ends, as a Project's
-    /// coordinator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+    /// Whether the thread wakes its `parent` when a CLI process of its ends, as an orchestrator's
+    /// orchestrator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
     /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

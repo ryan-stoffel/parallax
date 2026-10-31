@@ -3,8 +3,8 @@
 use std::fs;
 use std::time::Duration;
 
-use parallax_protocol::methods::{HostHealth, ProjectCreate};
-use parallax_protocol::{HostHealthParams, ProjectCreateResult};
+use parallax_protocol::methods::{HostHealth, OrchestratorCreate};
+use parallax_protocol::{HostHealthParams, OrchestratorCreateResult};
 use rustix::process::Signal;
 use tokio::time::sleep;
 
@@ -42,7 +42,7 @@ async fn sigterm_finishes_the_requests_in_flight_then_cleans_up() {
     let mut client = Client::ready(&plxd.socket).await;
     let lock = WriteLock::take(dir.path());
     let params = create_params(dir.path(), "parallax");
-    let create = client.send::<ProjectCreate>(params.clone()).await;
+    let create = client.send::<OrchestratorCreate>(params.clone()).await;
     sleep(SETTLE).await;
 
     plxd.signal(Signal::TERM);
@@ -54,8 +54,8 @@ async fn sigterm_finishes_the_requests_in_flight_then_cleans_up() {
     lock.release();
     let answered = client.response().await;
     assert_eq!(answered.id, Some(create));
-    let created: ProjectCreateResult = answered.into_result().unwrap();
-    assert_eq!(created.project.id, params.id);
+    let created: OrchestratorCreateResult = answered.into_result().unwrap();
+    assert_eq!(created.orchestrator.id, params.id);
     assert!(client.closes_within(PATIENCE).await);
 
     let (status, stderr) = plxd.exit().await;

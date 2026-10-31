@@ -79,14 +79,14 @@ interface NewThreadProps {
   draftId?: string;
   /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
   settingsClosed?: number;
-  /** Shown under the composer until a thread starts, as a Space's page (0090). */
+  /** Shown under the composer until a thread starts, as a Project's page (0090). */
   below?: ReactNode;
-  /** Shown over the composer in place of its question, as a Space's header (0090). */
+  /** Shown over the composer in place of its question, as a Project's header (0090). */
   header?: ReactNode;
-  /** A Space's tray under the composer: the computers it can run on (0090). */
+  /** A Project's tray under the composer: the computers it can run on (0090). */
   tray?: ReactNode;
   /**
-   * A column beside `below`, as a Space's instructions and files beside its threads (0090). With
+   * A column beside `below`, as a Project's instructions and files beside its threads (0090). With
    * it, New thread lays out as a page: the header, the composer at full width, then `below` and
    * this side by side.
    */
@@ -469,7 +469,7 @@ export function NewThread({
             <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
               {group.id === noRepo
                 ? "What should we do on "
-                : group.space
+                : group.project
                   ? "What should we work on in "
                   : "What should we build in "}
               <button
@@ -531,7 +531,13 @@ export function NewThread({
                   value: g.id,
                   label: g.name,
                   icon:
-                    g.id === noRepo ? <SquareDashed /> : g.space ? <MessagesSquare /> : <Folder />,
+                    g.id === noRepo ? (
+                      <SquareDashed />
+                    ) : g.project ? (
+                      <MessagesSquare />
+                    ) : (
+                      <Folder />
+                    ),
                 })),
                 ...elsewhere.map((o, i) => ({
                   value: elsewhereValue(o),
@@ -576,19 +582,19 @@ export function NewThread({
           uploadBytes={uploadBytes(connection)}
           menus={
             connected && "composerMenus" in connection.capabilities
-              ? { hostId, repo: group.id === noRepo || group.space ? undefined : group.id }
+              ? { hostId, repo: group.id === noRepo || group.project ? undefined : group.id }
               : undefined
           }
           placeholder={
-            group.space ? "Ask anything, paste an image, use /skills or @threads" : undefined
+            group.project ? "Ask anything, paste an image, use /skills or @threads" : undefined
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Chat picks only its computer here, and a Space only among the computers that have it
+          // Chat picks only its computer here, and a Project only among the computers that have it
           // (`tray`), since its entry is on each computer alone. While a start is under way it stays as it was, but inert, so the thread
           // can't move. `contents` keeps the tab's own layout.
           tab={
-            group.space ? (
+            group.project ? (
               tray
             ) : (
               <div inert={starting !== undefined} className="contents">

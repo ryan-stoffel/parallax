@@ -7,7 +7,7 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     AgentOutcome, AgentOutputItem, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
-    ParallaxEvent, Project, QueueCancelParams, QueueEditParams, QueueListParams,
+    Orchestrator, ParallaxEvent, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueuedMessage, RunId, TurnId,
 };
 use plxd::backend::fake::Step;
@@ -31,11 +31,11 @@ fn working() -> impl FnMut(&EventsEventParams) -> bool {
     })
 }
 
-/// A run on `backends` in a new Project, once its first turn is working: its host, a client
-/// subscribed to the Project, the Project, and the run.
-async fn working_run(backends: BackendRegistry) -> (Host, Conn, Project, RunId) {
+/// A run on `backends` in a new orchestrator, once its first turn is working: its host, a client
+/// subscribed to the orchestrator, the orchestrator, and the run.
+async fn working_run(backends: BackendRegistry) -> (Host, Conn, Orchestrator, RunId) {
     let host = Host::start(temp_dir(), backends);
-    let (mut client, project) = host.project_client().await;
+    let (mut client, project) = host.orchestrator_client().await;
     let params = start_params(project.id, "Work for a while");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();

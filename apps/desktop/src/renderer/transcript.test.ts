@@ -357,7 +357,7 @@ test("ExitPlanMode's call takes the plan its request carries, and never loses it
   ]);
 });
 
-test("a Project's waiting requests are tracked by run, once each, until resolved or ended", () => {
+test("an orchestrator's waiting requests are tracked by run, once each, until resolved or ended", () => {
   const other = "01a0d391-0000-7000-8000-000000000001";
   const req = (seq: number, run: string, approvalId: string): LoggedEvent => ({
     seq,

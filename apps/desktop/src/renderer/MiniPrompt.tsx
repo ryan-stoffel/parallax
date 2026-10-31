@@ -13,26 +13,26 @@ import { uuidv7 } from "./uuidv7";
 import { behaviorPrefs } from "./prefs";
 
 /**
- * The prompt box in miniature, for changing a Project's knowledge in plain words ("we moved off
- * Jest, use Vitest"): a box and Send, with only the model tucked under it. It sends the change to
- * the coordinator, whose rewrite comes back as a proposal (0044), on the model picked, which the
- * coordinator then keeps (`sendModel`); one on another provider moves it there (`sendAccount`).
- * `large` is the full-screen Knowledge view's, wider and taller. Off until the Project has a
- * coordinator.
+ * The prompt box in miniature, for changing an orchestrator's knowledge in plain words ("we moved
+ * off Jest, use Vitest"): a box and Send, with only the model tucked under it. It sends the change
+ * to the orchestrator, whose rewrite comes back as a proposal (0044), on the model picked, which
+ * the orchestrator then keeps (`sendModel`); one on another provider moves it there
+ * (`sendAccount`). `large` is the full-screen Knowledge view's, wider and taller. Off until the
+ * orchestrator has a orchestrator.
  */
 export function MiniPrompt({
   hostId,
-  coordinator,
+  orchestratorRun,
   large,
 }: {
   hostId: string;
-  coordinator?: AgentRun;
+  orchestratorRun?: AgentRun;
   large?: boolean;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const sendModel = connected && "sendModel" in connection.capabilities;
-  // With `sendAccount`, the coordinator can move to another provider that runs one.
+  // With `sendAccount`, the orchestrator can move to another provider that runs one.
   const moves = sendModel && "sendAccount" in connection.capabilities;
   const catalog = useCatalog(hostId);
   const [text, setText] = useState("");
@@ -42,28 +42,30 @@ export function MiniPrompt({
   const providers = catalog.instances.filter(
     (i) =>
       i.enabled &&
-      (i.id === coordinator?.backend || (moves && i.coordinator)) &&
+      (i.id === orchestratorRun?.backend || (moves && i.orchestrator)) &&
       catalog.models.some((m) => m.provider === i.id),
   );
   const offered = catalog.models.filter((m) => providers.some((i) => i.id === m.provider));
   const model =
     (picked && offered.find((m) => m.id === picked.id && m.provider === picked.provider)) ??
-    offered.find((m) => m.provider === coordinator?.backend && m.id === coordinator?.model) ??
-    offered.find((m) => m.provider === coordinator?.backend);
-  const off = !coordinator || !connected;
+    offered.find(
+      (m) => m.provider === orchestratorRun?.backend && m.id === orchestratorRun?.model,
+    ) ??
+    offered.find((m) => m.provider === orchestratorRun?.backend);
+  const off = !orchestratorRun || !connected;
   const canSend = !off && !busy && text.trim() !== "";
 
   const send = async () => {
-    if (!canSend || !coordinator) return;
+    if (!canSend || !orchestratorRun) return;
     setBusy(true);
     const answer = await window.parallax.request(hostId, "agent/send", {
-      runId: coordinator.id,
+      runId: orchestratorRun.id,
       turnId: uuidv7(),
       text: changeMessage(text.trim()),
-      ...(sendModel && model && model.id !== coordinator.model && { model: model.id }),
+      ...(sendModel && model && model.id !== orchestratorRun.model && { model: model.id }),
       ...(moves &&
         model &&
-        model.provider !== coordinator.backend && {
+        model.provider !== orchestratorRun.backend && {
           account: { kind: "subscription", backend: model.provider } as const,
         }),
     });
@@ -80,7 +82,7 @@ export function MiniPrompt({
       key: "knowledge",
       tone: "info",
       title: "Sent",
-      body: "The coordinator's rewrite shows up as a proposal.",
+      body: "The orchestrator's rewrite shows up as a proposal.",
     });
     box.current?.focus();
   };
@@ -98,11 +100,11 @@ export function MiniPrompt({
           ref={box}
           aria-label="Change knowledge"
           placeholder={
-            coordinator
+            orchestratorRun
               ? large
-                ? "Tell the Project what changed, what to remember, or what to forget"
+                ? "Tell the orchestrator what changed, what to remember, or what to forget"
                 : "Change what it knows, in plain words"
-              : "Start the coordinator to change what it knows"
+              : "Start the orchestrator to change what it knows"
           }
           rows={large ? 2 : 1}
           value={text}

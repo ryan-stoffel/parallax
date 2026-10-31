@@ -19,13 +19,25 @@ use crate::{ErrorKind, IncompatibleProtocolDetail, PROTOCOL_VERSION, ParallaxEve
 #[test]
 fn every_sample_decodes_and_exact_samples_encode_back_unchanged() {
     let mut coverage = Coverage::default();
-    for (path, exact) in sample_files() {
-        check_file(&path, exact, &mut coverage);
+    for (path, mode) in sample_files() {
+        check_file(&path, mode, &mut coverage);
     }
     coverage.assert_complete();
 }
 
-fn sample_files() -> Vec<(PathBuf, bool)> {
+/// How a sample file is checked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Decodes and encodes back unchanged.
+    Exact,
+    /// From a newer peer: only decodes.
+    Lenient,
+    /// In the names 0093 renamed: only decodes, through [`crate::legacy`]'s method names and the
+    /// serde aliases, as a lenient file does too.
+    Legacy,
+}
+
+fn sample_files() -> Vec<(PathBuf, Mode)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples");
     let mut versions = BTreeSet::new();
     for entry in fs::read_dir(&root).unwrap() {
@@ -44,12 +56,13 @@ fn sample_files() -> Vec<(PathBuf, bool)> {
     let mut files = Vec::new();
     for version in versions {
         let directory = root.join(format!("v{version}"));
-        files.extend(json_files(&directory).into_iter().map(|path| (path, true)));
-        files.extend(
-            json_files(&directory.join("lenient"))
-                .into_iter()
-                .map(|path| (path, false)),
-        );
+        for (folder, mode) in [
+            (directory.clone(), Mode::Exact),
+            (directory.join("lenient"), Mode::Lenient),
+            (directory.join("legacy"), Mode::Legacy),
+        ] {
+            files.extend(json_files(&folder).into_iter().map(|path| (path, mode)));
+        }
     }
     files
 }
@@ -75,7 +88,8 @@ enum Expect {
     InvalidParams,
 }
 
-fn check_file(path: &Path, exact: bool, coverage: &mut Coverage) {
+fn check_file(path: &Path, mode: Mode, coverage: &mut Coverage) {
+    let exact = mode == Mode::Exact;
     let name = path
         .strip_prefix(env!("CARGO_MANIFEST_DIR"))
         .unwrap()
@@ -87,6 +101,7 @@ fn check_file(path: &Path, exact: bool, coverage: &mut Coverage) {
     };
     let mut transcript = Transcript {
         exact,
+        legacy: mode == Mode::Legacy,
         at: String::new(),
         pending: HashMap::new(),
         coverage,
@@ -105,6 +120,8 @@ fn check_file(path: &Path, exact: bool, coverage: &mut Coverage) {
 
 struct Transcript<'a> {
     exact: bool,
+    /// From [`Mode::Legacy`]: every event kind must decode to a known one.
+    legacy: bool,
     at: String,
     pending: HashMap<RequestId, Expect>,
     coverage: &'a mut Coverage,
@@ -131,7 +148,11 @@ impl Transcript<'_> {
 
     fn request(&mut self, request: Request) {
         let at = &self.at;
-        let expect = match decode(&request.method, Part::Params(request.params.as_ref())) {
+        let method = match crate::legacy::new_method(&request.method, true) {
+            Some(new) if !self.exact => new,
+            _ => &request.method,
+        };
+        let expect = match decode(method, Part::Params(request.params.as_ref())) {
             None => Expect::MethodNotFound,
             Some((_, Err(_))) => Expect::InvalidParams,
             Some((method, Ok(encoded))) => {
@@ -156,6 +177,12 @@ impl Transcript<'_> {
             None => assert!(!self.exact, "{at}: unknown notification in an exact sample"),
             Some((_, Err(error))) => panic!("{at}: {error}"),
             Some((method, Ok(encoded))) => {
+                if self.legacy && params.is_some_and(|params| params["event"]["kind"].is_string()) {
+                    assert_ne!(
+                        encoded["event"]["kind"], "Unknown",
+                        "{at}: an old event kind decodes to `Unknown`"
+                    );
+                }
                 if self.exact {
                     assert_eq!(Some(&encoded), params, "{at}: the params changed");
                     self.coverage.notifications.insert(method);

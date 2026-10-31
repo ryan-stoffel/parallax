@@ -60,7 +60,7 @@ fn asking(asked: AskedApproval) -> Vec<Step> {
 /// Starts a worker on `host`'s script in a new project, with a client subscribed to its events,
 /// answering its permission requests when `approvals`.
 async fn start_run(host: &Host, approvals: bool) -> (Conn, RunId) {
-    let (mut client, project) = host.project_client().await;
+    let (mut client, project) = host.orchestrator_client().await;
     let params = AgentStartParams {
         approvals,
         ..start_params(project.id, "Run the tests")

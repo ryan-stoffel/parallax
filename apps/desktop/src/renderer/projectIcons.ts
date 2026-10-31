@@ -152,9 +152,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
+import type { ChosenIcon } from "../protocol/generated/protocol";
 
-/** One of the icons a Project can wear: its Lucide name, which plxd keeps (0032), and its glyph. */
+/** One of the icons an orchestrator can wear: its Lucide name, which plxd keeps (0032), and its glyph. */
 export interface IconChoice {
   name: string;
   /** Its accessible name, from its Lucide name. */
@@ -168,11 +168,11 @@ export interface IconChoice {
 // never Lucide's whole set. A name is stored on the host, so a Lucide rename keeps the old name
 // here and imports the new glyph; the test checks the old name is still Lucide's alias for it.
 const icons: [name: string, Icon: LucideIcon, keywords: string][] = [
-  ["layers", Layers, "stack project default"],
+  ["layers", Layers, "stack project orchestrator default"],
   ["folder", Folder, "directory files"],
   ["folder-git-2", FolderGit2, "repository repo"],
   ["briefcase", Briefcase, "work business job"],
-  ["folder-kanban", FolderKanban, "project board"],
+  ["folder-kanban", FolderKanban, "project orchestrator board"],
   ["layout-grid", LayoutGrid, "apps tiles"],
   ["layout-dashboard", LayoutDashboard, "dashboard panels"],
   ["kanban", Kanban, "board columns tasks"],
@@ -326,7 +326,7 @@ const labelOf = (name: string) => {
   return words[0]!.toUpperCase() + words.slice(1);
 };
 
-/** The icons a Project can wear, in the picker's order, the default first. */
+/** The icons an orchestrator can wear, in the picker's order, the default first. */
 export const projectIcons: IconChoice[] = icons.map(([name, Icon, keywords]) => ({
   name,
   label: labelOf(name),
@@ -335,8 +335,8 @@ export const projectIcons: IconChoice[] = icons.map(([name, Icon, keywords]) => 
 }));
 const iconsByName = new Map(projectIcons.map((i) => [i.name, i]));
 
-/** A Project's icon until one is chosen. Picking it sends it by name, since none can't be sent. */
-export const defaultIcon: ProjectIconValue = { name: "layers" };
+/** An orchestrator's icon until one is chosen. Picking it sends it by name, since none can't be sent. */
+export const defaultIcon: ChosenIcon = { name: "layers" };
 
 /**
  * A color an icon can take, as Tailwind classes: the accent, which has no key, then the palette's
@@ -354,22 +354,37 @@ export interface IconColor {
 export const iconColors: IconColor[] = [
   { label: "Accent", text: "text-accent", fill: "bg-accent" },
   { key: "red", label: "Red", text: "text-project-red", fill: "bg-project-red" },
-  { key: "orange", label: "Orange", text: "text-project-orange", fill: "bg-project-orange" },
-  { key: "yellow", label: "Yellow", text: "text-project-yellow", fill: "bg-project-yellow" },
+  {
+    key: "orange",
+    label: "Orange",
+    text: "text-project-orange",
+    fill: "bg-project-orange",
+  },
+  {
+    key: "yellow",
+    label: "Yellow",
+    text: "text-project-yellow",
+    fill: "bg-project-yellow",
+  },
   { key: "green", label: "Green", text: "text-project-green", fill: "bg-project-green" },
   { key: "teal", label: "Teal", text: "text-project-teal", fill: "bg-project-teal" },
   { key: "sky", label: "Sky", text: "text-project-sky", fill: "bg-project-sky" },
-  { key: "violet", label: "Violet", text: "text-project-violet", fill: "bg-project-violet" },
+  {
+    key: "violet",
+    label: "Violet",
+    text: "text-project-violet",
+    fill: "bg-project-violet",
+  },
   { key: "pink", label: "Pink", text: "text-project-pink", fill: "bg-project-pink" },
   { key: "gray", label: "Gray", text: "text-project-gray", fill: "bg-project-gray" },
 ];
 const colorsByKey = new Map(iconColors.map((c) => [c.key, c]));
 
 /**
- * How a Project's icon draws: its glyph and its color's text class. No icon is `Layers` in
+ * How an orchestrator's icon draws: its glyph and its color's text class. No icon is `Layers` in
  * the accent, and a name or color this app doesn't know falls back to that on its own (0032).
  */
-export function iconLook(icon?: ProjectIconValue): { Icon: LucideIcon; color: string } {
+export function iconLook(icon?: ChosenIcon): { Icon: LucideIcon; color: string } {
   return {
     Icon: iconsByName.get(icon?.name ?? "")?.Icon ?? Layers,
     color: (icon?.color && colorsByKey.get(icon.color)?.text) || "text-accent",

@@ -70,7 +70,7 @@ export function SidebarNav({
   onNewThread: () => void;
   onOpen: (row: NavRow) => void;
   onOpenProject: (entry: ProjectEntry) => void;
-  /** Opens the add palette: a new Project, Space, or repository. */
+  /** Opens the add palette: a new orchestrator thread, Project, or repository. */
   onAdd: () => void;
   /** A pinned project's menu items after Unpin. */
   pinActions: (entry: ProjectEntry) => FavoriteAction[];
@@ -171,7 +171,7 @@ export function SidebarNav({
   );
 }
 
-/** A pinned Space's row: its glyph and name, and its menu on hover. It opens the Space's page. */
+/** A pinned Project's row: its glyph and name, and its menu on hover. It opens the Project's page. */
 function PinnedRow({
   entry,
   open,

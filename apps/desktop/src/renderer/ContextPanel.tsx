@@ -10,33 +10,33 @@ import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
 import { codeComponents, highlight } from "./AgentChat";
 
-/** The status board the coordinator keeps, as `coordinator.md` asks; the Project tab leads with it. */
+/** The status board the orchestrator keeps, as `orchestrator.md` asks; the orchestrator tab leads with it. */
 export const board = "notes.md";
 
-/** Applies one of a Project's events to its context files: a changed file joins or replaces its row, by path. */
+/** Applies one of an orchestrator's events to its context files: a changed file joins or replaces its row, by path. */
 function applyContextEvent(files: ContextFile[], event: ParallaxEvent): ContextFile[] {
   if (event.kind !== "context.changed") return files;
   const rest = files.filter((f) => f.path !== event.file.path);
   return [...rest, event.file].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
-/** A Project's context files, as `useProjectContext` keeps them, and why they didn't load. */
-export type ProjectContext = { files: ContextFile[]; error?: string };
+/** An orchestrator's context files, as `useOrchestratorContext` keeps them, and why they didn't load. */
+export type OrchestratorContext = { files: ContextFile[]; error?: string };
 
 /**
- * A Project's shared context files (0005), by path, kept live: `context/list`, then the Project's
- * `context.changed` events, starting over on `resync`. Loads only while `connected`.
+ * An orchestrator's shared context files (0005), by path, kept live: `context/list`, then the
+ * orchestrator's `context.changed` events, starting over on `resync`. Loads only while `connected`.
  */
-export function useProjectContext(
+export function useOrchestratorContext(
   hostId: string,
-  project: string,
+  orchestrator: string,
   connected: boolean,
-): ProjectContext {
+): OrchestratorContext {
   const [files, setFiles] = useState<ContextFile[]>([]);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    // Another Project's files, or why they failed, never show under this one.
+    // Another orchestrator's files, or why they failed, never show under this one.
     setFiles([]);
     setError(undefined);
     if (!connected) return;
@@ -46,16 +46,23 @@ export function useProjectContext(
     async function load() {
       // ponytail: `context/list` has no `seq` of its own (PLX-187), so subscribe after
       // `agent/list`'s, taken first: a change that lands before the list replays, harmlessly.
-      const position = await window.parallax.request(hostId, "agent/list", { project });
+      const position = await window.parallax.request(hostId, "agent/list", {
+        project: orchestrator,
+      });
       if (stopped) return;
       if ("error" in position) return setError(position.error.message);
-      const list = await window.parallax.request(hostId, "context/list", { project });
+      const list = await window.parallax.request(hostId, "context/list", { project: orchestrator });
       if (stopped) return;
       if ("error" in list) return setError(list.error.message);
       setFiles(list.result.files);
       setError(undefined);
       // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
-      const since = { after: position.result.seq, project, shell: true, logId: position.logId };
+      const since = {
+        after: position.result.seq,
+        orchestrator,
+        shell: true,
+        logId: position.logId,
+      };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
@@ -69,7 +76,7 @@ export function useProjectContext(
       stopped = true;
       unsubscribe();
     };
-  }, [hostId, project, connected]);
+  }, [hostId, orchestrator, connected]);
 
   return { files, error };
 }
@@ -78,13 +85,13 @@ export function useProjectContext(
  * A context file's content, read again whenever `file` changes: it's a new object for each
  * `context.changed` to it.
  */
-function useContent(hostId: string, project: string, file: ContextFile) {
+function useContent(hostId: string, orchestrator: string, file: ContextFile) {
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
   useEffect(() => {
     let stopped = false;
     void window.parallax
-      .request(hostId, "context/read", { project, path: file.path })
+      .request(hostId, "context/read", { project: orchestrator, path: file.path })
       .then((read) => {
         if (stopped) return;
         if ("error" in read) return setError(describeError(read.error));
@@ -94,12 +101,12 @@ function useContent(hostId: string, project: string, file: ContextFile) {
     return () => {
       stopped = true;
     };
-  }, [hostId, project, file]);
+  }, [hostId, orchestrator, file]);
   return { content, error };
 }
 
 /**
- * A context file's Markdown, the user's own notes, with `components` drawing the Project tab's
+ * A context file's Markdown, the user's own notes, with `components` drawing the orchestrator tab's
  * board (its headings, task circles, and links between files). It stays on react-markdown, whose
  * components can restyle elements, while transcripts use Enriched Markdown (MarkdownText).
  */
@@ -128,16 +135,16 @@ const noImage: Components["img"] = ({ src, alt }) => (
 /** A context file, rendered as Markdown with `components`. */
 function ContextDoc({
   hostId,
-  project,
+  orchestrator,
   file,
   components,
 }: {
   hostId: string;
-  project: string;
+  orchestrator: string;
   file: ContextFile;
   components: Components;
 }) {
-  const { content, error } = useContent(hostId, project, file);
+  const { content, error } = useContent(hostId, orchestrator, file);
   return (
     <article
       aria-label={file.path}
@@ -155,24 +162,24 @@ function ContextDoc({
 }
 
 /**
- * A context file's Markdown inside another view's scroll, as the Project tab shows the status
+ * A context file's Markdown inside another view's scroll, as the orchestrator tab shows the status
  * board: tasks as circles, pull requests and issues with their icons, and links to other context
  * files that open them with `onOpen`.
  */
 export function ContextBody({
   hostId,
-  project,
+  orchestrator,
   files,
   file,
   onOpen,
 }: {
   hostId: string;
-  project: string;
+  orchestrator: string;
   files: ContextFile[];
   file: ContextFile;
   onOpen: (path: string) => void;
 }) {
-  const { content, error } = useContent(hostId, project, file);
+  const { content, error } = useContent(hostId, orchestrator, file);
   return (
     <div aria-label={file.path} className="context-doc context-board">
       {error ? (
@@ -191,8 +198,8 @@ export function ContextBody({
   );
 }
 
-// The board's own headings sit under the Project's name (h2) as the tab's sections do (h3): its
-// title an h3, and its sections h4.
+// The board's own headings sit under the orchestrator's name (h2) as the tab's sections do (h3):
+// its title an h3, and its sections h4.
 const boardHeadings: Components = {
   h1: ({ children }) => <h3 className="board-title">{children}</h3>,
   h2: ({ children }) => <h4 className="board-section">{children}</h4>,
@@ -205,7 +212,7 @@ function when(at: string): string {
   return `${day} at ${new Date(time).toLocaleTimeString(locale(), clockOptions())}`;
 }
 
-/** A Project's context files as a tree: each folder once, above its files, by path. */
+/** An orchestrator's context files as a tree: each folder once, above its files, by path. */
 function fileTree(files: readonly ContextFile[]) {
   // `key` is a folder's whole path, as two folders may share a name under different parents.
   const rows: { key: string; name: string; depth: number; at: string; path?: string }[] = [];
@@ -235,7 +242,7 @@ function fileTree(files: readonly ContextFile[]) {
 }
 
 /**
- * All of a Project's context files, as a tree of folders and files, each with when it last
+ * All of an orchestrator's context files, as a tree of folders and files, each with when it last
  * changed. A file opens with `onOpen`.
  */
 export function AllFiles({
@@ -342,17 +349,17 @@ function MarkdownMark(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-/** A context file opened from the Project tab, with a way back and its links to other files. */
+/** A context file opened from the orchestrator tab, with a way back and its links to other files. */
 export function ContextReader({
   hostId,
-  project,
+  orchestrator,
   files,
   file,
   onOpen,
   onBack,
 }: {
   hostId: string;
-  project: string;
+  orchestrator: string;
   files: ContextFile[];
   file: ContextFile;
   onOpen: (path: string) => void;
@@ -371,7 +378,7 @@ export function ContextReader({
       <ContextDoc
         key={file.path}
         hostId={hostId}
-        project={project}
+        orchestrator={orchestrator}
         file={file}
         components={contextComponents(files, onOpen)}
       />

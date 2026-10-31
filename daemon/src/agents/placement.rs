@@ -1,30 +1,31 @@
-//! Placing a Project's children on accounts (PLX-413, decision 0046), by fixed rules, with no
+//! Placing an orchestrator's children on accounts (PLX-413, decision 0046), by fixed rules, with no
 //! model involved.
 //!
 //! Each provider instance can keep a reserve: a percent of every limit window `usage/get` reports
-//! for it that Projects leave for the user. Its headroom is the least of `100 - reserve - used`
-//! over those windows, and it takes new children only while that is above 0. A window whose reset
-//! has passed counts as reset, and an instance that reports no limits is always eligible.
+//! for it that orchestrators leave for the user. Its headroom is the least of `100 - reserve -
+//! used` over those windows, and it takes new children only while that is above 0. A window whose
+//! reset has passed counts as reset, and an instance that reports no limits is always eligible.
 //!
 //! [`decide`] holds the rules: (1) the instance the composer picked, or the worker default, if it
-//! is enabled, not signed out, has the Project's mode, and is under its reserve; (2) otherwise the
-//! instance of the same kind that serves the model with the most headroom; (3) otherwise, when
-//! only quota stops them, the child waits. Before them, a Project already running `maxChildren`
-//! children makes it wait too. Any other refusal, such as an instance signed out with no other to
-//! go to, starts on the picked instance, which then fails saying why, as before.
+//! is enabled, not signed out, has the orchestrator's mode, and is under its reserve; (2) otherwise
+//! the instance of the same kind that serves the model with the most headroom; (3) otherwise, when
+//! only quota stops them, the child waits. Before them, an orchestrator already running
+//! `maxChildren` children makes it wait too. Any other refusal, such as an instance signed out with
+//! no other to go to, starts on the picked instance, which then fails saying why, as before.
 //!
 //! A child that waits is recorded like any run, with its worktree, as `waiting` with the reason as
 //! its error, and a `failed` inbox item (0043). Its first message waits in the store's placement
 //! queue, so a restart keeps it. [`start`]'s dispatcher looks at the queue, oldest first, when a
-//! child ends, when a Project's settings change, and every [`EVERY`], and starts each child that
-//! now has room through its actor. A message or Resume now starts a waiting child at once on its
-//! picked instance; Cancel or delete takes it out of the queue. One lock covers placing a child
+//! child ends, when an orchestrator's settings change, and every [`EVERY`], and starts each child
+//! that now has room through its actor. A message or Resume now starts a waiting child at once on
+//! its picked instance; Cancel or delete takes it out of the queue. One lock covers placing a child
 //! until it counts as starting or waiting, so children placed at once never overshoot
 //! `maxChildren`. A waiting child is recorded on its picked instance, or on a blocked sibling when
 //! the picked one can't run.
 //!
-//! An API key account is used only when the Project allows it: `agents::prepare_run` refuses one
-//! otherwise, and turns off routing's automatic fallback to one (0012) for a Project's children.
+//! An API key account is used only when the orchestrator allows it: `agents::prepare_run` refuses
+//! one otherwise, and turns off routing's automatic fallback to one (0012) for an orchestrator's
+//! children.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,8 +34,8 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AgentRun, ErrorKind, InboxKind, ProjectId, ProjectPermission, PromptImage,
-    ProviderKind, Role, RunId,
+    AccountChoice, AgentRun, ErrorKind, InboxKind, OrchestratorPermission, PromptImage,
+    ProviderKind, Role, RunId, ScopeId,
 };
 use parallax_store::LimitSnapshot;
 use serde::{Deserialize, Serialize};
@@ -43,7 +44,7 @@ use tracing::{info, warn};
 use super::actor::{Command, session_account};
 use super::convert::{NO_WRITE, RUNNING, STARTING, WAITING};
 use super::worker::StoredKeyAccounts;
-use super::{ask, in_mode, project_mode, store, store_error, wake};
+use super::{ask, in_mode, orchestrator_mode, store, store_error, wake};
 use crate::server::Daemon;
 
 /// How often the dispatcher looks at a queue with children in it when nothing woke it, for limits
@@ -59,7 +60,7 @@ pub(crate) struct Instance {
     pub enabled: bool,
     /// `None` when plxd can't tell.
     pub signed_in: Option<bool>,
-    /// Whether it runs the Project's mode (0042).
+    /// Whether it runs the orchestrator's mode (0042).
     pub in_mode: bool,
     /// The models it serves. Empty when plxd doesn't know, which serves any.
     pub models: Vec<String>,
@@ -70,7 +71,7 @@ pub(crate) struct Instance {
 }
 
 impl Instance {
-    /// Enabled, not signed out, and in the Project's mode: all but quota.
+    /// Enabled, not signed out, and in the orchestrator's mode: all but quota.
     fn usable(&self) -> bool {
         self.enabled && self.signed_in != Some(false) && self.in_mode
     }
@@ -189,7 +190,7 @@ pub(crate) fn quota_reason(name: &str, until: Option<Timestamp>, zone: &TimeZone
     }
 }
 
-/// Where a Project's child goes.
+/// Where an orchestrator's child goes.
 pub(super) enum Placed {
     /// On this account.
     Start(AccountChoice),
@@ -203,18 +204,18 @@ pub(super) enum Placed {
 }
 
 /// Places a child of `project`, in `mode`, that asked for `account` and `model`. `run` is the
-/// child itself when it already counts among the Project's runs.
+/// child itself when it already counts among the orchestrator's runs.
 pub(super) async fn place(
     daemon: &Arc<Daemon>,
-    project: ProjectId,
+    project: ScopeId,
     run: Option<RunId>,
     account: Option<&AccountChoice>,
     model: Option<&str>,
-    mode: ProjectPermission,
+    mode: OrchestratorPermission,
 ) -> Result<Placed, ErrorObject> {
     let (max, running, default) = store(daemon, move |db| {
         let max = db
-            .get_project(project.into())
+            .get_orchestrator(project.into())
             .map_err(|e| store_error(&e))?
             .map_or(10, |row| row.max_children);
         let running = db
@@ -256,7 +257,7 @@ pub(super) async fn place(
     })
 }
 
-/// A wait for a free slot, recorded on `on`, when the Project already runs `max` children.
+/// A wait for a free slot, recorded on `on`, when the orchestrator already runs `max` children.
 fn slot(running: usize, max: u32, on: Option<AccountChoice>) -> Option<Placed> {
     if running < usize::try_from(max).unwrap_or(usize::MAX) {
         return None;
@@ -264,7 +265,7 @@ fn slot(running: usize, max: u32, on: Option<AccountChoice>) -> Option<Placed> {
     let children = if max == 1 { "child" } else { "children" };
     Some(Placed::Wait {
         reason: format!(
-            "Waiting for a free slot: the Project runs at most {max} {children} at once"
+            "Waiting for a free slot: the orchestrator runs at most {max} {children} at once"
         ),
         on,
     })
@@ -273,7 +274,7 @@ fn slot(running: usize, max: u32, on: Option<AccountChoice>) -> Option<Placed> {
 /// The host's instances as [`decide`] sees them, with their limit windows from the store.
 async fn instances(
     daemon: &Arc<Daemon>,
-    mode: ProjectPermission,
+    mode: OrchestratorPermission,
 ) -> Result<Vec<Instance>, ErrorObject> {
     let known = daemon.providers.known(&daemon.cli_detector).await;
     let mut instances: Vec<Instance> = known
@@ -309,12 +310,12 @@ async fn instances(
     Ok(instances)
 }
 
-/// Refuses an API key account, `chosen` for a child of `project` (a run in `role` `Worker`),
-/// unless the Project allows API keys, and then takes every key account out of `accounts`, so
-/// routing never falls back to one (0046). Leaves a coordinator or a run outside a Project alone.
+/// Refuses an API key account, `chosen` for a child of `project` (a run in `role` `Worker`), unless
+/// the orchestrator allows API keys, and then takes every key account out of `accounts`, so routing
+/// never falls back to one (0046). Leaves an orchestrator or a run outside an orchestrator alone.
 pub(super) fn api_keys(
     role: Role,
-    project: Option<&parallax_store::Project>,
+    project: Option<&parallax_store::Orchestrator>,
     chosen: Option<&AccountChoice>,
     accounts: &mut StoredKeyAccounts,
 ) -> Result<(), ErrorObject> {
@@ -326,7 +327,7 @@ pub(super) fn api_keys(
         return Err(ErrorObject::parallax(
             ErrorKind::UnsupportedOption,
             format!(
-                "The Project \"{}\" doesn't allow API keys. Pick a subscription, or allow API \
+                "The Orchestrator \"{}\" doesn't allow API keys. Pick a subscription, or allow API \
                  keys in its settings.",
                 project.name
             ),
@@ -346,7 +347,7 @@ struct Extra {
 }
 
 /// Puts `run`, just recorded as waiting with its reason as its error, in the placement queue with
-/// its first message `prompt`, and adds the reason to its Project's inbox.
+/// its first message `prompt`, and adds the reason to its orchestrator's inbox.
 pub(super) async fn queue(
     daemon: &Arc<Daemon>,
     run: &AgentRun,
@@ -362,7 +363,7 @@ pub(super) async fn queue(
     };
     let row = parallax_store::Placement {
         run_id: run.id.into(),
-        project_id: run.project.into(),
+        orchestrator_id: run.project.into(),
         prompt,
         // Plain data, which serializes.
         extra: serde_json::to_string(&extra).unwrap_or_default(),
@@ -374,7 +375,7 @@ pub(super) async fn queue(
     // Arms the dispatcher's timer, which stays off while the queue is empty.
     daemon.agents.placement.notify_one();
     let reason = run.error.clone().unwrap_or_default();
-    info!(run = %run.id, %reason, "a Project's child waits to be placed");
+    info!(run = %run.id, %reason, "an orchestrator's child waits to be placed");
     let text = format!("{}: {reason}", wake::task(&run.prompt));
     crate::methods::inbox::add(daemon, run.project, run.id, InboxKind::Failed, text).await;
     Ok(())
@@ -455,15 +456,17 @@ async fn dispatch_one(
     row: parallax_store::Placement,
 ) -> Result<(), ErrorObject> {
     let run_id = row.run_id;
-    let (Ok(id), Ok(project)) = (RunId::try_from(run_id), ProjectId::try_from(row.project_id))
-    else {
+    let (Ok(id), Ok(project)) = (
+        RunId::try_from(run_id),
+        ScopeId::try_from(row.orchestrator_id),
+    ) else {
         return drop_row(daemon, run_id).await;
     };
     let run = store(daemon, move |db| {
         db.get_run(run_id).map_err(|e| store_error(&e))
     })
     .await?;
-    let mode = project_mode(daemon, project).await?;
+    let mode = orchestrator_mode(daemon, project).await?;
     let (Some(run), Some(mode)) = (run, mode) else {
         return drop_row(daemon, run_id).await;
     };
@@ -528,7 +531,7 @@ mod tests {
         now() + SignedDuration::from_mins(minutes)
     }
 
-    /// A signed-in Claude Code instance in the Project's mode, with no reserve and no limits.
+    /// A signed-in Claude Code instance in the orchestrator's mode, with no reserve and no limits.
     fn claude(id: &str) -> Instance {
         Instance {
             id: id.to_owned(),

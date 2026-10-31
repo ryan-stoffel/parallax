@@ -33,6 +33,15 @@ import type {
   TerminalOpenParams,
   TerminalOutputParams,
 } from "../protocol/generated/protocol";
+import {
+  capabilitiesFromLegacy,
+  CLIENT_CAPABILITY,
+  errorFromLegacy,
+  eventFromLegacy,
+  isLegacy,
+  requestToLegacy,
+  resultFromLegacy,
+} from "../protocol/legacyNames";
 
 // The generated protocol's, copied so this chunk shares nothing with the app's (webBridge.test.ts).
 export const PROTOCOL_VERSION = 1;
@@ -192,6 +201,8 @@ export class WebHost {
   readonly stateListeners = new Set<(hostId: string, state: ConnectionState) => void>();
   private socket?: WebSocket;
   private logId?: LogId;
+  /** plxd is from before 0093, so requests and answers go through `legacyNames`. */
+  private legacy = false;
   private nextId = 1;
   private failures = 0;
   private closed = false;
@@ -241,7 +252,7 @@ export class WebHost {
       if (socket === this.socket) this.end("The connection to Parallax ended.");
     };
     socket.onopen = () => {
-      const capabilities = { resyncNotice: {} };
+      const capabilities = { resyncNotice: {}, [CLIENT_CAPABILITY]: {} };
       const client = { name: "parallax-web", version: "web" };
       const protocol = { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION };
       this.send("initialize", { protocol, client, capabilities }, (response) => {
@@ -261,11 +272,19 @@ export class WebHost {
     // simulators over 30 seconds to list (PLX-886).
     const timeout =
       method === "device/boot" || method === "device/state" ? 4 * 60_000 : REQUEST_TIMEOUT_MS;
+    // A plxd from before 0093 takes and answers the old names.
+    const legacy = this.legacy;
+    const [sent, outgoing] = legacy ? requestToLegacy(method, params) : [method, params];
     return new Promise((resolve) =>
       this.send(
-        method,
-        params,
-        (response) => resolve("result" in response ? { ...response, logId } : response),
+        sent,
+        outgoing,
+        (response) => {
+          if ("error" in response)
+            return resolve(legacy ? { error: errorFromLegacy(response.error) } : response);
+          const result = legacy ? resultFromLegacy(method, response.result) : response.result;
+          resolve({ ...response, result, logId });
+        },
         timeout,
       ),
     );
@@ -395,7 +414,11 @@ export class WebHost {
     this.failures = 0;
     clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = window.setInterval(() => this.heartbeat(), HEARTBEAT_MS);
-    const { plxd, protocol, capabilities } = result;
+    this.legacy = isLegacy(result.capabilities);
+    const { plxd, protocol } = result;
+    const capabilities = this.legacy
+      ? capabilitiesFromLegacy(result.capabilities)
+      : result.capabilities;
     this.setState({ status: "connected", plxd, protocol, capabilities });
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
     for (const watch of this.watches) this.sendWatch(watch);
@@ -447,9 +470,10 @@ export class WebHost {
         this.watches.delete(watch);
         return watch.listener({ type: "error", error: response.error });
       }
-      const { subscription, snapshot } = response.result as
-        | SubscribeShellResult
-        | SubscribeThreadResult;
+      const answer = this.legacy
+        ? resultFromLegacy("orchestration/subscribeShell", response.result)
+        : response.result;
+      const { subscription, snapshot } = answer as SubscribeShellResult | SubscribeThreadResult;
       watch.id = subscription;
       if (!snapshot) return;
       watch.seq = snapshot.seq;
@@ -493,7 +517,7 @@ export class WebHost {
       return;
     }
     if (method !== "events/event") return;
-    const event = params as EventsEventParams;
+    const event = eventFromLegacy(params as EventsEventParams);
     for (const watch of this.watches) {
       if (watch.id !== event.subscription) continue;
       if (watch.seq !== undefined && event.seq <= watch.seq) return;

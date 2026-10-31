@@ -1,15 +1,15 @@
-//! A Project's checks after each landing end to end (PLX-411, decision 0045), on the fake CLI:
-//! green checks land, red ones take the child's work off and send it back, then go to the user,
-//! and the branch moves only once they pass. The timeout is the runner's unit test.
+//! An orchestrator's checks after each landing end to end (PLX-411, decision 0045), on the fake
+//! CLI: green checks land, red ones take the child's work off and send it back, then go to the
+//! user, and the branch moves only once they pass. The timeout is the runner's unit test.
 
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::methods::{LandQueue, ProjectUpdate};
-use parallax_protocol::{InboxKind, LandQueueParams, ProjectId, ProjectUpdateParams};
+use parallax_protocol::methods::{LandQueue, OrchestratorUpdate};
+use parallax_protocol::{InboxKind, LandQueueParams, OrchestratorUpdateParams, ScopeId};
 
-use crate::agents::{Conn, Host, create, git, project_params, start_params};
+use crate::agents::{Conn, Host, create, git, orchestrator_params, start_params};
 use crate::landing::{finished, item, lands_automatically, messages, notes, worktree};
-use crate::support::{project_update, temp_dir};
+use crate::support::{orchestrator_update, temp_dir};
 
 /// Checks that fail, printing so, while `broken.txt` is in the tree.
 const CHECKS: &str = if cfg!(windows) {
@@ -19,15 +19,15 @@ const CHECKS: &str = if cfg!(windows) {
 };
 
 /// Confirms [`CHECKS`] as `project`'s checks.
-async fn set_checks(client: &mut Conn, project: ProjectId) {
+async fn set_checks(client: &mut Conn, project: ScopeId) {
     let updated = client
-        .call::<ProjectUpdate>(ProjectUpdateParams {
+        .call::<OrchestratorUpdate>(OrchestratorUpdateParams {
             checks: Some(format!("  {CHECKS}\n")),
-            ..project_update(project)
+            ..orchestrator_update(project)
         })
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     assert_eq!(updated.checks.as_deref(), Some(CHECKS), "trimmed");
 }
 
@@ -44,7 +44,7 @@ fn break_it(dir: &Path) {
 async fn green_checks_land_and_red_ones_go_back_to_the_child_then_to_the_user() {
     let host = Host::start(temp_dir(), notes());
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
     let repo = PathBuf::from(&project.repo_path);
     set_checks(&mut client, project.id).await;
     lands_automatically(&mut client, project.id).await;
@@ -83,7 +83,7 @@ async fn green_checks_land_and_red_ones_go_back_to_the_child_then_to_the_user() 
     let sent = messages(&mut client, b.id).await;
     let red = sent.last().unwrap();
     assert!(
-        red.starts_with("Parallax, not the user: the Project's checks failed"),
+        red.starts_with("Parallax, not the user: the orchestrator's checks failed"),
         "{sent:?}"
     );
     assert!(
@@ -100,19 +100,19 @@ async fn green_checks_land_and_red_ones_go_back_to_the_child_then_to_the_user() 
 async fn the_branch_moves_only_once_the_checks_pass() {
     let host = Host::start(temp_dir(), notes());
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
     let repo = PathBuf::from(&project.repo_path);
     let seen = host.dir.path().join("seen.txt");
     let command = format!("git rev-parse parallax/app HEAD > {}", seen.display());
     let updated = client
-        .call::<ProjectUpdate>(ProjectUpdateParams {
+        .call::<OrchestratorUpdate>(OrchestratorUpdateParams {
             auto_land: Some(true),
             checks: Some(command),
-            ..project_update(project.id)
+            ..orchestrator_update(project.id)
         })
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     assert!(updated.checks.is_some());
     let tip = git(&repo, &["rev-parse", "parallax/app"]);
     let run = finished(&mut client, start_params(project.id, "Write the notes")).await;

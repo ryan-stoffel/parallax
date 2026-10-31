@@ -93,8 +93,8 @@ impl Store {
     ) -> Result<Account, StoreError> {
         let id_text = id.to_string();
 
-        // See `create_project`'s fast path: a retry that already matches doesn't need the write
-        // lock.
+        // See `create_orchestrator`'s fast path: a retry that already matches doesn't need the
+        // write lock.
         if let Some(existing) = fetch_raw(&self.conn, &id_text)?
             && existing.matches(fields)
         {

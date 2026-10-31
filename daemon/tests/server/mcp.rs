@@ -1,4 +1,4 @@
-//! `plxd mcp --thread` for a Project's coordinator (PLX-380, decisions 0019 and 0041): the built
+//! `plxd mcp --thread` for an orchestrator (PLX-380, decisions 0019 and 0041): the built
 //! binary, speaking MCP on stdio, against an in-process plxd whose runs use the fake backend in a
 //! real git repository.
 
@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::methods::{AgentList, ContextList, ThreadStart};
-use parallax_protocol::{AgentListParams, AgentRun, ContextListParams, Project, ProjectId};
+use parallax_protocol::{AgentListParams, AgentRun, ContextListParams, Orchestrator, ScopeId};
 use plxd::backend::fake::Step;
-use plxd::mcp::question::COORDINATOR_TOOLS;
+use plxd::mcp::question::ORCHESTRATOR_TOOLS;
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
 use plxd::mcp::{board, delegation, device, files, html, land, preview, triggers};
 use serde_json::{Value, json};
@@ -18,8 +18,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
 
-use crate::agents::{Conn, Host, create, end_turn, init, project_params, text};
-use crate::coordinator::{plan, roles};
+use crate::agents::{Conn, Host, create, end_turn, init, orchestrator_params, text};
+use crate::orchestrator::{plan, roles};
 use crate::support::{PATIENCE, temp_dir};
 
 /// A worker that edits the README, says so, waits for one message, echoes it, and finishes.
@@ -169,7 +169,7 @@ impl Mcp {
     }
 }
 
-async fn runs(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
+async fn runs(client: &mut Conn, project: ScopeId) -> Vec<AgentRun> {
     client
         .call::<AgentList>(AgentListParams {
             project: Some(project),
@@ -179,13 +179,13 @@ async fn runs(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
         .runs
 }
 
-/// A project whose coordinator runs until stopped, on `worker` for its children, and its tools.
-async fn coordinator(host: &Host, client: &mut Conn) -> (Project, AgentRun, Mcp) {
-    let project = create(client, project_params(host.dir.path())).await;
-    let coordinator = plan(client, project.id).await;
-    let run = coordinator.id.to_string();
+/// A project whose orchestrator runs until stopped, on `worker` for its children, and its tools.
+async fn orchestrator(host: &Host, client: &mut Conn) -> (Orchestrator, AgentRun, Mcp) {
+    let project = create(client, orchestrator_params(host.dir.path())).await;
+    let orchestrator = plan(client, project.id).await;
+    let run = orchestrator.id.to_string();
     let mcp = Mcp::spawn(mcp_command(host.dir.path(), &["--thread", &run])).await;
-    (project, coordinator, mcp)
+    (project, orchestrator, mcp)
 }
 
 /// Polls `thread_wait` until `done` holds.
@@ -203,22 +203,22 @@ async fn wait_until(mcp: &mut Mcp, run_id: &str, done: impl Fn(&Value) -> bool) 
     }
 }
 
-/// PLX-380: a Project's coordinator has a thread's tools, and the context tools. Its children are
-/// the Project's runs, which the Agents panel lists, with the coordinator as their parent.
+/// PLX-380: an orchestrator has a thread's tools, and the context tools. Its children are
+/// the orchestrator's runs, which the Agents panel lists, with the orchestrator as their parent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
+async fn an_orchestrator_launches_steers_and_records_through_the_thread_tools() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let host = Host::start(
         temp_dir(),
         roles(
             worker(),
-            vec![vec![init("coordinator-1"), Step::Hang]],
+            vec![vec![init("orchestrator-1"), Step::Hang]],
             &seen,
         ),
     );
     let mut client = host.client().await;
-    let (project, coordinator, mut mcp) = coordinator(&host, &mut client).await;
-    let me = coordinator.id.to_string();
+    let (project, orchestrator, mut mcp) = orchestrator(&host, &mut client).await;
+    let me = orchestrator.id.to_string();
 
     let listed = mcp.request("tools/list", json!({})).await;
     let names: Vec<&str> = listed["result"]["tools"]
@@ -232,7 +232,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
         [
             TOOLS,
             CONTEXT_TOOLS,
-            COORDINATOR_TOOLS,
+            ORCHESTRATOR_TOOLS,
             land::TOOLS,
             board::TOOLS,
             &["memory_read", "memory_propose", "memory_write"],
@@ -252,13 +252,13 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
     let stored = runs(&mut client, project.id).await;
     let tagged: Vec<_> = stored
         .iter()
-        .filter(|run| run.coordinator_thread == coordinator.coordinator_thread)
+        .filter(|run| run.orchestrator_thread == orchestrator.orchestrator_thread)
         .map(|run| run.id.to_string())
         .collect();
     assert_eq!(
         tagged,
         [me.clone(), child.clone()],
-        "the Agents panel lists the child as the coordinator's"
+        "the Agents panel lists the child as the orchestrator's"
     );
 
     let threads = mcp.ok("thread_list", json!({})).await;
@@ -270,7 +270,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             .unwrap()
             .iter()
             .all(|thread| thread["runId"] != me.as_str()),
-        "the coordinator never lists itself: {threads}"
+        "the orchestrator never lists itself: {threads}"
     );
     let refused = mcp
         .refused(
@@ -304,21 +304,26 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
     host.server.stop().await;
 }
 
-/// The context tools reach only the caller's own Project, and a thread outside a Project has none.
+/// The context tools reach only the caller's own orchestrator, and a thread outside an orchestrator
+/// has none.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_context_tools_reach_only_the_callers_project() {
+async fn the_context_tools_reach_only_the_callers_orchestrator() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let host = Host::start(
         temp_dir(),
         roles(
             worker(),
-            vec![vec![init("coordinator-1"), Step::Hang]],
+            vec![vec![init("orchestrator-1"), Step::Hang]],
             &seen,
         ),
     );
     let mut client = host.client().await;
-    let (ours, _, mut mcp) = coordinator(&host, &mut client).await;
-    let theirs = create(&mut client, project_params(&host.dir.path().join("theirs"))).await;
+    let (ours, _, mut mcp) = orchestrator(&host, &mut client).await;
+    let theirs = create(
+        &mut client,
+        orchestrator_params(&host.dir.path().join("theirs")),
+    )
+    .await;
 
     let refused = mcp
         .refused(
@@ -333,7 +338,7 @@ async fn the_context_tools_reach_only_the_callers_project() {
             json!({"path": "plan.md", "content": "# Plan\n"}),
         )
         .await;
-    assert_eq!(written["lastWriter"], "coordinator");
+    assert_eq!(written["lastWriter"], "orchestrator");
     let listed = mcp.ok("read_context", json!({})).await;
     assert_eq!(listed["files"][0]["path"], "plan.md");
     let (content, is_error) = mcp.tool("read_context", json!({"path": "plan.md"})).await;

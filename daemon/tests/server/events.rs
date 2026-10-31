@@ -3,20 +3,22 @@
 use std::path::Path;
 
 use parallax_protocol::jsonrpc::{Message, Notification};
-use parallax_protocol::methods::{EventsSubscribe, NotificationMethod, ProjectCreate, ProjectList};
+use parallax_protocol::methods::{
+    EventsSubscribe, NotificationMethod, OrchestratorCreate, OrchestratorList,
+};
 use parallax_protocol::{
-    ErrorKind, EventsEventParams, EventsSubscribeParams, ParallaxEvent, Project, ProjectListParams,
-    SubscriptionId,
+    ErrorKind, EventsEventParams, EventsSubscribeParams, Orchestrator, OrchestratorListParams,
+    ParallaxEvent, SubscriptionId,
 };
 
 use crate::support::{Client, InProcess, Plxd, create_params, kind, temp_dir};
 
-async fn create(client: &mut Client, dir: &Path, name: &str) -> Project {
+async fn create(client: &mut Client, dir: &Path, name: &str) -> Orchestrator {
     client
-        .call::<ProjectCreate>(create_params(dir, name))
+        .call::<OrchestratorCreate>(create_params(dir, name))
         .await
         .unwrap()
-        .project
+        .orchestrator
 }
 
 async fn subscribe(client: &mut Client, after: u64) -> SubscriptionId {
@@ -45,10 +47,10 @@ async fn event(client: &mut Client) -> EventsEventParams {
     }
 }
 
-fn created(event: &EventsEventParams) -> &Project {
+fn created(event: &EventsEventParams) -> &Orchestrator {
     match &event.event {
-        ParallaxEvent::ProjectCreated { project } => project,
-        other => panic!("expected project.created, got {other:?}"),
+        ParallaxEvent::OrchestratorCreated { orchestrator } => orchestrator,
+        other => panic!("expected orchestrator.created, got {other:?}"),
     }
 }
 
@@ -64,13 +66,13 @@ async fn subscribers_get_the_replay_then_live_events_on_every_connection() {
     let replayed = event(&mut replaying).await;
     assert_eq!(replayed.subscription, replay);
     assert_eq!(replayed.seq, 1);
-    assert_eq!(replayed.project, None, "project.created is host-level");
+    assert_eq!(replayed.project, None, "orchestrator.created is host-level");
     assert_eq!(replayed.time, first.created_at);
     assert_eq!(created(&replayed), &first);
 
     let mut live = Client::ready(&plxd.socket).await;
     let snapshot = live
-        .call::<ProjectList>(ProjectListParams {})
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap();
     let live_subscription = subscribe(&mut live, snapshot.seq).await;
@@ -128,7 +130,7 @@ async fn events_reach_a_subscriber_while_it_is_also_making_requests() {
         .await
         .unwrap();
     let create = client
-        .send::<ProjectCreate>(create_params(dir.path(), "parallax"))
+        .send::<OrchestratorCreate>(create_params(dir.path(), "parallax"))
         .await;
     let mut saw_answer = false;
     let mut saw_event = false;

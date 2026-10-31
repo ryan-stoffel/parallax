@@ -26,6 +26,7 @@ use parallax_protocol::jsonrpc::{
     CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
     Response,
 };
+use parallax_protocol::legacy;
 use parallax_protocol::methods::{
     CancelRequest, DeviceClose, DeviceSend, EventsEvent, EventsResync, Initialize,
     NotificationMethod, RequestMethod, TerminalDetach, TerminalResize, TerminalWrite,
@@ -220,10 +221,18 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         }
     }
 
-    async fn request(&mut self, request: Request) -> bool {
+    async fn request(&mut self, mut request: Request) -> bool {
         if self.session.is_none() {
             return self.before_initialize(request).await;
         }
+        let old_client = self.session.as_ref().is_some_and(|session| session.legacy);
+        // 0093's old method names run as the new ones: an old client's `project/*` is an
+        // orchestrator's, and a new client's is a Project's.
+        if let Some(new) = legacy::new_method(&request.method, old_client) {
+            new.clone_into(&mut request.method);
+        }
+        // For a client from before 0093, the method its reply's names depend on.
+        let legacy = old_client.then(|| request.method.clone());
         if lock(&self.in_flight).contains_key(&request.id) {
             let error = ErrorObject::new(
                 INVALID_REQUEST,
@@ -268,7 +277,8 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         if listed {
             let work = self.daemon.commands.spawn(async move {
                 let _permit = permit;
-                dispatch_reply(context, request).await
+                let reply = dispatch_reply(context, request).await;
+                in_names(reply, legacy.as_deref())
             });
             self.handlers.spawn(
                 async move {
@@ -283,6 +293,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             self.handlers.spawn(
                 async move {
                     let reply = dispatch_reply(context, request).await;
+                    let reply = in_names(reply, legacy.as_deref());
                     lock(&in_flight).remove(&id);
                     debug!("answered");
                     let _ = replies.send(reply).await;
@@ -485,6 +496,36 @@ impl Stall {
     }
 }
 
+/// `reply` in 0093's old names, for a client from before it: `method` is its request's method
+/// then, and `None` for any other client.
+fn in_names(mut reply: Reply, method: Option<&str>) -> Reply {
+    let Some(method) = method else {
+        return reply;
+    };
+    let response = match &mut reply {
+        Reply::Response(response)
+        | Reply::Initialized { response, .. }
+        | Reply::Unsubscribe { response, .. } => response,
+        Reply::Subscribe { response, cursor } => {
+            cursor.legacy = true;
+            response
+        }
+        Reply::Notification(_) => return reply,
+    };
+    match &mut response.result {
+        Ok(result) => legacy::to_legacy(method, result),
+        Err(error) => {
+            if let Some(serde_json::Value::Object(data)) = &mut error.data
+                && let Some(serde_json::Value::String(kind)) = data.get_mut("kind")
+                && let Some(old) = legacy::old_error_kind(kind)
+            {
+                old.clone_into(kind);
+            }
+        }
+    }
+    reply
+}
+
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut sink: FramedWrite<W, FrameCodec>,
     mut queue: mpsc::Receiver<Reply>,
@@ -605,8 +646,8 @@ async fn send_response<W: AsyncWrite + Unpin>(
 }
 
 // An event too large for a frame fails the connection rather than being skipped, so a subscriber
-// never goes on with a gap it can't see. Project fields have size limits, which keep M1's events
-// far below the frame limit.
+// never goes on with a gap it can't see. Orchestrator fields have size limits, which keep M1's
+// events far below the frame limit.
 async fn send_event<W: AsyncWrite + Unpin>(
     sink: &mut FramedWrite<W, FrameCodec>,
     event: Delivery,
@@ -637,7 +678,7 @@ mod tests {
     use jiff::Timestamp;
     use parallax_protocol::framing::FrameCodec;
     use parallax_protocol::jsonrpc::Message;
-    use parallax_protocol::{ParallaxEvent, Project, ProjectId};
+    use parallax_protocol::{Orchestrator, ParallaxEvent, ScopeId};
     use serde_json::{Value, json};
     use tokio::io::{AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
     use tokio::time::timeout;
@@ -656,14 +697,14 @@ mod tests {
     }
 
     /// A new project named `name`, on `repo_path`, with nothing else set.
-    fn project(name: &str, repo_path: &str) -> Project {
-        Project {
-            id: ProjectId::generate(),
+    fn project(name: &str, repo_path: &str) -> Orchestrator {
+        Orchestrator {
+            id: ScopeId::generate(),
             name: name.to_owned(),
             icon: None,
             repo_path: repo_path.to_owned(),
             branch: None,
-            coordinator: None,
+            run: None,
             permission: None,
             autonomy: None,
             created_at: Timestamp::now(),
@@ -687,7 +728,9 @@ mod tests {
                 .append(
                     Timestamp::now(),
                     None,
-                    ParallaxEvent::ProjectCreated { project },
+                    ParallaxEvent::OrchestratorCreated {
+                        orchestrator: project,
+                    },
                 )
                 .await;
         }

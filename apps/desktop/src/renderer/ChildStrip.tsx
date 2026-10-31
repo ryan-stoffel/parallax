@@ -5,8 +5,9 @@ import type { ReactNode } from "react";
 import { useShortcutLabel } from "./keybindings";
 
 /**
- * Tucked over a child thread's composer: whose child it is, `name` opening it (a Project's home, or
- * the parent thread), and Open parent, with its shortcut. A Project child passes its Project's icon.
+ * Tucked over a child thread's composer: whose child it is, `name` opening it (an orchestrator's
+ * home, or the parent thread), and Open parent, with its shortcut. An orchestrator child passes its
+ * orchestrator's icon.
  */
 export function ChildStrip({
   name,

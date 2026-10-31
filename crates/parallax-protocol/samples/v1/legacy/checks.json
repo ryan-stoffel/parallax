@@ -1,0 +1,56 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project/update",
+    "params": {
+      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+      "proposedChecks": "cargo test --workspace"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "project": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "name": "app",
+        "repoPath": "/Users/me/src/app",
+        "branch": "main",
+        "permission": "auto",
+        "baseBranch": "main",
+        "integrationBranch": "parallax/app",
+        "proposedChecks": "cargo test --workspace",
+        "createdAt": "2026-10-04T11:00:00Z",
+        "updatedAt": "2026-10-04T11:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "project/update",
+    "params": {
+      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+      "checks": "cargo test --workspace && npm test"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "project": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "name": "app",
+        "repoPath": "/Users/me/src/app",
+        "branch": "main",
+        "permission": "auto",
+        "baseBranch": "main",
+        "integrationBranch": "parallax/app",
+        "checks": "cargo test --workspace && npm test",
+        "createdAt": "2026-10-04T11:00:00Z",
+        "updatedAt": "2026-10-04T11:00:00Z"
+      }
+    }
+  }
+]

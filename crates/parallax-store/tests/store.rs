@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::thread;
 
 use parallax_store::{
-    AccountFields, ProjectEdit, ProjectFields, ProjectIcon, Store, StoreError, StoredEvent,
-    UsageDelta,
+    AccountFields, ChosenIcon, OrchestratorEdit, OrchestratorFields, Store, StoreError,
+    StoredEvent, UsageDelta,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -20,8 +20,8 @@ fn open_temp() -> (tempfile::TempDir, Store) {
     (dir, Store::open(&path).expect("open"))
 }
 
-fn sample_fields() -> ProjectFields {
-    ProjectFields {
+fn sample_fields() -> OrchestratorFields {
+    OrchestratorFields {
         name: "parallax".to_string(),
         repo_path: "/Users/ryan/dev/parallax".to_string(),
         icon: None,
@@ -31,8 +31,8 @@ fn sample_fields() -> ProjectFields {
     }
 }
 
-fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
-    ProjectIcon {
+fn icon(name: &str, color: Option<&str>) -> ChosenIcon {
+    ChosenIcon {
         name: name.to_string(),
         color: color.map(str::to_string),
         image: None,
@@ -47,10 +47,10 @@ fn creating_with_the_same_id_and_different_fields_conflicts() {
     other.name = "different-name".to_string();
 
     store
-        .create_project(id, &sample_fields())
+        .create_orchestrator(id, &sample_fields())
         .expect("first create should succeed");
     let err = store
-        .create_project(id, &other)
+        .create_orchestrator(id, &other)
         .expect_err("repeat create with different fields should fail");
 
     match err {
@@ -58,7 +58,7 @@ fn creating_with_the_same_id_and_different_fields_conflicts() {
         other => panic!("expected IdConflict, got {other:?}"),
     }
     assert_eq!(
-        store.list_projects().expect("list").len(),
+        store.list_orchestrators().expect("list").len(),
         1,
         "a rejected conflicting create must not change the stored row"
     );
@@ -69,22 +69,22 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
     let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let created = store
-        .create_project(id, &sample_fields())
+        .create_orchestrator(id, &sample_fields())
         .expect("create should succeed");
 
     let (renamed, changed) = store
-        .update_project(
+        .update_orchestrator(
             id,
-            &ProjectEdit {
+            &OrchestratorEdit {
                 name: Some("renamed".to_string()),
-                ..ProjectEdit::default()
+                ..OrchestratorEdit::default()
             },
         )
         .expect("a rename");
     assert!(changed);
     assert_eq!(
         renamed,
-        parallax_store::Project {
+        parallax_store::Orchestrator {
             name: "renamed".to_string(),
             ..created.clone()
         },
@@ -92,11 +92,11 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
     );
 
     let (with_icon, changed) = store
-        .update_project(
+        .update_orchestrator(
             id,
-            &ProjectEdit {
+            &OrchestratorEdit {
                 icon: Some(icon("rocket", Some("green"))),
-                ..ProjectEdit::default()
+                ..OrchestratorEdit::default()
             },
         )
         .expect("an icon");
@@ -106,11 +106,11 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
     assert_eq!(with_icon.updated_at, created.updated_at);
 
     let (recolored, changed) = store
-        .update_project(
+        .update_orchestrator(
             id,
-            &ProjectEdit {
+            &OrchestratorEdit {
                 icon: Some(icon("rocket", None)),
-                ..ProjectEdit::default()
+                ..OrchestratorEdit::default()
             },
         )
         .expect("an icon without a color");
@@ -118,7 +118,10 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
     assert_eq!(recolored.icon, Some(icon("rocket", None)));
 
     assert_eq!(
-        store.get_project(id).expect("get").expect("the project"),
+        store
+            .get_orchestrator(id)
+            .expect("get")
+            .expect("the project"),
         recolored,
         "the update was stored"
     );
@@ -127,10 +130,12 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
 /// A project's base branch (PLX-409, decision record 0045) is checked on a retry only when
 /// given, and recording the integration branch fills in a base only when there was none.
 #[test]
-fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
+fn an_orchestrators_branches_are_stored_and_a_retry_without_a_base_matches() {
     let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
-    let created = store.create_project(id, &sample_fields()).expect("create");
+    let created = store
+        .create_orchestrator(id, &sample_fields())
+        .expect("create");
     assert_eq!(
         (created.base_branch, created.integration_branch),
         (None, None)
@@ -147,15 +152,18 @@ fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
             .expect("record again"),
         "nothing changes"
     );
-    let project = store.get_project(id).expect("get").expect("the project");
+    let project = store
+        .get_orchestrator(id)
+        .expect("get")
+        .expect("the project");
     assert_eq!(project.base_branch.as_deref(), Some("main"));
     assert_eq!(project.integration_branch.as_deref(), Some("parallax/app"));
     store
-        .create_project(id, &sample_fields())
+        .create_orchestrator(id, &sample_fields())
         .expect("a retry with no base matches");
-    match store.create_project(
+    match store.create_orchestrator(
         id,
-        &ProjectFields {
+        &OrchestratorFields {
             base_branch: Some("develop".to_string()),
             ..sample_fields()
         },
@@ -165,11 +173,11 @@ fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
     }
 
     let (updated, changed) = store
-        .update_project(
+        .update_orchestrator(
             id,
-            &ProjectEdit {
+            &OrchestratorEdit {
                 base_branch: Some("develop".to_string()),
-                ..ProjectEdit::default()
+                ..OrchestratorEdit::default()
             },
         )
         .expect("a new base");
@@ -178,43 +186,45 @@ fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
     assert_eq!(updated.integration_branch.as_deref(), Some("parallax/app"));
 }
 
-/// PLX-411: a coordinator's proposal never becomes the checks; the user's confirmation does, and
+/// PLX-411: an orchestrator's proposal never becomes the checks; the user's confirmation does, and
 /// clears the proposal. Empty clears either.
 #[test]
 fn confirming_checks_clears_the_proposal_and_empty_clears_them() {
     let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
-    store.create_project(id, &sample_fields()).expect("create");
-    let edit = |checks: Option<&str>, proposed: Option<&str>| ProjectEdit {
+    store
+        .create_orchestrator(id, &sample_fields())
+        .expect("create");
+    let edit = |checks: Option<&str>, proposed: Option<&str>| OrchestratorEdit {
         checks: checks.map(str::to_owned),
         proposed_checks: proposed.map(str::to_owned),
-        ..ProjectEdit::default()
+        ..OrchestratorEdit::default()
     };
 
     let (proposed, changed) = store
-        .update_project(id, &edit(None, Some("cargo test")))
+        .update_orchestrator(id, &edit(None, Some("cargo test")))
         .expect("a proposal");
     assert!(changed);
     assert_eq!(proposed.proposed_checks.as_deref(), Some("cargo test"));
     assert_eq!(proposed.checks, None, "a proposal never runs");
 
     let (confirmed, changed) = store
-        .update_project(id, &edit(Some("cargo test"), None))
+        .update_orchestrator(id, &edit(Some("cargo test"), None))
         .expect("a confirmation");
     assert!(changed);
     assert_eq!(confirmed.checks.as_deref(), Some("cargo test"));
     assert_eq!(confirmed.proposed_checks, None);
     let (_, changed) = store
-        .update_project(id, &edit(Some("cargo test"), None))
+        .update_orchestrator(id, &edit(Some("cargo test"), None))
         .expect("the same again");
     assert!(!changed);
 
     let (cleared, changed) = store
-        .update_project(id, &edit(Some(""), None))
+        .update_orchestrator(id, &edit(Some(""), None))
         .expect("cleared");
     assert!(changed);
     assert_eq!(cleared.checks, None);
-    assert_eq!(store.get_project(id).unwrap().unwrap(), cleared);
+    assert_eq!(store.get_orchestrator(id).unwrap().unwrap(), cleared);
 }
 
 /// Regression test for a migration-runner race: several connections opening
@@ -239,7 +249,7 @@ fn concurrent_open_of_a_fresh_database_applies_migrations_exactly_once() {
         .expect("every concurrent open should succeed");
 
     for store in &stores {
-        assert_eq!(store.list_projects().expect("list"), Vec::new());
+        assert_eq!(store.list_orchestrators().expect("list"), Vec::new());
     }
 
     let conn = Connection::open(&path).expect("open verification connection");
@@ -271,7 +281,7 @@ fn reads_timestamps_written_in_the_old_variable_width_format() {
     let conn = Connection::open(&path).expect("open raw connection");
     conn.execute(
         &format!(
-            "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
+            "INSERT INTO orchestrators (id, name, repo_path, created_at, updated_at)
              VALUES ('{id}', 'legacy', '/r', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00.5Z')"
         ),
         [],
@@ -281,7 +291,7 @@ fn reads_timestamps_written_in_the_old_variable_width_format() {
 
     let store = Store::open(&path).expect("reopen an existing database");
     let project = store
-        .get_project(id)
+        .get_orchestrator(id)
         .expect("get should parse the legacy timestamps")
         .expect("row should exist");
 
@@ -290,14 +300,14 @@ fn reads_timestamps_written_in_the_old_variable_width_format() {
         project.updated_at,
         "2026-01-01T00:00:00.5Z".parse().unwrap()
     );
-    assert_eq!(store.list_projects().expect("list").len(), 1);
+    assert_eq!(store.list_orchestrators().expect("list").len(), 1);
 }
 
 /// Migration 2 drops the `host` column. A database written at schema
 /// version 1, with a row in it, must open, keep the row, and lose the
 /// column.
 #[test]
-fn a_version_1_database_migrates_and_keeps_its_projects() {
+fn a_version_1_database_migrates_and_keeps_its_orchestrators() {
     let (_dir, path) = temp_db_path();
     let id = Uuid::now_v7();
     let conn = Connection::open(&path).expect("open raw connection");
@@ -323,7 +333,7 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
 
     let mut store = Store::open(&path).expect("open should migrate to version 2");
     let project = store
-        .get_project(id)
+        .get_orchestrator(id)
         .expect("get")
         .expect("the row should survive the migration");
     assert_eq!(project.name, "parallax");
@@ -337,9 +347,9 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         "migration 26 puts old projects in Auto"
     );
     let again = store
-        .create_project(
+        .create_orchestrator(
             id,
-            &ProjectFields {
+            &OrchestratorFields {
                 name: "parallax".to_string(),
                 repo_path: "/r".to_string(),
                 // No icon, Auto, and Routine: what migrations 16, 26, and 31 give an old row.

@@ -123,7 +123,7 @@ impl Fake {
             permission: None,
             context_window: None,
             fast: None,
-            coordinator_tools: None,
+            orchestrator_tools: None,
             thread_tools: None,
             approvals: true,
             thread: true,
@@ -542,10 +542,10 @@ async fn a_steer_cancels_the_running_turn_and_goes_next() {
 }
 
 /// The thread's server goes in `session/new` and `session/load` only with `approvals` or Bypass,
-/// and its tools then run without asking. A coordinator's go the same way (0042).
+/// and its tools then run without asking. An orchestrator's go the same way (0042).
 #[tokio::test]
 async fn thread_mcp_is_injected_on_new_and_load_and_preapproved() {
-    for (resume, approvals, bypass, coordinator) in [
+    for (resume, approvals, bypass, orchestrator) in [
         (false, true, false, false),
         (true, true, false, false),
         (false, false, false, false),
@@ -559,10 +559,10 @@ async fn thread_mcp_is_injected_on_new_and_load_and_preapproved() {
             data_dir: "/tmp/parallax data".into(),
             run: request.run_id,
         });
-        if coordinator {
+        if orchestrator {
             request.thread = false;
             request.policy = crate::backend::ToolPolicy::NoWrite;
-            request.coordinator_tools = tools;
+            request.orchestrator_tools = tools;
         } else {
             request.thread_tools = tools;
         }

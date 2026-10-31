@@ -60,13 +60,13 @@ export type ParallaxRequests = {
 	 */
 	"host/readUpload": { params: HostReadUploadParams, result: HostReadUploadResult },
 	/**
-	 * `project/list`: every project, and the event log's `seq` from before the read.
+	 * `orchestrator/list`: every orchestrator, and the event log's `seq` from before the read.
 	 */
-	"project/list": { params: ProjectListParams, result: ProjectListResult },
+	"orchestrator/list": { params: OrchestratorListParams, result: OrchestratorListResult },
 	/**
-	 * `project/create`: creates a project, idempotent on its client-generated id.
+	 * `orchestrator/create`: creates an orchestrator, idempotent on its client-generated id.
 	 */
-	"project/create": { params: ProjectCreateParams, result: ProjectCreateResult },
+	"orchestrator/create": { params: OrchestratorCreateParams, result: OrchestratorCreateResult },
 	/**
 	 * `events/subscribe`: replays the events after a `seq`, then streams new ones as
 	 * `events/event` notifications.
@@ -195,7 +195,7 @@ export type ParallaxRequests = {
 	 */
 	"usage/limits": { params: UsageLimitsParams, result: UsageLimitsResult },
 	/**
-	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
+	 * `accounts/defaults/get`: this host's default account for the orchestrator role and for
 	 * a worker role, absent where none is set (#119).
 	 */
 	"accounts/defaults/get": { params: AccountsDefaultsGetParams, result: AccountsDefaultsGetResult },
@@ -221,12 +221,12 @@ export type ParallaxRequests = {
 	"context/write": { params: ContextWriteParams, result: ContextWriteResult },
 	/**
 	 * `context/readBytes`: one slice of a shared context file of any type, such as an
-	 * artifact, base64-encoded. Behind `projectArtifacts`.
+	 * artifact, base64-encoded. Behind `orchestratorArtifacts`.
 	 */
 	"context/readBytes": { params: ContextReadBytesParams, result: ContextReadBytesResult },
 	/**
-	 * `context/saveArtifact`: copies a file from a Project child's working folder into the
-	 * Project's `artifacts/<run id>/`. Behind `projectArtifacts`.
+	 * `context/saveArtifact`: copies a file from an orchestrator child's working folder into
+	 * the orchestrator's `artifacts/<run id>/`. Behind `orchestratorArtifacts`.
 	 */
 	"context/saveArtifact": { params: ContextSaveArtifactParams, result: ContextWriteResult },
 	/**
@@ -494,45 +494,45 @@ export type ParallaxRequests = {
 	 */
 	"repo/update": { params: RepoUpdateParams, result: RepoUpdateResult },
 	/**
-	 * `space/create`: makes a Space, a named group for chats with no repository, backed by a
+	 * `project/create`: makes a Project, a named group for chats with no repository, backed by a
 	 * repository plxd makes (0069). Idempotent on its client-generated id. Gated on the
-	 * `spaces` capability.
+	 * `projects` capability.
 	 */
-	"space/create": { params: SpaceCreateParams, result: SpaceCreateResult },
+	"project/create": { params: ProjectCreateParams, result: ProjectCreateResult },
 	/**
-	 * `space/delete`: deletes a Space and the chats in it (0069). Gated on the `spaces`
+	 * `project/delete`: deletes a Project and the chats in it (0069). Gated on the `projects`
 	 * capability.
 	 */
-	"space/delete": { params: SpaceDeleteParams, result: SpaceDeleteResult },
+	"project/delete": { params: ProjectDeleteParams, result: ProjectDeleteResult },
 	/**
-	 * `thread/setSpace`: adds threads to a Space, or takes them out of one, leaving where
-	 * each works as it is (0090). Gated on the `spaceThreads` capability.
+	 * `thread/setProject`: adds threads to a Project, or takes them out of one, leaving where
+	 * each works as it is (0090). Gated on the `projectThreads` capability.
 	 */
-	"thread/setSpace": { params: ThreadSetSpaceParams, result: ThreadSetSpaceResult },
+	"thread/setProject": { params: ThreadSetProjectParams, result: ThreadSetProjectResult },
 	/**
 	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
 	 * stopping its CLI first if it runs.
 	 */
 	"thread/delete": { params: ThreadDeleteParams, result: ThreadDeleteResult },
 	/**
-	 * `project/start`: starts a project's coordinator chat, a no-write run in its repository
-	 * with plxd's coordinator tools (0024), idempotent on its client-generated run id. It
-	 * replaces the project's last coordinator unless that one is running. Gated on the
-	 * `coordinator` capability.
+	 * `orchestrator/start`: starts an orchestrator's chat, a no-write run in its repository
+	 * with plxd's orchestrator tools (0024), idempotent on its client-generated run id. It
+	 * replaces the orchestrator's last run unless that one is running. Gated on the
+	 * `orchestrator` capability.
 	 */
-	"project/start": { params: ProjectStartParams, result: AgentRunResult },
+	"orchestrator/start": { params: OrchestratorStartParams, result: AgentRunResult },
 	/**
-	 * `coordinator/fresh`: ends a Project's coordinator session, so its next message starts
-	 * a new one from the Project's state (PLX-937, 0079). Gated on the `coordinatorEpochs`
+	 * `orchestrator/fresh`: ends an orchestrator's session, so its next message starts a new
+	 * one from the orchestrator's state (PLX-937, 0079). Gated on the `orchestratorEpochs`
 	 * capability.
 	 */
-	"coordinator/fresh": { params: CoordinatorFreshParams, result: AgentRunResult },
+	"orchestrator/fresh": { params: OrchestratorFreshParams, result: AgentRunResult },
 	/**
-	 * `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
-	 * it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
-	 * `projectEdit` capability, like `Project.icon`.
+	 * `orchestrator/update`: renames an orchestrator or sets its icon, and leaves its
+	 * `updatedAt` as it is (0032). Fails with `orchestratorNotFound` for an unknown
+	 * orchestrator. Gated on the `orchestratorEdit` capability, like `Orchestrator.icon`.
 	 */
-	"project/update": { params: ProjectUpdateParams, result: ProjectUpdateResult },
+	"orchestrator/update": { params: OrchestratorUpdateParams, result: OrchestratorUpdateResult },
 	/**
 	 * `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
 	 * thread starts from. Gated on the `repoRefs` capability.
@@ -565,11 +565,11 @@ export type ParallaxRequests = {
 	 */
 	"pr/unlink": { params: PrViewParams, result: AgentRunResult },
 	/**
-	 * `project/delete`: deletes a project with every run in it, stopping their CLIs first
-	 * (PLX-338). Fails with `projectNotFound` for an unknown project or a repo entry's id.
-	 * Gated on the `projectDelete` capability.
+	 * `orchestrator/delete`: deletes an orchestrator with every run in it, stopping their CLIs
+	 * first (PLX-338). Fails with `orchestratorNotFound` for an unknown orchestrator or a repo
+	 * entry's id. Gated on the `orchestratorDelete` capability.
 	 */
-	"project/delete": { params: ProjectDeleteParams, result: ProjectDeleteResult },
+	"orchestrator/delete": { params: OrchestratorDeleteParams, result: OrchestratorDeleteResult },
 	/**
 	 * `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
 	 * (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
@@ -610,9 +610,9 @@ export type ParallaxRequests = {
 	 */
 	"agent/stopTask": { params: AgentStopTaskParams, result: AgentStopTaskResult },
 	/**
-	 * `agent/setPermission`: moves a run's live CLI to another permission mode now, and
-	 * stores it as the run's. Fails with `invalidParams` when the run has no live CLI, is in
-	 * a Project, or its backend can't switch mid-turn; send the mode with the next message
+	 * `agent/setPermission`: moves a run's live CLI to another permission mode now, and stores
+	 * it as the run's. Fails with `invalidParams` when the run has no live CLI, is in an
+	 * orchestrator, or its backend can't switch mid-turn; send the mode with the next message
 	 * instead.
 	 */
 	"agent/setPermission": { params: AgentSetPermissionParams, result: AgentRunResult },
@@ -702,12 +702,13 @@ export type ParallaxRequests = {
 	 */
 	"access/setupCode": { params: AccessSetupCodeParams, result: AccessSetupCodeResult },
 	/**
-	 * `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
-	 * read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
+	 * `inbox/list`: an orchestrator's inbox, oldest first, and the event log's `seq` from
+	 * before the read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
 	"inbox/list": { params: InboxListParams, result: InboxListResult },
 	/**
-	 * `inbox/seen`: marks items of a Project's inbox seen, and returns them as they stand.
+	 * `inbox/seen`: marks items of an orchestrator's inbox seen, and returns them as they
+	 * stand.
 	 */
 	"inbox/seen": { params: InboxSeenParams, result: InboxSeenResult },
 	/**
@@ -748,30 +749,30 @@ export type ParallaxRequests = {
 	 */
 	"queue/steer": { params: QueueSteerParams, result: QueueResult },
 	/**
-	 * `question/ask`: records a Project child's question and wakes its coordinator; the
+	 * `question/ask`: records an orchestrator child's question and wakes its orchestrator; the
 	 * child goes on with its assumption (PLX-402, 0043). Gated on the `questions`
 	 * capability, like every `question/*` method.
 	 */
 	"question/ask": { params: QuestionAskParams, result: QuestionResult },
 	/**
-	 * `question/answer`: the coordinator's or the user's answer to a question.
+	 * `question/answer`: the orchestrator's or the user's answer to a question.
 	 */
 	"question/answer": { params: QuestionAnswerParams, result: QuestionResult },
 	/**
-	 * `question/escalate`: the coordinator passes a question to the user.
+	 * `question/escalate`: the orchestrator passes a question to the user.
 	 */
 	"question/escalate": { params: QuestionEscalateParams, result: QuestionResult },
 	/**
-	 * `question/list`: a Project's questions, oldest first.
+	 * `question/list`: an orchestrator's questions, oldest first.
 	 */
 	"question/list": { params: QuestionListParams, result: QuestionListResult },
 	/**
-	 * `board/list`: a Project's status board items, oldest first (PLX-940). Gated on the
+	 * `board/list`: an orchestrator's status board items, oldest first (PLX-940). Gated on the
 	 * `board` capability.
 	 */
 	"board/list": { params: BoardListParams, result: BoardListResult },
 	/**
-	 * `board/add`: adds an item to a Project's status board and renders `notes.md`
+	 * `board/add`: adds an item to an orchestrator's status board and renders `notes.md`
 	 * (PLX-940). Gated on the `board` capability.
 	 */
 	"board/add": { params: BoardAddParams, result: BoardItemResult },
@@ -794,7 +795,8 @@ export type ParallaxRequests = {
 	 */
 	"memory/read": { params: MemoryReadParams, result: MemoryReadResult },
 	/**
-	 * `memory/write`: writes the brief, knowledge, or an entry, as the user or a coordinator.
+	 * `memory/write`: writes the brief, knowledge, or an entry, as the user or an
+	 * orchestrator.
 	 */
 	"memory/write": { params: MemoryWriteParams, result: MemoryWriteResult },
 	/**
@@ -802,7 +804,7 @@ export type ParallaxRequests = {
 	 */
 	"memory/delete": { params: MemoryDeleteParams, result: MemoryDeleteResult },
 	/**
-	 * `memory/propose`: a thread proposes an entry, for its coordinator or the user.
+	 * `memory/propose`: a thread proposes an entry, for its orchestrator or the user.
 	 */
 	"memory/propose": { params: MemoryProposeParams, result: MemoryProposeResult },
 	/**
@@ -815,9 +817,9 @@ export type ParallaxRequests = {
 	 */
 	"memory/syncRead": { params: MemorySyncReadParams, result: MemorySyncReadResult },
 	/**
-	 * `land/queue`: queues a Project's finished child to land on its integration branch, as
-	 * the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
-	 * like every `land/*` method.
+	 * `land/queue`: queues an orchestrator's finished child to land on its integration branch,
+	 * as the orchestrator's `land` tool does (PLX-410, 0045). Gated on the `landing`
+	 * capability, like every `land/*` method.
 	 */
 	"land/queue": { params: LandQueueParams, result: LandResult },
 	/**
@@ -834,11 +836,12 @@ export type ParallaxRequests = {
 	 */
 	"agent/wait": { params: AgentWaitParams, result: AgentWaitResult },
 	/**
-	 * `project/fromThreads`: makes a Project from threads on one repo entry, each with its
-	 * own worktree, starts its coordinator, and makes each thread its child (0042).
-	 * Idempotent on its client-generated ids. Gated on the `projectFromThreads` capability.
+	 * `orchestrator/fromThreads`: makes an orchestrator from threads on one repo entry, each
+	 * with its own worktree, starts its orchestrator, and makes each thread its child (0042).
+	 * Idempotent on its client-generated ids. Gated on the `orchestratorFromThreads`
+	 * capability.
 	 */
-	"project/fromThreads": { params: ProjectFromThreadsParams, result: ProjectFromThreadsResult },
+	"orchestrator/fromThreads": { params: OrchestratorFromThreadsParams, result: OrchestratorFromThreadsResult },
 	/**
 	 * `cursor/signIn`: starts a Cursor account login in the browser and answers with its
 	 * URL (0053). The app opens it. `providers/list` reports the instance signed in once
@@ -1062,8 +1065,8 @@ export const REQUEST_METHODS = [
 	"host/folders",
 	"host/upload",
 	"host/readUpload",
-	"project/list",
-	"project/create",
+	"orchestrator/list",
+	"orchestrator/create",
 	"events/subscribe",
 	"events/unsubscribe",
 	"accounts/keys/add",
@@ -1149,20 +1152,20 @@ export const REQUEST_METHODS = [
 	"thread/archive",
 	"thread/update",
 	"repo/update",
-	"space/create",
-	"space/delete",
-	"thread/setSpace",
+	"project/create",
+	"project/delete",
+	"thread/setProject",
 	"thread/delete",
-	"project/start",
-	"coordinator/fresh",
-	"project/update",
+	"orchestrator/start",
+	"orchestrator/fresh",
+	"orchestrator/update",
 	"repo/refs",
 	"pr/view",
 	"pr/act",
 	"pr/diff",
 	"pr/link",
 	"pr/unlink",
-	"project/delete",
+	"orchestrator/delete",
 	"agent/commands",
 	"repo/files",
 	"repo/grep",
@@ -1218,7 +1221,7 @@ export const REQUEST_METHODS = [
 	"land/approve",
 	"land/sendBack",
 	"agent/wait",
-	"project/fromThreads",
+	"orchestrator/fromThreads",
 	"cursor/signIn",
 	"cursor/signInCancel",
 	"cursor/signOut",
@@ -1702,18 +1705,18 @@ export type HostReadUploadResult = {
 };
 
 /**
- * Params of `project/list`.
+ * Params of `orchestrator/list`.
  */
-export type ProjectListParams = Record<symbol, never>;
+export type OrchestratorListParams = Record<symbol, never>;
 
 /**
- * Result of `project/list`: a snapshot of every project.
+ * Result of `orchestrator/list`: a snapshot of every orchestrator.
  */
-export type ProjectListResult = {
+export type OrchestratorListResult = {
 	/**
-	 * Every project, oldest first.
+	 * Every orchestrator, oldest first.
 	 */
-	projects: Array<Project>,
+	orchestrators: Array<Orchestrator>,
 	/**
 	 * The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
 	 * list may already reflect some events after it, and replaying them is harmless.
@@ -1722,46 +1725,47 @@ export type ProjectListResult = {
 };
 
 /**
- * A project: a body of work on one repository, run by this plxd.
+ * An orchestrator thread (0093, once a Project): a long-running chat on one repository that plans
+ * work and hands it to child threads, run by this plxd.
  */
-export type Project = {
+export type Orchestrator = {
 	/**
-	 * The id the client chose when it created the project.
+	 * The id the client chose when it created the orchestrator.
 	 */
-	id: ProjectId,
+	id: ScopeId,
 	/**
 	 * The name shown in the app.
 	 */
 	name: string,
 	/**
-	 * The icon the user chose, behind the `projectEdit` capability (PLX-227, 0032). Absent means
-	 * the app's default icon.
+	 * The icon the user chose, behind the `orchestratorEdit` capability (PLX-227, 0032). Absent
+	 * means the app's default icon.
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
 	/**
 	 * The absolute path of the repository on this host.
 	 */
 	repoPath: string,
 	/**
 	 * The branch checked out in the repository, or the first 7 digits of the commit when `HEAD`
-	 * is detached, read when plxd sends the project. Absent when plxd can't read it.
+	 * is detached, read when plxd sends the orchestrator. Absent when plxd can't read it.
 	 */
 	branch?: string,
 	/**
-	 * The run of the project's coordinator chat, the newest one `project/start` started (0024).
-	 * Its transcript, messages, and Stop go through `agent/*` like any run's.
+	 * The run of its chat, the newest one `orchestrator/start` started (0024). Its transcript,
+	 * messages, and Stop go through `agent/*` like any run's. Was `coordinator` (0093).
 	 */
-	coordinator?: RunId,
+	run?: RunId,
 	/**
-	 * The permission mode its coordinator and every run in it start in (0042), behind the
-	 * `projectPermission` capability. Absent only from an older plxd.
+	 * The permission mode its run and every child start in (0042), behind the
+	 * `orchestratorPermission` capability. Absent only from an older plxd.
 	 */
-	permission?: ProjectPermission,
+	permission?: OrchestratorPermission,
 	/**
-	 * Who answers its children's questions (0043), behind the `projectAutonomy` capability.
+	 * Who answers its children's questions (0043), behind the `orchestratorAutonomy` capability.
 	 * Absent only from an older plxd.
 	 */
-	autonomy?: ProjectAutonomy,
+	autonomy?: OrchestratorAutonomy,
 	/**
 	 * The branch its integration branch is cut from and its PR targets (0045), behind the
 	 * `integrationBranch` capability. Absent until set, or until plxd cuts the integration branch
@@ -1769,8 +1773,8 @@ export type Project = {
 	 */
 	baseBranch?: string,
 	/**
-	 * Its integration branch, `parallax/<project slug>` (0045), behind `integrationBranch`.
-	 * Absent until plxd cuts it, when the project is created or a run in it starts.
+	 * Its integration branch, `parallax/<orchestrator slug>` (0045), behind `integrationBranch`.
+	 * Absent until plxd cuts it, when the orchestrator is created or a run in it starts.
 	 */
 	integrationBranch?: string,
 	/**
@@ -1779,14 +1783,14 @@ export type Project = {
 	 */
 	autoLand?: boolean,
 	/**
-	 * How many of its children run at once (0046), behind `projectPlacement`. Over it, a new
-	 * child waits in the Project's queue. Absent only from an older plxd.
+	 * How many of its children run at once (0046), behind `orchestratorPlacement`. Over it, a new
+	 * child waits in the orchestrator's queue. Absent only from an older plxd.
 	 */
 	maxChildren?: number,
 	/**
-	 * Whether its children may run on an API key account (0046), behind `projectPlacement`. Off,
-	 * a child never starts on one, nor falls back to one on a usage limit. Absent only from an
-	 * older plxd.
+	 * Whether its children may run on an API key account (0046), behind `orchestratorPlacement`.
+	 * Off, a child never starts on one, nor falls back to one on a usage limit. Absent only from
+	 * an older plxd.
 	 */
 	allowApiKeys?: boolean,
 	/**
@@ -1796,7 +1800,7 @@ export type Project = {
 	 */
 	checks?: string,
 	/**
-	 * The checks command the coordinator proposed, behind `checks`. It never runs: the user
+	 * The checks command the orchestrator proposed, behind `checks`. It never runs: the user
 	 * confirms it, or another, by setting `checks`. Absent means none.
 	 */
 	proposedChecks?: string,
@@ -1806,30 +1810,22 @@ export type Project = {
 	 */
 	computer?: string,
 	/**
-	 * When the project was created, in RFC 3339 UTC.
+	 * When the orchestrator was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
 	/**
-	 * When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
-	 * a rename or a new icon is not activity (0032).
+	 * When the orchestrator last changed, in RFC 3339 UTC. `orchestrator/update` leaves it as it
+	 * is, since a rename or a new icon is not activity (0032).
 	 */
 	updatedAt: string,
 };
 
 /**
- * A project's autonomy level (0043): who answers its children's questions. Separate from its
- * permission mode, which decides what they may run.
- *
- * A newer plxd may send a value this version does not know; treat it as unknown.
- */
-export type ProjectAutonomy = "ask" | "routine" | "full";
-
-/**
- * A project's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both by
- * name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
+ * An orchestrator's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both
+ * by name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
  * them and never reads them.
  */
-export type ProjectIcon = {
+export type ChosenIcon = {
 	/**
 	 * The Lucide icon's name in kebab-case, such as `rocket`: 1 to 64 characters of `a-z`, `0-9`,
 	 * and `-`.
@@ -1874,19 +1870,21 @@ export type PromptImage = {
 export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "text/html" | "video/webm";
 
 /**
- * A project's id: a version 7 UUID that the client generates once and sends again on every
- * retry of `project/create`.
- */
-export type ProjectId = string;
-
-/**
- * A project's permission mode (0042): the mode its coordinator and every run in it start in.
- * Each maps to the [`AgentPermission`] of the same name. A run on a backend that doesn't map it
- * is refused with `unsupportedOption`, never moved to another mode.
+ * An orchestrator's autonomy level (0043): who answers its children's questions. Separate from its
+ * permission mode, which decides what they may run.
  *
  * A newer plxd may send a value this version does not know; treat it as unknown.
  */
-export type ProjectPermission = "auto" | "bypass";
+export type OrchestratorAutonomy = "ask" | "routine" | "full";
+
+/**
+ * An orchestrator's permission mode (0042): the mode its run and every child start
+ * in. Each maps to the [`AgentPermission`] of the same name. A run on a backend that doesn't map
+ * it is refused with `unsupportedOption`, never moved to another mode.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type OrchestratorPermission = "auto" | "bypass";
 
 /**
  * An agent run's id: a version 7 UUID that the client generates once and sends again on every
@@ -1895,18 +1893,25 @@ export type ProjectPermission = "auto" | "bypass";
 export type RunId = string;
 
 /**
- * Params of `project/create`.
- *
- * It is idempotent on `id`: if a project with that id exists, plxd returns it instead of
- * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`,
- * `autonomy`, or a given `baseBranch` differ. A new project's `repoPath` must be the top folder of a git working tree on this host,
- * or it fails with `notARepository`.
+ * A run's scope: an orchestrator's id, or a repo entry's for a thread's run. An orchestrator's
+ * is a version 7 UUID that the client generates once and sends again on every retry of
+ * `orchestrator/create`. Its wire name is still `project` where a field holds a scope (0093).
  */
-export type ProjectCreateParams = {
+export type ScopeId = string;
+
+/**
+ * Params of `orchestrator/create`.
+ *
+ * It is idempotent on `id`: if an orchestrator with that id exists, plxd returns it instead of
+ * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`,
+ * `autonomy`, or a given `baseBranch` differ. A new orchestrator's `repoPath` must be the top
+ * folder of a git working tree on this host, or it fails with `notARepository`.
+ */
+export type OrchestratorCreateParams = {
 	/**
-	 * The new project's id, a version 7 UUID generated by the client.
+	 * The new orchestrator's id, a version 7 UUID generated by the client.
 	 */
-	id: ProjectId,
+	id: ScopeId,
 	/**
 	 * The name shown in the app.
 	 */
@@ -1916,22 +1921,22 @@ export type ProjectCreateParams = {
 	 */
 	repoPath: string,
 	/**
-	 * The project's icon, sent only to a plxd that advertises `projectEdit`. Absent means the
-	 * app's default icon.
+	 * The orchestrator's icon, sent only to a plxd that advertises `orchestratorEdit`. Absent
+	 * means the app's default icon.
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
 	/**
-	 * The project's permission mode, sent only to a plxd that advertises `projectPermission`.
-	 * Absent means `auto`, the mode projects from before it have.
+	 * The orchestrator's permission mode, sent only to a plxd that advertises
+	 * `orchestratorPermission`. Absent means `auto`, the mode orchestrators from before it have.
 	 */
-	permission?: ProjectPermission,
+	permission?: OrchestratorPermission,
 	/**
-	 * The project's autonomy level, sent only to a plxd that advertises `projectAutonomy`.
-	 * Absent means `routine`, the level projects from before it have.
+	 * The orchestrator's autonomy level, sent only to a plxd that advertises
+	 * `orchestratorAutonomy`. Absent means `routine`, the level orchestrators from before it have.
 	 */
-	autonomy?: ProjectAutonomy,
+	autonomy?: OrchestratorAutonomy,
 	/**
-	 * The project's base branch (0045), sent only to a plxd that advertises
+	 * The orchestrator's base branch (0045), sent only to a plxd that advertises
 	 * `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
 	 * Absent means the repository's default branch. A retry that leaves it out matches any.
 	 */
@@ -1939,13 +1944,13 @@ export type ProjectCreateParams = {
 };
 
 /**
- * Result of `project/create`.
+ * Result of `orchestrator/create`.
  */
-export type ProjectCreateResult = {
+export type OrchestratorCreateResult = {
 	/**
-	 * The project, new or existing.
+	 * The orchestrator, new or existing.
 	 */
-	project: Project,
+	orchestrator: Orchestrator,
 };
 
 /**
@@ -1964,14 +1969,14 @@ export type ProjectCreateResult = {
 export type EventsSubscribeParams = {
 	/**
 	 * Replay the events whose `seq` is greater than this: usually the `seq` of a snapshot, such
-	 * as `project/list`'s, or of the last event received. `seq` starts at 1.
+	 * as `orchestrator/list`'s, or of the last event received. `seq` starts at 1.
 	 */
 	after: number,
 	/**
 	 * Subscribe to one project's events. Without it, the subscription gets host-level events,
-	 * such as `project.created`.
+	 * such as `orchestrator.created`.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
 	/**
 	 * Only this run's events, for an open transcript.
 	 */
@@ -2312,9 +2317,9 @@ export type ProviderInfo = {
 	 */
 	efforts: boolean,
 	/**
-	 * Whether it can run a Project's coordinator.
+	 * Whether it can run an orchestrator.
 	 */
-	coordinator: boolean,
+	orchestrator: boolean,
 	/**
 	 * The command that signs it in, run in a terminal on the host, if it has one.
 	 */
@@ -2405,8 +2410,8 @@ export type ProviderInstance = {
 	 */
 	models: Array<ProviderModel>,
 	/**
-	 * The percent of each limit window that a Project's children leave for the user, from 0 to
-	 * 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
+	 * The percent of each limit window that an orchestrator's children leave for the user, from 0
+	 * to 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
 	 */
 	reserve?: number,
 };
@@ -3118,9 +3123,9 @@ export type AccountsDefaultsGetParams = Record<symbol, never>;
  */
 export type AccountsDefaultsGetResult = {
 	/**
-	 * The coordinator's default account.
+	 * The orchestrator's default account.
 	 */
-	coordinator?: AccountChoice,
+	orchestrator?: AccountChoice,
 	/**
 	 * A worker's default account.
 	 */
@@ -3161,7 +3166,7 @@ export type AccountsDefaultsSetParams = {
 /**
  * Which kind of run an account is chosen for (0004).
  */
-export type Role = "coordinator" | "worker";
+export type Role = "orchestrator" | "worker";
 
 /**
  * Params of `context/list`.
@@ -3170,7 +3175,7 @@ export type ContextListParams = {
 	/**
 	 * The project whose shared context to list.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 };
 
 /**
@@ -3213,7 +3218,7 @@ export type ContextReadParams = {
 	/**
 	 * The file's project.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The file's path. Fails with `contextNotFound` if it does not exist.
 	 */
@@ -3250,7 +3255,7 @@ export type ContextWriteParams = {
 	/**
 	 * The file's project.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The file's path.
 	 */
@@ -3285,7 +3290,7 @@ export type ContextWriteResult = {
 };
 
 /**
- * Params of `context/readBytes`, behind `projectArtifacts` (PLX-941): one slice of a shared
+ * Params of `context/readBytes`, behind `orchestratorArtifacts` (PLX-941): one slice of a shared
  * context file of any type, such as an artifact, as `agent/file`'s working side reads one
  * (`fileChunks`, 0074). Fails with `contextNotFound` if it does not exist.
  */
@@ -3293,7 +3298,7 @@ export type ContextReadBytesParams = {
 	/**
 	 * The file's project.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The file's path.
 	 */
@@ -3323,12 +3328,12 @@ export type ContextReadBytesResult = {
 };
 
 /**
- * Params of `context/saveArtifact`, behind `projectArtifacts` (PLX-941): copies a file from a
- * Project child's working folder into its Project's `artifacts/<run id>/`, at the same path,
- * replacing an earlier copy. When the Project's `history/`, `artifacts/`, and `.versions/` would
- * pass 2 GiB, plxd deletes its oldest artifacts first and adds a `needsYou` inbox item. Fails
- * with `invalidParams` for a run outside a Project or a path that isn't a file, and
- * `contextTooLarge` when deleting artifacts can't make room.
+ * Params of `context/saveArtifact`, behind `orchestratorArtifacts` (PLX-941): copies a file from a
+ * orchestrator child's working folder into its orchestrator's `artifacts/<run id>/`, at the same
+ * path, replacing an earlier copy. When the orchestrator's `history/`, `artifacts/`, and
+ * `.versions/` would pass 2 GiB, plxd deletes its oldest artifacts first and adds a `needsYou`
+ * inbox item. Fails with `invalidParams` for a run outside an orchestrator or a path that isn't a
+ * file, and `contextTooLarge` when deleting artifacts can't make room.
  */
 export type ContextSaveArtifactParams = {
 	/**
@@ -3355,14 +3360,14 @@ export type AgentStartParams = {
 	/**
 	 * The project whose repository the run works in.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The task.
 	 */
 	prompt: string,
 	/**
-	 * What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
-	 * `noWrite` run, is started with `project/start`.
+	 * What the run's tools may do: only `workspaceWrite`. An orchestrator, the one
+	 * `noWrite` run, is started with `orchestrator/start`.
 	 */
 	policy: AgentPolicy,
 	/**
@@ -3370,13 +3375,13 @@ export type AgentStartParams = {
 	 */
 	account?: AccountChoice,
 	/**
-	 * The coordinator thread starting the run, which `plxd mcp` sets for runs the coordinator
+	 * The orchestrator thread starting the run, which `plxd mcp` sets for runs the orchestrator
 	 * spawns (0019). The run keeps it, and a retry must repeat it.
 	 */
-	coordinatorThread?: CoordinatorThreadId,
+	orchestratorThread?: OrchestratorThreadId,
 	/**
-	 * Whether the run wakes its coordinator when a CLI process of its ends (PLX-380, 0025), for
-	 * a run with a `coordinatorThread`. Absent means true. A retry must repeat it.
+	 * Whether the run wakes its orchestrator when a CLI process of its ends (PLX-380, 0025), for
+	 * a run with a `orchestratorThread`. Absent means true. A retry must repeat it.
 	 */
 	notify?: boolean,
 	/**
@@ -3419,7 +3424,7 @@ export type AgentStartParams = {
 	 * answers them, and only to a plxd that advertises `approvals`. A thread with it is full
 	 * Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
 	 * denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a
-	 * `coordinatorThread` also gets it when its coordinator has it. The run keeps it when it
+	 * `orchestratorThread` also gets it when its orchestrator has it. The run keeps it when it
 	 * resumes, and a retry must repeat it.
 	 */
 	approvals?: boolean,
@@ -3433,9 +3438,9 @@ export type AgentStartParams = {
 	 */
 	threads?: Array<RunId>,
 	/**
-	 * Start a Project's child as an exploration, such as a spike or a comparison, which never
-	 * lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must repeat
-	 * it.
+	 * Start an orchestrator's child as an exploration, such as a spike or a comparison, which
+	 * never lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must
+	 * repeat it.
 	 */
 	explore?: boolean,
 };
@@ -3450,18 +3455,18 @@ export type AgentStartParams = {
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
- * What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
- * which `project/start` starts, is `noWrite`.
+ * What a run's tools may do. `agent/start` takes only `workspaceWrite`; an orchestrator,
+ * which `orchestrator/start` starts, is `noWrite`.
  *
  * A newer plxd may send a policy this version does not know; treat it as unknown.
  */
 export type AgentPolicy = "workspaceWrite" | "noWrite";
 
 /**
- * A project's coordinator thread (M4, #195, decision 0019). Runs the coordinator starts
+ * An orchestrator thread (M4, #195, decision 0019). Runs the orchestrator starts
  * through its Parallax tools carry it, so a client can tell them from runs it started itself.
  */
-export type CoordinatorThreadId = string;
+export type OrchestratorThreadId = string;
 
 /**
  * Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
@@ -3485,7 +3490,7 @@ export type AgentRun = {
 	/**
 	 * Its project.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The task it was started with.
 	 */
@@ -3534,10 +3539,10 @@ export type AgentRun = {
 	 */
 	diff?: DiffSummary,
 	/**
-	 * The coordinator thread that started it through its Parallax tools. Absent for a run a client
-	 * started itself.
+	 * The orchestrator thread that started it through its Parallax tools. Absent for a run a
+	 * client started itself.
 	 */
-	coordinatorThread?: CoordinatorThreadId,
+	orchestratorThread?: OrchestratorThreadId,
 	/**
 	 * Its model: what it was started with, or what `agent/send` last changed it to. Absent
 	 * means the CLI's default.
@@ -3560,10 +3565,10 @@ export type AgentRun = {
 	 */
 	permission?: AgentPermission,
 	/**
-	 * True when it forwards its permission requests to the client, as the start method that
-	 * made it asked with `approvals` (PLX-222, decision 0031). It changes only when
-	 * `project/fromThreads` makes the run a Project's child, which sets it. Absent means false:
-	 * its CLI denies what would prompt.
+	 * True when it forwards its permission requests to the client, as the start method that made
+	 * it asked with `approvals` (PLX-222, decision 0031). It changes only when
+	 * `orchestrator/fromThreads` makes the run an orchestrator's child, which sets it. Absent
+	 * means false: its CLI denies what would prompt.
 	 */
 	approvals?: boolean,
 	/**
@@ -3573,7 +3578,7 @@ export type AgentRun = {
 	 */
 	checkout?: boolean,
 	/**
-	 * True for a Project's exploration child, started with `explore` (0045): it never lands.
+	 * True for an orchestrator's exploration child, started with `explore` (0045): it never lands.
 	 * Absent means false.
 	 */
 	explore?: boolean,
@@ -3751,7 +3756,7 @@ export type AgentListParams = {
 	/**
 	 * Only this project's runs. Absent lists every run on the host.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
 };
 
 /**
@@ -3836,7 +3841,7 @@ export type LoggedEvent = {
 	/**
 	 * Its project. Absent for host-level events.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
 	/**
 	 * What happened.
 	 */
@@ -3849,19 +3854,19 @@ export type LoggedEvent = {
  * A newer plxd may send kinds that are not listed here. Skip those events but still count their
  * `seq` as received, and don't end a `switch` over this type in an exhaustiveness assertion.
  */
-export type ParallaxEvent = { "kind": "project.created",
+export type ParallaxEvent = { "kind": "orchestrator.created",
 	/**
-	 * The new project.
+	 * The new orchestrator.
 	 */
-	project: Project, } | { "kind": "project.updated",
+	orchestrator: Orchestrator, } | { "kind": "orchestrator.updated",
 	/**
-	 * The project as it stands.
+	 * The orchestrator as it stands.
 	 */
-	project: Project, } | { "kind": "project.deleted",
+	orchestrator: Orchestrator, } | { "kind": "orchestrator.deleted",
 	/**
-	 * The deleted project's id.
+	 * The deleted orchestrator's id.
 	 */
-	project: ProjectId, } | { "kind": "context.changed",
+	orchestrator: ScopeId, } | { "kind": "context.changed",
 	/**
 	 * The changed file.
 	 */
@@ -3927,7 +3932,7 @@ export type ParallaxEvent = { "kind": "project.created",
 	 */
 	merge: AgentMerge, } | { "kind": "agent.wakeupsPaused",
 	/**
-	 * The coordinator's run id.
+	 * The orchestrator's run id.
 	 */
 	runId: RunId, } | { "kind": "inbox.added",
 	/**
@@ -4166,7 +4171,7 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 */
 	text?: string,
 	/**
-	 * True for a wake-up (PLX-42, decision 0025): a turn plxd sent a project's coordinator
+	 * True for a wake-up (PLX-42, decision 0025): a turn plxd sent an orchestrator
 	 * on its own, not the user, because runs it started finished. `text` lists them. Also
 	 * true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
 	 * 0049).
@@ -4256,13 +4261,13 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 */
 	done: boolean, } | { "kind": "epoch",
 	/**
-	 * The new session's number, from 1 for the coordinator's first.
+	 * The new session's number, from 1 for the orchestrator's first.
 	 */
 	epoch: number,
 	/**
 	 * Why the last one ended.
 	 */
-	reason: CoordinatorSessionEnd, } | { "kind": "turnFinished",
+	reason: OrchestratorSessionEnd, } | { "kind": "turnFinished",
 	/**
 	 * The turn's id, as its `turnStarted` had it.
 	 */
@@ -4540,17 +4545,17 @@ export type AgentToolStatus = "ok" | "error" | "denied";
 export type ApprovalId = string;
 
 /**
- * Why a Project's coordinator session ended (PLX-937, decision 0079).
- *
- * A newer plxd may send a reason this version does not know; treat it as unknown.
- */
-export type CoordinatorSessionEnd = "compactedOut" | "notResumable" | "userFresh" | "backendChange";
-
-/**
  * A stored image's id (PLX-191, decision 0026): a version 7 UUID that plxd generates once a
  * message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
  */
 export type ImageId = string;
+
+/**
+ * Why an orchestrator session ended (PLX-937, decision 0079).
+ *
+ * A newer plxd may send a reason this version does not know; treat it as unknown.
+ */
+export type OrchestratorSessionEnd = "compactedOut" | "notResumable" | "userFresh" | "backendChange";
 
 /**
  * How a secret request stands (0063).
@@ -4646,7 +4651,7 @@ export type Compacted = {
 };
 
 /**
- * One item of a Project's inbox.
+ * One item of an orchestrator's inbox.
  */
 export type InboxItem = {
 	/**
@@ -4658,7 +4663,7 @@ export type InboxItem = {
 	 */
 	kind: InboxKind,
 	/**
-	 * The run it is about: a child, or the coordinator when its wake-ups paused.
+	 * The run it is about: a child, or the orchestrator when its wake-ups paused.
 	 */
 	run: RunId,
 	/**
@@ -4732,27 +4737,27 @@ export type Repo = {
 	 */
 	scratch?: boolean,
 	/**
-	 * True for a Space (0069): a group of chats the user made, with no repository of theirs.
-	 * `path` is the repository plxd made for it. Behind the `spaces` capability.
+	 * True for a Project (0069): a group of chats the user made, with no repository of theirs.
+	 * `path` is the repository plxd made for it. Behind the `projects` capability.
 	 */
-	space?: boolean,
+	project?: boolean,
 	/**
 	 * The icon the user chose, in a project's shape (0032), behind the `threadAttention`
 	 * capability (0033). Absent means the app's default: the name's initials.
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
 	/**
 	 * When the entry was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
 	/**
-	 * A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
-	 * behind the `spaceContext` capability. Absent when it has none.
+	 * A Project's instructions, which plxd pins to the system prompt of every thread in it (0090),
+	 * behind the `projectContext` capability. Absent when it has none.
 	 */
 	instructions?: string,
 	/**
-	 * The files a Space gives every thread in it (0090), as absolute paths on the host, such as
-	 * `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
+	 * The files a Project gives every thread in it (0090), as absolute paths on the host, such as
+	 * `host/upload` answers, behind `projectContext`. Each thread's system prompt lists them.
 	 */
 	files?: Array<string>,
 };
@@ -4784,9 +4789,9 @@ export type Thread = {
 	 */
 	id: RunId,
 	/**
-	 * Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
-	 * `thread/start`'s `project` has the Project's id here instead (0042), while a thread
-	 * `project/fromThreads` made a Project's child keeps its repo entry.
+	 * Its repo entry: the scratch entry for a thread with no repo. An orchestrator's child started
+	 * with `thread/start`'s `project` has the orchestrator's id here instead (0042), while a
+	 * thread `orchestrator/fromThreads` made an orchestrator's child keeps its repo entry.
 	 */
 	repo: RepoId,
 	/**
@@ -4839,11 +4844,11 @@ export type Thread = {
 	 */
 	pinned?: boolean,
 	/**
-	 * The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
-	 * Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
-	 * Space.
+	 * The Project the user added it to with `thread/setProject` (0090), where it works elsewhere.
+	 * Absent for a thread in no Project, and for one started in a Project, whose `repo` is the
+	 * Project.
 	 */
-	space?: RepoId,
+	project?: RepoId,
 };
 
 /**
@@ -6233,9 +6238,9 @@ export type RepoRemoteResult = {
 
 /**
  * Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
- * `origin`, for a Project on another plxd whose children run here. Each entry's `origin` and this
- * one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing slash,
- * and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
+ * `origin`, for an orchestrator on another plxd whose children run here. Each entry's `origin` and
+ * this one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing
+ * slash, and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
  */
 export type RepoMatchParams = {
 	/**
@@ -6274,22 +6279,22 @@ export type ThreadStartParams = {
 	 */
 	repo?: RepoId,
 	/**
-	 * Starts a child of this Project instead (0042), behind `projectTasks`: it runs in the
-	 * Project's mode with `approvals`, in a new worktree cut from the Project's integration branch,
-	 * and its first message is the child's header, then `prompt`. Its parent is the Project's
-	 * current coordinator, which a batched wake-up tells of the start; with no coordinator yet it
-	 * has none. Not with `repo`, `parent`, `checkout`, `base`, or `checkoutRef`, which the Project
-	 * decides.
+	 * Starts a child of this orchestrator instead (0042), behind `orchestratorTasks`: it runs in
+	 * the orchestrator's mode with `approvals`, in a new worktree cut from the orchestrator's
+	 * integration branch, and its first message is the child's header, then `prompt`. Its parent
+	 * is the orchestrator's current run, which a batched wake-up tells of the start; with
+	 * no orchestrator yet it has none. Not with `repo`, `parent`, `checkout`, `base`, or
+	 * `checkoutRef`, which the orchestrator decides.
 	 */
-	project?: ProjectId,
+	orchestrator?: ScopeId,
 	/**
 	 * The run that launches it, recorded as its parent (0041). It must exist, or the start fails
 	 * with `runNotFound`. Behind `threadLineage`.
 	 */
 	parent?: RunId,
 	/**
-	 * Whether the thread wakes its `parent` when a CLI process of its ends, as a Project's
-	 * coordinator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+	 * Whether the thread wakes its `parent` when a CLI process of its ends, as an orchestrator's
+	 * orchestrator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
 	 * it.
 	 */
 	notify?: boolean,
@@ -6817,10 +6822,10 @@ export type ThreadUpdateResult = {
 
 /**
  * Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
- * behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
- * Space's instructions and files (0090), behind `spaceContext`. A change appends
+ * behind the `threadAttention` capability, renames a Project (0069), behind `projects`, or sets a
+ * Project's instructions and files (0090), behind `projectContext`. A change appends
  * `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
- * `name`, `instructions`, or `files` on an entry that isn't a Space.
+ * `name`, `instructions`, or `files` on an entry that isn't a Project.
  */
 export type RepoUpdateParams = {
 	/**
@@ -6828,20 +6833,20 @@ export type RepoUpdateParams = {
 	 */
 	repo: RepoId,
 	/**
-	 * Its new icon, checked as `project/update` checks a project's.
+	 * Its new icon, checked as `orchestrator/update` checks a project's.
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
 	/**
-	 * A Space's new name, trimmed, 1 to 128 bytes.
+	 * A Project's new name, trimmed, 1 to 128 bytes.
 	 */
 	name?: string,
 	/**
-	 * A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+	 * A Project's new instructions, up to [`MAX_PROJECT_INSTRUCTIONS_BYTES`] once trimmed. Empty
 	 * clears them.
 	 */
 	instructions?: string,
 	/**
-	 * A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+	 * A Project's files in full, replacing the list: at most [`MAX_PROJECT_FILES`] absolute paths
 	 * inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
 	 */
 	files?: Array<string>,
@@ -6858,75 +6863,76 @@ export type RepoUpdateResult = {
 };
 
 /**
- * Params of `space/create` (0069), behind the `spaces` capability: makes a Space, a named group
+ * Params of `project/create` (0069), behind the `projects` capability: makes a Project, a named group
  * for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry
  * with the same name returns the entry, another name fails with `idConflict`. Appends
  * `repo.added`.
  */
-export type SpaceCreateParams = {
+export type ProjectCreateParams = {
 	/**
-	 * The Space's id, a version 7 UUID generated by the client.
+	 * The Project's id, a version 7 UUID generated by the client.
 	 */
 	id: RepoId,
 	/**
-	 * Its name, trimmed, 1 to [`MAX_SPACE_NAME_BYTES`] bytes.
+	 * Its name, trimmed, 1 to [`MAX_PROJECT_NAME_BYTES`] bytes.
 	 */
 	name: string,
 	/**
-	 * Its icon, checked as `project/create` checks a project's.
+	 * Its icon, checked as `orchestrator/create` checks a project's.
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
 };
 
 /**
- * Result of `space/create`.
+ * Result of `project/create`.
  */
-export type SpaceCreateResult = {
+export type ProjectCreateResult = {
 	/**
-	 * The Space, new or existing, as a repo entry with `space` true.
+	 * The Project, new or existing, as a repo entry with `project` true.
 	 */
 	repo: Repo,
 };
 
 /**
- * Params of `space/delete` (0069), behind the `spaces` capability: deletes a Space and every
+ * Params of `project/delete` (0069), behind the `projects` capability: deletes a Project and every
  * chat in it, as `thread/delete` deletes each, then its repository. Appends `repo.removed`.
- * Fails with `repoNotFound` for an unknown id or an entry that isn't a Space.
+ * Fails with `repoNotFound` for an unknown id or an entry that isn't a Project.
  */
-export type SpaceDeleteParams = {
+export type ProjectDeleteParams = {
 	/**
-	 * The Space's id.
+	 * The Project's id.
 	 */
-	space: RepoId,
+	project: RepoId,
 };
 
 /**
- * Result of `space/delete`.
+ * Result of `project/delete`.
  */
-export type SpaceDeleteResult = Record<symbol, never>;
+export type ProjectDeleteResult = Record<symbol, never>;
 
 /**
- * Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
- * Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
- * and transcript, and its next CLI process gets the Space's instructions and files. Appends
+ * Params of `thread/setProject` (0090), behind the `projectThreads` capability: adds threads to a
+ * Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+ * and transcript, and its next CLI process gets the Project's instructions and files. Appends
  * `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
- * thread started in a Space or a Project, and with `repoNotFound` for a `space` that isn't one.
+ * thread started in a Project or an orchestrator, and with `repoNotFound` for a `project` that isn't
+ * one.
  */
-export type ThreadSetSpaceParams = {
+export type ThreadSetProjectParams = {
 	/**
 	 * The threads, by run id.
 	 */
 	threads: Array<RunId>,
 	/**
-	 * The Space to add them to. Absent takes them out of their Space.
+	 * The Project to add them to. Absent takes them out of their Project.
 	 */
-	space?: RepoId,
+	project?: RepoId,
 };
 
 /**
- * Result of `thread/setSpace`.
+ * Result of `thread/setProject`.
  */
-export type ThreadSetSpaceResult = {
+export type ThreadSetProjectResult = {
 	/**
 	 * The threads as they stand, in the order asked.
 	 */
@@ -6954,25 +6960,25 @@ export type ThreadDeleteParams = {
 export type ThreadDeleteResult = Record<symbol, never>;
 
 /**
- * Params of `project/start`: starts the project's coordinator chat (0024), behind the
- * `coordinator` capability.
+ * Params of `orchestrator/start`: starts the orchestrator chat (0024), behind the
+ * `orchestrator` capability.
  *
- * The coordinator is a run with policy `noWrite` in the project's repository, whose
- * `coordinatorThread` is its own id. Later messages, Stop, and its transcript go through
- * `agent/send`, `agent/cancel`, and `agent/events`, and its events are the project's `agent.*`
- * events. Idempotent on `runId` like `agent/start`: the same params return the run, and
- * different ones fail with `idConflict`. A project's coordinator is its newest one, which
- * `Project.coordinator` names. A new `runId` starts over: it replaces the coordinator unless that
- * one is starting or running, when it fails with `idConflict`. So a coordinator whose session
- * can't be resumed never locks its project.
+ * The orchestrator is a run with policy `noWrite` in the orchestrator's repository, whose
+ * `orchestratorThread` is its own id. Later messages, Stop, and its transcript go through
+ * `agent/send`, `agent/cancel`, and `agent/events`, and its events are the orchestrator's
+ * `agent.*` events. Idempotent on `runId` like `agent/start`: the same params return the run, and
+ * different ones fail with `idConflict`. An orchestrator is its newest one, which
+ * `Orchestrator.orchestrator` names. A new `runId` starts over: it replaces the orchestrator
+ * unless that one is starting or running, when it fails with `idConflict`. So an orchestrator
+ * whose session can't be resumed never locks its orchestrator.
  */
-export type ProjectStartParams = {
+export type OrchestratorStartParams = {
 	/**
-	 * The project.
+	 * The orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
-	 * The coordinator run's id, a version 7 UUID generated by the client.
+	 * The orchestrator run's id, a version 7 UUID generated by the client.
 	 */
 	runId: RunId,
 	/**
@@ -6980,7 +6986,7 @@ export type ProjectStartParams = {
 	 */
 	prompt: string,
 	/**
-	 * The account to run on. Absent means the coordinator role's default
+	 * The account to run on. Absent means the orchestrator role's default
 	 * (`accounts/defaults/*`). Only a backend that can coordinate takes it: Claude Code.
 	 */
 	account?: AccountChoice,
@@ -6993,7 +6999,7 @@ export type ProjectStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * Ignored: the coordinator runs in the project's permission mode (0042).
+	 * Ignored: the orchestrator runs in the orchestrator's permission mode (0042).
 	 */
 	permission?: AgentPermission,
 	/**
@@ -7001,47 +7007,49 @@ export type ProjectStartParams = {
 	 */
 	images?: Array<PromptImage>,
 	/**
-	 * Ignored: plxd starts the coordinator as if it were set, as it does every Project child,
-	 * since the inbox answers its permission requests (0042).
+	 * Ignored: plxd starts the orchestrator as if it were set, as it does every orchestrator
+	 * child, since the inbox answers its permission requests (0042).
 	 */
 	approvals?: boolean,
 };
 
 /**
- * Params of `coordinator/fresh`: ends a Project's coordinator session, so its next message
- * starts a new one from the Project's state (PLX-937, decision 0079), behind the
- * `coordinatorEpochs` capability.
+ * Params of `orchestrator/fresh`: ends an orchestrator session, so its next message
+ * starts a new one from the orchestrator's state (PLX-937, decision 0079), behind the
+ * `orchestratorEpochs` capability.
  *
- * The coordinator stays the same run and thread. plxd ends its idle CLI, ends its epoch as
- * `userFresh`, and adds an `epoch` item to its transcript. Its next message starts the next
- * epoch from a rehydration packet. Fails with `projectNotFound` for an unknown project, `runNotFound`
- * for one with no coordinator, and `idConflict` while the coordinator is starting or running.
+ * The orchestrator stays the same run and thread. plxd ends its idle CLI, ends its epoch as
+ * `userFresh`, and adds an `epoch` item to its transcript. Its next message starts the next epoch
+ * from a rehydration packet. Fails with `orchestratorNotFound` for an unknown orchestrator,
+ * `runNotFound` for one with no orchestrator, and `idConflict` while the orchestrator is starting
+ * or running.
  */
-export type CoordinatorFreshParams = {
+export type OrchestratorFreshParams = {
 	/**
-	 * The project.
+	 * The orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 };
 
 /**
- * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
- * autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
- * (0045), automatic landing, behind `landing` (0045), how its children are placed, behind
- * `projectPlacement` (0046), its checks, behind `checks` (0045), or the computer its children
- * run on, behind `projectComputer` (0057).
+ * Params of `orchestrator/update`: renames an orchestrator or sets its icon, behind the
+ * `orchestratorEdit` capability (PLX-227, 0032), its permission mode, behind
+ * `orchestratorPermission` (0042), its autonomy level, behind `orchestratorAutonomy` (0043), its
+ * base branch, behind `integrationBranch` (0045), automatic landing, behind `landing` (0045), how
+ * its children are placed, behind `orchestratorPlacement` (0046), its checks, behind `checks`
+ * (0045), or the computer its children run on, behind `orchestratorComputer` (0057).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
- * `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
- * or a new level is not activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
- * A change appends `project.updated`; an update that changes nothing appends no event.
+ * `orchestrator/create`'s rules, and the repository can't change. A rename, a new icon, a new
+ * mode, or a new level is not activity, so `updatedAt` stays as it is. Fails with
+ * `orchestratorNotFound` for an unknown orchestrator. A change appends `orchestrator.updated`; an
+ * update that changes nothing appends no event.
  */
-export type ProjectUpdateParams = {
+export type OrchestratorUpdateParams = {
 	/**
-	 * The project.
+	 * The orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
 	 * The new name. Absent keeps the name.
 	 */
@@ -7049,17 +7057,17 @@ export type ProjectUpdateParams = {
 	/**
 	 * The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0032).
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
 	/**
-	 * The new permission mode. Absent keeps the mode. Each run in the project starts its next
+	 * The new permission mode. Absent keeps the mode. Each run in the orchestrator starts its next
 	 * CLI process in it, and a running CLI keeps its mode until it exits.
 	 */
-	permission?: ProjectPermission,
+	permission?: OrchestratorPermission,
 	/**
 	 * The new autonomy level. Absent keeps it. It applies to the next question: one already
-	 * waiting for the coordinator stays with it, though in `ask` plxd refuses its answer.
+	 * waiting for the orchestrator stays with it, though in `ask` plxd refuses its answer.
 	 */
-	autonomy?: ProjectAutonomy,
+	autonomy?: OrchestratorAutonomy,
 	/**
 	 * The new base branch, behind `integrationBranch`. Absent keeps it. An integration branch
 	 * already cut stays where it is.
@@ -7071,12 +7079,13 @@ export type ProjectUpdateParams = {
 	 */
 	autoLand?: boolean,
 	/**
-	 * How many children may run at once, from 1 to 100, behind `projectPlacement`. Absent keeps
-	 * it. Children already running keep running, and a higher number starts waiting ones.
+	 * How many children may run at once, from 1 to 100, behind `orchestratorPlacement`. Absent
+	 * keeps it. Children already running keep running, and a higher number starts waiting ones.
 	 */
 	maxChildren?: number,
 	/**
-	 * Whether children may run on an API key account, behind `projectPlacement`. Absent keeps it.
+	 * Whether children may run on an API key account, behind `orchestratorPlacement`. Absent keeps
+	 * it.
 	 */
 	allowApiKeys?: boolean,
 	/**
@@ -7085,28 +7094,29 @@ export type ProjectUpdateParams = {
 	 */
 	checks?: string,
 	/**
-	 * The coordinator's proposal for `checks`, behind `checks`, which adds a `needsYou` item
-	 * naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps it.
+	 * The orchestrator's proposal for `checks`, behind `checks`, which adds a `needsYou` item
+	 * naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps
+	 * it.
 	 */
 	proposedChecks?: string,
 	/**
-	 * The Tailscale node ID of the device its children run on, behind `projectComputer` (0057).
-	 * Empty clears it, so they run on this plxd. Absent keeps it. The node has to be one of
-	 * `connect/devices`' tailnet devices, online or not, and the repository needs an `origin`
-	 * for the device to find its copy. A plxd without `projectComputer` refuses it with
+	 * The Tailscale node ID of the device its children run on, behind `orchestratorComputer`
+	 * (0057). Empty clears it, so they run on this plxd. Absent keeps it. The node has to be one
+	 * of `connect/devices`' tailnet devices, online or not, and the repository needs an `origin`
+	 * for the device to find its copy. A plxd without `orchestratorComputer` refuses it with
 	 * `unsupportedOption`. Children already started keep their computer.
 	 */
 	computer?: string,
 };
 
 /**
- * Result of `project/update`.
+ * Result of `orchestrator/update`.
  */
-export type ProjectUpdateResult = {
+export type OrchestratorUpdateResult = {
 	/**
-	 * The project as it stands after the update.
+	 * The orchestrator as it stands after the update.
 	 */
-	project: Project,
+	orchestrator: Orchestrator,
 };
 
 /**
@@ -7479,26 +7489,26 @@ export type PrDiffResult = {
 };
 
 /**
- * Params of `project/delete`: deletes a project with its coordinator and every run in it, their
+ * Params of `orchestrator/delete`: deletes an orchestrator with every run in it, their
  * stored events, sent turns, images, worktrees, and branches, and its shared context folder,
- * behind the `projectDelete` capability (PLX-338).
+ * behind the `orchestratorDelete` capability (PLX-338).
  *
- * Running CLIs are cancelled first, and the delete answers once they have exited, the runs'
- * pushes and Open PRs in flight have finished (PLX-458), and the project is gone, after
- * appending `project.deleted`. Deleting a project that doesn't exist, or a repo entry's id,
- * fails with `projectNotFound`.
+ * Running CLIs are cancelled first, and the delete answers once they have exited, the runs' pushes
+ * and Open PRs in flight have finished (PLX-458), and the orchestrator is gone, after appending
+ * `orchestrator.deleted`. Deleting an orchestrator that doesn't exist, or a repo entry's id, fails
+ * with `orchestratorNotFound`.
  */
-export type ProjectDeleteParams = {
+export type OrchestratorDeleteParams = {
 	/**
-	 * The project.
+	 * The orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 };
 
 /**
- * Result of `project/delete`.
+ * Result of `orchestrator/delete`.
  */
-export type ProjectDeleteResult = Record<symbol, never>;
+export type OrchestratorDeleteResult = Record<symbol, never>;
 
 /**
  * Params of `agent/commands`: lists what a thread on `backend` takes as a command, by asking the
@@ -7828,8 +7838,8 @@ export type HostSettings = {
 	autoResume: boolean,
 	/**
 	 * Whether a plain thread's turn that a plxd restart cut off gets "Continue where you left
-	 * off." once plxd is up (0060). Off by default. A Project's runs always continue. An older
-	 * plxd leaves it out.
+	 * off." once plxd is up (0060). Off by default. An orchestrator's runs always continue. An
+	 * older plxd leaves it out.
 	 */
 	continueAfterRestart?: boolean,
 	/**
@@ -8373,13 +8383,13 @@ export type AccessSetupCodeResult = {
 };
 
 /**
- * Params of `inbox/list`. Fails with `projectNotFound` for an unknown project.
+ * Params of `inbox/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
  */
 export type InboxListParams = {
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 };
 
 /**
@@ -8391,7 +8401,7 @@ export type InboxListResult = {
 	 */
 	items: Array<InboxItem>,
 	/**
-	 * The event log's `seq` from before the list was read. Subscribe to the Project's events
+	 * The event log's `seq` from before the list was read. Subscribe to the orchestrator's events
 	 * with `after` set to it for the items added since. The list may already reflect some events
 	 * after it, and replaying them is harmless.
 	 */
@@ -8400,14 +8410,14 @@ export type InboxListResult = {
 
 /**
  * Params of `inbox/seen`: marks items seen at plxd's clock now. An item already seen keeps its
- * first `seenAt`, and ids not in the Project's inbox are skipped. Fails with `projectNotFound`
- * for an unknown project.
+ * first `seenAt`, and ids not in the orchestrator's inbox are skipped. Fails with
+ * `orchestratorNotFound` for an unknown orchestrator.
  */
 export type InboxSeenParams = {
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
 	 * The items to mark.
 	 */
@@ -8530,8 +8540,8 @@ export type QueueSteerParams = {
 };
 
 /**
- * Params of `question/ask`. Fails with `invalidParams` unless `run` is in a Project and isn't
- * its coordinator, and with `runNotFound` for an unknown run.
+ * Params of `question/ask`. Fails with `invalidParams` unless `run` is in an orchestrator and
+ * isn't its orchestrator, and with `runNotFound` for an unknown run.
  */
 export type QuestionAskParams = {
 	/**
@@ -8583,7 +8593,7 @@ export type Question = {
 	 */
 	status: QuestionStatus,
 	/**
-	 * The coordinator's or the user's answer. Absent while `open` or `escalated`.
+	 * The orchestrator's or the user's answer. Absent while `open` or `escalated`.
 	 */
 	answer?: string,
 	/**
@@ -8605,12 +8615,12 @@ export type QuestionId = string;
 export type QuestionStatus = "open" | "escalated" | "decided" | "answered";
 
 /**
- * Params of `question/answer`. With `from`, the Project's current coordinator answers an `open`
- * question, which becomes `decided`; otherwise it fails with `invalidParams`. Without `from`,
- * the user answers any question, which becomes `answered`. The child gets the answer as a
- * queued message when it differs from what it was last told: its assumption, or the decided
- * answer the user changes. Fails with `invalidParams` for an unknown question, or one whose
- * child is gone.
+ * Params of `question/answer`. With `from`, the orchestrator's current run answers an
+ * `open` question, which becomes `decided`; otherwise it fails with `invalidParams`. Without
+ * `from`, the user answers any question, which becomes `answered`. The child gets the answer as a
+ * queued message when it differs from what it was last told: its assumption, or the decided answer
+ * the user changes. Fails with `invalidParams` for an unknown question, or one whose child is
+ * gone.
  */
 export type QuestionAnswerParams = {
 	/**
@@ -8622,15 +8632,15 @@ export type QuestionAnswerParams = {
 	 */
 	text: string,
 	/**
-	 * The coordinator's run, when it answers. Absent for the user.
+	 * The orchestrator's run, when it answers. Absent for the user.
 	 */
 	from?: RunId,
 };
 
 /**
- * Params of `question/escalate`: the Project's current coordinator passes an `open` question to
- * the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or for
- * a question that isn't open or is unknown.
+ * Params of `question/escalate`: the orchestrator's current run passes an `open` question
+ * to the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or
+ * for a question that isn't open or is unknown.
  */
 export type QuestionEscalateParams = {
 	/**
@@ -8638,19 +8648,19 @@ export type QuestionEscalateParams = {
 	 */
 	question: QuestionId,
 	/**
-	 * The coordinator's run.
+	 * The orchestrator's run.
 	 */
 	from: RunId,
 };
 
 /**
- * Params of `question/list`. Fails with `projectNotFound` for an unknown project.
+ * Params of `question/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
  */
 export type QuestionListParams = {
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 };
 
 /**
@@ -8664,13 +8674,13 @@ export type QuestionListResult = {
 };
 
 /**
- * Params of `board/list`. Fails with `projectNotFound` for an unknown Project.
+ * Params of `board/list`. Fails with `orchestratorNotFound` for an unknown Orchestrator.
  */
 export type BoardListParams = {
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 };
 
 /**
@@ -8684,7 +8694,7 @@ export type BoardListResult = {
 };
 
 /**
- * One item on a Project's status board.
+ * One item on an orchestrator's status board.
  */
 export type BoardItem = {
 	/**
@@ -8755,14 +8765,14 @@ export type BoardStatus = "open" | "done";
 
 /**
  * Params of `board/add`: adds an item. Not idempotent: a retry adds a second item. Fails with
- * `projectNotFound` for an unknown Project, and `invalidParams` for empty or multi-line text
- * over 2 KiB, or links that aren't valid.
+ * `orchestratorNotFound` for an unknown Orchestrator, and `invalidParams` for empty or multi-line
+ * text over 2 KiB, or links that aren't valid.
  */
 export type BoardAddParams = {
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
 	 * One line of Markdown.
 	 */
@@ -8793,13 +8803,13 @@ export type BoardItemResult = {
 
 /**
  * Params of `board/update`: changes what it names of one item, replacing `links` whole. Fails
- * with `invalidParams` for an item the Project doesn't have, or a value `board/add` refuses.
+ * with `invalidParams` for an item the orchestrator doesn't have, or a value `board/add` refuses.
  */
 export type BoardUpdateParams = {
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
 	 * The item.
 	 */
@@ -8823,14 +8833,14 @@ export type BoardUpdateParams = {
 };
 
 /**
- * Params of `board/remove`: removes one item. Removing one the Project doesn't have succeeds
+ * Params of `board/remove`: removes one item. Removing one the orchestrator doesn't have succeeds
  * with `removed` false.
  */
 export type BoardRemoveParams = {
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
 	 * The item.
 	 */
@@ -8858,17 +8868,17 @@ export type MemoryListParams = {
 };
 
 /**
- * Whose memory: the user's own, a repository's, or a Project's (0044).
+ * Whose memory: the user's own, a repository's, or an orchestrator's (0044).
  */
 export type MemoryScope = { "kind": "you" } | { "kind": "repo",
 	/**
 	 * The repo entry.
 	 */
-	id: RepoId, } | { "kind": "project",
+	id: RepoId, } | { "kind": "orchestrator",
 	/**
-	 * The Project.
+	 * The Orchestrator.
 	 */
-	id: ProjectId,
+	id: ScopeId,
 };
 
 /**
@@ -8915,23 +8925,23 @@ export type MemoryFile = {
 	 */
 	date?: string,
 	/**
-	 * Who wrote it: `user`, or `coordinator <run id>`, or for a proposal `thread <run id>` or
-	 * `coordinator <run id>`.
+	 * Who wrote it: `user`, or `orchestrator <run id>`, or for a proposal `thread <run id>` or
+	 * `orchestrator <run id>`.
 	 */
 	writer?: string,
 	/**
-	 * For a proposal in a Project's folder, the scope it is for: a child's, which its
-	 * coordinator curates, or a coordinator's, which the user saves there.
+	 * For a proposal in an orchestrator's folder, the scope it is for: a child's, which its
+	 * orchestrator curates, or an orchestrator's, which the user saves there.
 	 */
 	forScope?: MemoryScopeKind,
 	/**
-	 * For a coordinator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
+	 * For an orchestrator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
 	 * `for_scope`, which saving it replaces.
 	 */
 	replaces?: string,
 	/**
 	 * An entry plxd marked for review because a path it names in backticks is missing from its
-	 * branch: the integration branch for a Project entry, the base branch for a repo entry
+	 * branch: the integration branch for an orchestrator entry, the base branch for a repo entry
 	 * (0044, PLX-407). Rewriting the entry clears it.
 	 */
 	stale?: boolean,
@@ -8978,7 +8988,7 @@ export type MemoryMachine = {
  *
  * A newer plxd may send a value this version does not know; treat it as unknown.
  */
-export type MemoryScopeKind = "you" | "repo" | "project";
+export type MemoryScopeKind = "you" | "repo" | "orchestrator";
 
 /**
  * Params of `memory/read`. Fails with `contextNotFound` if there is no such file.
@@ -9017,7 +9027,7 @@ export type MemoryReadResult = {
  * Params of `memory/write`: replaces `brief.md`, `knowledge/<slug>.md`, or an entry,
  * `memory/<kind>/<slug>.md`, in full. For an entry, plxd writes the header from `title`, which it
  * then needs, `source`, today's UTC date, and the writer. Fails with `contextTooLarge` over the
- * shared context caps. Only the user writes the brief: a coordinator proposes it.
+ * shared context caps. Only the user writes the brief: an orchestrator proposes it.
  */
 export type MemoryWriteParams = {
 	/**
@@ -9041,9 +9051,9 @@ export type MemoryWriteParams = {
 	 */
 	source?: string,
 	/**
-	 * The run writing, for a thread's Parallax tools. It must be its Project's current
-	 * coordinator, or the write fails with `invalidParams`, and the write adds a `learned` item to
-	 * that Project's inbox. Absent: the user writes.
+	 * The run writing, for a thread's Parallax tools. It must be its orchestrator's current
+	 * orchestrator, or the write fails with `invalidParams`, and the write adds a `learned` item
+	 * to that orchestrator's inbox. Absent: the user writes.
 	 */
 	from?: RunId,
 };
@@ -9080,11 +9090,11 @@ export type MemoryDeleteResult = Record<symbol, never>;
 
 /**
  * Params of `memory/propose`, for a thread's Parallax tools: run `from` proposes an entry, saved
- * as `proposals/<slug>.md`. A Project's child's is saved in the Project's folder, with a `Scope:`
- * line naming `scope`, and its coordinator's next wake-up carries it, then removes it; it
- * doesn't wake the coordinator. A coordinator's is saved the same way, for the user, and no
- * wake-up carries it. A plain thread's, only at its own repository's scope, is saved there for
- * the user. Any other run's fails with `invalidParams`.
+ * as `proposals/<slug>.md`. An orchestrator's child's is saved in the orchestrator's folder, with
+ * a `Scope:` line naming `scope`, and its orchestrator's next wake-up carries it, then removes it;
+ * it doesn't wake the orchestrator. An orchestrator's is saved the same way, for the user, and no
+ * wake-up carries it. A plain thread's, only at its own repository's scope, is saved there for the
+ * user. Any other run's fails with `invalidParams`.
  */
 export type MemoryProposeParams = {
 	/**
@@ -9096,8 +9106,8 @@ export type MemoryProposeParams = {
 	 */
 	scope: MemoryScope,
 	/**
-	 * Its kind. Absent: a rewrite of the Project's brief, which only its coordinator proposes,
-	 * at the Project's scope. Its proposal has no kind.
+	 * Its kind. Absent: a rewrite of the orchestrator's brief, which only its orchestrator
+	 * proposes, at the orchestrator's scope. Its proposal has no kind.
 	 */
 	kind?: MemoryKind,
 	/**
@@ -9110,7 +9120,7 @@ export type MemoryProposeParams = {
 	content: string,
 	/**
 	 * The entry it rewrites, `memory/<kind>/<name>.md` of the same kind at `scope`, which must
-	 * exist. Only a coordinator names one; its proposal records it as `replaces`.
+	 * exist. Only an orchestrator names one; its proposal records it as `replaces`.
 	 */
 	replaces?: string,
 };
@@ -9134,7 +9144,7 @@ export type MemoryProposeResult = {
  *
  * A newer plxd may send a value this version does not know; treat it as unknown.
  */
-export type MemoryProposalTo = "coordinator" | "user";
+export type MemoryProposalTo = "orchestrator" | "user";
 
 /**
  * Params of `memory/syncList`.
@@ -9203,12 +9213,12 @@ export type MemorySyncReadResult = {
 };
 
 /**
- * Params of `land/queue`: queues a finished child of a Project to land on its integration
- * branch, as the coordinator's `land` tool does. It waits for the user's approval unless the
- * Project's `autoLand` is on. A child already waiting, queued, or sent back stays as it is.
+ * Params of `land/queue`: queues a finished child of an orchestrator to land on its integration
+ * branch, as the orchestrator's `land` tool does. It waits for the user's approval unless the
+ * orchestrator's `autoLand` is on. A child already waiting, queued, or sent back stays as it is.
  *
- * Fails with `runNotFound`, or `landRefused` for a run that isn't a Project's completed child
- * with a branch, such as one started with `explore`.
+ * Fails with `runNotFound`, or `landRefused` for a run that isn't an orchestrator's completed
+ * child with a branch, such as one started with `explore`.
  */
 export type LandQueueParams = {
 	/**
@@ -9228,7 +9238,7 @@ export type LandResult = {
 };
 
 /**
- * A child in its Project's landing queue.
+ * A child in its orchestrator's landing queue.
  */
 export type Landing = {
 	/**
@@ -9236,9 +9246,9 @@ export type Landing = {
 	 */
 	runId: RunId,
 	/**
-	 * Its Project.
+	 * Its Orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
 	 * Where it is.
 	 */
@@ -9250,7 +9260,7 @@ export type Landing = {
 };
 
 /**
- * Where a child is in its Project's landing queue.
+ * Where a child is in its orchestrator's landing queue.
  *
  * A newer plxd may send a status this version does not know; treat it as unknown.
  */
@@ -9325,35 +9335,35 @@ export type AgentWaitResult = {
 };
 
 /**
- * Params of `project/fromThreads`: makes a Project from threads (0042), behind the
- * `projectFromThreads` capability.
+ * Params of `orchestrator/fromThreads`: makes an orchestrator from threads (0042), behind the
+ * `orchestratorFromThreads` capability.
  *
- * Each thread must be on the same repo entry and have its own worktree, so a thread on the
- * scratch entry, one in the user's checkout, one whose worktree `agent/accept` removed, or one
- * already in a Project fails with `invalidParams`, as do threads on two repo entries. A thread
- * whose kind has no `permission` in a Project fails with `unsupportedOption`. An unknown thread
+ * Each thread must be on the same repo entry and have its own worktree, so a thread on the scratch
+ * entry, one in the user's checkout, one whose worktree `agent/accept` removed, or one already in
+ * an orchestrator fails with `invalidParams`, as do threads on two repo entries. A thread whose
+ * kind has no `permission` in an orchestrator fails with `unsupportedOption`. An unknown thread
  * fails with `threadNotFound`.
  *
- * plxd creates the Project on the threads' repository as `project/create` does, starts its
- * coordinator as `project/start` does, with a first message asking it to read the threads and
- * propose the brief with `memory_propose` for the user to save, and makes each thread the
- * coordinator's child. When the coordinator can't start, plxd removes the Project it just
- * created and leaves the threads as they were.
+ * plxd creates the orchestrator on the threads' repository as `orchestrator/create` does, starts
+ * its orchestrator as `orchestrator/start` does, with a first message asking it to read the
+ * threads and propose the brief with `memory_propose` for the user to save, and makes each thread
+ * the orchestrator's child. When the orchestrator can't start, plxd removes the orchestrator it
+ * just created and leaves the threads as they were.
  *
  * A thread keeps its history, worktree, branch, and `Thread.repo`. Its run moves to the
- * Project, so its later `agent.*` events are on the Project's scope, and it forwards its
- * permission requests (`approvals`) to the inbox. It takes the coordinator as its `parent`
+ * orchestrator, so its later `agent.*` events are on the orchestrator's scope, and it forwards its
+ * permission requests (`approvals`) to the inbox. It takes the orchestrator as its `parent`
  * (reported as `thread.updated`), replacing any parent it had: a thread another thread started
- * stops waking that thread. It runs in the Project's mode from its next CLI process. Idempotent
- * on `id` and `runId`: a retry returns the same Project and coordinator.
+ * stops waking that thread. It runs in the orchestrator's mode from its next CLI process.
+ * Idempotent on `id` and `runId`: a retry returns the same orchestrator and run.
  */
-export type ProjectFromThreadsParams = {
+export type OrchestratorFromThreadsParams = {
 	/**
-	 * The new project's id, a version 7 UUID generated by the client.
+	 * The new orchestrator's id, a version 7 UUID generated by the client.
 	 */
-	id: ProjectId,
+	id: ScopeId,
 	/**
-	 * The coordinator run's id, a version 7 UUID generated by the client.
+	 * The orchestrator run's id, a version 7 UUID generated by the client.
 	 */
 	runId: RunId,
 	/**
@@ -9361,30 +9371,30 @@ export type ProjectFromThreadsParams = {
 	 */
 	name: string,
 	/**
-	 * The project's permission mode, which the user picked in the disclaimer.
+	 * The orchestrator's permission mode, which the user picked in the disclaimer.
 	 */
-	permission: ProjectPermission,
+	permission: OrchestratorPermission,
 	/**
 	 * The threads, by run id: at least one.
 	 */
 	threads: Array<RunId>,
 	/**
-	 * The coordinator's account, as `project/start`'s. Absent means the coordinator role's
+	 * The orchestrator's account, as `orchestrator/start`'s. Absent means the orchestrator role's
 	 * default.
 	 */
 	account?: AccountChoice,
 };
 
 /**
- * Result of `project/fromThreads`.
+ * Result of `orchestrator/fromThreads`.
  */
-export type ProjectFromThreadsResult = {
+export type OrchestratorFromThreadsResult = {
 	/**
-	 * The project, with its coordinator.
+	 * The orchestrator, with its run.
 	 */
-	project: Project,
+	orchestrator: Orchestrator,
 	/**
-	 * The coordinator's run.
+	 * The orchestrator's run.
 	 */
 	run: AgentRun,
 };
@@ -9562,9 +9572,9 @@ export type ScheduledTask = {
 	 */
 	thread?: RunId,
 	/**
-	 * The Project whose coordinator each fire messages.
+	 * The orchestrator each fire messages.
 	 */
-	project?: ProjectId,
+	orchestrator?: ScopeId,
 	/**
 	 * Without `thread` or `project`: the repo entry each fire launches a thread in. Absent
 	 * launches it with no repository.
@@ -9730,9 +9740,9 @@ export type ScheduleSaveParams = {
 	 */
 	thread?: RunId,
 	/**
-	 * The Project whose coordinator each fire messages.
+	 * The orchestrator each fire messages.
 	 */
-	project?: ProjectId,
+	orchestrator?: ScopeId,
 	/**
 	 * The repo entry each fire launches a thread in.
 	 */
@@ -10666,7 +10676,7 @@ export type ShellSnapshot = {
 	/**
 	 * Every project.
 	 */
-	projects: Array<Project>,
+	orchestrators: Array<Orchestrator>,
 	/**
 	 * Every repo entry.
 	 */
@@ -10676,7 +10686,7 @@ export type ShellSnapshot = {
 	 */
 	threads: Array<Thread>,
 	/**
-	 * Every agent run: each thread's, and each Project's coordinators' and children's.
+	 * Every agent run: each thread's, and each orchestrators' and children's.
 	 */
 	runs: Array<AgentRun>,
 	/**
@@ -11174,7 +11184,7 @@ export type EventsEventParams = {
 	/**
 	 * The project it belongs to. Absent for host-level events.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
 	/**
 	 * What happened.
 	 */
@@ -11338,7 +11348,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

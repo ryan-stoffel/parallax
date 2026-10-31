@@ -106,7 +106,7 @@ impl Store {
         Ok(turn.as_deref().map(Uuid::parse_str).transpose()?)
     }
 
-    /// When `run_id`'s newest recorded turn was sent, or `None` if it has none: a coordinator's
+    /// When `run_id`'s newest recorded turn was sent, or `None` if it has none: an orchestrator's
     /// last turn, which wake-ups rebuilt after a restart count from (PLX-178).
     ///
     /// # Errors

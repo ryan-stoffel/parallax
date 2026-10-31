@@ -1,7 +1,7 @@
 // For tests only: a fake bridge's `watch`, served from its own `request` and `subscribe`, as plxd
 // builds its snapshots from the same lists and logs (0059): `thread/list`, `agent/list`, and
-// `project/list` for the shell, with the permission requests in running runs' logs, and a run's
-// `agent/events` and `queue/list` for a thread. Then the fake's events follow.
+// `orchestrator/list` for the shell, with the permission requests in running runs' logs, and a
+// run's `agent/events` and `queue/list` for a thread. Then the fake's events follow.
 import type {
   ParallaxBridge,
   RpcError,
@@ -55,14 +55,14 @@ export function fakeWatch(bridge: () => Fake) {
 
 async function shell(call: Call, host: string): Promise<ShellSnapshot | RpcError> {
   const answers = await Promise.all(
-    ["thread/list", "agent/list", "project/list"].map((method) => call(host, method, {})),
+    ["thread/list", "agent/list", "orchestrator/list"].map((method) => call(host, method, {})),
   );
   const failed = answers.find((a) => a.error)?.error;
   if (failed) return failed;
-  const [list, listed, projects] = answers.map((a) => a.result) as [
+  const [list, listed, orchestrators] = answers.map((a) => a.result) as [
     Pick<ShellSnapshot, "repos" | "threads"> & { seq: number },
     { runs: AgentRun[]; seq: number },
-    { projects: ShellSnapshot["projects"]; seq?: number },
+    { orchestrators: ShellSnapshot["orchestrators"]; seq?: number },
   ];
   const requests: LoggedEvent[] = [];
   for (const run of listed.runs.filter((r) => r.approvals && isOpen(r.status))) {
@@ -70,8 +70,8 @@ async function shell(call: Call, host: string): Promise<ShellSnapshot | RpcError
     if (Array.isArray(logged)) requests.push(...logged);
   }
   return {
-    seq: Math.max(list.seq, listed.seq, projects.seq ?? 0),
-    projects: projects.projects,
+    seq: Math.max(list.seq, listed.seq, orchestrators.seq ?? 0),
+    orchestrators: orchestrators.orchestrators,
     repos: list.repos,
     threads: list.threads,
     runs: listed.runs,

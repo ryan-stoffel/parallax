@@ -1,8 +1,8 @@
-// Search every thread and Project on every computer, as a sheet up to just below the notch: a glass
-// field at the top, focused once the sheet is up, then the recent threads; with a query, the
-// Projects, threads, and archived threads whose name, repository, branch, or computer has every
-// word, each match highlighted. A result becomes the main view, which closes the sheet and the
-// sidebar.
+// Search every thread and orchestrator on every computer, as a sheet up to just below the notch: a
+// glass field at the top, focused once the sheet is up, then the recent threads; with a query, the
+// Orchestrators, threads, and archived threads whose name, repository, branch, or computer has
+// every word, each match highlighted. A result becomes the main view, which closes the sheet and
+// the sidebar.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { History, MessagesSquare, Search as SearchIcon, X, type LucideIcon } from "lucide-react-native";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -11,14 +11,14 @@ import { Keyboard, Pressable, SectionList, StyleSheet, Text, TextInput, View } f
 import { useFleet } from "./fleet";
 import { Glass } from "./Glass";
 import { ago, useShow, type Screens } from "./nav";
-import { ProjectGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
+import { OrchestratorGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
 import { marks, matchesAll, wordsOf } from "./searchText";
-import { entriesOf, projectsOf, when, type Entry, type ProjectEntry } from "./Sidebar";
+import { entriesOf, orchestratorsOf, when, type Entry, type ProjectEntry } from "./Sidebar";
 import { AttentionBadge, Icon, T, useColors } from "./ui";
 
 const RECENT = 8;
 
-type Result = { kind: "thread"; entry: Entry } | { kind: "project"; entry: ProjectEntry };
+type Result = { kind: "thread"; entry: Entry } | { kind: "orchestrator"; entry: ProjectEntry };
 
 /** What a thread matches on, and its line under the title. */
 const placeOf = (e: Entry, many: boolean) =>
@@ -50,10 +50,10 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
     words.length
       ? [
           {
-            title: "Projects",
-            data: projectsOf(computers)
-              .filter((p) => matchesAll(`${p.project.name} ${p.computer.machine.name}`, words))
-              .map((entry): Result => ({ kind: "project", entry })),
+            title: "Orchestrators",
+            data: orchestratorsOf(computers)
+              .filter((p) => matchesAll(`${p.orchestrator.name} ${p.computer.machine.name}`, words))
+              .map((entry): Result => ({ kind: "orchestrator", entry })),
           },
           { title: "Threads", data: asThreads(threads.filter((e) => !e.thread.archived && found(e))) },
           { title: "Archived", data: asThreads(threads.filter((e) => e.thread.archived && found(e))) },
@@ -78,7 +78,7 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
             accessibilityLabel="Search threads"
             value={query}
             onChangeText={setQuery}
-            placeholder="Search threads and Projects"
+            placeholder="Search threads and orchestrators"
             placeholderTextColor={c.faintForeground}
             selectionColor={c.accent}
             autoCorrect={false}
@@ -99,7 +99,7 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
       <SectionList
         sections={sections}
         keyExtractor={(r) =>
-          `${r.kind}:${r.entry.computer.machine.id}:${r.kind === "thread" ? r.entry.thread.id : r.entry.project.id}`
+          `${r.kind}:${r.entry.computer.machine.id}:${r.kind === "thread" ? r.entry.thread.id : r.entry.orchestrator.id}`
         }
         stickySectionHeadersEnabled={false}
         contentInsetAdjustmentBehavior="automatic"
@@ -116,19 +116,19 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
           </View>
         )}
         renderItem={({ item }) => {
-          if (item.kind === "project") {
-            const { project, computer, threads: count } = item.entry;
-            const coordinator = project.coordinator;
+          if (item.kind === "orchestrator") {
+            const { orchestrator, computer, threads: count } = item.entry;
+            const orchestratorRun = orchestrator.run;
             return (
               <ResultRow
-                icon={<ProjectGlyph icon={project.icon} size={project.icon?.image ? 36 : 18} />}
-                title={project.name}
-                detail={[`${count} thread${count === 1 ? "" : "s"}`, computer.machine.name, !coordinator && "Not started"]
+                icon={<OrchestratorGlyph icon={orchestrator.icon} size={orchestrator.icon?.image ? 36 : 18} />}
+                title={orchestrator.name}
+                detail={[`${count} thread${count === 1 ? "" : "s"}`, computer.machine.name, !orchestratorRun && "Not started"]
                   .filter(Boolean)
                   .join(" · ")}
                 words={words}
                 right={<AttentionBadge attention={item.entry.attention} />}
-                onPress={coordinator ? () => open(computer.machine.id, coordinator) : undefined}
+                onPress={orchestratorRun ? () => open(computer.machine.id, orchestratorRun) : undefined}
               />
             );
           }

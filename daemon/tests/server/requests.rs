@@ -6,8 +6,10 @@ use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{
     CancelRequestParams, INVALID_REQUEST, PARSE_ERROR, REQUEST_CANCELLED,
 };
-use parallax_protocol::methods::{CancelRequest, HostHealth, ProjectCreate, ProjectList};
-use parallax_protocol::{HostHealthParams, ProjectCreateResult, ProjectListParams, QueueStats};
+use parallax_protocol::methods::{CancelRequest, HostHealth, OrchestratorCreate, OrchestratorList};
+use parallax_protocol::{
+    HostHealthParams, OrchestratorCreateResult, OrchestratorListParams, QueueStats,
+};
 use tokio::time::{Instant, sleep};
 
 use crate::support::{Client, PATIENCE, Plxd, WriteLock, create_params, temp_dir};
@@ -20,13 +22,14 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
     let mut client = Client::ready(&plxd.socket).await;
+    // plxd's start-up jobs go first: one still to run would wait on the lock ahead of the create.
+    let before = settled(&mut client).await;
     let lock = WriteLock::take(dir.path());
 
     // The create starts and waits for SQLite's lock; the second create queues behind it. Lists
     // read on their own thread (PLX-457), so only a write can queue here.
-    let before = store_queue(&mut client).await.jobs;
     let params = create_params(dir.path(), "parallax");
-    let create = client.send::<ProjectCreate>(params.clone()).await;
+    let create = client.send::<OrchestratorCreate>(params.clone()).await;
     let deadline = Instant::now() + PATIENCE;
     loop {
         let queue = store_queue(&mut client).await;
@@ -37,7 +40,7 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
         sleep(Duration::from_millis(10)).await;
     }
     let queued = client
-        .send::<ProjectCreate>(create_params(dir.path(), "queued"))
+        .send::<OrchestratorCreate>(create_params(dir.path(), "queued"))
         .await;
     client
         .notify::<CancelRequest>(CancelRequestParams { id: queued.clone() })
@@ -54,18 +57,38 @@ async fn a_cancelled_request_gets_exactly_one_answer_and_started_work_finishes()
     lock.release();
     let finished = client.response().await;
     assert_eq!(finished.id, Some(create));
-    let created: ProjectCreateResult = finished.into_result().unwrap();
-    assert_eq!(created.project.id, params.id);
+    let created: OrchestratorCreateResult = finished.into_result().unwrap();
+    assert_eq!(created.orchestrator.id, params.id);
 
     // A cancel for a request that was already answered is ignored.
     client
         .notify::<CancelRequest>(CancelRequestParams { id: 1.into() })
         .await;
     let listed = client
-        .call::<ProjectList>(ProjectListParams {})
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap();
-    assert_eq!(listed.projects, [created.project]);
+    assert_eq!(listed.orchestrators, [created.orchestrator]);
+}
+
+/// The store's started jobs once plxd's start-up jobs are done: nothing queued and none started
+/// over [`SETTLE`]. Background tasks start theirs as plxd starts, which on a busy runner can be
+/// after the socket is up.
+async fn settled(client: &mut Client) -> u64 {
+    let deadline = Instant::now() + PATIENCE;
+    let mut last = store_queue(client).await;
+    loop {
+        sleep(SETTLE).await;
+        let now = store_queue(client).await;
+        if now.queued == 0 && now.jobs == last.jobs {
+            return now.jobs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "plxd's start-up jobs never settled"
+        );
+        last = now;
+    }
 }
 
 /// The store's job queue, from `host/health`.
@@ -141,22 +164,22 @@ async fn a_client_that_disconnects_mid_request_leaves_the_server_serving() {
     // A whole create, then gone before the answer.
     let params = create_params(dir.path(), "parallax");
     let mut hasty = Client::ready(&plxd.socket).await;
-    hasty.send::<ProjectCreate>(params.clone()).await;
+    hasty.send::<OrchestratorCreate>(params.clone()).await;
     drop(hasty);
 
     // The retry with the same id is safe whether or not the first create ran.
     let mut client = Client::ready(&plxd.socket).await;
     let retried = client
-        .call::<ProjectCreate>(params.clone())
+        .call::<OrchestratorCreate>(params.clone())
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     assert_eq!(retried.id, params.id);
     let listed = client
-        .call::<ProjectList>(ProjectListParams {})
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap();
-    assert_eq!(listed.projects, [retried]);
+    assert_eq!(listed.orchestrators, [retried]);
     assert_eq!(listed.seq, 1);
     client
         .call::<HostHealth>(HostHealthParams {})

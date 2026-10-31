@@ -1,28 +1,29 @@
-//! `project/fromThreads` (PLX-419, 0042): threads on one repo entry, each in its own worktree,
-//! become a new Project's children under its coordinator.
+//! `orchestrator/fromThreads` (PLX-419, 0042): threads on one repo entry, each in its own worktree,
+//! become a new orchestrator's children under its orchestrator.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use parallax_protocol::methods::{AgentSend, ProjectFromThreads, ThreadStart};
+use parallax_protocol::methods::{AgentSend, OrchestratorFromThreads, ThreadStart};
 use parallax_protocol::{
-    AccountChoice, AgentPermission, ProjectFromThreadsParams, ProjectId, ProjectPermission, RunId,
+    AccountChoice, AgentPermission, OrchestratorFromThreadsParams, OrchestratorPermission, RunId,
+    ScopeId,
 };
 use plxd::backend::{RunRequest, ToolPolicy};
 use tokio::time::Instant;
 
 use super::{Host, message, real_repo, start_params};
 use crate::agents::{end_turn, init};
-use crate::coordinator::{nth_launch, roles_mapping};
+use crate::orchestrator::{nth_launch, roles_mapping};
 use crate::support::PATIENCE;
 
-fn params(threads: Vec<RunId>) -> ProjectFromThreadsParams {
-    ProjectFromThreadsParams {
-        id: ProjectId::generate(),
+fn params(threads: Vec<RunId>) -> OrchestratorFromThreadsParams {
+    OrchestratorFromThreadsParams {
+        id: ScopeId::generate(),
         run_id: RunId::generate(),
         name: "app".to_owned(),
-        permission: ProjectPermission::Bypass,
+        permission: OrchestratorPermission::Bypass,
         threads,
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
@@ -30,13 +31,13 @@ fn params(threads: Vec<RunId>) -> ProjectFromThreadsParams {
     }
 }
 
-/// Workers end each turn at once, and the coordinator has a script for its first turn and the
-/// wake-ups the joined threads send it. Both run in a Project only in `permissions`.
+/// Workers end each turn at once, and the orchestrator has a script for its first turn and the
+/// wake-ups the joined threads send it. Both run in an orchestrator only in `permissions`.
 fn host(seen: &Arc<Mutex<Vec<RunRequest>>>, permissions: &'static [AgentPermission]) -> Host {
-    let coordinator = || vec![init("coordinator-1"), end_turn("Here's a draft brief.")];
+    let orchestrator = || vec![init("orchestrator-1"), end_turn("Here's a draft brief.")];
     Host::start(roles_mapping(
         vec![init("worker-1"), end_turn("Done.")],
-        vec![coordinator(), coordinator(), coordinator()],
+        vec![orchestrator(), orchestrator(), orchestrator()],
         seen,
         permissions,
     ))
@@ -61,11 +62,12 @@ async fn worker_launches(seen: &Mutex<Vec<RunRequest>>, n: usize) -> Vec<RunRequ
     }
 }
 
-/// Two threads become a Project's children: the Project is on their repository, its coordinator
-/// is asked to read them and propose the brief, and each keeps its repo entry and worktree, takes
-/// the coordinator as its parent, and runs its next turn in the Project's mode.
+/// Two threads become an orchestrator's children: the orchestrator is on their repository, its
+/// orchestrator is asked to read them and propose the brief, and each keeps its repo entry and
+/// worktree, takes the orchestrator as its parent, and runs its next turn in the orchestrator's
+/// mode.
 #[tokio::test]
-async fn threads_become_a_projects_children_under_its_coordinator() {
+async fn threads_become_a_orchestrators_children_under_its_orchestrator() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let host = host(&seen, &[AgentPermission::Auto, AgentPermission::Bypass]);
     let path = real_repo(host.work.path(), "app");
@@ -84,13 +86,16 @@ async fn threads_become_a_projects_children_under_its_coordinator() {
 
     let request = params(threads.iter().map(|run| run.id).collect());
     let made = client
-        .call::<ProjectFromThreads>(request.clone())
+        .call::<OrchestratorFromThreads>(request.clone())
         .await
         .unwrap();
-    assert_eq!(made.project.id, request.id);
-    assert_eq!(made.project.repo_path, repo.path);
-    assert_eq!(made.project.permission, Some(ProjectPermission::Bypass));
-    assert_eq!(made.project.coordinator, Some(request.run_id));
+    assert_eq!(made.orchestrator.id, request.id);
+    assert_eq!(made.orchestrator.repo_path, repo.path);
+    assert_eq!(
+        made.orchestrator.permission,
+        Some(OrchestratorPermission::Bypass)
+    );
+    assert_eq!(made.orchestrator.run, Some(request.run_id));
     assert_eq!(made.run.id, request.run_id);
 
     let kickoff = nth_launch(&seen, 0).await.prompt;
@@ -112,8 +117,11 @@ async fn threads_become_a_projects_children_under_its_coordinator() {
         assert!(Path::new(thread.worktree_path.as_deref().unwrap()).is_dir());
     }
 
-    let again = client.call::<ProjectFromThreads>(request).await.unwrap();
-    assert_eq!(again.project.id, made.project.id, "idempotent");
+    let again = client
+        .call::<OrchestratorFromThreads>(request)
+        .await
+        .unwrap();
+    assert_eq!(again.orchestrator.id, made.orchestrator.id, "idempotent");
     assert_eq!(again.run.id, made.run.id);
 
     client

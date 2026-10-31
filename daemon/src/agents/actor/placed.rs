@@ -1,5 +1,6 @@
-//! Starting a Project's child that waited to be placed (PLX-413, decision 0046): its first CLI,
-//! on the account [`crate::agents::placement`] found, with the first message it was queued with.
+//! Starting an orchestrator's child that waited to be placed (PLX-413, decision 0046): its first
+//! CLI, on the account [`crate::agents::placement`] found, with the first message it was queued
+//! with.
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{AccountChoice, AgentRun, ErrorKind, Role};

@@ -1,13 +1,13 @@
-//! A Project's history (0044, PLX-407): `history/<run id>.md` in its folder, one per child, which
-//! plxd writes each time the child's CLI ends, from the run's row and last result, as 0025's
-//! wake-up summaries are. A child resumed later rewrites its own. The coordinator reads one with
+//! An orchestrator's history (0044, PLX-407): `history/<run id>.md` in its folder, one per child,
+//! which plxd writes each time the child's CLI ends, from the run's row and last result, as 0025's
+//! wake-up summaries are. A child resumed later rewrites its own. The orchestrator reads one with
 //! `memory_read`. It costs no tokens. History counts toward the bulk cap, not the 20 MiB one
 //! (PLX-941).
 
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use parallax_protocol::{AgentOutcome, AgentRun, ContextWriteId, InboxKind, ProjectId};
+use parallax_protocol::{AgentOutcome, AgentRun, ContextWriteId, InboxKind, ScopeId};
 use tracing::warn;
 
 use super::memory::one_line;
@@ -25,7 +25,7 @@ const RESULT_BYTES: usize = 8 * 1024;
 /// `failed` one: the child's end doesn't wait on it.
 pub(crate) async fn write(
     daemon: &Arc<Daemon>,
-    project: ProjectId,
+    project: ScopeId,
     run: &AgentRun,
     outcome: &AgentOutcome,
 ) {

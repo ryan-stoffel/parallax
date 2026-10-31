@@ -1,13 +1,13 @@
 //! Corrections reach running children (0044, PLX-407): changing or deleting a memory entry sends
-//! each running child of the Projects that read it a queued message (PLX-370) naming the change.
-//! An entry in a Project's folder reaches that Project, a repo entry's every Project in its
-//! repository, and You every Project.
+//! each running child of the orchestrators that read it a queued message (PLX-370) naming the
+//! change. An entry in an orchestrator's folder reaches that orchestrator, a repo entry's every
+//! orchestrator in its repository, and You every orchestrator.
 
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentDelivery, AgentSendParams, AgentStatus, MemoryScope, ProjectId, RunId, TurnId,
+    AgentDelivery, AgentSendParams, AgentStatus, MemoryScope, RunId, ScopeId, TurnId,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -26,7 +26,7 @@ pub(crate) enum Change {
     Deleted,
 }
 
-/// Tells each running child of the Projects `scope` reaches that the entry at `path`, titled
+/// Tells each running child of the orchestrators `scope` reaches that the entry at `path`, titled
 /// `title` when known, had `change`, without waiting for it. A path that isn't an entry tells no
 /// one, and a failure is logged.
 // ponytail: a child whose CLI ends between the lookup and the send is resumed by the message;
@@ -75,21 +75,21 @@ pub(crate) fn tell(
     });
 }
 
-/// The runs, other than coordinators, starting or running in the Projects `scope` reaches.
+/// The runs, other than orchestrators, starting or running in the orchestrators `scope` reaches.
 async fn running_children(daemon: &Daemon, scope: MemoryScope) -> Result<Vec<RunId>, ErrorObject> {
     let data_dir = daemon.data_dir.clone();
     daemon
         .store
         .run(&CancellationToken::new(), move |db| {
             let projects: Vec<Uuid> = match scope {
-                MemoryScope::Project { id } => vec![id.into()],
+                MemoryScope::Orchestrator { id } => vec![id.into()],
                 MemoryScope::You | MemoryScope::Repo { .. } => {
                     let repos = db.list_repos().map_err(|e| store_error(&e))?;
-                    let all = db.list_projects().map_err(|e| store_error(&e))?;
+                    let all = db.list_orchestrators().map_err(|e| store_error(&e))?;
                     all.into_iter()
                         .filter(|project| match scope {
                             MemoryScope::Repo { id } => {
-                                let folder = ProjectId::try_from(Uuid::from(id))
+                                let folder = ScopeId::try_from(Uuid::from(id))
                                     .ok()
                                     .map(|id| data_dir.context_dir(id));
                                 memory::repo_dir(&data_dir, &project.repo_path, &repos) == folder
@@ -126,7 +126,7 @@ fn message(scope: MemoryScope, path: &str, title: Option<&str>, change: Change) 
     let scope = match scope {
         MemoryScope::You => "you",
         MemoryScope::Repo { .. } => "repo",
-        MemoryScope::Project { .. } => "project",
+        MemoryScope::Orchestrator { .. } => "orchestrator",
     };
     let titled = title.map_or_else(String::new, |title| format!(", titled {}", quoted(title)));
     let (what, then) = match change {

@@ -15,7 +15,7 @@ const RETENTION: SignedDuration = SignedDuration::from_hours(7 * 24);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestrationReceipt {
     pub command_id: String,
-    /// The thread (or Project) whose lane the command ran in.
+    /// The thread (or Orchestrator) whose lane the command ran in.
     pub thread_id: Uuid,
     /// The command's type, such as `thread.archive`.
     pub kind: String,

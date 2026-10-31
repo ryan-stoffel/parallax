@@ -83,7 +83,7 @@ beforeEach(() => {
     "agent/list": () => ({
       result: { runs: [run(thread.id, "Fix the flaky test\nPlease.")], seq: 7 },
     }),
-    "project/list": () => ({ result: { projects: [], seq: 7 } }),
+    "orchestrator/list": () => ({ result: { orchestrators: [], seq: 7 } }),
   };
   window.parallax = {
     onProfile: () => () => {},
@@ -167,7 +167,7 @@ const notice = () => {
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 
-// A main pane menu's option. The sidebar's Create Project dialog has a Repository menu too.
+// A main pane menu's option. The sidebar's Create orchestrator dialog has a Repository menu too.
 async function choose(label: string, option: string) {
   const item = [
     ...document.querySelectorAll<HTMLElement>(

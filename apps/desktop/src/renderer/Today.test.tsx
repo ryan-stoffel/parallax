@@ -73,7 +73,7 @@ beforeEach(() => {
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads, seq: 7 } }),
     "agent/list": () => ({ result: { runs, seq: 7 } }),
-    "project/list": () => ({ result: { projects: [], seq: 7 } }),
+    "orchestrator/list": () => ({ result: { orchestrators: [], seq: 7 } }),
     "thread/archive": archiving(),
     "thread/update": (p) => ({
       result: { thread: { ...threads.find((t) => t.id === p["runId"]), ...p } },

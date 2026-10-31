@@ -311,7 +311,7 @@ fn request(cwd: PathBuf) -> RunRequest {
         permission: None,
         context_window: None,
         fast: None,
-        coordinator_tools: None,
+        orchestrator_tools: None,
         thread_tools: None,
         approvals: true,
         thread: true,

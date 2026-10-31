@@ -34,7 +34,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ParallaxEvent, PrMergeMethod, PrMergeWhenReadyParams, PrStatusCheck, PrStatusFile,
     PrStatusResult, PrStatusThread, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
-    ProjectId, RunId, TurnId,
+    RunId, ScopeId, TurnId,
 };
 use parallax_store::Store;
 use serde::{Deserialize, Serialize};
@@ -325,7 +325,7 @@ pub(crate) async fn watch(
         )));
     }
     debug_assert!(run.pull_requests.contains(&url));
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     let key = url.clone();
     let was_watching = daemon
         .store
@@ -378,7 +378,7 @@ pub(crate) async fn merge_when_ready(
     )
     .await?;
     let id = Uuid::from(run_id);
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     daemon
         .store
         .run(&CancellationToken::new(), move |db| {
@@ -649,7 +649,7 @@ pub(crate) async fn unwatch(
 ) -> Result<PrWatchResult, ErrorObject> {
     let PrViewParams { run_id, url } = params;
     let id = Uuid::from(run_id);
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     let key = url.clone();
     let was_watching = daemon
         .store
@@ -699,7 +699,7 @@ fn stage_watches(db: &mut Tx, run: Uuid) -> Result<(), ErrorObject> {
         .get_run(run)
         .map_err(|e| store_error(&e))?
         .ok_or_else(|| ErrorObject::internal_error(format!("run {run} is gone")))?;
-    let project = ProjectId::try_from(row.fields.project_id)
+    let project = ScopeId::try_from(row.fields.project_id)
         .map_err(|_| ErrorObject::internal_error("a stored project id is not a UUIDv7"))?;
     let run_id = run_id(run)?;
     let urls = urls(db, run)?;
@@ -934,7 +934,7 @@ async fn record(
     let run = target.run;
     let (started_at, seen_merge) = (target.watch.started_at, target.watch.merge);
     let key = url.to_owned();
-    let _lane = daemon.orchestrator.lane(run).await;
+    let _lane = daemon.dispatcher.lane(run).await;
     let recorded = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
@@ -943,7 +943,7 @@ async fn record(
         .await;
     match recorded {
         Ok(true) => {
-            daemon.orchestrator.notify();
+            daemon.dispatcher.notify();
             if !ended.is_empty() {
                 info!(%run, %url, reason = ended, "a pull request watch ended");
             }
@@ -997,7 +997,7 @@ fn record_job(
             },
             text,
         };
-        crate::orchestrator::enqueue_wake(db, &command_id, run, wake)?;
+        crate::dispatcher::enqueue_wake(db, &command_id, run, wake)?;
     }
     Ok(true)
 }

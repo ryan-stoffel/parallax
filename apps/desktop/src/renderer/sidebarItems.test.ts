@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import type { AgentRun, Project, Repo, Thread } from "../protocol/generated/protocol";
+import type { AgentRun, Orchestrator, Repo, Thread } from "../protocol/generated/protocol";
 import type { Draft } from "./drafts";
 import type { Host } from "./hosts";
 import {
@@ -23,7 +23,7 @@ const repo = (id: string, name: string, extra: Partial<Repo> = {}): Repo => ({
 const zeta = repo("r-zeta", "zeta");
 const alpha = repo("r-alpha", "Alpha");
 const scratch = repo("r-scratch", "scratch", { scratch: true });
-const essays = repo("s-essays", "Essays", { space: true });
+const essays = repo("s-essays", "Essays", { project: true });
 const thread = (
   id: string,
   repoId: string,
@@ -40,7 +40,7 @@ const listed = (
   id: string,
   repos: Repo[],
   threads: Thread[],
-  extra: { projects?: Project[]; runs?: Record<string, AgentRun> } = {},
+  extra: { orchestrators?: Orchestrator[]; runs?: Record<string, AgentRun> } = {},
 ): HostThreads => ({
   host: host(id),
   view: {
@@ -48,21 +48,21 @@ const listed = (
       ...emptyThreads,
       repos,
       threads,
-      projects: extra.projects ?? [],
+      orchestrators: extra.orchestrators ?? [],
       runs: extra.runs ?? {},
     },
     capabilities: {},
   } as unknown as ThreadsView,
 });
 
-test("sidebarItems lists threads and Projects with their repo, keeps a Project's threads inside it, and reads a marked-unread finished thread as done", () => {
-  const project: Project = {
+test("sidebarItems lists threads and orchestrators with their repo, keeps an orchestrator's threads inside it, and reads a marked-unread finished thread as done", () => {
+  const orchestrator: Orchestrator = {
     id: "p-ember",
     name: "ember",
     repoPath: zeta.path,
     createdAt: "2026-10-01T09:00:00Z",
     updatedAt: "2026-10-29T11:00:00Z",
-  } as Project;
+  } as Orchestrator;
   const runs = {
     "t-done": {
       id: "t-done",
@@ -80,14 +80,14 @@ test("sidebarItems lists threads and Projects with their repo, keeps a Project's
         "local",
         [zeta],
         [thread("t-done", zeta.id, 30, seen), thread("t-child", zeta.id, 10)],
-        { projects: [project], runs },
+        { orchestrators: [orchestrator], runs },
       ),
     ],
     ["local/t-done"],
   );
   expect(items.map((i) => [i.kind, i.key, i.repo?.name])).toEqual([
     ["thread", "local/t-done", "zeta"],
-    ["project", "local/p-ember", "zeta"],
+    ["orchestrator", "local/p-ember", "zeta"],
   ]);
   expect(items[0]!.attention).toBe("done");
   expect(items[0]!.text).toBe("Thread zeta fix/flaky #12");
@@ -108,7 +108,7 @@ test("draftItems keeps drafts on listed hosts in scope that hold every word, key
   expect(draftItems(list, hosts, "all", ["flaky", "fix"]).map((d) => d.key)).toEqual(["draft:d1"]);
 });
 
-test("folderGroups makes a folder per host and repo, by name, puts a Space's added threads under it, and No repo last", () => {
+test("folderGroups makes a folder per host and repo, by name, puts a Project's added threads under it, and No repo last", () => {
   const hosts = [
     listed(
       "local",
@@ -117,7 +117,7 @@ test("folderGroups makes a folder per host and repo, by name, puts a Space's add
         thread("t-1", zeta.id, 1),
         thread("t-2", scratch.id, 2),
         thread("t-3", alpha.id, 3),
-        thread("t-4", zeta.id, 4, { space: essays.id }),
+        thread("t-4", zeta.id, 4, { project: essays.id }),
         thread("t-5", zeta.id, 5),
       ],
     ),

@@ -71,8 +71,8 @@ const capabilities: Capabilities = Object.fromEntries(
     "composerMenus",
     "computerUse",
     "contextAndFast",
-    "coordinator",
-    "coordinatorEpochs",
+    "orchestrator",
+    "orchestratorEpochs",
     "eventFilters",
     "files",
     "git",
@@ -89,13 +89,13 @@ const capabilities: Capabilities = Object.fromEntries(
     "orchestration",
     "pins",
     "prDiff",
-    "projectAutonomy",
-    "projectDelete",
-    "projectEdit",
-    "projectFromThreads",
-    "projectPermission",
-    "projectPlacement",
-    "projectTasks",
+    "orchestratorAutonomy",
+    "orchestratorDelete",
+    "orchestratorEdit",
+    "orchestratorFromThreads",
+    "orchestratorPermission",
+    "orchestratorPlacement",
+    "orchestratorTasks",
     "providerUpdates",
     "providers",
     "pullRequests",
@@ -109,9 +109,9 @@ const capabilities: Capabilities = Object.fromEntries(
     "sendModel",
     "sendOptions",
     "setupScripts",
-    "spaceContext",
-    "spaceThreads",
-    "spaces",
+    "projectContext",
+    "projectThreads",
+    "projects",
     "threadAttention",
     "threadFork",
     "threadImport",
@@ -144,14 +144,19 @@ const db = createFixtures();
 let seq = 0;
 const logs = new Map<string, LoggedEvent[]>();
 const runOf = (id: string) => db.runs.find((r) => r.id === id);
-/** A run's scope, as its events carry it: its Project, or its thread's repo entry. */
+/** A run's scope, as its events carry it: its orchestrator, or its thread's repo entry. */
 const scopeOf = (runId: string) => runOf(runId)?.project;
 
 function number(runId: string, list: RunEvent[]) {
-  const project = scopeOf(runId);
+  const orchestrator = scopeOf(runId);
   logs.set(
     runId,
-    list.map((e) => ({ seq: ++seq, time: e.time, ...(project && { project }), event: e.event })),
+    list.map((e) => ({
+      seq: ++seq,
+      time: e.time,
+      ...(orchestrator && { orchestrator }),
+      event: e.event,
+    })),
   );
 }
 // Oldest run first, so seqs rise with time across runs, roughly as plxd's log does.
@@ -205,11 +210,11 @@ const queued = new Map<string, ThreadRun[]>([
 ]);
 
 /** Logs and delivers an event, as plxd does: a run's to its scope, a host-level one to the host. */
-function emit(event: ParallaxEvent, project?: string) {
+function emit(event: ParallaxEvent, orchestrator?: string) {
   const logged: LoggedEvent = {
     seq: ++seq,
     time: new Date().toISOString(),
-    ...(project && { project }),
+    ...(orchestrator && { orchestrator }),
     event,
   };
   if ("runId" in event && event.kind.startsWith("agent.")) {
@@ -626,7 +631,7 @@ const remoteImportable: ImportableSession[] = [
     source: "claude",
     id: "session_01r2",
     title: "Upgrade the homelab Postgres",
-    cwd: "C:\\Users\\ryan\\life\\projects\\homelab",
+    cwd: "C:\\Users\\ryan\\life\\orchestrators\\homelab",
     updatedAt: ago(40),
     remote: true,
   },
@@ -642,7 +647,7 @@ const remoteImportable: ImportableSession[] = [
     source: "claude",
     id: "session_01r4",
     title: "Write the backup cron script",
-    cwd: "C:\\Users\\ryan\\life\\projects\\homelab",
+    cwd: "C:\\Users\\ryan\\life\\orchestrators\\homelab",
     updatedAt: ago(60 * 30),
     remote: true,
   },
@@ -768,9 +773,9 @@ const handlers: { [M in Method]?: Handler<M> } = {
     ),
   }),
 
-  "project/list": () => ({ projects: db.projects, seq }),
-  "project/create": (p) => {
-    const project = {
+  "orchestrator/list": () => ({ orchestrators: db.orchestrators, seq }),
+  "orchestrator/create": (p) => {
+    const orchestrator = {
       id: p.id,
       name: p.name,
       repoPath: p.repoPath,
@@ -781,32 +786,32 @@ const handlers: { [M in Method]?: Handler<M> } = {
       createdAt: now(),
       updatedAt: now(),
     };
-    db.projects.push(project);
+    db.orchestrators.push(orchestrator);
     db.inbox[p.id] = [];
     db.questions[p.id] = [];
     db.context[p.id] = [];
-    emit({ kind: "project.created", project });
-    return { project };
+    emit({ kind: "orchestrator.created", orchestrator });
+    return { orchestrator };
   },
-  "project/update": (p) => {
-    const project = db.projects.find((x) => x.id === p.project);
-    if (!project) return fail("no such project", "projectNotFound");
-    const { project: _, ...change } = p;
-    Object.assign(project, change);
-    emit({ kind: "project.updated", project });
-    return { project };
+  "orchestrator/update": (p) => {
+    const orchestrator = db.orchestrators.find((x) => x.id === p.orchestrator);
+    if (!orchestrator) return fail("no such orchestrator", "orchestratorNotFound");
+    const { orchestrator: _, ...change } = p;
+    Object.assign(orchestrator, change);
+    emit({ kind: "orchestrator.updated", orchestrator });
+    return { orchestrator };
   },
-  "project/delete": (p) => {
-    db.projects = db.projects.filter((x) => x.id !== p.project);
-    emit({ kind: "project.deleted", project: p.project });
+  "orchestrator/delete": (p) => {
+    db.orchestrators = db.orchestrators.filter((x) => x.id !== p.orchestrator);
+    emit({ kind: "orchestrator.deleted", orchestrator: p.orchestrator });
     return {};
   },
-  // Ends the coordinator's session: its next message starts the next epoch (0079).
-  "coordinator/fresh": (p) => {
-    const project = db.projects.find((x) => x.id === p.project);
-    if (!project) return fail("no such project", "projectNotFound");
-    const run = project.coordinator ? runOf(project.coordinator) : undefined;
-    if (!run) return fail("no coordinator", "runNotFound");
+  // Ends the orchestrator's session: its next message starts the next epoch (0079).
+  "orchestrator/fresh": (p) => {
+    const orchestrator = db.orchestrators.find((x) => x.id === p.orchestrator);
+    if (!orchestrator) return fail("no such orchestrator", "orchestratorNotFound");
+    const run = orchestrator.run ? runOf(orchestrator.run) : undefined;
+    if (!run) return fail("no orchestrator run", "runNotFound");
     const epochs = (logs.get(run.id) ?? []).filter(
       (l) => l.event.kind === "agent.output" && l.event.items.some((i) => i.kind === "epoch"),
     ).length;
@@ -821,12 +826,12 @@ const handlers: { [M in Method]?: Handler<M> } = {
     );
     return { run: { ...run } };
   },
-  "project/start": (p) => {
-    const project = db.projects.find((x) => x.id === p.project);
-    if (!project) return fail("no such project", "projectNotFound");
+  "orchestrator/start": (p) => {
+    const orchestrator = db.orchestrators.find((x) => x.id === p.orchestrator);
+    if (!orchestrator) return fail("no such orchestrator", "orchestratorNotFound");
     const run: AgentRun = {
       id: p.runId,
-      project: p.project,
+      project: p.orchestrator,
       prompt: p.prompt,
       policy: "noWrite",
       status: "starting",
@@ -835,21 +840,23 @@ const handlers: { [M in Method]?: Handler<M> } = {
       model: p.model ?? "claude-opus-5-5",
       effort: p.effort ?? "high",
       contextWindow: 1_000_000,
-      permission: project.permission ?? "auto",
+      permission: orchestrator.permission ?? "auto",
       approvals: !!p.approvals,
-      worktreePath: project.repoPath,
+      worktreePath: orchestrator.repoPath,
       createdAt: now(),
       updatedAt: now(),
     };
-    project.coordinator = run.id;
+    orchestrator.run = run.id;
     startRun(run);
     return { run };
   },
 
   "thread/list": () => ({ repos: db.repos, threads: db.threads, seq }),
   "thread/start": (p) => {
-    const project = p.project ? db.projects.find((x) => x.id === p.project) : undefined;
-    const repo = p.project ?? p.repo ?? db.repos.find((r) => r.scratch)!.id;
+    const orchestrator = p.orchestrator
+      ? db.orchestrators.find((x) => x.id === p.orchestrator)
+      : undefined;
+    const repo = p.orchestrator ?? p.repo ?? db.repos.find((r) => r.scratch)!.id;
     const slug = p.branchSlug ?? p.runId.slice(-8);
     const run: AgentRun = {
       id: p.runId,
@@ -868,8 +875,8 @@ const handlers: { [M in Method]?: Handler<M> } = {
       effort: p.effort ?? "high",
       contextWindow: p.contextWindow ?? 1_000_000,
       ...(p.fast !== undefined && { fast: p.fast }),
-      permission: project ? (project.permission ?? "auto") : (p.permission ?? "edit"),
-      approvals: !!p.approvals || !!project,
+      permission: orchestrator ? (orchestrator.permission ?? "auto") : (p.permission ?? "edit"),
+      approvals: !!p.approvals || !!orchestrator,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -879,7 +886,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
       createdAt: now(),
       lastPromptAt: now(),
       ...(p.title && { title: p.title }),
-      ...(project?.coordinator && { parent: project.coordinator }),
+      ...(orchestrator?.run && { parent: orchestrator.run }),
       ...(p.parent && { parent: p.parent }),
     };
     startRun(run, thread);
@@ -962,12 +969,12 @@ const handlers: { [M in Method]?: Handler<M> } = {
     const { runId, seen, ...rest } = p;
     return threadResult(runId, { ...rest, ...(seen && { seenAt: now() }) });
   },
-  "thread/setSpace": (p) => {
+  "thread/setProject": (p) => {
     const threads = p.threads.map((runId) => {
       const thread = db.threads.find((t) => t.id === runId);
       if (!thread) return undefined;
-      if (p.space) thread.space = p.space;
-      else delete thread.space;
+      if (p.project) thread.project = p.project;
+      else delete thread.project;
       emit({ kind: "thread.updated", thread });
       return thread;
     });
@@ -1037,14 +1044,14 @@ const handlers: { [M in Method]?: Handler<M> } = {
     emit({ kind: "repo.updated", repo });
     return { repo };
   },
-  "space/create": (p) => {
+  "project/create": (p) => {
     const found = db.repos.find((r) => r.id === p.id);
     if (found) return { repo: found };
     const repo = {
       id: p.id,
       name: p.name.trim(),
       path: `${HOME}/.parallax/spaces/${p.id}`,
-      space: true,
+      project: true,
       ...(p.icon && { icon: p.icon }),
       createdAt: now(),
     };
@@ -1052,10 +1059,10 @@ const handlers: { [M in Method]?: Handler<M> } = {
     emit({ kind: "repo.added", repo });
     return { repo };
   },
-  "space/delete": (p) => {
-    db.threads = db.threads.filter((t) => t.repo !== p.space);
-    db.repos = db.repos.filter((r) => r.id !== p.space);
-    emit({ kind: "repo.removed", repo: p.space });
+  "project/delete": (p) => {
+    db.threads = db.threads.filter((t) => t.repo !== p.project);
+    db.repos = db.repos.filter((r) => r.id !== p.project);
+    emit({ kind: "repo.removed", repo: p.project });
     return {};
   },
   "repo/refs": () => ({
@@ -1334,11 +1341,11 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "accounts/refresh": () => ({ clis: db.clis, checkedAt: now() }),
   "accounts/keys/list": () => ({ accounts: db.keys }),
   "accounts/defaults/get": () => ({
-    coordinator: { kind: "subscription", backend: "claude" },
+    orchestrator: { kind: "subscription", backend: "claude" },
     worker: { kind: "subscription", backend: "claude" },
   }),
   "accounts/defaults/set": () => ({
-    coordinator: { kind: "subscription", backend: "claude" },
+    orchestrator: { kind: "subscription", backend: "claude" },
     worker: { kind: "subscription", backend: "claude" },
   }),
   "providers/list": () => ({ providers: db.providers, checkedAt: now() }),
@@ -1364,7 +1371,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
               models: [],
               permissions: [],
               efforts: false,
-              coordinator: false,
+              orchestrator: false,
             },
       );
     }
@@ -1432,13 +1439,13 @@ const handlers: { [M in Method]?: Handler<M> } = {
       : fail(`no context file ${p.path}`, "contextNotFound");
   },
 
-  "inbox/list": (p) => ({ items: db.inbox[p.project] ?? [], seq }),
+  "inbox/list": (p) => ({ items: db.inbox[p.orchestrator] ?? [], seq }),
   "inbox/seen": (p) => {
-    const items = (db.inbox[p.project] ?? []).filter((i) => p.items.includes(i.id));
+    const items = (db.inbox[p.orchestrator] ?? []).filter((i) => p.items.includes(i.id));
     for (const i of items) i.seenAt ??= now();
     return { items };
   },
-  "question/list": (p) => ({ questions: db.questions[p.project] ?? [] }),
+  "question/list": (p) => ({ questions: db.questions[p.orchestrator] ?? [] }),
   "question/answer": (p) => {
     const question = Object.values(db.questions)
       .flat()
@@ -1710,8 +1717,8 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
       };
     case "agent/list":
       return { runs: db.runs.filter((r) => own(r.id)), seq };
-    case "project/list":
-      return { projects: [], seq };
+    case "orchestrator/list":
+      return { orchestrators: [], seq };
     // The Gaming PC runs the Remote Control threads' sessions (PLX-1143).
     case "thread/importable":
       return {
@@ -2018,7 +2025,7 @@ export const mockBridge: ParallaxBridge = {
     // A LAN computer runs nothing in the preview.
     if (isLanHost(hostId))
       return delay({
-        result: { repos: [], threads: [], runs: [], projects: [], seq },
+        result: { repos: [], threads: [], runs: [], orchestrators: [], seq },
         logId: LOG_ID,
       } as unknown as HostResponse<Result<M>>);
     if (hostId !== LOCAL && !deviceOf(hostId)?.parallax)
@@ -2101,7 +2108,7 @@ export const mockBridge: ParallaxBridge = {
       const runs = known ? db.runs.filter((r) => own(r.id)) : [];
       snapshot = {
         seq,
-        projects: hostId === LOCAL ? db.projects : [],
+        orchestrators: hostId === LOCAL ? db.orchestrators : [],
         repos: known ? (deviceOf(hostId)?.repos?.(db.repos) ?? db.repos) : [],
         threads: known ? db.threads.filter((t) => own(t.id)) : [],
         runs,

@@ -1,11 +1,11 @@
-//! A Project's coordinator's `land` tool (PLX-410, decision 0045): queues a finished child to land
-//! on the Project's integration branch, through `land/queue`. And `checks_propose` (PLX-411):
-//! proposes the Project's checks command, which the user confirms, through `project/update`. Only
-//! a coordinator gets them.
+//! An orchestrator's `land` tool (PLX-410, decision 0045): queues a finished child to land on the
+//! orchestrator's integration branch, through `land/queue`. And `checks_propose` (PLX-411):
+//! proposes the orchestrator's checks command, which the user confirms, through
+//! `orchestrator/update`. Only an orchestrator gets them.
 
-use parallax_protocol::methods::{AgentList, LandQueue, ProjectUpdate};
+use parallax_protocol::methods::{AgentList, LandQueue, OrchestratorUpdate};
 use parallax_protocol::{
-    AgentListParams, LandQueueParams, LandingStatus, ProjectId, ProjectUpdateParams, RunId,
+    AgentListParams, LandQueueParams, LandingStatus, OrchestratorUpdateParams, RunId, ScopeId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -13,25 +13,25 @@ use serde_json::{Value, json};
 use super::thread::Binding;
 use super::{object, parse, pretty, tool};
 
-/// The tools a coordinator gets from this module.
+/// The tools an orchestrator gets from this module.
 pub const TOOLS: &[&str] = &["land", "checks_propose"];
 
-/// [`TOOLS`] for a coordinator, and none for anyone else.
+/// [`TOOLS`] for an orchestrator, and none for anyone else.
 #[must_use]
-pub fn tools(coordinator: bool) -> &'static [&'static str] {
-    if coordinator { TOOLS } else { &[] }
+pub fn tools(orchestrator: bool) -> &'static [&'static str] {
+    if orchestrator { TOOLS } else { &[] }
 }
 
 /// The definitions of [`tools`], in its order.
 #[must_use]
-pub fn definitions(coordinator: bool) -> Vec<Value> {
-    if !coordinator {
+pub fn definitions(orchestrator: bool) -> Vec<Value> {
+    if !orchestrator {
         return Vec::new();
     }
     vec![
         tool(
             "land",
-            "Queue a finished child whose review passed to land on the Project's integration branch, as one squashed commit titled with its task's first line. It waits for the user's approval unless the Project lands automatically. If it conflicts, Parallax sends it back to merge the branch and queues it again, and you hear how it went. Never land an exploration child.",
+            "Queue a finished child whose review passed to land on the orchestrator's integration branch, as one squashed commit titled with its task's first line. It waits for the user's approval unless the orchestrator lands automatically. If it conflicts, Parallax sends it back to merge the branch and queues it again, and you hear how it went. Never land an exploration child.",
             object(
                 json!({
                     "runId": {"type": "string", "description": "The child's run id, from thread_list or thread_launch."},
@@ -42,7 +42,7 @@ pub fn definitions(coordinator: bool) -> Vec<Value> {
         ),
         tool(
             "checks_propose",
-            "Propose the Project's checks: one shell command, run from the repository's root after each landing, that exits 0 when the integration branch is healthy, such as `cargo test --workspace && npm test`. Find it once, from AGENTS.md, CI config, and package scripts. The user confirms or edits it before it ever runs. Red checks take the child's work off the branch and send it the output.",
+            "Propose the orchestrator's checks: one shell command, run from the repository's root after each landing, that exits 0 when the integration branch is healthy, such as `cargo test --workspace && npm test`. Find it once, from AGENTS.md, CI config, and package scripts. The user confirms or edits it before it ever runs. Red checks take the child's work off the branch and send it the output.",
             object(
                 json!({
                     "command": {"type": "string", "description": "The command, for `sh -c` (`cmd /C` on Windows). At most 4,096 bytes."},
@@ -66,22 +66,22 @@ struct ProposeArgs {
     command: String,
 }
 
-/// `checks_propose`: proposes `project`'s checks command, the caller's Project when it is its
-/// coordinator. It never runs until the user confirms it.
+/// `checks_propose`: proposes `project`'s checks command, the caller's Orchestrator when it is its
+/// orchestrator. It never runs until the user confirms it.
 pub(super) async fn propose(
     binding: &Binding,
-    project: Option<ProjectId>,
+    project: Option<ScopeId>,
     arguments: Value,
 ) -> Result<String, String> {
-    let project = project.ok_or("only a Project's coordinator proposes its checks")?;
+    let project = project.ok_or("only an orchestrator proposes its checks")?;
     let ProposeArgs { command } = parse(arguments)?;
     if command.trim().is_empty() {
         return Err("command must not be empty".to_owned());
     }
     let plxd = &binding.plxd;
     let project = plxd
-        .call::<ProjectUpdate>(ProjectUpdateParams {
-            project,
+        .call::<OrchestratorUpdate>(OrchestratorUpdateParams {
+            orchestrator: project,
             name: None,
             icon: None,
             permission: None,
@@ -95,7 +95,7 @@ pub(super) async fn propose(
             allow_api_keys: None,
         })
         .await?
-        .project;
+        .orchestrator;
     Ok(pretty(&json!({
         "proposed": project.proposed_checks,
         "current": project.checks,
@@ -103,14 +103,14 @@ pub(super) async fn propose(
     })))
 }
 
-/// `land`: queues the child `runId` of `project`, the caller's Project when it is its
-/// coordinator.
+/// `land`: queues the child `runId` of `project`, the caller's Orchestrator when it is its
+/// orchestrator.
 pub(super) async fn call(
     binding: &Binding,
-    project: Option<ProjectId>,
+    project: Option<ScopeId>,
     arguments: Value,
 ) -> Result<String, String> {
-    let project = project.ok_or("only a Project's coordinator lands its children")?;
+    let project = project.ok_or("only an orchestrator lands its children")?;
     let LandArgs { run_id } = parse(arguments)?;
     let plxd = &binding.plxd;
     let runs = plxd
@@ -120,7 +120,9 @@ pub(super) async fn call(
         .await?
         .runs;
     if !runs.iter().any(|run| run.id == run_id) {
-        return Err(format!("run {run_id} isn't one of your Project's runs"));
+        return Err(format!(
+            "run {run_id} isn't one of your orchestrator's runs"
+        ));
     }
     let landing = plxd
         .call::<LandQueue>(LandQueueParams { run_id })

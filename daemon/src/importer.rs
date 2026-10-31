@@ -43,7 +43,7 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentOutputItem, ChatRole, ImportSource, ImportableSession, MAX_CHAT_MESSAGES,
-    MAX_THREAD_TITLE_BYTES, ProjectId, RepoAddParams, RepoCloneParams, RepoId, RunId,
+    MAX_THREAD_TITLE_BYTES, RepoAddParams, RepoCloneParams, RepoId, RunId, ScopeId,
     ThreadArchiveParams, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
     ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult,
     ThreadStartResult, TurnId,
@@ -391,7 +391,7 @@ async fn create(
                 backend: backend_of(source).to_owned(),
             })
         }),
-        coordinator_thread: None,
+        orchestrator_thread: None,
         notify: false,
         options: RunOptions::default(),
         approvals: true,
@@ -489,16 +489,16 @@ async fn workspace(
     daemon: &Arc<Daemon>,
     repo: Option<RepoId>,
     run_id: RunId,
-) -> Result<(ProjectId, Option<PathBuf>), ErrorObject> {
+) -> Result<(ScopeId, Option<PathBuf>), ErrorObject> {
     let invalid = |_| ErrorObject::internal_error("a repo entry has an invalid id");
     if let Some(repo) = repo {
         return Ok((
-            ProjectId::try_from(uuid::Uuid::from(repo)).map_err(invalid)?,
+            ScopeId::try_from(uuid::Uuid::from(repo)).map_err(invalid)?,
             None,
         ));
     }
     let entry = threads::start_entry(daemon, None).await?;
-    let scope = ProjectId::try_from(entry.id).map_err(invalid)?;
+    let scope = ScopeId::try_from(entry.id).map_err(invalid)?;
     Ok((
         scope,
         threads::scratch_dir(daemon, &entry, run_id, false).await?,

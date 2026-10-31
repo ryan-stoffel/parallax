@@ -495,7 +495,7 @@ mod tests {
     use super::{
         ErrorObject, INVALID_REQUEST, MAX_QUOTED_BYTES, Message, PARSE_ERROR, Request, RequestId,
     };
-    use crate::ProjectCreateParams;
+    use crate::OrchestratorCreateParams;
 
     fn parse(json: &str) -> Result<Message, super::MalformedMessage> {
         Message::from_frame(json.as_bytes())
@@ -586,10 +586,10 @@ mod tests {
         assert!(ErrorObject::method_not_found(&huge).message.len() <= MAX_QUOTED_BYTES + 3);
         let request = Request {
             id: 1.into(),
-            method: "project/create".to_owned(),
+            method: "orchestrator/create".to_owned(),
             params: Some(json!({"id": huge, "name": 1, "repoPath": "/"})),
         };
-        let error = request.params::<ProjectCreateParams>().unwrap_err();
+        let error = request.params::<OrchestratorCreateParams>().unwrap_err();
         assert!(
             error.message.len() <= MAX_QUOTED_BYTES + 3,
             "{}",

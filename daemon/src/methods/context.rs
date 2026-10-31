@@ -1,5 +1,5 @@
 //! `context/list`, `context/read`, and `context/write` (0005, #155), and behind
-//! `projectArtifacts`, `context/readBytes` and `context/saveArtifact` (PLX-941).
+//! `orchestratorArtifacts`, `context/readBytes` and `context/saveArtifact` (PLX-941).
 //!
 //! File I/O runs on tokio's blocking pool (`spawn_blocking`), not the request's own task, since
 //! reading, writing, and listing a project's shared context folder are ordinary blocking
@@ -11,7 +11,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ContextListParams, ContextListResult, ContextReadBytesParams, ContextReadBytesResult,
     ContextReadParams, ContextReadResult, ContextSaveArtifactParams, ContextWriteParams,
-    ContextWriteResult, ErrorKind, InboxKind, ParallaxEvent, ProjectId, RunId,
+    ContextWriteResult, ErrorKind, InboxKind, ParallaxEvent, RunId, ScopeId,
 };
 use parallax_store::StoreError;
 use tracing::info;
@@ -25,7 +25,7 @@ pub(crate) async fn list(
     params: ContextListParams,
 ) -> Result<ContextListResult, ErrorObject> {
     let project = params.project;
-    ensure_project_exists(context, project).await?;
+    ensure_orchestrator_exists(context, project).await?;
     let daemon = Arc::clone(&context.daemon);
     run_blocking(move || {
         let dir = context::ensure_dir(&daemon.data_dir, project).map_err(io_error(""))?;
@@ -54,7 +54,7 @@ pub(crate) async fn read(
         )));
     }
     let project = params.project;
-    ensure_project_exists(context, project).await?;
+    ensure_orchestrator_exists(context, project).await?;
     let daemon = Arc::clone(&context.daemon);
     run_blocking(move || {
         let dir = context::ensure_dir(&daemon.data_dir, project).map_err(io_error(&name))?;
@@ -80,7 +80,7 @@ pub(crate) async fn read_bytes(
     let (offset, length) =
         super::host::slice(params.offset, params.length)?.unwrap_or((0, super::host::CHUNK_BYTES));
     let project = params.project;
-    ensure_project_exists(context, project).await?;
+    ensure_orchestrator_exists(context, project).await?;
     let daemon = Arc::clone(&context.daemon);
     run_blocking(move || {
         let dir = context::ensure_dir(&daemon.data_dir, project).map_err(io_error(&name))?;
@@ -98,9 +98,9 @@ pub(crate) async fn read_bytes(
 /// The largest artifact `context/saveArtifact` copies: `present_files`' own cap.
 const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 
-/// `context/saveArtifact`: copies `path` from a Project child's working folder into the Project's
-/// `artifacts/<run id>/<path>`, deleting the oldest artifacts first when the bulk folders would pass
-/// their cap, with a `needsYou` inbox item saying so.
+/// `context/saveArtifact`: copies `path` from an orchestrator child's working folder into the
+/// orchestrator's `artifacts/<run id>/<path>`, deleting the oldest artifacts first when the bulk
+/// folders would pass their cap, with a `needsYou` inbox item saying so.
 pub(crate) async fn save_artifact(
     context: &Context,
     params: ContextSaveArtifactParams,
@@ -109,7 +109,7 @@ pub(crate) async fn save_artifact(
     crate::worktree::validate_repo_path(&path).map_err(ErrorObject::invalid_params)?;
     let name = format!("artifacts/{run_id}/{path}");
     context::validate_relative_path(&name)?;
-    let project = project_of(context, run_id).await?;
+    let project = orchestrator_of(context, run_id).await?;
     let daemon = Arc::clone(&context.daemon);
     let (root, _) = crate::agents::review::run_folder(&daemon, run_id).await?;
     let (pruned, saved) = run_blocking(move || {
@@ -161,8 +161,8 @@ pub(crate) async fn save_artifact(
     Ok(ContextWriteResult { file: saved? })
 }
 
-/// The Project `run` is a child of, or `invalidParams` for a run in a repo entry.
-async fn project_of(context: &Context, run: RunId) -> Result<ProjectId, ErrorObject> {
+/// The Orchestrator `run` is a child of, or `invalidParams` for a run in a repo entry.
+async fn orchestrator_of(context: &Context, run: RunId) -> Result<ScopeId, ErrorObject> {
     context
         .daemon
         .store
@@ -171,14 +171,14 @@ async fn project_of(context: &Context, run: RunId) -> Result<ProjectId, ErrorObj
                 .get_run(run.into())
                 .map_err(|error| store_error(&error))?
                 .ok_or_else(|| store_error(&StoreError::NotFound { id: run.into() }))?;
-            let in_project = store
-                .get_project(row.fields.project_id)
+            let in_orchestrator = store
+                .get_orchestrator(row.fields.project_id)
                 .map_err(|error| store_error(&error))?
                 .is_some();
-            match ProjectId::try_from(row.fields.project_id) {
-                Ok(project) if in_project => Ok(project),
+            match ScopeId::try_from(row.fields.project_id) {
+                Ok(project) if in_orchestrator => Ok(project),
                 _ => Err(ErrorObject::invalid_params(format!(
-                    "run {run} isn't in a Project, so it has no artifacts"
+                    "run {run} isn't in an orchestrator, so it has no artifacts"
                 ))),
             }
         })
@@ -189,7 +189,7 @@ async fn project_of(context: &Context, run: RunId) -> Result<ProjectId, ErrorObj
 /// artifacts.
 pub(crate) async fn pruned_item(
     daemon: &Arc<crate::server::Daemon>,
-    project: ProjectId,
+    project: ScopeId,
     run: RunId,
     pruned: &[String],
 ) {
@@ -197,7 +197,7 @@ pub(crate) async fn pruned_item(
         return;
     }
     let text = format!(
-        "Deleted the {} oldest artifacts to keep this Project's history and artifacts under 2 GiB",
+        "Deleted the {} oldest artifacts to keep this orchestrator's history and artifacts under 2 GiB",
         pruned.len()
     );
     super::inbox::add(daemon, project, run, InboxKind::NeedsYou, text).await;
@@ -216,7 +216,7 @@ pub(crate) async fn pruned_item(
 /// [`context::MAX_BULK_BYTES`] with [`context::make_room`] first.
 pub(crate) fn write_context_file(
     daemon: &crate::server::Daemon,
-    project: ProjectId,
+    project: ScopeId,
     name: &str,
     content: &str,
     writer: Option<String>,
@@ -291,7 +291,7 @@ pub(crate) async fn write(
     } = params;
     let name = context::validate_relative_path(&path)?.to_owned();
     // 0044's folders hold memory, which only `memory/*` and the memory tools write, so a child
-    // can't skip `memory_propose` and a coordinator's write always adds its `learned` item. The
+    // can't skip `memory_propose` and an orchestrator's write always adds its `learned` item. The
     // brief is the user's, written or approved by them, so it goes through `memory/*` too.
     if name.contains('/') || name.eq_ignore_ascii_case("brief.md") {
         return Err(ErrorObject::invalid_params(
@@ -320,18 +320,21 @@ pub(crate) async fn write(
             format!("{name} would be over the per-file shared context size cap"),
         ));
     }
-    ensure_project_exists(context, project).await?;
+    ensure_orchestrator_exists(context, project).await?;
     let daemon = Arc::clone(&context.daemon);
     run_blocking(move || write_context_file(&daemon, project, &name, &content, writer, id)).await
 }
 
-async fn ensure_project_exists(context: &Context, project: ProjectId) -> Result<(), ErrorObject> {
+async fn ensure_orchestrator_exists(
+    context: &Context,
+    project: ScopeId,
+) -> Result<(), ErrorObject> {
     context
         .daemon
         .store
         .run(&context.cancel, move |store| {
             let found = store
-                .get_project(project.into())
+                .get_orchestrator(project.into())
                 .map_err(|error| store_error(&error))?
                 .is_some();
             if found {
@@ -365,7 +368,7 @@ pub(super) fn io_error(path: &str) -> impl Fn(std::io::Error) -> ErrorObject {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{ContextWriteId, ProjectId};
+    use parallax_protocol::{ContextWriteId, ScopeId};
 
     use super::write_context_file;
     use crate::server::Daemon;
@@ -378,9 +381,9 @@ mod tests {
 
     /// History counts toward the bulk cap, not the 20 MiB one (PLX-941).
     #[test]
-    fn a_history_write_is_not_held_to_the_per_project_cap() {
+    fn a_history_write_is_not_held_to_the_per_orchestrator_cap() {
         let (_dir, daemon) = daemon();
-        let project = ProjectId::generate();
+        let project = ScopeId::generate();
         let full = "a".repeat(usize::try_from(super::context::MAX_FILE_BYTES).unwrap());
         let write = |path: &str, content: &str| {
             write_context_file(

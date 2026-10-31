@@ -658,7 +658,7 @@ fi"#;
             permission: None,
             context_window: None,
             fast: None,
-            coordinator_tools: None,
+            orchestrator_tools: None,
             thread_tools: None,
             approvals: false,
             thread: false,

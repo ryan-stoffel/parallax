@@ -1,8 +1,8 @@
 //! `present_files` (PLX-755): shows documents the agent made, from its thread's folder, as cards in
 //! the transcript, images and videos large in it (PLX-785), and any other file as one to download
 //! (0074). The app reads each through `agent/file`'s working side, in slices, and shows it,
-//! view-only, with Download. A Project's child's files are also copied into the Project's
-//! `artifacts/<thread>/`, so they outlive its worktree (PLX-941).
+//! view-only, with Download. An orchestrator's child's files are also copied into the
+//! orchestrator's `artifacts/<thread>/`, so they outlive its worktree (PLX-941).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -65,7 +65,7 @@ struct PresentArgs {
     paths: Vec<String>,
 }
 
-/// Runs `name`, one of [`TOOLS`], for a Project's child when `child` is set.
+/// Runs `name`, one of [`TOOLS`], for an orchestrator's child when `child` is set.
 ///
 /// # Errors
 ///
@@ -164,7 +164,7 @@ pub async fn call(
     .into())
 }
 
-/// Copies each of `files` into the Project's `artifacts/<thread>/`, and what to tell the model
+/// Copies each of `files` into the orchestrator's `artifacts/<thread>/`, and what to tell the model
 /// about it. A failure doesn't fail the presentation, which already happened.
 async fn save_artifacts(binding: &Binding, files: &[Value]) -> String {
     let mut failed = Vec::new();
@@ -178,10 +178,10 @@ async fn save_artifacts(binding: &Binding, files: &[Value]) -> String {
         }
     }
     if failed.is_empty() {
-        " Saved in your Project's artifacts.".to_owned()
+        " Saved in your orchestrator's artifacts.".to_owned()
     } else {
         format!(
-            " Not saved in your Project's artifacts: {}.",
+            " Not saved in your orchestrator's artifacts: {}.",
             failed.join(", ")
         )
     }

@@ -2,7 +2,7 @@
 //!
 //! [`resolve`] picks the account: the one a task names, or its role's stored default
 //! (`accounts/defaults/get` and `accounts/defaults/set`, `methods::defaults`), and forces the
-//! coordinator's no-write policy regardless of what was asked for (0004). [`start`] then starts
+//! orchestrator's no-write policy regardless of what was asked for (0004). [`start`] then starts
 //! the run, and retries once on a key-account fallback if it fails signed out or rate limited
 //! (0004's fallback), and once as a new session if the session it resumes is gone and it has a
 //! [`Resume::fallback`](crate::backend::Resume::fallback) (PLX-937).
@@ -10,12 +10,12 @@
 //! # What owns calling this, and how
 //!
 //! #156's runner (`crate::agents`) calls `resolve` and `start` for workers, and for a project's
-//! coordinator (PLX-41, 0024). Who owns what (see #119's decision record, 0012):
+//! Orchestrator (PLX-41, 0024). Who owns what (see #119's decision record, 0012):
 //!
 //! - #156 (the M3 runner, workers only) calls `resolve` and `start` for a worker's
 //!   `workspace-write` run, maps [`Event::AccountFallback`] to an `agent/*` notification, and
 //!   charges usage after it to `to_account`, not the account the run started on.
-//! - The same runner runs a project's coordinator (0024): `resolve` and `start` the same way.
+//! - The same runner runs an orchestrator (0024): `resolve` and `start` the same way.
 //! - [`start`]'s returned [`Started::run`] already forwards to whichever attempt is actually
 //!   running, including after a fallback (see [`FallbackRun`]), so a caller never needs to track
 //!   that itself.
@@ -134,8 +134,8 @@ pub trait KeyAccounts: Send + Sync {
 /// Both roles' default accounts, as `accounts/defaults/get` reports them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Defaults {
-    /// The coordinator's default account.
-    pub coordinator: Option<AccountChoice>,
+    /// The orchestrator's default account.
+    pub orchestrator: Option<AccountChoice>,
     /// A worker's default account.
     pub worker: Option<AccountChoice>,
 }
@@ -143,7 +143,7 @@ pub struct Defaults {
 impl Defaults {
     fn for_role(&self, role: Role) -> Option<&AccountChoice> {
         match role {
-            Role::Coordinator => self.coordinator.as_ref(),
+            Role::Orchestrator => self.orchestrator.as_ref(),
             Role::Worker => self.worker.as_ref(),
         }
     }
@@ -178,10 +178,10 @@ impl Selection {
     }
 }
 
-/// The policy `role` actually gets: always [`ToolPolicy::NoWrite`] for [`Role::Coordinator`],
+/// The policy `role` actually gets: always [`ToolPolicy::NoWrite`] for [`Role::Orchestrator`],
 /// whatever `policy` asks for (0004).
 fn enforced_policy(role: Role, policy: ToolPolicy) -> ToolPolicy {
-    if role == Role::Coordinator {
+    if role == Role::Orchestrator {
         ToolPolicy::NoWrite
     } else {
         policy
@@ -190,9 +190,9 @@ fn enforced_policy(role: Role, policy: ToolPolicy) -> ToolPolicy {
 
 /// What [`resolve`] found for a task: its backend, the account it will run as (once its
 /// credential is read), and the policy it actually gets, which may not be what was requested
-/// (0004's coordinator policy).
+/// (0004's orchestrator policy).
 ///
-/// Every field is private. A coordinator's forced [`ToolPolicy::NoWrite`] is meaningless if
+/// Every field is private. An orchestrator's forced [`ToolPolicy::NoWrite`] is meaningless if
 /// something between `resolve` and `start` can change it back, so nothing outside this module can
 /// read or write one without going through [`Resolved::policy`], and [`start`] enforces it again
 /// from the run's role regardless of what `policy()` already says.
@@ -278,7 +278,7 @@ pub enum RoutingError {
 }
 
 /// Picks `role`'s account and backend: `requested` if given, else `role`'s entry in `defaults`.
-/// The coordinator always gets [`ToolPolicy::NoWrite`], whatever `policy` asks for (0004); a
+/// The orchestrator always gets [`ToolPolicy::NoWrite`], whatever `policy` asks for (0004); a
 /// worker gets `policy` as given.
 ///
 /// This reads no credential and starts nothing; [`start`] does both, right before spawning the
@@ -360,7 +360,7 @@ pub fn start(
         policy,
     } = resolved;
     // Re-enforced here, not just trusted from `resolved`: `Resolved`'s fields are private and
-    // `policy` is already correct by construction, but the coordinator's no-write policy is
+    // `policy` is already correct by construction, but the orchestrator's no-write policy is
     // exactly the thing that must never depend on one code path remembering to apply it.
     let policy = enforced_policy(role, policy);
     let is_subscription = matches!(selection, Selection::Subscription { .. });
@@ -373,12 +373,12 @@ pub fn start(
         // A no-write run never writes, so it has no worker sandbox (0013), whatever was asked.
         request.sandbox = None;
     }
-    if role != Role::Coordinator {
-        // Only a coordinator gets its Parallax tools here (0019, PLX-380).
-        request.coordinator_tools = None;
+    if role != Role::Orchestrator {
+        // Only an orchestrator gets its Parallax tools here (0019, PLX-380).
+        request.orchestrator_tools = None;
     }
     if !request.thread {
-        // Only a normal thread gets them as a thread (0041); a coordinator gets them above, and
+        // Only a normal thread gets them as a thread (0041); an orchestrator gets them above, and
         // its subagents get none.
         request.thread_tools = None;
     }

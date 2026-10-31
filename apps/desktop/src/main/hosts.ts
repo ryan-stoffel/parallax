@@ -323,13 +323,14 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
 
   ipcMain.handle("parallax:subscribe", (event, hostId: unknown, key: unknown, params: unknown) => {
     if (!isObject(params)) throw new Error("params must be an object");
-    const { after, project, logId, run, shell } = params;
+    const { after, orchestrator, logId, run, shell } = params;
     if (typeof key !== "string") throw new Error("invalid subscription key");
     if (typeof logId !== "string") throw new Error("logId must be a string");
     if (typeof after !== "number" || !Number.isSafeInteger(after) || after < 0) {
       throw new Error("after must be a non-negative integer");
     }
-    if (project !== undefined && typeof project !== "string") throw new Error("invalid project");
+    if (orchestrator !== undefined && typeof orchestrator !== "string")
+      throw new Error("invalid orchestrator");
     if (run !== undefined && typeof run !== "string") throw new Error("invalid run");
     if (shell !== undefined && typeof shell !== "boolean") throw new Error("invalid shell");
     const host = connection(hostId);
@@ -341,7 +342,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       {
         after,
         logId,
-        ...(project !== undefined && { project }),
+        ...(orchestrator !== undefined && { orchestrator }),
         ...(run !== undefined && { run }),
         ...(shell !== undefined && { shell }),
       } satisfies SubscribeParams,

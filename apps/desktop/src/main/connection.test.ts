@@ -377,7 +377,7 @@ test("resyncRequired ends the subscription with a resync", () => {
 test("events/resync ends only its subscription, and the connection stays up", () => {
   const connection = connect();
   expect(child().request("initialize").params).toMatchObject({
-    capabilities: { resyncNotice: {} },
+    capabilities: { resyncNotice: {}, projects: {} },
   });
   child().handshake();
   const lagging = vi.fn();
@@ -417,21 +417,21 @@ test("a new logId after a reconnect ends every subscription with a resync", () =
 test("a mutating request sends commandId and its timeout retry reuses it", async () => {
   const connection = connect();
   child().handshake();
-  const params = { project: "01901234-5678-7abc-89ab-cdef01234567" };
-  const first = connection.request("project/delete", params);
-  const sent = child().request("project/delete");
+  const params = { orchestrator: "01901234-5678-7abc-89ab-cdef01234567" };
+  const first = connection.request("orchestrator/delete", params);
+  const sent = child().request("orchestrator/delete");
   expect(sent.params?.["commandId"]).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   );
   child().reply({ id: sent.id, error: { code: -32800, message: "timeout" } });
   await Promise.resolve();
-  const again = child().request("project/delete");
+  const again = child().request("orchestrator/delete");
   expect(again.params?.["commandId"]).toBe(sent.params?.["commandId"]);
   child().reply({ id: again.id, result: {} });
   await first;
 
-  const next = connection.request("project/delete", params);
-  const third = child().request("project/delete");
+  const next = connection.request("orchestrator/delete", params);
+  const third = child().request("orchestrator/delete");
   expect(third.params?.["commandId"]).not.toBe(sent.params?.["commandId"]);
   child().reply({ id: third.id, result: {} });
   await next;
@@ -440,28 +440,46 @@ test("a mutating request sends commandId and its timeout retry reuses it", async
 test("a request retries after reconnect with its original command id", async () => {
   const connection = connect();
   child().handshake();
-  const pending = connection.request("project/delete", {
-    project: "01901234-5678-7abc-89ab-cdef01234567",
+  const pending = connection.request("orchestrator/delete", {
+    orchestrator: "01901234-5678-7abc-89ab-cdef01234567",
   });
-  const sent = child().request("project/delete");
+  const sent = child().request("orchestrator/delete");
   child().emit("close", 1, null);
   await Promise.resolve();
   connection.retry();
   child().handshake();
   await Promise.resolve();
-  const retried = child().request("project/delete");
+  const retried = child().request("orchestrator/delete");
   expect(retried.params?.["commandId"]).toBe(sent.params?.["commandId"]);
   child().reply({ id: retried.id, result: {} });
   expect(await pending).toEqual({ result: {}, logId: "log-1" });
 });
 
+test("a plxd from before 0093 gets the old names and answers in the new ones", async () => {
+  const connection = connect();
+  const capabilities = { coordinator: {}, projectEdit: {} };
+  child().reply({ id: child().request("initialize").id, result: { ...initialized, capabilities } });
+  expect(state()).toMatchObject({
+    capabilities: { coordinator: {}, orchestrator: {}, orchestratorEdit: {} },
+  });
+  const listed = connection.request("orchestrator/list", {});
+  const old = { id: "o1", name: "fly", repoPath: "/r", coordinator: "r1" };
+  child().reply({ id: child().request("project/list").id, result: { projects: [old], seq: 4 } });
+  expect(await listed).toMatchObject({
+    result: { orchestrators: [{ id: "o1", run: "r1" }], seq: 4 },
+  });
+});
+
 test("a subscribe after a new logId, with a seq from the old log, resyncs", async () => {
   const connection = connect();
   child().handshake("log-1");
-  const answer = connection.request("project/list", {});
-  child().reply({ id: child().request("project/list").id, result: { projects: [], seq: 40 } });
+  const answer = connection.request("orchestrator/list", {});
+  child().reply({
+    id: child().request("orchestrator/list").id,
+    result: { orchestrators: [], seq: 40 },
+  });
   const snapshot = await answer;
-  expect(snapshot).toEqual({ result: { projects: [], seq: 40 }, logId: "log-1" });
+  expect(snapshot).toEqual({ result: { orchestrators: [], seq: 40 }, logId: "log-1" });
   if (!("result" in snapshot)) return;
 
   // plxd starts over with a fresh log before the renderer subscribes.

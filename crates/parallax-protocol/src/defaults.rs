@@ -14,7 +14,8 @@ use crate::AccountId;
 #[serde(rename_all = "camelCase")]
 pub enum Role {
     /// The no-write planner, always on Claude Code or Codex.
-    Coordinator,
+    #[serde(alias = "coordinator")]
+    Orchestrator,
     /// A subagent that edits a worktree.
     Worker,
 }
@@ -57,10 +58,14 @@ pub struct AccountsDefaultsGetParams {}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountsDefaultsGetResult {
-    /// The coordinator's default account.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The orchestrator's default account.
+    #[serde(
+        default,
+        alias = "coordinator",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
-    pub coordinator: Option<AccountChoice>,
+    pub orchestrator: Option<AccountChoice>,
     /// A worker's default account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

@@ -1,5 +1,5 @@
 // Images sent with a message (PLX-193, decision 0026): read from a pasted, dropped, or picked
-// file into what plxd takes, and fetched back for the transcript. Also a Project's or repo's
+// file into what plxd takes, and fetched back for the transcript. Also an orchestrator's or repo's
 // icon image (PLX-341, decision 0038).
 import type { ConnectionState } from "../preload/bridge";
 import type { ImageMediaType, PromptImage } from "../protocol/generated/protocol";
@@ -88,11 +88,11 @@ export function iconImageBytes(connection?: ConnectionState): number | undefined
   return typeof max === "number" ? max : undefined;
 }
 
-// An icon image's edge: crisp at the largest icon drawn, Create Project's 32 px, at 4x.
+// An icon image's edge: crisp at the largest icon drawn, Create orchestrator's 32 px, at 4x.
 const iconEdge = 128;
 
 /**
- * `file` as a Project's or repo's icon image (PLX-341, 0038): its center cropped square and
+ * `file` as an orchestrator's or repo's icon image (PLX-341, 0038): its center cropped square and
  * redrawn as a 128 px WebP, which keeps any transparency (a GIF keeps its first frame). Resolves to
  * why not, for people, when it isn't an image plxd takes, can't be read, or is over `maxBytes`.
  */

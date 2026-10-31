@@ -1,6 +1,6 @@
 //! Scheduled tasks (0063), as T3 Code's `ScheduledTaskService`: a prompt sent on an interval, at
 //! a time of day, or on each request to a webhook. A task bound to a thread queues its prompt
-//! into it, one in a Project messages the Project's coordinator, and any other launches a new
+//! into it, one in an orchestrator messages the orchestrator, and any other launches a new
 //! thread per fire.
 //!
 //! A task is a row of `scheduled_tasks`: its next run, and the [`ScheduledTask`] with its
@@ -9,7 +9,7 @@
 //! moves any a plxd before that kept in the row. [`run`] keeps one timer for the earliest next
 //! run, re-armed whenever a task changes, and none while no task has one.
 //!
-//! A fire takes the task's orchestrator lane and commits in one writer job: a receipt for
+//! A fire takes the task's dispatcher lane and commits in one writer job: a receipt for
 //! `scheduled-task:<fire key>`, the task's next run and run count, and a `thread.wake` effect
 //! ([`Wake`]). The fire key is the task's id with its due time, the time of a manual run, or a
 //! webhook delivery's id, so a key that already has a receipt commits nothing and a restart
@@ -29,9 +29,9 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Span, Timestamp};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AccountId, AgentEffort, AgentPermission, AgentSendParams, ErrorKind, ProjectId,
-    RepoId, RunId, Schedule, ScheduleDeleteResult, ScheduleIdParams, ScheduleListResult,
-    ScheduleRunStatus, ScheduleSaveParams, ScheduleWebhook, ScheduledTask, SignatureEncoding,
+    AccountChoice, AccountId, AgentEffort, AgentPermission, AgentSendParams, ErrorKind, RepoId,
+    RunId, Schedule, ScheduleDeleteResult, ScheduleIdParams, ScheduleListResult, ScheduleRunStatus,
+    ScheduleSaveParams, ScheduleWebhook, ScheduledTask, ScopeId, SignatureEncoding,
     ThreadStartParams, TurnId,
 };
 use parallax_store::OrchestrationReceipt;
@@ -153,8 +153,13 @@ pub(crate) struct Wake {
 pub(crate) enum To {
     /// Queued behind the thread's running turn, or as its next turn.
     Thread { run_id: RunId, turn_id: TurnId },
-    /// A Project's coordinator, as it is when the wake is sent.
-    Coordinator { project: ProjectId, turn_id: TurnId },
+    /// An orchestrator, as it is when the wake is sent. Stored as `coordinator` before 0093.
+    #[serde(alias = "coordinator")]
+    Orchestrator {
+        #[serde(alias = "project")]
+        orchestrator: ScopeId,
+        turn_id: TurnId,
+    },
     /// A new thread.
     New {
         run_id: RunId,
@@ -230,7 +235,7 @@ pub(crate) async fn save(
     };
     let new_key = new_secret_given(&params).then(AccountId::generate);
     let replacing = params.id.is_some();
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     let checked = params.clone();
     let legacy = reader(daemon, move |db| {
         let existing = existing(db, id, replacing, &checked)?;
@@ -384,7 +389,7 @@ pub(crate) async fn delete(
     params: ScheduleIdParams,
 ) -> Result<ScheduleDeleteResult, ErrorObject> {
     let id = task_id(&params.id)?;
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     let (deleted, key) = store(daemon, move |db| {
         let key = read(db, id)?.and_then(|stored| stored.secret_key);
         let deleted = db.delete_scheduled_task(id).map_err(|e| store_error(&e))?;
@@ -470,13 +475,13 @@ async fn fire_due(daemon: &Daemon) {
 
 /// Fires task `id` in its lane: see the module documentation.
 async fn fire(daemon: &Daemon, id: Uuid, trigger: Trigger) -> Result<Fired, ErrorObject> {
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     let fired = store(daemon, move |db| {
         fire_job(db, id, trigger, Timestamp::now())
     })
     .await?;
     if matches!(fired, Fired::Sent(_)) {
-        daemon.orchestrator.notify();
+        daemon.dispatcher.notify();
     }
     daemon.schedules.changed.notify_one();
     Ok(fired)
@@ -531,9 +536,9 @@ fn fire_job(db: &mut Tx, id: Uuid, trigger: Trigger, now: Timestamp) -> Result<F
             run_id,
             turn_id: TurnId::generate(),
         }
-    } else if let Some(project) = task.project {
-        To::Coordinator {
-            project,
+    } else if let Some(orchestrator) = task.orchestrator {
+        To::Orchestrator {
+            orchestrator,
             turn_id: TurnId::generate(),
         }
     } else {
@@ -569,7 +574,7 @@ fn fire_job(db: &mut Tx, id: Uuid, trigger: Trigger, now: Timestamp) -> Result<F
         to,
         text,
     };
-    crate::orchestrator::enqueue_wake(db, &command_id, id, wake)?;
+    crate::dispatcher::enqueue_wake(db, &command_id, id, wake)?;
     Ok(Fired::Sent(Box::new(stored)))
 }
 
@@ -579,15 +584,18 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
     let Wake { task, to, text } = wake;
     let sent = match to {
         To::Thread { run_id, turn_id } => send(daemon, run_id, turn_id, text).await,
-        To::Coordinator { project, turn_id } => {
-            let coordinator = store(daemon, move |db| {
-                crate::agents::coordinator::coordinator_of(db, project.into())
+        To::Orchestrator {
+            orchestrator: project,
+            turn_id,
+        } => {
+            let orchestrator = store(daemon, move |db| {
+                crate::agents::orchestrator::orchestrator_of(db, project.into())
             })
             .await;
-            match coordinator {
+            match orchestrator {
                 Ok(Some(run_id)) => send(daemon, run_id, turn_id, text).await,
                 Ok(None) => Err(ErrorObject::invalid_params(format!(
-                    "Project {project} has no coordinator"
+                    "orchestrator {project} has no run"
                 ))),
                 Err(error) => Err(error),
             }
@@ -605,7 +613,7 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
             ThreadStartParams {
                 run_id,
                 repo,
-                project: None,
+                orchestrator: None,
                 parent: None,
                 notify: None,
                 title: Some(title),
@@ -635,7 +643,7 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
         }
         return;
     };
-    let _lane = daemon.orchestrator.lane(task).await;
+    let _lane = daemon.dispatcher.lane(task).await;
     let recorded = store(daemon, move |db| {
         let Some(mut stored) = read(db, task)? else {
             return Ok(());
@@ -824,10 +832,10 @@ fn check(params: &ScheduleSaveParams, keystore: bool) -> Result<(), ErrorObject>
     if params.prompt.trim().is_empty() || params.prompt.len() > MAX_PROMPT_BYTES {
         return invalid("prompt must be 1 byte to 64 KiB");
     }
-    if usize::from(params.thread.is_some()) + usize::from(params.project.is_some()) > 1
-        || (params.repo.is_some() && (params.thread.is_some() || params.project.is_some()))
+    if usize::from(params.thread.is_some()) + usize::from(params.orchestrator.is_some()) > 1
+        || (params.repo.is_some() && (params.thread.is_some() || params.orchestrator.is_some()))
     {
-        return invalid("name at most one of thread, project, and repo");
+        return invalid("name at most one of thread, orchestrator, and repo");
     }
     match &params.schedule {
         Schedule::Interval { every_ms } if *every_ms < MIN_INTERVAL_MS => {
@@ -872,7 +880,7 @@ fn existing(
     Ok(existing)
 }
 
-/// Refuses a save whose thread, Project, or repo entry doesn't exist.
+/// Refuses a save whose thread, Orchestrator, or repo entry doesn't exist.
 fn check_targets(db: &Tx, params: &ScheduleSaveParams) -> Result<(), ErrorObject> {
     let error = |e| store_error(&e);
     let missing = |what: &str, id: &dyn std::fmt::Display| {
@@ -885,10 +893,13 @@ fn check_targets(db: &Tx, params: &ScheduleSaveParams) -> Result<(), ErrorObject
     {
         return missing("thread", &run);
     }
-    if let Some(project) = params.project
-        && db.get_project(project.into()).map_err(error)?.is_none()
+    if let Some(project) = params.orchestrator
+        && db
+            .get_orchestrator(project.into())
+            .map_err(error)?
+            .is_none()
     {
-        return missing("Project", &project);
+        return missing("Orchestrator", &project);
     }
     if let Some(repo) = params.repo
         && db.get_repo(repo.into()).map_err(error)?.is_none()
@@ -913,7 +924,7 @@ fn build(
         enabled,
         schedule,
         thread,
-        project,
+        orchestrator: project,
         repo,
         account,
         model,
@@ -962,7 +973,7 @@ fn build(
             enabled,
             schedule,
             thread,
-            project,
+            orchestrator: project,
             repo,
             account,
             model,
@@ -1016,7 +1027,7 @@ async fn move_old_secrets(daemon: &Daemon) {
     .unwrap_or_default();
     let mut moved = false;
     for id in old {
-        let _lane = daemon.orchestrator.lane(id).await;
+        let _lane = daemon.dispatcher.lane(id).await;
         let Ok(Some(mut stored)) = reader(daemon, move |db| read(db, id)).await else {
             continue;
         };

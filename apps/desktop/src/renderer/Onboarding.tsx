@@ -641,7 +641,7 @@ function Parallel() {
   );
 }
 
-/** A coordinator handing a Project's work to three agents, each checking off in turn. */
+/** An orchestrator handing an orchestrator's work to three agents, each checking off in turn. */
 function Delegate() {
   // In the stage's 400 by 240 viewBox, stretched to fill it, so the nodes' percentages match.
   const children = [
@@ -674,7 +674,7 @@ function Delegate() {
         >
           <p className="flex items-center gap-2 text-body font-semibold">
             <ParallaxMark className="size-5" />
-            Coordinator
+            Orchestrator
           </p>
           <p className="mt-0.5 text-meta text-muted-foreground">Ship the billing API</p>
         </div>
@@ -793,8 +793,8 @@ const tour = [
     Scene: Parallel,
   },
   {
-    title: "Projects that plan themselves",
-    body: "Give a Project a goal. Its coordinator splits the work, hands each piece to an agent, and checks what comes back.",
+    title: "Orchestrator threads",
+    body: "Give an orchestrator thread a goal. It splits the work, hands each piece to an agent, and checks what comes back.",
     Scene: Delegate,
   },
   {

@@ -2,9 +2,9 @@
   {
     "jsonrpc": "2.0",
     "id": 0,
-    "method": "project/start",
+    "method": "orchestrator/start",
     "params": {
-      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "orchestrator": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
       "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
       "prompt": "Add a README, and link it from the docs.",
       "permission": "plan",
@@ -23,7 +23,7 @@
         "status": "running",
         "backend": "claude",
         "accountId": "claude",
-        "coordinatorThread": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "orchestratorThread": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
         "permission": "plan",
         "approvals": true,
         "createdAt": "2026-10-01T11:59:58Z",
@@ -47,13 +47,13 @@
             "kind": "toolCall",
             "callId": "toolu_01Ap1",
             "name": "Bash",
-            "input": {"command": "pnpm test", "description": "Run the tests"}
+            "input": { "command": "pnpm test", "description": "Run the tests" }
           },
           {
             "kind": "approvalRequested",
             "approvalId": "01a0f1c2-3d4e-7f50-8a61-7b8c9d0e1f21",
             "toolName": "Bash",
-            "input": {"command": "pnpm test", "description": "Run the tests"},
+            "input": { "command": "pnpm test", "description": "Run the tests" },
             "callId": "toolu_01Ap1",
             "alwaysAllow": ["Bash(pnpm test:*)"],
             "expiresAt": "2026-10-01T12:30:00Z"
@@ -76,11 +76,7 @@
   {
     "jsonrpc": "2.0",
     "id": 1,
-    "result": {
-      "decision": "allowed",
-      "by": "user",
-      "always": true
-    }
+    "result": { "decision": "allowed", "by": "user", "always": true }
   },
   {
     "jsonrpc": "2.0",
@@ -121,7 +117,7 @@
             "kind": "approvalRequested",
             "approvalId": "01a0f1c3-4e5f-7a61-9b72-8c9d0e1f2a32",
             "toolName": "ExitPlanMode",
-            "input": {"plan": "1. Add a README.\n2. Link it from the docs."},
+            "input": { "plan": "1. Add a README.\n2. Link it from the docs." },
             "callId": "toolu_01Ap2",
             "interactive": true,
             "expiresAt": "2026-10-01T12:31:00Z"
@@ -166,7 +162,11 @@
             "kind": "approvalRequested",
             "approvalId": "01a0f1c4-5f60-7b72-8c83-9d0e1f2a3b43",
             "toolName": "Edit",
-            "input": {"file_path": "/Users/me/src/app/.claude/settings.json", "old_string": "{}", "new_string": "{\"hooks\": {}}"},
+            "input": {
+              "file_path": "/Users/me/src/app/.claude/settings.json",
+              "old_string": "{}",
+              "new_string": "{\"hooks\": {}}"
+            },
             "reason": "Claude requested permissions to edit /Users/me/src/app/.claude/settings.json, which is a sensitive file.",
             "blockedPath": "/Users/me/src/app/.claude/settings.json",
             "subagent": "a7f3c2e1",
@@ -206,16 +206,17 @@
       "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
       "approvalId": "01a0f1c4-5f60-7b72-8c83-9d0e1f2a3b43",
       "decision": "allow",
-      "input": {"file_path": "/Users/me/src/app/.claude/settings.json", "old_string": "{}", "new_string": "{}"}
+      "input": {
+        "file_path": "/Users/me/src/app/.claude/settings.json",
+        "old_string": "{}",
+        "new_string": "{}"
+      }
     }
   },
   {
     "jsonrpc": "2.0",
     "id": 3,
-    "result": {
-      "decision": "expired",
-      "by": "timeout"
-    }
+    "result": { "decision": "expired", "by": "timeout" }
   },
   {
     "jsonrpc": "2.0",
@@ -233,9 +234,7 @@
     "error": {
       "code": -32000,
       "message": "run 01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01 has no permission request 01a0f1c5-6071-7c83-9d94-0e1f2a3b4c54",
-      "data": {
-        "kind": "approvalNotFound"
-      }
+      "data": { "kind": "approvalNotFound" }
     }
   },
   {

@@ -20,8 +20,8 @@
 //!   `context.changed` events.
 //! - `detect`: detecting which vendor CLIs are installed and signed in, without touching their
 //!   credentials (#114).
-//! - [`mcp`]: `plxd mcp`, the coordinator's Parallax tools as an MCP server on stdio, bound to one
-//!   project and one coordinator thread (#195, 0019).
+//! - [`mcp`]: `plxd mcp`, the orchestrator's Parallax tools as an MCP server on stdio, bound to one
+//!   project and one orchestrator thread (#195, 0019).
 //! - [`peer`]: the client of a plxd, over the local socket or a tailnet device's TCP port (0057).
 //! - [`launch_agent`]: the service that `attach` starts plxd through, when it is installed.
 //! - [`service`]: installs, removes, and reports on the per-user service that keeps `serve`
@@ -30,12 +30,12 @@
 //! - [`keystore`]: where API keys live: the macOS login Keychain (#117), the Secret Service on
 //!   Linux (PLX-19), and no store yet on Windows.
 //! - [`usage`]: turns backend usage events into `parallax-store` rows (#120).
-//! - `routing`: picks a task's backend and account, forces the coordinator's no-write policy,
+//! - `routing`: picks a task's backend and account, forces the orchestrator's no-write policy,
 //!   and falls a failed subscription run back to a key account (#119).
 //! - [`worktree`]: creates, inspects, and removes the git worktrees agent runs use (#154).
 //! - `agents`: the M3 runner behind `agent/*` (#156): starts a worker in its worktree, streams
 //!   its events, commits its changes, and resumes it after a restart.
-//! - `threads`: normal threads behind `thread/*` and `repo/*` (#110): runs with no coordinator
+//! - `threads`: normal threads behind `thread/*` and `repo/*` (#110): runs with no orchestrator
 //!   that belong to a repo entry, or to a scratch repository for a thread with no repo.
 //! - `images`: the caps and checks for images sent with a prompt or message (PLX-191).
 //! - `terminals`: the terminals plxd runs for its clients, by thread and terminal id (PLX-637).
@@ -63,6 +63,7 @@ mod context;
 mod delegation;
 mod detect;
 mod devices;
+mod dispatcher;
 mod event_log;
 pub mod gh_shim;
 mod github;
@@ -76,13 +77,13 @@ pub mod logging;
 pub mod mcp;
 mod methods;
 mod naming;
-mod orchestrator;
 pub mod paths;
 pub mod peer;
 mod pr_media;
 mod pr_watch;
 mod pr_write;
 pub(crate) mod preview;
+mod projects;
 pub mod providers;
 #[cfg(unix)]
 mod public_proxy;
@@ -98,7 +99,6 @@ pub mod self_update;
 pub mod server;
 pub mod service;
 mod setup_scripts;
-mod spaces;
 #[cfg(unix)]
 mod spawn;
 mod store;

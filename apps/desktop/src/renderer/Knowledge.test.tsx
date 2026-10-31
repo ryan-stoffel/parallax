@@ -14,7 +14,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.showPopover = () => {};
 HTMLElement.prototype.hidePopover = () => {};
 
-const coordinator: AgentRun = {
+const orchestratorRun: AgentRun = {
   id: "c-1",
   project: "p-1",
   prompt: "Plan it",
@@ -26,7 +26,7 @@ const coordinator: AgentRun = {
   createdAt: "2026-10-04T10:00:00Z",
   updatedAt: "2026-10-04T10:00:00Z",
 };
-/** A provider plxd lists, which runs a Project's coordinator. */
+/** A provider plxd lists, which runs an orchestrator. */
 const provider = (id: "claude" | "codex", name: string): ProviderInfo =>
   ({
     instance: { id, kind: id, name, enabled: true, args: [], env: [], models: [] },
@@ -34,7 +34,7 @@ const provider = (id: "claude" | "codex", name: string): ProviderInfo =>
     models: [],
     permissions: ["auto", "bypass"],
     efforts: true,
-    coordinator: true,
+    orchestrator: true,
   }) as ProviderInfo;
 const request = vi.fn(async (_host: string, method: string, _params?: unknown) => {
   const ok = (result: unknown) => ({ logId: "log-1", result });
@@ -42,7 +42,7 @@ const request = vi.fn(async (_host: string, method: string, _params?: unknown) =
   if (method === "memory/list" || method === "context/list") return ok({ files: [] });
   if (method === "providers/list")
     return ok({ providers: [provider("claude", "Claude"), provider("codex", "Codex")] });
-  return ok({ run: coordinator });
+  return ok({ run: orchestratorRun });
 });
 
 let unmount = () => {};
@@ -77,7 +77,7 @@ async function typeChange(text: string) {
   await settle();
 }
 
-test("the mini prompt sends a change to the coordinator, and a model on another provider moves it there", async () => {
+test("the mini prompt sends a change to the orchestrator, and a model on another provider moves it there", async () => {
   window.parallax = {
     platform: "darwin",
     request,
@@ -97,9 +97,9 @@ test("the mini prompt sends a change to the coordinator, and a model on another 
         <Notifications />
         <KnowledgePanel
           hostId="h-prompt"
-          project="p-1"
+          orchestrator="p-1"
           repo="r-1"
-          coordinator={coordinator}
+          orchestratorRun={orchestratorRun}
           memory
           expanded={false}
         />
@@ -121,7 +121,7 @@ test("the mini prompt sends a change to the coordinator, and a model on another 
     },
   ]);
 
-  // The picker shows the coordinator's providers as tabs.
+  // The picker shows the orchestrator's providers as tabs.
   const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="Provider"] button')];
   await click(tabs[1]);
   await click(document.querySelector<HTMLElement>('[role="listbox"] [role="option"]'));

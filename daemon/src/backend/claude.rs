@@ -16,14 +16,14 @@
 //!   also keeps the file tools out of Claude Code's shared temp folder (PLX-176). As a second
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`].
-//! - **A coordinator**, a no-write run with plxd's own MCP tools attached (0019), is full Claude
+//! - **An orchestrator**, a no-write run with plxd's own MCP tools attached (0019), is full Claude
 //!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with its
 //!   `plxd mcp --thread` server (PLX-380), which joins the user's, the repository's, and plugins'
 //!   servers, and `--allowedTools` with [`crate::mcp::thread::ALLOWED_TOOLS`], so plxd's tools
 //!   work in every mode, and [`TODO_TOOLS`],
 //!   so it keeps a plan on every model (PLX-249), then `--settings` with only [`settings_env`].
 //!   Its user and project settings, hooks, skills, plugins, and subagents all load, as in a
-//!   terminal. As a second check, a coordinator whose `system/init` reports another permission
+//!   terminal. As a second check, an orchestrator whose `system/init` reports another permission
 //!   mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
 //!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for each
@@ -111,19 +111,19 @@
 //! credentials, provider, or endpoint: names starting with one of [`SCRUBBED_PREFIXES`], plus
 //! [`SCRUBBED_VARS`]. Those include the three that outrank the login (0004), the cloud provider
 //! switches, `ANTHROPIC_BASE_URL`, which would send the login's token elsewhere, and the profile
-//! and federation variables. `CLAUDE_CONFIG_DIR` is dropped too, and set only to the account's
-//! own configuration folder. [`apply_credential`] then injects only what the account needs: the
+//! and federation variables. `CLAUDE_CONFIG_DIR` is dropped too, and set only to the account's own
+//! configuration folder. [`apply_credential`] then injects only what the account needs: the
 //! account's configuration folder for a subscription, or, for an API key account (#118), only
-//! [`API_KEY_ENV`] with the key [`key_account::resolve`](super::key_account::resolve) read from
-//! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it plxd
-//! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
-//! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it. No run inherits [`SCRUB_ENV`]; a no-write run other than a coordinator sets it, so the
-//! CLI's own subprocesses don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed
-//! commands only: the helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still
-//! inherit it.
+//! [`API_KEY_ENV`] with the key [`key_account::resolve`](super::key_account::resolve) read from the
+//! Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it plxd makes
+//! along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s entries, and
+//! the buffers `spawn_session` builds from them) is zeroized once it is done with it. No run
+//! inherits [`SCRUB_ENV`]; a no-write run other than an orchestrator sets it, so the CLI's own
+//! subprocesses don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its
+//! sandboxed commands only: the helpers Claude Code runs outside the sandbox, such as `git` and
+//! `rg`, still inherit it.
 //!
-//! A project's `env` block can still set variables for a worker, and a coordinator or a bypass
+//! A project's `env` block can still set variables for a worker, and an orchestrator or a bypass
 //! worker loads the repository's settings (0004, #134, 0027), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
 //! a `result` whose `modelUsage` names a provider other than `firstParty`, kill the CLI's process
@@ -135,26 +135,26 @@
 //! names a list that other sessions share (PLX-251). No run inherits it ([`SCRUBBED_VARS`]), but
 //! the CLI also copies settings `env` blocks into its own process: its global config's, which
 //! even `--restricted` reads, and those of the user, project, and local settings that a
-//! coordinator and a bypass worker load. So every run's `--settings`, which the CLI applies after
+//! orchestrator and a bypass worker load. So every run's `--settings`, which the CLI applies after
 //! them, sets it empty ([`settings_env`]). Managed settings are applied last, so their `env`
 //! still picks the list for every run (0013).
 //!
 //! # Permission requests
 //!
-//! In Manual, Auto, and Plan, a worker's, a thread's, or a coordinator's CLI, and a thread's in
-//! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its
-//! `canUseTool` (PLX-222, 0031), when its client answers permission requests
-//! ([`RunRequest::approvals`]). Instead of denying a tool call nobody approved, the CLI writes a
-//! `can_use_tool` control request on stdout and waits. The sidecar passes it on, the driver
-//! reports it as [`Event::ApprovalRequested`], and the answer that [`Run::answer`](super::Run::answer) gives goes
-//! back as a `control_response`, which answers the SDK's `canUseTool`; the prompt stays open
-//! while a request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws
-//! every one left. The SDK answers any other control request itself, and a test's fake that
-//! passes one on gets an error response. A sandboxed worker in Accept Edits and every run
-//! in Bypass Permissions never ask, a plain no-write run denies what isn't allowed (`dontAsk`),
-//! and a run without `approvals` denies what would prompt, so their CLIs run as before. In Plan,
-//! the plan itself is a request: `ExitPlanMode`'s, which a coordinator and a thread always have
-//! with the channel and a worker gets with it (PLX-243).
+//! In Manual, Auto, and Plan, a worker's, a thread's, or an orchestrator's CLI, and a thread's in
+//! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool`
+//! (PLX-222, 0031), when its client answers permission requests ([`RunRequest::approvals`]).
+//! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
+//! on stdout and waits. The sidecar passes it on, the driver reports it as
+//! [`Event::ApprovalRequested`], and the answer that [`Run::answer`](super::Run::answer) gives goes
+//! back as a `control_response`, which answers the SDK's `canUseTool`; the prompt stays open while
+//! a request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws every one
+//! left. The SDK answers any other control request itself, and a test's fake that passes one on
+//! gets an error response. A sandboxed worker in Accept Edits and every run in Bypass Permissions
+//! never ask, a plain no-write run denies what isn't allowed (`dontAsk`), and a run without
+//! `approvals` denies what would prompt, so their CLIs run as before. In Plan, the plan itself is a
+//! request: `ExitPlanMode`'s, which an orchestrator and a thread always have with the channel and a
+//! worker gets with it (PLX-243).
 //!
 //! # Cancel
 //!
@@ -229,7 +229,7 @@ pub const BASE_ARGS: &[&str] = &[
     "--include-partial-messages",
 ];
 
-/// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't a coordinator, as 0004 has
+/// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't an orchestrator, as 0004 has
 /// them: read-only built-in tools, only the user's settings (so no project `env` block or hooks),
 /// no MCP servers, and every call that would prompt denied. [`arguments`] adds
 /// [`no_write_settings`] after them.
@@ -243,7 +243,7 @@ pub const NO_WRITE_ARGS: &[&str] = &[
     "dontAsk",
 ];
 
-/// The `--settings` a no-write run other than a coordinator gets: hooks off (0004), and no `Read`
+/// The `--settings` a no-write run other than an orchestrator gets: hooks off (0004), and no `Read`
 /// under Claude Code's shared temp folder, `/tmp/claude-<uid>` in both spellings
 /// ([`commands_temp`]), which holds every session's files and which Claude Code otherwise lets it
 /// read outside its cwd (PLX-176). 0013 hides the same folder from workers. A `Read` rule covers
@@ -277,7 +277,7 @@ pub fn settings_env() -> Value {
 }
 
 /// The only built-in tools a no-write run's `system/init` may list. `EndConversation` stays
-/// whatever `--tools` says (the CLI reference), and only ends the session. A coordinator's
+/// whatever `--tools` says (the CLI reference), and only ends the session. An orchestrator's
 /// `system/init` may list any tool: it is full Claude Code (0027).
 pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"];
 
@@ -309,7 +309,7 @@ pub const WORKER_TOOLS: &[&str] = &[
 ];
 
 /// The todo tools, the end of [`WORKER_TOOLS`]: `TodoWrite` and Claude Code's four task tools. A
-/// coordinator and a worker in [`AgentPermission::Bypass`] have no `--tools`, so they name these
+/// orchestrator and a worker in [`AgentPermission::Bypass`] have no `--tools`, so they name these
 /// in `--allowedTools` instead, which turns them on in the same way (PLX-249). Whichever set
 /// `CLAUDE_CODE_ENABLE_TASKS` picks is then on, so a user who turned the task tools off in their
 /// settings' `env` gets `TodoWrite` back, as in their terminal. An allow rule also pre-approves a
@@ -338,10 +338,10 @@ pub const PLAN_WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,
 /// interface addresses aren't: 0013 records that gap.
 pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "[::]"];
 
-/// The permission mode a worker or a coordinator asks for by default ([`permission_mode`]). It
-/// must then report the mode it asked for in `system/init`. Claude Code forces `default` instead when
-/// [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub mode,
-/// whatever `linux_sandbox::check_host` saw (PLX-118).
+/// The permission mode a worker or an orchestrator asks for by default ([`permission_mode`]). It
+/// must then report the mode it asked for in `system/init`. Claude Code forces `default` instead
+/// when [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub
+/// mode, whatever `linux_sandbox::check_host` saw (PLX-118).
 pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 
 /// [`AgentPermission::Bypass`]'s mode. Claude Code refuses it under `--restricted`, so a worker
@@ -423,7 +423,7 @@ pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAU
 
 /// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
 /// configuration folder, which [`apply_credential`] sets only to the account's own;
-/// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or a coordinator must not
+/// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or an orchestrator must not
 /// get (PLX-112, 0027); and [`TASK_LIST_ENV`], which would share one task list (PLX-251).
 pub const SCRUBBED_VARS: &[&str] = &[
     "AWS_BEARER_TOKEN_BEDROCK",
@@ -471,13 +471,12 @@ const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1
 /// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
 /// `/run`, `/mnt`, and `/root` (PLX-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
 /// from a worker's commands instead, and [`SCRUBBED_VARS`] keeps an inherited one out. Managed
-/// settings can still set it, and their `env` beats plxd's, so on Linux
-/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (PLX-112), and
-/// on every OS a worker whose `system/init` shows the permission mode it forces fails
-/// (PLX-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
-/// Code denies every tool nobody approved, so a coordinator that reports another mode than it
-/// asked for fails the same way (0027). It forces a plain no-write run's mode to `default` as
-/// well, so those aren't checked.
+/// settings can still set it, and their `env` beats plxd's, so on Linux `linux_sandbox::check_host`
+/// refuses a worker when Claude Code runs with it on (PLX-112), and on every OS a worker whose
+/// `system/init` shows the permission mode it forces fails (PLX-118). An orchestrator doesn't get
+/// it either: it would force `default`, where headless Claude Code denies every tool nobody
+/// approved, so an orchestrator that reports another mode than it asked for fails the same way
+/// (0027). It forces a plain no-write run's mode to `default` as well, so those aren't checked.
 const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
 /// Variables a worker's commands never see (0013): an API key account's key, and the token for
@@ -556,7 +555,7 @@ pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
 }
 
 /// What a run adds to Claude Code's system prompt: the math format for a full thread (PLX-730)
-/// and a coordinator's instructions (0078), joined, since the CLI keeps one addition.
+/// and an orchestrator's instructions (0078), joined, since the CLI keeps one addition.
 #[must_use]
 pub fn appended_prompt(request: &RunRequest) -> Option<String> {
     let parts: Vec<&str> = unsandboxed(request)
@@ -605,7 +604,7 @@ pub struct ClaudeBackend {
     grace: Duration,
     limits: OutputLimits,
     overrides: Overrides,
-    project_permissions: &'static [AgentPermission],
+    orchestrator_permissions: &'static [AgentPermission],
 }
 
 impl ClaudeBackend {
@@ -618,15 +617,15 @@ impl ClaudeBackend {
             grace: CancelPolicy::default().grace,
             limits: OutputLimits::default(),
             overrides: Overrides::default(),
-            project_permissions: PERMISSIONS,
+            orchestrator_permissions: PERMISSIONS,
         }
     }
 
-    /// Runs a Project's agents only in Bypass, for a model service whose endpoint Auto's
+    /// Runs an orchestrator's agents only in Bypass, for a model service whose endpoint Auto's
     /// classifier isn't tested against (0042). Its threads keep every mode.
     #[must_use]
-    pub fn bypass_only_in_projects(mut self) -> Self {
-        self.project_permissions = &[AgentPermission::Bypass];
+    pub fn bypass_only_in_orchestrators(mut self) -> Self {
+        self.orchestrator_permissions = &[AgentPermission::Bypass];
         self
     }
 
@@ -693,7 +692,7 @@ impl ClaudeBackend {
             };
             spec.inject.set(TEMP_ENV, temp);
         }
-        if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
+        if request.policy == ToolPolicy::NoWrite && request.orchestrator_tools.is_none() {
             spec.inject.set(SCRUB_ENV, "1");
         }
         match request.context_window {
@@ -801,19 +800,19 @@ impl ClaudeBackend {
 /// # Errors
 ///
 /// [`StartError::Invalid`] if the model or the resume id could be read as an option, if a
-/// worker has no usable [`WorkerSandbox`], or if a no-write run other than a coordinator asks for
+/// worker has no usable [`WorkerSandbox`], or if a no-write run other than an orchestrator asks for
 /// a permission.
 /// [`StartError::Unsupported`] for an effort or permission this version doesn't know.
 pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
-    let coordinator = request.coordinator_tools.is_some();
-    if coordinator && request.policy != ToolPolicy::NoWrite {
+    let orchestrator = request.orchestrator_tools.is_some();
+    if orchestrator && request.policy != ToolPolicy::NoWrite {
         return Err(StartError::Invalid(
-            "plxd's coordinator tools are only for a no-write run".into(),
+            "plxd's orchestrator tools are only for a no-write run".into(),
         ));
     }
     let unsandboxed = unsandboxed(request);
     let policy: &[&str] = match request.policy {
-        ToolPolicy::NoWrite if coordinator => &[],
+        ToolPolicy::NoWrite if orchestrator => &[],
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite if unsandboxed => &[],
         ToolPolicy::WorkspaceWrite if hands_over_plans(request) => PLAN_WORKSPACE_WRITE_ARGS,
@@ -829,7 +828,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         }
         settings.to_string().into()
     };
-    if request.policy == ToolPolicy::NoWrite && !coordinator {
+    if request.policy == ToolPolicy::NoWrite && !orchestrator {
         if request.permission.is_some() {
             return Err(StartError::Invalid(
                 "a no-write run takes no permission; its mode is fixed (0004)".into(),
@@ -846,11 +845,11 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             args.extend(LIVE_MODE_ARGS.iter().map(Into::into));
         }
     }
-    if coordinator || unsandboxed {
-        // A coordinator's or a thread's host-wide tools join the user's own MCP servers (0041),
+    if orchestrator || unsandboxed {
+        // An orchestrator's or a thread's host-wide tools join the user's own MCP servers (0041),
         // and the allowlist lets them run in every mode.
         let tools = request
-            .coordinator_tools
+            .orchestrator_tools
             .as_ref()
             .or(request.thread_tools.as_ref());
         let mut allowed: Vec<&str> = Vec::new();
@@ -877,7 +876,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             args.extend(["--add-dir".into(), dir.into()]);
         }
     }
-    if coordinator || unsandboxed {
+    if orchestrator || unsandboxed {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share
         // its task list, so it gets `--settings` only for this (PLX-251).
         let env = serde_json::json!({"env": settings_env()});
@@ -1009,7 +1008,7 @@ pub fn full_thread(request: &RunRequest) -> bool {
 }
 
 /// Whether `request`'s CLI asks plxd before a tool call that would prompt (PLX-222, 0031): a
-/// worker or a coordinator in Manual, Auto, or Plan, and a thread in every mode, whose client
+/// worker or an orchestrator in Manual, Auto, or Plan, and a thread in every mode, whose client
 /// answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands without
 /// asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034), and its mode can
 /// change while it runs ([`LIVE_MODE_ARGS`]), so in Bypass Permissions it keeps the channel for a
@@ -1020,7 +1019,7 @@ pub fn full_thread(request: &RunRequest) -> bool {
 #[must_use]
 pub fn prompts(request: &RunRequest) -> bool {
     let plain_no_write =
-        request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none();
+        request.policy == ToolPolicy::NoWrite && request.orchestrator_tools.is_none();
     request.approvals
         && !plain_no_write
         && (full_thread(request)
@@ -1032,7 +1031,7 @@ pub fn prompts(request: &RunRequest) -> bool {
 
 /// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], PLX-243):
 /// a sandboxed worker in Plan whose CLI asks plxd ([`prompts`]). A thread has no `--tools`, so
-/// it has the tool as a coordinator does (0034). Headless Claude Code offers
+/// it has the tool as an orchestrator does (0034). Headless Claude Code offers
 /// the tool only to a run that asks a host, and asking with it is how the plan reaches the user
 /// (0031). The tool runs nothing and writes nothing in the worktree. Allowing it only moves the
 /// CLI to `default` (Manual), a mode a worker can start in, under the same `--restricted`,
@@ -1047,7 +1046,7 @@ pub fn hands_over_plans(request: &RunRequest) -> bool {
         && prompts(request)
 }
 
-/// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
+/// A worker's or an orchestrator's `--permission-mode` for `permission`: Claude Code's own mode of
 /// the same name (PLX-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
 ///
 /// # Errors
@@ -1186,8 +1185,8 @@ impl Backend for ClaudeBackend {
         PERMISSIONS
     }
 
-    fn project_permissions(&self) -> &[AgentPermission] {
-        self.project_permissions
+    fn orchestrator_permissions(&self) -> &[AgentPermission] {
+        self.orchestrator_permissions
     }
 
     fn context_windows(&self) -> &'static [u32] {
@@ -1329,7 +1328,7 @@ impl Backend for ClaudeBackend {
             sink,
             switch,
             translator: Translator::new(request.policy, expected_key_source)
-                .with_coordinator_tools(request.coordinator_tools.is_some())
+                .with_orchestrator_tools(request.orchestrator_tools.is_some())
                 .with_thread(full)
                 .with_permission_mode(permission_mode(request.permission)?)
                 .with_prompts(asks)

@@ -37,8 +37,8 @@ export const setCliEnabled = (cli: string, on: boolean) =>
 
 /**
  * A provider instance a thread can run on (`AccountChoice`'s `backend` is its id): what kind it
- * is, the permissions it maps, whether it takes an effort, and whether it can run a Project's
- * coordinator. `enabled` is off while it's turned off in Settings > Providers.
+ * is, the permissions it maps, whether it takes an effort, and whether it can run an orchestrator's
+ * orchestrator. `enabled` is off while it's turned off in Settings > Providers.
  */
 export interface Instance {
   id: string;
@@ -51,7 +51,7 @@ export interface Instance {
   enabled: boolean;
   permissions: AgentPermission[];
   efforts: boolean;
-  coordinator: boolean;
+  orchestrator: boolean;
 }
 
 /** A host's instances, and the models it offers on them, in the order the model picker lists them. */
@@ -65,7 +65,7 @@ export interface Catalog {
  * The built-in backends of a plxd without `providers`, whose names the model menu has always shown.
  * Every one maps efforts but Cursor, whose model ids carry the effort (PLX-97, PLX-38, 0036).
  * ponytail: mirrors plxd's `Backend::permissions`, `Backend::efforts`, and
- * `Capabilities::coordinator`; a plxd with `providers` reports them (`ProviderInfo`).
+ * `Capabilities::orchestrator`; a plxd with `providers` reports them (`ProviderInfo`).
  */
 const builtIns: Omit<Instance, "enabled">[] = [
   {
@@ -74,7 +74,7 @@ const builtIns: Omit<Instance, "enabled">[] = [
     kind: "claude",
     permissions: ["manual", "edit", "auto", "plan", "bypass"],
     efforts: true,
-    coordinator: true,
+    orchestrator: true,
   },
   // A Codex thread's modes (0035); Codex's plan mode is experimental, so it has no Plan.
   {
@@ -83,7 +83,7 @@ const builtIns: Omit<Instance, "enabled">[] = [
     kind: "codex",
     permissions: ["manual", "edit", "auto", "bypass"],
     efforts: true,
-    coordinator: false,
+    orchestrator: false,
   },
   {
     id: "cursor",
@@ -91,7 +91,7 @@ const builtIns: Omit<Instance, "enabled">[] = [
     kind: "cursor",
     permissions: ["edit", "plan", "auto", "bypass"],
     efforts: false,
-    coordinator: false,
+    orchestrator: false,
   },
 ];
 
@@ -167,7 +167,7 @@ export function catalogOf(
           enabled: info.instance.enabled,
           permissions: info.permissions,
           efforts: info.efforts,
-          coordinator: info.coordinator,
+          orchestrator: info.orchestrator,
         },
         models: instanceModels(info),
       }))

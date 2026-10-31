@@ -18,8 +18,8 @@ use plxd::backend::{Event, ToolStatus};
 use serde_json::json;
 
 use crate::agents::{
-    Conn, create, end_turn, fake, init, project_params, real_repo, scope, start_params, subscribe,
-    until, updated_to,
+    Conn, create, end_turn, fake, init, orchestrator_params, real_repo, scope, start_params,
+    subscribe, until, updated_to,
 };
 use crate::open_pr::{Tools, start, thread};
 use crate::support::{kind, temp_dir};
@@ -143,7 +143,7 @@ fn opening() -> Vec<Step> {
 async fn an_agent_s_gh_pr_create_links_its_pull_request_and_only_that_one_is_viewed() {
     let tools = Tools::new();
     let dir = temp_dir();
-    let params = project_params(dir.path());
+    let params = orchestrator_params(dir.path());
     let host = start(dir, opening(), &tools);
     let mut client = host.client().await;
     let project = create(&mut client, params).await;

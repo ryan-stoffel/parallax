@@ -261,7 +261,7 @@ describe("on a plxd with providers", () => {
         models: [],
         permissions: ["edit"],
         efforts: true,
-        coordinator: true,
+        orchestrator: true,
         login: ["claude", "auth", "login"],
       },
       {
@@ -271,7 +271,7 @@ describe("on a plxd with providers", () => {
         models: [],
         permissions: ["edit"],
         efforts: true,
-        coordinator: false,
+        orchestrator: false,
         login: ["codex", "login"],
       },
     ];

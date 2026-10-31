@@ -9,10 +9,10 @@
 //! `agent/send` and `agent/cancel`, and when a CLI process ends, commits the worktree through
 //! #166's hardened `commit_all` and reports the diff in `agent.updated`.
 //!
-//! A run whose client started it with `approvals`, and every run in a Project, its coordinator
-//! included, lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042). It logs the
-//! request and takes `agent/approve`'s answer, waiting as long as it takes ([`approvals`]). Every
-//! launch of the run, a resume included, keeps the flag.
+//! A run whose client started it with `approvals`, and every run in an orchestrator, its
+//! orchestrator included, lets its CLI ask before a tool call (PLX-222, decisions 0031 and 0042).
+//! It logs the request and takes `agent/approve`'s answer, waiting as long as it takes
+//! ([`approvals`]). Every launch of the run, a resume included, keeps the flag.
 //!
 //! A run outlives its CLI processes: `agent/send` to a run whose CLI has ended resumes the
 //! vendor session in the same worktree. When plxd stops, running CLIs are cancelled and their
@@ -20,23 +20,24 @@
 //! starts (a crash) is marked `interrupted` too. Either kind resumes through `agent/send`, and
 //! either wakes the parent that launched it once plxd starts again ([`wake::catch_up`]).
 //!
-//! A project's coordinator (0024) is a run too, started by [`coordinator::start`] instead, with
-//! no recorded worktree; the same actor runs it. Children wake the run that launched them when they
-//! finish, a coordinator or any thread, and a run started in a Project wakes its coordinator
-//! ([`wake`]).
+//! An orchestrator (0024) is a run too, started by [`orchestrator::start`] instead, with no
+//! recorded worktree; the same actor runs it. Children wake the run that launched them when they
+//! finish, an orchestrator or any thread, and a run started in an orchestrator wakes its
+//! orchestrator ([`wake`]).
 //!
-//! Every run in a Project, its coordinator included, runs in the Project's permission mode, Auto
-//! or Bypass (0042), whatever its request or a later `agent/send` asks for. Each new CLI process
-//! reads the mode again, so one `project/update` changed applies from the run's next process. A
-//! backend that doesn't map the mode is refused ([`in_mode`]), never moved to another mode.
+//! Every run in an orchestrator, its orchestrator included, runs in the orchestrator's permission
+//! mode, Auto or Bypass (0042), whatever its request or a later `agent/send` asks for. Each new CLI
+//! process reads the mode again, so one `orchestrator/update` changed applies from the run's next
+//! process. A backend that doesn't map the mode is refused ([`in_mode`]), never moved to another
+//! mode.
 //!
-//! A Project's child starts on the account [`placement`]'s fixed rules pick (0046), or waits,
+//! An orchestrator's child starts on the account [`placement`]'s fixed rules pick (0046), or waits,
 //! recorded as `waiting`, until one has room.
 //!
 //! A normal thread's run is full Claude Code in every mode, with no worker sandbox, when its client
-//! answers permission requests, and its first message is the user's own (0034). A Project's
+//! answers permission requests, and its first message is the user's own (0034). An orchestrator's
 //! children run the same way, through `agent/start`: always with `approvals`, and with a short
-//! header naming the Project and its tools, then its brief and memory index (0044), before the
+//! header naming the orchestrator and its tools, then its brief and memory index (0044), before the
 //! task (0042). A thread started
 //! with `checkout` has no worktree either: it runs in its repo entry's own checkout, on the branch
 //! the user has out or the one `checkoutRef` switches it to first. plxd never commits it, since the
@@ -49,8 +50,8 @@ pub(crate) mod attached;
 pub(crate) mod cleanup;
 pub(crate) mod compact;
 pub(crate) mod convert;
-pub(crate) mod coordinator;
 pub(crate) mod handoff;
+pub(crate) mod orchestrator;
 pub(crate) mod packet;
 mod placement;
 mod resume;
@@ -71,10 +72,10 @@ use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
     AgentAttachParams, AgentAttachResult, AgentBackgroundTask, AgentDelivery, AgentEffort,
     AgentFailureKind, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem,
-    AgentPermission, AgentRun, AgentSendParams, AgentStartParams, ApprovalId, CliKind,
-    CoordinatorThreadId, ErrorKind, GitStatus, ImageId, ImageMediaType, ParallaxEvent, PrActParams,
-    PrDiffResult, PrState, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest,
-    QueueResult, Role, RunId, TurnId,
+    AgentPermission, AgentRun, AgentSendParams, AgentStartParams, ApprovalId, CliKind, ErrorKind,
+    GitStatus, ImageId, ImageMediaType, OrchestratorPermission, OrchestratorThreadId,
+    ParallaxEvent, PrActParams, PrDiffResult, PrState, PrViewParams, PromptImage, PullRequest,
+    QueueResult, Role, RunId, ScopeId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
@@ -94,7 +95,7 @@ pub(crate) use self::resume::Timing as ResumeTiming;
 use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::context::memory;
-use crate::orchestrator::{self, Lane};
+use crate::dispatcher::{self, Lane};
 use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, PrError, WorktreeError, WorktreeManager, github_pr_urls};
@@ -114,8 +115,8 @@ pub(crate) struct Agents {
     resume_timing: ResumeTiming,
     /// Wakes the dispatcher of children waiting to be placed (PLX-413, [`placement`]).
     pub(crate) placement: tokio::sync::Notify,
-    /// Held from placing a Project's child until it counts as running or waiting, so two at once
-    /// never both take a Project's last free slot (0046).
+    /// Held from placing an orchestrator's child until it counts as running or waiting, so two at
+    /// once never both take an orchestrator's last free slot (0046).
     placing: tokio::sync::Mutex<()>,
     /// The runs whose live sessions are idle (0060).
     pub(super) idle: IdleSessions,
@@ -127,8 +128,8 @@ pub(crate) struct Agents {
 }
 
 /// The most idle live sessions a host keeps (0060). Past it, the least recently used is released.
-/// T3 Code has no cap; Parallax's Projects fan out to many threads, each of whose idle CLI holds
-/// hundreds of MiB.
+/// T3 Code has no cap; Parallax's Orchestrators fan out to many threads, each of whose idle CLI
+/// holds hundreds of MiB.
 pub(super) const MAX_IDLE_SESSIONS: usize = 5;
 
 /// The runs whose live sessions are idle, least recently used first. A running turn is never here,
@@ -174,19 +175,19 @@ pub(super) struct Prepared {
 
 /// Where a run's CLI starts, and what that needs.
 pub(super) enum Place {
-    /// A thread, in its worktree or its repo entry's checkout: a normal thread, or a Project's
-    /// child (0042). With `approvals` it runs as the full CLI (0034). Without, Claude Code keeps
-    /// the worker sandbox (0013), which needs these folders. A child's first message starts with
-    /// `header`.
+    /// A thread, in its worktree or its repo entry's checkout: a normal thread, or an
+    /// orchestrator's child (0042). With `approvals` it runs as the full CLI (0034). Without,
+    /// Claude Code keeps the worker sandbox (0013), which needs these folders. A child's first
+    /// message starts with `header`.
     Worker {
         home: PathBuf,
         data_dir: PathBuf,
         context: PathBuf,
         header: Option<String>,
     },
-    /// A project's coordinator, with no sandbox (0024), in a detached worktree of `repo` that the
+    /// An orchestrator, with no sandbox (0024), in a detached worktree of `repo` that the
     /// actor moves to the integration branch's tip before each CLI process (0042).
-    Coordinator { repo: PathBuf },
+    Orchestrator { repo: PathBuf },
 }
 
 impl Agents {
@@ -306,7 +307,7 @@ async fn store<T: Send + 'static>(
         .await?;
     // A turn that ended enqueued its checkpoint's capture (0062).
     if effects {
-        daemon.orchestrator.notify();
+        daemon.dispatcher.notify();
     }
     Ok(value)
 }
@@ -354,12 +355,12 @@ pub(super) fn full_claude_code(fields: &RunFields, changed: Option<AgentPermissi
 }
 
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
-/// checked: everything that can refuse a worker, or a coordinator when `role` is one, before
+/// checked: everything that can refuse a worker, or an orchestrator when `role` is one, before
 /// anything is created. `full_claude` is [`full_claude_code`] of the run's fields. For a run that
 /// exists already, or one that isn't a thread.
 pub(super) async fn prepare(
     daemon: &Arc<Daemon>,
-    project: ProjectId,
+    project: ScopeId,
     run: RunId,
     requested: Option<AccountChoice>,
     role: Role,
@@ -372,26 +373,26 @@ pub(super) async fn prepare(
 /// (`thread/start`), whose thread row doesn't exist yet.
 async fn prepare_run(
     daemon: &Arc<Daemon>,
-    project: ProjectId,
+    project: ScopeId,
     run: RunId,
     requested: Option<AccountChoice>,
     role: Role,
     full_claude: bool,
     new_thread: bool,
 ) -> Result<(Prepared, String), ErrorObject> {
-    let (repo_path, context_scope, project_row, thread_run, defaults, mut accounts) =
+    let (repo_path, context_scope, orchestrator_row, thread_run, defaults, mut accounts) =
         store(daemon, move |db| {
             // A thread sharing another's workspace works in its worktree (0063).
             let repo_path = crate::delegation::workdir(db, project, run.into())?;
-            // A run whose scope is a Project, not a repo entry, is its coordinator or one of its
-            // children (0042).
-            let project_row = db
-                .get_project(project.into())
+            // A run whose scope is an orchestrator, not a repo entry, is its orchestrator or one of
+            // its children (0042).
+            let orchestrator_row = db
+                .get_orchestrator(project.into())
                 .map_err(|e| store_error(&e))?;
-            // The run itself is a thread: one `thread/start` made, or a Project's child, not any
-            // run on a repo entry, such as one `agent/start` made there.
+            // The run itself is a thread: one `thread/start` made, or an orchestrator's child, not
+            // any run on a repo entry, such as one `agent/start` made there.
             let thread_run = new_thread
-                || project_row.is_some()
+                || orchestrator_row.is_some()
                 || db
                     .get_thread(run.into())
                     .map_err(|e| store_error(&e))?
@@ -406,7 +407,7 @@ async fn prepare_run(
             Ok((
                 repo_path,
                 context_scope,
-                project_row,
+                orchestrator_row,
                 thread_run,
                 defaults,
                 StoredKeyAccounts(accounts),
@@ -414,13 +415,13 @@ async fn prepare_run(
         })
         .await?;
     let chosen = requested.as_ref().or(defaults.worker.as_ref());
-    placement::api_keys(role, project_row.as_ref(), chosen, &mut accounts)?;
+    placement::api_keys(role, orchestrator_row.as_ref(), chosen, &mut accounts)?;
     let defaults = Defaults {
-        coordinator: defaults.coordinator,
+        orchestrator: defaults.orchestrator,
         worker: defaults.worker,
     };
     let policy = match role {
-        Role::Coordinator => ToolPolicy::NoWrite,
+        Role::Orchestrator => ToolPolicy::NoWrite,
         Role::Worker => ToolPolicy::WorkspaceWrite,
     };
     let resolved = routing::resolve(
@@ -432,8 +433,8 @@ async fn prepare_run(
         policy,
     )
     .map_err(|error| routing_error(&error))?;
-    if role == Role::Coordinator {
-        let place = Place::Coordinator {
+    if role == Role::Orchestrator {
+        let place = Place::Orchestrator {
             repo: PathBuf::from(&repo_path),
         };
         let prepared = Prepared {
@@ -473,7 +474,7 @@ async fn prepare_run(
     })?;
     let context = sandbox_path(&context, "the shared context folder")?;
     sandbox_path(Path::new(&repo_path), "the project's repository")?;
-    let header = match project_row.map(|row| row.name) {
+    let header = match orchestrator_row.map(|row| row.name) {
         Some(name) => Some(child_header(&name, &memory::start(daemon, project).await?)),
         None => None,
     };
@@ -601,7 +602,7 @@ fn routing_error(error: &RoutingError) -> ErrorObject {
 /// that thread's work to a branch it never chose.
 async fn switch_checkout(
     daemon: &Daemon,
-    project: ProjectId,
+    project: ScopeId,
     repo_path: &Path,
     reference: &str,
 ) -> Result<(), ErrorObject> {
@@ -673,7 +674,7 @@ async fn existing(
             ErrorKind::IdConflict,
             format!(
                 "run {run_id} exists with a different project, prompt, account, policy, \
-                 coordinator thread, parent, notify, model, effort, permission, context window, \
+                 orchestrator thread, parent, notify, model, effort, permission, context window, \
                  fast mode, or approvals"
             ),
         ));
@@ -741,10 +742,10 @@ pub(super) async fn git_common_dir(
     sandbox_path(&common, "the repository's git folder")
 }
 
-/// Records run `run_id` through the orchestrator's `thread.create` (0059), in `lane`, which the
-/// caller holds: its run row, its worktree's when it has one, and its thread's when it is one,
-/// with `agent.started` and `thread.started`, in one transaction. `prepare_run` read the scope
-/// in an earlier job, so a Project that `project/delete` removed since gets no run (PLX-338).
+/// Records run `run_id` through the dispatcher's `thread.create` (0059), in `lane`, which the
+/// caller holds: its run row, its worktree's when it has one, and its thread's when it is one, with
+/// `agent.started` and `thread.started`, in one transaction. `prepare_run` read the scope in an
+/// earlier job, so an orchestrator that `orchestrator/delete` removed since gets no run (PLX-338).
 /// Removes the worktree `created` when the run isn't recorded.
 async fn record(
     daemon: &Arc<Daemon>,
@@ -770,10 +771,10 @@ async fn record(
         git_dir: created.git_dir.to_string_lossy().into_owned(),
         base_dirty: created.base_dirty,
     });
-    let command = orchestrator::Command::new(
+    let command = dispatcher::Command::new(
         None,
         run_id,
-        orchestrator::Action::Create(Box::new(orchestrator::NewRows {
+        dispatcher::Action::Create(Box::new(dispatcher::NewRows {
             fields,
             state,
             worktree,
@@ -781,10 +782,10 @@ async fn record(
         })),
     );
     let recorded = daemon
-        .orchestrator
+        .dispatcher
         .commit(daemon, lane, command)
         .await
-        .and_then(orchestrator::Outcome::rows)
+        .and_then(dispatcher::Outcome::rows)
         .and_then(|rows| {
             let run = rows
                 .run
@@ -804,28 +805,31 @@ async fn record(
     recorded
 }
 
-/// The permission mode every run in `scope` runs in (0042): its Project's, or `None` when `scope`
-/// is a repo entry, whose threads keep their own.
-pub(super) async fn project_mode(
+/// The permission mode every run in `scope` runs in (0042): its orchestrator's, or `None` when
+/// `scope` is a repo entry, whose threads keep their own.
+pub(super) async fn orchestrator_mode(
     daemon: &Arc<Daemon>,
-    scope: ProjectId,
-) -> Result<Option<ProjectPermission>, ErrorObject> {
+    scope: ScopeId,
+) -> Result<Option<OrchestratorPermission>, ErrorObject> {
     store(daemon, move |db| {
-        let row = db.get_project(scope.into()).map_err(|e| store_error(&e))?;
-        Ok(row.map(|row| crate::store::project_permission(&row.permission)))
+        let row = db
+            .get_orchestrator(scope.into())
+            .map_err(|e| store_error(&e))?;
+        Ok(row.map(|row| crate::store::orchestrator_permission(&row.permission)))
     })
     .await
 }
 
-/// Cuts Project `scope`'s integration branch and its worktree when either is missing (0045), and
-/// returns the project row as it stands, with its integration branch. `None` when `scope` is a
-/// repo entry, not a Project.
+/// Cuts Orchestrator `scope`'s integration branch and its worktree when either is missing (0045),
+/// and returns the project row as it stands, with its integration branch. `None` when `scope` is a
+/// repo entry, not an orchestrator.
 pub(crate) async fn integration(
     daemon: &Arc<Daemon>,
-    scope: ProjectId,
-) -> Result<Option<parallax_store::Project>, ErrorObject> {
+    scope: ScopeId,
+) -> Result<Option<parallax_store::Orchestrator>, ErrorObject> {
     let Some(mut row) = store(daemon, move |db| {
-        db.get_project(scope.into()).map_err(|e| store_error(&e))
+        db.get_orchestrator(scope.into())
+            .map_err(|e| store_error(&e))
     })
     .await?
     else {
@@ -863,25 +867,27 @@ pub(crate) async fn integration(
     Ok(Some(row))
 }
 
-/// The Project's `mode` as a run on `backend` takes it, from its [`Backend::project_permissions`],
-/// or `unsupportedOption` saying why it can't: a run in a Project is never moved to another mode
-/// (0042).
+/// The orchestrator's `mode` as a run on `backend` takes it, from its
+/// [`Backend::orchestrator_permissions`], or `unsupportedOption` saying why it can't: a run in an
+/// orchestrator is never moved to another mode (0042).
 pub(super) fn in_mode(
     backend: &dyn Backend,
-    mode: ProjectPermission,
+    mode: OrchestratorPermission,
 ) -> Result<AgentPermission, ErrorObject> {
     let name = actor::backend_name(backend.name());
-    let maps = |mode: ProjectPermission| {
+    let maps = |mode: OrchestratorPermission| {
         mode.agent()
-            .filter(|permission| backend.project_permissions().contains(permission))
+            .filter(|permission| backend.orchestrator_permissions().contains(permission))
     };
     let (label, other, other_label) = match mode {
-        ProjectPermission::Auto => ("Auto", ProjectPermission::Bypass, "Bypass"),
-        ProjectPermission::Bypass => ("Bypass Permissions", ProjectPermission::Auto, "Auto"),
-        ProjectPermission::Unknown => {
+        OrchestratorPermission::Auto => ("Auto", OrchestratorPermission::Bypass, "Bypass"),
+        OrchestratorPermission::Bypass => {
+            ("Bypass Permissions", OrchestratorPermission::Auto, "Auto")
+        }
+        OrchestratorPermission::Unknown => {
             return Err(ErrorObject::parallax(
                 ErrorKind::UnsupportedOption,
-                "the Project's permission mode is one this plxd doesn't know",
+                "the orchestrator's permission mode is one this plxd doesn't know",
             ));
         }
     };
@@ -889,28 +895,30 @@ pub(super) fn in_mode(
         return Ok(permission);
     }
     let detail = if maps(other).is_some() {
-        // A model service has Auto in its threads but not in a Project.
+        // A model service has Auto in its threads but not in an orchestrator.
         let scope = if mode
             .agent()
             .is_some_and(|permission| backend.permissions().contains(&permission))
         {
-            " in a Project"
+            " in an orchestrator"
         } else {
             ""
         };
-        format!("{name} has no {label}{scope}. Set the Project to {other_label} to use it.")
+        format!("{name} has no {label}{scope}. Set the orchestrator to {other_label} to use it.")
     } else {
-        format!("{name} has neither Auto nor Bypass Permissions, so it can't run in a Project.")
+        format!(
+            "{name} has neither Auto nor Bypass Permissions, so it can't run in an orchestrator."
+        )
     };
     Err(ErrorObject::parallax(ErrorKind::UnsupportedOption, detail))
 }
 
-/// `project/fromThreads`' check that a run on backend `name` can run in Project mode `mode`. A
-/// backend this host no longer has passes, since its run can't start anywhere.
+/// `orchestrator/fromThreads`' check that a run on backend `name` can run in Orchestrator mode
+/// `mode`. A backend this host no longer has passes, since its run can't start anywhere.
 pub(crate) fn fits_mode(
     daemon: &Daemon,
     name: &str,
-    mode: ProjectPermission,
+    mode: OrchestratorPermission,
 ) -> Result<(), ErrorObject> {
     match daemon.agents.backends.by_backend_name(name) {
         Some((_, backend)) => in_mode(backend.as_ref(), mode).map(|_| ()),
@@ -946,7 +954,7 @@ pub(crate) async fn start(
         project,
         prompt,
         account,
-        coordinator_thread,
+        orchestrator_thread,
         model,
         effort,
         permission,
@@ -966,7 +974,7 @@ pub(crate) async fn start(
         images,
         threads,
         account,
-        coordinator_thread,
+        orchestrator_thread,
         notify: notify.unwrap_or(true),
         options: RunOptions {
             model,
@@ -987,21 +995,21 @@ pub(crate) async fn start(
 pub(crate) struct NewRun {
     pub run_id: RunId,
     /// The project, or for a thread its repo entry, whose id the run's events go to.
-    pub scope: ProjectId,
+    pub scope: ScopeId,
     pub prompt: String,
     /// The prompt's images (PLX-191), already checked.
     pub images: Vec<PromptImage>,
     /// The threads attached to the prompt (PLX-372), already checked.
     pub threads: Vec<RunId>,
     pub account: Option<AccountChoice>,
-    /// The coordinator thread starting the run through `plxd mcp` (#195).
-    pub coordinator_thread: Option<CoordinatorThreadId>,
+    /// The orchestrator thread starting the run through `plxd mcp` (#195).
+    pub orchestrator_thread: Option<OrchestratorThreadId>,
     /// The run wakes its parent, if it has one, when a CLI process of its ends (PLX-380, 0025).
     pub notify: bool,
     pub options: RunOptions,
     /// The client answers the run's permission requests (PLX-222, 0031).
     pub approvals: bool,
-    /// A Project's exploration child, which never lands (0045).
+    /// An orchestrator's exploration child, which never lands (0045).
     pub explore: bool,
     pub thread: Option<NewThread>,
 }
@@ -1047,13 +1055,13 @@ pub(crate) struct CreatedRun {
     pub thread: Option<parallax_store::Thread>,
 }
 
-/// A new run's parent (0041): the one its thread names, or the coordinator that starts it, whose
+/// A new run's parent (0041): the one its thread names, or the orchestrator that starts it, whose
 /// subagents are its children.
-fn parent(thread: Option<&NewThread>, coordinator: Option<CoordinatorThreadId>) -> Option<Uuid> {
+fn parent(thread: Option<&NewThread>, orchestrator: Option<OrchestratorThreadId>) -> Option<Uuid> {
     thread
         .and_then(|thread| thread.parent)
         .map(Uuid::from)
-        .or(coordinator.map(Uuid::from))
+        .or(orchestrator.map(Uuid::from))
 }
 
 /// A new fork's run, recorded with no CLI (0050): logs the parent's transcript up to the fork
@@ -1062,7 +1070,7 @@ fn parent(thread: Option<&NewThread>, coordinator: Option<CoordinatorThreadId>) 
 /// shouldn't hold that one up: a crash between the two leaves the fork with none of it.
 async fn fork_created(
     daemon: &Daemon,
-    project: ProjectId,
+    project: ScopeId,
     run_id: RunId,
     fork: NewFork,
     row: &parallax_store::Run,
@@ -1098,7 +1106,7 @@ async fn fork_created(
 /// Creates and starts a run: see the module documentation. Idempotent on the run id. A fork
 /// (`NewThread::fork`) is created with no CLI, at rest where its parent's turn ended.
 pub(crate) async fn create(daemon: Arc<Daemon>, new: NewRun) -> Result<CreatedRun, ErrorObject> {
-    let lane = daemon.orchestrator.lane(new.run_id).await;
+    let lane = daemon.dispatcher.lane(new.run_id).await;
     create_started(Arc::clone(&daemon), new, &lane).await
 }
 
@@ -1121,7 +1129,7 @@ pub(crate) async fn create_started(
         images,
         threads,
         mut account,
-        coordinator_thread,
+        orchestrator_thread,
         notify,
         mut options,
         mut approvals,
@@ -1129,24 +1137,23 @@ pub(crate) async fn create_started(
         mut thread,
     } = new;
     let fork = thread.as_mut().and_then(|thread| thread.fork.take());
-    // A run in a Project runs in its mode, whatever the request asked for, and asks through the
-    // inbox, whoever started it (0042).
-    // ponytail: a retry after `project/update` changed the mode gets idConflict; compare the
-    // stored mode instead if that bites.
-    let mode = project_mode(&daemon, project).await?;
+    // A run in an orchestrator runs in its mode, whatever the request asked for, and asks through
+    // the inbox, whoever started it (0042). ponytail: a retry after `orchestrator/update` changed
+    // the mode gets idConflict; compare the stored mode instead if that bites.
+    let mode = orchestrator_mode(&daemon, project).await?;
     if let Some(mode) = mode {
         options.permission = mode.agent();
         approvals = true;
     }
     // What the request asks for, as the runs table stores it. Routing fills in the backend below.
-    let parent = parent(thread.as_ref(), coordinator_thread);
+    let parent = parent(thread.as_ref(), orchestrator_thread);
     let mut fields = RunFields {
         project_id: project.into(),
         prompt: prompt.clone(),
         requested_account: requested_account(account.as_ref()),
         policy: WORKSPACE_WRITE.to_owned(),
         backend: String::new(),
-        coordinator_thread: coordinator_thread.map(Uuid::from),
+        orchestrator_thread: orchestrator_thread.map(Uuid::from),
         parent,
         notify_parent: notify && parent.is_some(),
         model: options.model.clone(),
@@ -1170,7 +1177,7 @@ pub(crate) async fn create_started(
     // The attached threads are read before anything is created, so a failure leaves nothing.
     let attached = attached::prompt(&daemon, run_id, &threads, &prompt).await?;
     let (sent, seen) = (attached.text, attached.seen);
-    // A Project's child goes where its rules say, or waits (0046).
+    // An orchestrator's child goes where its rules say, or waits (0046).
     let requested = account.clone();
     let mut waiting = None;
     let mut placing = None;
@@ -1248,7 +1255,7 @@ pub(crate) async fn create_started(
     if waiting.is_some() {
         let run = agent_run(&row, worktree.as_ref())?;
         placement::queue(&daemon, &run, prompt, images, threads, requested).await?;
-        if coordinator_thread.is_none() {
+        if orchestrator_thread.is_none() {
             wake::started(&daemon, &run);
         }
         return Ok(CreatedRun {
@@ -1309,8 +1316,9 @@ pub(crate) async fn create_started(
         agents.spawn(actor);
         run?
     };
-    // A run started in a Project wakes its coordinator, unless the coordinator launched it (0043).
-    if mode.is_some() && coordinator_thread.is_none() {
+    // A run started in an orchestrator wakes its orchestrator, unless the orchestrator launched it
+    // (0043).
+    if mode.is_some() && orchestrator_thread.is_none() {
         wake::started(&daemon, &run);
     }
     Ok(CreatedRun {
@@ -1321,15 +1329,15 @@ pub(crate) async fn create_started(
 
 /// Where new run `run_id` works, and its canonical cwd and git folder: for a `checkout` thread,
 /// `repo_path`'s own checkout, switched to the thread's ref first, or else a new worktree of
-/// `repo_path`, cut from the Project's integration branch's tip when `in_project` (0045).
+/// `repo_path`, cut from the orchestrator's integration branch's tip when `in_orchestrator` (0045).
 async fn workspace(
     daemon: &Arc<Daemon>,
-    project: ProjectId,
+    project: ScopeId,
     run_id: RunId,
     repo_path: &Path,
     thread: Option<&NewThread>,
     checkout: bool,
-    in_project: bool,
+    in_orchestrator: bool,
 ) -> Result<(Option<CreatedWorktree>, (PathBuf, PathBuf)), ErrorObject> {
     let agents = &daemon.agents;
     if checkout {
@@ -1338,7 +1346,7 @@ async fn workspace(
         }
         return Ok((None, checkout_paths(agents, repo_path).await?));
     }
-    let base = if in_project {
+    let base = if in_orchestrator {
         integration(daemon, project)
             .await?
             .and_then(|row| row.integration_branch)
@@ -1350,20 +1358,20 @@ async fn workspace(
     Ok((Some(created), (worktree_path, git_common_dir)))
 }
 
-/// A new thread's first message: `prompt` as the user or the coordinator wrote it, as in Claude
-/// Code (0034), after a Project child's header (0042).
+/// A new thread's first message: `prompt` as the user or the orchestrator wrote it, as in Claude
+/// Code (0034), after an orchestrator child's header (0042).
 pub(super) fn first_prompt(prompt: &str, place: &Place) -> Result<String, ErrorObject> {
     match place {
         Place::Worker { header, .. } => Ok(format!("{}{prompt}", header.as_deref().unwrap_or(""))),
-        Place::Coordinator { .. } => Err(ErrorObject::internal_error(
-            "a thread was prepared as a coordinator",
+        Place::Orchestrator { .. } => Err(ErrorObject::internal_error(
+            "a thread was prepared as an orchestrator",
         )),
     }
 }
 
-/// The start of a Project child's first message (0042): the Project's name, the plxd tools
-/// every kind gives a child, which always runs with `approvals` (0041), and then the brief and
-/// memory index when there are any (0044). The task follows it.
+/// The start of an orchestrator child's first message (0042): the orchestrator's name, the plxd
+/// tools every kind gives a child, which always runs with `approvals` (0041), and then the brief
+/// and memory index when there are any (0044). The task follows it.
 fn child_header(project: &str, start: &memory::Start) -> String {
     let tools = [
         crate::mcp::thread::TOOLS,
@@ -1374,11 +1382,11 @@ fn child_header(project: &str, start: &memory::Start) -> String {
     .concat()
     .join(", ");
     let mut header = format!(
-        "You are working on a task in the Parallax Project \"{project}\".\n\
+        "You are working on a task in the Parallax Orchestrator \"{project}\".\n\
          Your Parallax tools are on the plxd MCP server: {tools}.\n\n"
     );
     if let Some(brief) = &start.brief {
-        let _ = write!(header, "The Project's brief:\n{brief}\n\n");
+        let _ = write!(header, "The orchestrator's brief:\n{brief}\n\n");
     }
     if !start.index.is_empty() {
         header.push_str(&start.index);
@@ -1434,7 +1442,7 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
     if let Some(actor) = agents.actor(id) {
         return Ok(actor);
     }
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     if let Some(actor) = agents.actor(id) {
         return Ok(actor);
     }
@@ -1444,7 +1452,7 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| run_not_found(id))?;
         let worktree = db.get_worktree(id.into()).map_err(|e| store_error(&e))?;
-        // Only an accepted run has lost its worktree, and a coordinator or a checkout thread
+        // Only an accepted run has lost its worktree, and an orchestrator or a checkout thread
         // never had one (0024).
         if worktree.is_none()
             && row.state.status != convert::ACCEPTED
@@ -1481,8 +1489,8 @@ async fn ask<T>(
     let (reply, answer) = oneshot::channel();
     let mut command = command(reply);
     let stopping = || ErrorObject::internal_error("plxd is stopping");
-    // An actor that `thread/delete` or `project/delete` just stopped has closed its channel: look
-    // the run up again, which then finds it gone.
+    // An actor that `thread/delete` or `orchestrator/delete` just stopped has closed its channel:
+    // look the run up again, which then finds it gone.
     for _ in 0..2 {
         let actor = actor_for(daemon, id).await?;
         match actor.send(command).await {
@@ -1624,15 +1632,14 @@ pub(crate) async fn queue(
     .await
 }
 
-/// Starts the actor of every run with waiting messages, so a Project's coordinator's and
-/// children's are sent, as before (PLX-370), since nobody may be watching an Auto Project. A plain
-/// thread's [`recover`] held, so its actor waits for `queue.resume`. With the host's
-/// `continueAfterRestart`, a plain
-/// thread in `cut`, whose turn the restart cut off, then gets [`CONTINUE`] on its session, ahead
-/// of its held queue, once a slot is free for a thread in a shared worktree (0063). A Project's
-/// cut runs go on through its coordinator's restart wake-up
-/// instead ([`wake::catch_up`], PLX-178), which placement's slots (0046) also hold to. Called
-/// once at startup, after [`recover`].
+/// Starts the actor of every run with waiting messages, so an orchestrator's and children's are
+/// sent, as before (PLX-370), since nobody may be watching an Auto Orchestrator. A plain thread's
+/// [`recover`] held, so its actor waits for `queue.resume`. With the host's `continueAfterRestart`,
+/// a plain thread in `cut`, whose turn the restart cut off, then gets [`CONTINUE`] on its session,
+/// ahead of its held queue, once a slot is free for a thread in a shared worktree (0063). An
+/// orchestrator's cut runs go on through its orchestrator's restart wake-up instead
+/// ([`wake::catch_up`], PLX-178), which placement's slots (0046) also hold to. Called once at
+/// startup, after [`recover`].
 pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>, cut: Vec<RunId>) {
     let pending = store(daemon, |db| {
         db.checkpoint_revert_threads().map_err(|e| store_error(&e))
@@ -1669,7 +1676,7 @@ pub(crate) async fn deliver_queued(daemon: &Arc<Daemon>, cut: Vec<RunId>) {
                 return Ok(None);
             };
             let project = db
-                .get_project(row.fields.project_id)
+                .get_orchestrator(row.fields.project_id)
                 .map_err(|e| store_error(&e))?;
             let shared = db
                 .lineage(id.into())
@@ -1757,14 +1764,14 @@ async fn hold_queues(daemon: &Arc<Daemon>) {
 }
 
 /// Holds run `id`'s stored queue when it is a plain thread's, and reports it held. Whether it
-/// did: a Project's run, or one gone since, is left as it is.
+/// did: an orchestrator's run, or one gone since, is left as it is.
 fn hold_queue(db: &mut crate::store::Tx, id: RunId) -> Result<bool, ErrorObject> {
     let Some(row) = db.get_run(id.into()).map_err(|e| store_error(&e))? else {
         return Ok(false);
     };
     let project = row.fields.project_id;
     if db
-        .get_project(project)
+        .get_orchestrator(project)
         .map_err(|e| store_error(&e))?
         .is_some()
     {
@@ -1774,7 +1781,7 @@ fn hold_queue(db: &mut crate::store::Tx, id: RunId) -> Result<bool, ErrorObject>
     let (rows, messages) = actor::held(queue);
     db.set_queue(id.into(), &rows)
         .map_err(|e| store_error(&e))?;
-    let project = ProjectId::try_from(project)
+    let project = ScopeId::try_from(project)
         .map_err(|_| ErrorObject::internal_error("a stored project id is not a UUIDv7"))?;
     db.stage(
         jiff::Timestamp::now(),
@@ -1964,12 +1971,12 @@ pub(crate) async fn set_auto_resume(
     .await
 }
 
-/// `project/fromThreads` (0042): moves run `id` into Project `project` as the child of its
-/// coordinator `parent`, through the run's actor, so a live actor takes the new scope too.
+/// `orchestrator/fromThreads` (0042): moves run `id` into Orchestrator `project` as the child of
+/// its orchestrator `parent`, through the run's actor, so a live actor takes the new scope too.
 pub(crate) async fn join(
     daemon: &Arc<Daemon>,
     id: RunId,
-    project: ProjectId,
+    project: ScopeId,
     parent: RunId,
 ) -> Result<AgentRun, ErrorObject> {
     ask(daemon, id, |reply| Command::Join {
@@ -2020,10 +2027,11 @@ pub(super) fn approval_not_found(run: RunId, approval: ApprovalId) -> ErrorObjec
     )
 }
 
-/// `thread/delete`'s and `project/delete`'s part in the runner: deletes a run through its actor,
-/// which stops a running CLI first and never races the run's own resume, commit, or accept. A
-/// push or Open PR in flight refuses it (`gitRefused`), unless `wait`, which waits for it to
-/// finish first, as `project/delete` does so it never stops with half its runs deleted (PLX-458).
+/// `thread/delete`'s and `orchestrator/delete`'s part in the runner: deletes a run through its
+/// actor, which stops a running CLI first and never races the run's own resume, commit, or accept.
+/// A push or Open PR in flight refuses it (`gitRefused`), unless `wait`, which waits for it to
+/// finish first, as `orchestrator/delete` does so it never stops with half its runs deleted
+/// (PLX-458).
 pub(crate) async fn delete(
     daemon: &Arc<Daemon>,
     id: RunId,
@@ -2188,10 +2196,10 @@ pub(crate) async fn git(
     ask(&daemon, run_id, |reply| Command::Git { action, reply }).await
 }
 
-/// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd
-/// stopped without recording how they ended, as after a crash. Then holds plain threads' queues
-/// (0060), wakes each project's coordinator for what it missed while plxd was stopped
-/// ([`wake::catch_up`], PLX-178), and starts the timers of runs waiting for a usage limit to reset ([`resume::restore`], PLX-371).
+/// Marks every run the store still has as `starting` or `running` as `interrupted`: plxd stopped
+/// without recording how they ended, as after a crash. Then holds plain threads' queues (0060),
+/// wakes each orchestrator for what it missed while plxd was stopped ([`wake::catch_up`], PLX-178),
+/// and starts the timers of runs waiting for a usage limit to reset ([`resume::restore`], PLX-371).
 /// Returns the runs it interrupted, for [`deliver_queued`]. Called once at startup, before any
 /// connection is accepted.
 pub(crate) async fn recover(daemon: &Arc<Daemon>) -> Vec<RunId> {
@@ -2265,7 +2273,7 @@ mod tests {
     use std::path::Path;
 
     use parallax_protocol::{ErrorKind, RunId};
-    use parallax_store::{ProjectFields, RunFields, RunState};
+    use parallax_store::{OrchestratorFields, RunFields, RunState};
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
@@ -2274,9 +2282,9 @@ mod tests {
 
     use crate::server::Daemon;
 
-    /// A Project's fields, for a test that stores one.
-    pub(super) fn project_fields() -> ProjectFields {
-        ProjectFields {
+    /// An orchestrator's fields, for a test that stores one.
+    pub(super) fn orchestrator_fields() -> OrchestratorFields {
+        OrchestratorFields {
             name: "app".to_owned(),
             repo_path: "/src/app".to_owned(),
             icon: None,
@@ -2294,7 +2302,7 @@ mod tests {
             requested_account: None,
             policy: super::WORKSPACE_WRITE.to_owned(),
             backend: "fake".to_owned(),
-            coordinator_thread: None,
+            orchestrator_thread: None,
             parent: None,
             notify_parent: false,
             model: None,
@@ -2338,18 +2346,18 @@ mod tests {
         ));
     }
 
-    /// PLX-338: a worker start that read its Project before `project/delete` removed it records
-    /// no run once the row is gone, so the delete leaves no orphan behind.
+    /// PLX-338: a worker start that read its orchestrator before `orchestrator/delete` removed it
+    /// records no run once the row is gone, so the delete leaves no orphan behind.
     #[tokio::test]
-    async fn a_start_racing_a_project_delete_records_no_run() {
+    async fn a_start_racing_a_orchestrator_delete_records_no_run() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
         let project = Uuid::now_v7();
         // The start's `prepare_run` saw the project; the delete then removed it.
         store(&daemon, move |db| {
-            db.create_project(project, &project_fields())
+            db.create_orchestrator(project, &orchestrator_fields())
                 .map_err(|e| store_error(&e))?;
-            db.delete_project(project).map_err(|e| store_error(&e))
+            db.delete_orchestrator(project).map_err(|e| store_error(&e))
         })
         .await
         .unwrap();
@@ -2357,7 +2365,7 @@ mod tests {
         let run_id = RunId::generate();
         let run = run_fields(project);
         let state = RunState::default();
-        let lane = daemon.orchestrator.lane(run_id).await;
+        let lane = daemon.dispatcher.lane(run_id).await;
         let error = record(
             &daemon,
             &lane,
@@ -2371,7 +2379,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error.parallax_data().map(|data| data.kind),
-            Some(ErrorKind::ProjectNotFound)
+            Some(ErrorKind::OrchestratorNotFound)
         );
         let stored = store(&daemon, move |db| {
             db.get_run(run_id.into()).map_err(|e| store_error(&e))

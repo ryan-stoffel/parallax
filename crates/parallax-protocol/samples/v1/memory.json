@@ -4,7 +4,7 @@
     "id": 1,
     "method": "memory/write",
     "params": {
-      "scope": { "kind": "project", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" },
+      "scope": { "kind": "orchestrator", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" },
       "path": "memory/decision/use-vitest.md",
       "content": "We moved off Jest.\n",
       "title": "Use Vitest, not Jest"
@@ -77,7 +77,11 @@
       "path": "proposals/node-22.md"
     }
   },
-  { "jsonrpc": "2.0", "id": 4, "result": {} },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  },
   {
     "jsonrpc": "2.0",
     "id": 5,
@@ -113,7 +117,7 @@
     "method": "memory/propose",
     "params": {
       "from": "01a0f755-f200-74dd-8cfc-06d0b225c5e3",
-      "scope": { "kind": "project", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" },
+      "scope": { "kind": "orchestrator", "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" },
       "title": "Ship v2 first",
       "content": "# Goal\n\nShip v2 before the redesign.\n"
     }
@@ -131,7 +135,7 @@
         "source": "coordinator 01a0f755-f200-74dd-8cfc-06d0b225c5e3",
         "date": "2026-10-04",
         "writer": "coordinator 01a0f755-f200-74dd-8cfc-06d0b225c5e3",
-        "forScope": "project"
+        "forScope": "orchestrator"
       }
     }
   }

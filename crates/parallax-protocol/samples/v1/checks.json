@@ -2,9 +2,9 @@
   {
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "project/update",
+    "method": "orchestrator/update",
     "params": {
-      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+      "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
       "proposedChecks": "cargo test --workspace"
     }
   },
@@ -12,7 +12,7 @@
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-      "project": {
+      "orchestrator": {
         "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
         "name": "app",
         "repoPath": "/Users/me/src/app",
@@ -29,9 +29,9 @@
   {
     "jsonrpc": "2.0",
     "id": 2,
-    "method": "project/update",
+    "method": "orchestrator/update",
     "params": {
-      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+      "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
       "checks": "cargo test --workspace && npm test"
     }
   },
@@ -39,7 +39,7 @@
     "jsonrpc": "2.0",
     "id": 2,
     "result": {
-      "project": {
+      "orchestrator": {
         "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
         "name": "app",
         "repoPath": "/Users/me/src/app",

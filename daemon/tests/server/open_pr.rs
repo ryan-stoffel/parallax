@@ -15,7 +15,7 @@ use plxd::backend::process::{Environment, find_program};
 use tempfile::TempDir;
 
 use crate::agents::{
-    Host, create, end_turn, fake, git, init, project_params, start_params, subscribe, until,
+    Host, create, end_turn, fake, git, init, orchestrator_params, start_params, subscribe, until,
     updated_to,
 };
 use crate::support::{InProcess, temp_dir};
@@ -150,7 +150,7 @@ pub(crate) fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenP
 async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
     let tools = Tools::new();
     let dir = temp_dir();
-    let params = project_params(dir.path());
+    let params = orchestrator_params(dir.path());
     let repo = PathBuf::from(&params.repo_path);
     let origin = add_origin(&repo, dir.path());
     let host = start(dir, editing(), &tools);

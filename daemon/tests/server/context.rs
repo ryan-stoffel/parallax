@@ -4,23 +4,23 @@
 use std::os::unix::fs::symlink;
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
-use parallax_protocol::methods::{ContextList, ContextRead, ContextWrite, ProjectCreate};
+use parallax_protocol::methods::{ContextList, ContextRead, ContextWrite, OrchestratorCreate};
 use parallax_protocol::{
-    ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams, Project, ProjectId,
+    ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams, Orchestrator, ScopeId,
 };
 
 use crate::support::{Client, Plxd, create_params, temp_dir};
 
-async fn project(client: &mut Client, dir: &std::path::Path) -> Project {
+async fn project(client: &mut Client, dir: &std::path::Path) -> Orchestrator {
     client
-        .call::<ProjectCreate>(create_params(dir, "parallax"))
+        .call::<OrchestratorCreate>(create_params(dir, "parallax"))
         .await
         .unwrap()
-        .project
+        .orchestrator
 }
 
 fn write_params(
-    project: ProjectId,
+    project: ScopeId,
     path: &str,
     content: &str,
     writer: Option<&str>,

@@ -67,7 +67,7 @@ const pageTitles: Record<Exclude<MenuPage, "root">, string> = {
   contents: "Search project contents",
 };
 const placeholders: Record<MenuPage, string> = {
-  root: "Search commands, projects, and threads…",
+  root: "Search commands, orchestrators, and threads…",
   repos: "Search repositories…",
   theme: "Search themes…",
   appearance: "Search…",
@@ -82,7 +82,7 @@ const parallaxThemes: { id: string; name: string; mode: Mode }[] = [
 
 /**
  * The command menu (PLX-993), on Mod+K: one search over the app's actions, every computer's
- * repositories, Projects, and threads, and the open thread's files. With no query it lists the
+ * repositories, orchestrators, and threads, and the open thread's files. With no query it lists the
  * actions, then the most recent threads. Typing ranks each group fuzzily (commandSearch.ts) and
  * orders the groups by their best match; plxd's index of messages (`thread/search`) adds threads
  * that match only there, with the line that matched. Some actions open a page in its place: a
@@ -100,11 +100,11 @@ export function CommandMenu({
   theme,
   onThemeChange,
   onOpenThread,
-  onOpenProject,
+  onOpenOrchestrator,
   onOpenFile,
 }: {
   ref: Ref<CommandMenuHandle>;
-  /** Every host's threads and Projects. */
+  /** Every host's threads and orchestrators. */
   hosts: HostThreads[];
   /** The root's actions, in order. */
   actions: MenuItem[];
@@ -117,7 +117,7 @@ export function CommandMenu({
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
   onOpenThread: (hostId: string, threadId: string) => void;
-  onOpenProject: (hostId: string, projectId: string) => void;
+  onOpenOrchestrator: (hostId: string, orchestratorId: string) => void;
   onOpenFile: (runId: string, path: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -292,15 +292,15 @@ export function CommandMenu({
         recent.map((r) => threadItem(r)),
       );
     } else {
-      const projects: MenuItem[] = hosts.flatMap(({ host, view }) =>
-        view.state.projects.map((p) => ({
-          id: `project:${host.id}/${p.id}`,
+      const orchestrators: MenuItem[] = hosts.flatMap(({ host, view }) =>
+        view.state.orchestrators.map((p) => ({
+          id: `orchestrator:${host.id}/${p.id}`,
           label: p.name,
           text: p.name,
           keywords: hosts.length > 1 ? host.name : undefined,
           hint: hosts.length > 1 ? host.name : undefined,
           icon: <ProjectIcon icon={p.icon} />,
-          run: () => onOpenProject(host.id, p.id),
+          run: () => onOpenOrchestrator(host.id, p.id),
         })),
       );
       // Archived threads rank under open ones that match as well.
@@ -313,7 +313,7 @@ export function CommandMenu({
       const groups = [
         { name: "Actions", found: ranked(actions) },
         { name: "Repositories", found: ranked(repos).slice(0, 6) },
-        { name: "Projects", found: ranked(projects).slice(0, 6) },
+        { name: "Orchestrators", found: ranked(orchestrators).slice(0, 6) },
         {
           name: "Threads",
           found: [
@@ -529,7 +529,7 @@ export function CommandMenu({
             aria-controls={listId}
             aria-activedescendant={current && `${listId}-${rows.indexOf(current)}`}
             aria-label={
-              page === "root" ? "Search commands, projects, and threads" : pageTitles[page]
+              page === "root" ? "Search commands, orchestrators, and threads" : pageTitles[page]
             }
             placeholder={placeholders[page]}
             value={query}

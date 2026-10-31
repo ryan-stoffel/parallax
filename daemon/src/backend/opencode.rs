@@ -30,14 +30,14 @@
 //! (`POST /session`) or checks the one it resumes (`GET /session/<id>`), and opens its event
 //! stream before the first prompt. Each message is a `POST /session/<id>/prompt_async`, with its
 //! images as `data:` file parts before its text, the model as `providerID/modelID`, Plan's
-//! `plan` agent, and a coordinator's instructions as `system` (0078); a turn ends when the
+//! `plan` agent, and an orchestrator's instructions as `system` (0078); a turn ends when the
 //! session goes idle after it went busy for the prompt, or with a `session.error`, which fails
 //! the run. A follow-up sent during a turn waits for it. A steer (PLX-370) aborts the turn
 //! (`POST /session/<id>/abort`) and then goes as the next prompt, as ACP agents take one. Once no
 //! turn is in flight, nothing waits, and plxd holds no message for it
 //! ([`Run::hold`](super::Run::hold)), the run ends; a later message resumes the session.
 //!
-//! Only threads and a Project's coordinator run here (`RunRequest::full_agent`, 0042): `OpenCode`
+//! Only threads and an orchestrator run here (`RunRequest::full_agent`, 0042): `OpenCode`
 //! has no worker sandbox plxd can check. A thread with `approvals` or Bypass gets its
 //! `plxd mcp --thread` server (0041) through `POST /mcp`, under a name of its own run, since
 //! a server's MCP servers are shared by its folder's sessions; it is disconnected at the end.
@@ -580,13 +580,13 @@ fn rules(permission: AgentPermission) -> Value {
 ///
 /// # Errors
 ///
-/// [`StartError::Unsupported`] for a run that isn't a thread or a coordinator, a key account or
+/// [`StartError::Unsupported`] for a run that isn't a thread or an orchestrator, a key account or
 /// an account folder, a fork, an effort, context window, or fast mode, or a level it doesn't map,
 /// and [`StartError::Invalid`] for an empty prompt or a model that isn't `provider/model`.
 fn check(label: &str, request: &RunRequest) -> Result<Option<Value>, StartError> {
     if !request.full_agent() {
         return Err(StartError::Unsupported(format!(
-            "plxd runs only threads and coordinators on {label}: it has no worker sandbox"
+            "plxd runs only threads and orchestrators on {label}: it has no worker sandbox"
         )));
     }
     match &request.account.credential {

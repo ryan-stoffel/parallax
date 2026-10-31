@@ -18,7 +18,7 @@ export function questionOf(item: InboxItem, questions: readonly Question[]): Que
 export interface InboxView {
   /** Every item, oldest first, read and unread. */
   items: InboxItem[];
-  /** The Project's questions, which Needs you and Decided items are about. */
+  /** The orchestrator's questions, which Needs you and Decided items are about. */
   questions: Question[];
   /** Marks items seen with `inbox/seen`. */
   seen: (ids: string[]) => Promise<void>;
@@ -27,14 +27,14 @@ export interface InboxView {
 }
 
 /**
- * A Project's inbox (0043), kept live: `inbox/list`, then the Project's events after its `seq`
- * for `inbox.added`, starting over on `resync`. With `answerable` (the `questions` capability),
- * also `question/list`, read again when a Needs you or Decided item arrives. Loads only while
- * `enabled`: connected to a plxd with `inbox`. Key its caller by host and Project.
+ * An orchestrator's inbox (0043), kept live: `inbox/list`, then the orchestrator's events after its
+ * `seq` for `inbox.added`, starting over on `resync`. With `answerable` (the `questions`
+ * capability), also `question/list`, read again when a Needs you or Decided item arrives. Loads
+ * only while `enabled`: connected to a plxd with `inbox`. Key its caller by host and orchestrator.
  */
 export function useInbox(
   hostId: string,
-  project: string,
+  orchestrator: string,
   enabled: boolean,
   answerable: boolean,
 ): InboxView {
@@ -47,18 +47,18 @@ export function useInbox(
     let unsubscribe = () => {};
     const loadQuestions = async () => {
       if (!answerable) return;
-      const answer = await window.parallax.request(hostId, "question/list", { project });
+      const answer = await window.parallax.request(hostId, "question/list", { orchestrator });
       if (!stopped && "result" in answer) setQuestions(answer.result.questions);
     };
     async function load() {
       unsubscribe();
-      const list = await window.parallax.request(hostId, "inbox/list", { project });
+      const list = await window.parallax.request(hostId, "inbox/list", { orchestrator });
       // ponytail: a failed list shows no inbox; the chat under it still works.
       if (stopped || "error" in list) return;
       setItems(list.result.items);
       void loadQuestions();
       // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
-      const since = { after: list.result.seq, project, shell: true, logId: list.logId };
+      const since = { after: list.result.seq, orchestrator, shell: true, logId: list.logId };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
@@ -75,16 +75,19 @@ export function useInbox(
       stopped = true;
       unsubscribe();
     };
-  }, [hostId, project, enabled, answerable]);
+  }, [hostId, orchestrator, enabled, answerable]);
 
   const seen = useCallback(
     async (ids: string[]) => {
-      const answer = await window.parallax.request(hostId, "inbox/seen", { project, items: ids });
+      const answer = await window.parallax.request(hostId, "inbox/seen", {
+        orchestrator,
+        items: ids,
+      });
       if ("error" in answer) return;
       const marked = new Map(answer.result.items.map((i) => [i.id, i]));
       setItems((prev) => prev.map((i) => marked.get(i.id) ?? i));
     },
-    [hostId, project],
+    [hostId, orchestrator],
   );
 
   const answer = useCallback(

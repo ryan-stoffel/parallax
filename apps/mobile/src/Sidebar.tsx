@@ -1,13 +1,13 @@
 // The sidebar, as Claude's app has one: a swipe right on the main view opens it over most of the
 // screen. Its top wears the nightly sky, with the Parallax mark (a new thread where the last one
 // started), the filter, and search. Below are every computer's threads, as the desktop's sidebar
-// lists a host's: Projects, pinned, then the rest grouped by day or by repository, each with its
-// status (Working, Monitoring, Waiting, Needs you, Done, Failed), and pinned under the list, as the
-// desktop's, drawers for those working, snoozed, and archived. The filter narrows it to one
+// lists a host's: orchestrators, pinned, then the rest grouped by day or by repository, each with
+// its status (Working, Monitoring, Waiting, Needs you, Done, Failed), and pinned under the list, as
+// the desktop's, drawers for those working, snoozed, and archived. The filter narrows it to one
 // computer or repository. A swipe left on a thread shows Archive, and a full one archives it; on an
 // archived thread a swipe right does the same for Unarchive. A long press pins, snoozes, renames,
-// or archives it. Its bottom has the profile picture (Settings), pull requests, and New thread.
-// The drawer keeps it mounted, so the sky never flickers in.
+// or archives it. Its bottom has the profile picture (Settings), pull requests, and New thread. The
+// drawer keeps it mounted, so the sky never flickers in.
 import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
 import {
@@ -39,10 +39,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import * as Lucide from "lucide-react-native";
 
-import type { AgentRun, Project, ProjectIcon, Repo, Thread } from "../../desktop/src/protocol/generated/protocol";
+import type { AgentRun, Orchestrator, ChosenIcon, Repo, Thread } from "../../desktop/src/protocol/generated/protocol";
 import {
   attentionOf,
-  projectAttention,
+  orchestratorAttention,
   snoozeChoices,
   snoozed,
   type Attention,
@@ -51,8 +51,8 @@ import {
   asksOf,
   groupOf,
   noRepo,
-  projectRuns,
-  threadProjects,
+  orchestratorRuns,
+  threadOrchestrators,
   waitingOf,
 } from "../../desktop/src/renderer/threads";
 import { Avatar } from "./Account";
@@ -60,7 +60,7 @@ import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
 import { GlassButton } from "./Glass";
 import { ProviderLogo } from "./logos";
-import { ProjectGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
+import { OrchestratorGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
 import { ago, useNav, useShow } from "./nav";
 import { getPrefs } from "./prefs";
 import { AttentionBadge, Button, DeviceIcon, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
@@ -90,62 +90,62 @@ export interface Entry {
 
 export const when = (t: Thread) => t.lastPromptAt ?? t.createdAt;
 
-/** A Parallax Project (0042) as the list shows it: its coordinator, computer, and attention. */
+/** A Parallax orchestrator (0042) as the list shows it: its orchestrator, computer, and attention. */
 export interface ProjectEntry {
   computer: Computer;
-  project: Project;
+  orchestrator: Orchestrator;
   attention: Attention;
-  /** How many threads it has, but its coordinator, for Search. */
+  /** How many threads it has, but its orchestrator, for Search. */
   threads: number;
   at: string;
 }
 
-/** Every computer's Projects, as the list and Search show them. */
-export function projectsOf(computers: Computer[]): ProjectEntry[] {
+/** Every computer's orchestrators, as the list and Search show them. */
+export function orchestratorsOf(computers: Computer[]): ProjectEntry[] {
   return computers.flatMap((computer) => {
     const { state } = computer.view;
-    const inProject = threadProjects(state);
-    return state.projects.map((project) => {
-      const runs = projectRuns(state, project.id, inProject);
+    const inOrchestrator = threadOrchestrators(state);
+    return state.orchestrators.map((orchestrator) => {
+      const runs = orchestratorRuns(state, orchestrator.id, inOrchestrator);
       return {
         computer,
-        project,
-        attention: projectAttention(runs, (id) => asksOf(state, id)),
-        threads: runs.filter((r) => r.id !== project.coordinator).length,
+        orchestrator,
+        attention: orchestratorAttention(runs, (id) => asksOf(state, id)),
+        threads: runs.filter((r) => r.id !== orchestrator.run).length,
         at: runs.reduce((latest, r) => (r.updatedAt > latest ? r.updatedAt : latest), ""),
       };
     });
   });
 }
 
-/** A Project's row: its icon and name, its status, and its computer with its folder there. */
-function ProjectRow({ entry }: { entry: ProjectEntry }) {
+/** An orchestrator's row: its icon and name, its status, and its computer with its folder there. */
+function OrchestratorRow({ entry }: { entry: ProjectEntry }) {
   const c = useColors();
   const show = useShow();
-  const { project, computer, attention } = entry;
-  const coordinator = project.coordinator;
+  const { orchestrator, computer, attention } = entry;
+  const orchestratorRun = orchestrator.run;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${project.name}, on ${computer.machine.name}`}
-      disabled={!coordinator}
-      onPress={() => coordinator && show({ name: "Thread", params: { hostId: computer.machine.id, runId: coordinator } })}
+      accessibilityLabel={`${orchestrator.name}, on ${computer.machine.name}`}
+      disabled={!orchestratorRun}
+      onPress={() => orchestratorRun && show({ name: "Thread", params: { hostId: computer.machine.id, runId: orchestratorRun } })}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
     >
       <View style={styles.line}>
-        {project.icon?.image ? (
-          <View style={styles.projectIcon}>
-            <ProjectGlyph icon={project.icon} size={30} />
+        {orchestrator.icon?.image ? (
+          <View style={styles.orchestratorIcon}>
+            <OrchestratorGlyph icon={orchestrator.icon} size={30} />
           </View>
         ) : (
-          <View style={[styles.projectIcon, { backgroundColor: c.selected }]}>
-            <ProjectGlyph icon={project.icon} size={16} />
+          <View style={[styles.orchestratorIcon, { backgroundColor: c.selected }]}>
+            <OrchestratorGlyph icon={orchestrator.icon} size={16} />
           </View>
         )}
         <View style={{ flex: 1, gap: 2 }}>
           <View style={styles.line}>
             <T numberOfLines={1} style={{ flex: 1, fontWeight: attention === "needsYou" ? "600" : "500" }}>
-              {project.name}
+              {orchestrator.name}
             </T>
             {attention === "settled" ? (
               !!entry.at && (
@@ -160,7 +160,7 @@ function ProjectRow({ entry }: { entry: ProjectEntry }) {
           <View style={styles.line}>
             <DeviceIcon name={computer.machine.name} size={13} color={c.faintForeground} />
             <T faint numberOfLines={1} ellipsizeMode="head" style={{ ...styles.small, flex: 1 }}>
-              {homeless(project.repoPath)}
+              {homeless(orchestrator.repoPath)}
             </T>
           </View>
         </View>
@@ -169,13 +169,13 @@ function ProjectRow({ entry }: { entry: ProjectEntry }) {
   );
 }
 
-/** Every computer's threads, but those in a Project or forked from another. */
+/** Every computer's threads, but those in an orchestrator or forked from another. */
 export function entriesOf(computers: Computer[]): Entry[] {
   return computers.flatMap((computer) => {
     const { state } = computer.view;
-    const inProject = threadProjects(state);
+    const inOrchestrator = threadOrchestrators(state);
     return state.threads
-      .filter((t) => !inProject.has(t.id) && !t.parent)
+      .filter((t) => !inOrchestrator.has(t.id) && !t.parent)
       .map((thread) => {
         const run = state.runs[thread.id];
         const group = groupOf(state, thread);
@@ -304,7 +304,7 @@ function Swipe({
  * A thread's row, as the desktop's: its title and status, then quietly its repository and branch,
  * its lines changed, its computer's icon, and its provider's mark.
  */
-function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string, ProjectIcon> }) {
+function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string, ChosenIcon> }) {
   const c = useColors();
   const show = useShow();
   const { thread, run, computer, title, repo, attention } = entry;
@@ -434,7 +434,7 @@ function Drawer({
   entries: Entry[];
   open: boolean;
   onToggle: () => void;
-  shared: ReadonlyMap<string, ProjectIcon>;
+  shared: ReadonlyMap<string, ChosenIcon>;
 }) {
   const { height } = useWindowDimensions();
   if (!entries.length) return null;
@@ -501,7 +501,7 @@ export function Sidebar() {
   const working = pool.filter((e) => !e.thread.pinned && busy(e.attention));
   const listed = pool.filter((e) => !e.thread.pinned && !busy(e.attention));
 
-  const projects = projectsOf(computers.filter((m) => scope === "all" || scope === `computer:${m.machine.id}`)).sort(
+  const orchestrators = orchestratorsOf(computers.filter((m) => scope === "all" || scope === `computer:${m.machine.id}`)).sort(
     (a, b) => b.at.localeCompare(a.at),
   );
 
@@ -515,11 +515,11 @@ export function Sidebar() {
     groups.set(key, [...(groups.get(key) ?? []), e]);
     if (groupBy === "repo") groupRepos.set(key, e.source);
   }
-  type Row = { kind: "thread"; entry: Entry } | { kind: "project"; entry: ProjectEntry };
+  type Row = { kind: "thread"; entry: Entry } | { kind: "orchestrator"; entry: ProjectEntry };
   const threadRows = (list: Entry[]): Row[] => list.map((entry) => ({ kind: "thread", entry }));
   const sections = [
-    ...(projects.length && !scope.startsWith("repo:")
-      ? [{ title: "Projects", data: projects.map((entry): Row => ({ kind: "project", entry })), drawer: true }]
+    ...(orchestrators.length && !scope.startsWith("repo:")
+      ? [{ title: "Orchestrators", data: orchestrators.map((entry): Row => ({ kind: "orchestrator", entry })), drawer: true }]
       : []),
     ...(pinned.length ? [{ title: "Pinned", data: threadRows(pinned), drawer: false }] : []),
     ...[...groups].map(([title, data]) => ({ title, data: threadRows(data), drawer: false, repo: groupRepos.get(title) })),
@@ -612,7 +612,7 @@ export function Sidebar() {
         contentInsetAdjustmentBehavior="never"
         sections={sections}
         keyExtractor={(r) =>
-          `${r.entry.computer.machine.id}:${r.kind === "thread" ? r.entry.thread.id : r.entry.project.id}`
+          `${r.entry.computer.machine.id}:${r.kind === "thread" ? r.entry.thread.id : r.entry.orchestrator.id}`
         }
         stickySectionHeadersEnabled={false}
         refreshControl={
@@ -679,8 +679,8 @@ export function Sidebar() {
           )
         }
         renderItem={({ item }) =>
-          item.kind === "project" ? (
-            <ProjectRow entry={item.entry} />
+          item.kind === "orchestrator" ? (
+            <OrchestratorRow entry={item.entry} />
           ) : (
             <ThreadRow entry={item.entry} shared={shared} />
           )
@@ -806,7 +806,7 @@ const styles = StyleSheet.create({
   section: { fontSize: 13, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 4 },
   drawer: { flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 20, paddingVertical: 8 },
   rule: { flex: 1, height: StyleSheet.hairlineWidth },
-  projectIcon: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", marginRight: 4 },
+  orchestratorIcon: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", marginRight: 4 },
   swipe: { marginVertical: 2, borderRadius: 12, borderCurve: "continuous", justifyContent: "center" },
   swipeButton: { width: SWIPE + 8, flex: 1, alignItems: "center", justifyContent: "center", gap: 3 },
   row: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, gap: 3 },

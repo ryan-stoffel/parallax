@@ -80,9 +80,9 @@ import type {
   AgentRun,
   AgentStatus,
   GitStatus,
-  Project,
-  ProjectAutonomy,
-  ProjectIcon as ProjectIconValue,
+  Orchestrator,
+  OrchestratorAutonomy,
+  ChosenIcon,
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
@@ -111,7 +111,7 @@ import {
 } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { locale } from "./locale";
-import { AutonomyChoice } from "./ProjectPermission";
+import { AutonomyChoice } from "./OrchestratorPermission";
 import { resumeTime } from "./ResumeCard";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { DeviceIcon } from "./DeviceIcon";
@@ -145,7 +145,7 @@ import {
 } from "./sidebarItems";
 import { RowCard, rowTool } from "./RowCard";
 import { SidebarNav, navRow } from "./SidebarNav";
-import { spaceChoices, SpacePicker } from "./SpaceMenu";
+import { projectChoices, ProjectPicker } from "./ThreadProjectMenu";
 import { projectEntries, type ProjectEntry } from "./projectList";
 import { stored } from "./stored";
 
@@ -156,7 +156,7 @@ import {
   repoIconOf,
   setRepoIcons,
   type ForkChoice,
-  type ProjectChange,
+  type OrchestratorChange,
   type ThreadsView,
 } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
@@ -278,27 +278,27 @@ export type { HostThreads } from "./sidebarItems";
 interface ThreadListProps {
   /** Every host's list, this computer first. */
   hosts: HostThreads[];
-  /** The open host: where a new Project goes by default, and whose connection the footer shows. */
+  /** The open host: where a new orchestrator goes by default, and whose connection the footer shows. */
   host: Host;
   selection: Selection;
   /** Opens something on `hostId`, which becomes the open host. */
   onSelect: (hostId: string, selection: Selection) => void;
-  /** Opens a Project, on another host by opening that host first. */
-  onOpenProject: (hostId: string, projectId: string) => void;
+  /** Opens an orchestrator, on another host by opening that host first. */
+  onOpenOrchestrator: (hostId: string, orchestratorId: string) => void;
   onOpenSettings: (section: SettingsSection) => void;
   /** The page open in place of the main pane, whose nav row reads as selected (0090). */
   page?: NavRow;
   /** Opens Projects, Pull requests, or Usage in place of the main pane. */
   onOpenPage: (page: NavRow) => void;
-  /** The open Space, as `<host>/<id>`, whose pinned row reads as selected. */
-  openSpace?: string;
-  /** A project's menu, for the Projects page's cards (0090). */
-  projectMenu?: Ref<ProjectMenuHandle>;
-  /** Opens Create Space, from the add palette's New Space, where the open host makes Spaces. */
-  onNewSpace?: () => void;
+  /** The open Project, as `<host>/<id>`, whose pinned row reads as selected. */
+  openProject?: string;
+  /** An orchestrator's menu, for the orchestrators page's cards (0090). */
+  orchestratorMenu?: Ref<ProjectMenuHandle>;
+  /** Opens Create Project, from the add palette's New Project, where the open host makes Projects. */
+  onNewProject?: () => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
-  /** The add palette, for the command menu's New Project and Add repository (PLX-993). */
+  /** The add palette, for the command menu's New orchestrator and Add repository (PLX-993). */
   addDialog?: Ref<AddDialogHandle>;
   /** New thread, which opens Mod+N's picker of the repository it goes in. */
   onNewThread: () => void;
@@ -311,17 +311,11 @@ interface ThreadListProps {
 }
 
 /**
- * A Project's icon, in the sidebar, the breadcrumb, its chat, and Create Project: its uploaded
- * image as a rounded square (0038), else its glyph in its color, or `Layers` in the accent
+ * An orchestrator's icon, in the sidebar, the breadcrumb, its chat, and Create orchestrator: its
+ * uploaded image as a rounded square (0038), else its glyph in its color, or `Layers` in the accent
  * for none, or for a name or color this app doesn't know.
  */
-export function ProjectIcon({
-  icon,
-  className = "",
-}: {
-  icon?: ProjectIconValue;
-  className?: string;
-}) {
+export function ProjectIcon({ icon, className = "" }: { icon?: ChosenIcon; className?: string }) {
   // An <svg> like the glyph's, so every place's glyph size (`[&_svg]:size-*`) fits the image too.
   if (icon?.image)
     return (
@@ -349,13 +343,13 @@ export function ProjectIcon({
  * Every computer's repository icons by name (`sharedRepoIcons`), which App provides, so a repo
  * with no icon of its own draws its namesake's.
  */
-export const SharedRepoIcons = createContext<ReadonlyMap<string, ProjectIconValue>>(new Map());
+export const SharedRepoIcons = createContext<ReadonlyMap<string, ChosenIcon>>(new Map());
 
 /**
  * A repo's color: `icon`'s, its own or its namesake's (`repoIconOf`), or else one picked from its
  * name, as its initials' tile shows.
  */
-function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
+function repoColor(repo: Repo, icon: ChosenIcon | undefined) {
   const palette = iconColors.slice(1);
   if (icon?.color) return `var(--project-${icon.color})`;
   if (icon) return "var(--accent)";
@@ -365,9 +359,9 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 }
 
 /**
- * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
+ * A repo's icon: the one the user chose, in an orchestrator's shape (0033), or its namesake's on
  * another computer, or else its initials on a tile in a color picked from its name. No repo is a
- * dashed square, and a Space with no icon of its own two speech bubbles (0090).
+ * dashed square, and a Project with no icon of its own two speech bubbles (0090).
  */
 export function RepoIcon({ repo }: { repo?: Repo }) {
   const shared = useContext(SharedRepoIcons);
@@ -376,8 +370,8 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
     return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
   if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
-  // A Space with no icon draws the Space glyph, as on the Projects page (0090).
-  if (repo.space)
+  // A Project with no icon draws the Project glyph, as on the orchestrators page (0090).
+  if (repo.project)
     return <MessagesSquare aria-hidden className={`${size} shrink-0 text-project-gray`} />;
   return (
     <span
@@ -481,29 +475,29 @@ function sweepOut(keys: string[], to: string, stagger = 0) {
 }
 
 /**
- * Search, the repo filter, a menu to create a Project or add a repository, and New thread, then
- * every host's Projects as rows (PLX-1043), the favorites (pinned threads moved up), the other
- * pinned threads (0075), a divider with Clear and the View panel, and Today: every other open
+ * Search, the repo filter, a menu to create an orchestrator or add a repository, and New thread,
+ * then every host's orchestrators as rows (PLX-1043), the favorites (pinned threads moved up), the
+ * other pinned threads (0075), a divider with Clear and the View panel, and Today: every other open
  * thread, most recently active first, so one that finishes rises to the top, grouped as View says.
  * Nothing left, Today is blank. A thread row shows its title, how long ago it was last active or
  * what it asks of the user, its repo, git status, and pull request; its card adds its branch, which
- * search also matches. Threads another thread started don't list (0041); a Project's show only
- * inside it (0042). While a thread is working it sits in a Working drawer above Snoozed and Archived, until it
- * finishes. Rows that move slide to their place. Changes the user makes show a toast with Undo,
- * which ⌘Z also runs. Resting on a thread shows a card.
+ * search also matches. Threads another thread started don't list (0041); an orchestrator's show
+ * only inside it (0042). While a thread is working it sits in a Working drawer above Snoozed and
+ * Archived, until it finishes. Rows that move slide to their place. Changes the user makes show a
+ * toast with Undo, which ⌘Z also runs. Resting on a thread shows a card.
  */
 export function ThreadList({
   hosts,
   host,
   selection,
   onSelect,
-  onOpenProject,
+  onOpenOrchestrator,
   onOpenSettings,
   page,
   onOpenPage,
-  openSpace,
-  projectMenu,
-  onNewSpace,
+  openProject,
+  orchestratorMenu,
+  onNewProject,
   onDelete,
   addDialog: addDialogRef,
   onNewThread,
@@ -515,17 +509,17 @@ export function ThreadList({
   useImperativeHandle(addDialogRef, () => ({ open: (start) => addDialog.current?.open(start) }));
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
-  const projectDialogs = useRef<ProjectDialogsHandle>(null);
-  const spaceDelete = useRef<HTMLDialogElement>(null);
-  // The Space the delete dialog asks about, and its host's view.
-  const [spaceToDelete, setSpaceToDelete] = useState<ProjectEntry>();
+  const entryDialogs = useRef<EntryDialogsHandle>(null);
+  const projectDelete = useRef<HTMLDialogElement>(null);
+  // The Project the delete dialog asks about, and its host's view.
+  const [projectToDelete, setProjectToDelete] = useState<ProjectEntry>();
   const pins = pinnedProjects.use();
   // Which sidebar shows (0094): Inbox's head is the search box and its buttons, and its threads one
   // list; Traditional's head is rows, and it lists the threads in a folder per repo.
   const mode = sidebarMode.use();
   const inbox = mode === "inbox";
   const folders = mode === "traditional";
-  // The thread or Project the delete dialog asks about.
+  // The thread or orchestrator the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
@@ -565,14 +559,14 @@ export function ThreadList({
   const sharedIcons = useContext(SharedRepoIcons);
 
   // A chosen repo that's gone, deleted or not loaded yet, shows everything, keeping the choice
-  // for its return. A Space chosen while Spaces showed (0073) shows everything too.
+  // for its return. A Project chosen while Projects showed (0073) shows everything too.
   const chosen = scopeStore.use();
   const parsed = parseScope(chosen);
   const scopeRepo =
     parsed.kind === "repo"
       ? hosts
           .find((h) => h.host.id === parsed.hostId)
-          ?.view.state.repos.find((r) => !r.scratch && !r.space && r.id === parsed.id)
+          ?.view.state.repos.find((r) => !r.scratch && !r.project && r.id === parsed.id)
       : undefined;
   const scope: Scope = parsed.kind === "repo" && !scopeRepo ? "all" : chosen;
   const scopeLabel = scopeRepo
@@ -632,8 +626,8 @@ export function ThreadList({
   }
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
-  // The Space a thread was added to (0090), which it shows and filters as, over where it works.
-  const addedTo = (item: Item) => (item.kind === "thread" ? item.thread.space : undefined);
+  // The Project a thread was added to (0090), which it shows and filters as, over where it works.
+  const addedTo = (item: Item) => (item.kind === "thread" ? item.thread.project : undefined);
 
   const inScope = (item: Item, s: Scope) => {
     const p = parseScope(s);
@@ -713,17 +707,17 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043). Inbox lists only one that
-  // needs the user, or matches a search, atop Today; the rest are on the Projects page.
+  // Orchestrators, most recently active first, as threads are (PLX-1043). Inbox lists only one
+  // that needs the user, or matches a search, atop Today; the rest are on the Projects page.
   // Traditional lists each as one row in its repo's folder (0094).
-  const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
-  const projects = inbox
-    ? allProjects.filter((p) => p.attention === "needsYou" || words.length > 0)
+  const allOrchestrators = shown.flatMap((i) => (i.kind === "orchestrator" ? [i] : []));
+  const orchestrators = inbox
+    ? allOrchestrators.filter((p) => p.attention === "needsYou" || words.length > 0)
     : [];
-  // Traditional's pinned Projects (orchestrator threads from 0093), as cards with its pinned threads,
-  // in the order pinned, and so out of their folders. Its pinned Spaces stay in its head.
+  // Traditional's pinned orchestrators, as cards with its pinned threads, in the order pinned, and so
+  // out of their folders. Its pinned Projects stay in its head.
   const pinnedOrchestrators = folders
-    ? pins.flatMap((key) => allProjects.filter((p) => p.key === key))
+    ? pins.flatMap((key) => allOrchestrators.filter((p) => p.key === key))
     : [];
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
@@ -765,8 +759,8 @@ export function ThreadList({
   const selectedKey =
     selection.kind === "thread"
       ? `${host.id}/${selection.threadId}`
-      : selection.kind === "project"
-        ? `${host.id}/${selection.projectId}`
+      : selection.kind === "orchestrator"
+        ? `${host.id}/${selection.orchestratorId}`
         : undefined;
   // The row that reads as open: the open thread's, or while a thread another started is open, which
   // doesn't list, the row of the thread at the top of its family.
@@ -777,7 +771,7 @@ export function ThreadList({
       pinUnread.set(pinUnread.get().filter((k) => k !== selectedKey));
   }, [selectedKey, unread.includes(selectedKey ?? "")]);
   // Today, grouped as its View says, under each repo or each day (Inbox), or Traditional's
-  // folders, a repo's threads and Projects in each, by name (0094). Each kind folds in its own store.
+  // folders, a repo's threads and orchestrators in each, by name (0094). Each kind folds in its own store.
   const todayBy = todayGroup.use();
   const compact = compactRows.use();
   const todayShut = todayFolded.use();
@@ -788,7 +782,7 @@ export function ThreadList({
   const isFolded = (key: string) => !words.length && foldedGroups.includes(key);
   const groups: Group[] | undefined = folders
     ? folderGroups(
-        [...allProjects.filter((p) => !pinnedOrchestrators.includes(p)), ...topThreads].sort(
+        [...allOrchestrators.filter((p) => !pinnedOrchestrators.includes(p)), ...topThreads].sort(
           (a, b) => Date.parse(b.at) - Date.parse(a.at),
         ),
         many,
@@ -799,11 +793,11 @@ export function ThreadList({
   // Today's rows in the order they show, none from a folded group.
   const todayRows = groups ? groups.flatMap((g) => (isFolded(g.key) ? [] : g.rows)) : topThreads;
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // pinned threads' rows, Inbox's Projects' rows, then Today's, then Working's, while it's open.
+  // pinned threads' rows, Inbox's orchestrators' rows, then Today's, then Working's, while it's open.
   const listed = [
     ...pinnedOrchestrators,
     ...pinnedRows,
-    ...projects,
+    ...orchestrators,
     ...todayRows,
     ...(sections.working ? workingTops : []),
   ];
@@ -815,7 +809,7 @@ export function ThreadList({
       item.host.id,
       item.kind === "thread"
         ? { kind: "thread", threadId: item.thread.id }
-        : { kind: "project", projectId: item.project.id },
+        : { kind: "orchestrator", orchestratorId: item.orchestrator.id },
     );
   };
 
@@ -1023,7 +1017,7 @@ export function ThreadList({
         void viewOf(h.id)?.update(t.id, { title: was });
       });
   };
-  // The picked threads that are still listed. Projects can't be picked.
+  // The picked threads that are still listed. Orchestrators can't be picked.
   const pickedItems = [...picked].flatMap((k) => {
     const i = byKey.get(k);
     return i?.kind === "thread" && !doomed.has(k) ? [i] : [];
@@ -1139,7 +1133,7 @@ export function ThreadList({
     const selected = item.key === openKey;
     const { thread: t, view } = item;
     const pinnable = pinsOn(view) && !t.parent;
-    const spaces = t.parent ? undefined : spaceChoices(t, view);
+    const projects = t.parent ? undefined : projectChoices(t, view);
     return (
       <ThreadRow
         key={item.key}
@@ -1153,7 +1147,7 @@ export function ThreadList({
         title={item.title}
         run={item.run}
         repo={item.repo}
-        space={t.space ? view.state.repos.find((r) => r.id === t.space) : undefined}
+        project={t.project ? view.state.repos.find((r) => r.id === t.project) : undefined}
         attention={rowAttention(item)}
         selected={selected}
         picked={picked.has(item.key)}
@@ -1205,7 +1199,9 @@ export function ThreadList({
               }
             : undefined
         }
-        spacePicker={spaces && !spaces.startedIn ? { view, spaces: spaces.spaces } : undefined}
+        projectPicker={
+          projects && !projects.startedIn ? { view, projects: projects.projects } : undefined
+        }
         onAutoResume={async (autoResume) => {
           const answer = await window.parallax.request(item.host.id, "agent/autoResume", {
             runId: t.id,
@@ -1260,23 +1256,23 @@ export function ThreadList({
       return;
     }
     setDeleting(true);
-    // Running agents are stopped first, so this can take a moment. Deleting the open Project
+    // Running agents are stopped first, so this can take a moment. Deleting the open orchestrator
     // leaves it once it's gone from the list (App.tsx).
-    const error = await toDelete.view.removeProject(toDelete.project.id);
+    const error = await toDelete.view.removeOrchestrator(toDelete.orchestrator.id);
     setDeleting(false);
     if (error) setDeleteError(error);
     else deleteDialog.current?.close();
   };
 
-  const confirmSpaceDelete = async () => {
-    if (!spaceToDelete) return;
+  const confirmProjectDelete = async () => {
+    if (!projectToDelete) return;
     setDeleting(true);
-    const error = await spaceToDelete.view.removeSpace(spaceToDelete.id);
+    const error = await projectToDelete.view.removeProject(projectToDelete.id);
     setDeleting(false);
     if (error) return setDeleteError(error);
-    spaceDelete.current?.close();
-    pinnedProjects.set(pinnedProjects.get().filter((k) => k !== spaceToDelete.key));
-    if (openSpace === spaceToDelete.key) onSelect(spaceToDelete.host.id, { kind: "new" });
+    projectDelete.current?.close();
+    pinnedProjects.set(pinnedProjects.get().filter((k) => k !== projectToDelete.key));
+    if (openProject === projectToDelete.key) onSelect(projectToDelete.host.id, { kind: "new" });
   };
 
   // Each favorite's icon, chosen for it, else its repo's.
@@ -1426,9 +1422,9 @@ export function ThreadList({
     if (openGroupKey && foldStore.get().includes(openGroupKey))
       foldStore.set(foldStore.get().filter((k) => k !== openGroupKey));
   }, [openKey, mode]);
-  // A row of the list: a thread's, or in Folders, a Project's.
+  // A row of the list: a thread's, or in Traditional, an orchestrator's.
   const rowOf = (i: Item, nested = false) =>
-    i.kind === "project" ? projectCard(i, nested) : row(i, nested);
+    i.kind === "orchestrator" ? orchestratorCard(i, nested) : row(i, nested);
   // Each group under a heading that folds it, which while folded shows whether anything in it
   // finished or failed, and sticks to the top while its rows scroll under it. Alt-click folds or
   // opens them all. Today's headings are quiet labels on a rule; Traditional's are rows, as a repo's
@@ -1601,34 +1597,34 @@ export function ThreadList({
       );
     });
   });
-  // A Project's own menu items, where its plxd allows each (0043, PLX-803).
-  const projectActions = (item: Item & { kind: "project" }): FavoriteAction[] => {
-    const { project, view } = item;
-    const open = (what: ProjectDialog) => (square: HTMLElement) =>
-      projectDialogs.current?.open(what, project, view, square);
+  // An orchestrator's own menu items, where its plxd allows each (0043, PLX-803).
+  const orchestratorActions = (item: Item & { kind: "orchestrator" }): FavoriteAction[] => {
+    const { orchestrator, view } = item;
+    const open = (what: EntryDialog) => (square: HTMLElement) =>
+      entryDialogs.current?.open(what, orchestrator, view, square);
     const can = (capability: string) => capability in view.capabilities;
     return [
-      ...(can("projectEdit")
+      ...(can("orchestratorEdit")
         ? [
             { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
             { label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") },
           ]
         : []),
-      ...(can("projectPermission") && project.permission !== "bypass"
+      ...(can("orchestratorPermission") && orchestrator.permission !== "bypass"
         ? [{ label: "Full access…", icon: <ShieldCheck aria-hidden />, run: open("access") }]
         : []),
-      ...(can("projectAutonomy")
+      ...(can("orchestratorAutonomy")
         ? [{ label: "Autonomy…", icon: <Bot aria-hidden />, run: open("autonomy") }]
         : []),
-      // Its coordinator's next message starts a new session from the Project's state (0079).
-      ...(can("coordinatorEpochs") && project.coordinator
+      // Its orchestrator's next message starts a new session from the orchestrator's state (0079).
+      ...(can("orchestratorEpochs") && orchestrator.run
         ? [
             {
               label: "Fresh session",
               icon: <RotateCcw aria-hidden />,
               run: async () => {
-                const answer = await window.parallax.request(item.host.id, "coordinator/fresh", {
-                  project: project.id,
+                const answer = await window.parallax.request(item.host.id, "orchestrator/fresh", {
+                  orchestrator: orchestrator.id,
                 });
                 actionFailed(
                   "error" in answer ? answer.error.message : undefined,
@@ -1638,7 +1634,7 @@ export function ThreadList({
             },
           ]
         : []),
-      ...(can("projectDelete")
+      ...(can("orchestratorDelete")
         ? [
             {
               label: "Delete…",
@@ -1650,13 +1646,13 @@ export function ThreadList({
         : []),
     ];
   };
-  // A Space's menu items (0090): Rename and Change icon where its plxd keeps icons, and
+  // A Project's menu items (0090): Rename and Change icon where its plxd keeps icons, and
   // Delete.
-  const spaceActions = (entry: ProjectEntry): FavoriteAction[] => {
-    const space = entry.view.state.repos.find((r) => r.id === entry.id);
-    if (!space) return [];
-    const open = (what: ProjectDialog) => (square: HTMLElement) =>
-      projectDialogs.current?.open(what, space, entry.view, square);
+  const projectActions = (entry: ProjectEntry): FavoriteAction[] => {
+    const project = entry.view.state.repos.find((r) => r.id === entry.id);
+    if (!project) return [];
+    const open = (what: EntryDialog) => (square: HTMLElement) =>
+      entryDialogs.current?.open(what, project, entry.view, square);
     return [
       { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
       ...("threadAttention" in entry.view.capabilities
@@ -1667,30 +1663,21 @@ export function ThreadList({
         icon: <Trash2 aria-hidden />,
         danger: true,
         run: () => {
-          setSpaceToDelete(entry);
+          setProjectToDelete(entry);
           setDeleteError(undefined);
-          spaceDelete.current?.showModal();
+          projectDelete.current?.showModal();
         },
       },
     ];
   };
-  const entryActions = (entry: ProjectEntry): FavoriteAction[] => {
-    if (entry.kind === "space") return spaceActions(entry);
-    const item = byKey.get(entry.key);
-    return item?.kind === "project" ? projectActions(item) : [];
-  };
-  useImperativeHandle(projectMenu, () => ({ actionsFor: entryActions }));
-  // Every project, Projects and Spaces, for Pinned, in the order pinned.
+  const entryActions = (entry: ProjectEntry): FavoriteAction[] => projectActions(entry);
+  useImperativeHandle(orchestratorMenu, () => ({ actionsFor: entryActions }));
+  // Every Project, for Pinned, in the order pinned.
   const entries = projectEntries(hosts);
   const pinnedEntries = pins.flatMap((key) => entries.filter((e) => e.key === key));
   const openEntry = (entry: ProjectEntry) => {
     hideCard();
-    onSelect(
-      entry.host.id,
-      entry.kind === "project"
-        ? { kind: "project", projectId: entry.id }
-        : { kind: "new", groupId: entry.id },
-    );
+    onSelect(entry.host.id, { kind: "new", groupId: entry.id });
   };
 
   // The pinned threads moved up into the favorites, in the order moved into.
@@ -1709,18 +1696,18 @@ export function ThreadList({
       };
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
-  // A Project's card in the Inbox sidebar (PLX-1043).
-  // A Project's card, dense in Traditional, as its threads' are. `nested`, under a folder, it's its
+  // An orchestrator's card in the Inbox sidebar (PLX-1043).
+  // An orchestrator's card, dense in Traditional, as its threads' are. `nested`, under a folder, it's its
   // icon and name on one line, then its details; pinned, it keeps its first line, as a thread does.
-  const projectCard = (p: Item & { kind: "project" }, nested = false) => {
+  const orchestratorCard = (p: Item & { kind: "orchestrator" }, nested = false) => {
     const n = modHeld ? listed.indexOf(p) : -1;
     return (
-      <ProjectRow
+      <OrchestratorRow
         key={p.key}
         rowKey={p.key}
         look={compact ? "compact" : folders ? "dense" : undefined}
         nested={nested}
-        project={p.project}
+        orchestrator={p.orchestrator}
         runs={p.runs}
         device={many && p.host.icon ? p.host : undefined}
         at={p.at}
@@ -1728,7 +1715,7 @@ export function ThreadList({
         selected={p.key === openKey}
         badge={n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined}
         words={words}
-        actions={projectActions(p)}
+        actions={orchestratorActions(p)}
         onOpen={() => {
           setPicked(new Set());
           openItem(p);
@@ -1737,10 +1724,10 @@ export function ThreadList({
       />
     );
   };
-  // Inbox's Projects that need the user, or match a search, atop Today.
-  const projectList = projects.length > 0 && (
-    <ul aria-label="Projects" className={`mb-1 ${cardGap}`}>
-      {projects.map((p) => projectCard(p))}
+  // Inbox's orchestrators that need the user, or match a search, atop Today.
+  const projectList = orchestrators.length > 0 && (
+    <ul aria-label="Orchestrators" className={`mb-1 ${cardGap}`}>
+      {orchestrators.map((p) => orchestratorCard(p))}
     </ul>
   );
   // In every mode (0094): the drafts, then the favorites and pinned threads, each under a line, then
@@ -1776,7 +1763,7 @@ export function ThreadList({
       />
       {pinnedOrchestrators.length > 0 && (
         <ul aria-label="Pinned orchestrator threads" className={`mb-1 ${cardGap}`}>
-          {pinnedOrchestrators.map((p) => projectCard(p))}
+          {pinnedOrchestrators.map((p) => orchestratorCard(p))}
         </ul>
       )}
       {pinList}
@@ -1791,7 +1778,7 @@ export function ThreadList({
   // Why a host's list couldn't load or stopped updating, which is the list's own state.
   const errors = [...new Set(hosts.map((h) => h.view.error).filter(Boolean))];
   const nothingShown =
-    !allProjects.length &&
+    !allOrchestrators.length &&
     !pool.length &&
     !snoozedItems.length &&
     !archived.length &&
@@ -1802,7 +1789,7 @@ export function ThreadList({
     <input
       ref={search}
       type="search"
-      aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and Projects"}
+      aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and orchestrators"}
       placeholder={scopeLabel ? `Search ${scopeLabel.name}` : "Search"}
       value={query}
       onChange={(e) => {
@@ -1867,7 +1854,10 @@ export function ThreadList({
           >
             <LayoutGrid />
           </IconButton>
-          <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
+          <IconButton
+            label="New orchestrator or repository"
+            onClick={() => addDialog.current?.open()}
+          >
             <FolderPlus />
           </IconButton>
           <IconButton label="New thread" command="newThread" onClick={onNewThread}>
@@ -1877,8 +1867,8 @@ export function ThreadList({
       ) : (
         <SidebarNav
           current={page}
-          pinned={pinnedEntries.filter((e) => e.kind === "space")}
-          openKey={openSpace ?? (selection.kind === "project" ? openKey : undefined)}
+          pinned={pinnedEntries}
+          openKey={openProject ?? (selection.kind === "orchestrator" ? openKey : undefined)}
           onNewThread={onNewThread}
           onOpen={onOpenPage}
           onOpenProject={openEntry}
@@ -1971,37 +1961,41 @@ export function ThreadList({
         unbrowsable={unbrowsable(hosts)}
         hostId={host.id}
         repos={open?.state.repos ?? []}
-        create={open?.createProject ?? (async () => "Not connected")}
-        onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
-        onNewSpace={onNewSpace}
+        create={open?.createOrchestrator ?? (async () => "Not connected")}
+        onCreated={(hostId, orchestrator) => onOpenOrchestrator(hostId, orchestrator.id)}
+        onNewProject={onNewProject}
       />
-      <ProjectDialogs
-        ref={projectDialogs}
-        onError={(error) => actionFailed(error, "Couldn't change the Project")}
+      <EntryDialogs
+        ref={entryDialogs}
+        onError={(error) => actionFailed(error, "Couldn't change the orchestrator")}
       />
       <ConfirmDialog
         ref={deleteDialog}
-        title={toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
+        title={
+          toDelete?.kind === "orchestrator" ? "Delete this orchestrator?" : "Delete this thread?"
+        }
         action="Delete"
         busy={deleting ? "Deleting…" : undefined}
         error={deleteError}
         onConfirm={() => void confirmDelete()}
       >
         “{toDelete?.title}” goes for good
-        {toDelete?.kind === "project"
-          ? projectLoss(toDelete.runs.length)
+        {toDelete?.kind === "orchestrator"
+          ? orchestratorLoss(toDelete.runs.length)
           : ", with its transcript, worktree, and branch."}
       </ConfirmDialog>
       <ConfirmDialog
-        ref={spaceDelete}
-        title="Delete this Space?"
+        ref={projectDelete}
+        title="Delete this Project?"
         action="Delete"
         busy={deleting ? "Deleting…" : undefined}
         error={deleteError}
-        onConfirm={() => void confirmSpaceDelete()}
+        onConfirm={() => void confirmProjectDelete()}
       >
-        “{spaceToDelete?.name}” goes for good, with{" "}
-        {spaceToDelete?.threads === 1 ? "its thread" : `its ${spaceToDelete?.threads ?? 0} threads`}
+        “{projectToDelete?.name}” goes for good, with{" "}
+        {projectToDelete?.threads === 1
+          ? "its thread"
+          : `its ${projectToDelete?.threads ?? 0} threads`}
         , instructions, and files.
       </ConfirmDialog>
       <div className="border-t border-border p-2">
@@ -2131,8 +2125,8 @@ function Toasts() {
   );
 }
 
-/** The rest of Delete Project's warning, after "“name” goes for good", for a Project of `agents` runs. */
-function projectLoss(agents: number): string {
+/** The rest of Delete orchestrator's warning, after "“name” goes for good", for an orchestrator of `agents` runs. */
+function orchestratorLoss(agents: number): string {
   if (agents === 0) return ".";
   if (agents === 1)
     return ", with its agent's transcript, worktree, and branch. A running agent is stopped first.";
@@ -2282,10 +2276,12 @@ function ScopeMenu({
   const [editing, setEditing] = useState<{ view: ThreadsView; repo: Repo }>();
   const sharedIcons = useContext(SharedRepoIcons);
   const q = query.trim().toLowerCase();
-  // Spaces (0069) don't list.
+  // Projects (0069) don't list.
   const repos = hosts
     .flatMap(({ host, view }) =>
-      view.state.repos.filter((r) => !r.scratch && !r.space).map((repo) => ({ host, view, repo })),
+      view.state.repos
+        .filter((r) => !r.scratch && !r.project)
+        .map((repo) => ({ host, view, repo })),
     )
     .filter((r) => !q || r.repo.name.toLowerCase().includes(q));
   const choose = (next: Scope) => {
@@ -2526,55 +2522,56 @@ function Marked({ text, words }: { text: string; words: readonly string[] }) {
   );
 }
 
-/** What a Project row's menu opens. */
-type ProjectDialog = "rename" | "icon" | "access" | "autonomy";
+/** What an orchestrator row's menu opens. */
+type EntryDialog = "rename" | "icon" | "access" | "autonomy";
 /** Says why a sidebar action failed, when `error` says one did, and closes that once one works. */
 function actionFailed(error: string | undefined, title: string) {
   if (error) notify({ key: "sidebar", tone: "error", title, body: error });
   else dismiss("sidebar");
 }
 
-type ProjectDialogsHandle = {
-  /** Opens `what` for a Project, or for a Space's entry (0090), which renames and recolors only. */
+type EntryDialogsHandle = {
+  /** Opens `what` for an orchestrator, or for a Project's entry (0090), which renames and recolors only. */
   open: (
-    what: ProjectDialog,
-    project: Project | Repo,
+    what: EntryDialog,
+    orchestrator: Orchestrator | Repo,
     view: ThreadsView,
     square: HTMLElement,
   ) => void;
 };
 
-/** Project handle the Projects page reads a project's menu through (0090). */
+/** Orchestrator handle the orchestrators page reads an orchestrator's menu through (0090). */
 export type ProjectMenuHandle = { actionsFor: (entry: ProjectEntry) => FavoriteAction[] };
 
 /**
- * A Project's dialogs, opened from its row's menu: Rename, the icon picker beside its row,
- * Full access (a one-way move to Bypass), and Autonomy (0043). Each saves through `project/update`
- * and reports plxd's error through `onError`. Only the one open is drawn.
+ * An orchestrator's or a Project's dialogs, opened from its row's or card's menu: Rename, the icon
+ * picker beside its row, and for an orchestrator Full access (a one-way move to Bypass) and
+ * Autonomy (0043). Each saves through `orchestrator/update` or `repo/update` and reports plxd's
+ * error through `onError`. Only the one open is drawn.
  */
-function ProjectDialogs({
+function EntryDialogs({
   ref,
   onError,
 }: {
-  ref: RefObject<ProjectDialogsHandle | null>;
+  ref: RefObject<EntryDialogsHandle | null>;
   onError: (error?: string) => void;
 }) {
   const [opened, setOpened] = useState<{
-    what: ProjectDialog;
-    project: Project | Repo;
+    what: EntryDialog;
+    orchestrator: Orchestrator | Repo;
     view: ThreadsView;
     square: HTMLElement;
   }>();
   const [name, setName] = useState("");
-  const [autonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
+  const [autonomy, setAutonomy] = useState<OrchestratorAutonomy>("routine");
   const dialog = useRef<HTMLDialogElement>(null);
   const picker = useRef<HTMLDivElement>(null);
   const pickerId = useId();
   useImperativeHandle(ref, () => ({
-    open(what, project, view, square) {
-      setName(project.name);
-      setAutonomy(("autonomy" in project && project.autonomy) || "routine");
-      setOpened({ what, project, view, square });
+    open(what, orchestrator, view, square) {
+      setName(orchestrator.name);
+      setAutonomy(("autonomy" in orchestrator && orchestrator.autonomy) || "routine");
+      setOpened({ what, orchestrator, view, square });
     },
   }));
   // What was just opened shows once it's drawn.
@@ -2582,19 +2579,19 @@ function ProjectDialogs({
     if (opened?.what === "icon") picker.current?.showPopover({ source: opened.square });
     else if (opened) dialog.current?.showModal();
   }, [opened]);
-  const update = async (change: ProjectChange) => {
+  const update = async (change: OrchestratorChange) => {
     if (!opened) return;
-    const { project, view } = opened;
+    const { orchestrator, view } = opened;
     onError(
-      "repoPath" in project
-        ? await view.updateProject(project.id, change)
-        : await view.updateRepo(project.id, {
+      "repoPath" in orchestrator
+        ? await view.updateOrchestrator(orchestrator.id, change)
+        : await view.updateRepo(orchestrator.id, {
             ...(change.name && { name: change.name }),
             ...(change.icon && { icon: change.icon }),
           }),
     );
   };
-  const project = opened?.project;
+  const orchestrator = opened?.orchestrator;
   const close = () => setOpened(undefined);
   return (
     <>
@@ -2602,26 +2599,30 @@ function ProjectDialogs({
       <IconPicker
         ref={picker}
         id={pickerId}
-        value={project?.icon}
+        value={orchestrator?.icon}
         onPick={(icon) => void update({ icon })}
         maxImageBytes={opened?.view.iconImageBytes}
       />
       {opened?.what === "rename" && (
         <SettingDialog
           ref={dialog}
-          label={opened.project && "repoPath" in opened.project ? "Rename Project" : "Rename Space"}
+          label={
+            opened.orchestrator && "repoPath" in opened.orchestrator
+              ? "Rename orchestrator"
+              : "Rename Project"
+          }
           action="Rename"
           onClose={close}
           onSave={() => {
             // An empty name, or the same one, saves nothing.
             const next = name.trim();
-            if (next && next !== opened.project.name) void update({ name: next });
+            if (next && next !== opened.orchestrator.name) void update({ name: next });
           }}
         >
           <label className="block text-body font-medium">
             Name
             <input
-              aria-label="Project name"
+              aria-label="Orchestrator name"
               autoFocus
               value={name}
               spellCheck={false}
@@ -2635,16 +2636,16 @@ function ProjectDialogs({
       {opened?.what === "access" && (
         <SettingDialog
           ref={dialog}
-          label={`${opened.project.name} full access`}
+          label={`${opened.orchestrator.name} full access`}
           action="Give full access"
           onClose={close}
           onSave={() => void update({ permission: "bypass" })}
         >
           <p className="text-body font-medium">Full access</p>
           <p className="mt-1 text-body text-muted-foreground">
-            New agents in this Project run commands and edit files without asking, as in new
-            Projects. Agents running now keep asking until they next start. Agents on Cursor, Grok
-            Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
+            New agents in this orchestrator run commands and edit files without asking, as in new
+            orchestrators. Agents running now keep asking until they next start. Agents on Cursor,
+            Grok Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
             switch back.
           </p>
         </SettingDialog>
@@ -2652,7 +2653,7 @@ function ProjectDialogs({
       {opened?.what === "autonomy" && (
         <SettingDialog
           ref={dialog}
-          label={`${opened.project.name} autonomy`}
+          label={`${opened.orchestrator.name} autonomy`}
           onClose={close}
           onSave={() => void update({ autonomy })}
         >
@@ -2663,7 +2664,7 @@ function ProjectDialogs({
   );
 }
 
-/** A Project setting's dialog: its choice, then Cancel and `action`, which closes it and saves. */
+/** An orchestrator setting's dialog: its choice, then Cancel and `action`, which closes it and saves. */
 function SettingDialog({
   ref,
   label,
@@ -2727,18 +2728,18 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 export const backendLogo = (backend: string) => backendLogos[backend] ?? instanceLogo(backend);
 
 /**
- * A Project's card (PLX-1043, 0090), in Inbox's list and in its repo's folder in Traditional: its
- * icon, "Project", and how many threads it holds, with its status at the end (what it asks of the
- * user, how many of its runs work, or how long ago it was last active), then its name, then its
- * branch, its computer, and its coordinator's provider, in color while it's open. Hovering or
- * focusing it shows its actions button, whose menu also opens by right-clicking the row, or with
- * A: Rename, Change icon, and the rest its plxd allows.
+ * An orchestrator's card (PLX-1043, 0090), in Inbox's list and in its repo's folder in Traditional:
+ * its icon, "Orchestrator", and how many threads it holds, with its status at the end (what it asks
+ * of the user, how many of its runs work, or how long ago it was last active), then its name, then
+ * its branch, its computer, and its orchestrator's provider, in color while it's open. Hovering or
+ * focusing it shows its actions button, whose menu also opens by right-clicking the row, or with A:
+ * Rename, Change icon, and the rest its plxd allows.
  */
-function ProjectRow({
+function OrchestratorRow({
   rowKey,
   look,
   nested = false,
-  project,
+  orchestrator,
   runs,
   device,
   at,
@@ -2757,8 +2758,8 @@ function ProjectRow({
   look?: "compact" | "dense";
   /** Under its repo's folder, which names the repo: its icon and name lead, with no first line. */
   nested?: boolean;
-  project: Project;
-  /** Its coordinator's and children's runs (0042). */
+  orchestrator: Orchestrator;
+  /** Its orchestrator's and children's runs (0042). */
   runs: readonly AgentRun[];
   /** Its computer, whose icon shows beside the provider's while there are several (0056). */
   device?: Host;
@@ -2782,16 +2783,16 @@ function ProjectRow({
   const status =
     badge ??
     (attention === "settled" ? age(at) : <AttentionBadge attention={attention} count={working} />);
-  const icon = <ProjectIcon icon={project.icon} className="size-4 shrink-0" />;
+  const icon = <ProjectIcon icon={orchestrator.icon} className="size-4 shrink-0" />;
   const oneLine = look === "compact";
-  // Its branch (0045), and its coordinator's provider.
-  const branch = project.integrationBranch ?? project.branch;
-  const coordinator = runs.find((r) => r.id === project.coordinator);
-  const Logo = coordinator?.backend ? backendLogo(coordinator.backend) : undefined;
+  // Its branch (0045), and its orchestrator's provider.
+  const branch = orchestrator.integrationBranch ?? orchestrator.branch;
+  const orchestratorRun = runs.find((r) => r.id === orchestrator.run);
+  const Logo = orchestratorRun?.backend ? backendLogo(orchestratorRun.backend) : undefined;
   return (
     <RowCard
       rowKey={rowKey}
-      kind="project"
+      kind="orchestrator"
       compact={oneLine}
       dense={look === "dense"}
       place={
@@ -2801,7 +2802,7 @@ function ProjectRow({
           <span className="flex min-w-0 items-center gap-1.5">
             {icon}
             <span className="min-w-0 truncate">
-              Project
+              Orchestrator
               {runs.length > 0 && ` · ${runs.length} ${runs.length === 1 ? "thread" : "threads"}`}
             </span>
           </span>
@@ -2811,11 +2812,14 @@ function ProjectRow({
       title={
         nested && !oneLine ? (
           <>
-            <ProjectIcon icon={project.icon} className="mr-1.5 inline-block size-4 align-[-3px]" />
-            <Marked text={project.name} words={words} />
+            <ProjectIcon
+              icon={orchestrator.icon}
+              className="mr-1.5 inline-block size-4 align-[-3px]"
+            />
+            <Marked text={orchestrator.name} words={words} />
           </>
         ) : (
-          <Marked text={project.name} words={words} />
+          <Marked text={orchestrator.name} words={words} />
         )
       }
       dim={attention === "settled"}
@@ -2858,7 +2862,7 @@ function ProjectRow({
           <button
             ref={trigger}
             type="button"
-            aria-label="Project actions"
+            aria-label="Orchestrator actions"
             title="More (or right-click)"
             popoverTarget={menuId}
             className={rowTool}
@@ -2871,7 +2875,7 @@ function ProjectRow({
       {actions.length > 0 && (
         <Menu
           id={menuId}
-          label="Project actions"
+          label="Orchestrator actions"
           align="end"
           focus='[role^="menuitem"]'
           className="min-w-56 p-1"
@@ -3063,7 +3067,7 @@ function ThreadRow({
   title,
   run,
   repo,
-  space,
+  project,
   attention,
   selected,
   picked,
@@ -3088,7 +3092,7 @@ function ThreadRow({
   onDelete,
   onOpenBeside,
   onFork,
-  spacePicker,
+  projectPicker,
   onAutoResume,
   onRest,
   onLeave,
@@ -3111,8 +3115,8 @@ function ThreadRow({
   title: string;
   run?: AgentRun;
   repo?: Repo;
-  /** The Space it was added to (0090), which it shows as its place over `repo`. */
-  space?: Repo;
+  /** The Project it was added to (0090), which it shows as its place over `repo`. */
+  project?: Repo;
   attention: Attention;
   selected: boolean;
   /** Whether it's one of the threads picked for a bulk action. */
@@ -3155,8 +3159,8 @@ function ThreadRow({
   onOpenBeside?: () => void;
   /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
   onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
-  /** The Spaces it can be added to (SpaceMenu.tsx), for Add to Space. */
-  spacePicker?: { view: ThreadsView; spaces: Repo[] };
+  /** The Projects it can be added to (ThreadProjectMenu.tsx), for Add to Project. */
+  projectPicker?: { view: ThreadsView; projects: Repo[] };
   /** Sets its run's auto-resume override, or clears it with undefined. */
   onAutoResume: (autoResume?: boolean) => void;
   onRest: (row: HTMLElement) => void;
@@ -3165,10 +3169,10 @@ function ThreadRow({
   const menuId = useId();
   const snoozeId = useId();
   const forkId = useId();
-  const spaceId = useId();
+  const projectMenuId = useId();
   const menu = useRef<HTMLDivElement>(null);
   const forkMenu = useRef<HTMLDivElement>(null);
-  const spaceMenu = useRef<HTMLDivElement>(null);
+  const projectMenu = useRef<HTMLDivElement>(null);
   const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
   const [custom, setCustom] = useState("");
@@ -3225,9 +3229,9 @@ function ThreadRow({
       : checks.length && checks.every((c) => c === "passed")
         ? "passed"
         : undefined;
-  // A thread with no repo leaves out its scratch branch, and a Space's thread the branch plxd made
+  // A thread with no repo leaves out its scratch branch, and a Project's thread the branch plxd made
   // in its repository.
-  const branch = repo && !repo.scratch && !repo.space ? run?.branch : undefined;
+  const branch = repo && !repo.scratch && !repo.project ? run?.branch : undefined;
   // Its pin isn't a detail: it sits in the row's top-right, so pinning doesn't change its height.
   const hasDetails = !!((git && (git.ahead || git.changes)) || prs.urls.length || Logo || device);
   // With no branch, git, pull request, or Remote Control to show, its computer and provider marks
@@ -3344,8 +3348,8 @@ function ThreadRow({
       dense={look === "dense"}
       place={
         compact
-          ? !nested && <RepoIcon repo={space ?? repo} />
-          : !nested && <RowPlace repo={space ?? repo} words={words} />
+          ? !nested && <RepoIcon repo={project ?? repo} />
+          : !nested && <RowPlace repo={project ?? repo} words={words} />
       }
       status={status}
       title={titleText}
@@ -3621,18 +3625,18 @@ function ThreadRow({
                 Fork…
               </button>
             )}
-            {spacePicker && (
-              // The Spaces' menu opens under the actions button, as Fork's does.
+            {projectPicker && (
+              // The Projects' menu opens under the actions button, as Fork's does.
               <button
                 type="button"
                 role="menuitem"
                 className={menuItem}
                 onClick={choose(() =>
-                  spaceMenu.current?.showPopover({ source: actions.current ?? undefined }),
+                  projectMenu.current?.showPopover({ source: actions.current ?? undefined }),
                 )}
               >
                 <MessagesSquare aria-hidden />
-                {thread.space ? "Move to Space…" : "Add to Space…"}
+                {thread.project ? "Move to Project…" : "Add to Project…"}
               </button>
             )}
             {autoResumable && run && (
@@ -3675,13 +3679,13 @@ function ThreadRow({
           align="end"
         />
       )}
-      {spacePicker && (
-        <SpacePicker
-          ref={spaceMenu}
-          id={spaceId}
+      {projectPicker && (
+        <ProjectPicker
+          ref={projectMenu}
+          id={projectMenuId}
           thread={thread}
-          view={spacePicker.view}
-          spaces={spacePicker.spaces}
+          view={projectPicker.view}
+          projects={projectPicker.projects}
         />
       )}
     </RowCard>

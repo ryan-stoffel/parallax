@@ -7,8 +7,8 @@ import type { ParallaxRequests } from "./generated/protocol";
 type Params<M extends keyof ParallaxRequests> = ParallaxRequests[M]["params"];
 
 test("wrong params and unknown methods fail to type-check", () => {
-  // @ts-expect-error: project/create needs an id and a repoPath too.
-  expectTypeOf({ name: "parallax" }).toExtend<Params<"project/create">>();
-  // @ts-expect-error: there is no project/nope method.
-  expectTypeOf<Params<"project/nope">>().toBeObject();
+  // @ts-expect-error: orchestrator/create needs an id and a repoPath too.
+  expectTypeOf({ name: "parallax" }).toExtend<Params<"orchestrator/create">>();
+  // @ts-expect-error: there is no orchestrator/nope method.
+  expectTypeOf<Params<"orchestrator/nope">>().toBeObject();
 });

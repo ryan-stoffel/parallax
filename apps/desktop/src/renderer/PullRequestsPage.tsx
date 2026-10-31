@@ -32,7 +32,7 @@ const sorts: { id: PrSort; label: string }[] = [
 
 const key = (e: PrEntry) => `${e.hostId} ${e.url}`;
 
-/** A page's tool: Sort, Filters, Refresh, and the Projects page's New project and Sort. */
+/** A page's tool: Sort, Filters, Refresh, and the Projects page's New orchestrator or Project and Sort. */
 export const toolButton =
   "flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground aria-expanded:text-foreground [&_svg]:size-4";
 

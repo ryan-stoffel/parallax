@@ -572,7 +572,7 @@ export interface Crumb {
   label: string;
   icon?: ReactNode;
   /**
-   * Makes it a button to that page, such as back to a coordinator or on to New thread. The last
+   * Makes it a button to that page, such as back to an orchestrator or on to New thread. The last
    * crumb with one isn't the current page.
    */
   onClick?: () => void;
