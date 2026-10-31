@@ -178,3 +178,37 @@ test("todayGroups groups by repo or day where each group's newest row falls", ()
   ]);
   expect(dayOf("2026-10-28T12:00:00Z", now)).toBe("Yesterday");
 });
+
+test("a backing orchestrator thread lists once with its lifecycle metadata and Project", () => {
+  const run = { id: "t-orchestrator", project: "p-ember", status: "completed" } as AgentRun;
+  const orchestrator: Orchestrator = {
+    id: "p-ember",
+    name: "ember",
+    repoPath: zeta.path,
+    run: run.id,
+    createdAt: "2026-10-01T09:00:00Z",
+    updatedAt: "2026-10-29T11:00:00Z",
+  };
+  const backing = thread(run.id, orchestrator.id, 10, {
+    pinned: true,
+    archived: true,
+    project: essays.id,
+  });
+  const h = listed("local", [zeta, essays], [backing], {
+    orchestrators: [orchestrator],
+    runs: { [run.id]: run },
+  });
+  const items = sidebarItems([h], ["local/p-ember"]);
+  expect(items).toHaveLength(1);
+  expect(items[0]).toMatchObject({
+    kind: "thread",
+    key: "local/p-ember",
+    thread: backing,
+    orchestration: { orchestrator, runs: [run] },
+    attention: "done",
+  });
+  expect(folderGroups(items, false)[0]?.label).toBe("Essays");
+  // Thread/list and agent/list can arrive independently.
+  h.view.state.runs = {};
+  expect(sidebarItems([h], [])).toHaveLength(1);
+});
