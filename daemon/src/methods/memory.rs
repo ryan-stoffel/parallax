@@ -421,7 +421,7 @@ async fn check_replaces(
 enum Proposer {
     /// An orchestrator's run other than its orchestrator.
     Child { project: ScopeId },
-    /// An orchestrator's current orchestrator, proposing for the user.
+    /// An orchestrator's current run, proposing for the user.
     Orchestrator { project: ScopeId },
     /// A thread in a repo entry with a repository.
     Thread { repo: parallax_protocol::RepoId },

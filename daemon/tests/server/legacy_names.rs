@@ -1,4 +1,4 @@
-//! 0093's old names, for one release: an app or phone from before it declares no `orchestrators`
+//! 0093's old names, for one release: an app or phone from before it declares no `projects`
 //! capability, calls `project/*` and `coordinator/*`, and gets the old names back in results,
 //! events, and errors.
 

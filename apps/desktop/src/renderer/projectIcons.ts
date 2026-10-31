@@ -168,11 +168,11 @@ export interface IconChoice {
 // never Lucide's whole set. A name is stored on the host, so a Lucide rename keeps the old name
 // here and imports the new glyph; the test checks the old name is still Lucide's alias for it.
 const icons: [name: string, Icon: LucideIcon, keywords: string][] = [
-  ["layers", Layers, "stack orchestrator default"],
+  ["layers", Layers, "stack project orchestrator default"],
   ["folder", Folder, "directory files"],
   ["folder-git-2", FolderGit2, "repository repo"],
   ["briefcase", Briefcase, "work business job"],
-  ["folder-kanban", FolderKanban, "orchestrator board"],
+  ["folder-kanban", FolderKanban, "project orchestrator board"],
   ["layout-grid", LayoutGrid, "apps tiles"],
   ["layout-dashboard", LayoutDashboard, "dashboard panels"],
   ["kanban", Kanban, "board columns tasks"],

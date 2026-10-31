@@ -16,7 +16,7 @@
 //! disk ([`proposals`], 0044).
 //! A question counts as seen once a wake-up turn carries it to its orchestrator's CLI, which
 //! the store keeps (PLX-469).
-//! An orchestrator's wake-ups go to the orchestrator's current orchestrator, so a Start over
+//! An orchestrator's wake-ups go to the orchestrator's current run, so a Start over
 //! orphans no child ([`target`], [`hand_over`], PLX-936).
 
 use std::collections::{BTreeSet, HashMap};
@@ -312,7 +312,7 @@ fn target(db: &parallax_store::Store, parent: Uuid) -> Result<Uuid, ErrorObject>
     Ok(current.map_or(parent, Uuid::from))
 }
 
-/// Wakes `run`'s orchestrator's current orchestrator, if it has one, to say the run started (0043),
+/// Wakes the current run of `run`'s orchestrator, if it has one, to say the run started (0043),
 /// so it can step in early. For a run started in an orchestrator other than through its
 /// orchestrator's own tools: the orchestrator knows about the ones it launched.
 // ponytail: a start line waits only in memory, so a restart before it is sent drops it; store
@@ -552,7 +552,7 @@ pub(super) async fn deliver(daemon: &Arc<Daemon>, orchestrator: RunId, questions
 /// After a restart, hands each parent one summary of its notifying children that ended after its
 /// last turn began (PLX-178): the runs the stop interrupted, and any whose wake-up was still
 /// waiting. A run a wake-up already named ended before that wake-up's turn, so it isn't named
-/// again. If an orchestrator's current orchestrator's own turn was interrupted, the summary says
+/// again. If an orchestrator's current run's own turn was interrupted, the summary says
 /// so, since nothing else would pick it back up, and it names the orchestrator's questions still
 /// open that no wake-up turn carried to it (PLX-469), unless the orchestrator's autonomy is Ask me,
 /// which hands questions to the user instead. An orchestrators' children wake the current one

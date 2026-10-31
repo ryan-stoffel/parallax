@@ -2,7 +2,7 @@
 //! `question/answer`, `question/escalate`, and `question/list`, behind the `questions` capability.
 //!
 //! A child's `ask` records its question and returns at once; the child goes on with its assumption.
-//! The question wakes the orchestrator's current orchestrator through 0025's wake-ups, so it
+//! The question wakes the orchestrator's current run through 0025's wake-ups, so it
 //! batches with them and counts toward their cap, or, with no orchestrator or in Ask me (PLX-403),
 //! goes straight to Needs you, as do those still open when the orchestrator switches to Ask me
 //! (PLX-474). Only the orchestrator answers or escalates with `from`, and only the user answers
@@ -439,7 +439,7 @@ pub(crate) fn level(autonomy: OrchestratorAutonomy) -> &'static str {
     }
 }
 
-/// Refuses unless `from` is `row`'s orchestrator's current orchestrator and `row` is still open.
+/// Refuses unless `from` is `row`'s orchestrator's current run and `row` is still open.
 fn open_for(
     db: &Store,
     row: &parallax_store::Question,

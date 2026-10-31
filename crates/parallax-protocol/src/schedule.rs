@@ -149,7 +149,7 @@ pub struct ScheduledTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread: Option<RunId>,
-    /// The Orchestrator whose orchestrator each fire messages.
+    /// The orchestrator each fire messages.
     #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub orchestrator: Option<ScopeId>,
@@ -218,7 +218,7 @@ pub struct ScheduleSaveParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread: Option<RunId>,
-    /// The Orchestrator whose orchestrator each fire messages.
+    /// The orchestrator each fire messages.
     #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub orchestrator: Option<ScopeId>,

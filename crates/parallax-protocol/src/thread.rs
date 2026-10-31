@@ -445,7 +445,7 @@ pub struct ThreadStartParams {
     /// Starts a child of this orchestrator instead (0042), behind `orchestratorTasks`: it runs in
     /// the orchestrator's mode with `approvals`, in a new worktree cut from the orchestrator's
     /// integration branch, and its first message is the child's header, then `prompt`. Its parent
-    /// is the orchestrator's current orchestrator, which a batched wake-up tells of the start; with
+    /// is the orchestrator's current run, which a batched wake-up tells of the start; with
     /// no orchestrator yet it has none. Not with `repo`, `parent`, `checkout`, `base`, or
     /// `checkoutRef`, which the orchestrator decides.
     #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]

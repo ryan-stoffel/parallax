@@ -6282,7 +6282,7 @@ export type ThreadStartParams = {
 	 * Starts a child of this orchestrator instead (0042), behind `orchestratorTasks`: it runs in
 	 * the orchestrator's mode with `approvals`, in a new worktree cut from the orchestrator's
 	 * integration branch, and its first message is the child's header, then `prompt`. Its parent
-	 * is the orchestrator's current orchestrator, which a batched wake-up tells of the start; with
+	 * is the orchestrator's current run, which a batched wake-up tells of the start; with
 	 * no orchestrator yet it has none. Not with `repo`, `parent`, `checkout`, `base`, or
 	 * `checkoutRef`, which the orchestrator decides.
 	 */
@@ -8615,7 +8615,7 @@ export type QuestionId = string;
 export type QuestionStatus = "open" | "escalated" | "decided" | "answered";
 
 /**
- * Params of `question/answer`. With `from`, the orchestrator's current orchestrator answers an
+ * Params of `question/answer`. With `from`, the orchestrator's current run answers an
  * `open` question, which becomes `decided`; otherwise it fails with `invalidParams`. Without
  * `from`, the user answers any question, which becomes `answered`. The child gets the answer as a
  * queued message when it differs from what it was last told: its assumption, or the decided answer
@@ -8638,7 +8638,7 @@ export type QuestionAnswerParams = {
 };
 
 /**
- * Params of `question/escalate`: the orchestrator's current orchestrator passes an `open` question
+ * Params of `question/escalate`: the orchestrator's current run passes an `open` question
  * to the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or
  * for a question that isn't open or is unknown.
  */
@@ -9572,7 +9572,7 @@ export type ScheduledTask = {
 	 */
 	thread?: RunId,
 	/**
-	 * The Orchestrator whose orchestrator each fire messages.
+	 * The orchestrator each fire messages.
 	 */
 	orchestrator?: ScopeId,
 	/**
@@ -9740,7 +9740,7 @@ export type ScheduleSaveParams = {
 	 */
 	thread?: RunId,
 	/**
-	 * The Orchestrator whose orchestrator each fire messages.
+	 * The orchestrator each fire messages.
 	 */
 	orchestrator?: ScopeId,
 	/**

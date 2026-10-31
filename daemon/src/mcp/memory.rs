@@ -151,7 +151,7 @@ impl Memory {
             "memory_propose",
             match self.role {
                 Role::Orchestrator => {
-                    "Propose a memory change for the user to save or discard: a rewrite the Memory tab asked for, or a new brief (kind brief, project scope; only the user writes the brief). To rewrite an existing entry, name it in path."
+                    "Propose a memory change for the user to save or discard: a rewrite the Memory tab asked for, or a new brief (kind brief, orchestrator scope; only the user writes the brief). To rewrite an existing entry, name it in path."
                 }
                 Role::Child => {
                     "Propose a memory entry: a lasting fact a later thread should start with, not what you did today. Your orchestrator reviews it at its next wake-up and saves it or drops it."

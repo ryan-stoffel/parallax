@@ -23,7 +23,7 @@
 //! `thread/start` with `project` starts an orchestrator's child (0042) through the same
 //! [`agents::create`] as an orchestrator's other runs, so it runs in the orchestrator's mode with
 //! its header, cut from the integration branch, and wakes the orchestrator. Its scope and thread
-//! row's repo are the orchestrator, and its parent the orchestrator's current orchestrator, or none
+//! row's repo are the orchestrator, and its parent the orchestrator's current run, or none
 //! before it has one.
 //!
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,

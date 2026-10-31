@@ -2,9 +2,10 @@
 //! table so every params and result type is the protocol's own.
 //!
 //! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4 `orchestrator`:
-//! `orchestrator/start` in `project.rs`; #110 `threads`: `thread.rs`; PLX-227 `orchestratorEdit`:
-//! `orchestrator/update` in `project.rs`; PLX-338 `orchestratorDelete`: `orchestrator/delete` in
-//! `project.rs`; 0042 `orchestratorFromThreads`: `orchestrator/fromThreads` in `project.rs`;
+//! `orchestrator/start` in `orchestrator.rs`; #110 `threads`: `thread.rs`; PLX-227
+//! `orchestratorEdit`: `orchestrator/update` in `orchestrator.rs`; PLX-338 `orchestratorDelete`:
+//! `orchestrator/delete` in `orchestrator.rs`; 0042 `orchestratorFromThreads`:
+//! `orchestrator/fromThreads` in `orchestrator.rs`;
 //! PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link` and `pr/unlink`):
 //! `pr.rs`; PLX-359 `composerMenus` and PLX-993 `repoGrep`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and

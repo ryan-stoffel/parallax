@@ -71,7 +71,7 @@ pub struct QuestionAskParams {
     pub assumption: String,
 }
 
-/// Params of `question/answer`. With `from`, the orchestrator's current orchestrator answers an
+/// Params of `question/answer`. With `from`, the orchestrator's current run answers an
 /// `open` question, which becomes `decided`; otherwise it fails with `invalidParams`. Without
 /// `from`, the user answers any question, which becomes `answered`. The child gets the answer as a
 /// queued message when it differs from what it was last told: its assumption, or the decided answer
@@ -90,7 +90,7 @@ pub struct QuestionAnswerParams {
     pub from: Option<RunId>,
 }
 
-/// Params of `question/escalate`: the orchestrator's current orchestrator passes an `open` question
+/// Params of `question/escalate`: the orchestrator's current run passes an `open` question
 /// to the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or
 /// for a question that isn't open or is unknown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
