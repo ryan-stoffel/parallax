@@ -6,15 +6,19 @@ import { animate, duration, easing } from "../motion";
 import { Button, Checkbox, Menu, MenuOption, Spinner } from "../ui";
 import { CheckGroup, Reveal, type CheckActions } from "./CheckGroup";
 import {
+  commitPreview,
   groupChecks,
   mergeGate,
+  mergeTone,
   methodHint,
   methodLabels,
   methodsOf,
   more,
   statusRows,
   type Check,
+  type CommitPreview,
   type GateTone,
+  type MergeTone,
   type PrActExtra,
   type PrActionMore,
   type RowTone,
@@ -37,6 +41,15 @@ const rowLook: Record<RowTone, { Icon: typeof icons.success; color: string }> = 
   running: { Icon: icons.loading, color: "animate-spin text-warning" },
   waiting: { Icon: icons.warning, color: "text-warning" },
   neutral: { Icon: icons.skipped, color: "text-faint-foreground" },
+};
+
+// The merge button's fill by mergeTone, each with its readable black or white text (index.css).
+const fills: Record<MergeTone, string> = {
+  ready: "bg-merge-ready text-merge-ready-foreground",
+  running: "bg-merge-running text-merge-running-foreground",
+  blocked: "bg-merge-blocked text-merge-blocked-foreground",
+  merged: "bg-merge-merged text-merge-merged-foreground",
+  neutral: "bg-merge-neutral text-merge-neutral-foreground",
 };
 
 /** How long after merging a pull request still says "just now". */
@@ -107,6 +120,7 @@ export function MergeBox({
   }, [running]);
 
   const chosen = methods.includes(method) ? method : methods[0]!;
+  const tone = mergeTone(gate);
   const rows = statusRows(pr, checks, gate, chosen, status);
   const commits = pr.commits?.length;
   const extra = (): PrActExtra =>
@@ -174,7 +188,7 @@ export function MergeBox({
           {title}
         </p>
       ) : (
-        <div className={`flex gap-2.5 px-3.5 pt-3 ${open ? "pb-1" : "pb-3"}`}>
+        <div className="flex gap-2.5 px-3.5 pt-3">
           <span ref={mark} className="mt-px grid size-5 shrink-0 place-items-center">
             <Icon aria-hidden className={`size-4 ${color}`} />
           </span>
@@ -193,77 +207,100 @@ export function MergeBox({
           </div>
         </div>
       )}
-      {open && (
-        <div className="flex flex-col gap-2.5 px-3.5 py-3.5">
-          {pr.autoMerge && (
-            <div className="flex items-center gap-2 text-meta text-muted-foreground">
-              <icons.merged aria-hidden className="size-3.5 shrink-0 text-added" />
-              <span className="min-w-0 flex-1">
-                Auto-merge is on{methodLabels[pr.autoMerge] && ` (${methodLabels[pr.autoMerge]})`}.
-                It merges once it can.
-              </span>
-              <Button size="sm" disabled={busy} onClick={() => onAct("disableAutoMerge")}>
-                Turn off
-              </Button>
-            </div>
-          )}
-          {gate.draft ? (
-            <Button variant="primary" disabled={busy} onClick={() => onAct("ready")}>
-              {busy ? <Spinner /> : <icons.pullRequest aria-hidden />}
-              Ready for review
+      <div className="flex flex-col gap-2.5 px-3.5 pt-3 pb-3.5">
+        {pr.autoMerge && open && (
+          <div className="flex items-center gap-2 text-meta text-muted-foreground">
+            <icons.merged aria-hidden className="size-3.5 shrink-0 text-added" />
+            <span className="min-w-0 flex-1">
+              Auto-merge is on{methodLabels[pr.autoMerge] && ` (${methodLabels[pr.autoMerge]})`}. It
+              merges once it can.
+            </span>
+            <Button size="sm" disabled={busy} onClick={() => onAct("disableAutoMerge")}>
+              Turn off
             </Button>
-          ) : (
-            <div className="flex gap-2">
-              <div className="flex min-w-0 flex-1">
-                <Button
-                  variant="primary"
-                  disabled={busy || !gate.canMerge}
-                  title={gate.canMerge ? undefined : gate.title}
-                  onClick={() => onAct(chosen, extra())}
-                  className="min-w-0 flex-1 rounded-r-none"
-                >
-                  {busy ? <Spinner className="text-current" /> : <icons.merged aria-hidden />}
-                  <span className="truncate">{methodLabels[chosen]}</span>
-                </Button>
+          </div>
+        )}
+        <div className="flex gap-2">
+          {/* GitHub's split button: the merge, a thin rule, and the method's chevron, one fill. */}
+          <div
+            data-tone={tone}
+            className={`flex h-8 min-w-0 flex-1 overflow-hidden rounded-md text-body font-medium ${fills[tone]}`}
+          >
+            <button
+              type="button"
+              disabled={busy || !gate.canMerge}
+              title={gate.canMerge ? undefined : gate.title}
+              onClick={() => onAct(chosen, extra())}
+              className="flex min-w-0 flex-1 items-center justify-center gap-1.5 px-3 transition-colors enabled:hover:bg-current/10 disabled:cursor-not-allowed [&_svg]:size-4 [&_svg]:shrink-0"
+            >
+              {busy ? (
+                <Spinner className="text-current" />
+              ) : pr.state === "closed" ? (
+                <icons.closedPullRequest aria-hidden />
+              ) : (
+                <icons.merged aria-hidden />
+              )}
+              <span className="truncate">
+                {pr.state === "merged"
+                  ? "Merged"
+                  : pr.state === "closed"
+                    ? "Closed"
+                    : methodLabels[chosen]}
+              </span>
+            </button>
+            {open && (
+              <>
+                <span aria-hidden className="w-px shrink-0 bg-current opacity-25" />
                 {/* GitHub lets the method change while merging waits, as auto-merge takes it. */}
-                <Button
-                  variant="primary"
+                <button
+                  type="button"
                   aria-label="Merge method"
                   aria-haspopup="menu"
                   popoverTarget={`${id}-method`}
                   disabled={busy || methods.length < 2}
-                  className="rounded-l-none border-l border-primary-foreground/20 px-2"
+                  className="grid w-8 shrink-0 place-items-center transition-colors enabled:hover:bg-current/10 disabled:opacity-50 [&_svg]:size-4"
                 >
                   <icons.expand aria-hidden />
-                </Button>
-              </div>
-              {gate.behind && actions && (
-                <Button variant="outline" disabled={busy} onClick={() => onAct("updateBranch")}>
-                  Update branch
-                </Button>
-              )}
-            </div>
-          )}
-          {!pr.autoMerge && !gate.canMerge && gate.canAutoMerge && (
-            <Button variant="outline" disabled={busy} onClick={() => onAct("autoMerge", extra())}>
-              Merge when ready
+                </button>
+              </>
+            )}
+          </div>
+          {gate.draft && (
+            <Button variant="outline" disabled={busy} onClick={() => onAct("ready")}>
+              <icons.pullRequest aria-hidden />
+              Ready for review
             </Button>
           )}
-          {actions && !gate.draft && (
-            <Checkbox checked={deleteBranch} onChange={setDeleteBranch}>
-              <span className="text-meta text-muted-foreground">Delete branch after merging</span>
-            </Checkbox>
+          {gate.behind && actions && (
+            <Button variant="outline" disabled={busy} onClick={() => onAct("updateBranch")}>
+              Update branch
+            </Button>
           )}
         </div>
-      )}
-      {pr.state === "merged" && actions && (
-        <div className="px-3.5 pb-3">
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => onAct("deleteBranch")}>
+        {open && <CommitMessage preview={commitPreview(pr, chosen)} base={pr.baseBranch} />}
+        {open && !pr.autoMerge && !gate.canMerge && gate.canAutoMerge && (
+          <Button variant="outline" disabled={busy} onClick={() => onAct("autoMerge", extra())}>
+            Merge when ready
+          </Button>
+        )}
+        {open && actions && !gate.draft && (
+          <Checkbox checked={deleteBranch} onChange={setDeleteBranch}>
+            <span className="text-meta text-muted-foreground">Delete branch after merging</span>
+          </Checkbox>
+        )}
+        {pr.state === "merged" && actions && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => onAct("deleteBranch")}
+            className="self-start"
+          >
             <icons.delete aria-hidden />
             Delete {pr.headBranch}
           </Button>
-        </div>
-      )}
+        )}
+      </div>
       <Menu
         ref={menu}
         id={`${id}-method`}
@@ -285,5 +322,51 @@ export function MergeBox({
         ))}
       </Menu>
     </section>
+  );
+}
+
+/**
+ * The commit the chosen method makes, read-only, as GitHub shows it before merging: a squash's or
+ * merge commit's title and body, or the commits a rebase replays as they are. Editing it needs
+ * plxd (PLX-1190).
+ */
+function CommitMessage({ preview, base }: { preview: CommitPreview; base: string }) {
+  return (
+    <div
+      role="note"
+      aria-label="Commit message"
+      className="min-w-0 rounded-lg border border-border px-3 py-2 text-meta"
+    >
+      {preview.replayed ? (
+        <>
+          <p className="text-muted-foreground">
+            {preview.replayed.length
+              ? `Replays these commits onto ${base} as they are:`
+              : `Replays this branch's commits onto ${base} as they are.`}
+          </p>
+          {preview.replayed.length > 0 && (
+            <ul className="mt-1 flex flex-col gap-0.5">
+              {preview.replayed.map((c) => (
+                <li key={c.oid} className="flex min-w-0 gap-2">
+                  <span className="shrink-0 font-mono text-faint-foreground">{c.oid}</span>
+                  <span className="truncate">{c.headline}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="truncate font-medium" title={preview.title}>
+            {preview.title}
+          </p>
+          {preview.body && (
+            <p className="mt-1 line-clamp-4 whitespace-pre-line text-muted-foreground">
+              {preview.body}
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }

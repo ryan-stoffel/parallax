@@ -357,8 +357,11 @@ test("the merge menu lists GitHub's methods with their lines, and the choice rel
       "false",
     ],
   ]);
+  const preview = () => document.querySelector('[aria-label="Commit message"]')!.textContent;
+  expect(preview()).toContain("Merge pull request #42 from");
   act(() => (options[1] as HTMLButtonElement).click());
   expect(button("Squash and merge")!.disabled).toBe(false);
+  expect(preview()).toContain("Change 42 (#42)");
 });
 
 test("the description's pencil edits the body in place and saves it through pr/write", async () => {

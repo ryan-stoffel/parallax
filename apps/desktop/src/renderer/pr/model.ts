@@ -393,6 +393,54 @@ export function statusRows(
   return rows;
 }
 
+/**
+ * The merge button's color, from the merge gate: ready (green) when it can merge, running
+ * (yellow) while it waits on checks or GitHub, blocked (red) when something stops it, merged
+ * (purple), and neutral (gray) for a draft or a closed one.
+ */
+export type MergeTone = "ready" | "running" | "blocked" | "merged" | "neutral";
+
+export function mergeTone(gate: Gate): MergeTone {
+  if (gate.tone === "merged") return "merged";
+  if (gate.tone === "closed" || gate.draft) return "neutral";
+  if (gate.canMerge) return "ready";
+  return gate.tone === "pending" ? "running" : "blocked";
+}
+
+/** The commit a merge makes, as GitHub would write it, for a read-only preview. */
+export interface CommitPreview {
+  /** Its title; none for a rebase, which keeps each commit's own. */
+  title?: string;
+  body?: string;
+  /** The commits a rebase replays, as they are. */
+  replayed?: { oid: string; headline: string }[];
+}
+
+/**
+ * The commit `method` makes, with GitHub's default messages (plxd doesn't report a repository's
+ * own squash message setting): a squash is titled `<title> (#n)` over its commits' headlines, or
+ * its one commit's; a merge commit is GitHub's "Merge pull request #n from <owner>/<head>" over
+ * the title; a rebase replays the commits as they are. The owner is the base repository's, as
+ * plxd doesn't say a fork's.
+ */
+export function commitPreview(pr: PullRequest, method: PrMergeMethod): CommitPreview {
+  const commits = pr.commits ?? [];
+  if (method === "rebase")
+    return { replayed: commits.map((c) => ({ oid: c.oid.slice(0, 7), headline: c.headline })) };
+  if (method === "merge")
+    return {
+      title: `Merge pull request #${pr.number} from ${pr.repo.split("/")[0]}/${pr.headBranch}`,
+      body: pr.title,
+    };
+  return {
+    title: `${pr.title} (#${pr.number})`,
+    body:
+      commits.length > 1
+        ? commits.map((c) => `* ${c.headline}`).join("\n\n")
+        : commits[0]?.headline,
+  };
+}
+
 /** A review thread as the view draws it, from PLX-1151's full threads or `pr/status`'s first lines. */
 export interface ThreadView {
   id?: string;

@@ -158,6 +158,33 @@
   --warning: #b45309;
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
+  /* The PR view's merge button, by the pull request's state (mergeTone), dark enough for white
+     text but running's yellow, which takes black. Each foreground picks black or white. */
+  --merge-ready: #1a7f37;
+  --merge-running: #bf8700;
+  --merge-blocked: #cf222e;
+  --merge-merged: #8250df;
+  --merge-neutral: #656d76;
+  --merge-ready-foreground: color(
+    from var(--merge-ready) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-running-foreground: color(
+    from var(--merge-running) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-blocked-foreground: color(
+    from var(--merge-blocked) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-merged-foreground: color(
+    from var(--merge-merged) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-neutral-foreground: color(
+    from var(--merge-neutral) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
   /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
   --code: #f6f6f9;
   --syntax-keyword: #2b5cff;
@@ -216,6 +243,11 @@
   --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
+  --merge-ready: #238636;
+  --merge-running: #d29922;
+  --merge-blocked: #da3633;
+  --merge-merged: #8957e5;
+  --merge-neutral: #3d444d;
   --code: #0a0a0a;
   --syntax-keyword: #7b9bff;
   --syntax-string: #ff8a65;
@@ -625,6 +657,16 @@ svg.lucide[stroke-width="2"] * {
   --color-project-teal: var(--project-teal);
   --color-project-sky: var(--project-sky);
   --color-project-violet: var(--project-violet);
+  --color-merge-ready: var(--merge-ready);
+  --color-merge-ready-foreground: var(--merge-ready-foreground);
+  --color-merge-running: var(--merge-running);
+  --color-merge-running-foreground: var(--merge-running-foreground);
+  --color-merge-blocked: var(--merge-blocked);
+  --color-merge-blocked-foreground: var(--merge-blocked-foreground);
+  --color-merge-merged: var(--merge-merged);
+  --color-merge-merged-foreground: var(--merge-merged-foreground);
+  --color-merge-neutral: var(--merge-neutral);
+  --color-merge-neutral-foreground: var(--merge-neutral-foreground);
   --color-project-pink: var(--project-pink);
   --color-project-gray: var(--project-gray);
   --color-mark-blue: var(--mark-blue);

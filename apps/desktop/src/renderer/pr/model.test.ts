@@ -1,7 +1,16 @@
 import { expect, test } from "vite-plus/test";
 
 import type { PrCheck, PullRequest } from "../../protocol/generated/protocol";
-import { checkRollup, groupChecks, mergeGate, methodHint, statusRows, threadsOf } from "./model";
+import {
+  checkRollup,
+  commitPreview,
+  groupChecks,
+  mergeGate,
+  mergeTone,
+  methodHint,
+  statusRows,
+  threadsOf,
+} from "./model";
 
 const check = (name: string, state: PrCheck["state"], workflow?: string): PrCheck => ({
   name,
@@ -256,4 +265,51 @@ test("methodHint says GitHub's line for each method, with the commits when known
   expect(methodHint("rebase", 1)).toBe(
     "The 1 commit from this branch will be rebased and added to the base branch.",
   );
+});
+
+test("mergeTone colors the merge button by the merge gate", () => {
+  const tone = (more: Partial<PullRequest>) => mergeTone(mergeGate(pr(more)));
+  expect(tone({ mergeState: "clean" })).toBe("ready");
+  expect(tone({ mergeState: "blocked", checks: [check("t", "pending")] })).toBe("running");
+  expect(tone({ mergeState: undefined })).toBe("running");
+  expect(tone({ mergeState: "blocked", checks: [check("t", "failed")] })).toBe("blocked");
+  expect(tone({ mergeState: "blocked", reviewDecision: "changesRequested" })).toBe("blocked");
+  expect(tone({ mergeState: "dirty" })).toBe("blocked");
+  expect(tone({ mergeState: "behind" })).toBe("blocked");
+  expect(tone({ state: "merged" })).toBe("merged");
+  expect(tone({ draft: true, mergeState: "draft" })).toBe("neutral");
+  expect(tone({ state: "closed" })).toBe("neutral");
+});
+
+test("commitPreview writes GitHub's default message for each method", () => {
+  const commit = (oid: string, headline: string) => ({
+    oid,
+    headline,
+    author: "me",
+    committedAt: "2026-10-02T12:00:00Z",
+  });
+  const two = pr({
+    number: 7,
+    title: "Add a tray",
+    headBranch: "tray",
+    commits: [commit("aaaaaaa1", "feat: tray"), commit("bbbbbbb2", "test: tray")],
+  });
+  expect(commitPreview(two, "squash")).toEqual({
+    title: "Add a tray (#7)",
+    body: "* feat: tray\n\n* test: tray",
+  });
+  expect(commitPreview({ ...two, commits: [commit("a", "feat: tray")] }, "squash")).toEqual({
+    title: "Add a tray (#7)",
+    body: "feat: tray",
+  });
+  expect(commitPreview(two, "merge")).toEqual({
+    title: "Merge pull request #7 from me/tray",
+    body: "Add a tray",
+  });
+  expect(commitPreview(two, "rebase")).toEqual({
+    replayed: [
+      { oid: "aaaaaaa", headline: "feat: tray" },
+      { oid: "bbbbbbb", headline: "test: tray" },
+    ],
+  });
 });
