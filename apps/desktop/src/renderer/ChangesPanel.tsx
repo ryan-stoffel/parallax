@@ -5,7 +5,7 @@ import type { ThreadRun } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { ChangesDiff } from "./ChangesDiff";
 import { useProviders } from "./providers";
-import { ConfirmDialog, Picker } from "./ui";
+import { ConfirmDialog, EmptyState, Picker } from "./ui";
 
 /** Open the Changes view, on `runId`'s turn `turn` if given, scrolled to the file at `path`. */
 export type ChangesRequest = { runId?: string; turn?: number; path?: string };
@@ -245,10 +245,11 @@ const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
 
 function Empty({ title, hint }: { title: string; hint: string }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
-      <GitCompare aria-hidden className="mb-1 size-5 text-faint-foreground" />
-      <p className="text-body font-medium text-foreground">{title}</p>
-      <p className="text-body text-muted-foreground">{hint}</p>
-    </div>
+    <EmptyState
+      icon={<GitCompare aria-hidden />}
+      title={title}
+      body={hint}
+      className="flex-1 justify-center pb-16"
+    />
   );
 }

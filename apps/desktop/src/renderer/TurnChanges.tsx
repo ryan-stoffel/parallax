@@ -3,6 +3,7 @@ import { createContext, useContext, type ReactNode } from "react";
 
 import type { CheckpointFile, ThreadRun } from "../protocol/generated/protocol";
 import { fileIcon } from "./fileIcons";
+import { DiffStat } from "./pr/parts";
 
 /** A folder of a turn's changed files, single-child folders joined into one, or a file. */
 export type TreeNode =
@@ -95,7 +96,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
           <>
             <FileIcon path={file.path} />
             <span className="min-w-0 flex-1 truncate">{node.name}</span>
-            <Counts added={file.additions} removed={file.deletions} />
+            <DiffStat added={file.additions} removed={file.deletions} />
           </>
         );
         const row = "flex h-7 w-full items-center gap-2 rounded-md pr-3 text-left";
@@ -133,7 +134,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
           />
           <Folder aria-hidden className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate font-mono text-meta">{node.name}</span>
-          {!shown && <Counts {...totals(node.children)} />}
+          {!shown && <DiffStat {...totals(node.children)} />}
         </button>,
         ...(shown ? rows(node.children, depth + 1) : []),
       ];
@@ -148,7 +149,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
         <span className="font-medium text-foreground">
           {files.length} changed {files.length === 1 ? "file" : "files"}
         </span>
-        <Counts added={added} removed={removed} />
+        <DiffStat added={added} removed={removed} />
         <span className="flex-1" />
         {dirs.length > 0 && (
           <button
@@ -202,13 +203,5 @@ export function FileIcon({ path }: { path: string }) {
       <img alt="" src={icon.dark} className={`${img} hidden [:root.dark_&]:block`} />
       <img alt="" src={icon.light} className={`${img} [:root.dark_&]:hidden`} />
     </>
-  );
-}
-
-function Counts({ added, removed }: { added: number; removed: number }) {
-  return (
-    <span className="shrink-0 font-mono text-meta tabular-nums">
-      <span className="text-added">+{added}</span> <span className="text-danger">−{removed}</span>
-    </span>
   );
 }
