@@ -1,4 +1,4 @@
-// What the sidebar lists (0091): every host's threads and Projects as rows, the unsent New Thread
+// What the sidebar lists (0094): every host's threads and Projects as rows, the unsent New Thread
 // drafts, and how rows group, as pure functions, so a sidebar mode is mostly its grouping.
 import type { AgentRun, Project, Repo, Thread } from "../protocol/generated/protocol";
 import { activeAt, attentionOf, projectAttention, type Attention } from "./attention";
@@ -203,7 +203,7 @@ export function todayGroups(
 }
 
 /**
- * Traditional's folders (0091), as Codex groups threads: one per `host/repo`, a thread added
+ * Traditional's folders (0094), as Codex groups threads: one per `host/repo`, a thread added
  * to a Space under that Space, each holding its rows in `rows`' order. Folders sort by name, then
  * computer, so they don't move as threads do, with No repo last. The computer shows only when
  * there are `many`.

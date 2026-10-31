@@ -1,5 +1,5 @@
 // The sidebar's pinned threads (pins.ts, 0075): thread rows under the drafts, in the order the user
-// drags them into, each with its pin in its top-right (PLX-1043, 0091).
+// drags them into, each with its pin in its top-right (PLX-1043, 0094).
 import { useState, type DragEvent, type ReactNode } from "react";
 
 import {

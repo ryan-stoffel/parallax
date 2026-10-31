@@ -520,7 +520,7 @@ export function ThreadList({
   // The Space the delete dialog asks about, and its host's view.
   const [spaceToDelete, setSpaceToDelete] = useState<ProjectEntry>();
   const pins = pinnedProjects.use();
-  // Which sidebar shows (0091): Inbox's head is the search box and its buttons, and its threads one
+  // Which sidebar shows (0094): Inbox's head is the search box and its buttons, and its threads one
   // list; Traditional's head is rows, and it lists the threads in a folder per repo.
   const mode = sidebarMode.use();
   const inbox = mode === "inbox";
@@ -715,7 +715,7 @@ export function ThreadList({
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Projects, most recently active first, as threads are (PLX-1043). Inbox lists only one that
   // needs the user, or matches a search, atop Today; the rest are on the Projects page.
-  // Traditional lists each as one row in its repo's folder (0091).
+  // Traditional lists each as one row in its repo's folder (0094).
   const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
   const projects = inbox
     ? allProjects.filter((p) => p.attention === "needsYou" || words.length > 0)
@@ -777,7 +777,7 @@ export function ThreadList({
       pinUnread.set(pinUnread.get().filter((k) => k !== selectedKey));
   }, [selectedKey, unread.includes(selectedKey ?? "")]);
   // Today, grouped as its View says, under each repo or each day (Inbox), or Traditional's
-  // folders, a repo's threads and Projects in each, by name (0091). Each kind folds in its own store.
+  // folders, a repo's threads and Projects in each, by name (0094). Each kind folds in its own store.
   const todayBy = todayGroup.use();
   const compact = compactRows.use();
   const todayShut = todayFolded.use();
@@ -1538,7 +1538,7 @@ export function ThreadList({
       discardDraft(d.draft);
     }
   };
-  // The unsent New Thread prompts, atop the list under a line (0091).
+  // The unsent New Thread prompts, atop the list under a line (0094).
   const draftList = draftRows.length > 0 && (
     <>
       <ul aria-label="Drafts" className={cardGap}>
@@ -1743,7 +1743,7 @@ export function ThreadList({
       {projects.map((p) => projectCard(p))}
     </ul>
   );
-  // In every mode (0091): the drafts, then the favorites and pinned threads, each under a line, then
+  // In every mode (0094): the drafts, then the favorites and pinned threads, each under a line, then
   // the rest. View lives in the filter menu.
   const list = (
     <>
@@ -2948,7 +2948,7 @@ function BranchName({ branch, words }: { branch: string; words: readonly string[
 /** The space between cards in a list. */
 const cardGap = "flex flex-col gap-1";
 
-/** The thin line under the drafts and under the pins (0091). */
+/** The thin line under the drafts and under the pins (0094). */
 function Rule() {
   return <div role="separator" className="mx-2 my-2 h-px bg-border" />;
 }
@@ -3047,7 +3047,7 @@ function DraftRow({
  * it asks of the user, or how long ago it was last active), its title in bold, then its branch (not
  * a Chat's), cut in the middle (`shortBranch`), its git status, linked pull requests (the number
  * of one, or +N for more) and their checks, its computer, and its provider, in color while it's
- * open. A pinned one keeps its pin in its top-right, which unpins it (0091). Under a search, the
+ * open. A pinned one keeps its pin in its top-right, which unpins it (0094). Under a search, the
  * words found are marked, and a match only in its messages shows a line of them. Resting on it
  * shows its card; hovering or focusing it swaps the status for Snooze, Archive, and more actions,
  * which also open by right-clicking the row: native popovers, so Escape and clicking away close

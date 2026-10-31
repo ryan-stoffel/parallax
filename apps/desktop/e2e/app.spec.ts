@@ -223,7 +223,7 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
   // One card for the Project, on the Projects page, which the classic sidebar opens from the
-  // button beside its search (0091). Opening the card goes back to the Project.
+  // button beside its search (0094). Opening the card goes back to the Project.
   await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
   const cards = page.locator("li[data-project]");
   await expect(cards).toHaveCount(1);

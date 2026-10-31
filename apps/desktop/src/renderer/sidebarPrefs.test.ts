@@ -15,7 +15,7 @@ test("a stored mode reads under any name it had: Classic as Inbox, Beta and Fold
   expect(readMode(true)).toBeUndefined();
 });
 
-test("before 0091, Settings › Beta's sidebar switch on reads as Traditional, and off or unset as Inbox", () => {
+test("before 0094, Settings › Beta's sidebar switch on reads as Traditional, and off or unset as Inbox", () => {
   expect(legacyMode()).toBe("inbox");
   localStorage.setItem("parallax.beta.newSidebar", "true");
   expect(legacyMode()).toBe("traditional");

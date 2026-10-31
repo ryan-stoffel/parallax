@@ -49,7 +49,7 @@ export function togglePinnedProject(key: string) {
 }
 
 /**
- * Which sidebar shows (0091). Inbox, the default, is 0087's: the search box and its buttons in its
+ * Which sidebar shows (0094). Inbox, the default, is 0087's: the search box and its buttons in its
  * head and the threads as one list, most recently active first. Traditional has 0090's head (New
  * thread, Search, and Projects as rows, and Pinned projects) and lists the threads in a folder per
  * repo. Settings › Appearance › Sidebar switches it.
@@ -66,7 +66,7 @@ export function readMode(raw: unknown): SidebarMode | undefined {
   return undefined;
 }
 
-/** The mode before 0091, when the new sidebar was Settings › Beta's switch: on reads as Traditional. */
+/** The mode before 0094, when the new sidebar was Settings › Beta's switch: on reads as Traditional. */
 export function legacyMode(): SidebarMode {
   try {
     return localStorage.getItem("parallax.beta.newSidebar") === "true" ? "traditional" : "inbox";

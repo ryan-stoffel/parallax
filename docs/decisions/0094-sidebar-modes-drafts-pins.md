@@ -1,4 +1,4 @@
-# 0091: Inbox and Traditional sidebars, with drafts and pins on top
+# 0094: Inbox and Traditional sidebars, with drafts and pins on top
 
 - Status: accepted; amends [0087](0087-sidebar-rows-no-areas-or-folders.md)'s "no separator" and its pinned thread cards, and [0090](0090-projects-page-and-spaces.md)'s New sidebar switch
 - Date: 2026-10-29

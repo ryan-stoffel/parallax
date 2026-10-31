@@ -1,4 +1,4 @@
-// The sidebar's row card (0091): one shell for thread, Project, and draft rows.
+// The sidebar's row card (0094): one shell for thread, Project, and draft rows.
 import type { HTMLAttributes, ReactNode } from "react";
 
 // One observer for every row: it keeps each row's `--row-tools` at its tools' width, so the line
@@ -55,7 +55,7 @@ export function RowCard({
   rowKey: string;
   kind: "thread" | "project" | "draft";
   compact?: boolean;
-  /** Less padding, for a card in the Traditional sidebar (0091). */
+  /** Less padding, for a card in the Traditional sidebar (0094). */
   dense?: boolean;
   place?: ReactNode;
   status?: ReactNode;

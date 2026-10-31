@@ -83,7 +83,7 @@ function Segmented<T extends string | number | boolean | null>({
 
 /**
  * The sidebar's View options, at the foot of the filter menu (PLX-1043): how today's threads
- * group (not in Folders, 0091), how tall their rows are, and when finished threads archive
+ * group (not in Folders, 0094), how tall their rows are, and when finished threads archive
  * themselves.
  */
 export function ViewOptions({

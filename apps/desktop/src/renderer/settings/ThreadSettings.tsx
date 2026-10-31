@@ -24,7 +24,7 @@ const pickerBox = "rounded-lg border border-border bg-background";
 /**
  * Settings > Threads: what a new thread starts with, whether a host's threads resume after a
  * usage limit or a restart, and importing past sessions (PLX-881) and exported chats (PLX-883).
- * How the sidebar lists threads is Appearance's (0091).
+ * How the sidebar lists threads is Appearance's (0094).
  */
 export function ThreadSettings() {
   return (

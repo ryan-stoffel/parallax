@@ -104,7 +104,7 @@ beforeEach(() => {
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
   sidebarNav.set(navDefaults);
-  // These tests are Traditional's head (0090); one below covers Inbox and Traditional's list (0091).
+  // These tests are Traditional's head (0090); one below covers Inbox and Traditional's list (0094).
   sidebarMode.set("traditional");
   pinnedProjects.set([]);
   moreShown.set(false);

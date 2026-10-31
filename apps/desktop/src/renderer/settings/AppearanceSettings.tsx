@@ -398,7 +398,7 @@ const modes: { value: SidebarMode; name: string }[] = [
 ];
 
 /**
- * Appearance's Sidebar (0091): which sidebar shows, where Traditional's pages show (0090), and
+ * Appearance's Sidebar (0094): which sidebar shows, where Traditional's pages show (0090), and
  * the Working and Archived drawers' behavior.
  */
 function SidebarSettings() {
