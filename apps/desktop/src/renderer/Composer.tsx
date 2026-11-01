@@ -14,7 +14,6 @@ import {
   Pencil,
   Quote,
   Sparkles,
-  Square,
   SquareSlash,
   X,
   Zap,
@@ -2123,7 +2122,7 @@ export function Composer({
                 </RefsContext.Provider>
                 <ScrollThumb target={editorDom} />
               </div>
-              <div className="flex shrink-0 items-center gap-1 pr-2 pb-2">
+              <div className="flex shrink-0 items-center gap-1 pr-1 pb-1">
                 <input
                   ref={filePicker}
                   type="file"
@@ -2144,41 +2143,44 @@ export function Composer({
                 >
                   <Paperclip />
                 </button>
-                <button
-                  type="button"
-                  aria-label="Voice input"
-                  title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
-                  disabled={!onSend || !!disabledReason || uploading}
-                  onClick={voice.start}
-                  className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
-                >
-                  <Mic />
-                </button>
-                {showStop ? (
+                {/* Voice and send or stop share one capsule at the row's end. */}
+                <div className="composer-actions">
                   <button
                     type="button"
-                    aria-label={stopping ? "Stopping" : "Stop"}
-                    disabled={stopping}
-                    onClick={() => void stop()}
-                    className="composer-pop grid size-8 place-items-center rounded-full bg-danger text-danger-foreground disabled:opacity-50"
+                    aria-label="Voice input"
+                    title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
+                    disabled={!onSend || !!disabledReason || uploading}
+                    onClick={voice.start}
+                    className="grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
                   >
-                    {stopping ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : (
-                      <Square className="size-3.5 fill-current" />
-                    )}
+                    <Mic />
                   </button>
-                ) : (
-                  <button
-                    type="button"
-                    aria-label="Send"
-                    disabled={!canSend}
-                    onClick={() => void submit()}
-                    className="composer-send send-sky grid size-8 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
-                  >
-                    <ArrowUp className="size-4" />
-                  </button>
-                )}
+                  {showStop ? (
+                    <button
+                      type="button"
+                      aria-label={stopping ? "Stopping" : "Stop"}
+                      disabled={stopping}
+                      onClick={() => void stop()}
+                      className="composer-pop grid size-8 place-items-center rounded-lg text-danger transition-colors hover:bg-hover disabled:opacity-50"
+                    >
+                      {stopping ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : (
+                        <span className="size-3.5 rounded-[3px] bg-current" />
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label="Send"
+                      disabled={!canSend}
+                      onClick={() => void submit()}
+                      className="composer-send send-sky grid size-8 place-items-center rounded-lg bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
+                    >
+                      <ArrowUp className="size-4" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

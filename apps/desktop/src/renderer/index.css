@@ -1182,6 +1182,20 @@ body {
     color-mix(in oklab, var(--foreground) 9%, var(--surface))
   );
 }
+/* The capsule at the end of the field's row, holding voice and send or stop (Composer.tsx). */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px;
+  border: 1px solid
+    light-dark(color-mix(in oklab, var(--foreground) 8%, transparent), rgb(255 255 255 / 14%));
+  border-radius: 10px;
+  background-color: light-dark(
+    color-mix(in oklab, var(--foreground) 5%, var(--surface)),
+    color-mix(in oklab, #000000 65%, var(--surface))
+  );
+}
 /* The text's height follows the editor's (Composer.tsx), so the box eases as lines wrap. */
 .composer-text {
   /* Clipped, not hidden: a hidden box still scrolls to the caret, cutting off the first line. */
