@@ -43,7 +43,6 @@ import {
   versions,
   withVersion,
 } from "./providers";
-import { Redacted } from "./Redacted";
 import { extraAccounts, SeveralAccountsMark } from "./SeveralAccounts";
 import { age, backendLogos, SettingsNav, settingsNames } from "./Sidebar";
 import { BrowserSettings } from "./settings/BrowserSettings";
@@ -891,7 +890,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                         <span className="min-w-0">
                           <span className="flex items-baseline gap-2">
                             <span className="truncate text-body font-medium">
-                              <Redacted text={accountLabel(info)} />
+                              {accountLabel(info)}
                             </span>
                             {info.version && (
                               <span className="truncate font-mono text-meta text-faint-foreground">
@@ -1173,9 +1172,7 @@ function InstancePane({
           <KindLogo className="size-5" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate text-reading font-semibold">
-            <Redacted text={accountLabel(info)} />
-          </h2>
+          <h2 className="truncate text-reading font-semibold">{accountLabel(info)}</h2>
           {/* What it is, unless its name says so, and its version. */}
           <p className="truncate text-body text-muted-foreground">
             {kind.name !== instance.name && kind.name}
@@ -1205,9 +1202,7 @@ function InstancePane({
             description={
               <span className="flex items-center gap-1.5">
                 <StatusDot tone="error" />
-                <span className="min-w-0">
-                  {busy ? `Installing ${kind.name}…` : <Redacted text={account} />}
-                </span>
+                <span className="min-w-0">{busy ? `Installing ${kind.name}…` : account}</span>
               </span>
             }
           >
@@ -1244,9 +1239,7 @@ function InstancePane({
                 <StatusDot
                   tone={info.signedIn === true ? "on" : instanceTone(info) ? "error" : "off"}
                 />
-                <span className="min-w-0">
-                  <Redacted text={account} />
-                </span>
+                <span className="min-w-0">{account}</span>
               </span>
             }
           >

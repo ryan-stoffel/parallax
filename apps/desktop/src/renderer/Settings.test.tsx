@@ -322,7 +322,7 @@ describe("on a plxd with providers", () => {
     await next();
     expect(saved()).toMatchObject({ id: "codex-2", kind: "codex" });
 
-    // A row by its instance's id, since Claude's shows its email blurred.
+    // A row by its instance's id, since Claude's shows its email.
     const mark = (id: string) =>
       document
         .querySelector(`[role="tab"][aria-controls$="-${id}-pane"]`)!
@@ -491,7 +491,7 @@ describe("on a plxd with providers", () => {
       expect(page.textContent).toContain("gemini-3-pro");
       expect(page.textContent).toContain("5-hour limit · 42% used");
       expect(page.textContent).toContain("Off on the hub");
-      expect(page.textContent).not.toContain("ada@example.com");
+      expect(page.textContent).toContain("ada@example.com");
 
       answers["hubs/remove"] = () => ({ result: { hubs: [] } });
       await click(document.querySelector<HTMLElement>('[aria-label="Remove Home hub"]')!);

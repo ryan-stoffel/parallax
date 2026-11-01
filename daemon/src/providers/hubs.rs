@@ -850,11 +850,10 @@ async fn read_accounts(launcher: &Launcher, url: &str, key: &str) -> Accounts {
     let accounts = futures_util::stream::iter(files.iter().filter_map(account_of))
         .map(|(mut account, index)| async move {
             if let Some(index) = index.filter(|_| !account.disabled) {
-                match limits(launcher, url, key, &account.provider, &index).await {
-                    Ok((limits, plan)) => {
-                        account.limits = limits;
-                        account.plan = plan.or(account.plan);
-                    }
+                let (windows, plan) = limits(launcher, url, key, &account.provider, &index).await;
+                account.plan = plan.or(account.plan);
+                match windows {
+                    Ok(limits) => account.limits = limits,
                     Err(problem) => account.problem = Some(problem),
                 }
             }
@@ -910,7 +909,10 @@ const CODEX_USAGE: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// The Anthropic endpoint a Claude login's usage is at.
 const CLAUDE_USAGE: &str = "https://api.anthropic.com/api/oauth/usage";
 
-/// An account's limit windows and its plan, read by the hub with the account's own token, which
+/// The Anthropic endpoint a Claude login's plan is at, as Claude Code reads it.
+const CLAUDE_PROFILE: &str = "https://api.anthropic.com/api/oauth/profile";
+
+/// An account's limit windows, or why they couldn't be read, and its plan, read by the hub with the account's own token, which
 /// the hub puts where `$TOKEN$` is.
 async fn limits(
     launcher: &Launcher,
@@ -918,7 +920,7 @@ async fn limits(
     key: &str,
     provider: &str,
     index: &Index,
-) -> Result<(Vec<UsageLimitWindow>, Option<String>), String> {
+) -> (Result<Vec<UsageLimitWindow>, String>, Option<String>) {
     let codex = provider == "codex";
     let mut header = if codex {
         json!({
@@ -938,30 +940,50 @@ async fn limits(
     if let Some(account) = index.chatgpt_account.as_deref().filter(|_| codex) {
         header["Chatgpt-Account-Id"] = account.into();
     }
-    let call = json!({
-        "auth_index": index.auth_index,
-        "method": "GET",
-        "url": if codex { CODEX_USAGE } else { CLAUDE_USAGE },
-        "header": header,
-    });
-    let answer = management(launcher, url, key, "POST", "api-call", Some(&call)).await?;
-    let status = answer["status_code"].as_u64().unwrap_or(0);
-    if !(200..300).contains(&status) {
-        return Err(format!(
-            "The service refused the hub's request (HTTP {status})."
-        ));
+    let read = async |service: &str| -> Result<Value, String> {
+        let call = json!({
+            "auth_index": index.auth_index,
+            "method": "GET",
+            "url": service,
+            "header": header,
+        });
+        let answer = management(launcher, url, key, "POST", "api-call", Some(&call)).await?;
+        let status = answer["status_code"].as_u64().unwrap_or(0);
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "The service refused the hub's request (HTTP {status})."
+            ));
+        }
+        answer["body"]
+            .as_str()
+            .and_then(|body| serde_json::from_str(body).ok())
+            .ok_or_else(|| "The hub couldn't read this account's usage.".to_owned())
+    };
+    if codex {
+        return match read(CODEX_USAGE).await {
+            Ok(usage) => {
+                let plan = usage["plan_type"].as_str().map(str::to_owned);
+                (Ok(codex_windows(&usage)), plan)
+            }
+            Err(problem) => (Err(problem), None),
+        };
     }
-    let unread = || "The hub couldn't read this account's usage.".to_owned();
-    let usage: Value = answer["body"]
-        .as_str()
-        .and_then(|body| serde_json::from_str(body).ok())
-        .ok_or_else(unread)?;
-    Ok(if codex {
-        let plan = usage["plan_type"].as_str().map(str::to_owned);
-        (codex_windows(&usage), plan)
-    } else {
-        (claude_windows(&usage), None)
-    })
+    // One after the other, to keep to four requests at once. The plan is read even when the usage
+    // endpoint refuses, as it often does with a 429.
+    let usage = read(CLAUDE_USAGE).await;
+    let plan = read(CLAUDE_PROFILE)
+        .await
+        .ok()
+        .and_then(|profile| claude_plan(&profile));
+    (usage.map(|usage| claude_windows(&usage)), plan)
+}
+
+/// A Claude login's plan from Anthropic's profile: `claude_max` as `max`.
+fn claude_plan(profile: &Value) -> Option<String> {
+    profile["organization"]["organization_type"]
+        .as_str()?
+        .strip_prefix("claude_")
+        .map(str::to_owned)
 }
 
 /// Anthropic's OAuth usage as windows: `five_hour`, `seven_day`, and each model's weekly window

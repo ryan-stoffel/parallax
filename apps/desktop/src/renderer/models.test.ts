@@ -1,8 +1,8 @@
 import { expect, test } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
-import { isNew } from "./catalog";
-import { catalogOf, instanceModels, plainName } from "./models";
+import { hubModelName, isNew } from "./catalog";
+import { catalogOf, instanceModels } from "./models";
 import { knownModel } from "./Subagents";
 
 const info = (instance: Partial<ProviderInstance>, rest: Partial<ProviderInfo> = {}) =>
@@ -51,15 +51,14 @@ test("a host's catalog is its instances' models, in this device's order, without
   expect(codex[0]).toMatchObject({ contexts: [272_000], fast: true });
   // A model plxd found and the user added is listed once, as plxd named it, and is custom.
   expect(catalog.models.filter((m) => m.provider !== "codex")).toEqual([
-    { id: "qwen/qwen3", name: "Qwen 3", provider: "router", contexts: [] },
     { id: "gemini-3", name: "Gemini 3 (found)", provider: "gemini", contexts: [], custom: true },
   ]);
 });
 
-test("a hub's instances offer only the hub's models, named as the catalog names them", () => {
+test("a hub's instances offer only the hub's models, with readable names and unchanged upstream IDs", () => {
   const hub = (id: string, kind: string, models: string[]) =>
     info(
-      { id, kind: kind as ProviderInstance["kind"], name: "Home hub" },
+      { id, kind: kind as ProviderInstance["kind"], name: "Work Codex" },
       { hub: "home", models: models.map((m) => ({ id: m, name: m })) },
     );
   const catalog = catalogOf(
@@ -71,10 +70,11 @@ test("a hub's instances offer only the hub's models, named as the catalog names 
     {},
     [],
   );
+  expect(catalog.instances.map((i) => i.hubName)).toEqual(["Work Codex", "Work Codex"]);
   expect(catalog.models.map((m) => [m.provider, m.id, m.name])).toEqual([
     ["home-claude", "claude-opus-5-5", "Claude Opus 5.5"],
-    ["home-codex", "gpt-6-sol", "GPT-6 Sol"],
-    ["home-codex", "gemini-3-pro", "gemini-3-pro"],
+    ["home-codex", "gpt-6-sol", "GPT 6 Sol"],
+    ["home-codex", "gemini-3-pro", "Gemini 3 Pro"],
   ]);
 });
 
@@ -110,15 +110,140 @@ test("a model is New for the week after its release", () => {
   expect(isNew({ ...m, released: undefined }, Date.parse("2026-10-20"))).toBe(false);
 });
 
-test("an account named by its email keeps it in the catalog, and plain text names it by its kind", () => {
+test("an account named by its email keeps it in the catalog", () => {
   const listed = [
     info({ id: "codex", kind: "codex", name: "Codex" }, { account: "ryan@example.com" }),
     info({ id: "work", kind: "codex", name: "Work" }, { account: "work@example.com" }),
   ];
   const [signedIn, named] = catalogOf("local", listed, {}, []).instances;
-  // The menus show the email, blurred (PLX-1067).
   expect(signedIn!.name).toBe("ryan@example.com");
-  // A tooltip or a reason it can't be picked can't blur, so it says the kind.
-  expect(plainName(signedIn!)).toBe("Codex");
-  expect(plainName(named!)).toBe("Work");
+  expect(named!.name).toBe("Work");
+});
+
+test("the catalog offers only instances that are on and can run", () => {
+  const model = { models: [{ id: "m", name: "M" }] };
+  const providers = [
+    info({ id: "ready", kind: "codex" }, { ...model, signedIn: true }),
+    info({ id: "unknown", kind: "pi" }, model),
+    info({ id: "off", kind: "pi", enabled: false }, { ...model, signedIn: true }),
+    info({ id: "out", kind: "claude" }, { ...model, signedIn: false }),
+    info({ id: "missing", kind: "opencode" }, { ...model, installed: false }),
+    info({ id: "free", kind: "cursor" }, { ...model, note: "[plan_required] Upgrade to Pro." }),
+  ];
+  const offered = (list: ProviderInfo[]) => [
+    ...new Set(catalogOf("local", list, {}, []).models.map((m) => m.provider)),
+  ];
+  expect(offered(providers)).toEqual(["ready", "unknown"]);
+  // A hub that answers but has no models leaves nothing to pick, so it doesn't count as running.
+  expect(
+    offered([
+      info({ id: "out", kind: "claude" }, { ...model, signedIn: false }),
+      info({ id: "hub", kind: "codex" }, { hub: "home", signedIn: true }),
+    ]),
+  ).toEqual(["out"]);
+  // Nor does one whose models are all hidden.
+  const signedOutAndHidden = [
+    info({ id: "out", kind: "claude" }, { ...model, signedIn: false }),
+    info({ id: "codex", kind: "codex" }, { ...model, signedIn: true }),
+  ];
+  expect(
+    catalogOf("local", signedOutAndHidden, { "local/codex": { hidden: ["m"] } }, []).models.map(
+      (m) => m.provider,
+    ),
+  ).toEqual(["out"]);
+  // Signed out of everything, the composer still has a model to send with.
+  expect(offered([info({ id: "out", kind: "claude" }, { ...model, signedIn: false })])).toEqual([
+    "out",
+  ]);
+});
+
+test("a catalog knows the models it doesn't offer, for an open thread on them", () => {
+  const catalog = catalogOf(
+    "local",
+    [
+      info({ id: "ready", kind: "codex" }, { models: [{ id: "m", name: "M" }], signedIn: true }),
+      info({ id: "out", kind: "claude" }, { models: [{ id: "o", name: "Opus" }], signedIn: false }),
+    ],
+    {},
+    [],
+  );
+  expect(catalog.models.map((m) => m.id)).toEqual(["m"]);
+  expect(catalog.known.find((m) => m.id === "o")?.name).toBe("Opus");
+});
+
+test("a hub drops routed image models, and dates only snapshots that share a label", () => {
+  const names = instanceModels(
+    info(
+      { id: "hub-claude", kind: "claude" },
+      {
+        hub: "home",
+        models: [
+          "team/gpt-image-2",
+          "team/codex-auto-review",
+          "claude-opus-4-5-20251101",
+          "claude-opus-4-5",
+          "claude-sonnet-4-5-20250929",
+        ].map((id) => ({ id, name: id })),
+      },
+    ),
+  ).map((m) => m.name);
+  expect(names).toEqual(["Claude Sonnet 4.5", "Claude Opus 4.5 20251101", "Claude Opus 4.5"]);
+});
+
+test("a hub lists agent models newest first, without its image models", () => {
+  const models = instanceModels(
+    info(
+      { id: "hub-codex", kind: "codex" },
+      {
+        hub: "home",
+        models: [
+          "gpt-oss-120b",
+          "gpt-image-2.5",
+          "gpt-5.6-sol",
+          "codex-auto-review",
+          "gpt-6.1-terra",
+        ].map((id) => ({ id, name: id })),
+      },
+    ),
+  );
+  expect(models.map((m) => m.name)).toEqual(["GPT 6.1 Terra", "GPT 5.6 Sol", "GPT OSS 120B"]);
+});
+
+test("discovered models define availability and names without a catalog edit", () => {
+  const models = instanceModels(
+    info(
+      { id: "codex", kind: "codex" },
+      {
+        models: [
+          { id: "brand-new-model", name: "An upstream name" },
+          { id: "gpt-6-sol", name: "Upstream Sol" },
+        ],
+      },
+    ),
+  );
+  expect(models.map((m) => [m.id, m.name])).toEqual([
+    ["brand-new-model", "An upstream name"],
+    ["gpt-6-sol", "Upstream Sol"],
+  ]);
+  expect(models[1]!.fast).toBe(true);
+  expect(isNew({ ...models[0]!, released: "2099-01-01" }, Date.parse("2026-10-31"))).toBe(false);
+});
+
+test("hub display names format raw slugs without rewriting routes, dates, or custom labels", () => {
+  for (const [id, expected] of [
+    ["gpt-6.1-terra", "GPT 6.1 Terra"],
+    ["claude-opus-5-5", "Claude Opus 5.5"],
+    ["claude-sonnet-4-5-20250929", "Claude Sonnet 4.5"],
+    ["claude-3-5-haiku-20241022", "Claude 3.5 Haiku"],
+    ["gemini-3-pro-preview", "Gemini 3 Pro Preview"],
+    ["gpt-oss-120b", "GPT OSS 120B"],
+    ["team/gpt-6.1-terra", "team/GPT 6.1 Terra"],
+    ["gemini-3-pro-2026-10-31", "Gemini 3 Pro 2026-10-31"],
+  ])
+    expect(hubModelName({ id: id!, name: id! })).toBe(expected);
+  expect(hubModelName({ id: "gpt-6.1-terra", name: "Terra (recommended)" })).toBe(
+    "Terra (recommended)",
+  );
+  expect(hubModelName({ id: "gpt-6.1-terra", name: "my-custom-alias" })).toBe("my-custom-alias");
+  expect(hubModelName({ id: "gpt-6.1-terra", name: "GPT-6.1 Terra" })).toBe("GPT-6.1 Terra");
 });

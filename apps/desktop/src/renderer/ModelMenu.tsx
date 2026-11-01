@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Search, SearchX, Star } from "lucide-react";
+import { Check, ChevronDown, Network, Search, SearchX, Star } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
 import {
@@ -11,47 +11,31 @@ import {
   type Provider,
 } from "./models";
 import { isNew } from "./catalog";
-import { kindOf, logoOf } from "./providers";
-import { Redacted, withoutEmails } from "./Redacted";
-import { menuButton, menuPanel, moveFocus } from "./ui";
+import { ensureHubs, useHubs } from "./hubs";
+import { PlanBadge } from "./PlanBadge";
+import { kindOf, listedProviders, loadProviders, logoOf } from "./providers";
+import { menuButton, menuPanel, moveFocus, Segmented } from "./ui";
 
-/** A plan id as a label: `pro` as "Pro", `chatgpt_plus` as "Chatgpt Plus". */
-const planName = (plan: string) =>
-  plan.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-/** The sign-in an instance shows under its name: its email, unless the name already is. */
-const emailOf = (i: Instance | undefined, name: string) =>
-  i?.account?.includes("@") && i.account !== name ? i.account : undefined;
-
-/** Whether an account header would say more than the provider's name. */
-const hasAccountDetail = (i: Instance | undefined, name: string) =>
-  !!(i?.plan || emailOf(i, name) || name.includes("@"));
-
-/**
- * An instance on one line, as the account header and its menu show it: its name, its email muted
- * beside it, and its plan. Each email sits right inside a `.truncate`, so its blur spreads softly
- * past the cut (index.css's `.truncate:has(.redacted)`).
- */
-function AccountLabel({ instance: i, name }: { instance: Instance | undefined; name: string }) {
-  const detail = emailOf(i, name);
-  return (
-    <span className="flex min-w-0 flex-1 items-center gap-2">
-      <span className="min-w-0 truncate">
-        <Redacted text={name} />
-      </span>
-      {detail && (
-        <span className="min-w-0 truncate font-normal text-faint-foreground">
-          <Redacted text={detail} />
-        </span>
-      )}
-      {i?.plan && (
-        <span className="shrink-0 rounded-sm bg-hover px-1 text-caption leading-4 font-medium text-muted-foreground">
-          {planName(i.plan)}
-        </span>
-      )}
-    </span>
-  );
+/** Who an instance signs in as: its own account, or a hub's enabled accounts of its kind. */
+interface Account {
+  email?: string;
+  plan?: string;
 }
+
+/** An instance's own account, if it has an email or a plan to show. */
+function ownAccount(i: Instance): Account[] {
+  const email = [i.account, i.name].find((text) => text?.includes("@"));
+  return email || i.plan ? [{ ...(email && { email }), ...(i.plan && { plan: i.plan }) }] : [];
+}
+
+/** An instance as a choice among its group's: a hub's by its kind, an email before its @. */
+const choiceName = (i: Instance) => (i.hub ? kindOf(i.kind).name : i.name.split("@")[0]!);
+
+/** `i`'s name among `all`: short, unless another's short name is the same. */
+const uniqueChoiceName = (i: Instance, all: (Instance | undefined)[]) =>
+  all.filter((other) => other && choiceName(other) === choiceName(i)).length > 1
+    ? i.name
+    : choiceName(i);
 
 // The same model can run on two instances, so a model is known by both.
 const keyOf = (m: Model) => `${m.provider}/${m.id}`;
@@ -60,7 +44,8 @@ const keyOf = (m: Model) => `${m.provider}/${m.id}`;
  * The rail's group for an instance: its kind, so a provider's accounts share one button, except
  * an ACP agent, which is its own.
  */
-const groupOf = (i: Pick<Instance, "id" | "kind">) => (i.kind === "acp" ? i.id : i.kind);
+const groupOf = (i: Pick<Instance, "id" | "kind" | "hub">) =>
+  i.hub ? `hub/${i.hub}` : i.kind === "acp" ? i.id : i.kind;
 
 // A rail button's pressed look, a raised tile, is in index.css's `.model-menu-rail`.
 const railButton =
@@ -69,12 +54,14 @@ const railButton =
 /**
  * The model picker: a button showing the chosen model that opens a searchable list of the
  * `catalog`'s models, with a rail to filter by favorites or provider. A provider with more than
- * one account has one rail button. A header over a provider's models names its account with its
- * email and plan, and picks which account runs the thread when there's more than one. Its rows name only their models; Favorites and search, which mix
- * providers, also say whose each is. A native popover, so Escape and clicking away close it, and it
- * flips above the button when there's no room below. The models of instances in `unavailable`
- * aren't listed, and the rail and the account menu show those instances disabled, saying why on
- * hover. Favorites are kept on this device, per host.
+ * one account, and a hub with its Claude Code and Codex, has one rail button and a segmented
+ * control over its models that picks which runs the thread. Under it, who that signs in as, with
+ * each account's plan. Its rows name only their models; Favorites and search, which mix providers,
+ * also say whose each is. A native popover, so Escape and clicking away close it, and it flips
+ * above the button when there's no room below. The models of instances in `unavailable` aren't
+ * listed, and the rail and the control show those instances disabled, saying why on hover.
+ * Opening it asks the host again, so it follows Settings > Providers. Favorites are kept on this
+ * device, per host.
  */
 export function ModelMenu({
   catalog,
@@ -88,9 +75,12 @@ export function ModelMenu({
   value: Model;
   onChange: (model: Model) => void;
 }) {
-  const all = catalog.models;
+  const all = catalog.models.filter((m) =>
+    catalog.instances.some((i) => i.id === m.provider && i.enabled),
+  );
   const models = all.filter((m) => !unavailable[m.provider]);
   const prefs = useModelPrefs();
+  const hubs = useHubs(catalog.hostId);
   const starred = (m: Model) =>
     !!prefs[prefsKey(catalog.hostId, m.provider)]?.favorites?.includes(m.id);
   const instance = (id: Provider) => catalog.instances.find((i) => i.id === id);
@@ -99,6 +89,13 @@ export function ModelMenu({
     return found ? logoOf(found) : kindOf(id).Logo;
   };
   const nameOf = (id: Provider) => instance(id)?.name ?? id;
+  const accountsOf = (id: Provider): Account[] => {
+    const i = instance(id);
+    if (!i) return [];
+    if (!i.hub) return ownAccount(i);
+    const accounts = hubs?.find((h) => h.id === i.hub)?.accounts ?? [];
+    return accounts.filter((a) => !a.disabled && a.provider === i.kind && (a.email || a.plan));
+  };
   const group = (id: Provider) => {
     const found = instance(id);
     return found ? groupOf(found) : id;
@@ -110,42 +107,42 @@ export function ModelMenu({
   // The instance a group opens on: the chosen model's, else its first account that can be picked.
   const opening = (key: string) => {
     const ids = groups.get(key) ?? [];
-    return ids.includes(chosen.provider)
+    return ids.includes(chosen.provider) && !unavailable[chosen.provider]
       ? chosen.provider
       : (ids.find((p) => !unavailable[p]) ?? ids[0]!);
   };
   // A group, or null for Favorites, and the instance its models are listed for.
-  const [tab, setTab] = useState<string | null>(group(chosen.provider));
-  const [account, setAccount] = useState<Provider>(chosen.provider);
+  const [selectedTab, setTab] = useState<string | null>(group(chosen.provider));
+  const tab =
+    selectedTab === null || groups.has(selectedTab)
+      ? selectedTab
+      : (groups.keys().next().value ?? null);
+  const [selectedAccount, setAccount] = useState<Provider>(chosen.provider);
+  const account =
+    tab && groups.get(tab)?.includes(selectedAccount) && !unavailable[selectedAccount]
+      ? selectedAccount
+      : tab
+        ? opening(tab)
+        : chosen.provider;
   const [query, setQuery] = useState("");
-  const [choosingAccount, setChoosingAccount] = useState(false);
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
-  const accountChooser = useRef<HTMLButtonElement>(null);
-  const accountMenu = useRef<HTMLDivElement>(null);
+  const hasHub = catalog.instances.some((i) => i.hub);
+  // Before the first open, so a hub's accounts are there as it opens.
   useEffect(() => {
-    if (!choosingAccount) return;
-    const items = accountMenu.current?.querySelectorAll<HTMLButtonElement>(
-      '[role="menuitemradio"]:not(:disabled)',
-    );
-    (
-      [...(items ?? [])].find((item) => item.getAttribute("aria-checked") === "true") ?? items?.[0]
-    )?.focus();
-  }, [choosingAccount]);
-  const closeAccounts = () => {
-    setChoosingAccount(false);
-    accountChooser.current?.focus();
-  };
+    if (hasHub) void ensureHubs(catalog.hostId);
+  }, [catalog.hostId, hasHub]);
 
   const q = query.trim().toLowerCase();
   const shown = models.filter((m) =>
     q ? m.name.toLowerCase().includes(q) : tab === null ? starred(m) : m.provider === account,
   );
   const Logo = logo(chosen.provider);
-  const accounts = tab === null || q ? [] : (groups.get(tab) ?? []);
   // Favorites and search results mix providers, so only their rows say whose each model is.
   const mixed = tab === null || !!q;
+  const choices = mixed ? [] : (groups.get(tab) ?? []);
+  const shownAccounts = mixed ? [] : accountsOf(account);
 
   const pick = (m: Model) => {
     onChange(m);
@@ -170,24 +167,23 @@ export function ModelMenu({
         id={id}
         popover="auto"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open") search.current?.focus();
-          else {
-            setQuery("");
-            setChoosingAccount(false);
-          }
+          if (e.newState === "open") {
+            setTab(group(chosen.provider));
+            setAccount(chosen.provider);
+            search.current?.focus();
+            if (listedProviders(catalog.hostId)) void loadProviders(catalog.hostId);
+            if (hasHub) void ensureHubs(catalog.hostId);
+          } else setQuery("");
         }}
         onKeyDown={moveFocus}
-        className={`${menuPanel()} model-menu pop-in h-96 w-[28rem] overflow-hidden p-0 [&:popover-open]:flex`}
+        className={`${menuPanel()} model-menu pop-in h-[26rem] w-[30rem] overflow-hidden p-0 [&:popover-open]:flex`}
       >
         <div className="model-menu-rail flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border py-2">
           <button
             type="button"
             aria-label="Favorites"
             aria-pressed={!q && tab === null}
-            onClick={() => {
-              setTab(null);
-              setChoosingAccount(false);
-            }}
+            onClick={() => setTab(null)}
             className={`${railButton} aria-pressed:[&_svg]:fill-current aria-pressed:[&_svg]:text-amber-500`}
           >
             <Star />
@@ -195,28 +191,29 @@ export function ModelMenu({
           <span aria-hidden className="my-1 h-px w-5 bg-border" />
           {[...groups].map(([key, ids]) => {
             const first = ids[0]!;
-            const ProviderLogo = logo(first);
+            const ProviderLogo = instance(first)?.hub ? Network : logo(first);
             // A group can't be picked only when none of its instances can.
             const why = ids.every((p) => unavailable[p]) ? unavailable[first] : undefined;
             const kind = instance(first)?.kind;
-            // An account named by its email is named by its kind, so the email isn't read out.
+            // One named by its email is named by its kind here, which fits a tooltip.
             const label =
-              kind && (ids.length > 1 || nameOf(first).includes("@"))
+              instance(first)?.hubName ??
+              (kind && (ids.length > 1 || nameOf(first).includes("@"))
                 ? kindOf(kind).name
-                : nameOf(first);
+                : nameOf(first));
             return (
               // A disabled button gets no pointer events, so its wrapper shows the tooltip.
               <span key={key} className="group relative flex">
                 <button
                   type="button"
                   aria-label={label}
+                  title={label}
                   aria-pressed={!q && tab === key}
                   disabled={!!why}
                   aria-describedby={why ? `${id}-${key}` : undefined}
                   onClick={() => {
                     setTab(key);
                     setAccount(opening(key));
-                    setChoosingAccount(false);
                   }}
                   className={railButton}
                 >
@@ -236,8 +233,8 @@ export function ModelMenu({
           })}
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Focus turns its rule the accent, the field's focus ring. */}
-          <label className="flex h-11 shrink-0 items-center gap-2.5 border-b border-border px-4 transition-colors duration-150 focus-within:border-ring">
+          {/* It's focused as the menu opens, so focus doesn't change its rule. */}
+          <label className="flex h-11 shrink-0 items-center gap-2.5 border-b border-border px-4">
             <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
             <input
               ref={search}
@@ -252,75 +249,54 @@ export function ModelMenu({
               className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
           </label>
-          {accounts.length > 1 ? (
-            <div className="relative shrink-0 px-1.5 pt-1.5">
-              <button
-                type="button"
-                ref={accountChooser}
-                aria-label="Choose account"
-                aria-haspopup="menu"
-                aria-expanded={choosingAccount}
-                onClick={() => setChoosingAccount(!choosingAccount)}
-                onKeyDown={(e) => {
-                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setChoosingAccount(true);
-                }}
-                className="flex h-7 w-full items-center gap-2 rounded-md px-2.5 text-left text-meta font-medium text-muted-foreground transition-colors duration-150 hover:bg-hover hover:text-foreground aria-expanded:text-foreground"
-              >
-                <AccountLabel instance={instance(account)} name={nameOf(account)} />
-                <ChevronDown
-                  aria-hidden
-                  className={`size-3.5 shrink-0 text-faint-foreground transition-transform duration-150 ${choosingAccount ? "rotate-180" : ""}`}
-                />
-              </button>
-              {choosingAccount && (
-                <div
-                  ref={accountMenu}
-                  role="menu"
-                  aria-label="Account"
-                  onKeyDown={(e) => {
-                    e.stopPropagation();
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      closeAccounts();
-                    } else moveFocus(e);
-                  }}
-                  className="rise-in absolute top-full right-1.5 left-1.5 z-10 mt-1 max-h-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-composer"
-                >
-                  {accounts.map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      aria-label={withoutEmails(nameOf(p))}
-                      role="menuitemradio"
-                      aria-checked={account === p}
-                      disabled={!!unavailable[p]}
-                      title={unavailable[p]}
-                      onClick={() => {
-                        setAccount(p);
-                        closeAccounts();
-                      }}
-                      className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body enabled:hover:bg-hover aria-checked:font-medium disabled:opacity-40"
-                    >
-                      <AccountLabel instance={instance(p)} name={nameOf(p)} />
-                      <Check
-                        aria-hidden
-                        className={`size-3.5 shrink-0 text-accent ${account === p ? "" : "invisible"}`}
-                      />
-                    </button>
-                  ))}
+          {!mixed && (choices.length > 1 || shownAccounts.length > 0) && (
+            <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-4 py-2.5">
+              {choices.length > 1 && (
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                  <span className="min-w-0 truncate text-meta font-medium text-foreground">
+                    {instance(account)?.hubName ?? kindOf(instance(account)?.kind ?? "").name}
+                  </span>
+                  <Segmented
+                    label={instance(account)?.hub ? "Provider" : "Account"}
+                    value={account}
+                    onChange={setAccount}
+                    wrap
+                    options={choices.map((p) => {
+                      const ChoiceLogo = logo(p);
+                      const found = instance(p);
+                      return {
+                        value: p,
+                        name: (
+                          <>
+                            <ChoiceLogo aria-hidden />
+                            <span className="max-w-28 truncate">
+                              {found ? uniqueChoiceName(found, choices.map(instance)) : p}
+                            </span>
+                          </>
+                        ),
+                        disabled: !!unavailable[p],
+                        title: unavailable[p] ?? found?.name ?? p,
+                      };
+                    })}
+                  />
                 </div>
               )}
+              {shownAccounts.length > 0 && (
+                <ul className="flex max-h-[4.25rem] flex-col gap-1 overflow-y-auto text-meta text-muted-foreground">
+                  {shownAccounts.map((a, i) => (
+                    <li
+                      key={`${a.email}/${i}`}
+                      className="flex min-h-[1.125rem] items-center gap-2"
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        {a.email ?? kindOf(instance(account)?.kind ?? "").name}
+                      </span>
+                      {a.plan && <PlanBadge kind={instance(account)!.kind} plan={a.plan} />}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
-          ) : (
-            accounts.length === 1 &&
-            hasAccountDetail(instance(account), nameOf(account)) && (
-              <div className="mt-1.5 flex h-7 shrink-0 items-center px-4 text-meta font-medium text-muted-foreground">
-                <AccountLabel instance={instance(account)} name={nameOf(account)} />
-              </div>
-            )
           )}
           <ul className="min-h-0 flex-1 scroll-py-1.5 overflow-y-auto p-1.5">
             {shown.map((m) => {
@@ -332,7 +308,7 @@ export function ModelMenu({
                 // Keyboard focus rings the whole row, star included, in the app's focus ring.
                 <li
                   key={key}
-                  className="group/row flex h-8 items-center rounded-md transition-colors duration-100 hover:bg-hover has-[[role=menuitemradio]:focus-visible]:outline-2 has-[[role=menuitemradio]:focus-visible]:-outline-offset-2 has-[[role=menuitemradio]:focus-visible]:outline-ring"
+                  className={`group/row flex h-8 items-center rounded-md transition-colors duration-100 hover:bg-hover ${current ? "bg-selected" : ""} has-[[role=menuitemradio]:focus-visible]:outline-2 has-[[role=menuitemradio]:focus-visible]:-outline-offset-2 has-[[role=menuitemradio]:focus-visible]:outline-ring`}
                 >
                   <button
                     type="button"
@@ -344,18 +320,21 @@ export function ModelMenu({
                     <span
                       className={`flex min-w-0 flex-1 items-center gap-2 text-body ${current ? "font-medium" : ""}`}
                     >
-                      <span className="truncate">{m.name}</span>
+                      <span title={m.id || undefined} className="truncate">
+                        {m.name}
+                      </span>
                       {isNew(m) && (
-                        <span className="shrink-0 rounded-full bg-accent/12 px-1.5 text-caption leading-4 font-medium text-accent">
+                        <span
+                          title="Newly released or first discovered in the past week"
+                          className="shrink-0 rounded-full bg-accent/12 px-1.5 text-caption leading-4 font-medium text-accent"
+                        >
                           New
                         </span>
                       )}
                       {mixed && (
                         <span className="ml-auto flex min-w-0 items-center gap-1.5 text-meta font-normal text-faint-foreground">
                           <ProviderLogo className="size-3 shrink-0" />
-                          <span className="truncate">
-                            <Redacted text={nameOf(m.provider)} />
-                          </span>
+                          <span className="truncate">{nameOf(m.provider)}</span>
                         </span>
                       )}
                     </span>
@@ -383,10 +362,18 @@ export function ModelMenu({
                   {q ? <SearchX aria-hidden /> : <Star aria-hidden />}
                 </span>
                 <span className="text-body font-medium">
-                  {q ? "No matching models" : "No favorites yet"}
+                  {q
+                    ? "No matching models"
+                    : tab === null
+                      ? "No favorites yet"
+                      : "No models available"}
                 </span>
                 <span className="text-meta text-faint-foreground">
-                  {q ? "Try another name." : "Star a model to keep it here."}
+                  {q
+                    ? "Try another name."
+                    : tab === null
+                      ? "Star a model to keep it here."
+                      : "Check your providers in Settings."}
                 </span>
               </li>
             )}
