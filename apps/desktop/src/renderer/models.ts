@@ -61,7 +61,10 @@ export interface Instance {
 export interface Catalog {
   hostId: string;
   instances: Instance[];
+  /** The models it offers. */
   models: Model[];
+  /** Every model its instances have, offered or not, to name the one an open thread runs on. */
+  known: Model[];
 }
 
 /**
@@ -189,10 +192,11 @@ export function catalogOf(
         runs: true,
         models: models.filter((m) => m.provider === b.id),
       }));
-  const anyRuns = entries.some((e) => e.instance.enabled && e.runs);
+  const anyRuns = entries.some((e) => e.instance.enabled && e.runs && e.models.length > 0);
   return {
     hostId,
     instances: entries.map((e) => e.instance),
+    known: entries.flatMap((e) => e.models),
     models: entries.flatMap(({ instance, runs, models }) => {
       if (!instance.enabled || (anyRuns && !runs)) return [];
       const p = all[prefsKey(hostId, instance.id)];

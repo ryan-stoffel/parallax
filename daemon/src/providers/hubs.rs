@@ -850,11 +850,10 @@ async fn read_accounts(launcher: &Launcher, url: &str, key: &str) -> Accounts {
     let accounts = futures_util::stream::iter(files.iter().filter_map(account_of))
         .map(|(mut account, index)| async move {
             if let Some(index) = index.filter(|_| !account.disabled) {
-                match limits(launcher, url, key, &account.provider, &index).await {
-                    Ok((limits, plan)) => {
-                        account.limits = limits;
-                        account.plan = plan.or(account.plan);
-                    }
+                let (windows, plan) = limits(launcher, url, key, &account.provider, &index).await;
+                account.plan = plan.or(account.plan);
+                match windows {
+                    Ok(limits) => account.limits = limits,
                     Err(problem) => account.problem = Some(problem),
                 }
             }
@@ -913,7 +912,7 @@ const CLAUDE_USAGE: &str = "https://api.anthropic.com/api/oauth/usage";
 /// The Anthropic endpoint a Claude login's plan is at, as Claude Code reads it.
 const CLAUDE_PROFILE: &str = "https://api.anthropic.com/api/oauth/profile";
 
-/// An account's limit windows and its plan, read by the hub with the account's own token, which
+/// An account's limit windows, or why they couldn't be read, and its plan, read by the hub with the account's own token, which
 /// the hub puts where `$TOKEN$` is.
 async fn limits(
     launcher: &Launcher,
@@ -921,7 +920,7 @@ async fn limits(
     key: &str,
     provider: &str,
     index: &Index,
-) -> Result<(Vec<UsageLimitWindow>, Option<String>), String> {
+) -> (Result<Vec<UsageLimitWindow>, String>, Option<String>) {
     let codex = provider == "codex";
     let mut header = if codex {
         json!({
@@ -961,17 +960,19 @@ async fn limits(
             .ok_or_else(|| "The hub couldn't read this account's usage.".to_owned())
     };
     if codex {
-        let usage = read(CODEX_USAGE).await?;
-        let plan = usage["plan_type"].as_str().map(str::to_owned);
-        return Ok((codex_windows(&usage), plan));
+        return match read(CODEX_USAGE).await {
+            Ok(usage) => {
+                let plan = usage["plan_type"].as_str().map(str::to_owned);
+                (Ok(codex_windows(&usage)), plan)
+            }
+            Err(problem) => (Err(problem), None),
+        };
     }
-    let usage = read(CLAUDE_USAGE).await?;
-    // A plan that can't be read costs only its label, not the account's limits.
-    let plan = read(CLAUDE_PROFILE)
-        .await
-        .ok()
-        .and_then(|p| claude_plan(&p));
-    Ok((claude_windows(&usage), plan))
+    // Together, so a slow one doesn't add to the other's time, and a plan that can be read shows
+    // even when the usage endpoint refuses, as it often does with a 429.
+    let (usage, profile) = tokio::join!(read(CLAUDE_USAGE), read(CLAUDE_PROFILE));
+    let plan = profile.ok().and_then(|profile| claude_plan(&profile));
+    (usage.map(|usage| claude_windows(&usage)), plan)
 }
 
 /// A Claude login's plan from Anthropic's profile: `claude_max` as `max`.

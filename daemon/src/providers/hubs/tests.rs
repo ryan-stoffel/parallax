@@ -345,6 +345,11 @@ async fn a_hub_lists_its_models_accounts_and_limits_through_curl() {
         ]
     );
     assert_eq!(
+        accounts[0].plan.as_deref(),
+        Some("max"),
+        "a Claude account's plan is from its profile"
+    );
+    assert_eq!(
         accounts[1].plan.as_deref(),
         Some("pro"),
         "the usage's plan wins"

@@ -31,6 +31,7 @@ const model = (provider: string, id: string): Model => ({
 // Three Codex accounts, and Claude.
 const catalog: Catalog = {
   hostId: "local",
+  known: [],
   instances: [
     { ...codex("claude", "Claude"), kind: "claude" },
     { ...codex("codex", "personal@example.test"), plan: "plus" },
@@ -94,6 +95,7 @@ test("a lone account shows its email and plan, and favorites say whose a model i
   root = createRoot(container);
   const lone: Catalog = {
     hostId: "local",
+    known: [],
     instances: [catalog.instances[0]!, catalog.instances[1]!],
     models: catalog.models.slice(0, 2),
   };
@@ -125,6 +127,21 @@ test("an account that can't be picked is disabled in the control, saying why", (
   expect(choice("personal")!.disabled).toBe(true);
   expect(choice("personal")!.parentElement!.title).toBe("Signed out");
   expect(listed()).toEqual(["gpt-b"]);
+});
+
+test("accounts whose emails start the same keep their full names", () => {
+  const same: Catalog = {
+    hostId: "local",
+    known: [],
+    instances: [codex("a", "ryan@one.test"), codex("b", "ryan@two.test")],
+    models: [model("a", "gpt-a"), model("b", "gpt-b")],
+  };
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root!.render(<ModelMenu catalog={same} value={same.models[0]!} onChange={() => {}} />));
+  expect(radios().map((r) => r.parentElement!.textContent)).toEqual([
+    "ryan@one.test",
+    "ryan@two.test",
+  ]);
 });
 
 test("each provider's plans have their label and tier, and an unknown one its id", () => {
@@ -227,6 +244,7 @@ test("a hub's runtimes show their enabled accounts, with plans, and follow the h
   Object.assign(window, { parallax: { request } });
   const hub: Catalog = {
     hostId: "hub-emails-test",
+    known: [],
     instances: [
       {
         ...codex("hub-claude", "CLIProxyAPI"),

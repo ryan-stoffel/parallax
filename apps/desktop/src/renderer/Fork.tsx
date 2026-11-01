@@ -69,7 +69,7 @@ export function ForkMenu({
     const found = instance(p);
     return found ? logoOf(found) : kindOf(p).Logo;
   };
-  const kept = catalog.models.find((m) => m.provider === run.backend && m.id === (run.model ?? ""));
+  const kept = catalog.known.find((m) => m.provider === run.backend && m.id === (run.model ?? ""));
   const keptName = kept?.name ?? run.model ?? "the current model";
   const others = catalog.models.filter((m) => m !== kept && instance(m.provider)?.enabled);
   const KeptLogo = logo(run.backend);

@@ -994,7 +994,7 @@ export function Composer({
   const startedModel =
     started &&
     run &&
-    (runModels.find((m) => m.id === started.model) ?? {
+    (catalog.known.find((m) => m.provider === run.id && m.id === started.model) ?? {
       id: started.model ?? "",
       name: started.model ?? "Default model",
       provider: run.id,
