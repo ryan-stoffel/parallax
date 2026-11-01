@@ -1162,7 +1162,8 @@ body {
   );
   transition:
     border-color var(--transition-duration-base) var(--ease-out),
-    box-shadow var(--transition-duration-base) var(--ease-out);
+    box-shadow var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-base) var(--ease-out);
 }
 .composer-entry {
   background-color: light-dark(
@@ -1205,6 +1206,10 @@ body {
     scale: 0.7;
     opacity: 0;
   }
+}
+/* The box fades out from under the voice pill (VoicePill.tsx), which grows out of it. */
+.composer-shell[data-voice] {
+  opacity: 0;
 }
 /* The footer folds away while the box steps back, unless one of its menus is open. */
 .composer-footer {
