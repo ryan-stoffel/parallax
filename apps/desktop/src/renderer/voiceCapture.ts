@@ -1,4 +1,5 @@
 import type { VoiceCapture } from "./voiceSession";
+import workletUrl from "./voiceCapture.worklet.js?url&no-inline";
 
 /** Capture and meter the same microphone stream. Nothing is sent off the device. */
 export async function captureVoice(signal: AbortSignal): Promise<VoiceCapture> {
@@ -40,7 +41,7 @@ export async function captureVoice(signal: AbortSignal): Promise<VoiceCapture> {
     signal.throwIfAborted();
     context = new AudioContext({ sampleRate: 16000 });
     if (context.sampleRate !== 16000) throw new Error("The microphone could not use 16 kHz audio.");
-    await context.audioWorklet.addModule(new URL("./voiceCapture.worklet.js", import.meta.url));
+    await context.audioWorklet.addModule(workletUrl);
     signal.throwIfAborted();
     const source = context.createMediaStreamSource(stream);
     const analyser = context.createAnalyser();
