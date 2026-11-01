@@ -1235,7 +1235,7 @@ body {
 }
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */
-:is(.composer-footer, .composer-places) button[aria-haspopup] {
+:is(.composer-footer, .composer-places) button[aria-haspopup]:not([popover] *) {
   height: 1.75rem;
   padding-block: 0;
   padding-right: 0.5rem;
