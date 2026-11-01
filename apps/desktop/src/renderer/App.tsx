@@ -470,10 +470,6 @@ export function App() {
     orchestrator?.id ?? "",
     connected && !!orchestrator,
   );
-  const needs = useMemo(
-    () => new Set(inbox.items.filter((i) => !i.seenAt && i.kind === "needsYou").map((i) => i.run)),
-    [inbox.items],
-  );
   const agent = agents.runs.find((r) => r.id === agentId);
   // Its thread's title from plxd (0041), else its prompt's.
   const agentTitle = agentId
@@ -1846,10 +1842,6 @@ export function App() {
                             threads.state.repos.find((r) => r.path === orchestrator.repoPath)?.id
                           }
                           others={othersAsked(orchestrator.run)}
-                          agents={agents}
-                          titles={threads.state.titles}
-                          needs={needs}
-                          onOpenRun={(id) => openAgent(id === orchestrator.run ? undefined : id)}
                           threadLinks={threadLinks}
                           settingsClosed={settingsClosed.count}
                         />

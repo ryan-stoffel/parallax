@@ -1152,10 +1152,16 @@ body {
   scrollbar-width: none;
 }
 
-/* The trays above and below the composer share one quiet surface. */
+/* The remaining context tabs share the composer's quiet outer surface. */
 .composer-tray {
   border-color: var(--border);
   background-color: color-mix(in oklab, var(--foreground) 2%, var(--surface));
+}
+
+/* The message and actions share an inset surface within one composer shape. */
+.composer-entry {
+  background-color: color-mix(in oklab, var(--foreground) 4%, var(--surface));
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 4%, transparent);
 }
 
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
