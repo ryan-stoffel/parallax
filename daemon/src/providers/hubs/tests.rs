@@ -128,6 +128,13 @@ fn cliproxy(request: &Request, _: &[Request]) -> (u16, Value) {
             ]}),
         ),
         "/v0/management/api-call" if management => {
+            if request.body["url"] == super::CLAUDE_PROFILE {
+                let profile = json!({"organization": {"organization_type": "claude_max"}});
+                return (
+                    200,
+                    json!({"status_code": 200, "body": profile.to_string()}),
+                );
+            }
             let usage = match request.body["auth_index"].as_str() {
                 Some("1") => json!({
                     "five_hour": {"utilization": 42.0, "resets_at": "2026-10-27T03:00:00Z"},
@@ -365,7 +372,8 @@ async fn a_hub_lists_its_models_accounts_and_limits_through_curl() {
         .iter()
         .filter(|r| r.path == "/v0/management/api-call")
         .collect();
-    assert_eq!(calls.len(), 2, "only enabled Claude and Codex accounts");
+    // Claude's usage and profile, and Codex's usage.
+    assert_eq!(calls.len(), 3, "only enabled Claude and Codex accounts");
     let codex = calls.iter().find(|r| r.body["auth_index"] == "2").unwrap();
     assert_eq!(codex.method, "POST");
     assert_eq!(

@@ -6,7 +6,7 @@ import type {
   ThreadStartParams,
 } from "../protocol/generated/protocol";
 import { instanceModels, models, type Model, type Provider } from "./catalog";
-import { accountLabel, discoveredAt, kindOf, useLegacyProviders, useProviders } from "./providers";
+import { accountLabel, discoveredAt, useLegacyProviders, useProviders } from "./providers";
 import { merged, stored } from "./stored";
 
 /**
@@ -142,16 +142,18 @@ export function arranged(list: Model[], p: ModelPrefs | undefined): Model[] {
 }
 
 /**
- * An instance's name for plain text, such as a tooltip or a reason it can't be picked: its kind's
- * name in place of an email, which plain text can't blur (PLX-1067).
+ * Whether threads can run on an instance: installed, not signed out, and not refused for its plan,
+ * as Cursor refuses a free account. A sign-in plxd can't tell (`null`) counts, so a probe that
+ * timed out doesn't hide a provider.
  */
-export const plainName = (i: Pick<Instance, "name" | "kind">) =>
-  i.name.includes("@") ? kindOf(i.kind).name : i.name;
+const canRun = (info: ProviderInfo) =>
+  info.installed && info.signedIn !== false && !info.note?.startsWith("[plan_required]");
 
 /**
  * The model picker's catalog: each instance's models in this device's order, without those it
- * hides. `listed` is plxd's `providers/list`; without it (an older plxd), the built-in backends,
- * turned off by `off`.
+ * hides. Only instances turned on in Settings > Providers that can run offer models, unless none
+ * can, when the composer still needs a model and its thread's error says what's wrong. `listed` is
+ * plxd's `providers/list`; without it (an older plxd), the built-in backends, turned off by `off`.
  */
 export function catalogOf(
   hostId: string,
@@ -176,6 +178,7 @@ export function catalogOf(
           efforts: info.efforts,
           orchestrator: info.orchestrator,
         },
+        runs: canRun(info),
         models: instanceModels(info).map((m) => ({
           ...m,
           released: m.released ?? discoveredAt(hostId, info.instance.id, m.id),
@@ -183,13 +186,15 @@ export function catalogOf(
       }))
     : builtIns.map((b) => ({
         instance: { ...b, enabled: !off.includes(b.id) },
+        runs: true,
         models: models.filter((m) => m.provider === b.id),
       }));
+  const anyRuns = entries.some((e) => e.instance.enabled && e.runs);
   return {
     hostId,
     instances: entries.map((e) => e.instance),
-    models: entries.flatMap(({ instance, models }) => {
-      if (!instance.enabled) return [];
+    models: entries.flatMap(({ instance, runs, models }) => {
+      if (!instance.enabled || (anyRuns && !runs)) return [];
       const p = all[prefsKey(hostId, instance.id)];
       return arranged(models, p).filter((m) => !p?.hidden?.includes(m.id));
     }),
