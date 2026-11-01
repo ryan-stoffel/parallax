@@ -192,16 +192,16 @@ export function catalogOf(
         runs: true,
         models: models.filter((m) => m.provider === b.id),
       }));
-  const anyRuns = entries.some((e) => e.instance.enabled && e.runs && e.models.length > 0);
+  const offered = ({ instance, models }: (typeof entries)[number]) => {
+    const p = all[prefsKey(hostId, instance.id)];
+    return arranged(models, p).filter((m) => !p?.hidden?.includes(m.id));
+  };
+  const anyRuns = entries.some((e) => e.instance.enabled && e.runs && offered(e).length > 0);
   return {
     hostId,
     instances: entries.map((e) => e.instance),
     known: entries.flatMap((e) => e.models),
-    models: entries.flatMap(({ instance, runs, models }) => {
-      if (!instance.enabled || (anyRuns && !runs)) return [];
-      const p = all[prefsKey(hostId, instance.id)];
-      return arranged(models, p).filter((m) => !p?.hidden?.includes(m.id));
-    }),
+    models: entries.flatMap((e) => (!e.instance.enabled || (anyRuns && !e.runs) ? [] : offered(e))),
   };
 }
 

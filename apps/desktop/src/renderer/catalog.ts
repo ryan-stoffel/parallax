@@ -212,15 +212,7 @@ export function instanceModels(info: ProviderInfo): Model[] {
   // Availability and names belong to the upstream catalog. Built-ins supply only optional
   // capabilities, and remain a fallback for older CLIs that cannot list models.
   const discovered = info.models
-    .filter(
-      (m) =>
-        !info.hub ||
-        // A snapshot is the same model as the alias beside it, and would have the same label.
-        !(
-          hubOnly.test(m.id) ||
-          (undated(m.id) !== m.id && info.models.some((o) => o.id === undated(m.id)))
-        ),
-    )
+    .filter((m) => !info.hub || !hubOnly.test(m.id))
     .map((m) => ({
       ...models.find((c) => c.provider === instance.kind && c.id === m.id),
       ...m,
@@ -231,10 +223,16 @@ export function instanceModels(info: ProviderInfo): Model[] {
           : m.name,
       contexts: models.find((c) => c.provider === instance.kind && c.id === m.id)?.contexts ?? [],
     }));
-  if (info.hub)
+  if (info.hub) {
+    // Snapshots that would share a label with another model keep their dates, to tell them apart.
+    const labels = discovered.map((m) => m.name);
+    for (const m of discovered)
+      if (undated(m.id) !== m.id && labels.filter((label) => label === m.name).length > 1)
+        m.name += ` ${m.id.slice(-8)}`;
     discovered.sort(
       (a, b) => versionIn(b.name) - versionIn(a.name) || b.name.localeCompare(a.name),
     );
+  }
   const listed = [
     ...(discovered.length || info.hub
       ? discovered
