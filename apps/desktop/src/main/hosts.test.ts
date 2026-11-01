@@ -265,6 +265,80 @@ test("discovery follows connect, keeps devices through a failed read, and revive
   }
 });
 
+test("Add computer lists removed account computers and restores one only after its code pairs", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    fake.answers.set("relay/hosts", {
+      result: {
+        hosts: [{ hostId: buildBox, name: "build-box", online: true, thisComputer: false }],
+      },
+    });
+    const local = await start(
+      {
+        accounts: [
+          { hostId: buildBox, name: "build-box", routes: ["10.0.0.5:7341"], removed: true },
+        ],
+      },
+      signedIn().account,
+    );
+    local.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    const discover = fake.handlers.get("parallax:discoverAccount")!;
+    const computers = discover();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await computers).toMatchObject([{ id: `account:${buildBox}`, enabled: false }]);
+    expect(listed(buildBox)).toBeUndefined();
+    expect(accountConnection(buildBox)).toBeUndefined();
+
+    const enter = (code: string) =>
+      fake.handlers.get("parallax:enterSetupCode")!({}, `account:${buildBox}`, code) as Promise<
+        string | undefined
+      >;
+    fake.dialOutput = { lines: [], code: 5 };
+    const wrong = enter("111111");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await wrong).toMatch(/wrong, used, or expired/);
+    expect(listed(buildBox)).toBeUndefined();
+    expect(accountConnection(buildBox)).toBeUndefined();
+    const saved = () => JSON.parse(readFileSync(path.join(fake.userData, "settings.json"), "utf8"));
+    expect(saved().accounts[0].removed).toBe(true);
+
+    fake.dialOutput = { lines: [JSON.stringify({ name: "build-box", routes: [] })], code: 0 };
+    const right = enter("123456");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await right).toBeUndefined();
+    expect(fake.dials.at(-1)).toEqual({
+      args: [
+        "dial",
+        "--account",
+        buildBox,
+        "--pair",
+        "--name=macbook",
+        "--",
+        "10.0.0.5:7341",
+        `relay:${buildBox}`,
+      ],
+      stdin: "123456\n",
+    });
+    expect(saved().accounts[0].removed).toBeUndefined();
+    expect(listed(buildBox)).toMatchObject({ enabled: true });
+    const box = accountConnection(buildBox)!;
+    expect(box).toBeDefined();
+
+    // A connected computer can finish a fresh CLI setup without another global prompt.
+    box.set(connected());
+    fake.dialOutput = { lines: [], code: 5 };
+    const again = enter("000000");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await again).toMatch(/wrong, used, or expired/);
+    expect(listed(buildBox)?.access).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
 test("streamFile answers ranges in agent/file slices, and refuses what isn't a file plxd serves", async () => {
   vi.useFakeTimers();
   fake.userData = mkdtempSync(path.join(tmpdir(), "plx836-"));

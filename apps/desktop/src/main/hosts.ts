@@ -238,7 +238,10 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
   // Settings > Connections and Add computer ask for the account's computers when they open, and
   // the window's focus and the network do too, with no timer (0091).
-  ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
+  ipcMain.handle("parallax:discoverAccount", async () => {
+    await discoverAccounts();
+    return deviceHosts(true).filter((d) => d.id.startsWith("account:"));
+  });
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
@@ -1237,12 +1240,13 @@ function connectState(): ConnectState {
 const savedDevices = () => settings.devices ?? [];
 
 /**
- * The devices as the renderer lists them, by name, less removed ones: the account's computers
- * (0091), then, while Connect is on, the tailnet's not yet reached through the account.
+ * The devices as the renderer lists them, by name: the account's computers (0091), then, while
+ * Connect is on, the tailnet's not yet reached through the account. Add computer includes removed
+ * account computers so their setup code can bring them back.
  */
-function deviceHosts(): DeviceHost[] {
+function deviceHosts(includeRemoved = false): DeviceHost[] {
   const accounts = savedAccounts()
-    .filter((a) => !a.removed)
+    .filter((a) => includeRemoved || !a.removed)
     .map((a): DeviceHost => {
       const access = accountAccess.get(accountId(a.hostId));
       return {
@@ -1251,7 +1255,7 @@ function deviceHosts(): DeviceHost[] {
         icon: a.icon ?? iconFor(a.name),
         detected: iconFor(a.name),
         hostName: a.name,
-        enabled: !a.off,
+        enabled: !a.off && !a.removed,
         ...(access && { access }),
       };
     });
@@ -1897,7 +1901,7 @@ function learn(relayId: string, name: string, routes: string[]): void {
 }
 
 /**
- * `window.parallax.enterSetupCode`: pairs with new account computer `hostId` with the 6-digit code
+ * `window.parallax.enterSetupCode`: pairs with account computer `hostId` with the 6-digit code
  * its `plx connect` shows (0091), through `plxd dial --account --pair`. Each typed code gets one
  * run, at most `MAX_PAIR_RUNS` an hour per computer, since a computer the relay made up sets no
  * limit of its own. Then this app vouches for it to the user's other computers. Resolves to an
@@ -1910,17 +1914,22 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
   const digits = typeof code === "string" ? code.replace(/\s/g, "") : "";
   if (!/^\d{6}$/.test(digits)) return "Enter the 6 digits it shows.";
   const plxd = localPlxd();
-  const routes = accountRoutes.get(id);
-  if (!plxd || !routes) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  if (!plxd) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  const routes = accountRoutes.get(id)?.dial() ?? [...saved.routes, `relay:${saved.hostId}`];
+  // A manual dialog owns its progress and errors; only an automatic prompt follows access state.
+  const prompted = accountAccess.get(id)?.step === "needsCode";
   const runs = countPairRun(saved.pairRuns, Date.now());
-  const fail = (why: string) => (setAccess(id, { step: "needsCode", error: why }), why);
+  const fail = (why: string) => {
+    if (prompted) setAccess(id, { step: "needsCode", error: why });
+    return why;
+  };
   if (!runs) return fail("That's 5 tries with this computer this hour. Try again later.");
   updateAccount(saved.hostId, (each) => ({ ...each, pairRuns: runs }));
-  setAccess(id, { step: "pairing" });
+  if (prompted) setAccess(id, { step: "pairing" });
   let stdout: string;
   try {
     const args = ["--account", saved.hostId, "--pair", `--name=${localName()}`, "--"];
-    const running = dialPlxd(plxd, [...args, ...routes.dial()], await account?.accessToken());
+    const running = dialPlxd(plxd, [...args, ...routes], await account?.accessToken());
     running.child.stdin?.end(`${digits}\n`);
     ({ stdout } = await running);
   } catch (error) {
@@ -1945,6 +1954,7 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
     approvedHosts: [saved.hostId],
   });
   setAccess(id, undefined);
+  await setDeviceEnabled(id, true);
   connections.get(id)?.retry();
   return undefined;
 }

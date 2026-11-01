@@ -426,12 +426,14 @@ export interface ParallaxBridge {
   removeDevice(hostId: string): Promise<void>;
   /**
    * Asks the account for its computers now (0091), as Settings > Connections and Add computer do
-   * when they open, and starts again any connection to one that stopped retrying.
+   * when they open, and starts again any connection to one that stopped retrying. Returns all
+   * account computers, including removed ones, so Add computer can take their setup code.
    */
-  discoverAccount(): Promise<void>;
+  discoverAccount(): Promise<DeviceHost[]>;
   /**
-   * Pairs with new account computer `hostId` with the 6-digit code `plx connect` shows there
-   * (0091). Each code is good for one try. Resolves to an error for people, or undefined.
+   * Pairs with account computer `hostId` with the 6-digit code `plx connect` shows there (0091),
+   * bringing back a removed or disabled one only on success. Each code is good for one try.
+   * Resolves to an error for people, or undefined.
    */
   enterSetupCode(hostId: string, code: string): Promise<string | undefined>;
   /** Asks account computer `hostId` again to approve this device, after a denial or a lapse. */
