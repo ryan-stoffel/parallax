@@ -271,6 +271,7 @@ export function AgentChat({
   onOpenChanges,
   pullRequests,
   quiet,
+  voiceFocused = true,
 }: {
   hostId: string;
   runId: string;
@@ -340,6 +341,8 @@ export function AgentChat({
   onOpenChanges?: (ordinal: number, path?: string) => void;
   /** In a split's tile that isn't focused: its composer steps back to one line, as scrolled up. */
   quiet?: boolean;
+  /** Only the selected split tile owns voice input and the Fn hold gesture. */
+  voiceFocused?: boolean;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -857,6 +860,7 @@ export function AgentChat({
       >
         <Composer
           top={<ComposerTabs tabs={tabs} short={back} />}
+          voiceFocused={voiceFocused}
           // One sent before the transcript loads stays in the box.
           onSend={(text, options, images, threads) =>
             run

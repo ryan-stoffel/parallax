@@ -749,6 +749,8 @@ export interface Unanswered {
 }
 
 export interface ComposerProps {
+  /** Whether this composer owns voice input in a split thread view. */
+  voiceFocused?: boolean;
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
   /**
@@ -910,6 +912,7 @@ const lineWidth = 480;
  */
 export function Composer({
   newThread,
+  voiceFocused = true,
   onSend,
   onSendInBackground,
   onSteer,
@@ -1767,6 +1770,7 @@ export function Composer({
   const voiceSelection = useRef({ from: 1, to: 1 });
   const focusAfterVoice = useRef(false);
   const voice = useVoice({
+    focused: voiceFocused,
     enabled: !!onSend && !disabledReason && !uploading,
     hotkey: !newThread,
     scope: `${hostId ?? ""}:${runId ?? repo ?? ""}`,

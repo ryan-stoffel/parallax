@@ -14,6 +14,7 @@ export function startVoice(): void {
   let monitor: FnMonitor | undefined;
   let failure: string | undefined;
   let owner: WebContents | undefined;
+  let ownerToken: string | undefined;
   const ownWindow = (contents: WebContents) => {
     const window = BrowserWindow.fromWebContents(contents);
     return window?.webContents === contents ? window : undefined;
@@ -22,17 +23,24 @@ export function startVoice(): void {
   const refresh = () => monitor?.setEnabled(!!owner && !owner.isDestroyed() && focused(owner));
   const forget = (contents: WebContents) => {
     if (owner !== contents) return;
-    // Disable before forgetting so an in-progress hold gets cancelled in its original window.
-    monitor?.setEnabled(false);
+    // Discard queued native callbacks belonging to the previous composer.
+    monitor?.stop();
     owner = undefined;
+    ownerToken = undefined;
   };
-  ipcMain.handle("parallax:voiceHotkey", (event, enabled: unknown) => {
+  ipcMain.handle("parallax:voiceHotkey", (event, enabled: unknown, token: unknown) => {
     const window = ownWindow(event.sender);
-    if (!window || event.senderFrame !== event.sender.mainFrame || typeof enabled !== "boolean")
+    if (
+      !window ||
+      event.senderFrame !== event.sender.mainFrame ||
+      typeof enabled !== "boolean" ||
+      typeof token !== "string" ||
+      token.length > 128
+    )
       return { available: false, error: "Voice input is available only in the app's thread view." };
     if (process.platform !== "darwin") return { available: false };
     if (!enabled) {
-      forget(event.sender);
+      if (ownerToken === token) forget(event.sender);
       return { available: !failure };
     }
     if (!monitor && !failure) {
@@ -41,9 +49,6 @@ export function startVoice(): void {
           ? path.join(process.resourcesPath, "fn-key.node")
           : path.join(app.getAppPath(), "native/fn-key.node");
         monitor = createRequire(__filename)(file) as FnMonitor;
-        monitor.start((key) => {
-          if (owner && !owner.isDestroyed()) owner.send("parallax:voiceKey", key);
-        });
       } catch (error) {
         monitor = undefined;
         failure = `Hold Fn is unavailable. Use the microphone button. ${error instanceof Error ? error.message : "The native key monitor could not load."}`;
@@ -51,8 +56,19 @@ export function startVoice(): void {
       }
     }
     if (failure) return { available: false, error: failure };
-    if (owner && owner !== event.sender) forget(owner);
-    owner = event.sender;
+    if (owner !== event.sender || ownerToken !== token) {
+      if (owner) forget(owner);
+      try {
+        monitor!.start((key) => {
+          if (owner && !owner.isDestroyed()) owner.send("parallax:voiceKey", key);
+        });
+      } catch {
+        failure = "The app-local Fn key monitor could not start.";
+        return { available: false, error: failure };
+      }
+      owner = event.sender;
+      ownerToken = token;
+    }
     refresh();
     return { available: true };
   });

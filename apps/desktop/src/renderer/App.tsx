@@ -1664,6 +1664,7 @@ export function App() {
                                     // The list's status goes stale once the run moves on, so only a start says so.
                                     going={focused && selection.started}
                                     quiet={tiled && !focused}
+                                    voiceFocused={focused}
                                     listed={threads.state.runs[threadId]}
                                     compose={focused ? compose : undefined}
                                     onComposed={composed}
