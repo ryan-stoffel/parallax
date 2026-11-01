@@ -1799,7 +1799,7 @@ export function Composer({
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      className="flex min-w-0 items-center gap-0.5"
+      className="flex min-w-0 items-center gap-1.5"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
@@ -2121,7 +2121,7 @@ export function Composer({
         {(pickers || tab) && (
           // On one line at any width: index.css trims labels to icons as the box narrows.
           <div className="composer-footer">
-            <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2 [&_button[aria-haspopup]]:h-7 [&_button[aria-haspopup]]:rounded-lg [&_button[aria-haspopup]]:py-0 [&_button[aria-haspopup]]:whitespace-nowrap">
+            <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2">
               {pickers}
               {tab && (
                 <div className="ml-auto flex min-w-0 shrink items-center justify-end gap-1">
