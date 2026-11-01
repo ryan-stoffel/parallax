@@ -301,7 +301,7 @@ test("leaving New Thread keeps its prompt as a draft atop the list, which reopen
   const data = new DataTransfer();
   dragThread(data, "local", thread.id);
   act(() => {
-    document.querySelector("main form")!.dispatchEvent(
+    document.querySelector("main .composer-shell")!.dispatchEvent(
       Object.defineProperty(new Event("drop", { bubbles: true }), "dataTransfer", {
         value: data,
       }),
