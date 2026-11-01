@@ -160,3 +160,45 @@ test("the button names only the chosen model, not its account", () => {
   );
   expect(button("Model: gpt-b")?.textContent).toBe("gpt-b");
 });
+
+test("a hub has one rail entry and provider-logo choices separate from local providers", () => {
+  const hub: Catalog = {
+    ...catalog,
+    instances: [
+      ...catalog.instances,
+      {
+        ...codex("hub-claude", "CLIProxyAPI"),
+        kind: "claude",
+        hub: "home",
+        hubName: "CLIProxyAPI",
+      },
+      { ...codex("hub-codex", "CLIProxyAPI"), hub: "home", hubName: "CLIProxyAPI" },
+      { ...codex("disabled", "Disabled"), kind: "pi", enabled: false },
+    ],
+    models: [
+      ...catalog.models,
+      model("hub-claude", "claude-upstream"),
+      model("hub-codex", "gpt-upstream"),
+      model("disabled", "invisible"),
+    ],
+  };
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root!.render(<ModelMenu catalog={hub} value={hub.models[0]!} onChange={() => {}} />));
+  expect(button("Disabled")).toBeUndefined();
+  act(() => button("CLIProxyAPI")!.click());
+  expect(listed()).toEqual(["claude-upstream"]);
+  act(() => button("Choose provider")!.click());
+  const chooser = document.querySelector('[role="menu"][aria-label="Account"]')!;
+  expect([...chooser.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
+    "Claude Code",
+    "Codex",
+  ]);
+  expect(chooser.querySelectorAll("button svg").length).toBeGreaterThanOrEqual(2);
+  act(() => chooser.querySelector<HTMLButtonElement>('[aria-label="Codex"]')!.click());
+  expect(listed()).toEqual(["gpt-upstream"]);
+  // Removing the active source must recover to an existing group's models immediately.
+  act(() =>
+    root!.render(<ModelMenu catalog={catalog} value={catalog.models[0]!} onChange={() => {}} />),
+  );
+  expect(listed()).toEqual(["opus"]);
+});

@@ -27,7 +27,7 @@ function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = fa
   if ("error" in answer) return describeError(answer.error);
   lists.set(hostId, answer.result.hubs);
   for (const listener of listeners) listener();
-  if (changed) void loadProviders(hostId);
+  if (changed) void loadProviders(hostId, true);
   return undefined;
 }
 

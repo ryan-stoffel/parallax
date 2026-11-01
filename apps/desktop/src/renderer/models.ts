@@ -6,7 +6,7 @@ import type {
   ThreadStartParams,
 } from "../protocol/generated/protocol";
 import { instanceModels, models, type Model, type Provider } from "./catalog";
-import { accountLabel, kindOf, useProviders } from "./providers";
+import { accountLabel, discoveredAt, kindOf, useLegacyProviders, useProviders } from "./providers";
 import { merged, stored } from "./stored";
 
 /**
@@ -48,6 +48,9 @@ export interface Instance {
   /** Subscription plan reported by the provider, such as `pro`. */
   plan?: string;
   kind: string;
+  /** Hub identity, shared by its Claude/Codex runtimes. */
+  hub?: string;
+  hubName?: string;
   enabled: boolean;
   permissions: AgentPermission[];
   efforts: boolean;
@@ -164,12 +167,19 @@ export function catalogOf(
           ...(info.account && { account: info.account }),
           ...(info.plan && { plan: info.plan }),
           kind: info.instance.kind,
+          ...(info.hub && {
+            hub: info.hub,
+            hubName: info.instance.name,
+          }),
           enabled: info.instance.enabled,
           permissions: info.permissions,
           efforts: info.efforts,
           orchestrator: info.orchestrator,
         },
-        models: instanceModels(info),
+        models: instanceModels(info).map((m) => ({
+          ...m,
+          released: m.released ?? discoveredAt(hostId, info.instance.id, m.id),
+        })),
       }))
     : builtIns.map((b) => ({
         instance: { ...b, enabled: !off.includes(b.id) },
@@ -179,18 +189,26 @@ export function catalogOf(
     hostId,
     instances: entries.map((e) => e.instance),
     models: entries.flatMap(({ instance, models }) => {
+      if (!instance.enabled) return [];
       const p = all[prefsKey(hostId, instance.id)];
       return arranged(models, p).filter((m) => !p?.hidden?.includes(m.id));
     }),
   };
 }
 
+const emptyProviders: ProviderInfo[] = [];
+
 /** `hostId`'s catalog, kept current. Without a host, the built-in one, as on an older plxd. */
 export function useCatalog(hostId: string | undefined): Catalog {
   const listed = useProviders(hostId)?.providers;
+  const legacy = useLegacyProviders(hostId);
+  const available = listed ?? (legacy ? undefined : emptyProviders);
   const all = prefs.use();
   const off = disabled.use();
-  return useMemo(() => catalogOf(hostId ?? "local", listed, all, off), [hostId, listed, all, off]);
+  return useMemo(
+    () => catalogOf(hostId ?? "local", available, all, off),
+    [hostId, available, all, off],
+  );
 }
 
 export { instanceModels, models, type Model, type Provider };

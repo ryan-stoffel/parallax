@@ -51,15 +51,14 @@ test("a host's catalog is its instances' models, in this device's order, without
   expect(codex[0]).toMatchObject({ contexts: [272_000], fast: true });
   // A model plxd found and the user added is listed once, as plxd named it, and is custom.
   expect(catalog.models.filter((m) => m.provider !== "codex")).toEqual([
-    { id: "qwen/qwen3", name: "Qwen 3", provider: "router", contexts: [] },
     { id: "gemini-3", name: "Gemini 3 (found)", provider: "gemini", contexts: [], custom: true },
   ]);
 });
 
-test("a hub's instances offer only the hub's models, named as the catalog names them", () => {
+test("a hub's instances offer only the hub's models, named exactly as the upstream names them", () => {
   const hub = (id: string, kind: string, models: string[]) =>
     info(
-      { id, kind: kind as ProviderInstance["kind"], name: "Home hub" },
+      { id, kind: kind as ProviderInstance["kind"], name: "Work Codex" },
       { hub: "home", models: models.map((m) => ({ id: m, name: m })) },
     );
   const catalog = catalogOf(
@@ -71,9 +70,10 @@ test("a hub's instances offer only the hub's models, named as the catalog names 
     {},
     [],
   );
+  expect(catalog.instances.map((i) => i.hubName)).toEqual(["Work Codex", "Work Codex"]);
   expect(catalog.models.map((m) => [m.provider, m.id, m.name])).toEqual([
-    ["home-claude", "claude-opus-5-5", "Claude Opus 5.5"],
-    ["home-codex", "gpt-6-sol", "GPT-6 Sol"],
+    ["home-claude", "claude-opus-5-5", "claude-opus-5-5"],
+    ["home-codex", "gpt-6-sol", "gpt-6-sol"],
     ["home-codex", "gemini-3-pro", "gemini-3-pro"],
   ]);
 });
@@ -121,4 +121,24 @@ test("an account named by its email keeps it in the catalog, and plain text name
   // A tooltip or a reason it can't be picked can't blur, so it says the kind.
   expect(plainName(signedIn!)).toBe("Codex");
   expect(plainName(named!)).toBe("Work");
+});
+
+test("discovered models define availability and names without a catalog edit", () => {
+  const models = instanceModels(
+    info(
+      { id: "codex", kind: "codex" },
+      {
+        models: [
+          { id: "brand-new-model", name: "An upstream name" },
+          { id: "gpt-6-sol", name: "Upstream Sol" },
+        ],
+      },
+    ),
+  );
+  expect(models.map((m) => [m.id, m.name])).toEqual([
+    ["brand-new-model", "An upstream name"],
+    ["gpt-6-sol", "Upstream Sol"],
+  ]);
+  expect(models[1]!.fast).toBe(true);
+  expect(isNew({ ...models[0]!, released: "2099-01-01" }, Date.parse("2026-10-31"))).toBe(false);
 });
