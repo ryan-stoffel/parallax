@@ -33,7 +33,7 @@ export interface Model {
   name: string;
   /** The instance that runs it. */
   provider: Provider;
-  /** The day its maker released it, `YYYY-MM-DD`, for `isNew`. */
+  /** Upstream release date or persisted discovery timestamp, for `isNew`. */
   released?: string;
   /** The context windows it offers, in tokens, its default first. */
   contexts: number[];
@@ -45,9 +45,9 @@ export interface Model {
 
 const week = 7 * 24 * 60 * 60 * 1000;
 
-/** Whether the pickers mark `model` New: less than a week past its release. */
+/** Whether release or first discovery was within the past week. */
 export const isNew = (model: Model, now = Date.now()) =>
-  !!model.released && now - Date.parse(model.released) < week;
+  !!model.released && now >= Date.parse(model.released) && now - Date.parse(model.released) < week;
 
 const claude1M = [1_000_000, 200_000];
 const codex872K = [272_000, 872_000];
@@ -168,28 +168,24 @@ export const models: Model[] = [
 export function instanceModels(info: ProviderInfo): Model[] {
   const { instance } = info;
   const seen = new Set<string>();
-  // A hub's instance (0089) offers only what the hub serves, named as the catalog names it.
-  if (info.hub)
-    return info.models.map((m) => ({
-      ...m,
-      contexts: [],
-      ...models.find((c) => c.provider === instance.kind && c.id === m.id),
-      provider: instance.id,
-    }));
+  // Availability and names belong to the upstream catalog. Built-ins supply only optional
+  // capabilities, and remain a fallback for older CLIs that cannot list models.
+  const discovered = info.models.map((m) => ({
+    ...models.find((c) => c.provider === instance.kind && c.id === m.id),
+    ...m,
+    name:
+      instance.kind === "opencode" && m.id.startsWith("opencode/")
+        ? m.name.replace(/^[^/]*\//, "")
+        : m.name,
+    contexts: models.find((c) => c.provider === instance.kind && c.id === m.id)?.contexts ?? [],
+  }));
   const listed = [
-    ...models.filter((m) => m.provider === instance.kind),
-    // OpenCode names its own models (ids `opencode/…`) "opencode/Big Pickle" or "OpenCode
-    // Zen/Big Pickle", by version: the picker already says OpenCode.
-    ...info.models.map((m) => ({
-      ...m,
-      name:
-        instance.kind === "opencode" && m.id.startsWith("opencode/")
-          ? m.name.replace(/^[^/]*\//, "")
-          : m.name,
-      contexts: [],
-    })),
+    ...(discovered.length || info.hub
+      ? discovered
+      : models.filter((m) => m.provider === instance.kind)),
     ...instance.models.map((m) => ({ ...m, contexts: [] })),
   ];
+  if (info.hub && !listed.length) return [];
   return (listed.length ? listed : [{ id: "", name: "Default model", contexts: [] }])
     .filter((m) => !seen.has(m.id) && !!seen.add(m.id))
     .map((m) => ({

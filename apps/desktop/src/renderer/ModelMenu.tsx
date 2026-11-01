@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Search, SearchX, Star } from "lucide-react";
+import { Check, ChevronDown, Search, SearchX, Star, Network } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
 import {
@@ -34,10 +34,12 @@ const hasAccountDetail = (i: Instance | undefined, name: string) =>
  */
 function AccountLabel({ instance: i, name }: { instance: Instance | undefined; name: string }) {
   const detail = emailOf(i, name);
+  const Logo = i && logoOf(i);
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
+      {Logo && <Logo aria-hidden className="size-4 shrink-0" />}
       <span className="min-w-0 truncate">
-        <Redacted text={name} />
+        <Redacted text={i?.hub ? kindOf(i.kind).name : name} />
       </span>
       {detail && (
         <span className="min-w-0 truncate font-normal text-faint-foreground">
@@ -60,7 +62,8 @@ const keyOf = (m: Model) => `${m.provider}/${m.id}`;
  * The rail's group for an instance: its kind, so a provider's accounts share one button, except
  * an ACP agent, which is its own.
  */
-const groupOf = (i: Pick<Instance, "id" | "kind">) => (i.kind === "acp" ? i.id : i.kind);
+const groupOf = (i: Pick<Instance, "id" | "kind" | "hub">) =>
+  i.hub ? `hub/${i.hub}` : i.kind === "acp" ? i.id : i.kind;
 
 // A rail button's pressed look, a raised tile, is in index.css's `.model-menu-rail`.
 const railButton =
@@ -88,7 +91,9 @@ export function ModelMenu({
   value: Model;
   onChange: (model: Model) => void;
 }) {
-  const all = catalog.models;
+  const all = catalog.models.filter((m) =>
+    catalog.instances.some((i) => i.id === m.provider && i.enabled),
+  );
   const models = all.filter((m) => !unavailable[m.provider]);
   const prefs = useModelPrefs();
   const starred = (m: Model) =>
@@ -110,13 +115,23 @@ export function ModelMenu({
   // The instance a group opens on: the chosen model's, else its first account that can be picked.
   const opening = (key: string) => {
     const ids = groups.get(key) ?? [];
-    return ids.includes(chosen.provider)
+    return ids.includes(chosen.provider) && !unavailable[chosen.provider]
       ? chosen.provider
       : (ids.find((p) => !unavailable[p]) ?? ids[0]!);
   };
   // A group, or null for Favorites, and the instance its models are listed for.
-  const [tab, setTab] = useState<string | null>(group(chosen.provider));
-  const [account, setAccount] = useState<Provider>(chosen.provider);
+  const [selectedTab, setTab] = useState<string | null>(group(chosen.provider));
+  const tab =
+    selectedTab === null || groups.has(selectedTab)
+      ? selectedTab
+      : (groups.keys().next().value ?? null);
+  const [selectedAccount, setAccount] = useState<Provider>(chosen.provider);
+  const account =
+    tab && groups.get(tab)?.includes(selectedAccount) && !unavailable[selectedAccount]
+      ? selectedAccount
+      : tab
+        ? opening(tab)
+        : chosen.provider;
   const [query, setQuery] = useState("");
   const [choosingAccount, setChoosingAccount] = useState(false);
   const id = useId();
@@ -170,8 +185,11 @@ export function ModelMenu({
         id={id}
         popover="auto"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open") search.current?.focus();
-          else {
+          if (e.newState === "open") {
+            setTab(group(chosen.provider));
+            setAccount(chosen.provider);
+            search.current?.focus();
+          } else {
             setQuery("");
             setChoosingAccount(false);
           }
@@ -195,21 +213,23 @@ export function ModelMenu({
           <span aria-hidden className="my-1 h-px w-5 bg-border" />
           {[...groups].map(([key, ids]) => {
             const first = ids[0]!;
-            const ProviderLogo = logo(first);
+            const ProviderLogo = instance(first)?.hub ? Network : logo(first);
             // A group can't be picked only when none of its instances can.
             const why = ids.every((p) => unavailable[p]) ? unavailable[first] : undefined;
             const kind = instance(first)?.kind;
             // An account named by its email is named by its kind, so the email isn't read out.
             const label =
-              kind && (ids.length > 1 || nameOf(first).includes("@"))
+              instance(first)?.hubName ??
+              (kind && (ids.length > 1 || nameOf(first).includes("@"))
                 ? kindOf(kind).name
-                : nameOf(first);
+                : nameOf(first));
             return (
               // A disabled button gets no pointer events, so its wrapper shows the tooltip.
               <span key={key} className="group relative flex">
                 <button
                   type="button"
                   aria-label={label}
+                  title={label}
                   aria-pressed={!q && tab === key}
                   disabled={!!why}
                   aria-describedby={why ? `${id}-${key}` : undefined}
@@ -252,12 +272,17 @@ export function ModelMenu({
               className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
           </label>
+          {instance(account)?.hub && !mixed && (
+            <div className="px-4 pt-2 text-meta font-medium text-foreground">
+              {instance(account)?.hubName}
+            </div>
+          )}
           {accounts.length > 1 ? (
             <div className="relative shrink-0 px-1.5 pt-1.5">
               <button
                 type="button"
                 ref={accountChooser}
-                aria-label="Choose account"
+                aria-label={instance(account)?.hub ? "Choose provider" : "Choose account"}
                 aria-haspopup="menu"
                 aria-expanded={choosingAccount}
                 onClick={() => setChoosingAccount(!choosingAccount)}
@@ -293,7 +318,9 @@ export function ModelMenu({
                     <button
                       key={p}
                       type="button"
-                      aria-label={withoutEmails(nameOf(p))}
+                      aria-label={
+                        instance(p)?.hub ? kindOf(instance(p)!.kind).name : withoutEmails(nameOf(p))
+                      }
                       role="menuitemradio"
                       aria-checked={account === p}
                       disabled={!!unavailable[p]}
@@ -316,11 +343,16 @@ export function ModelMenu({
             </div>
           ) : (
             accounts.length === 1 &&
-            hasAccountDetail(instance(account), nameOf(account)) && (
+            (instance(account)?.hub || hasAccountDetail(instance(account), nameOf(account))) && (
               <div className="mt-1.5 flex h-7 shrink-0 items-center px-4 text-meta font-medium text-muted-foreground">
                 <AccountLabel instance={instance(account)} name={nameOf(account)} />
               </div>
             )
+          )}
+          {instance(account)?.hub && !mixed && (
+            <div className="px-4 pt-1 text-caption text-faint-foreground">
+              Accounts are routed by the hub.
+            </div>
           )}
           <ul className="min-h-0 flex-1 scroll-py-1.5 overflow-y-auto p-1.5">
             {shown.map((m) => {
@@ -346,7 +378,10 @@ export function ModelMenu({
                     >
                       <span className="truncate">{m.name}</span>
                       {isNew(m) && (
-                        <span className="shrink-0 rounded-full bg-accent/12 px-1.5 text-caption leading-4 font-medium text-accent">
+                        <span
+                          title="Newly released or first discovered in the past week"
+                          className="shrink-0 rounded-full bg-accent/12 px-1.5 text-caption leading-4 font-medium text-accent"
+                        >
                           New
                         </span>
                       )}
@@ -383,10 +418,18 @@ export function ModelMenu({
                   {q ? <SearchX aria-hidden /> : <Star aria-hidden />}
                 </span>
                 <span className="text-body font-medium">
-                  {q ? "No matching models" : "No favorites yet"}
+                  {q
+                    ? "No matching models"
+                    : tab === null
+                      ? "No favorites yet"
+                      : "No models available"}
                 </span>
                 <span className="text-meta text-faint-foreground">
-                  {q ? "Try another name." : "Star a model to keep it here."}
+                  {q
+                    ? "Try another name."
+                    : tab === null
+                      ? "Star a model to keep it here."
+                      : "Check your providers in Settings."}
                 </span>
               </li>
             )}

@@ -48,6 +48,7 @@ if (command === "login") {
   createInterface({ input: process.stdin }).on("line", line => {
     const request = JSON.parse(line);
     if (request.method === "initialize") console.log(JSON.stringify({ id: request.id, result: {} }));
+    if (request.method === "model/list") console.log(JSON.stringify({ id: request.id, result: { data: [], nextCursor: null } }));
     if (request.method === "account/read") {
       const account = existsSync(marker)
         ? { type: "chatgpt", email: "e2e@example.test", planType: "plus" }
