@@ -148,6 +148,21 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("a footer search cannot implicitly send the draft, while Send still can", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type } = render(onSend, caps, { tab: <input aria-label="Search refs" /> });
+  type("Keep this draft");
+  await act(async () => {
+    document.querySelector<HTMLInputElement>('[aria-label="Search refs"]')!.focus();
+    // A browser's default Enter action in an unmatched branch search submits its owning form.
+    box.closest("form")!.requestSubmit();
+  });
+  expect(onSend).not.toHaveBeenCalled();
+  expect(box.textContent).toBe("Keep this draft");
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(onSend).toHaveBeenCalledWith("Keep this draft", {}, [], []);
+});
+
 test("cited agent text is sent as a quote and its comment, a paragraph apart from what's typed", async () => {
   const onSend = vi.fn(async () => undefined);
   const { box, type, press, rerender } = render(onSend);
