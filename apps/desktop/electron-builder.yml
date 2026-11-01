@@ -16,8 +16,8 @@ publish:
   owner: ryan-stoffel
   repo: parallax
   channel: ${channel}
-# The app has no native modules, so nothing needs compiling. @electron/rebuild would fetch
-# Electron's headers anyway on some runners.
+# The app-local Fn monitor uses stable Node-API and is built by voice-assets.mjs.
+# @electron/rebuild would fetch unnecessary Electron headers on some runners.
 npmRebuild: false
 # Only Chromium's en-US locale ships: the rest are about 50 MiB of the installed app. The UI is
 # English only, and the renderer formats dates, numbers, and sort order in the OS's locale itself
@@ -39,6 +39,8 @@ asarUnpack:
 extraResources:
   - from: ../../target/package-resources
     to: .
+  - from: native/VOICE-NOTICES.txt
+    to: VOICE-NOTICES.txt
 artifactName: parallax-${version}-${os}-${arch}.${ext}
 # The updater installs from the zip; the dmg is for first installs. Signing happens only when
 # CSC_KEYCHAIN (or CSC_LINK) is set (release.yml's macOS build): everything in the bundle, plxd
@@ -50,6 +52,11 @@ mac:
   # The full-bleed dark tile from the icon kit (design/icon/README.md).
   icon: ../../design/icon/icns/Parallax-dark.icns
   category: public.app-category.developer-tools
+  extraResources:
+    - from: native/fn-key.node
+      to: fn-key.node
+  extendInfo:
+    NSMicrophoneUsageDescription: Parallax uses your microphone to transcribe voice into your message. Audio stays on this device.
   entitlements: entitlements.mac.plist
   entitlementsInherit: entitlements.mac.plist
   # Chromium's .pak files (its locale and resources) aren't code, so they aren't signed one by one

@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
+import { prepareVoice } from "./scripts/voice-assets.mjs";
 
 // The renderer's Content Security Policy, set as a <meta> tag so it applies
 // alike under the dev server and the built app's app:// scheme (appScheme.ts).
@@ -84,7 +85,13 @@ export default defineConfig({
   // Renderer (`vp dev`, `vp build`).
   root: "src/renderer",
   base: "./",
-  plugins: [react(), tailwindcss(), cspMeta],
+  plugins: [
+    react(),
+    tailwindcss(),
+    cspMeta,
+    { name: "parallax-voice-assets", buildStart: prepareVoice },
+  ],
+  optimizeDeps: { exclude: ["cactus-needle"] },
   build: {
     outDir: "../../dist/renderer",
     emptyOutDir: true,

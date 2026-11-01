@@ -74,6 +74,8 @@ function follow<T>(channel: string, listener: (value: T) => void, read = true): 
 // The renderer's only way into the app, exposed as `window.parallax`.
 const bridge: ParallaxBridge = {
   platform: process.platform,
+  voiceHotkey: (enabled) => ipcRenderer.invoke("parallax:voiceHotkey", enabled),
+  onVoiceKey: (listener) => follow("parallax:voiceKey", listener, false),
   version: () => ipcRenderer.invoke("parallax:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("parallax:theme", preference),
   setZoom: (factor) => webFrame.setZoomFactor(factor),
