@@ -968,10 +968,13 @@ async fn limits(
             Err(problem) => (Err(problem), None),
         };
     }
-    // Together, so a slow one doesn't add to the other's time, and a plan that can be read shows
-    // even when the usage endpoint refuses, as it often does with a 429.
-    let (usage, profile) = tokio::join!(read(CLAUDE_USAGE), read(CLAUDE_PROFILE));
-    let plan = profile.ok().and_then(|profile| claude_plan(&profile));
+    // One after the other, to keep to four requests at once. The plan is read even when the usage
+    // endpoint refuses, as it often does with a 429.
+    let usage = read(CLAUDE_USAGE).await;
+    let plan = read(CLAUDE_PROFILE)
+        .await
+        .ok()
+        .and_then(|profile| claude_plan(&profile));
     (usage.map(|usage| claude_windows(&usage)), plan)
 }
 

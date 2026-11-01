@@ -2,7 +2,13 @@
 import { expect, test, vi } from "vite-plus/test";
 
 import type { ProvidersListResult } from "../protocol/generated/protocol";
-import { discoveredAt, listedProviders, loadProviders, saveProvider } from "./providers";
+import {
+  discoveredAt,
+  listedProviders,
+  loadProviders,
+  relistProviders,
+  saveProvider,
+} from "./providers";
 
 const result = (enabled: boolean, ids = ["gpt-6-sol"]): ProvidersListResult => ({
   providers: [
@@ -43,6 +49,26 @@ test("an old refresh cannot restore a provider disabled by a save", async () => 
   resolve({ result: result(true) });
   await oldLoad;
   expect(listedProviders("race-test")!.providers[0]!.instance.enabled).toBe(false);
+});
+
+test("listing again after a change drops a list already on its way, then asks each", async () => {
+  let resolve!: (value: { result: ProvidersListResult }) => void;
+  const request = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    )
+    .mockResolvedValue({ result: result(false) });
+  Object.assign(window, { parallax: { request } });
+  const inFlight = loadProviders("relist-test");
+  await relistProviders("relist-test");
+  resolve({ result: result(true) });
+  await inFlight;
+  expect(listedProviders("relist-test")!.providers[0]!.instance.enabled).toBe(false);
+  expect(request.mock.calls.map(([, , params]) => params.refresh)).toEqual([false, false, true]);
 });
 
 test("discovery dates persist without making shipped models new or resetting new ones", async () => {

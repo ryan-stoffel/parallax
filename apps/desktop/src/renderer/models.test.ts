@@ -141,6 +141,16 @@ test("the catalog offers only instances that are on and can run", () => {
       info({ id: "hub", kind: "codex" }, { hub: "home", signedIn: true }),
     ]),
   ).toEqual(["out"]);
+  // Nor does one whose models are all hidden.
+  const signedOutAndHidden = [
+    info({ id: "out", kind: "claude" }, { ...model, signedIn: false }),
+    info({ id: "codex", kind: "codex" }, { ...model, signedIn: true }),
+  ];
+  expect(
+    catalogOf("local", signedOutAndHidden, { "local/codex": { hidden: ["m"] } }, []).models.map(
+      (m) => m.provider,
+    ),
+  ).toEqual(["out"]);
   // Signed out of everything, the composer still has a model to send with.
   expect(offered([info({ id: "out", kind: "claude" }, { ...model, signedIn: false })])).toEqual([
     "out",
@@ -161,7 +171,7 @@ test("a catalog knows the models it doesn't offer, for an open thread on them", 
   expect(catalog.known.find((m) => m.id === "o")?.name).toBe("Opus");
 });
 
-test("a hub drops routed image models, and a snapshot beside its alias", () => {
+test("a hub drops routed image models, and dates only snapshots that share a label", () => {
   const names = instanceModels(
     info(
       { id: "hub-claude", kind: "claude" },
@@ -176,8 +186,8 @@ test("a hub drops routed image models, and a snapshot beside its alias", () => {
         ].map((id) => ({ id, name: id })),
       },
     ),
-  ).map((m) => m.id);
-  expect(names).toEqual(["claude-sonnet-4-5-20250929", "claude-opus-4-5"]);
+  ).map((m) => m.name);
+  expect(names).toEqual(["Claude Sonnet 4.5", "Claude Opus 4.5 20251101", "Claude Opus 4.5"]);
 });
 
 test("a hub lists agent models newest first, without its image models", () => {
