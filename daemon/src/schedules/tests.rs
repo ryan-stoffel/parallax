@@ -171,6 +171,41 @@ async fn a_fire_commits_once_per_due_time_even_when_tried_again() {
     assert_eq!(stored(&daemon, id).await.task.run_count, 1);
 }
 
+/// 0093: a task that fires into an archived orchestrator brings its thread back, naming the task.
+#[tokio::test]
+async fn a_fire_wakes_an_archived_orchestrator_thread() {
+    use crate::agents::orchestrator::tests::{archive, orchestrator, reason, thread};
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path());
+    let (scope, run) = orchestrator(&daemon, None).await;
+    archive(&daemon, run, true).await;
+    let task = save(
+        &daemon,
+        ScheduleSaveParams {
+            orchestrator: Some(scope),
+            ..params(HOURLY)
+        },
+    )
+    .await
+    .unwrap();
+    let id = Uuid::try_parse(&task.id).unwrap();
+    due_at(&daemon, id, Timestamp::now() - SignedDuration::from_secs(1)).await;
+    assert!(matches!(
+        fire(&daemon, id, Trigger::Scheduled).await.unwrap(),
+        Fired::Sent(_)
+    ));
+    let woken = thread(&daemon, run).await;
+    assert!(!woken.archived);
+    assert_eq!(
+        reason(&woken),
+        Some(parallax_protocol::WakeReason::Schedule {
+            task: task.id,
+            title: "Triage".to_owned(),
+        })
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "one webhook told step by step")]

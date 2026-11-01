@@ -1756,7 +1756,8 @@ export type Orchestrator = {
 	 */
 	icon?: ChosenIcon,
 	/**
-	 * The absolute path of the repository on this host.
+	 * The absolute path of the repository on this host, or empty for an orchestrator with no
+	 * repo (0093), which only a client of a plxd that advertises `orchestratorThreads` makes.
 	 */
 	repoPath: string,
 	/**
@@ -1930,9 +1931,10 @@ export type OrchestratorCreateParams = {
 	 */
 	name: string,
 	/**
-	 * The absolute path of the repository on this host.
+	 * The absolute path of the repository on this host. Absent or empty makes an orchestrator
+	 * with no repo (0093), sent only to a plxd that advertises `orchestratorThreads`.
 	 */
-	repoPath: string,
+	repoPath?: string,
 	/**
 	 * The orchestrator's icon, sent only to a plxd that advertises `orchestratorEdit`. Absent
 	 * means the app's default icon.
@@ -4870,6 +4872,16 @@ export type Thread = {
 	 * Project.
 	 */
 	project?: RepoId,
+	/**
+	 * The orchestrator whose orchestration it runs, when it is an orchestrator thread (0093),
+	 * behind `orchestratorThreads`. Its `repo` is the orchestrator too, as its children's is.
+	 */
+	orchestrator?: ScopeId,
+	/**
+	 * Why an orchestrator thread last un-archived itself (0093), behind `orchestratorThreads`.
+	 * Absent once the user archives or un-archives it.
+	 */
+	wakeReason?: WakeReason,
 };
 
 /**
@@ -4884,6 +4896,33 @@ export type ForkedFrom = {
 	 * The turn of that run it was forked at.
 	 */
 	turn: TurnId,
+};
+
+/**
+ * Why an orchestrator thread un-archived itself (0093). A newer plxd may send a kind this version
+ * does not know; treat it as unknown.
+ */
+export type WakeReason = { "kind": "childFinished",
+	/**
+	 * The child's run.
+	 */
+	child: RunId, } | { "kind": "schedule",
+	/**
+	 * The task's id.
+	 */
+	task: string,
+	/**
+	 * The task's title.
+	 */
+	title: string, } | { "kind": "pullRequest",
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string, } | { "kind": "needsYou",
+	/**
+	 * The run it is about: a child, or the orchestrator's own.
+	 */
+	run: RunId,
 };
 
 /**
@@ -6936,8 +6975,8 @@ export type ProjectDeleteResult = Record<symbol, never>;
  * Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
  * and transcript, and its next CLI process gets the Project's instructions and files. Appends
  * `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
- * thread started in a Project or an orchestrator, and with `repoNotFound` for a `project` that isn't
- * one.
+ * thread started in a Project or an orchestrator's child, and with `repoNotFound` for a `project`
+ * that isn't one. An orchestrator thread joins one (0093).
  */
 export type ThreadSetProjectParams = {
 	/**

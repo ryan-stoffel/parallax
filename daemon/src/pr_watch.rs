@@ -36,7 +36,7 @@ use parallax_protocol::{
     PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewDecision, PrReviewState,
     PrReviewThread, PrState, PrStatusCheck, PrStatusFile, PrStatusResult, PrStatusThread,
     PrThreadComment, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
-    PullRequest as PrView, RunId, ScopeId, TurnId,
+    PullRequest as PrView, RunId, ScopeId, TurnId, WakeReason,
 };
 use parallax_store::Store;
 use serde::{Deserialize, Serialize};
@@ -1092,6 +1092,11 @@ fn record_job(
     }
     if let Some(text) = text {
         let run_id = run_id(run)?;
+        // An orchestrator thread watching it comes back into the list (0093).
+        let reason = WakeReason::PullRequest {
+            url: url.to_owned(),
+        };
+        crate::threads::wake_thread(db, run, &reason)?;
         let command_id = format!("pr-watch:{run}:{}", Uuid::now_v7());
         let wake = Wake {
             task: None,

@@ -20,7 +20,7 @@ async fn project(daemon: &Daemon) -> ScopeId {
     let (uuid, fields) = crate::store::fields(OrchestratorCreateParams {
         id,
         name: "p".to_owned(),
-        repo_path: "/nowhere".to_owned(),
+        repo_path: Some("/nowhere".to_owned()),
         icon: None,
         permission: None,
         autonomy: None,

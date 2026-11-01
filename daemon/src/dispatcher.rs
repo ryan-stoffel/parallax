@@ -274,8 +274,13 @@ struct Rows {
     /// then stays, and the shared worktree it was the last to work in, which goes with it.
     shared: bool,
     left: Option<Removal>,
-    /// For `project.delete`: its repository, if it exists, and its runs, orchestrators first.
-    project: Option<String>,
+    /// For `project.delete`: its repository, `Some(None)` for one with no repo (0093), if it
+    /// exists, and its runs, orchestrators first.
+    #[expect(
+        clippy::option_option,
+        reason = "no orchestrator and an orchestrator with no repo differ"
+    )]
+    project: Option<Option<String>>,
     runs: Vec<Uuid>,
 }
 
@@ -324,8 +329,12 @@ enum Effect {
         refs: Option<String>,
     },
     /// A deleted orchestrator's integration and orchestrator worktrees and its context folder.
+    /// With no repo (0093) it has only its folder.
     #[serde(rename = "project.cleanup")]
-    OrchestratorCleanup { repo_path: String },
+    OrchestratorCleanup {
+        #[serde(default)]
+        repo_path: Option<String>,
+    },
     /// A scheduled task's fire or a pull request watch's news, sent to a thread (0063).
     #[serde(rename = "thread.wake")]
     Wake(crate::schedules::Wake),
@@ -557,6 +566,13 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
                 rows.scratch = repo.fields.scratch;
                 rows.repo_path = Some(repo.fields.path);
             }
+            // A child of an orchestrator with no repo has a scratch repository of its own (0093).
+            if let Some(row) = &rows.thread.thread
+                && row.orchestrator_id.is_none()
+                && let Ok(scope) = ScopeId::try_from(row.repo_id)
+            {
+                rows.scratch |= crate::threads::is_repoless(db, scope)?;
+            }
             let (shared, left) = crate::delegation::on_delete(db, thread)?;
             rows.shared = shared;
             rows.left = left.map(Removal::from);
@@ -760,11 +776,11 @@ fn apply(db: &mut Tx, thread: Uuid, change: Change) -> Result<(), ErrorObject> {
         }
         Change::Archive(archived) => {
             let row = db.set_thread_archived(thread, archived).map_err(error)?;
-            stage_updated(db, &row)?;
+            crate::threads::stage_updated(db, &row)?;
         }
         Change::Update(update) => {
             let (row, _) = db.update_thread(thread, &update).map_err(error)?;
-            stage_updated(db, &row)?;
+            crate::threads::stage_updated(db, &row)?;
         }
         Change::Delete { repo, children } => {
             if let Some(repo) = repo {
@@ -781,7 +797,7 @@ fn apply(db: &mut Tx, thread: Uuid, change: Change) -> Result<(), ErrorObject> {
             }
             for child in children {
                 if let Some(row) = db.get_thread(child).map_err(error)? {
-                    stage_updated(db, &row)?;
+                    crate::threads::stage_updated(db, &row)?;
                 }
             }
         }
@@ -797,16 +813,6 @@ fn apply(db: &mut Tx, thread: Uuid, change: Change) -> Result<(), ErrorObject> {
             );
         }
     }
-    Ok(())
-}
-
-fn stage_updated(db: &mut Tx, row: &Thread) -> Result<(), ErrorObject> {
-    let thread = crate::threads::thread_entry(row)?;
-    db.stage(
-        Timestamp::now(),
-        None,
-        ParallaxEvent::ThreadUpdated { thread },
-    );
     Ok(())
 }
 
@@ -938,6 +944,7 @@ async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
 
 /// Does `effect`, effect `id`, for `thread`. An error says whether it is final; any other is
 /// retried.
+#[expect(clippy::too_many_lines, reason = "one arm per kind of effect")]
 async fn perform(
     daemon: &Arc<Daemon>,
     id: &str,
@@ -981,6 +988,19 @@ async fn perform(
         Effect::OrchestratorCleanup { repo_path } => {
             let project = ScopeId::try_from(thread).map_err(|_| corrupt())?;
             let worktrees = daemon.agents.worktrees();
+            let Some(repo_path) = repo_path else {
+                let folder = worktrees.orchestrator_path(project);
+                if let Err(error) = std::fs::remove_dir_all(&folder)
+                    && folder.exists()
+                {
+                    return Err((
+                        format!("could not remove the orchestrator's folder: {error}"),
+                        false,
+                    ));
+                }
+                crate::threads::remove_context(daemon, project);
+                return Ok(());
+            };
             worktrees
                 .remove_integration(Path::new(&repo_path), project)
                 .await

@@ -186,8 +186,9 @@ pub(super) enum Place {
         header: Option<String>,
     },
     /// An orchestrator, with no sandbox (0024), in a detached worktree of `repo` that the
-    /// actor moves to the integration branch's tip before each CLI process (0042).
-    Orchestrator { repo: PathBuf },
+    /// actor moves to the integration branch's tip before each CLI process (0042), or in its
+    /// own empty folder when it has no repo (0093).
+    Orchestrator { repo: Option<PathBuf> },
 }
 
 impl Agents {
@@ -365,12 +366,14 @@ pub(super) async fn prepare(
     requested: Option<AccountChoice>,
     role: Role,
     full_claude: bool,
-) -> Result<(Prepared, String), ErrorObject> {
+) -> Result<(Prepared, Option<String>), ErrorObject> {
     prepare_run(daemon, project, run, requested, role, full_claude, false).await
 }
 
 /// [`prepare`], where `new_thread` says the run being created is a normal thread's
-/// (`thread/start`), whose thread row doesn't exist yet.
+/// (`thread/start`), whose thread row doesn't exist yet. The path is the scope's repository, `None`
+/// for an orchestrator with no repo (0093).
+#[expect(clippy::too_many_lines, reason = "one check after another, in order")]
 async fn prepare_run(
     daemon: &Arc<Daemon>,
     project: ScopeId,
@@ -379,11 +382,11 @@ async fn prepare_run(
     role: Role,
     full_claude: bool,
     new_thread: bool,
-) -> Result<(Prepared, String), ErrorObject> {
+) -> Result<(Prepared, Option<String>), ErrorObject> {
     let (repo_path, context_scope, orchestrator_row, thread_run, defaults, mut accounts) =
         store(daemon, move |db| {
             // A thread sharing another's workspace works in its worktree (0063).
-            let repo_path = crate::delegation::workdir(db, project, run.into())?;
+            let repo_path = crate::delegation::workdir_repo(db, project, run.into())?;
             // A run whose scope is an orchestrator, not a repo entry, is its orchestrator or one of
             // its children (0042).
             let orchestrator_row = db
@@ -435,7 +438,7 @@ async fn prepare_run(
     .map_err(|error| routing_error(&error))?;
     if role == Role::Orchestrator {
         let place = Place::Orchestrator {
-            repo: PathBuf::from(&repo_path),
+            repo: repo_path.as_ref().map(PathBuf::from),
         };
         let prepared = Prepared {
             resolved,
@@ -473,7 +476,9 @@ async fn prepare_run(
         ))
     })?;
     let context = sandbox_path(&context, "the shared context folder")?;
-    sandbox_path(Path::new(&repo_path), "the project's repository")?;
+    if let Some(repo_path) = &repo_path {
+        sandbox_path(Path::new(repo_path), "the project's repository")?;
+    }
     let header = match orchestrator_row.map(|row| row.name) {
         Some(name) => Some(child_header(&name, &memory::start(daemon, project).await?)),
         None => None,
@@ -822,7 +827,8 @@ pub(super) async fn orchestrator_mode(
 
 /// Cuts Orchestrator `scope`'s integration branch and its worktree when either is missing (0045),
 /// and returns the project row as it stands, with its integration branch. `None` when `scope` is a
-/// repo entry, not an orchestrator.
+/// repo entry, not an orchestrator. An orchestrator with no repo has no integration branch (0093),
+/// and is returned as it is.
 pub(crate) async fn integration(
     daemon: &Arc<Daemon>,
     scope: ScopeId,
@@ -836,7 +842,9 @@ pub(crate) async fn integration(
         return Ok(None);
     };
     let worktrees = &daemon.agents.worktrees;
-    let repo = Path::new(&row.repo_path);
+    let Some(repo) = row.repo_path.as_deref().map(Path::new) else {
+        return Ok(Some(row));
+    };
     let base = match &row.base_branch {
         Some(base) => base.clone(),
         None => worktrees
@@ -1208,9 +1216,17 @@ pub(crate) async fn create_started(
     }
     options.fork_onto(fork.as_ref(), prepared.resolved.backend(), &mut fields);
     options.check(prepared.resolved.backend())?;
-    let repo_path = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
-        Some(scratch) => scratch.to_string_lossy().into_owned(),
-        None => scope_path,
+    // A child of an orchestrator with no repo gets a scratch repository, as a thread with no
+    // repo does (0093).
+    let scratch = match thread.as_ref().and_then(|thread| thread.scratch.clone()) {
+        Some(scratch) => Some(scratch),
+        None if scope_path.is_none() => Some(crate::threads::child_scratch(&daemon, run_id).await?),
+        None => None,
+    };
+    let repo_path = match (scratch, scope_path) {
+        (Some(scratch), _) => scratch.to_string_lossy().into_owned(),
+        (None, Some(path)) => path,
+        (None, None) => return Err(ErrorObject::internal_error("the run has no repository")),
     };
     let (created, (cwd, git_common_dir)) = workspace(
         &daemon,
@@ -2283,7 +2299,7 @@ mod tests {
     pub(super) fn orchestrator_fields() -> OrchestratorFields {
         OrchestratorFields {
             name: "app".to_owned(),
-            repo_path: "/src/app".to_owned(),
+            repo_path: Some("/src/app".to_owned()),
             icon: None,
             permission: "auto".to_owned(),
             autonomy: "routine".to_owned(),

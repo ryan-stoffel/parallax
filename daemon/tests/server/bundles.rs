@@ -42,7 +42,7 @@ struct Device {
 async fn device(host: Host, status: AgentStatus) -> Device {
     let mut client = host.client().await;
     let params = orchestrator_params(host.dir.path());
-    let repo = PathBuf::from(&params.repo_path);
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
     let project = create(&mut client, params).await;
     subscribe(&mut client, project.id, 0).await;
     let start = start_params(project.id, "Work");

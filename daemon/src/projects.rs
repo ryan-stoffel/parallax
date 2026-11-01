@@ -233,12 +233,13 @@ pub(crate) async fn set_project(
                         "thread {run} started in a Project, so it stays there"
                     )));
                 }
-                None => {
+                // An orchestrator's child stays with it, but the orchestrator thread joins (0093).
+                None if thread.orchestrator_id.is_none() => {
                     return Err(ErrorObject::invalid_params(format!(
                         "thread {run} is an orchestrator's, so it can't join a Project"
                     )));
                 }
-                Some(_) => {}
+                None | Some(_) => {}
             }
             let (thread, moved) = db
                 .set_thread_project(thread.id, project.map(Uuid::from))

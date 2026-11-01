@@ -689,7 +689,7 @@ mod tests {
         let params = OrchestratorCreateParams {
             id: ScopeId::generate(),
             name: "n".to_owned(),
-            repo_path: "/r".to_owned(),
+            repo_path: Some("/r".to_owned()),
             icon: None,
             permission: None,
             autonomy: None,

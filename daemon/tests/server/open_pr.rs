@@ -165,7 +165,7 @@ async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
     let tools = Tools::new();
     let dir = temp_dir();
     let params = orchestrator_params(dir.path());
-    let repo = PathBuf::from(&params.repo_path);
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
     let origin = add_origin(&repo, dir.path());
     let host = start(dir, editing(), &tools);
     let mut client = host.client().await;

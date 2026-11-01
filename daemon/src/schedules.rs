@@ -32,7 +32,7 @@ use parallax_protocol::{
     AccountChoice, AccountId, AgentEffort, AgentPermission, AgentSendParams, ErrorKind, RepoId,
     RunId, Schedule, ScheduleDeleteResult, ScheduleIdParams, ScheduleListResult, ScheduleRunStatus,
     ScheduleSaveParams, ScheduleWebhook, ScheduledTask, ScopeId, SignatureEncoding,
-    ThreadStartParams, TurnId,
+    ThreadStartParams, TurnId, WakeReason,
 };
 use parallax_store::OrchestrationReceipt;
 use serde::{Deserialize, Serialize};
@@ -569,6 +569,18 @@ fn fire_job(db: &mut Tx, id: Uuid, trigger: Trigger, now: Timestamp) -> Result<F
         error: None,
     })
     .map_err(|e| store_error(&e))?;
+    // An orchestrator thread it goes to comes back into the list (0093).
+    let reason = WakeReason::Schedule {
+        task: id.to_string(),
+        title: stored.task.title.clone(),
+    };
+    match &to {
+        To::Thread { run_id, .. } => crate::threads::wake_thread(db, (*run_id).into(), &reason)?,
+        To::Orchestrator { orchestrator, .. } => {
+            crate::threads::wake_orchestrator(db, (*orchestrator).into(), &reason)?;
+        }
+        To::New { .. } => {}
+    }
     let wake = Wake {
         task: Some(id.to_string()),
         to,

@@ -92,8 +92,8 @@ async fn create_or_get(
                 .get_orchestrator(id)
                 .map_err(|error| store_error(&error))?
                 .is_some();
-            if !existed {
-                repo::check(Path::new(&fields.repo_path)).map_err(|error| {
+            if !existed && let Some(repo_path) = &fields.repo_path {
+                repo::check(Path::new(repo_path)).map_err(|error| {
                     ErrorObject::parallax(ErrorKind::NotARepository, error.to_string())
                 })?;
             }
@@ -203,7 +203,7 @@ pub(crate) async fn from_threads(
         OrchestratorCreateParams {
             id,
             name,
-            repo_path,
+            repo_path: Some(repo_path),
             icon: None,
             permission: Some(permission),
             autonomy: None,
@@ -479,7 +479,12 @@ async fn check_computer(
             "{computer} isn't one of this computer's devices"
         )));
     }
-    if crate::repo_clone::origin(daemon, Path::new(&row.repo_path))
+    let Some(repo_path) = &row.repo_path else {
+        return Err(ErrorObject::invalid_params(
+            "This orchestrator has no repository, so its children can't run on another computer.",
+        ));
+    };
+    if crate::repo_clone::origin(daemon, Path::new(repo_path))
         .await
         .is_none()
     {
@@ -584,6 +589,16 @@ fn check(params: &OrchestratorCreateParams) -> Result<(), ErrorObject> {
     if let Some(icon) = icon {
         check_icon(icon)?;
     }
+    // Absent or empty is an orchestrator with no repo (0093), which has no branch to cut from.
+    let Some(repo_path) = repo_path.as_deref().filter(|path| !path.is_empty()) else {
+        if base_branch.is_some() {
+            return Err(ErrorObject::invalid_params(
+                "baseBranch needs a repoPath: an orchestrator with no repo has no integration \
+                 branch",
+            ));
+        }
+        return Ok(());
+    };
     if repo_path.len() > MAX_REPO_PATH_BYTES {
         return Err(ErrorObject::invalid_params(format!(
             "repoPath must be at most {MAX_REPO_PATH_BYTES} bytes"

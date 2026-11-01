@@ -23,7 +23,7 @@ fn open_temp() -> (tempfile::TempDir, Store) {
 fn sample_fields() -> OrchestratorFields {
     OrchestratorFields {
         name: "parallax".to_string(),
-        repo_path: "/Users/ryan/dev/parallax".to_string(),
+        repo_path: Some("/Users/ryan/dev/parallax".to_string()),
         icon: None,
         permission: "auto".to_string(),
         autonomy: "routine".to_string(),
@@ -337,7 +337,7 @@ fn a_version_1_database_migrates_and_keeps_its_orchestrators() {
         .expect("get")
         .expect("the row should survive the migration");
     assert_eq!(project.name, "parallax");
-    assert_eq!(project.repo_path, "/r");
+    assert_eq!(project.repo_path.as_deref(), Some("/r"));
     assert_eq!(
         project.icon, None,
         "migration 16 leaves old projects with no icon"
@@ -351,7 +351,7 @@ fn a_version_1_database_migrates_and_keeps_its_orchestrators() {
             id,
             &OrchestratorFields {
                 name: "parallax".to_string(),
-                repo_path: "/r".to_string(),
+                repo_path: Some("/r".to_string()),
                 // No icon, Auto, and Routine: what migrations 16, 26, and 31 give an old row.
                 ..sample_fields()
             },

@@ -782,7 +782,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
     const orchestrator = {
       id: p.id,
       name: p.name,
-      repoPath: p.repoPath,
+      repoPath: p.repoPath ?? "",
       branch: "main",
       ...(p.icon && { icon: p.icon }),
       permission: p.permission ?? "auto",

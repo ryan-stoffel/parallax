@@ -763,7 +763,8 @@ pub(crate) fn fields(params: OrchestratorCreateParams) -> (Uuid, OrchestratorFie
         params.id.into(),
         OrchestratorFields {
             name: params.name,
-            repo_path: params.repo_path,
+            // Empty is no repo, as absent is (0093).
+            repo_path: params.repo_path.filter(|path| !path.is_empty()),
             icon: params.icon.map(stored_icon),
             permission: stored_permission(
                 params.permission.unwrap_or(OrchestratorPermission::Auto),
@@ -858,8 +859,11 @@ pub(crate) fn orchestrator(
         icon: row.icon.map(protocol_icon),
         permission: Some(orchestrator_permission(&row.permission)),
         autonomy: Some(orchestrator_autonomy(&row.autonomy)),
-        branch: repo::branch(Path::new(&row.repo_path)),
-        repo_path: row.repo_path,
+        branch: row
+            .repo_path
+            .as_deref()
+            .and_then(|path| repo::branch(Path::new(path))),
+        repo_path: row.repo_path.unwrap_or_default(),
         run: orchestrator,
         base_branch: row.base_branch,
         integration_branch: row.integration_branch,
@@ -1051,7 +1055,7 @@ mod tests {
         OrchestratorCreateParams {
             id: ScopeId::generate(),
             name: "n".to_owned(),
-            repo_path: "/r".to_owned(),
+            repo_path: Some("/r".to_owned()),
             icon: None,
             permission: None,
             autonomy: None,

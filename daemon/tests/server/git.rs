@@ -44,7 +44,7 @@ async fn a_worktree_run_commits_the_user_s_edits_and_pushes_its_branch() {
     let tools = Tools::new();
     let dir = temp_dir();
     let params = orchestrator_params(dir.path());
-    let repo = PathBuf::from(&params.repo_path);
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
     let origin = add_origin(&repo, dir.path());
     let host = start(dir, editing(), &tools);
     let mut client = host.client().await;
@@ -290,7 +290,7 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
     let tools = Tools::new();
     let dir = temp_dir();
     let params = orchestrator_params(dir.path());
-    let repo = PathBuf::from(&params.repo_path);
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
     let origin = add_origin(&repo, dir.path());
     let (started, gate) = hold_pushes(&origin);
     let host = start(dir, editing(), &tools);
@@ -368,7 +368,7 @@ async fn a_message_makes_a_swept_worktree_again() {
     let tools = Tools::new();
     let dir = temp_dir();
     let params = orchestrator_params(dir.path());
-    let repo = PathBuf::from(&params.repo_path);
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
     let origin = add_origin(&repo, dir.path());
     let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
     git(&repo, &["push", "-q", "-u", "origin", &main]);
@@ -429,7 +429,7 @@ async fn a_missing_worktree_refuses_git_without_touching_the_checkout() {
     let tools = Tools::new();
     let dir = temp_dir();
     let params = orchestrator_params(dir.path());
-    let repo = PathBuf::from(&params.repo_path);
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
     let origin = add_origin(&repo, dir.path());
     let host = start(dir, editing(), &tools);
     let mut client = host.client().await;

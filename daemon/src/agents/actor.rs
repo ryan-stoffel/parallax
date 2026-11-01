@@ -58,7 +58,7 @@ use parallax_protocol::{
     AgentApproveParams, AgentApproveResult, AgentBackgroundTask, AgentFailureKind, AgentOutcome,
     AgentOutputItem, AgentPermission, AgentRun, ApprovalId, DiffSummary, ErrorKind, GitStatus,
     ImageId, InboxKind, OrchestratorSessionEnd, ParallaxEvent, PromptImage, QueueResult,
-    QueuedMessage, Role, RunId, ScopeId, TurnId,
+    QueuedMessage, Role, RunId, ScopeId, TurnId, WakeReason,
 };
 use parallax_store::{
     QueuedRow, Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree,
@@ -895,8 +895,19 @@ impl Actor {
     }
 
     /// Adds a child's permission request for `tool` to its project's inbox as `needsYou` (0031).
+    /// An orchestrator asks in its own transcript, so its request only brings its archived thread
+    /// back into the list (0093).
     async fn inbox_approval(&self, tool: &str) {
-        if self.is_child().await {
+        if self.is_orchestrator() {
+            let (id, reason) = (self.id, WakeReason::NeedsYou { run: self.id });
+            let woken = store(&self.daemon, move |db| {
+                crate::threads::wake_thread(db, id.into(), &reason)
+            })
+            .await;
+            if let Err(error) = woken {
+                warn!(run = %self.id, %error.message, "could not wake the orchestrator's thread");
+            }
+        } else if self.is_child().await {
             let task = wake::task(&self.row.fields.prompt);
             let text = format!("{task}: waiting for permission to use {tool}");
             self.inbox(InboxKind::NeedsYou, text).await;
@@ -2258,7 +2269,7 @@ impl Actor {
         if self.is_orchestrator() && !self.busy() {
             let project = super::integration(&self.daemon, self.project).await?;
             if let Some(project) = project {
-                self.orchestrator_setup(Path::new(&project.repo_path))
+                self.orchestrator_setup(project.repo_path.as_deref().map(Path::new))
                     .await
                     .map_err(|why| ErrorObject::parallax(ErrorKind::WorktreeFailed, why))?;
             }
@@ -2769,7 +2780,7 @@ impl Actor {
         let backend = prepared.resolved.backend().name();
         let from = self.row.fields.backend.clone();
         let session_id = session_id.filter(|_| backend == from && epoch_end.is_none());
-        let paths = self.checkout_paths(&repo_path).await?;
+        let paths = self.checkout_paths(repo_path.as_deref()).await?;
         let attached = attached::prompt(&self.daemon, self.id, &threads, &text).await?;
         let (mut sent, seen) = (attached.text, attached.seen);
         // The run's fields before it moves, to move it back if its new CLI doesn't start.
@@ -2834,7 +2845,7 @@ impl Actor {
         account: AccountChoice,
         moving: bool,
         permission: Option<AgentPermission>,
-    ) -> Result<(Prepared, String, Option<OrchestratorSessionEnd>), ErrorObject> {
+    ) -> Result<(Prepared, Option<String>, Option<OrchestratorSessionEnd>), ErrorObject> {
         let role = if self.is_orchestrator() {
             let project = self.project;
             let current = store(&self.daemon, move |db| {
@@ -3407,7 +3418,7 @@ impl Actor {
                 context,
                 ..
             } => self.worker_setup(&home, &data_dir, &context, paths).await,
-            Place::Orchestrator { repo } => self.orchestrator_setup(&repo).await,
+            Place::Orchestrator { repo } => self.orchestrator_setup(repo.as_deref()).await,
         };
         let Setup {
             cwd,
@@ -3493,22 +3504,7 @@ impl Actor {
         // so the shared context folder isn't an allowed directory for it, and stays as unreadable
         // as the rest of plxd's data folder in the sandbox (0044, PLX-468).
         sandbox.writable.clear();
-        // A thread in a Project, started there or added to it, gets its instructions and files,
-        // read as they are now (0090).
-        let (scope, run) = (Uuid::from(self.project), Uuid::from(self.id));
-        let instructions = store(&self.daemon, move |db| {
-            let error = |error| store_error(&error);
-            let added = db
-                .get_thread(run)
-                .map_err(error)?
-                .and_then(|t| t.project_id);
-            Ok(db
-                .get_repo(added.unwrap_or(scope))
-                .map_err(error)?
-                .and_then(|repo| crate::projects::thread_instructions(&repo)))
-        })
-        .await
-        .map_err(|error| error.message)?;
+        let instructions = self.project_instructions().await?;
         Ok(Setup {
             cwd,
             sandbox: Some(sandbox),
@@ -3524,25 +3520,52 @@ impl Actor {
     /// and cut with the branch if either is missing (0042, 0045), with a thread's Parallax tools
     /// bound to its own run (0041, PLX-380), and its instructions with the orchestrator's autonomy
     /// as it is now, pinned to this CLI's system prompt (0078).
-    async fn orchestrator_setup(&mut self, repo: &Path) -> Result<Setup, String> {
+    /// A thread in a Project, started there or added to it, gets its instructions and files, read
+    /// as they are now (0090), and so does an orchestrator thread added to one (0093).
+    async fn project_instructions(&self) -> Result<Option<String>, String> {
+        let (scope, run) = (Uuid::from(self.project), Uuid::from(self.id));
+        store(&self.daemon, move |db| {
+            let error = |error| store_error(&error);
+            let added = db
+                .get_thread(run)
+                .map_err(error)?
+                .and_then(|t| t.project_id);
+            Ok(db
+                .get_repo(added.unwrap_or(scope))
+                .map_err(error)?
+                .and_then(|repo| crate::projects::thread_instructions(&repo)))
+        })
+        .await
+        .map_err(|error| error.message)
+    }
+
+    async fn orchestrator_setup(&mut self, repo: Option<&Path>) -> Result<Setup, String> {
         let project = self.project.into();
         let autonomy = store(&self.daemon, move |db| {
             crate::methods::question::autonomy_of(db, project)
         })
         .await
         .map_err(|error| error.message)?;
-        let branch = super::integration(&self.daemon, self.project)
-            .await
-            .map_err(|error| error.message)?
-            .and_then(|row| row.integration_branch)
-            .ok_or_else(|| "the orchestrator has no integration branch".to_owned())?;
-        let cwd = self
-            .daemon
-            .agents
-            .worktrees
-            .refresh_orchestrator(repo, self.project, &branch)
-            .await
-            .map_err(|error| format!("could not prepare the orchestrator's worktree: {error}"))?;
+        let worktrees = &self.daemon.agents.worktrees;
+        let cwd = if let Some(repo) = repo {
+            let branch = super::integration(&self.daemon, self.project)
+                .await
+                .map_err(|error| error.message)?
+                .and_then(|row| row.integration_branch)
+                .ok_or_else(|| "the orchestrator has no integration branch".to_owned())?;
+            worktrees
+                .refresh_orchestrator(repo, self.project, &branch)
+                .await
+                .map_err(|error| {
+                    format!("could not prepare the orchestrator's worktree: {error}")
+                })?
+        } else {
+            // One with no repo works in a folder of its own (0093).
+            let path = worktrees.orchestrator_path(self.project);
+            std::fs::create_dir_all(&path)
+                .map_err(|error| format!("could not make the orchestrator's folder: {error}"))?;
+            path
+        };
         Ok(Setup {
             cwd,
             sandbox: None,
@@ -3551,8 +3574,9 @@ impl Actor {
             thread_tools: None,
             thread: false,
             instructions: Some(super::orchestrator::instructions(
-                &repo.to_string_lossy(),
+                repo.map(|repo| repo.to_string_lossy()).as_deref(),
                 autonomy,
+                self.project_instructions().await?.as_deref(),
             )),
         })
     }
@@ -3580,11 +3604,12 @@ impl Actor {
     /// `None` for any other run, whose worktree [`Self::worker_paths`] finds.
     async fn checkout_paths(
         &self,
-        repo_path: &str,
+        repo_path: Option<&str>,
     ) -> Result<Option<(PathBuf, PathBuf)>, ErrorObject> {
         if !self.row.fields.checkout {
             return Ok(None);
         }
+        let repo_path = repo_path.ok_or_else(|| super::no_worktree(self.id))?;
         super::checkout_paths(&self.daemon.agents, Path::new(repo_path))
             .await
             .map(Some)
