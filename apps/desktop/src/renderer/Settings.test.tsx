@@ -220,6 +220,8 @@ test("Storage deletes only a host's archived threads, after asking", async () =>
       repos: [],
       threads: [
         { id: "t-old", repo: "r", archived: true, createdAt: "" },
+        // An orchestrator's thread goes only with its orchestrator (0093).
+        { id: "t-orchestrator", repo: "o", archived: true, orchestrator: "o", createdAt: "" },
         { id: "t-live", repo: "r", createdAt: "" },
       ],
     },

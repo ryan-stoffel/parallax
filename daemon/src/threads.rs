@@ -1418,12 +1418,18 @@ pub(crate) async fn delete(
     if replayed().await? {
         return Ok(ThreadDeleteResult {});
     }
-    store(daemon, move |db| {
+    let thread = store(daemon, move |db| {
         db.get_thread(run_id.into())
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| thread_not_found(run_id))
     })
     .await?;
+    // It goes only with its orchestrator: its memory, board, and children need it (0093).
+    if thread.orchestrator_id.is_some() {
+        return Err(ErrorObject::invalid_params(format!(
+            "thread {run_id} is an orchestrator's: delete the orchestrator with orchestrator/delete"
+        )));
+    }
     match agents::delete(daemon, run_id, false, command_id).await {
         Ok(()) => Ok(ThreadDeleteResult {}),
         Err(error)

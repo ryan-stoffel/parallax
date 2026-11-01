@@ -49,6 +49,25 @@ pub(crate) async fn orchestrator(daemon: &Daemon, repo: Option<&str>) -> (ScopeI
     (id, run)
 }
 
+/// Starts `orchestrator` over on a new run, as a Start over does, and returns the run.
+pub(crate) async fn replace(daemon: &Daemon, orchestrator: ScopeId) -> RunId {
+    let run = RunId::generate();
+    store(daemon, move |db| {
+        let fields = RunFields {
+            policy: NO_WRITE.to_owned(),
+            orchestrator_thread: Some(run.into()),
+            ..run_fields(orchestrator.into())
+        };
+        db.create_run(run.into(), &fields, &RunState::default())
+            .map_err(|e| store_error(&e))?;
+        db.create_orchestrator_thread(run.into(), orchestrator.into())
+            .map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
+    run
+}
+
 pub(crate) async fn thread(daemon: &Daemon, run: RunId) -> Thread {
     store(daemon, move |db| {
         db.get_thread(run.into()).map_err(|e| store_error(&e))

@@ -1092,11 +1092,14 @@ fn record_job(
     }
     if let Some(text) = text {
         let run_id = run_id(run)?;
-        // An orchestrator thread watching it comes back into the list (0093).
+        // An orchestrator's run watching it, current or replaced, brings its thread back (0093).
         let reason = WakeReason::PullRequest {
             url: url.to_owned(),
         };
-        crate::threads::wake_thread(db, run, &reason)?;
+        let row = db.get_run(run).map_err(|e| store_error(&e))?;
+        if let Some(row) = row.filter(|row| row.fields.policy == crate::agents::NO_WRITE) {
+            crate::threads::wake_orchestrator(db, row.fields.project_id, &reason)?;
+        }
         let command_id = format!("pr-watch:{run}:{}", Uuid::now_v7());
         let wake = Wake {
             task: None,

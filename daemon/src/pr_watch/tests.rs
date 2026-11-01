@@ -1006,3 +1006,29 @@ async fn a_watch_wakes_an_archived_orchestrator_thread() {
         })
     );
 }
+
+/// 0093: a watch held by a run that Start over replaced still brings the orchestrator's thread
+/// back, since the watch stays with the run that made it.
+#[tokio::test]
+async fn a_replaced_runs_watch_wakes_the_orchestrators_thread() {
+    use crate::agents::orchestrator::tests::{archive, orchestrator, replace, thread};
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon =
+        crate::server::Daemon::for_tests(dir.path(), 10, std::time::Duration::from_secs(90));
+    let (id, old) = orchestrator(&daemon, Some("/src/app")).await;
+    let new = replace(&daemon, id).await;
+    archive(&daemon, new, true).await;
+    let url = "https://github.com/o/r/pull/1";
+    let payload = serde_json::to_string(&Watch::new(start())).unwrap();
+    crate::threads::store(&daemon, move |db| {
+        db.put_pr_watch(old.into(), url, &payload)
+            .map_err(|e| crate::store::store_error(&e))?;
+        let next = Some(Watch::new(start()));
+        let text = Some("A check failed.".to_owned());
+        super::record_job(db, old.into(), url, (start(), None), next, text)
+    })
+    .await
+    .unwrap();
+    assert!(!thread(&daemon, new).await.archived);
+}

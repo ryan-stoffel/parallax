@@ -3,12 +3,13 @@
 //! scratch repositories, and nothing lands.
 
 use parallax_protocol::methods::{
-    AgentStart, LandQueue, OrchestratorStart, ThreadArchive, ThreadFork, ThreadList, ThreadUpdate,
+    AgentStart, LandQueue, OrchestratorStart, ThreadArchive, ThreadDelete, ThreadFork, ThreadList,
+    ThreadUpdate,
 };
 use parallax_protocol::{
     AgentOutputItem, AgentStartParams, AgentStatus, ErrorKind, LandQueueParams,
-    OrchestratorCreateParams, ParallaxEvent, RunId, ThreadArchiveParams, ThreadForkParams,
-    ThreadListParams, ThreadUpdateParams, WakeReason,
+    OrchestratorCreateParams, ParallaxEvent, RunId, ThreadArchiveParams, ThreadDeleteParams,
+    ThreadForkParams, ThreadListParams, ThreadUpdateParams, WakeReason,
 };
 
 use plxd::backend::fake::{AskedApproval, Step};
@@ -212,6 +213,43 @@ async fn an_orchestrators_permission_request_wakes_its_archived_thread() {
         woken.wake_reason,
         Some(WakeReason::NeedsYou { run: run.id })
     );
+    host.server.stop().await;
+}
+
+/// `thread/delete` refuses an orchestrator's thread: its memory, board, and children would be left
+/// behind. Storage's Delete all sends it for every archived thread.
+#[tokio::test]
+async fn an_orchestrators_thread_goes_only_with_the_orchestrator() {
+    let host = Host::start(temp_dir(), fake(vec![init("s"), end_turn("Planned.")]));
+    let mut client = host.client().await;
+    let orchestrator = create(
+        &mut client,
+        crate::agents::orchestrator_params(host.dir.path()),
+    )
+    .await;
+    subscribe(&mut client, orchestrator.id, 0).await;
+    let run = client
+        .call::<OrchestratorStart>(start_params(orchestrator.id, "Plan it."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let refused = client
+        .call::<ThreadDelete>(ThreadDeleteParams { run_id: run.id })
+        .await
+        .unwrap_err();
+    assert!(
+        refused.message.contains("is an orchestrator's"),
+        "{}",
+        refused.message
+    );
+    let threads = client
+        .call::<ThreadList>(ThreadListParams::default())
+        .await
+        .unwrap()
+        .threads;
+    assert!(threads.iter().any(|thread| thread.id == run.id));
     host.server.stop().await;
 }
 

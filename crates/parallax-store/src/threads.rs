@@ -590,8 +590,8 @@ impl Store {
 
     /// Makes run `id`, which must exist, orchestrator `orchestrator`'s thread (0093): a thread row
     /// in the orchestrator, as its children's are, with orchestration on. The thread that had it,
-    /// from a run this one replaces, keeps its row with orchestration off, and gives the new one
-    /// its Project and pin. Returns the new thread, and the old one when there was one.
+    /// from a run this one replaces, keeps its row with orchestration off, and moves its Project
+    /// and pin to the new one. Returns the new thread, and the old one when there was one.
     ///
     /// # Errors
     ///
@@ -619,7 +619,8 @@ impl Store {
         };
         if let Some(old) = &before {
             tx.execute(
-                "UPDATE threads SET orchestrator_id = NULL WHERE id = ?1",
+                "UPDATE threads SET orchestrator_id = NULL, project_id = NULL, pinned = 0
+                 WHERE id = ?1",
                 params![old],
             )?;
         }

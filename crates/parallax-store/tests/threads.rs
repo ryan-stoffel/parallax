@@ -617,13 +617,26 @@ fn a_new_orchestrator_run_takes_over_its_thread() {
     let project = Uuid::now_v7();
     store.create_orchestrator_thread(old, orchestrator).unwrap();
     store.set_thread_project(old, Some(project)).unwrap();
+    store
+        .update_thread(
+            old,
+            &ThreadUpdate {
+                pinned: Some(true),
+                ..ThreadUpdate::default()
+            },
+        )
+        .unwrap();
 
     let (thread, before) = store.create_orchestrator_thread(new, orchestrator).unwrap();
     assert_eq!(
         (thread.orchestrator_id, thread.project_id),
         (Some(orchestrator), Some(project))
     );
-    assert_eq!(before.unwrap().orchestrator_id, None);
+    let before = before.unwrap();
+    assert_eq!(
+        (before.orchestrator_id, before.project_id, before.pinned),
+        (None, None, false)
+    );
     assert_eq!(
         store.orchestrator_thread(orchestrator).unwrap().unwrap().id,
         new
