@@ -1306,7 +1306,7 @@ export function Composer({
     !!menus && !!trigger && trigger.from !== closedAt && (entries.length > 0 || !!loading);
   const highlighted = Math.min(active, entries.length - 1);
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
-  const box = useRef<HTMLFormElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   // Narrow, as in a small window or a split's tile, the usage ring gives its room to the text.
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
@@ -1848,10 +1848,9 @@ export function Composer({
 
   return (
     <div className="w-full">
-      <form
+      {/* Not a form: its tabs hold forms of their own, and Enter in a footer search sends nothing. */}
+      <div
         ref={box}
-        // Footer pickers contain search inputs. Their Enter key must never send the draft.
-        onSubmit={(e) => e.preventDefault()}
         // Files and sidebar threads dropped anywhere on the box are added, before the editor can
         // take them as text.
         onDragOver={(e) => {
@@ -2132,7 +2131,7 @@ export function Composer({
             </div>
           </div>
         )}
-      </form>
+      </div>
       {footer}
     </div>
   );

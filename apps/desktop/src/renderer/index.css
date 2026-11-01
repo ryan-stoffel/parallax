@@ -1169,10 +1169,10 @@ body {
     var(--surface),
     color-mix(in oklab, var(--foreground) 6%, var(--surface))
   );
-  box-shadow: light-dark(
-    0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent),
-    inset 0 1px 0 rgb(255 255 255 / 4%)
-  );
+  /* A hairline around it in light, a lit top edge in dark. light-dark() only takes colors. */
+  box-shadow:
+    0 0 0 1px light-dark(color-mix(in oklab, var(--foreground) 6%, transparent), transparent),
+    inset 0 1px 0 light-dark(transparent, rgb(255 255 255 / 4%));
   transition: background-color var(--transition-duration-base) var(--ease-out);
 }
 .composer-shell:focus-within .composer-entry {
