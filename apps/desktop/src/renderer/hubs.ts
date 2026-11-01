@@ -9,6 +9,9 @@ import { loadProviders } from "./providers";
 // by Settings' views, and replaced by each save or remove's answer.
 
 const lists = new Map<string, Hub[]>();
+const loading = new Map<string, Promise<string | undefined>>();
+const revisions = new Map<string, number>();
+const loadedAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -25,6 +28,8 @@ export const HUB_GUIDE = "https://gist.github.com/t3dotgg/59a521d2ee8d70aaf90e28
  */
 function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = false) {
   if ("error" in answer) return describeError(answer.error);
+  revisions.set(hostId, (revisions.get(hostId) ?? 0) + 1);
+  loadedAt.set(hostId, Date.now());
   lists.set(hostId, answer.result.hubs);
   for (const listener of listeners) listener();
   if (changed) void loadProviders(hostId, true);
@@ -32,8 +37,24 @@ function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = fa
 }
 
 /** Lists `hostId`'s hubs, asking each again with `refresh`. Resolves to an error for people. */
-export async function loadHubs(hostId: string, refresh = false): Promise<string | undefined> {
-  return kept(hostId, await window.parallax.request(hostId, "hubs/list", { refresh }));
+export function loadHubs(hostId: string, refresh = false): Promise<string | undefined> {
+  const pending = loading.get(hostId);
+  if (pending && !refresh) return pending;
+  const revision = (revisions.get(hostId) ?? 0) + 1;
+  revisions.set(hostId, revision);
+  const load = window.parallax.request(hostId, "hubs/list", { refresh }).then((answer) => {
+    if (loading.get(hostId) === load) loading.delete(hostId);
+    if (revisions.get(hostId) !== revision) return undefined;
+    return kept(hostId, answer);
+  });
+  loading.set(hostId, load);
+  return load;
+}
+
+/** Lazy picker metadata, shared across menus, without repeating management probes within 30 s. */
+export function ensureHubs(hostId: string): Promise<string | undefined> {
+  if (Date.now() - (loadedAt.get(hostId) ?? 0) < 30_000) return Promise.resolve(undefined);
+  return loadHubs(hostId);
 }
 
 /** Adds a hub to `hostId`, or replaces the one with its id. Resolves to an error for people. */

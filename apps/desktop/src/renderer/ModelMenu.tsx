@@ -11,6 +11,7 @@ import {
   type Provider,
 } from "./models";
 import { isNew } from "./catalog";
+import { ensureHubs, useHubs } from "./hubs";
 import { kindOf, logoOf } from "./providers";
 import { Redacted, withoutEmails } from "./Redacted";
 import { menuButton, menuPanel, moveFocus } from "./ui";
@@ -29,17 +30,43 @@ const hasAccountDetail = (i: Instance | undefined, name: string) =>
 
 /**
  * An instance on one line, as the account header and its menu show it: its name, its email muted
- * beside it, and its plan. Each email sits right inside a `.truncate`, so its blur spreads softly
+ * beside it, and its plan. A hub provider stacks its enabled account emails beneath its name.
+ * Each email sits right inside a `.truncate`, so its blur spreads softly
  * past the cut (index.css's `.truncate:has(.redacted)`).
  */
-function AccountLabel({ instance: i, name }: { instance: Instance | undefined; name: string }) {
+function AccountLabel({
+  instance: i,
+  name,
+  emails = [],
+}: {
+  instance: Instance | undefined;
+  name: string;
+  emails?: string[];
+}) {
   const detail = emailOf(i, name);
   const Logo = i && logoOf(i);
+  if (i?.hub)
+    return (
+      <span className="flex min-w-0 flex-1 items-start gap-2">
+        {Logo && <Logo aria-hidden className="mt-0.5 size-4 shrink-0" />}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate">{kindOf(i.kind).name}</span>
+          {emails.map((email, index) => (
+            <span
+              key={`${email}/${index}`}
+              className="truncate text-caption font-normal text-faint-foreground"
+            >
+              <Redacted text={email} />
+            </span>
+          ))}
+        </span>
+      </span>
+    );
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
       {Logo && <Logo aria-hidden className="size-4 shrink-0" />}
       <span className="min-w-0 truncate">
-        <Redacted text={i?.hub ? kindOf(i.kind).name : name} />
+        <Redacted text={name} />
       </span>
       {detail && (
         <span className="min-w-0 truncate font-normal text-faint-foreground">
@@ -96,6 +123,7 @@ export function ModelMenu({
   );
   const models = all.filter((m) => !unavailable[m.provider]);
   const prefs = useModelPrefs();
+  const hubs = useHubs(catalog.hostId);
   const starred = (m: Model) =>
     !!prefs[prefsKey(catalog.hostId, m.provider)]?.favorites?.includes(m.id);
   const instance = (id: Provider) => catalog.instances.find((i) => i.id === id);
@@ -104,6 +132,13 @@ export function ModelMenu({
     return found ? logoOf(found) : kindOf(id).Logo;
   };
   const nameOf = (id: Provider) => instance(id)?.name ?? id;
+  const emailsOf = (id: Provider) => {
+    const i = instance(id);
+    const accounts = hubs?.find((h) => h.id === i?.hub)?.accounts ?? [];
+    return accounts.flatMap((a) =>
+      !a.disabled && a.provider === i?.kind && a.email ? [a.email] : [],
+    );
+  };
   const group = (id: Provider) => {
     const found = instance(id);
     return found ? groupOf(found) : id;
@@ -189,6 +224,7 @@ export function ModelMenu({
             setTab(group(chosen.provider));
             setAccount(chosen.provider);
             search.current?.focus();
+            if (catalog.instances.some((i) => i.hub)) void ensureHubs(catalog.hostId);
           } else {
             setQuery("");
             setChoosingAccount(false);
@@ -292,9 +328,13 @@ export function ModelMenu({
                   e.stopPropagation();
                   setChoosingAccount(true);
                 }}
-                className="flex h-7 w-full items-center gap-2 rounded-md px-2.5 text-left text-meta font-medium text-muted-foreground transition-colors duration-150 hover:bg-hover hover:text-foreground aria-expanded:text-foreground"
+                className="flex min-h-7 w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-meta font-medium text-muted-foreground transition-colors duration-150 hover:bg-hover hover:text-foreground aria-expanded:text-foreground"
               >
-                <AccountLabel instance={instance(account)} name={nameOf(account)} />
+                <AccountLabel
+                  instance={instance(account)}
+                  name={nameOf(account)}
+                  emails={emailsOf(account)}
+                />
                 <ChevronDown
                   aria-hidden
                   className={`size-3.5 shrink-0 text-faint-foreground transition-transform duration-150 ${choosingAccount ? "rotate-180" : ""}`}
@@ -329,9 +369,9 @@ export function ModelMenu({
                         setAccount(p);
                         closeAccounts();
                       }}
-                      className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body enabled:hover:bg-hover aria-checked:font-medium disabled:opacity-40"
+                      className="flex min-h-8 w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-body enabled:hover:bg-hover aria-checked:font-medium disabled:opacity-40"
                     >
-                      <AccountLabel instance={instance(p)} name={nameOf(p)} />
+                      <AccountLabel instance={instance(p)} name={nameOf(p)} emails={emailsOf(p)} />
                       <Check
                         aria-hidden
                         className={`size-3.5 shrink-0 text-accent ${account === p ? "" : "invisible"}`}
@@ -344,15 +384,14 @@ export function ModelMenu({
           ) : (
             accounts.length === 1 &&
             (instance(account)?.hub || hasAccountDetail(instance(account), nameOf(account))) && (
-              <div className="mt-1.5 flex h-7 shrink-0 items-center px-4 text-meta font-medium text-muted-foreground">
-                <AccountLabel instance={instance(account)} name={nameOf(account)} />
+              <div className="mt-1.5 flex min-h-7 shrink-0 items-center px-4 py-1 text-meta font-medium text-muted-foreground">
+                <AccountLabel
+                  instance={instance(account)}
+                  name={nameOf(account)}
+                  emails={emailsOf(account)}
+                />
               </div>
             )
-          )}
-          {instance(account)?.hub && !mixed && (
-            <div className="px-4 pt-1 text-caption text-faint-foreground">
-              Accounts are routed by the hub.
-            </div>
           )}
           <ul className="min-h-0 flex-1 scroll-py-1.5 overflow-y-auto p-1.5">
             {shown.map((m) => {

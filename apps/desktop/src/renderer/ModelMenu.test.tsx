@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, test } from "vite-plus/test";
+import { afterEach, expect, test, vi } from "vite-plus/test";
 
+import type { Hub } from "../protocol/generated/protocol";
+import { loadHubs, setHubAccountEnabled } from "./hubs";
 import { ModelMenu } from "./ModelMenu";
 import type { Catalog, Instance, Model } from "./models";
 import { redactedPlaceholder } from "./Redacted";
@@ -201,4 +203,100 @@ test("a hub has one rail entry and provider-logo choices separate from local pro
     root!.render(<ModelMenu catalog={catalog} value={catalog.models[0]!} onChange={() => {}} />),
   );
   expect(listed()).toEqual(["opus"]);
+});
+
+test("hub providers show matching enabled account emails beneath their names, loaded on opening", async () => {
+  const metadata: Hub = {
+    id: "home",
+    name: "CLIProxyAPI",
+    url: "http://localhost:8317",
+    enabled: true,
+    hasManagementKey: true,
+    reachable: true,
+    claude: "hub-claude",
+    codex: "hub-codex",
+    claudeModels: [],
+    codexModels: [],
+    checkedAt: "2026-10-31T00:00:00Z",
+    accounts: [
+      { id: "c", provider: "claude", email: "claude@example.test", disabled: false, limits: [] },
+      { id: "a", provider: "codex", email: "personal@example.test", disabled: false, limits: [] },
+      { id: "b", provider: "codex", email: "work@example.test", disabled: false, limits: [] },
+      { id: "off", provider: "codex", email: "disabled@example.test", disabled: true, limits: [] },
+      { id: "no-email", provider: "codex", disabled: false, limits: [] },
+    ],
+  };
+  const request = vi.fn().mockResolvedValue({ result: { hubs: [metadata] } });
+  Object.assign(window, { parallax: { request } });
+  const hub: Catalog = {
+    hostId: "hub-emails-test",
+    instances: [
+      {
+        ...codex("hub-claude", "CLIProxyAPI"),
+        kind: "claude",
+        hub: "home",
+        hubName: "CLIProxyAPI",
+      },
+      { ...codex("hub-codex", "CLIProxyAPI"), hub: "home", hubName: "CLIProxyAPI" },
+    ],
+    models: [model("hub-claude", "Claude Opus 5.5"), model("hub-codex", "GPT 6.1 Terra")],
+  };
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root!.render(<ModelMenu catalog={hub} value={hub.models[0]!} onChange={() => {}} />));
+  expect(request).not.toHaveBeenCalled();
+  const opened = () =>
+    document
+      .querySelector(".model-menu")!
+      .dispatchEvent(Object.assign(new Event("toggle"), { newState: "open" }));
+  await act(async () => {
+    opened();
+    opened();
+  });
+  expect(request).toHaveBeenCalledExactlyOnceWith("hub-emails-test", "hubs/list", {
+    refresh: false,
+  });
+  act(() => button("Choose provider")!.click());
+  const choices = document.querySelector('[role="menu"][aria-label="Account"]')!;
+  const codexRow = choices.querySelector<HTMLButtonElement>('[aria-label="Codex"]')!;
+  expect(codexRow.querySelectorAll(".redacted")).toHaveLength(2);
+  expect(codexRow.textContent).toContain(redactedPlaceholder("personal@example.test"));
+  expect(codexRow.textContent).toContain(redactedPlaceholder("work@example.test"));
+  expect(codexRow.textContent).not.toContain(redactedPlaceholder("disabled@example.test"));
+  expect(choices.querySelector('[aria-label="Claude Code"] .redacted')).not.toBeNull();
+  act(() => codexRow.click());
+  expect(button("Choose provider")!.querySelectorAll(".redacted")).toHaveLength(2);
+  expect(listed()).toEqual(["GPT 6.1 Terra"]);
+  expect(document.body.textContent).not.toContain("Accounts are routed by the hub");
+  await act(async () => {
+    opened();
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+  // Without management metadata there is no invented account identity or helper message.
+  request.mockResolvedValue({
+    result: { hubs: [{ ...metadata, accounts: [], hasManagementKey: false }] },
+  });
+  await act(async () => {
+    await loadHubs("hub-emails-test", true);
+  });
+  expect(button("Choose provider")!.querySelectorAll(".redacted")).toHaveLength(0);
+  // An older metadata request must not undo a newer account settings response.
+  let finishOld!: (answer: { result: { hubs: Hub[] } }) => void;
+  request.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishOld = resolve;
+      }),
+  );
+  const stale = loadHubs("hub-emails-test", true);
+  request.mockResolvedValueOnce({ result: { hubs: [metadata] } });
+  await act(async () => {
+    await setHubAccountEnabled("hub-emails-test", "home", "b", true);
+  });
+  await act(async () => {
+    finishOld({ result: { hubs: [] } });
+    await stale;
+  });
+  expect(button("Choose provider")!.querySelectorAll(".redacted")).toHaveLength(1);
+  act(() => button("Choose provider")!.click());
+  expect(document.querySelectorAll('[aria-label="Codex"] .redacted')).toHaveLength(2);
 });
