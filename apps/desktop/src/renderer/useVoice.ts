@@ -13,6 +13,7 @@ function voiceError(error: unknown) {
 /** Own capture and the app-local hold gesture for this composer only. */
 export function useVoice(options: {
   enabled: boolean;
+  focused: boolean;
   hotkey: boolean;
   scope: string;
   starting(): void;
@@ -22,6 +23,7 @@ export function useVoice(options: {
   current.current = options;
   const [phase, setPhase] = useState<VoicePhase>("idle");
   const [hotkey, setHotkey] = useState(false);
+  const [owner] = useState(() => crypto.randomUUID());
   const [session] = useState(
     () =>
       new VoiceSession(
@@ -31,7 +33,8 @@ export function useVoice(options: {
         },
         setPhase,
         (text) => {
-          if (text) current.current.inserted(text);
+          if (text && current.current.focused && current.current.enabled)
+            current.current.inserted(text);
         },
         (error) => {
           notify({ tone: "error", title: "Voice input failed", body: voiceError(error) });
@@ -40,7 +43,7 @@ export function useVoice(options: {
   );
   const held = useRef(false);
   const start = () => {
-    if (!current.current.enabled || session.phase !== "idle") return;
+    if (!current.current.enabled || !current.current.focused || session.phase !== "idle") return;
     current.current.starting();
     session.start();
   };
@@ -72,10 +75,12 @@ export function useVoice(options: {
     };
   }, [session, options.scope]);
   useEffect(() => {
-    if (!options.enabled) session.cancel();
-    if (!options.enabled || !options.hotkey || !window.parallax?.voiceHotkey) return;
+    if (!options.enabled || !options.focused) session.cancel();
+    if (!options.enabled || !options.focused || !options.hotkey || !window.parallax?.voiceHotkey)
+      return;
     let live = true;
     const off = window.parallax.onVoiceKey?.((key) => {
+      if (!current.current.focused) return;
       if (key === "down") {
         // Fn belongs to the thread, never to a dialog or a different text field.
         if (
@@ -100,7 +105,7 @@ export function useVoice(options: {
       }
     });
     void window.parallax
-      .voiceHotkey(true)
+      .voiceHotkey(true, owner)
       .then((result) => {
         if (!live) return;
         setHotkey(result.available);
@@ -119,11 +124,11 @@ export function useVoice(options: {
       live = false;
       setHotkey(false);
       off?.();
-      void window.parallax.voiceHotkey?.(false);
+      void window.parallax.voiceHotkey?.(false, owner);
       held.current = false;
       session.cancel();
     };
-  }, [session, options.enabled, options.hotkey, options.scope]);
+  }, [session, owner, options.enabled, options.focused, options.hotkey, options.scope]);
   return {
     phase,
     hotkey,

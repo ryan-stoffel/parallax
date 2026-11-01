@@ -47,7 +47,14 @@ test("held Fn ignores hidden menus and inserts on release, then cancels on windo
   hidden.checkVisibility = () => false;
   let voice!: ReturnType<typeof useVoice>;
   function Probe() {
-    voice = useVoice({ enabled: true, hotkey: true, scope: "thread-1", starting, inserted });
+    voice = useVoice({
+      enabled: true,
+      focused: true,
+      hotkey: true,
+      scope: "thread-1",
+      starting,
+      inserted,
+    });
     return null;
   }
   const container = document.body.appendChild(document.createElement("div"));
@@ -74,5 +81,77 @@ test("held Fn ignores hidden menus and inserts on release, then cancels on windo
     await act(async () => root.unmount());
     container.remove();
     hidden.remove();
+  }
+});
+
+test("only the focused split composer owns Fn and a focus switch cancels its old recording", async () => {
+  const listeners = new Set<(key: VoiceKey) => void>();
+  let nativeOwner: string | undefined;
+  const native = vi.fn(async (enabled: boolean, owner: string) => {
+    if (enabled) nativeOwner = owner;
+    else if (nativeOwner === owner) nativeOwner = undefined;
+    return { available: true };
+  });
+  window.parallax = {
+    voiceHotkey: native,
+    onVoiceKey: (callback: (key: VoiceKey) => void) => {
+      listeners.add(callback);
+      return () => {
+        listeners.delete(callback);
+      };
+    },
+  } as unknown as ParallaxBridge;
+  const inserted = [vi.fn(), vi.fn()];
+  const started = [vi.fn(), vi.fn()];
+  const phases: ReturnType<typeof useVoice>[] = [];
+  function Tile({ id, focused }: { id: number; focused: boolean }) {
+    phases[id] = useVoice({
+      enabled: true,
+      focused,
+      hotkey: true,
+      scope: `thread-${id}`,
+      starting: started[id]!,
+      inserted: inserted[id]!,
+    });
+    return <div className="composer-input" contentEditable suppressContentEditableWarning />;
+  }
+  function Split({ focused, hideLeft = false }: { focused: number; hideLeft?: boolean }) {
+    return (
+      <>
+        {!hideLeft && <Tile key="left" id={0} focused={focused === 0} />}
+        <Tile key="right" id={1} focused={focused === 1} />
+      </>
+    );
+  }
+  const key = async (value: VoiceKey) => {
+    await act(async () => {
+      for (const listener of listeners) listener(value);
+      for (let i = 0; i < 15; i++) await Promise.resolve();
+    });
+  };
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<Split focused={0} />));
+    expect(listeners.size).toBe(1);
+    await key("down");
+    expect(phases[0]!.phase).toBe("recording");
+    expect(started[1]).not.toHaveBeenCalled();
+    await act(async () => root.render(<Split focused={1} />));
+    expect(phases[0]!.phase).toBe("idle");
+    expect(listeners.size).toBe(1);
+    const rightOwner = nativeOwner;
+    expect(rightOwner).toBeTruthy();
+    await key("up");
+    expect(inserted[0]).not.toHaveBeenCalled();
+    await act(async () => root.render(<Split focused={1} hideLeft />));
+    expect(nativeOwner).toBe(rightOwner);
+    await key("down");
+    await key("up");
+    expect(inserted[1]).toHaveBeenCalledExactlyOnceWith("hello");
+    expect(inserted[0]).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
   }
 });
