@@ -169,12 +169,12 @@ export function RunTargetMenu({
         {busy ? <LoaderCircle aria-hidden className="animate-spin" /> : hostIcon(host)}
         {host.name}
         {workspace && (
-          <>
+          <span className="composer-detail flex items-center gap-1.5">
             <span aria-hidden className="text-faint-foreground">
               ·
             </span>
             {workspace.label}
-          </>
+          </span>
         )}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>

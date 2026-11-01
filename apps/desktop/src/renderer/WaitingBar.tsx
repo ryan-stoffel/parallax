@@ -10,7 +10,7 @@ import { menuPanel, popoverBeside } from "./ui";
 import { presentWaiting } from "./waiting";
 
 /**
- * What a thread's settled agent still waits on, tucked over its composer as T3 Code's strip is
+ * What a thread's settled agent still waits on, in its composer's top row, as T3 Code's strip
  * (PLX-777): one line naming its background tasks, such as a Monitor, and the pull requests plxd
  * watches for it, and Stop, which ends them all. Hidden while it waits on nothing. `compact` shows
  * only how many, opening the details and Stop above itself, for a place beside other tabs. Each
