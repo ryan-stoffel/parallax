@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 import type { HostResponse } from "../preload/bridge";
 import type { Hub, HubsListResult, HubsSaveParams } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { loadProviders } from "./providers";
+import { loadProviders, relistProviders } from "./providers";
 
 // A host's CLIProxyAPI hubs (`hubs/list`, 0089), on a plxd with `hubs`: one list per host, shared
 // by Settings and every model picker, and replaced by each change's answer.
@@ -24,8 +24,7 @@ export const HUB_GUIDE = "https://gist.github.com/t3dotgg/59a521d2ee8d70aaf90e28
 
 /**
  * Keeps a list plxd answered as `hostId`'s, or resolves to why it couldn't, for people. A change
- * can change the host's instances and their models too, so they're listed again: from what plxd
- * knows at once, which drops a hub that went away, then asking each.
+ * can change the host's instances and their models too, so they're listed again.
  */
 function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = false) {
   if ("error" in answer) return describeError(answer.error);
@@ -33,7 +32,7 @@ function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = fa
   loadedAt.set(hostId, Date.now());
   lists.set(hostId, answer.result.hubs);
   for (const listener of listeners) listener();
-  if (changed) void loadProviders(hostId).then(() => loadProviders(hostId, true));
+  if (changed) void relistProviders(hostId);
   return undefined;
 }
 

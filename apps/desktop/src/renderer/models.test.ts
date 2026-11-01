@@ -134,10 +134,50 @@ test("the catalog offers only instances that are on and can run", () => {
     ...new Set(catalogOf("local", list, {}, []).models.map((m) => m.provider)),
   ];
   expect(offered(providers)).toEqual(["ready", "unknown"]);
+  // A hub that answers but has no models leaves nothing to pick, so it doesn't count as running.
+  expect(
+    offered([
+      info({ id: "out", kind: "claude" }, { ...model, signedIn: false }),
+      info({ id: "hub", kind: "codex" }, { hub: "home", signedIn: true }),
+    ]),
+  ).toEqual(["out"]);
   // Signed out of everything, the composer still has a model to send with.
   expect(offered([info({ id: "out", kind: "claude" }, { ...model, signedIn: false })])).toEqual([
     "out",
   ]);
+});
+
+test("a catalog knows the models it doesn't offer, for an open thread on them", () => {
+  const catalog = catalogOf(
+    "local",
+    [
+      info({ id: "ready", kind: "codex" }, { models: [{ id: "m", name: "M" }], signedIn: true }),
+      info({ id: "out", kind: "claude" }, { models: [{ id: "o", name: "Opus" }], signedIn: false }),
+    ],
+    {},
+    [],
+  );
+  expect(catalog.models.map((m) => m.id)).toEqual(["m"]);
+  expect(catalog.known.find((m) => m.id === "o")?.name).toBe("Opus");
+});
+
+test("a hub drops routed image models, and a snapshot beside its alias", () => {
+  const names = instanceModels(
+    info(
+      { id: "hub-claude", kind: "claude" },
+      {
+        hub: "home",
+        models: [
+          "team/gpt-image-2",
+          "team/codex-auto-review",
+          "claude-opus-4-5-20251101",
+          "claude-opus-4-5",
+          "claude-sonnet-4-5-20250929",
+        ].map((id) => ({ id, name: id })),
+      },
+    ),
+  ).map((m) => m.id);
+  expect(names).toEqual(["claude-sonnet-4-5-20250929", "claude-opus-4-5"]);
 });
 
 test("a hub lists agent models newest first, without its image models", () => {

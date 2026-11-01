@@ -31,6 +31,12 @@ function ownAccount(i: Instance): Account[] {
 /** An instance as a choice among its group's: a hub's by its kind, an email before its @. */
 const choiceName = (i: Instance) => (i.hub ? kindOf(i.kind).name : i.name.split("@")[0]!);
 
+/** `i`'s name among `all`: short, unless another's short name is the same. */
+const uniqueChoiceName = (i: Instance, all: (Instance | undefined)[]) =>
+  all.filter((other) => other && choiceName(other) === choiceName(i)).length > 1
+    ? i.name
+    : choiceName(i);
+
 // The same model can run on two instances, so a model is known by both.
 const keyOf = (m: Model) => `${m.provider}/${m.id}`;
 
@@ -246,7 +252,7 @@ export function ModelMenu({
           {!mixed && (choices.length > 1 || shownAccounts.length > 0) && (
             <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-4 py-2.5">
               {choices.length > 1 && (
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
                   <span className="min-w-0 truncate text-meta font-medium text-foreground">
                     {instance(account)?.hubName ?? kindOf(instance(account)?.kind ?? "").name}
                   </span>
@@ -254,6 +260,7 @@ export function ModelMenu({
                     label={instance(account)?.hub ? "Provider" : "Account"}
                     value={account}
                     onChange={setAccount}
+                    wrap
                     options={choices.map((p) => {
                       const ChoiceLogo = logo(p);
                       const found = instance(p);
@@ -263,12 +270,12 @@ export function ModelMenu({
                           <>
                             <ChoiceLogo aria-hidden />
                             <span className="max-w-28 truncate">
-                              {found ? choiceName(found) : p}
+                              {found ? uniqueChoiceName(found, choices.map(instance)) : p}
                             </span>
                           </>
                         ),
                         disabled: !!unavailable[p],
-                        ...(unavailable[p] && { title: unavailable[p] }),
+                        title: unavailable[p] ?? found?.name ?? p,
                       };
                     })}
                   />

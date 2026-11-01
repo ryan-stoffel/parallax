@@ -142,6 +142,17 @@ export function loadProviders(hostId: string, refresh = false): Promise<string |
   return load;
 }
 
+/**
+ * Lists `hostId`'s instances after something else changed them, such as a hub: what plxd knows at
+ * once, then asking each. A list already on its way predates the change, so it's dropped.
+ */
+export async function relistProviders(hostId: string): Promise<void> {
+  generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+  loading.delete(hostId);
+  await loadProviders(hostId);
+  await loadProviders(hostId, true);
+}
+
 /** Adds `instance` to a host, or replaces the one with its id. Resolves to an error for people. */
 export async function saveProvider(
   hostId: string,

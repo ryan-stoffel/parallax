@@ -167,7 +167,7 @@ export function hubModelName(model: { id: string; name: string }): string {
   const slash = name.lastIndexOf("/");
   const route = name.slice(0, slash + 1);
   // Anthropic's snapshot dates (`-20251101`) say nothing a person picks by; the id keeps them.
-  const slug = name.slice(slash + 1).replace(/-\d{8}$/, "");
+  const slug = undated(name.slice(slash + 1));
   // Versions such as Claude's 5-5 become 5.5. Dashed date suffixes remain intact.
   const words =
     slug.replace(/(\d{1,2})-(\d)(?=-|$)/g, "$1.$2").match(/\d{4}-\d{2}-\d{2}|[^-_]+/g) ?? [];
@@ -192,7 +192,10 @@ export function hubModelName(model: { id: string; name: string }): string {
 }
 
 /** What a hub serves that can't run an agent's thread: image models and Codex's reviewer. */
-const hubOnly = /^(?:gpt-image|codex-auto-review)/;
+const hubOnly = /(?:^|\/)(?:gpt-image|codex-auto-review)/;
+
+/** A dated id, such as `claude-opus-4-5-20251101`, without its date. */
+const undated = (id: string) => id.replace(/-\d{8}$/, "");
 
 /** A label's version: 6.1 in "GPT 6.1 Terra", none in "GPT OSS 120B". */
 const versionIn = (name: string) => Number(/\b\d+(?:\.\d+)?\b/.exec(name)?.[0] ?? 0);
@@ -209,7 +212,15 @@ export function instanceModels(info: ProviderInfo): Model[] {
   // Availability and names belong to the upstream catalog. Built-ins supply only optional
   // capabilities, and remain a fallback for older CLIs that cannot list models.
   const discovered = info.models
-    .filter((m) => !info.hub || !hubOnly.test(m.id))
+    .filter(
+      (m) =>
+        !info.hub ||
+        // A snapshot is the same model as the alias beside it, and would have the same label.
+        !(
+          hubOnly.test(m.id) ||
+          (undated(m.id) !== m.id && info.models.some((o) => o.id === undated(m.id)))
+        ),
+    )
     .map((m) => ({
       ...models.find((c) => c.provider === instance.kind && c.id === m.id),
       ...m,
