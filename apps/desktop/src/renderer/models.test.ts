@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
-import { isNew } from "./catalog";
+import { hubModelName, isNew } from "./catalog";
 import { catalogOf, instanceModels, plainName } from "./models";
 import { knownModel } from "./Subagents";
 
@@ -55,7 +55,7 @@ test("a host's catalog is its instances' models, in this device's order, without
   ]);
 });
 
-test("a hub's instances offer only the hub's models, named exactly as the upstream names them", () => {
+test("a hub's instances offer only the hub's models, with readable names and unchanged upstream IDs", () => {
   const hub = (id: string, kind: string, models: string[]) =>
     info(
       { id, kind: kind as ProviderInstance["kind"], name: "Work Codex" },
@@ -72,9 +72,9 @@ test("a hub's instances offer only the hub's models, named exactly as the upstre
   );
   expect(catalog.instances.map((i) => i.hubName)).toEqual(["Work Codex", "Work Codex"]);
   expect(catalog.models.map((m) => [m.provider, m.id, m.name])).toEqual([
-    ["home-claude", "claude-opus-5-5", "claude-opus-5-5"],
-    ["home-codex", "gpt-6-sol", "gpt-6-sol"],
-    ["home-codex", "gemini-3-pro", "gemini-3-pro"],
+    ["home-claude", "claude-opus-5-5", "Claude Opus 5.5"],
+    ["home-codex", "gpt-6-sol", "GPT 6 Sol"],
+    ["home-codex", "gemini-3-pro", "Gemini 3 Pro"],
   ]);
 });
 
@@ -141,4 +141,22 @@ test("discovered models define availability and names without a catalog edit", (
   ]);
   expect(models[1]!.fast).toBe(true);
   expect(isNew({ ...models[0]!, released: "2099-01-01" }, Date.parse("2026-10-31"))).toBe(false);
+});
+
+test("hub display names format raw slugs without rewriting routes, dates, or custom labels", () => {
+  for (const [id, expected] of [
+    ["gpt-6.1-terra", "GPT 6.1 Terra"],
+    ["claude-opus-5-5", "Claude Opus 5.5"],
+    ["claude-sonnet-4-5-20250929", "Claude Sonnet 4.5 20250929"],
+    ["gemini-3-pro-preview", "Gemini 3 Pro Preview"],
+    ["gpt-oss-120b", "GPT OSS 120B"],
+    ["team/gpt-6.1-terra", "team/GPT 6.1 Terra"],
+    ["gemini-3-pro-2026-10-31", "Gemini 3 Pro 2026-10-31"],
+  ])
+    expect(hubModelName({ id: id!, name: id! })).toBe(expected);
+  expect(hubModelName({ id: "gpt-6.1-terra", name: "Terra (recommended)" })).toBe(
+    "Terra (recommended)",
+  );
+  expect(hubModelName({ id: "gpt-6.1-terra", name: "my-custom-alias" })).toBe("my-custom-alias");
+  expect(hubModelName({ id: "gpt-6.1-terra", name: "GPT-6.1 Terra" })).toBe("GPT-6.1 Terra");
 });

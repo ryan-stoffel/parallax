@@ -160,10 +160,40 @@ export const models: Model[] = [
   { id: "kimi-k3-max", name: "Kimi K3", provider: "cursor", contexts: [] },
 ];
 
+/** Readable hub labels for raw model slugs, preserving routes, aliases, and upstream labels. */
+export function hubModelName(model: { id: string; name: string }): string {
+  const { id, name } = model;
+  if (name !== id || !/^[a-z0-9][a-z0-9._/-]*$/.test(name)) return name;
+  const slash = name.lastIndexOf("/");
+  const route = name.slice(0, slash + 1);
+  const slug = name.slice(slash + 1);
+  // Versions such as Claude's 5-5 become 5.5. Date suffixes remain intact.
+  const words =
+    slug.replace(/(\d{1,2})-(\d)(?=-|$)/g, "$1.$2").match(/\d{4}-\d{2}-\d{2}|[^-_]+/g) ?? [];
+  const marks: Record<string, string> = {
+    gpt: "GPT",
+    oss: "OSS",
+    deepseek: "DeepSeek",
+    openai: "OpenAI",
+  };
+  return (
+    route +
+    words
+      .map(
+        (word) =>
+          marks[word] ??
+          (/^\d+(?:\.\d+)?[bm]$/.test(word)
+            ? word.toUpperCase()
+            : word.replace(/^[a-z]/, (c) => c.toUpperCase())),
+      )
+      .join(" ")
+  );
+}
+
 /**
- * An instance's models before this device's choices: its kind's built-in catalog, then those plxd
- * found, OpenCode's own without its name for itself, then the user's own, each id once. One that lists none offers its agent's own default,
- * whose empty id sends no `model`.
+ * An instance's discovered models, or its legacy catalog when discovery is unavailable, then
+ * the user's own, each id once. Hubs have readable display labels and retain their exact IDs.
+ * One that lists none offers its agent's own default, whose empty id sends no `model`.
  */
 export function instanceModels(info: ProviderInfo): Model[] {
   const { instance } = info;
@@ -173,8 +203,9 @@ export function instanceModels(info: ProviderInfo): Model[] {
   const discovered = info.models.map((m) => ({
     ...models.find((c) => c.provider === instance.kind && c.id === m.id),
     ...m,
-    name:
-      instance.kind === "opencode" && m.id.startsWith("opencode/")
+    name: info.hub
+      ? hubModelName(m)
+      : instance.kind === "opencode" && m.id.startsWith("opencode/")
         ? m.name.replace(/^[^/]*\//, "")
         : m.name,
     contexts: models.find((c) => c.provider === instance.kind && c.id === m.id)?.contexts ?? [],
