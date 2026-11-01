@@ -23,7 +23,12 @@ export interface HostThreads {
 
 /** One row of the list: a thread, or an orchestrator, with its host and what it asks of the user. */
 export type Item = (
-  | { kind: "thread"; thread: Thread; run?: AgentRun }
+  | {
+      kind: "thread";
+      thread: Thread;
+      run?: AgentRun;
+      orchestration?: { orchestrator: Orchestrator; runs: AgentRun[] };
+    }
   | { kind: "orchestrator"; orchestrator: Orchestrator; runs: AgentRun[] }
 ) & {
   key: string;
@@ -59,7 +64,7 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
     const repoOf = (id: string) => state.repos.find((r) => r.id === id);
     const inOrchestrator = threadOrchestrators(state);
     const threads = state.threads
-      .filter((t) => !inOrchestrator.get(t.id))
+      .filter((t) => !inOrchestrator.get(t.id) && !state.orchestrators.some((p) => p.run === t.id))
       .map((t): Item => {
         const run = state.runs[t.id];
         const repo = repoOf(t.repo);
@@ -89,15 +94,19 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
       });
     const orchestrators = state.orchestrators.map((p): Item => {
       const runs = orchestratorRuns(state, p.id, inOrchestrator);
+      const thread = state.threads.find((t) => t.id === p.run);
+      const run = p.run ? state.runs[p.run] : undefined;
+      const key = `${h.id}/${p.id}`;
+      const attention = orchestratorAttention(runs, (id) => asksOf(state, id));
       return {
-        kind: "orchestrator",
-        orchestrator: p,
-        runs,
-        key: `${h.id}/${p.id}`,
+        ...(thread
+          ? { kind: "thread" as const, thread, run, orchestration: { orchestrator: p, runs } }
+          : { kind: "orchestrator" as const, orchestrator: p, runs }),
+        key,
         host: h,
         view,
         repo: state.repos.find((r) => r.path === p.repoPath),
-        attention: orchestratorAttention(runs, (id) => asksOf(state, id)),
+        attention: markedUnread(attention, run, unread.includes(key)),
         // Its last change, or when one of its runs last stopped, so finished work raises it too.
         at: runs.reduce((at, r) => {
           const stopped = state.stoppedAt[r.id];

@@ -1420,3 +1420,163 @@ test("the add palette offers New Project first where the host makes Projects, an
   )!;
   expect(create.open).toBe(true);
 });
+
+/** A daemon with 0093's backing Thread row, unlike the legacy fixtures above. */
+function withOrchestratorThread() {
+  capabilities = {
+    pins: {},
+    threadAttention: {},
+    threadLineage: {},
+    threadFork: {},
+    projectThreads: {},
+    autoResume: {},
+    orchestratorEdit: {},
+    orchestratorAutonomy: {},
+    orchestratorEpochs: {},
+    orchestratorDelete: {},
+  };
+  let thread: Thread = {
+    id: orchestratorRunId,
+    repo: "p-ember",
+    createdAt: "2026-09-20T12:00:00Z",
+    seenAt: "2026-09-29T12:00:00Z",
+  };
+  const project: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/essays",
+    project: true,
+    createdAt: thread.createdAt,
+  };
+  const run = { ...orchestratorRun(thread.id, "Keep working"), status: "completed" as const };
+  answers["orchestrator/list"] = () => ({
+    result: {
+      orchestrators: [{ ...orchestrator("ember", "2026-09-29T12:00:00Z"), run: thread.id }],
+      seq: 7,
+    },
+  });
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, project], threads: [thread], seq: 7 },
+  });
+  answers["agent/list"] = () => ({ result: { runs: [run], seq: 7 } });
+  answers["thread/update"] = (p) => {
+    thread = { ...thread, ...(p["pinned"] !== undefined && { pinned: p["pinned"] as boolean }) };
+    return { result: { thread } };
+  };
+  answers["thread/archive"] = (p) => {
+    thread = { ...thread, archived: p["archived"] as boolean };
+    return { result: { thread } };
+  };
+  answers["thread/setProject"] = (p) => {
+    thread = { ...thread, project: p["project"] as string };
+    return { result: { threads: [thread] } };
+  };
+  answers["host/settings/get"] = () => ({ result: { autoResume: false } });
+  answers["agent/autoResume"] = () => ({ result: {} });
+  answers["orchestrator/fresh"] = () => ({ result: { run } });
+  answers["agent/events"] = serveEvents(() => [run]);
+  return { run };
+}
+
+/** Native popovers are opened explicitly because happy-dom has no default click behavior. */
+async function threadMenu() {
+  const card = rowButton("ember").closest("li")!;
+  const menu = card.querySelector<HTMLDivElement>(
+    '[role="menu"][aria-label="Orchestrator actions"]',
+  )!;
+  await act(async () => menu.showPopover());
+  await settle();
+  return (label: string) =>
+    [...menu.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]')].find((b) =>
+      b.textContent?.startsWith(label),
+    )!;
+}
+
+test("an orchestrator's backing thread gets the shared actions, pins and archives by its run id", async () => {
+  withOrchestratorThread();
+  await renderApp();
+  expect(orchestratorRows()).toEqual(["ember"]);
+  expect(sidebarTitles()).toEqual([]);
+  let item = await threadMenu();
+  for (const label of [
+    "Pin to top",
+    "Mark as unread",
+    "Rename",
+    "Archive",
+    "Fork…",
+    "Add to Project…",
+    "Resume after usage limits",
+    "Change icon…",
+    "Autonomy…",
+    "Fresh session",
+    "Delete…",
+  ])
+    expect(item(label), label).toBeDefined();
+  await click(item("Pin to top"));
+  expect(calls("thread/update")).toContainEqual({ runId: orchestratorRunId, pinned: true });
+  expect(rowButton("ember").closest("li")!.querySelector('[aria-label="Unpin"]')).not.toBeNull();
+  item = await threadMenu();
+  await click(item("Unpin"));
+  expect(calls("thread/update")).toContainEqual({ runId: orchestratorRunId, pinned: false });
+  item = await threadMenu();
+  document.documentElement.classList.add("reduce-motion");
+  await click(item("Archive"));
+  document.documentElement.classList.remove("reduce-motion");
+  expect(calls("thread/archive")).toEqual([{ runId: orchestratorRunId, archived: true }]);
+});
+
+test("shared orchestrator actions retain orchestration navigation, Project assignment, auto resume and cascading delete", async () => {
+  withOrchestratorThread();
+  await renderApp();
+  let item = await threadMenu();
+  await click(item("Add to Project…"));
+  const picker = rowButton("ember")
+    .closest("li")!
+    .querySelector('[role="menu"][aria-label="Projects"]')!;
+  await click([...picker.querySelectorAll("button")].find((b) => b.textContent === "Essays"));
+  expect(calls("thread/setProject")).toEqual([
+    { threads: [orchestratorRunId], project: "s-essays" },
+  ]);
+  item = await threadMenu();
+  await click(item("Resume after usage limits"));
+  expect(calls("agent/autoResume")).toEqual([{ runId: orchestratorRunId, autoResume: true }]);
+  item = await threadMenu();
+  await click(item("Fresh session"));
+  expect(calls("orchestrator/fresh")).toEqual([{ orchestrator: "p-ember" }]);
+  await click(rowButton("ember"));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+  item = await threadMenu();
+  await click(item("Delete…"));
+  expect(deleteDialog().querySelector("h2")!.textContent).toBe("Delete this orchestrator?");
+});
+
+test("backed orchestrator keyboard actions share pin and unread state but rename orchestration", async () => {
+  withOrchestratorThread();
+  answers["orchestrator/update"] = (p) => ({
+    result: {
+      orchestrator: {
+        ...orchestrator(p["name"] as string, "2026-09-29T12:00:00Z"),
+        id: "p-ember",
+        run: orchestratorRunId,
+      },
+    },
+  });
+  await renderApp();
+  const key = async (value: string) => {
+    await act(async () =>
+      rowButton("ember").dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true })),
+    );
+    await settle();
+  };
+  await key("u");
+  expect(rowButton("ember").textContent).toContain("Done");
+  await key("p");
+  expect(calls("thread/update")).toContainEqual({ runId: orchestratorRunId, pinned: true });
+  await key("r");
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Thread name"]')!;
+  typeInto(input, "new ember");
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  expect(calls("orchestrator/update")).toEqual([{ orchestrator: "p-ember", name: "new ember" }]);
+});

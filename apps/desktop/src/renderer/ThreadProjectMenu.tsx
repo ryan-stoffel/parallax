@@ -11,8 +11,8 @@ import { Menu, menuItem, ToolbarMenuRow, toolbarMenuDivider } from "./ui";
 
 /**
  * Where `thread` can be added to a Project: this computer's Projects, and the Project it was
- * started in, which it stays in. Undefined for an orchestrator's thread, or where plxd can't add
- * threads to Projects or has none.
+ * started in, which it stays in. Orchestrator threads can join Projects too (0093). Undefined
+ * for an orchestrator's child, or where plxd can't add threads to Projects or has none.
  */
 export function projectChoices(
   thread: Thread,
@@ -21,8 +21,10 @@ export function projectChoices(
   const { repos } = view.state;
   const home = repos.find((r) => r.id === thread.repo);
   const projects = repos.filter((r) => r.project);
-  if (!home || !("projectThreads" in view.capabilities) || projects.length === 0) return undefined;
-  return { projects, startedIn: home.project ? home : undefined };
+  const orchestrator = view.state.orchestrators.some((p) => p.run === thread.id);
+  if ((!home && !orchestrator) || !("projectThreads" in view.capabilities) || projects.length === 0)
+    return undefined;
+  return { projects, startedIn: home?.project ? home : undefined };
 }
 
 /**

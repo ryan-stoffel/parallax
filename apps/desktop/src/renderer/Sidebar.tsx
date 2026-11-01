@@ -605,6 +605,12 @@ export function ThreadList({
 
   const items = sidebarItems(hosts, unread);
   const byKey = new Map(items.map((i) => [i.key, i]));
+  // Drag payloads name runs; orchestrator row keys keep their stable orchestration id.
+  const byRun = new Map<string, Item & { kind: "thread" }>(
+    items.flatMap((i) =>
+      i.kind === "thread" ? [[`${i.host.id}/${i.thread.id}`, i] as const] : [],
+    ),
+  );
   // The thread at the top of `key`'s family, as far up as it lists; `key` for one no thread started.
   const topOf = (key: string) => {
     let top = key;
@@ -808,9 +814,11 @@ export function ThreadList({
     hideCard();
     onSelect(
       item.host.id,
-      item.kind === "thread"
-        ? { kind: "thread", threadId: item.thread.id }
-        : { kind: "orchestrator", orchestratorId: item.orchestrator.id },
+      item.kind === "orchestrator"
+        ? { kind: "orchestrator", orchestratorId: item.orchestrator.id }
+        : item.orchestration
+          ? { kind: "orchestrator", orchestratorId: item.orchestration.orchestrator.id }
+          : { kind: "thread", threadId: item.thread.id },
     );
   };
 
@@ -919,7 +927,12 @@ export function ThreadList({
   };
 
   const askDelete = (item: Item) => {
-    setToDelete(item);
+    // Orchestration owns its children, so keep its cascading delete and confirmation.
+    setToDelete(
+      item.kind === "thread" && item.orchestration
+        ? { ...item, kind: "orchestrator", ...item.orchestration }
+        : item,
+    );
     setDeleteError(undefined);
     deleteDialog.current?.showModal();
   };
@@ -1011,14 +1024,20 @@ export function ThreadList({
     if (item.kind !== "thread" || !next || next === item.title) return;
     const { thread: t, host: h } = item;
     const was = t.title ?? "";
-    const error = await item.view.update(t.id, { title: next });
+    const error = item.orchestration
+      ? await item.view.updateOrchestrator(item.orchestration.orchestrator.id, { name: next })
+      : await item.view.update(t.id, { title: next });
     actionFailed(error, "Couldn't rename the thread");
     if (!error)
       toast("Renamed", () => {
-        void viewOf(h.id)?.update(t.id, { title: was });
+        if (item.orchestration)
+          void viewOf(h.id)?.updateOrchestrator(item.orchestration.orchestrator.id, {
+            name: item.title,
+          });
+        else void viewOf(h.id)?.update(t.id, { title: was });
       });
   };
-  // The picked threads that are still listed. Orchestrators can't be picked.
+  // The picked threads that are still listed, including backed orchestrator threads.
   const pickedItems = [...picked].flatMap((k) => {
     const i = byKey.get(k);
     return i?.kind === "thread" && !doomed.has(k) ? [i] : [];
@@ -1112,7 +1131,11 @@ export function ThreadList({
       act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000), at));
     else if (key === "p" && thread && pinsOn(item.view) && !item.thread.parent)
       act(() => void pin(item), { key: item.key });
-    else if (key === "r" && can("threadLineage")) act(() => setRenaming(item.key));
+    else if (
+      key === "r" &&
+      can(thread && item.orchestration ? "orchestratorEdit" : "threadLineage")
+    )
+      act(() => setRenaming(item.key));
     else if (key === "u" && thread && item.attention === "settled") act(() => markUnread(item));
     else if (key === "a")
       act(() =>
@@ -1142,6 +1165,13 @@ export function ThreadList({
         at={item.at}
         {...(pinDrag && { pinDrag })}
         rowKey={item.key}
+        orchestration={
+          item.orchestration
+            ? orchestratorActions({ ...item, kind: "orchestrator", ...item.orchestration }).filter(
+                (a) => a.label !== "Rename…" && !a.danger,
+              )
+            : undefined
+        }
         thread={t}
         hostId={item.host.id}
         device={item.host}
@@ -1159,7 +1189,11 @@ export function ThreadList({
         snippet={snippetOf(item)}
         renaming={renaming === item.key}
         snoozable={"threadAttention" in view.capabilities}
-        renamable={"threadLineage" in view.capabilities}
+        renamable={
+          item.orchestration
+            ? "orchestratorEdit" in view.capabilities
+            : "threadLineage" in view.capabilities
+        }
         autoResumable={"autoResume" in view.capabilities}
         onOpen={(e) => {
           const mod = mac() ? e.metaKey : e.ctrlKey;
@@ -1171,7 +1205,8 @@ export function ThreadList({
         onOpenPr={(pr) => {
           setPicked(new Set());
           anchor.current = item.key;
-          onSelect(item.host.id, { kind: "thread", threadId: t.id, pr });
+          if (item.orchestration) openItem(item);
+          else onSelect(item.host.id, { kind: "thread", threadId: t.id, pr });
         }}
         onKeys={(e) => rowKeys(e, item)}
         onArchive={() => void archive(item)}
@@ -1186,7 +1221,10 @@ export function ThreadList({
         onStartRename={() => setRenaming(item.key)}
         onDelete={() => askDelete(item)}
         onOpenBeside={
-          item.host.id === host.id && selection.kind === "thread" && !selected
+          !item.orchestration &&
+          item.host.id === host.id &&
+          selection.kind === "thread" &&
+          !selected
             ? () => onOpenBeside(t.id)
             : undefined
         }
@@ -1294,10 +1332,13 @@ export function ThreadList({
       window.removeEventListener("dragend", end);
     };
   }, []);
-  const moving = movingKey === undefined ? undefined : byKey.get(movingKey);
+  const moving = movingKey === undefined ? undefined : byRun.get(movingKey);
   // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
   const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
-    ...(i.host.id === host.id && selection.kind === "thread" && i.key !== openKey
+    ...(!i.orchestration &&
+    i.host.id === host.id &&
+    selection.kind === "thread" &&
+    i.key !== openKey
       ? [
           {
             label: "Open side by side",
@@ -1375,7 +1416,7 @@ export function ThreadList({
         return item && row(item, false, drag);
       }}
       onPinThread={(hostId, threadId) => {
-        const item = byKey.get(`${hostId}/${threadId}`);
+        const item = byRun.get(`${hostId}/${threadId}`);
         if (item?.kind !== "thread") return;
         // An archived or snoozed row dropped on the pins comes back too (PLX-1095).
         if (takes("today", item)) void moveTo("today", item);
@@ -1775,7 +1816,7 @@ export function ThreadList({
           favorite(key);
         }}
         onPinRow={(hostId, threadId) => {
-          const item = byKey.get(`${hostId}/${threadId}`);
+          const item = byRun.get(`${hostId}/${threadId}`);
           if (item?.kind !== "thread" || item.thread.parent) return;
           if (!item.thread.pinned) void pin(item);
           favorite(item.key);
@@ -3200,6 +3241,7 @@ function DraftRow({
  * them. Double-clicking the title renames it in place.
  */
 function ThreadRow({
+  orchestration,
   look,
   at,
   rowKey,
@@ -3240,6 +3282,8 @@ function ThreadRow({
   onLeave,
   pinDrag,
 }: {
+  /** Orchestrator-only actions alongside the shared thread menu (0093). */
+  orchestration?: FavoriteAction[];
   /** Today's one-line look (pins.ts): where it is, its title, and its status. Dense is a card with
    *  less padding, as every row in the Traditional sidebar is. */
   look?: "compact" | "dense";
@@ -3446,7 +3490,7 @@ function ThreadRow({
     // thread holds its own draft, so that doesn't show while it's open.
     <RowCard
       rowKey={rowKey}
-      kind="thread"
+      kind={orchestration ? "orchestrator" : "thread"}
       compact={compact}
       dense={look === "dense"}
       place={
@@ -3532,7 +3576,7 @@ function ThreadRow({
           <button
             ref={actions}
             type="button"
-            aria-label="Thread actions"
+            aria-label={orchestration ? "Orchestrator actions" : "Thread actions"}
             title="More (or right-click)"
             popoverTarget={menuId}
             onClick={onLeave}
@@ -3611,7 +3655,7 @@ function ThreadRow({
       <Menu
         ref={menu}
         id={menuId}
-        label="Thread actions"
+        label={orchestration ? "Orchestrator actions" : "Thread actions"}
         align="end"
         focus='[role^="menuitem"]'
         className="min-w-56 p-1"
@@ -3719,6 +3763,21 @@ function ThreadRow({
                 {resumes && <Check aria-hidden className="ml-auto size-3.5" />}
               </button>
             )}
+            {orchestration?.map((a) => (
+              <button
+                key={a.label}
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(() => {
+                  const row = actions.current?.closest("li");
+                  if (row) a.run(row);
+                })}
+              >
+                {a.icon}
+                {a.label}
+              </button>
+            ))}
             <div role="separator" className="my-1 h-px bg-border" />
             <button
               type="button"
