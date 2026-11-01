@@ -119,7 +119,6 @@ import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { GoalStrip } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
-import { AgentsBar, isGoing, type AgentRow } from "./AgentsBar";
 import { ComposerTabs, type ComposerTab } from "./ComposerTabs";
 import { useShortcutLabel } from "./keybindings";
 import { ResumeCard } from "./ResumeCard";
@@ -152,7 +151,6 @@ import {
   type Approval,
   type Item,
   type Subagent,
-  type SubagentState,
   type Work,
 } from "./transcript";
 import { TurnChanges, TurnChangesContext, type TurnChangesTarget } from "./TurnChanges";
@@ -289,11 +287,11 @@ export function AgentChat({
   /** The run as the thread list has it, which the composer shows until the transcript loads. */
   listed?: AgentRun;
   /**
-   * The tab tucked under the composer, such as an orchestrator's repository. A thread's own has
+   * The tab in the composer's footer, such as an orchestrator's repository. A thread's own has
    * none: where it runs and its branch show in Thread details, as a new thread's picker did.
    */
   tab?: ReactNode;
-  /** The back tab over the composer, behind the plan's, such as an orchestrator's agents. */
+  /** The composer's back tab, behind the plan's, such as an orchestrator's agents. */
   strip?: ComposerTab;
   /**
    * Permission requests other runs wait on, pinned here with this run's own, as an orchestrator's
@@ -789,19 +787,6 @@ export function AgentChat({
   const running = isRunning(run?.status);
   const tabs: ComposerTab[] = [];
   if (strip) tabs.push(strip);
-  const subagentTabRows = nativeRows(transcript.subagents, live, backgroundSubagents);
-  const subagentsShown = !!subagents && subagentTabRows.some(isGoing);
-  if (subagentsShown) {
-    const bar = (compact: boolean) => (
-      <AgentsBar
-        rows={subagentTabRows}
-        label="Subagents"
-        onOpen={subagents.open}
-        compact={compact}
-      />
-    );
-    tabs.push({ key: "subagents", node: bar(false), compact: bar(true) });
-  }
   // Once its turn settles, as T3 Code's strip: a turn's own work shows in the transcript.
   if (!running && presentWaiting(background, watching)) {
     const bar = (compact: boolean) => (
@@ -810,7 +795,6 @@ export function AgentChat({
         runId={runId}
         background={background}
         watching={watching}
-        agentsShown={subagentsShown}
         compact={compact}
         pullRequests={pullRequests}
       />
@@ -871,8 +855,8 @@ export function AgentChat({
       <div
         className={`transition-[margin] duration-200 ease-out motion-reduce:transition-none ${back ? "mx-10 @max-lg:mx-2" : ""}`}
       >
-        <ComposerTabs tabs={tabs} short={back} />
         <Composer
+          top={<ComposerTabs tabs={tabs} short={back} />}
           // One sent before the transcript loads stays in the box.
           onSend={(text, options, images, threads) =>
             run
@@ -1005,30 +989,6 @@ export function AgentChat({
 }
 
 const noneSent: ReadonlyMap<string, SentMessage> = new Map();
-
-const subagentAttention: Record<SubagentState, AgentRow["attention"]> = {
-  running: "working",
-  completed: "done",
-  failed: "failed",
-  stopped: "settled",
-};
-
-/** A thread's own subagents as the Subagents tab lists them, oldest first, nested ones left out. */
-function nativeRows(
-  subagents: Readonly<Record<string, Subagent>> | undefined,
-  live: boolean,
-  background: ReadonlySet<string>,
-) {
-  return nativeSubagents(subagents, live, background)
-    .filter((sub) => !sub.parent)
-    .map((sub): AgentRow => ({
-      id: sub.callId,
-      title: sub.title,
-      attention: subagentAttention[sub.state],
-      Logo: ClaudeLogo,
-      ...(sub.model && { detail: modelName(sub.model) }),
-    }));
-}
 
 /**
  * One of the agent's own subagents, read-only (PLX-382): its prompt, what it did, and its final

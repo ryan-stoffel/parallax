@@ -590,49 +590,50 @@ export function NewThread({
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Chat picks only its computer here, and a Project only among the computers that have it
-          // (`tray`), since its entry is on each computer alone. While a start is under way it stays as it was, but inert, so the thread
-          // can't move. `contents` keeps the tab's own layout.
-          tab={
-            group.project ? (
-              tray
-            ) : (
-              <div inert={starting !== undefined} className="contents">
-                {repoless(group) ? (
-                  <RunTargetMenu
-                    hosts={hosts}
-                    hostId={shownHostId}
-                    busy={!!moving}
-                    onHostChange={pickHost}
-                  />
-                ) : (
-                  <>
-                    <RunTargetMenu
-                      hosts={hosts}
-                      hostId={shownHostId}
-                      busy={!!moving}
-                      onHostChange={pickHost}
-                      workspace={checkout ? "checkout" : "worktree"}
-                      onWorkspaceChange={setWorkspace}
-                      checkoutUnavailable={checkoutUnavailable}
-                      missing={missing && { repo: group.name, hostIds: missing }}
-                    />
-                    {refsAvailable && (
-                      <RefMenu
-                        hostId={hostId}
-                        repo={group.id}
-                        checkout={checkout}
-                        value={gitRef}
-                        onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
-                      />
-                    )}
-                  </>
-                )}
-              </div>
-            )
-          }
           footer={
             <div>
+              {/* Where it runs, on a quiet row under the box, which holds only what shapes the
+                  reply. Chat picks only its computer here, and a Project only among the computers
+                  that have it (`tray`), since its entry is on each computer alone. While a start
+                  is under way it stays as it was, but inert, so the thread can't move. */}
+              <div className="composer-places">
+                {group.project ? (
+                  tray
+                ) : (
+                  <div inert={starting !== undefined} className="contents">
+                    {repoless(group) ? (
+                      <RunTargetMenu
+                        hosts={hosts}
+                        hostId={shownHostId}
+                        busy={!!moving}
+                        onHostChange={pickHost}
+                      />
+                    ) : (
+                      <>
+                        <RunTargetMenu
+                          hosts={hosts}
+                          hostId={shownHostId}
+                          busy={!!moving}
+                          onHostChange={pickHost}
+                          workspace={checkout ? "checkout" : "worktree"}
+                          onWorkspaceChange={setWorkspace}
+                          checkoutUnavailable={checkoutUnavailable}
+                          missing={missing && { repo: group.name, hostIds: missing }}
+                        />
+                        {refsAvailable && (
+                          <RefMenu
+                            hostId={hostId}
+                            repo={group.id}
+                            checkout={checkout}
+                            value={gitRef}
+                            onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
               {asking && (
                 <CloneDialog
                   hostId={asking.hostId}

@@ -3,8 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Orchestrator, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat, CheckoutLabel, PinnedApprovals, TranscriptView } from "./AgentChat";
-import { AgentsBar, isGoing, orchestratorAgentRows } from "./AgentsBar";
-import { ComposerTabs } from "./ComposerTabs";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
 import { offlineReason, useConnection } from "./ConnectionStatus";
@@ -15,7 +13,6 @@ import { uploadBytes } from "./uploads";
 import type { RunOptions } from "./models";
 import { notify } from "./notifications";
 import { accountOptions, defaultBackend } from "./settings/shared";
-import type { OrchestratorAgentsView } from "./OrchestratorAgents";
 import { RefMenu } from "./RefMenu";
 import { ProjectIcon } from "./Sidebar";
 import type { ThreadsView } from "./threads";
@@ -27,8 +24,8 @@ import { uuidv7 } from "./uuidv7";
  * sending starts the orchestrator, showing the message with the transcript's loader at once. From
  * then on it is the orchestrator run's `AgentChat`, so replies, Stop, and the transcript work as a
  * thread's do. Every message goes to the orchestrator, which starts the orchestrator's children
- * (0042). Either way its children ride over the composer (`AgentsBar`), and its inbox is the side
- * panel's. Key it by host and orchestrator.
+ * (0042). Its children and inbox stay in the thread details and side panel. Key it by host and
+ * orchestrator.
  */
 export function OrchestratorChat({
   hostId,
@@ -39,10 +36,6 @@ export function OrchestratorChat({
   startOrchestrator,
   updateOrchestrator,
   others,
-  agents,
-  titles,
-  needs,
-  onOpenRun,
   threadLinks,
   settingsClosed,
 }: {
@@ -57,13 +50,6 @@ export function OrchestratorChat({
   updateOrchestrator: ThreadsView["updateOrchestrator"];
   /** Permission requests the orchestrator's subagents wait on, pinned over the composer (PLX-196). */
   others?: readonly Asked[];
-  /** The orchestrator's runs, whose children show over the composer. */
-  agents: OrchestratorAgentsView;
-  titles?: Readonly<Record<string, string>>;
-  /** The children whose questions wait in the inbox. */
-  needs?: ReadonlySet<string>;
-  /** Opens a child's chat. */
-  onOpenRun: (runId: string) => void;
   /** The open host's threads, as a thread's chat gets them: its pages, files, and thread chips need them. */
   threadLinks: ThreadLinks;
   /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
@@ -162,15 +148,6 @@ export function OrchestratorChat({
     return error && describeError(error);
   };
 
-  const rows = orchestratorAgentRows(agents, titles ?? {}, orchestrator.run, needs);
-  const bar = rows.some(isGoing)
-    ? {
-        key: "agents",
-        node: <AgentsBar rows={rows} onOpen={onOpenRun} />,
-        compact: <AgentsBar rows={rows} onOpen={onOpenRun} compact />,
-      }
-    : undefined;
-
   if (orchestrator.run)
     return (
       <AgentChat
@@ -180,7 +157,6 @@ export function OrchestratorChat({
         prompt={prompt}
         going={started === orchestrator.run}
         tab={tab}
-        strip={bar}
         others={others}
         orchestratorMode={orchestrator.permission}
         threadLinks={threadLinks}
@@ -260,7 +236,6 @@ export function OrchestratorChat({
           onDismiss={dismiss}
           disabledReason={connected ? undefined : "Connecting to plxd…"}
         />
-        <ComposerTabs tabs={bar ? [bar] : []} />
         {/* In the same place while it starts, so a failed start puts the message back. */}
         <Composer
           newThread={!starting}

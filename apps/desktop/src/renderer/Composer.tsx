@@ -778,9 +778,11 @@ export interface ComposerProps {
   unanswered?: Unanswered;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
-  /** The tab tucked under the box: where the thread runs, or an open run's status. */
+  /** The row inside the box, over the text: the thread's plan, queue, and what it waits on. */
+  top?: ReactNode;
+  /** The footer controls inside the box: where the thread runs, or an open run's status. */
   tab?: ReactNode;
-  /** What goes under the tab, such as a new thread's account chooser. */
+  /** What goes under the box, such as a new thread's account chooser. */
   footer?: ReactNode;
   /**
    * The backend the thread runs on: shows the model, effort, and access choices it can honor. A
@@ -871,8 +873,8 @@ export interface ComposerProps {
   contents?: RefObject<ComposerContents | undefined>;
   /**
    * Whether the transcript over it is scrolled up from its end. An empty box no one is typing in
-   * then steps back: one gray line with only Attach and Send or Stop, marked `data-back`, over a
-   * thin tray of the model, effort, and access.
+   * then steps back: marked `data-back`, it folds its footer away (index.css), leaving one line
+   * with Attach and Send or Stop until the text takes focus.
    */
   away?: boolean;
   /** Told whether the box is stepped back, so its screen can shrink what sits with it. */
@@ -911,6 +913,7 @@ export function Composer({
   onPermission,
   unanswered,
   disabledReason,
+  top,
   tab,
   footer,
   backend,
@@ -1303,9 +1306,8 @@ export function Composer({
     !!menus && !!trigger && trigger.from !== closedAt && (entries.length > 0 || !!loading);
   const highlighted = Math.min(active, entries.length - 1);
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
-  const box = useRef<HTMLFormElement>(null);
-  // Narrow, as in a small window or a split's tile, the box is one line whatever it holds: its
-  // buttons at the line's end and its pickers in the tray under it, as when it steps back.
+  const box = useRef<HTMLDivElement>(null);
+  // Narrow, as in a small window or a split's tile, the usage ring gives its room to the text.
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
     const form = box.current;
@@ -1317,13 +1319,23 @@ export function Composer({
     observer.observe(form);
     return () => observer.disconnect();
   }, []);
-  const line = back || narrow;
   // The text's area, whose editor `ScrollThumb` scrolls.
   const textArea = useRef<HTMLDivElement>(null);
   const editorDom = useCallback(
     () => textArea.current?.querySelector<HTMLElement>(".composer-input"),
     [],
   );
+  // The text's area follows the editor's height in a transition (index.css), as `auto` can't ease.
+  useLayoutEffect(() => {
+    const area = textArea.current;
+    const input = editorDom();
+    if (!area || !input) return;
+    const observer = new ResizeObserver(() => {
+      if (input.offsetHeight > 0) area.style.height = `${input.offsetHeight}px`;
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, [editorDom]);
   const menuList = useRef<HTMLDivElement>(null);
   const menuDom = useCallback(() => menuList.current, []);
   const [menuBelow, setMenuBelow] = useState(false);
@@ -1544,10 +1556,9 @@ export function Composer({
             "aria-controls": menuId,
             "aria-activedescendant": `${menuId}-${highlighted}`,
           }),
-        // It grows from two rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
-        // Its parent is anchored below it, so it grows upward. As one line, it starts at one row,
-        // clear of the buttons at its end.
-        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${line ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5"}`,
+        // One row beside its actions, growing up to seven before it scrolls, never beneath them.
+        class:
+          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.5rem))] min-h-[calc(1.625em+1.5rem)] overflow-y-auto px-3.5 py-3 focus-visible:outline-none",
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1781,16 +1792,14 @@ export function Composer({
       .run();
   }, [cite, editor]);
 
-  // The run's model, effort, and access: in the box's row, or under it while it's stepped back.
+  // The run's model, effort, and access stay in the footer while the message grows above them.
   const pickers = run && (
     // A disabled fieldset turns off every control in it, and its title says why.
     <fieldset
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      // In the box's row, its buttons read brighter and heavier than other menus' (menuButton), as
-      // the box's own. In the tray under a line they stay menuButton's quiet gray.
-      className={`flex min-w-0 items-center gap-1 ${line ? "" : "[&>button]:font-semibold [&>button]:text-foreground/90"}`}
+      className="flex min-w-0 items-center gap-1.5"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
@@ -1831,6 +1840,7 @@ export function Composer({
               : accessOptions[p],
           )}
           panelClassName="w-[25rem]"
+          className="composer-access"
         />
       )}
     </fieldset>
@@ -1838,12 +1848,9 @@ export function Composer({
 
   return (
     <div className="w-full">
-      <form
+      {/* Not a form: its tabs hold forms of their own, and Enter in a footer search sends nothing. */}
+      <div
         ref={box}
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
         // Files and sidebar threads dropped anywhere on the box are added, before the editor can
         // take them as text.
         onDragOver={(e) => {
@@ -1882,11 +1889,11 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
         data-back={back || undefined}
-        className={`relative z-10 rounded-prompt border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] hover:bg-[color-mix(in_oklab,var(--foreground)_7%,var(--surface))]" : "bg-surface shadow-composer"}`}
+        className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${threadOver ? "border-ring" : "border-border"}`}
       >
         {menuOpen && (
           <div
-            className={`absolute inset-x-0 ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
+            className={`absolute inset-x-0 animate-fade-in ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
           >
             <div className="group/scroll relative">
               <div
@@ -1986,148 +1993,145 @@ export function Composer({
             )}
           </div>
         )}
-        {(images.length > 0 || files.length > 0) && (
-          <fieldset
-            // Locked while files upload: what's there now is what's sent.
-            disabled={uploading}
-            className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
-          >
-            {images.map((image, i) => (
-              <span key={i} className="relative">
-                <button
-                  type="button"
-                  aria-label={`Open image ${i + 1}`}
-                  onClick={() => setShown(image)}
-                  className="block cursor-zoom-in rounded-xl"
-                >
-                  <img
-                    src={imageUrl(image)}
-                    alt={`Image ${i + 1}`}
-                    className="size-14 rounded-xl border border-border object-cover"
-                  />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Remove image ${i + 1}`}
-                  onClick={() => removeImage(i)}
-                  className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-            {files.map((f, i) => (
-              <FileCard
-                key={`${f.name}-${f.lastModified}-${i}`}
-                file={f}
-                progress={sending?.file === f ? sending.share : undefined}
-                failed={sending?.file === f && sending.failed}
-                onRemove={() => setFiles((all) => all.filter((_, j) => j !== i))}
-              />
-            ))}
-            {files.length > 0 && !sendsFiles && (
-              <span className="text-meta text-faint-foreground">Not sent to the agent yet</span>
-            )}
-          </fieldset>
-        )}
-        {shown && images.includes(shown) && (
-          <Lightbox
-            images={images.map((image, i) => ({ src: imageUrl(image), name: `Image ${i + 1}` }))}
-            index={images.indexOf(shown)}
-            onIndex={(i) => setShown(images[i])}
-            onClose={() => setShown(undefined)}
-          />
-        )}
-        <div ref={textArea} className="group/scroll relative">
-          {!text && (
-            <p
-              aria-hidden
-              className={`pointer-events-none absolute left-5 truncate text-reading leading-relaxed text-faint-foreground ${line ? "top-3 right-28" : "top-3.5 right-5"}`}
+        {top}
+        <div className="composer-entry m-1 rounded-xl">
+          {(images.length > 0 || files.length > 0) && (
+            <fieldset
+              // Locked while files upload: what's there now is what's sent.
+              disabled={uploading}
+              className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-3.5 pt-3"
             >
-              {placeholder}
-            </p>
-          )}
-          <RefsContext.Provider
-            // No removing while files upload, as in the tray: what's there now is what's sent.
-            value={{
-              images,
-              removeImage: uploading ? undefined : removeImage,
-              threads: attach?.state,
-            }}
-          >
-            <EditorContent editor={editor} />
-          </RefsContext.Provider>
-          <ScrollThumb target={editorDom} />
-        </div>
-        <div
-          // As one line, its buttons sit level with the text's last row, as high as one row is.
-          className={`flex items-center gap-0.5 px-3 ${line ? "absolute right-0 bottom-0 h-[calc(1.625em+1.5rem)] text-reading" : "pb-2.5"}`}
-        >
-          {!line && pickers}
-          <input
-            ref={filePicker}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              void addFiles(Array.from(e.target.files ?? []));
-              e.target.value = "";
-            }}
-          />
-          {usage?.summary && !line && <UsageRing data={usage} />}
-          <button
-            type="button"
-            aria-label="Attach files"
-            title="Attach files"
-            onClick={() => filePicker.current?.click()}
-            className={`mr-1.5 ${usage?.summary ? "" : "ml-auto"} grid size-9 place-items-center rounded-full text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4`}
-          >
-            <Paperclip />
-          </button>
-          {showStop ? (
-            <button
-              type="button"
-              aria-label={stopping ? "Stopping" : "Stop"}
-              disabled={stopping}
-              onClick={() => void stop()}
-              className="grid size-9 place-items-center rounded-full bg-danger text-background disabled:opacity-50"
-            >
-              {stopping ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <Square className="size-3.5 fill-current" />
+              {images.map((image, i) => (
+                <span key={i} className="relative">
+                  <button
+                    type="button"
+                    aria-label={`Open image ${i + 1}`}
+                    onClick={() => setShown(image)}
+                    className="block cursor-zoom-in rounded-xl"
+                  >
+                    <img
+                      src={imageUrl(image)}
+                      alt={`Image ${i + 1}`}
+                      className="size-14 rounded-xl border border-border object-cover"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Remove image ${i + 1}`}
+                    onClick={() => removeImage(i)}
+                    className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+              {files.map((f, i) => (
+                <FileCard
+                  key={`${f.name}-${f.lastModified}-${i}`}
+                  file={f}
+                  progress={sending?.file === f ? sending.share : undefined}
+                  failed={sending?.file === f && sending.failed}
+                  onRemove={() => setFiles((all) => all.filter((_, j) => j !== i))}
+                />
+              ))}
+              {files.length > 0 && !sendsFiles && (
+                <span className="text-meta text-faint-foreground">Not sent to the agent yet</span>
               )}
-            </button>
-          ) : (
-            <button
-              type="submit"
-              aria-label="Send"
-              disabled={!canSend}
-              className="send-sky grid size-9 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
-            >
-              <ArrowUp className="size-4" />
-            </button>
+            </fieldset>
           )}
-        </div>
-      </form>
-      {line && pickers ? (
-        // A thin tray tucked under the line, as low as it can be, inset and rounded as the tabs over
-        // the box are (ComposerTabs). Stepped back, it's gray, as the line is, and takes any tab's
-        // place; narrow, the tab follows the pickers.
-        <div
-          className={`tucked mx-4 -mt-4 flex min-w-0 items-center gap-2 rounded-b-xl border border-t-0 border-border px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5 ${back ? "bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))]" : "bg-surface"}`}
-        >
-          {pickers}
-          {!back && tab && <div className="ml-auto flex min-w-0 items-center gap-2">{tab}</div>}
-        </div>
-      ) : (
-        tab && (
-          // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-4 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
-            {tab}
+          {shown && images.includes(shown) && (
+            <Lightbox
+              images={images.map((image, i) => ({ src: imageUrl(image), name: `Image ${i + 1}` }))}
+              index={images.indexOf(shown)}
+              onIndex={(i) => setShown(images[i])}
+              onClose={() => setShown(undefined)}
+            />
+          )}
+          <div className="flex min-w-0 items-end">
+            <div ref={textArea} className="composer-text group/scroll relative min-w-0 flex-1">
+              {!text && (
+                <p
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-3.5 top-3 truncate text-reading leading-relaxed text-faint-foreground"
+                >
+                  {placeholder}
+                </p>
+              )}
+              <RefsContext.Provider
+                // No removing while files upload, as in the tray: what's there now is what's sent.
+                value={{
+                  images,
+                  removeImage: uploading ? undefined : removeImage,
+                  threads: attach?.state,
+                }}
+              >
+                <EditorContent editor={editor} />
+              </RefsContext.Provider>
+              <ScrollThumb target={editorDom} />
+            </div>
+            <div className="flex shrink-0 items-center gap-1 pr-2 pb-2">
+              <input
+                ref={filePicker}
+                type="file"
+                multiple
+                hidden
+                onChange={(e) => {
+                  void addFiles(Array.from(e.target.files ?? []));
+                  e.target.value = "";
+                }}
+              />
+              {usage?.summary && !narrow && <UsageRing data={usage} />}
+              <button
+                type="button"
+                aria-label="Attach files"
+                title="Attach files"
+                onClick={() => filePicker.current?.click()}
+                className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-4"
+              >
+                <Paperclip />
+              </button>
+              {showStop ? (
+                <button
+                  type="button"
+                  aria-label={stopping ? "Stopping" : "Stop"}
+                  disabled={stopping}
+                  onClick={() => void stop()}
+                  className="composer-pop grid size-8 place-items-center rounded-full bg-danger text-danger-foreground disabled:opacity-50"
+                >
+                  {stopping ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Square className="size-3.5 fill-current" />
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  aria-label="Send"
+                  disabled={!canSend}
+                  onClick={() => void submit()}
+                  className="composer-send send-sky grid size-8 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
+                >
+                  <ArrowUp className="size-4" />
+                </button>
+              )}
+            </div>
           </div>
-        )
-      )}
+        </div>
+        {(pickers || tab) && (
+          // On one line at any width: index.css trims labels to icons as the box narrows.
+          <div className="composer-footer">
+            <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2">
+              {pickers}
+              {tab && (
+                <div className="ml-auto flex min-w-0 shrink items-center justify-end gap-1">
+                  {tab}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
       {footer}
     </div>
   );
