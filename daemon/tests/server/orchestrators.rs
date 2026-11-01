@@ -27,7 +27,7 @@ async fn orchestrators_are_created_listed_and_retried_idempotently() {
         .orchestrator;
     assert_eq!(created.id, params.id);
     assert_eq!(created.name, params.name);
-    assert_eq!(created.repo_path, params.repo_path);
+    assert_eq!(Some(created.repo_path.clone()), params.repo_path);
     assert_eq!(created.created_at, created.updated_at);
 
     let retried = client

@@ -135,6 +135,54 @@ pub struct Thread {
     #[serde(default, alias = "space", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub project: Option<RepoId>,
+    /// The orchestrator whose orchestration it runs, when it is an orchestrator thread (0093),
+    /// behind `orchestratorThreads`. Its `repo` is the orchestrator too, as its children's is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub orchestrator: Option<ScopeId>,
+    /// Why an orchestrator thread last un-archived itself (0093), behind `orchestratorThreads`.
+    /// Absent once the user archives or un-archives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wake_reason: Option<WakeReason>,
+}
+
+/// Why an orchestrator thread un-archived itself (0093). A newer plxd may send a kind this version
+/// does not know; treat it as unknown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WakeReason {
+    /// A child finished or failed.
+    ChildFinished {
+        /// The child's run.
+        child: RunId,
+    },
+    /// A scheduled task fired.
+    Schedule {
+        /// The task's id.
+        task: String,
+        /// The task's title.
+        title: String,
+    },
+    /// A watched pull request changed.
+    PullRequest {
+        /// The pull request's web URL.
+        url: String,
+    },
+    /// Something waits on the user: a child's question or permission, a landing, or paused
+    /// wake-ups.
+    NeedsYou {
+        /// The run it is about: a child, or the orchestrator's own.
+        run: RunId,
+    },
+    /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
 }
 
 /// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
@@ -268,8 +316,8 @@ pub struct ProjectDeleteParams {
 /// Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
 /// and transcript, and its next CLI process gets the Project's instructions and files. Appends
 /// `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
-/// thread started in a Project or an orchestrator, and with `repoNotFound` for a `project` that isn't
-/// one.
+/// thread started in a Project or an orchestrator's child, and with `repoNotFound` for a `project`
+/// that isn't one. An orchestrator thread joins one (0093).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSetProjectParams {

@@ -92,7 +92,11 @@ async fn running_children(daemon: &Daemon, scope: MemoryScope) -> Result<Vec<Run
                                 let folder = ScopeId::try_from(Uuid::from(id))
                                     .ok()
                                     .map(|id| data_dir.context_dir(id));
-                                memory::repo_dir(&data_dir, &project.repo_path, &repos) == folder
+                                project
+                                    .repo_path
+                                    .as_deref()
+                                    .and_then(|path| memory::repo_dir(&data_dir, path, &repos))
+                                    == folder
                             }
                             _ => true,
                         })

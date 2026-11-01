@@ -466,6 +466,8 @@ mod tests {
             unarchived_at: None,
             pinned: false,
             project_id: None,
+            orchestrator_id: None,
+            wake_reason: None,
         };
         let pulls = [Pull {
             merged_at: Some(at("2026-10-27T20:56:36Z")),

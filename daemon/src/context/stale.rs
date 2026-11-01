@@ -39,19 +39,21 @@ pub(crate) async fn check(daemon: &Daemon, project: ScopeId) {
             return;
         }
     };
-    let (Some(integration), Some(base)) = (row.integration_branch, row.base_branch) else {
+    let (Some(repo_path), Some(integration), Some(base)) =
+        (row.repo_path, row.integration_branch, row.base_branch)
+    else {
         return;
     };
     let data_dir = &daemon.data_dir;
     let mut folders = vec![(data_dir.context_dir(project), integration)];
-    if let Some(dir) = memory::repo_dir(data_dir, &row.repo_path, &repos) {
+    if let Some(dir) = memory::repo_dir(data_dir, &repo_path, &repos) {
         folders.push((dir, base));
     }
     for (dir, branch) in folders {
         let files = daemon
             .agents
             .worktrees()
-            .branch_files(Path::new(&row.repo_path), &branch)
+            .branch_files(Path::new(&repo_path), &branch)
             .await;
         let files: HashSet<String> = match files {
             Ok(files) => files.into_iter().collect(),

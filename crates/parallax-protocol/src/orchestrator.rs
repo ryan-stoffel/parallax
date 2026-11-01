@@ -26,7 +26,8 @@ pub struct Orchestrator {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub icon: Option<ChosenIcon>,
-    /// The absolute path of the repository on this host.
+    /// The absolute path of the repository on this host, or empty for an orchestrator with no
+    /// repo (0093), which only a client of a plxd that advertises `orchestratorThreads` makes.
     pub repo_path: String,
     /// The branch checked out in the repository, or the first 7 digits of the commit when `HEAD`
     /// is detached, read when plxd sends the orchestrator. Absent when plxd can't read it.
@@ -203,8 +204,11 @@ pub struct OrchestratorCreateParams {
     pub id: ScopeId,
     /// The name shown in the app.
     pub name: String,
-    /// The absolute path of the repository on this host.
-    pub repo_path: String,
+    /// The absolute path of the repository on this host. Absent or empty makes an orchestrator
+    /// with no repo (0093), sent only to a plxd that advertises `orchestratorThreads`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo_path: Option<String>,
     /// The orchestrator's icon, sent only to a plxd that advertises `orchestratorEdit`. Absent
     /// means the app's default icon.
     #[serde(default, skip_serializing_if = "Option::is_none")]

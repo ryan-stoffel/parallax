@@ -130,6 +130,11 @@ fn new_landing(
             "run {run_id} is the orchestrator, which never lands"
         )));
     }
+    if orchestrator.repo_path.is_none() {
+        return Err(refused(format!(
+            "run {run_id}'s orchestrator has no repo, so it has no integration branch to land on"
+        )));
+    }
     if snapshot.explore {
         return Err(refused(format!(
             "run {run_id} was started with explore, so it never lands"
@@ -575,7 +580,9 @@ async fn attempt(
         .await
         .map_err(|error| error.message)?
         .ok_or("its orchestrator is gone")?;
-    let (Some(branch), Some(base)) = (row.integration_branch, row.base_branch) else {
+    let (Some(repo_path), Some(branch), Some(base)) =
+        (row.repo_path, row.integration_branch, row.base_branch)
+    else {
         return Err("its orchestrator has no integration branch".to_owned());
     };
     let worktrees = daemon.agents.worktrees();
@@ -591,7 +598,7 @@ async fn attempt(
         .await
         .map_err(failed)?;
     let base_commit = worktrees
-        .fetch_base(Path::new(&row.repo_path), &base)
+        .fetch_base(Path::new(&repo_path), &base)
         .await
         .map_err(failed)?;
     if !worktrees

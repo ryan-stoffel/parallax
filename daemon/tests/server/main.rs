@@ -32,6 +32,7 @@ mod open_pr;
 mod orchestration;
 mod orchestrator;
 mod orchestrator_computer;
+mod orchestrator_threads;
 mod orchestrators;
 mod peer;
 mod pull_requests;

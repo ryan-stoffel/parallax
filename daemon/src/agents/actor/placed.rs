@@ -52,7 +52,7 @@ impl Actor {
             ..RunOptions::default()
         };
         self.store_options(backend, changes).await?;
-        let paths = self.checkout_paths(&repo_path).await?;
+        let paths = self.checkout_paths(repo_path.as_deref()).await?;
         // Re-read attachments when delivery becomes possible. Older queue rows may already
         // contain an expanded prompt, so use the run's original message.
         let attached = super::super::attached::prompt(

@@ -123,3 +123,45 @@ async fn an_app_from_0093_on_gets_the_new_names() {
         "space/create still works: {spaced}"
     );
 }
+
+/// PLX-1176: against 0093's thread model, an old app's `project/start` still starts its Project's
+/// coordinator, which `project/list` names, while its run is the orchestrator's thread.
+#[tokio::test]
+async fn an_app_from_before_0093_starts_an_orchestrator_thread_by_its_old_names() {
+    use crate::agents::{Host, end_turn, fake, init, orchestrator_params};
+
+    let host = Host::start(temp_dir(), fake(vec![init("s"), end_turn("Planned.")]));
+    let mut client = Client::connect(&host.server.socket).await;
+    let mut params = initialize_params(ProtocolRange::SUPPORTED);
+    params.capabilities = Capabilities::default();
+    client.call::<Initialize>(params).await.expect("initialize");
+
+    let params = serde_json::to_value(orchestrator_params(host.dir.path())).unwrap();
+    let id = params["id"].clone();
+    let (created, _) = call(&mut client, 1, "project/create", params).await;
+    assert_eq!(created["project"]["id"], id, "{created}");
+    let start = json!({
+        "project": id,
+        "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5ec",
+        "prompt": "Plan it.",
+        "account": {"kind": "subscription", "backend": "fake"},
+    });
+    let (started, _) = call(&mut client, 2, "project/start", start).await;
+    let run = started["run"]["id"].clone();
+    assert_eq!(run, "01a0f755-f200-74dd-8cfc-06d0b225c5ec", "{started}");
+
+    let (listed, _) = call(&mut client, 3, "project/list", json!({})).await;
+    assert_eq!(listed["projects"][0]["coordinator"], run, "{listed}");
+    let (threads, _) = call(&mut client, 4, "thread/list", json!({})).await;
+    let thread = threads["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|thread| thread["id"] == run)
+        .expect("its run is a thread");
+    assert_eq!(
+        thread["repo"], id,
+        "in its orchestrator, which an old app hides"
+    );
+    host.server.stop().await;
+}
