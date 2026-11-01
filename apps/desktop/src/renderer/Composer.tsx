@@ -1836,10 +1836,8 @@ export function Composer({
     <div className="w-full">
       <form
         ref={box}
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
+        // Footer pickers contain search inputs. Their Enter key must never send the draft.
+        onSubmit={(e) => e.preventDefault()}
         // Files and sidebar threads dropped anywhere on the box are added, before the editor can
         // take them as text.
         onDragOver={(e) => {
@@ -2094,9 +2092,10 @@ export function Composer({
                 </button>
               ) : (
                 <button
-                  type="submit"
+                  type="button"
                   aria-label="Send"
                   disabled={!canSend}
+                  onClick={() => void submit()}
                   className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity enabled:hover:opacity-80 disabled:bg-selected disabled:text-faint-foreground"
                 >
                   <ArrowUp className="size-4" />
