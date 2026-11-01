@@ -3,7 +3,7 @@ import { closeHistory } from "@tiptap/pm/history";
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
@@ -14,6 +14,10 @@ import { behaviorDefaults, newThreadDefaults, newThreadPrefs, setBehaviorPrefs }
 import type { AttachThreads } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
+
+vi.mock("./voiceEngine", () => ({
+  loadVoiceEngine: () => new Promise(() => {}),
+}));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The model menu's items are in the DOM either way.
@@ -117,7 +121,9 @@ const pngFile = (name = "image.png") =>
   new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], name, { type: "image/png" });
 const sentPng: PromptImage = { mediaType: "image/png", data: png };
 const thumbnails = () =>
-  [...document.querySelectorAll("form fieldset img")].map((img) => img.getAttribute("alt"));
+  [...document.querySelectorAll(".composer-shell fieldset img")].map((img) =>
+    img.getAttribute("alt"),
+  );
 /** The text's chips, as they read. */
 const chipsIn = (box: Element) =>
   [...box.querySelectorAll("[data-node-view-wrapper]")].map((c) => c.textContent);
@@ -146,6 +152,34 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
     [],
   );
   expect(box.textContent).toBe("");
+});
+
+test("recording takes the box's focus without stepping it back, so it keeps its height under the pill", async () => {
+  // Without motion, the pill takes its end state at once.
+  document.documentElement.classList.add("reduce-motion");
+  onTestFinished(() => document.documentElement.classList.remove("reduce-motion"));
+  const { box } = render(async () => undefined, caps, { away: true });
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  await act(async () => box.focus());
+  expect(shell.dataset["back"]).toBeUndefined();
+  await act(async () => document.querySelector<HTMLElement>('[aria-label="Voice input"]')!.click());
+  // As `inert` does when the pill takes over.
+  await act(async () => box.blur());
+  expect(shell.inert).toBe(true);
+  expect(shell.dataset["back"]).toBeUndefined();
+});
+
+test("a footer search cannot implicitly send the draft, while Send still can", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type } = render(onSend, caps, { tab: <input aria-label="Search refs" /> });
+  type("Keep this draft");
+  // A browser's default Enter in a search submits the form it's in, so the box must not be one.
+  const search = document.querySelector<HTMLInputElement>('[aria-label="Search refs"]')!;
+  expect(search.form).toBeNull();
+  expect(onSend).not.toHaveBeenCalled();
+  expect(box.textContent).toBe("Keep this draft");
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(onSend).toHaveBeenCalledWith("Keep this draft", {}, [], []);
 });
 
 test("cited agent text is sent as a quote and its comment, a paragraph apart from what's typed", async () => {
@@ -454,7 +488,9 @@ const hostThreads = (self: string, max = 8): AttachThreads => {
   };
 };
 const chips = () =>
-  [...document.querySelectorAll('form [data-chip="threadRef"]')].map((c) => c.textContent);
+  [...document.querySelectorAll('.composer-shell [data-chip="threadRef"]')].map(
+    (c) => c.textContent,
+  );
 
 test("a failed send puts its threads back within the cap, and another computer's can't be undone back", async () => {
   let fail = (_error: string) => {};
@@ -509,7 +545,7 @@ const drop = async (hostId: string, runId: string) => {
   // happy-dom's DragEvent takes no dataTransfer.
   const event = (type: string) =>
     Object.defineProperty(new Event(type, { bubbles: true }), "dataTransfer", { value: data });
-  const form = document.querySelector("form")!;
+  const form = document.querySelector(".composer-shell")!;
   act(() => {
     form.dispatchEvent(event("dragover"));
     form.dispatchEvent(event("drop"));
@@ -554,7 +590,7 @@ test("a sidebar row dropped on the box attaches its thread once, but not another
 
 test("scrolled up from the end, an empty box steps back until it's focused or holds text", async () => {
   const { box, type, rerender } = render(async () => undefined, caps, { away: true });
-  const form = () => box.closest("form")!;
+  const form = () => box.closest<HTMLElement>(".composer-shell")!;
   expect(form().dataset["back"]).toBe("true");
   // A press on Attach focuses it, which leaves the box stepped back so the click lands.
   act(() => document.querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!.focus());

@@ -105,7 +105,7 @@ export function EffortMenu({
         className={menuButton}
       >
         <EffortGauge value={value} />
-        {name}
+        <span className="composer-effort">{name}</span>
         {fast && <Zap aria-hidden className="fill-current text-orange-500" />}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>

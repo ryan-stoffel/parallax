@@ -172,7 +172,13 @@ export const needsTransparentWindow = (material: WindowMaterial, platform: strin
 /** A window's background: Settings > Appearance's Window. */
 export type WindowMaterial = "opaque" | "clear" | "blur";
 
+export type VoiceKey = "down" | "up" | "cancel";
+
 export interface ParallaxBridge {
+  /** Focused-thread Fn hold support on macOS. Voice recording itself stays in the renderer. */
+  voiceHotkey?(enabled: boolean, owner: string): Promise<{ available: boolean; error?: string }>;
+  /** Native Fn transitions, and cancellation when the app loses focus. */
+  onVoiceKey?(listener: (key: VoiceKey) => void): () => void;
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
   /** The app's version. */

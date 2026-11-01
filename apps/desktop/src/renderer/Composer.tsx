@@ -9,11 +9,11 @@ import {
   LockOpen,
   LoaderCircle,
   MessagesSquare,
+  Mic,
   Paperclip,
   Pencil,
   Quote,
   Sparkles,
-  Square,
   SquareSlash,
   X,
   Zap,
@@ -102,6 +102,9 @@ import type { ThreadsState } from "./threads";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { stored } from "./stored";
 import { Picker, type PickerOption } from "./ui";
+import { useVoice } from "./useVoice";
+import { VoicePill } from "./VoicePill";
+import { voiceText } from "./voiceText";
 
 const access = (value: AgentPermission, icon: ReactNode): PickerOption => ({
   value,
@@ -745,6 +748,8 @@ export interface Unanswered {
 }
 
 export interface ComposerProps {
+  /** Whether this composer owns voice input in a split thread view. */
+  voiceFocused?: boolean;
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
   /**
@@ -778,9 +783,11 @@ export interface ComposerProps {
   unanswered?: Unanswered;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
-  /** The tab tucked under the box: where the thread runs, or an open run's status. */
+  /** The row inside the box, over the text: the thread's plan, queue, and what it waits on. */
+  top?: ReactNode;
+  /** The footer controls inside the box: where the thread runs, or an open run's status. */
   tab?: ReactNode;
-  /** What goes under the tab, such as a new thread's account chooser. */
+  /** What goes under the box, such as a new thread's account chooser. */
   footer?: ReactNode;
   /**
    * The backend the thread runs on: shows the model, effort, and access choices it can honor. A
@@ -871,8 +878,8 @@ export interface ComposerProps {
   contents?: RefObject<ComposerContents | undefined>;
   /**
    * Whether the transcript over it is scrolled up from its end. An empty box no one is typing in
-   * then steps back: one gray line with only Attach and Send or Stop, marked `data-back`, over a
-   * thin tray of the model, effort, and access.
+   * then steps back: marked `data-back`, it folds its footer away (index.css), leaving one line
+   * with Attach and Send or Stop until the text takes focus.
    */
   away?: boolean;
   /** Told whether the box is stepped back, so its screen can shrink what sits with it. */
@@ -904,6 +911,7 @@ const lineWidth = 480;
  */
 export function Composer({
   newThread,
+  voiceFocused = true,
   onSend,
   onSendInBackground,
   onSteer,
@@ -911,6 +919,7 @@ export function Composer({
   onPermission,
   unanswered,
   disabledReason,
+  top,
   tab,
   footer,
   backend,
@@ -953,7 +962,14 @@ export function Composer({
   const [sending, setSending] = useState<{ file: File; share: number; failed?: boolean }>();
   const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
   const [focused, setFocused] = useState(false);
-  const back = away && !focused && !text && files.length === 0 && images.length === 0;
+  // While the pill stands in for the box, it stays as it was: `inert` takes its focus, and the
+  // box must keep its height under the pill.
+  const voiceBusy = useRef(false);
+  const lastBack = useRef(false);
+  const back = voiceBusy.current
+    ? lastBack.current
+    : away && !focused && !text && files.length === 0 && images.length === 0;
+  lastBack.current = back;
   useEffect(() => onBack?.(back), [back, onBack]);
   // The image shown large, kept by identity so images put back ahead of it don't change it.
   const [shown, setShown] = useState<PromptImage>();
@@ -1303,9 +1319,8 @@ export function Composer({
     !!menus && !!trigger && trigger.from !== closedAt && (entries.length > 0 || !!loading);
   const highlighted = Math.min(active, entries.length - 1);
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
-  const box = useRef<HTMLFormElement>(null);
-  // Narrow, as in a small window or a split's tile, the box is one line whatever it holds: its
-  // buttons at the line's end and its pickers in the tray under it, as when it steps back.
+  const box = useRef<HTMLDivElement>(null);
+  // Narrow, as in a small window or a split's tile, the usage ring gives its room to the text.
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
     const form = box.current;
@@ -1317,13 +1332,23 @@ export function Composer({
     observer.observe(form);
     return () => observer.disconnect();
   }, []);
-  const line = back || narrow;
   // The text's area, whose editor `ScrollThumb` scrolls.
   const textArea = useRef<HTMLDivElement>(null);
   const editorDom = useCallback(
     () => textArea.current?.querySelector<HTMLElement>(".composer-input"),
     [],
   );
+  // The text's area follows the editor's height in a transition (index.css), as `auto` can't ease.
+  useLayoutEffect(() => {
+    const area = textArea.current;
+    const input = editorDom();
+    if (!area || !input) return;
+    const observer = new ResizeObserver(() => {
+      if (input.offsetHeight > 0) area.style.height = `${input.offsetHeight}px`;
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, [editorDom]);
   const menuList = useRef<HTMLDivElement>(null);
   const menuDom = useCallback(() => menuList.current, []);
   const [menuBelow, setMenuBelow] = useState(false);
@@ -1337,7 +1362,6 @@ export function Composer({
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const empty = text.trim() === "" && images.length === 0 && (!sendsFiles || files.length === 0);
-  const canSend = !!onSend && !disabledReason && !empty && !uploading;
   const showStop = !!onStop && !disabledReason && empty;
 
   // Adds pasted, dropped, or picked files: images as thumbnails, anything else as a chip.
@@ -1402,7 +1426,7 @@ export function Composer({
   };
 
   const submit = async (background = false, steer = false) => {
-    if (!canSend) return;
+    if (!canSend || voiceBusy.current) return;
     const sent = editor.getJSON();
     const sentFiles = sendsFiles ? files : [];
     const sentImages = images;
@@ -1544,10 +1568,9 @@ export function Composer({
             "aria-controls": menuId,
             "aria-activedescendant": `${menuId}-${highlighted}`,
           }),
-        // It grows from two rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
-        // Its parent is anchored below it, so it grows upward. As one line, it starts at one row,
-        // clear of the buttons at its end.
-        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${line ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5"}`,
+        // One row beside its actions, growing up to seven before it scrolls, never beneath them.
+        class:
+          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.5rem))] min-h-[calc(1.625em+1.5rem)] overflow-y-auto px-3.5 py-3 focus-visible:outline-none",
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1749,6 +1772,39 @@ export function Composer({
     if (tr) editor.view.dispatch(tr);
   }, [host, editor]);
 
+  const voiceSelection = useRef({ from: 1, to: 1 });
+  const focusAfterVoice = useRef(false);
+  const voice = useVoice({
+    focused: voiceFocused,
+    enabled: !!onSend && !disabledReason && !uploading,
+    hotkey: !newThread,
+    scope: `${hostId ?? ""}:${runId ?? repo ?? ""}`,
+    starting() {
+      voiceSelection.current = { from: editor.state.selection.from, to: editor.state.selection.to };
+      setTrigger(undefined);
+    },
+    inserted(transcript) {
+      if (editor.isDestroyed) return;
+      const { from, to } = voiceSelection.current;
+      const doc = editor.state.doc;
+      const before = doc.textBetween(Math.max(0, from - 1), from, "\n");
+      const after = doc.textBetween(to, Math.min(doc.content.size, to + 1), "\n");
+      editor.view.dispatch(
+        editor.state.tr.insertText(voiceText(transcript, before, after), from, to),
+      );
+      focusAfterVoice.current = true;
+    },
+  });
+  voiceBusy.current = voice.phase !== "idle";
+  const canSend = !!onSend && !disabledReason && !empty && !uploading && !voiceBusy.current;
+  useEffect(() => {
+    editor.setEditable(voice.phase === "idle" && !uploading);
+    if (voice.phase === "idle" && focusAfterVoice.current) {
+      focusAfterVoice.current = false;
+      editor.commands.focus();
+    }
+  }, [editor, voice.phase, uploading]);
+
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {
     const mentions = mentionsIn(editor.state, known);
@@ -1781,16 +1837,14 @@ export function Composer({
       .run();
   }, [cite, editor]);
 
-  // The run's model, effort, and access: in the box's row, or under it while it's stepped back.
+  // The run's model, effort, and access stay in the footer while the message grows above them.
   const pickers = run && (
     // A disabled fieldset turns off every control in it, and its title says why.
     <fieldset
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      // In the box's row, its buttons read brighter and heavier than other menus' (menuButton), as
-      // the box's own. In the tray under a line they stay menuButton's quiet gray.
-      className={`flex min-w-0 items-center gap-1 ${line ? "" : "[&>button]:font-semibold [&>button]:text-foreground/90"}`}
+      className="flex min-w-0 items-center gap-1.5"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
@@ -1831,6 +1885,7 @@ export function Composer({
               : accessOptions[p],
           )}
           panelClassName="w-[25rem]"
+          className="composer-access"
         />
       )}
     </fieldset>
@@ -1838,296 +1893,312 @@ export function Composer({
 
   return (
     <div className="w-full">
-      <form
-        ref={box}
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-        // Files and sidebar threads dropped anywhere on the box are added, before the editor can
-        // take them as text.
-        onDragOver={(e) => {
-          const { types } = e.dataTransfer;
-          const thread = !!attach && types.includes(threadDragType);
-          if (types.includes("Files") || thread) e.preventDefault();
-          if (thread) e.dataTransfer.dropEffect = "copy";
-          setThreadOver(thread);
-        }}
-        onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setThreadOver(false);
-        }}
-        onDropCapture={(e) => {
-          setThreadOver(false);
-          const thread = attach ? draggedThread(e.dataTransfer) : undefined;
-          if (e.dataTransfer.files.length === 0 && !thread) return;
-          e.preventDefault();
-          e.stopPropagation();
-          if (!thread) return void addFiles([...e.dataTransfer.files]);
-          // Run ids are the host's own, so another computer's thread can't come along.
-          if (thread.hostId !== attach?.hostId)
-            setAttachError("A thread on another computer can't be attached here.");
-          else {
-            // Where it's dropped in the text, else at its end.
-            const at = editor.view.dom.contains(e.target as Node)
-              ? editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos
-              : undefined;
-            if (at === undefined) editor.commands.focus("end");
-            addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
-          }
-        }}
-        // Only the text's focus brings a stepped-back box back, so Attach and Stop, which a press
-        // focuses, take their click where they are.
-        onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
-        onBlur={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
-        }}
-        data-back={back || undefined}
-        className={`relative z-10 rounded-prompt border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] hover:bg-[color-mix(in_oklab,var(--foreground)_7%,var(--surface))]" : "bg-surface shadow-composer"}`}
-      >
-        {menuOpen && (
-          <div
-            className={`absolute inset-x-0 ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
-          >
-            <div className="group/scroll relative">
-              <div
-                ref={menuList}
-                id={menuId}
-                role="listbox"
-                aria-label={
-                  trigger.kind === "/"
-                    ? "Commands"
-                    : entries[0]?.group === "Threads"
-                      ? "Threads and files"
-                      : "Files"
-                }
-                className="max-h-72 overflow-y-auto p-1.5"
-              >
-                {entries.map((entry, i) => (
-                  <ReactFragment key={entry.key}>
-                    {entry.group !== entries[i - 1]?.group && (
+      <div className="relative">
+        <VoicePill {...voice} anchor={box} />
+        {/* Not a form: its tabs hold forms of their own, and Enter in a footer search sends nothing. */}
+        <div
+          // Held in place under the pill, so the transcript doesn't jump as it takes the box's place.
+          inert={voice.phase !== "idle"}
+          data-voice={voice.phase !== "idle" || undefined}
+          ref={box}
+          // Files and sidebar threads dropped anywhere on the box are added, before the editor can
+          // take them as text.
+          onDragOver={(e) => {
+            const { types } = e.dataTransfer;
+            const thread = !!attach && types.includes(threadDragType);
+            if (types.includes("Files") || thread) e.preventDefault();
+            if (thread) e.dataTransfer.dropEffect = "copy";
+            setThreadOver(thread);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setThreadOver(false);
+          }}
+          onDropCapture={(e) => {
+            setThreadOver(false);
+            const thread = attach ? draggedThread(e.dataTransfer) : undefined;
+            if (e.dataTransfer.files.length === 0 && !thread) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (!thread) return void addFiles([...e.dataTransfer.files]);
+            // Run ids are the host's own, so another computer's thread can't come along.
+            if (thread.hostId !== attach?.hostId)
+              setAttachError("A thread on another computer can't be attached here.");
+            else {
+              // Where it's dropped in the text, else at its end.
+              const at = editor.view.dom.contains(e.target as Node)
+                ? editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos
+                : undefined;
+              if (at === undefined) editor.commands.focus("end");
+              addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
+            }
+          }}
+          // Only the text's focus brings a stepped-back box back, so Attach and Stop, which a press
+          // focuses, take their click where they are.
+          onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
+          }}
+          data-back={back || undefined}
+          className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${threadOver ? "border-ring" : "border-border"}`}
+        >
+          {menuOpen && (
+            <div
+              className={`absolute inset-x-0 animate-fade-in ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
+            >
+              <div className="group/scroll relative">
+                <div
+                  ref={menuList}
+                  id={menuId}
+                  role="listbox"
+                  aria-label={
+                    trigger.kind === "/"
+                      ? "Commands"
+                      : entries[0]?.group === "Threads"
+                        ? "Threads and files"
+                        : "Files"
+                  }
+                  className="max-h-72 overflow-y-auto p-1.5"
+                >
+                  {entries.map((entry, i) => (
+                    <ReactFragment key={entry.key}>
+                      {entry.group !== entries[i - 1]?.group && (
+                        <div
+                          role="presentation"
+                          className="px-2.5 pt-2 pb-1 text-caption font-medium tracking-wide text-faint-foreground uppercase"
+                        >
+                          {entry.group}
+                        </div>
+                      )}
                       <div
-                        role="presentation"
-                        className="px-2.5 pt-2 pb-1 text-caption font-medium tracking-wide text-faint-foreground uppercase"
+                        id={`${menuId}-${i}`}
+                        role="option"
+                        aria-selected={i === highlighted}
+                        // The box keeps focus, so typing goes on filtering.
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          entry.pick();
+                        }}
+                        onMouseMove={() => setActive(i)}
+                        className={`flex h-9 w-full cursor-default items-center gap-2.5 rounded-md px-2.5 text-left text-body ${i === highlighted ? "bg-hover" : ""}`}
                       >
-                        {entry.group}
+                        <span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_img]:size-4 [&_svg]:size-4">
+                          {entry.icon}
+                        </span>
+                        <span data-label className="max-w-[55%] shrink-0 truncate font-medium">
+                          {entry.label}
+                        </span>
+                        {entry.hint && (
+                          <span className="shrink-0 font-mono text-caption text-faint-foreground">
+                            {entry.hint}
+                          </span>
+                        )}
+                        <span className="min-w-0 flex-1 truncate text-meta text-faint-foreground">
+                          {entry.description}
+                        </span>
+                        {entry.badge && (
+                          <span className="flex max-w-[30%] shrink-0 items-center gap-1.5 truncate rounded-md bg-hover px-1.5 py-0.5 text-caption text-muted-foreground [&_svg]:size-3.5">
+                            {entry.badge}
+                          </span>
+                        )}
+                        {entry.meta && (
+                          <span className="w-7 shrink-0 text-right text-meta text-faint-foreground tabular-nums">
+                            {entry.meta}
+                          </span>
+                        )}
                       </div>
-                    )}
-                    <div
-                      id={`${menuId}-${i}`}
-                      role="option"
-                      aria-selected={i === highlighted}
-                      // The box keeps focus, so typing goes on filtering.
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        entry.pick();
-                      }}
-                      onMouseMove={() => setActive(i)}
-                      className={`flex h-9 w-full cursor-default items-center gap-2.5 rounded-md px-2.5 text-left text-body ${i === highlighted ? "bg-hover" : ""}`}
+                    </ReactFragment>
+                  ))}
+                  {loading && (
+                    <p
+                      role="status"
+                      className="flex items-center gap-2 px-2.5 py-2 text-meta text-faint-foreground"
                     >
-                      <span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_img]:size-4 [&_svg]:size-4">
-                        {entry.icon}
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                      {loading}
+                    </p>
+                  )}
+                </div>
+                <ScrollThumb target={menuDom} />
+              </div>
+              {entries.length > 0 && (
+                <div className="flex items-start gap-3 border-t border-border px-3.5 py-2 text-meta text-faint-foreground">
+                  <p className="line-clamp-2 min-w-0 flex-1 text-muted-foreground">
+                    {entries[highlighted]?.detail}
+                  </p>
+                  <span aria-hidden className="flex shrink-0 items-center gap-2.5">
+                    {[
+                      ["↑↓", "move"],
+                      ["↵", "pick"],
+                      ["esc", "close"],
+                    ].map(([key, what]) => (
+                      <span key={key} className="flex items-center gap-1">
+                        <kbd className="rounded-sm border border-border px-1 font-sans text-caption leading-4">
+                          {key}
+                        </kbd>
+                        {what}
                       </span>
-                      <span data-label className="max-w-[55%] shrink-0 truncate font-medium">
-                        {entry.label}
-                      </span>
-                      {entry.hint && (
-                        <span className="shrink-0 font-mono text-caption text-faint-foreground">
-                          {entry.hint}
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-meta text-faint-foreground">
-                        {entry.description}
-                      </span>
-                      {entry.badge && (
-                        <span className="flex max-w-[30%] shrink-0 items-center gap-1.5 truncate rounded-md bg-hover px-1.5 py-0.5 text-caption text-muted-foreground [&_svg]:size-3.5">
-                          {entry.badge}
-                        </span>
-                      )}
-                      {entry.meta && (
-                        <span className="w-7 shrink-0 text-right text-meta text-faint-foreground tabular-nums">
-                          {entry.meta}
-                        </span>
-                      )}
-                    </div>
-                  </ReactFragment>
+                    ))}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          {top}
+          <div className="composer-entry m-1 rounded-xl">
+            {(images.length > 0 || files.length > 0) && (
+              <fieldset
+                // Locked while files upload: what's there now is what's sent.
+                disabled={uploading}
+                className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-3.5 pt-3"
+              >
+                {images.map((image, i) => (
+                  <span key={i} className="relative">
+                    <button
+                      type="button"
+                      aria-label={`Open image ${i + 1}`}
+                      onClick={() => setShown(image)}
+                      className="block cursor-zoom-in rounded-xl"
+                    >
+                      <img
+                        src={imageUrl(image)}
+                        alt={`Image ${i + 1}`}
+                        className="size-14 rounded-xl border border-border object-cover"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Remove image ${i + 1}`}
+                      onClick={() => removeImage(i)}
+                      className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
                 ))}
-                {loading && (
+                {files.map((f, i) => (
+                  <FileCard
+                    key={`${f.name}-${f.lastModified}-${i}`}
+                    file={f}
+                    progress={sending?.file === f ? sending.share : undefined}
+                    failed={sending?.file === f && sending.failed}
+                    onRemove={() => setFiles((all) => all.filter((_, j) => j !== i))}
+                  />
+                ))}
+                {files.length > 0 && !sendsFiles && (
+                  <span className="text-meta text-faint-foreground">Not sent to the agent yet</span>
+                )}
+              </fieldset>
+            )}
+            {shown && images.includes(shown) && (
+              <Lightbox
+                images={images.map((image, i) => ({
+                  src: imageUrl(image),
+                  name: `Image ${i + 1}`,
+                }))}
+                index={images.indexOf(shown)}
+                onIndex={(i) => setShown(images[i])}
+                onClose={() => setShown(undefined)}
+              />
+            )}
+            <div className="flex min-w-0 items-end">
+              <div ref={textArea} className="composer-text group/scroll relative min-w-0 flex-1">
+                {!text && (
                   <p
-                    role="status"
-                    className="flex items-center gap-2 px-2.5 py-2 text-meta text-faint-foreground"
+                    aria-hidden
+                    className="pointer-events-none absolute inset-x-3.5 top-3 truncate text-reading leading-relaxed text-faint-foreground"
                   >
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                    {loading}
+                    {placeholder}
                   </p>
                 )}
+                <RefsContext.Provider
+                  // No removing while files upload, as in the tray: what's there now is what's sent.
+                  value={{
+                    images,
+                    removeImage: uploading ? undefined : removeImage,
+                    threads: attach?.state,
+                  }}
+                >
+                  <EditorContent editor={editor} />
+                </RefsContext.Provider>
+                <ScrollThumb target={editorDom} />
               </div>
-              <ScrollThumb target={menuDom} />
+              <div className="flex shrink-0 items-center gap-1 pr-1 pb-1">
+                <input
+                  ref={filePicker}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    void addFiles(Array.from(e.target.files ?? []));
+                    e.target.value = "";
+                  }}
+                />
+                {usage?.summary && !narrow && <UsageRing data={usage} />}
+                <button
+                  type="button"
+                  aria-label="Attach files"
+                  title="Attach files"
+                  onClick={() => filePicker.current?.click()}
+                  className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-4"
+                >
+                  <Paperclip />
+                </button>
+                {/* Voice and send or stop share one capsule at the row's end. */}
+                <div className="composer-actions">
+                  <button
+                    type="button"
+                    aria-label="Voice input"
+                    title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
+                    disabled={!onSend || !!disabledReason || uploading}
+                    onClick={voice.start}
+                    className="grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
+                  >
+                    <Mic />
+                  </button>
+                  {showStop ? (
+                    <button
+                      type="button"
+                      aria-label={stopping ? "Stopping" : "Stop"}
+                      disabled={stopping}
+                      onClick={() => void stop()}
+                      className="composer-pop grid size-8 place-items-center rounded-lg text-danger transition-colors hover:bg-hover disabled:opacity-50"
+                    >
+                      {stopping ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : (
+                        <span className="size-3.5 rounded-[3px] bg-current" />
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label="Send"
+                      disabled={!canSend}
+                      onClick={() => void submit()}
+                      className="composer-send send-sky grid size-8 place-items-center rounded-lg bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
+                    >
+                      <ArrowUp className="size-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-            {entries.length > 0 && (
-              <div className="flex items-start gap-3 border-t border-border px-3.5 py-2 text-meta text-faint-foreground">
-                <p className="line-clamp-2 min-w-0 flex-1 text-muted-foreground">
-                  {entries[highlighted]?.detail}
-                </p>
-                <span aria-hidden className="flex shrink-0 items-center gap-2.5">
-                  {[
-                    ["↑↓", "move"],
-                    ["↵", "pick"],
-                    ["esc", "close"],
-                  ].map(([key, what]) => (
-                    <span key={key} className="flex items-center gap-1">
-                      <kbd className="rounded-sm border border-border px-1 font-sans text-caption leading-4">
-                        {key}
-                      </kbd>
-                      {what}
-                    </span>
-                  ))}
-                </span>
+          </div>
+          {(pickers || tab) && (
+            // On one line at any width: index.css trims labels to icons as the box narrows.
+            <div className="composer-footer">
+              <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2">
+                {pickers}
+                {tab && (
+                  <div className="ml-auto flex min-w-0 shrink items-center justify-end gap-1">
+                    {tab}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )}
-        {(images.length > 0 || files.length > 0) && (
-          <fieldset
-            // Locked while files upload: what's there now is what's sent.
-            disabled={uploading}
-            className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
-          >
-            {images.map((image, i) => (
-              <span key={i} className="relative">
-                <button
-                  type="button"
-                  aria-label={`Open image ${i + 1}`}
-                  onClick={() => setShown(image)}
-                  className="block cursor-zoom-in rounded-xl"
-                >
-                  <img
-                    src={imageUrl(image)}
-                    alt={`Image ${i + 1}`}
-                    className="size-14 rounded-xl border border-border object-cover"
-                  />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Remove image ${i + 1}`}
-                  onClick={() => removeImage(i)}
-                  className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-            {files.map((f, i) => (
-              <FileCard
-                key={`${f.name}-${f.lastModified}-${i}`}
-                file={f}
-                progress={sending?.file === f ? sending.share : undefined}
-                failed={sending?.file === f && sending.failed}
-                onRemove={() => setFiles((all) => all.filter((_, j) => j !== i))}
-              />
-            ))}
-            {files.length > 0 && !sendsFiles && (
-              <span className="text-meta text-faint-foreground">Not sent to the agent yet</span>
-            )}
-          </fieldset>
-        )}
-        {shown && images.includes(shown) && (
-          <Lightbox
-            images={images.map((image, i) => ({ src: imageUrl(image), name: `Image ${i + 1}` }))}
-            index={images.indexOf(shown)}
-            onIndex={(i) => setShown(images[i])}
-            onClose={() => setShown(undefined)}
-          />
-        )}
-        <div ref={textArea} className="group/scroll relative">
-          {!text && (
-            <p
-              aria-hidden
-              className={`pointer-events-none absolute left-5 truncate text-reading leading-relaxed text-faint-foreground ${line ? "top-3 right-28" : "top-3.5 right-5"}`}
-            >
-              {placeholder}
-            </p>
-          )}
-          <RefsContext.Provider
-            // No removing while files upload, as in the tray: what's there now is what's sent.
-            value={{
-              images,
-              removeImage: uploading ? undefined : removeImage,
-              threads: attach?.state,
-            }}
-          >
-            <EditorContent editor={editor} />
-          </RefsContext.Provider>
-          <ScrollThumb target={editorDom} />
-        </div>
-        <div
-          // As one line, its buttons sit level with the text's last row, as high as one row is.
-          className={`flex items-center gap-0.5 px-3 ${line ? "absolute right-0 bottom-0 h-[calc(1.625em+1.5rem)] text-reading" : "pb-2.5"}`}
-        >
-          {!line && pickers}
-          <input
-            ref={filePicker}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              void addFiles(Array.from(e.target.files ?? []));
-              e.target.value = "";
-            }}
-          />
-          {usage?.summary && !line && <UsageRing data={usage} />}
-          <button
-            type="button"
-            aria-label="Attach files"
-            title="Attach files"
-            onClick={() => filePicker.current?.click()}
-            className={`mr-1.5 ${usage?.summary ? "" : "ml-auto"} grid size-9 place-items-center rounded-full text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4`}
-          >
-            <Paperclip />
-          </button>
-          {showStop ? (
-            <button
-              type="button"
-              aria-label={stopping ? "Stopping" : "Stop"}
-              disabled={stopping}
-              onClick={() => void stop()}
-              className="grid size-9 place-items-center rounded-full bg-danger text-background disabled:opacity-50"
-            >
-              {stopping ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <Square className="size-3.5 fill-current" />
-              )}
-            </button>
-          ) : (
-            <button
-              type="submit"
-              aria-label="Send"
-              disabled={!canSend}
-              className="send-sky grid size-9 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
-            >
-              <ArrowUp className="size-4" />
-            </button>
+            </div>
           )}
         </div>
-      </form>
-      {line && pickers ? (
-        // A thin tray tucked under the line, as low as it can be, inset and rounded as the tabs over
-        // the box are (ComposerTabs). Stepped back, it's gray, as the line is, and takes any tab's
-        // place; narrow, the tab follows the pickers.
-        <div
-          className={`tucked mx-4 -mt-4 flex min-w-0 items-center gap-2 rounded-b-xl border border-t-0 border-border px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5 ${back ? "bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))]" : "bg-surface"}`}
-        >
-          {pickers}
-          {!back && tab && <div className="ml-auto flex min-w-0 items-center gap-2">{tab}</div>}
-        </div>
-      ) : (
-        tab && (
-          // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-4 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
-            {tab}
-          </div>
-        )
-      )}
+      </div>
       {footer}
     </div>
   );
