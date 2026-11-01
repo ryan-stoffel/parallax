@@ -25,7 +25,9 @@ class VoiceCapture extends AudioWorkletProcessor {
     for (let i = 0; i < channels[0].length; i++) {
       let value = 0;
       for (const channel of channels) value += channel[i] ?? 0;
-      this.samples[this.used++] = value / channels.length;
+      // Web Audio gain/AEC can exceed unity. Whistle accepts finite normalized PCM only.
+      const mixed = value / channels.length;
+      this.samples[this.used++] = Number.isFinite(mixed) ? Math.max(-1, Math.min(1, mixed)) : 0;
       if (this.used === this.samples.length) this.flush();
     }
     return true;
