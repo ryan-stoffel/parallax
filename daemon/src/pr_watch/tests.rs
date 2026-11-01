@@ -1032,3 +1032,30 @@ async fn a_replaced_runs_watch_wakes_the_orchestrators_thread() {
     .unwrap();
     assert!(!thread(&daemon, new).await.archived);
 }
+
+/// 0093: archiving an orchestrator's thread keeps its watches, current run's or replaced run's,
+/// and archiving any other thread ends them.
+#[tokio::test]
+async fn only_an_orchestrators_watch_outlives_its_archived_thread() {
+    use crate::agents::orchestrator::tests::{archive, orchestrator, plain_thread, replace};
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon =
+        crate::server::Daemon::for_tests(dir.path(), 10, std::time::Duration::from_secs(90));
+    let (id, old) = orchestrator(&daemon, Some("/src/app")).await;
+    archive(&daemon, old, true).await;
+    let new = replace(&daemon, id).await;
+    archive(&daemon, new, true).await;
+    let plain = plain_thread(&daemon).await;
+    archive(&daemon, plain, true).await;
+    let ended = crate::threads::store(&daemon, move |db| {
+        Ok([
+            super::watch_ended(db, old.into())?,
+            super::watch_ended(db, new.into())?,
+            super::watch_ended(db, plain.into())?,
+        ])
+    })
+    .await
+    .unwrap();
+    assert_eq!(ended, [false, false, true]);
+}

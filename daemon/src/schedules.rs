@@ -575,7 +575,7 @@ fn fire_job(db: &mut Tx, id: Uuid, trigger: Trigger, now: Timestamp) -> Result<F
         title: stored.task.title.clone(),
     };
     match &to {
-        To::Thread { run_id, .. } => crate::threads::wake_thread(db, (*run_id).into(), &reason)?,
+        To::Thread { run_id, .. } => crate::threads::wake_run(db, (*run_id).into(), &reason)?,
         To::Orchestrator { orchestrator, .. } => {
             crate::threads::wake_orchestrator(db, (*orchestrator).into(), &reason)?;
         }

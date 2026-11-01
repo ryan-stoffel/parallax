@@ -68,6 +68,26 @@ pub(crate) async fn replace(daemon: &Daemon, orchestrator: ScopeId) -> RunId {
     run
 }
 
+/// Stores a thread that isn't an orchestrator's, and returns its run.
+pub(crate) async fn plain_thread(daemon: &Daemon) -> RunId {
+    let run = RunId::generate();
+    store(daemon, move |db| {
+        let repo = Uuid::now_v7();
+        db.create_thread_run(
+            run.into(),
+            repo,
+            &run_fields(repo),
+            &RunState::default(),
+            None,
+            &parallax_store::ThreadFields::default(),
+        )
+        .map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
+    run
+}
+
 pub(crate) async fn thread(daemon: &Daemon, run: RunId) -> Thread {
     store(daemon, move |db| {
         db.get_thread(run.into()).map_err(|e| store_error(&e))

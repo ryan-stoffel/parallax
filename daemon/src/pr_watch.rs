@@ -21,8 +21,8 @@
 //! that finds the pull request ready by [`blockers`] reads it again fresh and merges it, pinned to
 //! that read's head, through `crate::pr_write`'s queue, then wakes the run and ends the watch.
 //!
-//! A watch ends when its pull request merges or closes, when its thread settles or is archived,
-//! after [`WAKE_LIMIT`] comment-only wakes in a row, or after [`READ_FAILURE_LIMIT`] failed reads
+//! A watch ends when its pull request merges or closes, when its thread settles or is archived
+//! unless it is an orchestrator's, which the news brings back (0093), after [`WAKE_LIMIT`] comment-only wakes in a row, or after [`READ_FAILURE_LIMIT`] failed reads
 //! in a row; a rate limit only delays it. A watch goes with its run.
 
 use std::collections::{BTreeMap, HashMap};
@@ -854,6 +854,21 @@ struct Target {
     ended: bool,
 }
 
+/// Whether run `run`'s thread has left the list, which ends its watches. An orchestrator's run
+/// keeps watching, since what it hears brings its thread back (0093).
+fn watch_ended(db: &Store, run: Uuid) -> Result<bool, ErrorObject> {
+    let error = |error| store_error(&error);
+    let orchestrators = db
+        .get_run(run)
+        .map_err(error)?
+        .is_some_and(|row| row.fields.policy == crate::agents::NO_WRITE);
+    Ok(!orchestrators
+        && db
+            .get_thread(run)
+            .map_err(error)?
+            .is_some_and(|thread| thread.settled || thread.archived))
+}
+
 /// One pass over every watched pull request.
 async fn sweep(daemon: &Daemon) {
     let found = daemon
@@ -865,10 +880,7 @@ async fn sweep(daemon: &Daemon) {
                     warn!(%run, %url, "a stored pull request watch can't be read; skipping it");
                     continue;
                 };
-                let ended = db
-                    .get_thread(run)
-                    .map_err(|e| store_error(&e))?
-                    .is_some_and(|thread| thread.settled || thread.archived);
+                let ended = watch_ended(db, run)?;
                 found
                     .entry(url)
                     .or_default()
@@ -1096,10 +1108,7 @@ fn record_job(
         let reason = WakeReason::PullRequest {
             url: url.to_owned(),
         };
-        let row = db.get_run(run).map_err(|e| store_error(&e))?;
-        if let Some(row) = row.filter(|row| row.fields.policy == crate::agents::NO_WRITE) {
-            crate::threads::wake_orchestrator(db, row.fields.project_id, &reason)?;
-        }
+        crate::threads::wake_run(db, run, &reason)?;
         let command_id = format!("pr-watch:{run}:{}", Uuid::now_v7());
         let wake = Wake {
             task: None,

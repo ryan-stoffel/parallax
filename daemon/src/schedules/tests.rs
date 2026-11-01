@@ -171,6 +171,35 @@ async fn a_fire_commits_once_per_due_time_even_when_tried_again() {
     assert_eq!(stored(&daemon, id).await.task.run_count, 1);
 }
 
+/// 0093: a task bound to a run that Start over replaced still brings the orchestrator's thread
+/// back.
+#[tokio::test]
+async fn a_fire_to_a_replaced_run_wakes_the_orchestrators_thread() {
+    use crate::agents::orchestrator::tests::{archive, orchestrator, replace, thread};
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path());
+    let (scope, old) = orchestrator(&daemon, None).await;
+    let new = replace(&daemon, scope).await;
+    archive(&daemon, new, true).await;
+    let task = save(
+        &daemon,
+        ScheduleSaveParams {
+            thread: Some(old),
+            ..params(HOURLY)
+        },
+    )
+    .await
+    .unwrap();
+    let id = Uuid::try_parse(&task.id).unwrap();
+    due_at(&daemon, id, Timestamp::now() - SignedDuration::from_secs(1)).await;
+    assert!(matches!(
+        fire(&daemon, id, Trigger::Scheduled).await.unwrap(),
+        Fired::Sent(_)
+    ));
+    assert!(!thread(&daemon, new).await.archived);
+}
+
 /// 0093: a task that fires into an archived orchestrator brings its thread back, naming the task.
 #[tokio::test]
 async fn a_fire_wakes_an_archived_orchestrator_thread() {

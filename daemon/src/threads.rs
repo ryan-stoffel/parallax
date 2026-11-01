@@ -322,7 +322,7 @@ pub(crate) fn wake_orchestrator(
 }
 
 /// [`wake_orchestrator`] for thread `thread`, which wakes only when it is an orchestrator thread.
-pub(crate) fn wake_thread(
+fn wake_thread(
     db: &mut crate::store::Tx,
     thread: Uuid,
     reason: &WakeReason,
@@ -334,6 +334,20 @@ pub(crate) fn wake_thread(
     {
         info!(thread = %row.id, %reason, "woke an orchestrator thread");
         stage_updated(db, &row)?;
+    }
+    Ok(())
+}
+
+/// [`wake_orchestrator`] for run `run`, when it is an orchestrator's, whether current or one a
+/// Start over replaced, whose watches and schedules stay with it. Any other run's does nothing.
+pub(crate) fn wake_run(
+    db: &mut crate::store::Tx,
+    run: Uuid,
+    reason: &WakeReason,
+) -> Result<(), ErrorObject> {
+    let row = db.get_run(run).map_err(|e| store_error(&e))?;
+    if let Some(row) = row.filter(|row| row.fields.policy == agents::NO_WRITE) {
+        wake_orchestrator(db, row.fields.project_id, reason)?;
     }
     Ok(())
 }

@@ -901,7 +901,7 @@ impl Actor {
         if self.is_orchestrator() {
             let (id, reason) = (self.id, WakeReason::NeedsYou { run: self.id });
             let woken = store(&self.daemon, move |db| {
-                crate::threads::wake_thread(db, id.into(), &reason)
+                crate::threads::wake_run(db, id.into(), &reason)
             })
             .await;
             if let Err(error) = woken {
