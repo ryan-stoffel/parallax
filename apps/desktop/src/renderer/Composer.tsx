@@ -9,6 +9,7 @@ import {
   LockOpen,
   LoaderCircle,
   MessagesSquare,
+  Mic,
   Paperclip,
   Pencil,
   Quote,
@@ -102,6 +103,9 @@ import type { ThreadsState } from "./threads";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { stored } from "./stored";
 import { Picker, type PickerOption } from "./ui";
+import { useVoice } from "./useVoice";
+import { VoicePill } from "./VoicePill";
+import { voiceText } from "./voiceText";
 
 const access = (value: AgentPermission, icon: ReactNode): PickerOption => ({
   value,
@@ -1349,7 +1353,7 @@ export function Composer({
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
   const empty = text.trim() === "" && images.length === 0 && (!sendsFiles || files.length === 0);
-  const canSend = !!onSend && !disabledReason && !empty && !uploading;
+  const voiceBusy = useRef(false);
   const showStop = !!onStop && !disabledReason && empty;
 
   // Adds pasted, dropped, or picked files: images as thumbnails, anything else as a chip.
@@ -1414,7 +1418,7 @@ export function Composer({
   };
 
   const submit = async (background = false, steer = false) => {
-    if (!canSend) return;
+    if (!canSend || voiceBusy.current) return;
     const sent = editor.getJSON();
     const sentFiles = sendsFiles ? files : [];
     const sentImages = images;
@@ -1760,6 +1764,38 @@ export function Composer({
     if (tr) editor.view.dispatch(tr);
   }, [host, editor]);
 
+  const voiceSelection = useRef({ from: 1, to: 1 });
+  const focusAfterVoice = useRef(false);
+  const voice = useVoice({
+    enabled: !!onSend && !disabledReason && !uploading,
+    hotkey: !newThread,
+    scope: `${hostId ?? ""}:${runId ?? repo ?? ""}`,
+    starting() {
+      voiceSelection.current = { from: editor.state.selection.from, to: editor.state.selection.to };
+      setTrigger(undefined);
+    },
+    inserted(transcript) {
+      if (editor.isDestroyed) return;
+      const { from, to } = voiceSelection.current;
+      const doc = editor.state.doc;
+      const before = doc.textBetween(Math.max(0, from - 1), from, "\n");
+      const after = doc.textBetween(to, Math.min(doc.content.size, to + 1), "\n");
+      editor.view.dispatch(
+        editor.state.tr.insertText(voiceText(transcript, before, after), from, to),
+      );
+      focusAfterVoice.current = true;
+    },
+  });
+  voiceBusy.current = voice.phase !== "idle";
+  const canSend = !!onSend && !disabledReason && !empty && !uploading && !voiceBusy.current;
+  useEffect(() => {
+    editor.setEditable(voice.phase === "idle" && !uploading);
+    if (voice.phase === "idle" && focusAfterVoice.current) {
+      focusAfterVoice.current = false;
+      editor.commands.focus();
+    }
+  }, [editor, voice.phase, uploading]);
+
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {
     const mentions = mentionsIn(editor.state, known);
@@ -1848,8 +1884,11 @@ export function Composer({
 
   return (
     <div className="w-full">
+      {voice.phase !== "idle" && <VoicePill {...voice} />}
       {/* Not a form: its tabs hold forms of their own, and Enter in a footer search sends nothing. */}
       <div
+        hidden={voice.phase !== "idle"}
+        style={voice.phase !== "idle" ? { display: "none" } : undefined}
         ref={box}
         // Files and sidebar threads dropped anywhere on the box are added, before the editor can
         // take them as text.
@@ -2089,6 +2128,16 @@ export function Composer({
                 className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-4"
               >
                 <Paperclip />
+              </button>
+              <button
+                type="button"
+                aria-label="Voice input"
+                title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
+                disabled={!onSend || !!disabledReason || uploading}
+                onClick={voice.start}
+                className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
+              >
+                <Mic />
               </button>
               {showStop ? (
                 <button
