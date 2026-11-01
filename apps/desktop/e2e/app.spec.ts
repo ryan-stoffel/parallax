@@ -299,7 +299,7 @@ test("chats with the orchestrator, whose transcript outlives a reload and a plxd
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 });
 
-test("shows the orchestrator's tasks over its composer and on its orchestrator tab, opens their chats, and marks the orchestrator's wake-up (PLX-47)", async () => {
+test("shows the orchestrator's tasks in its side panel, opens their chats, and marks the orchestrator's wake-up (PLX-47)", async () => {
   // The last test left ember's orchestrator open, interrupted by the restart, with its side panel
   // on the orchestrator tab.
   const panel = page.getByRole("complementary", { name: "Side panel" });
@@ -323,9 +323,6 @@ test("shows the orchestrator's tasks over its composer and on its orchestrator t
     })})`,
   );
   expect(task).not.toHaveProperty("error");
-  const bar = page.getByRole("region", { name: "Agents" });
-  await expect(bar).toContainText("Write the changelog");
-  await expect(bar).toContainText("1 working");
   const working = panel.getByRole("region", { name: "Running" });
   await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
 
@@ -343,7 +340,6 @@ test("shows the orchestrator's tasks over its composer and on its orchestrator t
   expect(started).not.toHaveProperty("error");
   const tag = working.getByRole("button", { name: /^Tag the release/ });
   await expect(tag).toBeVisible();
-  await expect(bar).toContainText("2 working");
 
   // Its chat, with the orchestrator still open. Stopping it wakes the orchestrator (0025).
   await tag.click();
@@ -361,7 +357,7 @@ test("shows the orchestrator's tasks over its composer and on its orchestrator t
     .getByRole("button", { name: /^Open parent/ })
     .click();
   await expect(crumbs).not.toContainText("Tag the release");
-  await expect(bar).toContainText("1 working");
+  await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
   // Two wake-ups: one for the task's start (0043), and one for the stop.
   await expect(transcript.getByText("From Parallax: subagents finished").first()).toBeVisible();
