@@ -15,6 +15,10 @@ import type { AttachThreads } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
 
+vi.mock("./voiceEngine", () => ({
+  loadVoiceEngine: () => new Promise(() => {}),
+}));
+
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The model menu's items are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
@@ -165,6 +169,18 @@ test("focus moving to the bar under the box keeps it from stepping back, and lea
   expect(shell.dataset["back"]).toBeUndefined();
   leaving(picker, null);
   expect(shell.dataset["back"]).toBe("true");
+});
+
+test("recording takes the box's focus without stepping it back, so it keeps its height under the pill", async () => {
+  const { box } = render(async () => undefined, caps, { away: true });
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  await act(async () => box.focus());
+  expect(shell.dataset["back"]).toBeUndefined();
+  await act(async () => document.querySelector<HTMLElement>('[aria-label="Voice input"]')!.click());
+  // As `inert` does when the pill takes over.
+  await act(async () => box.blur());
+  expect(shell.inert).toBe(true);
+  expect(shell.dataset["back"]).toBeUndefined();
 });
 
 test("a footer search cannot implicitly send the draft, while Send still can", async () => {
