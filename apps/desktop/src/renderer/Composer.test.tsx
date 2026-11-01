@@ -3,7 +3,7 @@ import { closeHistory } from "@tiptap/pm/history";
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
@@ -155,6 +155,9 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
 });
 
 test("recording takes the box's focus without stepping it back, so it keeps its height under the pill", async () => {
+  // Without motion, the pill takes its end state at once.
+  document.documentElement.classList.add("reduce-motion");
+  onTestFinished(() => document.documentElement.classList.remove("reduce-motion"));
   const { box } = render(async () => undefined, caps, { away: true });
   const shell = box.closest<HTMLElement>(".composer-shell")!;
   await act(async () => box.focus());
