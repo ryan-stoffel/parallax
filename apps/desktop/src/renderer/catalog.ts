@@ -166,8 +166,9 @@ export function hubModelName(model: { id: string; name: string }): string {
   if (name !== id || !/^[a-z0-9][a-z0-9._/-]*$/.test(name)) return name;
   const slash = name.lastIndexOf("/");
   const route = name.slice(0, slash + 1);
-  const slug = name.slice(slash + 1);
-  // Versions such as Claude's 5-5 become 5.5. Date suffixes remain intact.
+  // Anthropic's snapshot dates (`-20251101`) say nothing a person picks by; the id keeps them.
+  const slug = name.slice(slash + 1).replace(/-\d{8}$/, "");
+  // Versions such as Claude's 5-5 become 5.5. Dashed date suffixes remain intact.
   const words =
     slug.replace(/(\d{1,2})-(\d)(?=-|$)/g, "$1.$2").match(/\d{4}-\d{2}-\d{2}|[^-_]+/g) ?? [];
   const marks: Record<string, string> = {
@@ -190,26 +191,39 @@ export function hubModelName(model: { id: string; name: string }): string {
   );
 }
 
+/** What a hub serves that can't run an agent's thread: image models and Codex's reviewer. */
+const hubOnly = /^(?:gpt-image|codex-auto-review)/;
+
+/** A label's version: 6.1 in "GPT 6.1 Terra", none in "GPT OSS 120B". */
+const versionIn = (name: string) => Number(/\b\d+(?:\.\d+)?\b/.exec(name)?.[0] ?? 0);
+
 /**
  * An instance's discovered models, or its legacy catalog when discovery is unavailable, then
- * the user's own, each id once. Hubs have readable display labels and retain their exact IDs.
- * One that lists none offers its agent's own default, whose empty id sends no `model`.
+ * the user's own, each id once. A hub answers in no order, so its models have readable labels,
+ * and keep their exact ids, newest first, then Z to A, which leads with Terra and Sol and leaves
+ * Haiku last. One that lists none offers its agent's own default, whose empty id sends no `model`.
  */
 export function instanceModels(info: ProviderInfo): Model[] {
   const { instance } = info;
   const seen = new Set<string>();
   // Availability and names belong to the upstream catalog. Built-ins supply only optional
   // capabilities, and remain a fallback for older CLIs that cannot list models.
-  const discovered = info.models.map((m) => ({
-    ...models.find((c) => c.provider === instance.kind && c.id === m.id),
-    ...m,
-    name: info.hub
-      ? hubModelName(m)
-      : instance.kind === "opencode" && m.id.startsWith("opencode/")
-        ? m.name.replace(/^[^/]*\//, "")
-        : m.name,
-    contexts: models.find((c) => c.provider === instance.kind && c.id === m.id)?.contexts ?? [],
-  }));
+  const discovered = info.models
+    .filter((m) => !info.hub || !hubOnly.test(m.id))
+    .map((m) => ({
+      ...models.find((c) => c.provider === instance.kind && c.id === m.id),
+      ...m,
+      name: info.hub
+        ? hubModelName(m)
+        : instance.kind === "opencode" && m.id.startsWith("opencode/")
+          ? m.name.replace(/^[^/]*\//, "")
+          : m.name,
+      contexts: models.find((c) => c.provider === instance.kind && c.id === m.id)?.contexts ?? [],
+    }));
+  if (info.hub)
+    discovered.sort(
+      (a, b) => versionIn(b.name) - versionIn(a.name) || b.name.localeCompare(a.name),
+    );
   const listed = [
     ...(discovered.length || info.hub
       ? discovered

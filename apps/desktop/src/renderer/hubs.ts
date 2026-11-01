@@ -6,7 +6,7 @@ import { describeError } from "./errors";
 import { loadProviders } from "./providers";
 
 // A host's CLIProxyAPI hubs (`hubs/list`, 0089), on a plxd with `hubs`: one list per host, shared
-// by Settings' views, and replaced by each save or remove's answer.
+// by Settings and every model picker, and replaced by each change's answer.
 
 const lists = new Map<string, Hub[]>();
 const loading = new Map<string, Promise<string | undefined>>();
@@ -23,8 +23,9 @@ export const HUB_DOCS = "https://help.router-for.me/";
 export const HUB_GUIDE = "https://gist.github.com/t3dotgg/59a521d2ee8d70aaf90e280c175072af";
 
 /**
- * Keeps a list plxd answered as `hostId`'s, or resolves to why it couldn't, for people. A save or
- * remove changes the host's instances too, so they're listed again.
+ * Keeps a list plxd answered as `hostId`'s, or resolves to why it couldn't, for people. A change
+ * can change the host's instances and their models too, so they're listed again: from what plxd
+ * knows at once, which drops a hub that went away, then asking each.
  */
 function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = false) {
   if ("error" in answer) return describeError(answer.error);
@@ -32,7 +33,7 @@ function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = fa
   loadedAt.set(hostId, Date.now());
   lists.set(hostId, answer.result.hubs);
   for (const listener of listeners) listener();
-  if (changed) void loadProviders(hostId, true);
+  if (changed) void loadProviders(hostId).then(() => loadProviders(hostId, true));
   return undefined;
 }
 
@@ -57,6 +58,10 @@ export function ensureHubs(hostId: string): Promise<string | undefined> {
   return loadHubs(hostId);
 }
 
+/** Lists a hub's accounts and the host's instances again, after an account signed in. */
+export const refreshHubAccounts = (hostId: string) =>
+  Promise.all([loadHubs(hostId, true), loadProviders(hostId, true)]);
+
 /** Adds a hub to `hostId`, or replaces the one with its id. Resolves to an error for people. */
 export async function saveHub(hostId: string, hub: HubsSaveParams): Promise<string | undefined> {
   return kept(hostId, await window.parallax.request(hostId, "hubs/save", hub), true);
@@ -77,6 +82,7 @@ export async function setHubAccountEnabled(
   return kept(
     hostId,
     await window.parallax.request(hostId, "hubs/accounts/setEnabled", { hub, account, enabled }),
+    true,
   );
 }
 
@@ -89,6 +95,7 @@ export async function removeHubAccount(
   return kept(
     hostId,
     await window.parallax.request(hostId, "hubs/accounts/remove", { hub, account }),
+    true,
   );
 }
 

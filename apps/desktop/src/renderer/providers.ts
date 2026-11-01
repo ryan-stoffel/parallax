@@ -98,12 +98,11 @@ function notifySignIns(hostId: string, before: ProvidersListResult, after: Provi
     if (!instance.enabled || was == null || signedIn == null || was === signedIn) continue;
     const key = `provider/${hostId}/${instance.id}`;
     if (signedIn)
-      // Without the email, which a plain-text notification can't blur (PLX-1067).
       notify({
         key,
         tone: "success",
         title: `Signed in to ${instance.name}`,
-        ...(account && !account.includes("@") && { body: account }),
+        ...(account && { body: account }),
       });
     else
       notify({

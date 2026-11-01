@@ -436,15 +436,6 @@
 @custom-variant motion-safe (&:where(:root:not(.reduce-motion) *));
 @custom-variant motion-reduce (&:where(:root.reduce-motion *));
 
-/* A blurred email (Redacted.tsx) spreads softly past a truncating row around it instead of being
-   cut square at the row's edges: clip, unlike hidden, takes a margin, and keeps the ellipsis. */
-.truncate:has(.redacted) {
-  overflow: clip;
-  overflow-clip-margin: 0.5em;
-  /* Clip, unlike hidden, isn't a scroll container, so a flex item would keep its text's width. */
-  min-width: 0;
-}
-
 /* Long lines in code blocks, diffs, and file previews (.code-lines) wrap under .word-wrap, from
    Settings > Appearance, or else run on and their box (.code-scroll) scrolls. Unlayered, so they
    win over the elements' own whitespace utilities. */
@@ -1565,6 +1556,50 @@ body {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 10%),
     0 0 0 0.5px var(--border);
+}
+/* A subscription's badge (PlanBadge.tsx): its plan in its provider's colors, and at the top tier a
+   slow sheen, as the effort slider's. A plan without a tier stays gray. */
+.plan-badge {
+  background: var(--hover);
+  color: var(--muted-foreground);
+}
+.plan-badge[data-tier] {
+  --plan-a: var(--accent);
+  --plan-b: var(--accent);
+  background: color-mix(in oklab, var(--plan-a) 14%, transparent);
+  color: light-dark(
+    color-mix(in oklab, var(--plan-a) 80%, black),
+    color-mix(in oklab, var(--plan-b) 80%, white)
+  );
+}
+.plan-badge[data-kind="claude"] {
+  --plan-a: #d97757;
+  --plan-b: #f2b58c;
+}
+.plan-badge[data-kind="codex"] {
+  --plan-a: #0d9f7f;
+  --plan-b: #5fdcbc;
+}
+.plan-badge[data-tier="3"] {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(
+    100deg,
+    color-mix(in oklab, var(--plan-a) 26%, transparent),
+    color-mix(in oklab, var(--plan-b) 18%, transparent)
+  );
+}
+.plan-badge[data-tier="3"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 22%), transparent) no-repeat;
+  background-size: 50% 100%;
+  animation: effort-sheen 5s ease-in-out infinite;
+}
+:root.reduce-motion .plan-badge[data-tier="3"]::after {
+  animation: none;
+  background: none;
 }
 /* What arrives in the sidebar once its first load has settled (data-settled, Sidebar.tsx): a count
    rolls up into place, a status dot pops, and a square or button grows in. */

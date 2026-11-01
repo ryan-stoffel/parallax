@@ -162,7 +162,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", a
   await page.getByRole("button", { name: "Profile", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
-  const codex = page.getByRole("tab", { name: /^(Codex|Email hidden)/ });
+  const codex = page.getByRole("tab", { name: /^(Codex|e2e@example\.test)/ });
   await codex.click();
   await expect(codex).toHaveText("CodexNot authenticated");
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
@@ -172,9 +172,8 @@ test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", a
   await terminal.click();
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
-  // The sign-in's end ran accounts/refresh, which found the fake signed in. Its email is blurred.
-  await expect(codex).toHaveText(/Email hidden, hover or focus to showAuthenticated$/);
-  await expect(codex).not.toContainText("e2e@example.test");
+  // The sign-in's end ran accounts/refresh, which found the fake signed in.
+  await expect(codex).toContainText("e2e@example.test");
 });
 
 test("Escape closes a dialog opened in Settings, and leaves Settings open (PLX-1050)", async () => {

@@ -7,7 +7,7 @@ import { describeError } from "../errors";
 import {
   HUB_DOCS,
   HUB_GUIDE,
-  loadHubs,
+  refreshHubAccounts,
   removeHub,
   removeHubAccount,
   saveHub,
@@ -17,9 +17,9 @@ import {
 import type { Host } from "../hosts";
 import { ClaudeLogo, OpenAILogo } from "../logos";
 import { slug, unique } from "../providers";
-import { Redacted } from "../Redacted";
 import { IconButton } from "../ui";
 import { notify } from "../notifications";
+import { PlanBadge } from "../PlanBadge";
 import { LimitLines } from "../Usage";
 import {
   ConfirmRemove,
@@ -292,10 +292,6 @@ function AccountLogo({ provider }: { provider: string }) {
   return <Logo aria-hidden className="mt-0.5 size-3.5 shrink-0" />;
 }
 
-/** "pro" as "Pro", "chatgpt_plus" as "Chatgpt Plus". */
-const planName = (plan: string) =>
-  plan.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
 /**
  * One of a hub's accounts: its email or id, its plan, and its limits, or why they're missing.
  * With `hubAccounts`, a switch turns it on or off on the hub, and Remove deletes it after a
@@ -328,14 +324,8 @@ function AccountRow({
       <AccountLogo provider={account.provider} />
       <div className="min-w-0 flex-1">
         <span className="flex items-center gap-2 text-body font-medium">
-          <span className="truncate">
-            <Redacted text={name} />
-          </span>
-          {account.plan && (
-            <span className="shrink-0 rounded-sm bg-hover px-1.5 text-caption font-medium text-muted-foreground">
-              {planName(account.plan)}
-            </span>
-          )}
+          <span className="truncate">{name}</span>
+          {account.plan && <PlanBadge kind={account.provider} plan={account.plan} />}
           {account.disabled && !manage && (
             <span className="shrink-0 text-meta text-faint-foreground">Off on the hub</span>
           )}
@@ -443,7 +433,7 @@ function AddAccount({
           problem: problem ?? "The sign-in didn't finish.",
         });
       setStep({ step: status, service });
-      if (status === "done") void loadHubs(hostId, true);
+      if (status === "done") void refreshHubAccounts(hostId);
     }, SIGN_IN_POLL_MS);
     return () => {
       stopped = true;
@@ -460,7 +450,7 @@ function AddAccount({
     // The hub won't cancel while it saves the account, so it keeps waiting, and so does this.
     if (status === "waiting") return;
     if (status === "failed") return fail(service, problem ?? "The sign-in didn't finish.");
-    if (status === "done") void loadHubs(hostId, true);
+    if (status === "done") void refreshHubAccounts(hostId);
     setStep({ step: status, service });
   };
 

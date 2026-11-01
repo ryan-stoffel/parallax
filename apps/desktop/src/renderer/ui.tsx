@@ -171,7 +171,7 @@ export function Segmented<T extends string>({
   disabled,
 }: {
   label: string;
-  options: { value: T; name: string }[];
+  options: { value: T; name: ReactNode; disabled?: boolean; title?: string }[];
   value: T;
   onChange: (value: T) => void;
   disabled?: boolean;
@@ -185,11 +185,16 @@ export function Segmented<T extends string>({
       className="flex shrink-0 gap-0.5 rounded-lg border border-border p-0.5 disabled:pointer-events-none disabled:opacity-50"
     >
       {options.map((o) => (
-        <label key={o.value} className={segment}>
+        <label
+          key={o.value}
+          title={o.title}
+          className={`${segment} ${o.disabled ? "pointer-events-none opacity-40" : ""}`}
+        >
           <input
             type="radio"
             name={name}
             value={o.value}
+            disabled={o.disabled}
             checked={value === o.value}
             onChange={() => onChange(o.value)}
             className="sr-only"
