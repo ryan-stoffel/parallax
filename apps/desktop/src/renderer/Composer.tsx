@@ -778,6 +778,8 @@ export interface ComposerProps {
   unanswered?: Unanswered;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
+  /** The row inside the box, over the text: the thread's plan, queue, and what it waits on. */
+  top?: ReactNode;
   /** The footer controls inside the box: where the thread runs, or an open run's status. */
   tab?: ReactNode;
   /** What goes under the box, such as a new thread's account chooser. */
@@ -871,8 +873,8 @@ export interface ComposerProps {
   contents?: RefObject<ComposerContents | undefined>;
   /**
    * Whether the transcript over it is scrolled up from its end. An empty box no one is typing in
-   * then steps back: one quiet line with Attach and Send or Stop, marked `data-back`, above the
-   * model, effort, and access controls.
+   * then steps back: marked `data-back`, it folds its footer away (index.css), leaving one line
+   * with Attach and Send or Stop until the text takes focus.
    */
   away?: boolean;
   /** Told whether the box is stepped back, so its screen can shrink what sits with it. */
@@ -911,6 +913,7 @@ export function Composer({
   onPermission,
   unanswered,
   disabledReason,
+  top,
   tab,
   footer,
   backend,
@@ -1304,8 +1307,7 @@ export function Composer({
   const highlighted = Math.min(active, entries.length - 1);
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
   const box = useRef<HTMLFormElement>(null);
-  // Narrow, as in a small window or a split's tile, the box is one line whatever it holds: its
-  // buttons at the line's end and its pickers below it, as when it steps back.
+  // Narrow, as in a small window or a split's tile, the usage ring gives its room to the text.
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
     const form = box.current;
@@ -1317,13 +1319,23 @@ export function Composer({
     observer.observe(form);
     return () => observer.disconnect();
   }, []);
-  const line = back || narrow;
   // The text's area, whose editor `ScrollThumb` scrolls.
   const textArea = useRef<HTMLDivElement>(null);
   const editorDom = useCallback(
     () => textArea.current?.querySelector<HTMLElement>(".composer-input"),
     [],
   );
+  // The text's area follows the editor's height in a transition (index.css), as `auto` can't ease.
+  useLayoutEffect(() => {
+    const area = textArea.current;
+    const input = editorDom();
+    if (!area || !input) return;
+    const observer = new ResizeObserver(() => {
+      if (input.offsetHeight > 0) area.style.height = `${input.offsetHeight}px`;
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, [editorDom]);
   const menuList = useRef<HTMLDivElement>(null);
   const menuDom = useCallback(() => menuList.current, []);
   const [menuBelow, setMenuBelow] = useState(false);
@@ -1544,8 +1556,9 @@ export function Composer({
             "aria-controls": menuId,
             "aria-activedescendant": `${menuId}-${highlighted}`,
           }),
-        // The text grows beside its actions, then scrolls without ever running beneath them.
-        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-3.5 py-3 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${line ? "min-h-[calc(1.625em+1.5rem)]" : "min-h-[calc(3.25em+1.5rem)]"}`,
+        // One row beside its actions, growing up to seven before it scrolls, never beneath them.
+        class:
+          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.5rem))] min-h-[calc(1.625em+1.5rem)] overflow-y-auto px-3.5 py-3 focus-visible:outline-none",
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1786,7 +1799,7 @@ export function Composer({
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      className="flex min-w-0 flex-wrap items-center gap-0.5"
+      className="flex min-w-0 items-center gap-0.5"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
@@ -1827,6 +1840,7 @@ export function Composer({
               : accessOptions[p],
           )}
           panelClassName="w-[25rem]"
+          className="composer-access"
         />
       )}
     </fieldset>
@@ -1876,11 +1890,11 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
         data-back={back || undefined}
-        className={`composer-shell relative z-10 rounded-prompt border bg-surface shadow-composer transition-[border-color,box-shadow] duration-200 ease-out focus-within:border-foreground/20 motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text" : ""}`}
+        className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${threadOver ? "border-ring" : "border-border"}`}
       >
         {menuOpen && (
           <div
-            className={`absolute inset-x-0 ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
+            className={`absolute inset-x-0 animate-fade-in ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
           >
             <div className="group/scroll relative">
               <div
@@ -1980,12 +1994,13 @@ export function Composer({
             )}
           </div>
         )}
-        <div className="composer-entry m-1 rounded-[calc(var(--radius-prompt)-3px)]">
+        {top}
+        <div className="composer-entry m-1 rounded-xl">
           {(images.length > 0 || files.length > 0) && (
             <fieldset
               // Locked while files upload: what's there now is what's sent.
               disabled={uploading}
-              className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
+              className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-3.5 pt-3"
             >
               {images.map((image, i) => (
                 <span key={i} className="relative">
@@ -2034,7 +2049,7 @@ export function Composer({
             />
           )}
           <div className="flex min-w-0 items-end">
-            <div ref={textArea} className="group/scroll relative min-w-0 flex-1">
+            <div ref={textArea} className="composer-text group/scroll relative min-w-0 flex-1">
               {!text && (
                 <p
                   aria-hidden
@@ -2082,7 +2097,7 @@ export function Composer({
                   aria-label={stopping ? "Stopping" : "Stop"}
                   disabled={stopping}
                   onClick={() => void stop()}
-                  className="grid size-8 place-items-center rounded-full bg-foreground text-background disabled:opacity-50"
+                  className="composer-pop grid size-8 place-items-center rounded-full bg-danger text-danger-foreground disabled:opacity-50"
                 >
                   {stopping ? (
                     <LoaderCircle className="size-4 animate-spin" />
@@ -2096,7 +2111,7 @@ export function Composer({
                   aria-label="Send"
                   disabled={!canSend}
                   onClick={() => void submit()}
-                  className="grid size-8 place-items-center rounded-full bg-foreground text-background transition-opacity enabled:hover:opacity-80 disabled:bg-selected disabled:text-faint-foreground"
+                  className="composer-send send-sky grid size-8 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
                 >
                   <ArrowUp className="size-4" />
                 </button>
@@ -2105,13 +2120,16 @@ export function Composer({
           </div>
         </div>
         {(pickers || tab) && (
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 px-2 pt-0.5 pb-1.5 [&_button[aria-haspopup]]:rounded-lg [&_button[aria-haspopup]]:py-1">
-            {pickers}
-            {tab && (
-              <div className="ml-auto flex min-w-0 max-w-full flex-1 items-center justify-between gap-2">
-                {tab}
-              </div>
-            )}
+          // On one line at any width: index.css trims labels to icons as the box narrows.
+          <div className="composer-footer">
+            <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2 [&_button[aria-haspopup]]:h-7 [&_button[aria-haspopup]]:rounded-lg [&_button[aria-haspopup]]:py-0 [&_button[aria-haspopup]]:whitespace-nowrap">
+              {pickers}
+              {tab && (
+                <div className="ml-auto flex min-w-0 shrink items-center justify-end gap-1">
+                  {tab}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </form>

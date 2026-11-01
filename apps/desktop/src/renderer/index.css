@@ -498,8 +498,8 @@ svg.lucide[stroke-width="2"] * {
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
-  /* Match native macOS window corners, including the trays around a prompt box. */
-  --radius-prompt: 12px;
+  /* 16px since PLX-1089 found 24px too round (0092). The workspace layer's corner, too. */
+  --radius-prompt: 16px;
 }
 
 /* Motion and stacking (docs/decisions/0092-shared-ui-and-motion.md). Static, so plain CSS can use
@@ -1152,16 +1152,92 @@ body {
   scrollbar-width: none;
 }
 
-/* The remaining context tabs share the composer's quiet outer surface. */
-.composer-tray {
-  border-color: var(--border);
-  background-color: color-mix(in oklab, var(--foreground) 2%, var(--surface));
+/* The composer (Composer.tsx) is one shape: a shell holding a field for the text and its actions,
+   a step brighter than the shell in dark and white on a tinted shell in light, with its corners
+   concentric to the shell's. */
+.composer-shell {
+  background-color: light-dark(
+    color-mix(in oklab, var(--foreground) 4%, var(--surface)),
+    var(--surface)
+  );
+  transition:
+    border-color var(--transition-duration-base) var(--ease-out),
+    box-shadow var(--transition-duration-base) var(--ease-out);
 }
-
-/* The message and actions share an inset surface within one composer shape. */
 .composer-entry {
-  background-color: color-mix(in oklab, var(--foreground) 4%, var(--surface));
-  box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 4%, transparent);
+  background-color: light-dark(
+    var(--surface),
+    color-mix(in oklab, var(--foreground) 6%, var(--surface))
+  );
+  box-shadow: light-dark(
+    0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 4%)
+  );
+  transition: background-color var(--transition-duration-base) var(--ease-out);
+}
+.composer-shell:focus-within .composer-entry {
+  background-color: light-dark(
+    var(--surface),
+    color-mix(in oklab, var(--foreground) 9%, var(--surface))
+  );
+}
+/* The text's height follows the editor's (Composer.tsx), so the box eases as lines wrap. */
+.composer-text {
+  /* Clipped, not hidden: a hidden box still scrolls to the caret, cutting off the first line. */
+  overflow: clip;
+  transition: height var(--transition-duration-fast) var(--ease-out);
+}
+/* Send pops up when there's something to send, and Stop when it takes Send's place. Doubled up to
+   win over a nightly's .send-sky transition. */
+.composer-shell .composer-send.send-sky {
+  transition:
+    scale var(--transition-duration-base) var(--ease-spring),
+    filter var(--transition-duration-fast);
+}
+.composer-send:disabled {
+  scale: 0.88;
+}
+.composer-pop {
+  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
+}
+@keyframes composer-pop {
+  from {
+    scale: 0.7;
+    opacity: 0;
+  }
+}
+/* The footer folds away while the box steps back, unless one of its menus is open. */
+.composer-footer {
+  display: grid;
+  grid-template-rows: 1fr;
+  padding-block: 2px 6px;
+  transition:
+    grid-template-rows var(--transition-duration-base) var(--ease-out),
+    padding-block var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-fast) var(--ease-out),
+    visibility var(--transition-duration-fast);
+}
+[data-back] > .composer-footer:not(:has(:popover-open)) {
+  grid-template-rows: 0fr;
+  padding-block: 0;
+  opacity: 0;
+  visibility: hidden;
+}
+/* Labels give way to their icons as the box narrows, least needed first. Each keeps its title. */
+@container composer (width < 44rem) {
+  .composer-access > span {
+    display: none;
+  }
+}
+@container composer (width < 36rem) {
+  .composer-detail {
+    display: none;
+  }
+}
+@container composer (width < 26rem) {
+  .composer-effort {
+    display: none;
+  }
 }
 
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its

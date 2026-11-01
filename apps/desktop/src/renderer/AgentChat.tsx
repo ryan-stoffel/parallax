@@ -287,11 +287,11 @@ export function AgentChat({
   /** The run as the thread list has it, which the composer shows until the transcript loads. */
   listed?: AgentRun;
   /**
-   * The tab tucked under the composer, such as an orchestrator's repository. A thread's own has
+   * The tab in the composer's footer, such as an orchestrator's repository. A thread's own has
    * none: where it runs and its branch show in Thread details, as a new thread's picker did.
    */
   tab?: ReactNode;
-  /** The back tab over the composer, behind the plan's, such as an orchestrator's agents. */
+  /** The composer's back tab, behind the plan's, such as an orchestrator's agents. */
   strip?: ComposerTab;
   /**
    * Permission requests other runs wait on, pinned here with this run's own, as an orchestrator's
@@ -855,8 +855,8 @@ export function AgentChat({
       <div
         className={`transition-[margin] duration-200 ease-out motion-reduce:transition-none ${back ? "mx-10 @max-lg:mx-2" : ""}`}
       >
-        <ComposerTabs tabs={tabs} short={back} />
         <Composer
+          top={<ComposerTabs tabs={tabs} short={back} />}
           // One sent before the transcript loads stays in the box.
           onSend={(text, options, images, threads) =>
             run

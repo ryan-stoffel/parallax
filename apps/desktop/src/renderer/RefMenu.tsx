@@ -27,8 +27,8 @@ const hint = (r: RepoRef) =>
   r.current ? "current" : r.worktree ? "worktree" : r.default ? "default" : undefined;
 
 /**
- * New Thread's ref picker, for a plxd with `repoRefs`. For a new worktree its button reads
- * `From <ref>`, and picks the first of `baseOrder` the repository has, else it reads the checkout's
+ * New Thread's ref picker, for a plxd with `repoRefs`. For a new worktree its button reads its ref,
+ * titled `From <ref>`, and picks the first of `baseOrder` the repository has, else the checkout's
  * branch. For the current checkout it reads the picked ref, or `Select ref`. While another
  * repository's refs load, it keeps the label it had. Its menu searches the repository's branches
  * from `repo/refs`, asked again each time it opens.
@@ -79,7 +79,7 @@ export function RefMenu({
       ? last
       : checkout
         ? (value ?? "Select ref")
-        : `From ${value ?? base ?? list.find((r) => r.current)?.name ?? "HEAD"}`;
+        : (value ?? base ?? list.find((r) => r.current)?.name ?? "HEAD");
   if (label !== last) setLast(label);
   // Where the label's visible end starts: its last word, after a `-`, `/`, or space, up to
   // `tailLength` characters of it.
@@ -99,14 +99,14 @@ export function RefMenu({
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        title={label}
+        // The icon says it's a branch. A new worktree starts from it, which the title spells out.
+        title={checkout ? label : `From ${label}`}
         className={`${menuButton} min-w-0 max-w-72`}
       >
         <GitBranch />
-        {/* Cut in the middle, so a long branch keeps its end: `From bug/PLX-781-sweep…worktrees`. */}
+        {/* Cut in the middle, so a long branch keeps its end: `bug/PLX-781-sweep…worktrees`. */}
         <span className="flex min-w-0">
-          {/* `whitespace-pre` keeps a project the cut lands after, as in `From main`. */}
-          <span className="overflow-hidden text-ellipsis whitespace-pre">
+          <span className="overflow-hidden text-ellipsis whitespace-nowrap">
             {label.slice(0, tail)}
           </span>
           <span className="shrink-0">{label.slice(tail)}</span>
