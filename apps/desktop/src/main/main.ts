@@ -853,8 +853,8 @@ ipcMain.on("parallax:zoomed", (event, zoom: unknown) => {
 
 void app.whenReady().then(async () => {
   if (secondCopy) return;
-  startVoice();
   if (!devServerUrl) await serveAppScheme();
+  startVoice();
   protocol.handle("plx-render", (request) => renderPage(request.url));
   protocol.handle("plx-file", (request) => streamFile(request.url, request.headers.get("range")));
   // Pages in the side panel's browser get no camera, microphone, notifications, and the like.
