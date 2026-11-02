@@ -3,12 +3,15 @@ import { useSyncExternalStore } from "react";
 import type { HostResponse } from "../preload/bridge";
 import type { Hub, HubsListResult, HubsSaveParams } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { loadProviders } from "./providers";
+import { loadProviders, relistProviders } from "./providers";
 
 // A host's CLIProxyAPI hubs (`hubs/list`, 0089), on a plxd with `hubs`: one list per host, shared
-// by Settings' views, and replaced by each save or remove's answer.
+// by Settings and every model picker, and replaced by each change's answer.
 
 const lists = new Map<string, Hub[]>();
+const loading = new Map<string, Promise<string | undefined>>();
+const revisions = new Map<string, number>();
+const loadedAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -20,21 +23,43 @@ export const HUB_DOCS = "https://help.router-for.me/";
 export const HUB_GUIDE = "https://gist.github.com/t3dotgg/59a521d2ee8d70aaf90e280c175072af";
 
 /**
- * Keeps a list plxd answered as `hostId`'s, or resolves to why it couldn't, for people. A save or
- * remove changes the host's instances too, so they're listed again.
+ * Keeps a list plxd answered as `hostId`'s, or resolves to why it couldn't, for people. A change
+ * can change the host's instances and their models too, so they're listed again.
  */
 function kept(hostId: string, answer: HostResponse<HubsListResult>, changed = false) {
   if ("error" in answer) return describeError(answer.error);
+  revisions.set(hostId, (revisions.get(hostId) ?? 0) + 1);
+  loadedAt.set(hostId, Date.now());
   lists.set(hostId, answer.result.hubs);
   for (const listener of listeners) listener();
-  if (changed) void loadProviders(hostId);
+  if (changed) void relistProviders(hostId);
   return undefined;
 }
 
 /** Lists `hostId`'s hubs, asking each again with `refresh`. Resolves to an error for people. */
-export async function loadHubs(hostId: string, refresh = false): Promise<string | undefined> {
-  return kept(hostId, await window.parallax.request(hostId, "hubs/list", { refresh }));
+export function loadHubs(hostId: string, refresh = false): Promise<string | undefined> {
+  const pending = loading.get(hostId);
+  if (pending && !refresh) return pending;
+  const revision = (revisions.get(hostId) ?? 0) + 1;
+  revisions.set(hostId, revision);
+  const load = window.parallax.request(hostId, "hubs/list", { refresh }).then((answer) => {
+    if (loading.get(hostId) === load) loading.delete(hostId);
+    if (revisions.get(hostId) !== revision) return undefined;
+    return kept(hostId, answer);
+  });
+  loading.set(hostId, load);
+  return load;
 }
+
+/** Lazy picker metadata, shared across menus, without repeating management probes within 30 s. */
+export function ensureHubs(hostId: string): Promise<string | undefined> {
+  if (Date.now() - (loadedAt.get(hostId) ?? 0) < 30_000) return Promise.resolve(undefined);
+  return loadHubs(hostId);
+}
+
+/** Lists a hub's accounts and the host's instances again, after an account signed in. */
+export const refreshHubAccounts = (hostId: string) =>
+  Promise.all([loadHubs(hostId, true), loadProviders(hostId, true)]);
 
 /** Adds a hub to `hostId`, or replaces the one with its id. Resolves to an error for people. */
 export async function saveHub(hostId: string, hub: HubsSaveParams): Promise<string | undefined> {
@@ -56,6 +81,7 @@ export async function setHubAccountEnabled(
   return kept(
     hostId,
     await window.parallax.request(hostId, "hubs/accounts/setEnabled", { hub, account, enabled }),
+    true,
   );
 }
 
@@ -68,6 +94,7 @@ export async function removeHubAccount(
   return kept(
     hostId,
     await window.parallax.request(hostId, "hubs/accounts/remove", { hub, account }),
+    true,
   );
 }
 

@@ -7,6 +7,7 @@ import type {
   ProviderInstance,
   ProvidersListResult,
 } from "../protocol/generated/protocol";
+import { models as shippedModels } from "./catalog";
 import { describeError } from "./errors";
 import { notify } from "./notifications";
 import { kindInfo, type KindInfo } from "./providerKinds";
@@ -41,8 +42,10 @@ export {
 // A host's provider instances (`providers/list`), on a plxd with `providers`: one list per host,
 // shared by Settings and every model picker, and replaced by each save or remove's answer.
 
+const legacyHosts = new Set<string>();
 const lists = new Map<string, ProvidersListResult>();
 const listeners = new Set<() => void>();
+const generations = new Map<string, number>();
 const loading = new Map<string, Promise<string | undefined>>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -52,9 +55,37 @@ const subscribe = (listener: () => void) => {
 function put(hostId: string, result: ProvidersListResult | undefined) {
   const before = lists.get(hostId);
   if (before && result) notifySignIns(hostId, before, result);
-  if (result) lists.set(hostId, result);
-  else lists.delete(hostId);
+  if (result) {
+    rememberModels(hostId, result);
+    lists.set(hostId, result);
+  } else lists.delete(hostId);
   for (const listener of listeners) listener();
+}
+
+// Upstreams often omit release dates. Track when a model first became available here,
+// seeding shipped models from their release dates so upgrading does not mark them all New.
+const discoveries = stored<Record<string, Record<string, string>>>(
+  "parallax.modelDiscoveries",
+  {},
+  merged,
+);
+export const discoveredAt = (hostId: string, provider: string, model: string) =>
+  discoveries.get()[`${hostId}/${provider}`]?.[model];
+function rememberModels(hostId: string, result: ProvidersListResult) {
+  const next = { ...discoveries.get() };
+  for (const info of result.providers) {
+    const key = `${hostId}/${info.instance.id}`;
+    const known = { ...next[key] };
+    for (const model of info.models ?? []) {
+      known[model.id] ??= shippedModels.find(
+        (m) => m.provider === info.instance.kind && m.id === model.id,
+      )
+        ? "1970-01-01"
+        : new Date().toISOString();
+    }
+    next[key] = known;
+  }
+  discoveries.set(next);
 }
 
 /**
@@ -67,12 +98,11 @@ function notifySignIns(hostId: string, before: ProvidersListResult, after: Provi
     if (!instance.enabled || was == null || signedIn == null || was === signedIn) continue;
     const key = `provider/${hostId}/${instance.id}`;
     if (signedIn)
-      // Without the email, which a plain-text notification can't blur (PLX-1067).
       notify({
         key,
         tone: "success",
         title: `Signed in to ${instance.name}`,
-        ...(account && !account.includes("@") && { body: account }),
+        ...(account && { body: account }),
       });
     else
       notify({
@@ -101,12 +131,26 @@ export const listedProviders = (hostId: string) => lists.get(hostId);
 export function loadProviders(hostId: string, refresh = false): Promise<string | undefined> {
   const pending = loading.get(hostId);
   if (pending && !refresh) return pending;
+  const generation = (generations.get(hostId) ?? 0) + 1;
+  generations.set(hostId, generation);
   const load = window.parallax.request(hostId, "providers/list", { refresh }).then((answer) => {
     if (loading.get(hostId) === load) loading.delete(hostId);
+    if (generations.get(hostId) !== generation) return undefined;
     return kept(hostId, answer);
   });
   loading.set(hostId, load);
   return load;
+}
+
+/**
+ * Lists `hostId`'s instances after something else changed them, such as a hub: what plxd knows at
+ * once, then asking each. A list already on its way predates the change, so it's dropped.
+ */
+export async function relistProviders(hostId: string): Promise<void> {
+  generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+  loading.delete(hostId);
+  await loadProviders(hostId);
+  await loadProviders(hostId, true);
 }
 
 /** Adds `instance` to a host, or replaces the one with its id. Resolves to an error for people. */
@@ -114,12 +158,20 @@ export async function saveProvider(
   hostId: string,
   instance: ProviderInstance,
 ): Promise<string | undefined> {
-  return kept(hostId, await window.parallax.request(hostId, "providers/save", { instance }));
+  generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+  loading.delete(hostId);
+  const answer = await window.parallax.request(hostId, "providers/save", { instance });
+  generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+  return kept(hostId, answer);
 }
 
 /** Removes an instance, and its secrets. Resolves to an error for people. */
 export async function removeProvider(hostId: string, id: string): Promise<string | undefined> {
-  return kept(hostId, await window.parallax.request(hostId, "providers/remove", { id }));
+  generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+  loading.delete(hostId);
+  const answer = await window.parallax.request(hostId, "providers/remove", { id });
+  generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+  return kept(hostId, answer);
 }
 
 /**
@@ -132,20 +184,66 @@ export function useProviders(hostId: string | undefined): ProvidersListResult | 
   );
   useEffect(() => {
     if (hostId === undefined) return;
-    const check = (state: ConnectionState) => {
-      if (state.status !== "connected") return;
-      // Probing every instance starts each ACP agent, so a view only loads a list the host has
-      // none of yet; Settings lists them again, and probes on Refresh.
-      if ("providers" in state.capabilities) {
-        if (!lists.has(hostId)) void loadProviders(hostId);
-      } else if (lists.has(hostId)) put(hostId, undefined);
-    };
-    const stop = window.parallax.onConnectionState((id, state) => id === hostId && check(state));
-    // It rejects only for a host just removed, whose views are going away.
-    window.parallax.connectionState(hostId).then(check, () => {});
-    return stop;
+    return observeProviders(hostId);
   }, [hostId]);
   return listed;
+}
+
+/** Legacy fallback is allowed only after the host explicitly lacks provider support. */
+export const useLegacyProviders = (hostId: string | undefined) =>
+  useSyncExternalStore(subscribe, () => hostId === undefined || legacyHosts.has(hostId));
+
+const observers = new Map<string, { count: number; stop: () => void }>();
+function observeProviders(hostId: string) {
+  let observer = observers.get(hostId);
+  if (!observer) {
+    let supported = false;
+    let connected = false;
+    const check = (state: ConnectionState) => {
+      const wasConnected = connected;
+      connected = state.status === "connected";
+      if (state.status !== "connected") {
+        if (wasConnected) {
+          generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+          loading.delete(hostId);
+        }
+        return;
+      }
+      supported = "providers" in state.capabilities;
+      if (supported) legacyHosts.delete(hostId);
+      else legacyHosts.add(hostId);
+      if (supported) {
+        if (!wasConnected || !lists.has(hostId)) void loadProviders(hostId);
+      } else {
+        generations.set(hostId, (generations.get(hostId) ?? 0) + 1);
+        put(hostId, undefined);
+      }
+    };
+    const stop = window.parallax.onConnectionState((id, state) => id === hostId && check(state));
+    void window.parallax.connectionState(hostId).then(check, () => {});
+    const refresh = () => {
+      if (connected && supported && document.visibilityState !== "hidden")
+        void loadProviders(hostId);
+    };
+    const timer = setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    observer = {
+      count: 0,
+      stop: () => {
+        stop();
+        clearInterval(timer);
+        window.removeEventListener("focus", refresh);
+      },
+    };
+    observers.set(hostId, observer);
+  }
+  observer.count++;
+  return () => {
+    if (--observer.count === 0) {
+      observer.stop();
+      observers.delete(hostId);
+    }
+  };
 }
 
 type Logo = ComponentType<SVGProps<SVGSVGElement>>;

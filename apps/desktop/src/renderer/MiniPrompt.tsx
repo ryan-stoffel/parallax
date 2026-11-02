@@ -6,7 +6,7 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { changeMessage } from "./MemoryPanel";
 import { isNew } from "./catalog";
-import { plainName, useCatalog, type Instance, type Model } from "./models";
+import { useCatalog, type Instance, type Model } from "./models";
 import { notify } from "./notifications";
 import { kindOf, logoOf } from "./providers";
 import { uuidv7 } from "./uuidv7";
@@ -203,12 +203,12 @@ function ModelPick({
                   type="button"
                   role="tab"
                   aria-selected={p.id === tab}
-                  title={plainName(p)}
+                  title={p.name}
                   onClick={() => setTab(p.id)}
                   className={`grid size-7 place-items-center rounded-lg [&_svg]:size-3.5 ${p.id === tab ? "bg-selected" : "opacity-60 hover:bg-hover hover:opacity-100"}`}
                 >
                   {P ? <P aria-hidden /> : p.name.slice(0, 1)}
-                  <span className="sr-only">{plainName(p)}</span>
+                  <span className="sr-only">{p.name}</span>
                 </button>
               );
             })}

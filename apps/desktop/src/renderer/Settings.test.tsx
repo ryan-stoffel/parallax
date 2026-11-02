@@ -108,12 +108,19 @@ afterEach(() => {
 async function renderSettings(
   name: SettingsSection = "providers",
   listed: ComponentProps<typeof Settings>["listed"] = [],
+  openHost = "local",
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
       <>
-        <Settings section={name} listed={listed} theme="system" onThemeChange={() => {}} />
+        <Settings
+          section={name}
+          listed={listed}
+          theme="system"
+          onThemeChange={() => {}}
+          openHost={openHost}
+        />
         <Notifications />
       </>,
     ),
@@ -236,6 +243,17 @@ test("Storage deletes only a host's archived threads, after asking", async () =>
   expect(calls("thread/delete")).toEqual([{ host: "local", params: { runId: "t-old" } }]);
 });
 
+test("Providers opens on the host the window has open, not always this computer", async () => {
+  const failed = states[mini.id]!;
+  states[mini.id] = { ...states["local"]!, capabilities: { providers: {} } } as ConnectionState;
+  answers["providers/list"] = () => ({
+    result: { providers: [], checkedAt: "2026-09-28T12:00:00Z" },
+  });
+  await renderSettings("providers", [], mini.id);
+  expect(calls("providers/list").at(-1)!.host).toBe(mini.id);
+  states[mini.id] = failed;
+});
+
 describe("on a plxd with providers", () => {
   const instance = (id: string, kind: ProviderKind, name: string): ProviderInstance => ({
     id,
@@ -324,7 +342,7 @@ describe("on a plxd with providers", () => {
     await next();
     expect(saved()).toMatchObject({ id: "codex-2", kind: "codex" });
 
-    // A row by its instance's id, since Claude's shows its email blurred.
+    // A row by its instance's id, since Claude's shows its email.
     const mark = (id: string) =>
       document
         .querySelector(`[role="tab"][aria-controls$="-${id}-pane"]`)!
@@ -493,7 +511,7 @@ describe("on a plxd with providers", () => {
       expect(page.textContent).toContain("gemini-3-pro");
       expect(page.textContent).toContain("5-hour limit · 42% used");
       expect(page.textContent).toContain("Off on the hub");
-      expect(page.textContent).not.toContain("ada@example.com");
+      expect(page.textContent).toContain("ada@example.com");
 
       answers["hubs/remove"] = () => ({ result: { hubs: [] } });
       await click(document.querySelector<HTMLElement>('[aria-label="Remove Home hub"]')!);

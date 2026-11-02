@@ -13,9 +13,14 @@ HTMLElement.prototype.showPopover = () => {};
 HTMLElement.prototype.hidePopover = () => {};
 let root: Root | undefined;
 beforeEach(() => {
-  // No connection, so the menu lists the built-in catalog.
+  // An older daemon explicitly lacks providers, so it uses the built-in catalog.
   window.parallax = {
-    connectionState: async () => ({ status: "connecting" as const }),
+    connectionState: async () => ({
+      status: "connected" as const,
+      plxd: "test",
+      protocol: 1,
+      capabilities: {},
+    }),
     onConnectionState: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
@@ -34,9 +39,11 @@ const run = (over: Partial<AgentRun> = {}): AgentRun =>
     model: "claude-sonnet-5",
     ...over,
   }) as AgentRun;
-function render(r: AgentRun, onFork: (choice: object) => Promise<RpcError | undefined>) {
+async function render(r: AgentRun, onFork: (choice: object) => Promise<RpcError | undefined>) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<ForkMenu id="fork" hostId="local" run={r} onFork={onFork} />));
+  await act(async () =>
+    root!.render(<ForkMenu id="fork" hostId="local" run={r} onFork={onFork} />),
+  );
   // happy-dom has no popovers: the menu gets the event a browser sends as it opens.
   act(() => {
     document
@@ -50,7 +57,7 @@ const item = (name: string) => menuItems().find((b) => nameOf(b) === name)!;
 
 test("Keep sends nothing to change, another model its id, and another provider's its account", async () => {
   const onFork = vi.fn(async () => undefined);
-  render(run(), onFork);
+  await render(run(), onFork);
   await act(async () => item("Keep Claude Sonnet 5").click());
   expect(onFork).toHaveBeenLastCalledWith({});
   await act(async () => item("Claude Opus 5.5 (Claude)").click());

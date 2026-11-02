@@ -27,7 +27,7 @@ import { AddProviderDialog } from "./AddProviderDialog";
 import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
-import { localId, useHosts, type Host } from "./hosts";
+import { useHosts, type Host } from "./hosts";
 import { loadHubs, useHubs } from "./hubs";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
@@ -43,7 +43,6 @@ import {
   versions,
   withVersion,
 } from "./providers";
-import { Redacted } from "./Redacted";
 import { extraAccounts, SeveralAccountsMark } from "./SeveralAccounts";
 import { age, backendLogos, SettingsNav, settingsNames } from "./Sidebar";
 import { BrowserSettings } from "./settings/BrowserSettings";
@@ -99,6 +98,8 @@ interface SettingsProps {
   onThemeChange: (theme: ThemePreference) => void;
   /** The host Source control opens on, as Set up GitHub picks it (PLX-423). */
   sourceControlHost?: string;
+  /** The host the window has open, which Settings > Providers opens on. */
+  openHost: string;
   /** The setting search picked, scrolled to and flashed once it shows. */
   focus?: { anchor: string };
 }
@@ -193,6 +194,7 @@ export function Settings({
   theme,
   onThemeChange,
   sourceControlHost,
+  openHost,
   focus,
 }: SettingsProps) {
   useScrollTo(focus);
@@ -213,7 +215,7 @@ export function Settings({
         ) : section === "keybinds" ? (
           <KeybindSettings />
         ) : section === "providers" ? (
-          <ProvidersSettings />
+          <ProvidersSettings openHost={openHost} />
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
         ) : section === "computerUse" ? (
@@ -255,11 +257,12 @@ function checkedLabel(checkedAt: string): string {
 
 /**
  * Settings > Providers: one host's vendor CLIs as a list, and the chosen one's account, usage,
- * API keys, and models. With more than one host, a picker chooses which.
+ * API keys, and models. It opens on the host the window has open, whose providers the model picker
+ * lists, and with more than one host, a picker chooses which.
  */
-function ProvidersSettings() {
+function ProvidersSettings({ openHost }: { openHost: string }) {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
+  const [hostId, setHostId] = useState(openHost);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} always />;
   return <HostProviders key={host.id} host={host} picker={picker} />;
@@ -891,7 +894,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                         <span className="min-w-0">
                           <span className="flex items-baseline gap-2">
                             <span className="truncate text-body font-medium">
-                              <Redacted text={accountLabel(info)} />
+                              {accountLabel(info)}
                             </span>
                             {info.version && (
                               <span className="truncate font-mono text-meta text-faint-foreground">
@@ -1173,9 +1176,7 @@ function InstancePane({
           <KindLogo className="size-5" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate text-reading font-semibold">
-            <Redacted text={accountLabel(info)} />
-          </h2>
+          <h2 className="truncate text-reading font-semibold">{accountLabel(info)}</h2>
           {/* What it is, unless its name says so, and its version. */}
           <p className="truncate text-body text-muted-foreground">
             {kind.name !== instance.name && kind.name}
@@ -1205,9 +1206,7 @@ function InstancePane({
             description={
               <span className="flex items-center gap-1.5">
                 <StatusDot tone="error" />
-                <span className="min-w-0">
-                  {busy ? `Installing ${kind.name}…` : <Redacted text={account} />}
-                </span>
+                <span className="min-w-0">{busy ? `Installing ${kind.name}…` : account}</span>
               </span>
             }
           >
@@ -1244,9 +1243,7 @@ function InstancePane({
                 <StatusDot
                   tone={info.signedIn === true ? "on" : instanceTone(info) ? "error" : "off"}
                 />
-                <span className="min-w-0">
-                  <Redacted text={account} />
-                </span>
+                <span className="min-w-0">{account}</span>
               </span>
             }
           >

@@ -6,7 +6,7 @@ import type {
   ThreadStartParams,
 } from "../protocol/generated/protocol";
 import { instanceModels, models, type Model, type Provider } from "./catalog";
-import { accountLabel, kindOf, useProviders } from "./providers";
+import { accountLabel, discoveredAt, useLegacyProviders, useProviders } from "./providers";
 import { merged, stored } from "./stored";
 
 /**
@@ -48,6 +48,9 @@ export interface Instance {
   /** Subscription plan reported by the provider, such as `pro`. */
   plan?: string;
   kind: string;
+  /** Hub identity, shared by its Claude/Codex runtimes. */
+  hub?: string;
+  hubName?: string;
   enabled: boolean;
   permissions: AgentPermission[];
   efforts: boolean;
@@ -58,7 +61,10 @@ export interface Instance {
 export interface Catalog {
   hostId: string;
   instances: Instance[];
+  /** The models it offers. */
   models: Model[];
+  /** Every model its instances have, offered or not, to name the one an open thread runs on. */
+  known: Model[];
 }
 
 /**
@@ -139,16 +145,18 @@ export function arranged(list: Model[], p: ModelPrefs | undefined): Model[] {
 }
 
 /**
- * An instance's name for plain text, such as a tooltip or a reason it can't be picked: its kind's
- * name in place of an email, which plain text can't blur (PLX-1067).
+ * Whether threads can run on an instance: installed, not signed out, and not refused for its plan,
+ * as Cursor refuses a free account. A sign-in plxd can't tell (`null`) counts, so a probe that
+ * timed out doesn't hide a provider.
  */
-export const plainName = (i: Pick<Instance, "name" | "kind">) =>
-  i.name.includes("@") ? kindOf(i.kind).name : i.name;
+const canRun = (info: ProviderInfo) =>
+  info.installed && info.signedIn !== false && !info.note?.startsWith("[plan_required]");
 
 /**
  * The model picker's catalog: each instance's models in this device's order, without those it
- * hides. `listed` is plxd's `providers/list`; without it (an older plxd), the built-in backends,
- * turned off by `off`.
+ * hides. Only instances turned on in Settings > Providers that can run offer models, unless none
+ * can, when the composer still needs a model and its thread's error says what's wrong. `listed` is
+ * plxd's `providers/list`; without it (an older plxd), the built-in backends, turned off by `off`.
  */
 export function catalogOf(
   hostId: string,
@@ -164,33 +172,52 @@ export function catalogOf(
           ...(info.account && { account: info.account }),
           ...(info.plan && { plan: info.plan }),
           kind: info.instance.kind,
+          ...(info.hub && {
+            hub: info.hub,
+            hubName: info.instance.name,
+          }),
           enabled: info.instance.enabled,
           permissions: info.permissions,
           efforts: info.efforts,
           orchestrator: info.orchestrator,
         },
-        models: instanceModels(info),
+        runs: canRun(info),
+        models: instanceModels(info).map((m) => ({
+          ...m,
+          released: m.released ?? discoveredAt(hostId, info.instance.id, m.id),
+        })),
       }))
     : builtIns.map((b) => ({
         instance: { ...b, enabled: !off.includes(b.id) },
+        runs: true,
         models: models.filter((m) => m.provider === b.id),
       }));
+  const offered = ({ instance, models }: (typeof entries)[number]) => {
+    const p = all[prefsKey(hostId, instance.id)];
+    return arranged(models, p).filter((m) => !p?.hidden?.includes(m.id));
+  };
+  const anyRuns = entries.some((e) => e.instance.enabled && e.runs && offered(e).length > 0);
   return {
     hostId,
     instances: entries.map((e) => e.instance),
-    models: entries.flatMap(({ instance, models }) => {
-      const p = all[prefsKey(hostId, instance.id)];
-      return arranged(models, p).filter((m) => !p?.hidden?.includes(m.id));
-    }),
+    known: entries.flatMap((e) => e.models),
+    models: entries.flatMap((e) => (!e.instance.enabled || (anyRuns && !e.runs) ? [] : offered(e))),
   };
 }
+
+const emptyProviders: ProviderInfo[] = [];
 
 /** `hostId`'s catalog, kept current. Without a host, the built-in one, as on an older plxd. */
 export function useCatalog(hostId: string | undefined): Catalog {
   const listed = useProviders(hostId)?.providers;
+  const legacy = useLegacyProviders(hostId);
+  const available = listed ?? (legacy ? undefined : emptyProviders);
   const all = prefs.use();
   const off = disabled.use();
-  return useMemo(() => catalogOf(hostId ?? "local", listed, all, off), [hostId, listed, all, off]);
+  return useMemo(
+    () => catalogOf(hostId ?? "local", available, all, off),
+    [hostId, available, all, off],
+  );
 }
 
 export { instanceModels, models, type Model, type Provider };

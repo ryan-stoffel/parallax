@@ -13,7 +13,6 @@ import { AccountDialog, SecuredByClerk } from "./Account";
 import { useShortcutLabel } from "./keybindings";
 import { ParallaxMark } from "./logos";
 import { Avatar, useProfile } from "./profile";
-import { Redacted } from "./Redacted";
 import type { SettingsSection } from "./App";
 import type { HostThreads } from "./Sidebar";
 import { IconButton, Menu, menuItem } from "./ui";
@@ -77,17 +76,11 @@ export function ProfileButton({
               )}
               <div className="min-w-0">
                 <p className="truncate text-body font-medium">
-                  {profile
-                    ? profile.name || <Redacted text={profile.email} />
-                    : "Sign in to Parallax"}
+                  {profile ? profile.name || profile.email : "Sign in to Parallax"}
                 </p>
                 {(profile?.name || !profile) && (
                   <p role="status" className="truncate text-meta text-muted-foreground">
-                    {profile ? (
-                      <Redacted text={profile.email} />
-                    ) : (
-                      (note ?? "With GitHub, Google, Apple, or email.")
-                    )}
+                    {profile ? profile.email : (note ?? "With GitHub, Google, Apple, or email.")}
                   </p>
                 )}
               </div>

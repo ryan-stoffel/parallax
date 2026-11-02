@@ -4,10 +4,9 @@ import { createContext, useContext, useId, useRef, useState, type RefObject } fr
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { plainName, useCatalog, type Model } from "./models";
+import { useCatalog, type Model } from "./models";
 import { notify } from "./notifications";
 import { kindOf, logoOf } from "./providers";
-import { Redacted } from "./Redacted";
 import type { ForkChoice } from "./threads";
 import { isRunning } from "./transcript";
 import { Menu, menuItem } from "./ui";
@@ -70,7 +69,7 @@ export function ForkMenu({
     const found = instance(p);
     return found ? logoOf(found) : kindOf(p).Logo;
   };
-  const kept = catalog.models.find((m) => m.provider === run.backend && m.id === (run.model ?? ""));
+  const kept = catalog.known.find((m) => m.provider === run.backend && m.id === (run.model ?? ""));
   const keptName = kept?.name ?? run.model ?? "the current model";
   const others = catalog.models.filter((m) => m !== kept && instance(m.provider)?.enabled);
   const KeptLogo = logo(run.backend);
@@ -130,7 +129,7 @@ export function ForkMenu({
                       key={`${m.provider}/${m.id}`}
                       type="button"
                       role="menuitem"
-                      aria-label={`${m.name} (${found ? plainName(found) : m.provider})`}
+                      aria-label={`${m.name} (${found?.name ?? m.provider})`}
                       disabled={busy}
                       onClick={() => void pick(choiceOf(m, run))}
                       className={`${menuItem} disabled:opacity-50`}
@@ -138,7 +137,7 @@ export function ForkMenu({
                       <Logo aria-hidden />
                       <span className="truncate">{m.name}</span>
                       <span className="ml-auto shrink-0 text-meta text-faint-foreground">
-                        <Redacted text={where} />
+                        {where}
                       </span>
                     </button>
                   );

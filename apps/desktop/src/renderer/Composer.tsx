@@ -95,7 +95,7 @@ import { ScrollThumb } from "./ScrollThumb";
 import { dismiss, notify } from "./notifications";
 import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { accessLevels } from "./catalog";
-import { plainName, useCatalog, type Model, type Provider, type RunOptions } from "./models";
+import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { RepoIcon } from "./Sidebar";
 import { lookOf, type AttachThreads } from "./threadContext";
 import type { ThreadsState } from "./threads";
@@ -987,14 +987,14 @@ export function Composer({
   const blocked: Partial<Record<Provider, string>> = { ...unavailable };
   for (const i of catalog.instances)
     if (!i.enabled && !(started && i === run))
-      blocked[i.id] ??= `${plainName(i)} is turned off in Settings > Providers.`;
+      blocked[i.id] ??= `${i.name} is turned off in Settings > Providers.`;
   // Any instance whose models aren't unavailable: an open run moves to it, a new thread starts there.
   const choices = catalog.models.filter((m) => !blocked[m.provider]);
   // An open run's model, which may be one this list doesn't know, or the CLI's default.
   const startedModel =
     started &&
     run &&
-    (runModels.find((m) => m.id === started.model) ?? {
+    (catalog.known.find((m) => m.provider === run.id && m.id === started.model) ?? {
       id: started.model ?? "",
       name: started.model ?? "Default model",
       provider: run.id,

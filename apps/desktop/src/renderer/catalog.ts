@@ -33,7 +33,7 @@ export interface Model {
   name: string;
   /** The instance that runs it. */
   provider: Provider;
-  /** The day its maker released it, `YYYY-MM-DD`, for `isNew`. */
+  /** Upstream release date or persisted discovery timestamp, for `isNew`. */
   released?: string;
   /** The context windows it offers, in tokens, its default first. */
   contexts: number[];
@@ -45,9 +45,9 @@ export interface Model {
 
 const week = 7 * 24 * 60 * 60 * 1000;
 
-/** Whether the pickers mark `model` New: less than a week past its release. */
+/** Whether release or first discovery was within the past week. */
 export const isNew = (model: Model, now = Date.now()) =>
-  !!model.released && now - Date.parse(model.released) < week;
+  !!model.released && now >= Date.parse(model.released) && now - Date.parse(model.released) < week;
 
 const claude1M = [1_000_000, 200_000];
 const codex872K = [272_000, 872_000];
@@ -160,36 +160,86 @@ export const models: Model[] = [
   { id: "kimi-k3-max", name: "Kimi K3", provider: "cursor", contexts: [] },
 ];
 
+/** Readable hub labels for raw model slugs, preserving routes, aliases, and upstream labels. */
+export function hubModelName(model: { id: string; name: string }): string {
+  const { id, name } = model;
+  if (name !== id || !/^[a-z0-9][a-z0-9._/-]*$/.test(name)) return name;
+  const slash = name.lastIndexOf("/");
+  const route = name.slice(0, slash + 1);
+  // Anthropic's snapshot dates (`-20251101`) say nothing a person picks by; the id keeps them.
+  const slug = undated(name.slice(slash + 1));
+  // Versions such as Claude's 5-5 become 5.5. Dashed date suffixes remain intact.
+  const words =
+    slug.replace(/(\d{1,2})-(\d)(?=-|$)/g, "$1.$2").match(/\d{4}-\d{2}-\d{2}|[^-_]+/g) ?? [];
+  const marks: Record<string, string> = {
+    gpt: "GPT",
+    oss: "OSS",
+    deepseek: "DeepSeek",
+    openai: "OpenAI",
+  };
+  return (
+    route +
+    words
+      .map(
+        (word) =>
+          marks[word] ??
+          (/^\d+(?:\.\d+)?[bm]$/.test(word)
+            ? word.toUpperCase()
+            : word.replace(/^[a-z]/, (c) => c.toUpperCase())),
+      )
+      .join(" ")
+  );
+}
+
+/** What a hub serves that can't run an agent's thread: image models and Codex's reviewer. */
+const hubOnly = /(?:^|\/)(?:gpt-image|codex-auto-review)/;
+
+/** A dated id, such as `claude-opus-4-5-20251101`, without its date. */
+const undated = (id: string) => id.replace(/-\d{8}$/, "");
+
+/** A label's version: 6.1 in "GPT 6.1 Terra", none in "GPT OSS 120B". */
+const versionIn = (name: string) => Number(/\b\d+(?:\.\d+)?\b/.exec(name)?.[0] ?? 0);
+
 /**
- * An instance's models before this device's choices: its kind's built-in catalog, then those plxd
- * found, OpenCode's own without its name for itself, then the user's own, each id once. One that lists none offers its agent's own default,
- * whose empty id sends no `model`.
+ * An instance's discovered models, or its legacy catalog when discovery is unavailable, then
+ * the user's own, each id once. A hub answers in no order, so its models have readable labels,
+ * and keep their exact ids, newest first, then Z to A, which leads with Terra and Sol and leaves
+ * Haiku last. One that lists none offers its agent's own default, whose empty id sends no `model`.
  */
 export function instanceModels(info: ProviderInfo): Model[] {
   const { instance } = info;
   const seen = new Set<string>();
-  // A hub's instance (0089) offers only what the hub serves, named as the catalog names it.
-  if (info.hub)
-    return info.models.map((m) => ({
-      ...m,
-      contexts: [],
+  // Availability and names belong to the upstream catalog. Built-ins supply only optional
+  // capabilities, and remain a fallback for older CLIs that cannot list models.
+  const discovered = info.models
+    .filter((m) => !info.hub || !hubOnly.test(m.id))
+    .map((m) => ({
       ...models.find((c) => c.provider === instance.kind && c.id === m.id),
-      provider: instance.id,
-    }));
-  const listed = [
-    ...models.filter((m) => m.provider === instance.kind),
-    // OpenCode names its own models (ids `opencode/…`) "opencode/Big Pickle" or "OpenCode
-    // Zen/Big Pickle", by version: the picker already says OpenCode.
-    ...info.models.map((m) => ({
       ...m,
-      name:
-        instance.kind === "opencode" && m.id.startsWith("opencode/")
+      name: info.hub
+        ? hubModelName(m)
+        : instance.kind === "opencode" && m.id.startsWith("opencode/")
           ? m.name.replace(/^[^/]*\//, "")
           : m.name,
-      contexts: [],
-    })),
+      contexts: models.find((c) => c.provider === instance.kind && c.id === m.id)?.contexts ?? [],
+    }));
+  if (info.hub) {
+    // Snapshots that would share a label with another model keep their dates, to tell them apart.
+    const labels = discovered.map((m) => m.name);
+    for (const m of discovered)
+      if (undated(m.id) !== m.id && labels.filter((label) => label === m.name).length > 1)
+        m.name += ` ${m.id.slice(-8)}`;
+    discovered.sort(
+      (a, b) => versionIn(b.name) - versionIn(a.name) || b.name.localeCompare(a.name),
+    );
+  }
+  const listed = [
+    ...(discovered.length || info.hub
+      ? discovered
+      : models.filter((m) => m.provider === instance.kind)),
     ...instance.models.map((m) => ({ ...m, contexts: [] })),
   ];
+  if (info.hub && !listed.length) return [];
   return (listed.length ? listed : [{ id: "", name: "Default model", contexts: [] }])
     .filter((m) => !seen.has(m.id) && !!seen.add(m.id))
     .map((m) => ({
