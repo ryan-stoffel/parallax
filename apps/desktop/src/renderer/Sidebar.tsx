@@ -2196,8 +2196,8 @@ function useMinute() {
 
 /**
  * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
- * rows, which render only while it's open. It scrolls under a cap, and its summary sticks to the
- * top, so collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
+ * rows, which render only while it's open. Its rows scroll under a cap, below its summary, so
+ * collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
  * that many more. Whether it's open is the scope's (PLX-789). With `onDrop`, a row it would take is
  * dragging: it shows even while empty, and a drop on it moves the row in (PLX-1095).
  */
