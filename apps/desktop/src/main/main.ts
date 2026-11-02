@@ -234,7 +234,7 @@ function createWindow() {
     writeWindowState(windowStateFile, { bounds, maximized });
     // Simple full screen hides the Dock and menu bar for the whole app, and closing the window
     // doesn't bring them back.
-    if (win.isSimpleFullScreen()) win.setSimpleFullScreen(false);
+    if (process.platform === "darwin" && win.isSimpleFullScreen()) win.setSimpleFullScreen(false);
   });
   // Full screen hides Windows' window buttons, so the top row needs no room for them (main.tsx).
   win.on("enter-full-screen", () => win.webContents.send("parallax:fullScreen", true));
