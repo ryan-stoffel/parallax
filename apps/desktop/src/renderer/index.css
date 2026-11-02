@@ -762,8 +762,7 @@ body {
    than an opaque block, so nothing reads as a patch. Text keeps its color, solid. The sidebar is
    a denser pane of the same glass, as a macOS sidebar is, and what's raised over the glass (the
    composer, menus, dialogs, cards) is a lighter frosted layer with a lit top edge rather than a
-   dark slab. The sidebar's sticky headings frost what scrolls under them. Unlayered, so these win
-   over Tailwind's utilities. */
+   dark slab. Unlayered, so these win over Tailwind's utilities. */
 :root.translucent {
   --pane: transparent;
   --pane-sidebar: color-mix(in srgb, var(--sidebar) 40%, transparent);
@@ -795,10 +794,24 @@ body {
   background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
   backdrop-filter: var(--glass);
 }
-/* The sidebar's sticky headings sit on its own glass, so they're only a light frost over what
-   scrolls under them. */
+/* The thread list's sticky headings sit on the sidebar's own glass with nothing of their own: a
+   backdrop-filter there adds the glass's alpha again, which reads as a black box (PLX-1230). Only
+   while stuck, with rows passing under, do they cover them, solidly, so text never overlaps. */
 :root.translucent .sticky.bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
-  background-color: color-mix(in srgb, var(--sidebar) 25%, transparent);
+  background-color: transparent;
+  backdrop-filter: none;
+  container-type: scroll-state;
+}
+:root.translucent .sticky.bg-sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+}
+@container scroll-state(stuck: top) {
+  :root.translucent .sticky.bg-sidebar::before {
+    background-color: var(--sidebar);
+  }
 }
 /* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
    shadow (tooltips, the find bar, suggestions, hover cards). */
