@@ -587,7 +587,7 @@ function ProviderPane({
           already on {name} keep running.
         </p>
       )}
-      <Section title="Account">
+      <Section title="Status">
         <div className={settingRow}>
           <div className="min-w-0">
             <span className="block truncate text-body font-medium">{cliStatus(cli)}</span>
