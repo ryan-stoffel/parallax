@@ -587,7 +587,8 @@ svg.lucide[stroke-width="2"] * {
 }
 
 /* Reduced motion (Settings > Appearance, or the OS) stops every CSS animation and transition at
-   its end state. Animations started from JS go through motion.ts's `animate`, which skips them. */
+   its end state, except the sidebar's scroll-driven row fade, which follows the user's scrolling.
+   Animations started from JS go through motion.ts's `animate`, which skips them. */
 :root.reduce-motion *,
 :root.reduce-motion *::before,
 :root.reduce-motion *::after,
@@ -762,8 +763,7 @@ body {
    than an opaque block, so nothing reads as a patch. Text keeps its color, solid. The sidebar is
    a denser pane of the same glass, as a macOS sidebar is, and what's raised over the glass (the
    composer, menus, dialogs, cards) is a lighter frosted layer with a lit top edge rather than a
-   dark slab. The sidebar's sticky headings frost what scrolls under them. Unlayered, so these win
-   over Tailwind's utilities. */
+   dark slab. Unlayered, so these win over Tailwind's utilities. */
 :root.translucent {
   --pane: transparent;
   --pane-sidebar: color-mix(in srgb, var(--sidebar) 40%, transparent);
@@ -795,10 +795,28 @@ body {
   background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
   backdrop-filter: var(--glass);
 }
-/* The sidebar's sticky headings sit on its own glass, so they're only a light frost over what
-   scrolls under them. */
+/* The thread list's sticky headings sit on the sidebar's own glass with nothing of their own: a
+   fill or backdrop-filter there reads as a black box (PLX-1230). Rows dissolve as they reach the
+   heading instead, so their text never overlaps it. The 28px is the shorter heading's height.
+   Important, since this follows the user's own scrolling and Reduce motion must keep it: without
+   it, rows there would overlap the heading. */
 :root.translucent .sticky.bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
-  background-color: color-mix(in srgb, var(--sidebar) 25%, transparent);
+  background-color: transparent;
+  backdrop-filter: none;
+}
+:root.translucent .sticky.bg-sidebar + * ul > li:not(.row-flash) {
+  animation: under-heading linear both !important;
+  animation-timeline: view(block 28px 0) !important;
+  animation-range: exit 0 exit 12px !important;
+}
+/* Keyboard stepping stops below the heading, the taller one's 32px, not on a row that has faded. */
+:root.translucent .sticky.bg-sidebar + * [data-row] {
+  scroll-margin-top: 32px;
+}
+@keyframes under-heading {
+  to {
+    opacity: 0;
+  }
 }
 /* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
    shadow (tooltips, the find bar, suggestions, hover cards). */

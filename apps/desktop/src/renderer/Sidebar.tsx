@@ -2196,8 +2196,8 @@ function useMinute() {
 
 /**
  * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
- * rows, which render only while it's open. It scrolls under a cap, and its summary sticks to the
- * top, so collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
+ * rows, which render only while it's open. Its rows scroll under a cap, below its summary, so
+ * collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
  * that many more. Whether it's open is the scope's (PLX-789). With `onDrop`, a row it would take is
  * dragging: it shows even while empty, and a drop on it moves the row in (PLX-1095).
  */
@@ -2250,8 +2250,7 @@ function Drawer<T>({
           onDrop();
         })
       }
-      data-flip-scroll
-      className={`group/drawer mx-2 max-h-[40%] min-h-0 shrink-0 overflow-y-auto border-t border-border pb-1 transition-colors ${over ? `rounded-lg ${dropLook}` : ""}`}
+      className={`group/drawer mx-2 flex max-h-[40%] min-h-0 shrink-0 flex-col border-t border-border pb-1 transition-colors details-content:flex details-content:min-h-0 details-content:flex-col ${over ? `rounded-lg ${dropLook}` : ""}`}
     >
       {/* A line above each drawer sets its rows apart from the list's and the next drawer's; an
           open drawer's heading reads brighter, so it's clear which rows are under it. */}
@@ -2261,7 +2260,7 @@ function Drawer<T>({
           setOpened(!open);
           onOpenChange(!open);
         }}
-        className="group/summary sticky top-0 z-10 flex cursor-default list-none items-center gap-1.5 bg-sidebar px-2 pt-2 pb-1.5 text-meta font-medium text-muted-foreground select-none group-open/drawer:text-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+        className="group/summary flex shrink-0 cursor-default list-none items-center gap-1.5 px-2 pt-2 pb-1.5 text-meta font-medium text-muted-foreground select-none group-open/drawer:text-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
         {label}
         <span className="ml-auto text-faint-foreground tabular-nums group-hover/summary:text-muted-foreground">
@@ -2272,17 +2271,20 @@ function Drawer<T>({
           className="size-3.5 shrink-0 transition-transform duration-150 group-open/drawer:rotate-90"
         />
       </summary>
-      {open && <ul className={`${cardGap} ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>}
-      {open && more > 0 && (
-        <button
-          type="button"
-          onClick={() => setPages((n) => n + 1)}
-          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground"
-        >
-          <Plus aria-hidden className="size-3.5 shrink-0" />
-          Show {more} more
-        </button>
-      )}
+      {/* Only the rows scroll, so none pass under the heading, which has no fill of its own. */}
+      <div data-flip-scroll className="min-h-0 overflow-y-auto">
+        {open && <ul className={`${cardGap} ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>}
+        {open && more > 0 && (
+          <button
+            type="button"
+            onClick={() => setPages((n) => n + 1)}
+            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground"
+          >
+            <Plus aria-hidden className="size-3.5 shrink-0" />
+            Show {more} more
+          </button>
+        )}
+      </div>
     </details>
   );
 }
