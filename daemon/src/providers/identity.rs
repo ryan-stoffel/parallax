@@ -59,7 +59,8 @@ pub(super) async fn probe(
 }
 
 /// Claude Code's own name for this account's plan, such as `ultra`, which `auth status` reports as
-/// its older type, `max`. Claude Code keeps it in its config file, which holds no credentials.
+/// its older type, `max`. Claude Code keeps it in its config file, which can also hold an API key,
+/// so only this name is taken from it.
 async fn claude_plan_name(launcher: &Launcher, spec: &ProcessSpec) -> Option<String> {
     // The environment `auth status` just ran with, so it's the same account's file.
     let env = launcher.environment(spec);
