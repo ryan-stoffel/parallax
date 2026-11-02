@@ -252,7 +252,7 @@ function Behavior() {
       <Section title="Preferences">
         <Row
           title="Clean up dictation"
-          description="A small model from your providers removes filler words, fixes punctuation, and restores code names. It receives the text, and your audio stays on this computer. Off, dictation goes in as transcribed."
+          description="A small model from your providers removes filler words, fixes punctuation, and restores code names. It receives the text and the names of files you mention, and your audio stays on this computer. Off, dictation goes in as transcribed."
         >
           <Switch
             label="Clean up dictation"

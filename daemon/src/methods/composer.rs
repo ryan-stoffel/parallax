@@ -9,7 +9,7 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentCommandsParams, AgentCommandsResult, ErrorKind, RepoFilesParams, RepoFilesResult,
-    RepoGrepParams, RepoGrepResult, RepoId, RunId,
+    RepoGrepParams, RepoGrepResult, RepoId, RunId, VoiceCleanParams, VoiceCleanResult,
 };
 
 use super::Context;
@@ -102,6 +102,24 @@ pub(crate) async fn files(
     let truncated = files.len() > fits;
     files.truncate(fits);
     Ok(RepoFilesResult { files, truncated })
+}
+
+/// `voice/clean`, with the file names of the thread's folder, when there is one. Without them, it
+/// still cleans the text.
+pub(crate) async fn voice_clean(
+    context: &Context,
+    params: VoiceCleanParams,
+) -> Result<VoiceCleanResult, ErrorObject> {
+    let (repo, run_id) = (params.repo, params.run_id);
+    let files = if repo.is_some() || run_id.is_some() {
+        files(context, RepoFilesParams { repo, run_id })
+            .await
+            .map(|listed| listed.files)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    crate::voice_clean::clean(&context.daemon, params, &files).await
 }
 
 /// `repo/grep`: `git grep` for plain text in the thread's folder, capped.

@@ -97,10 +97,12 @@ test("what was already said still goes in when the window loses focus during cle
   let finish!: (text: string) => void;
   const clean = () => new Promise<string>((resolve) => (finish = resolve));
   let voice!: ReturnType<typeof useVoice>;
+  let focused = true;
+  let enabled = true;
   function Probe() {
     voice = useVoice({
-      enabled: true,
-      focused: true,
+      enabled,
+      focused,
       hotkey: true,
       scope: "thread-1",
       starting: () => {},
@@ -120,6 +122,11 @@ test("what was already said still goes in when the window loses focus during cle
     await act(async () => key("up"));
     expect(voice.phase).toBe("finishing");
     await act(async () => window.dispatchEvent(new Event("blur")));
+    expect(voice.phase).toBe("finishing");
+    // Moving to another tile, or the host going away, doesn't lose it either.
+    focused = false;
+    enabled = false;
+    await act(async () => root.render(<Probe />));
     expect(voice.phase).toBe("finishing");
     await act(async () => finish("Hello."));
     expect(inserted).toHaveBeenCalledExactlyOnceWith("Hello.");

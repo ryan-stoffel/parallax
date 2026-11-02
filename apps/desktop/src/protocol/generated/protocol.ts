@@ -10569,6 +10569,15 @@ export type VoiceCleanParams = {
 	 * model there, the first instance by name that has one answers.
 	 */
 	backend?: string,
+	/**
+	 * The repo being dictated about, without `runId`. Its file names that match what was said
+	 * help the model spell them.
+	 */
+	repo?: RepoId,
+	/**
+	 * The thread being dictated into, for the same.
+	 */
+	runId?: RunId,
 };
 
 /**

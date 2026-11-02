@@ -471,7 +471,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         PrSharedDiff => |p| agents::shared_diff(Arc::clone(daemon), p),
         PrWrite => |p| crate::pr_write::write(daemon, p),
         PrGuide => |p| crate::pr_guide::guide(daemon, p),
-        VoiceClean => |p| crate::voice_clean::clean(daemon, p),
+        VoiceClean => |p| composer::voice_clean(context, p),
         PrMergeWhenReady => |p| crate::pr_watch::merge_when_ready(daemon, p),
         RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
         TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),

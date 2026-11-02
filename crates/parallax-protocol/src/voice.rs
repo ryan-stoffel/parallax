@@ -15,6 +15,15 @@ pub struct VoiceCleanParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub backend: Option<String>,
+    /// The repo being dictated about, without `runId`. Its file names that match what was said
+    /// help the model spell them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<crate::RepoId>,
+    /// The thread being dictated into, for the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run_id: Option<crate::RunId>,
 }
 
 /// Result of `voice/clean`.

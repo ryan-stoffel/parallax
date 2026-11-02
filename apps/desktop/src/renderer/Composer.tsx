@@ -1819,7 +1819,7 @@ export function Composer({
       const after = doc.textBetween(to, Math.min(doc.content.size, to + 1), "\n");
       // A cleaned-up transcript can hold paragraphs and lists: lines as Shift+Enter types them, or
       // in a code block, its plain text.
-      const { schema, tr, selection } = editor.state;
+      const { schema, tr } = editor.state;
       const inserted = voiceText(transcript, before, after);
       const lines = inserted.split("\n");
       const nodes = lines.flatMap((line, i) => [
@@ -1827,13 +1827,13 @@ export function Composer({
         ...(line ? [schema.text(line)] : []),
       ]);
       editor.view.dispatch(
-        selection.$from.parent.type.spec.code
+        doc.resolve(from).parent.type.spec.code
           ? tr.insertText(inserted, from, to)
           : tr.replaceWith(from, to, nodes),
       );
       focusAfterVoice.current = true;
     },
-    clean: (text) => cleanDictation(text, hostId, target),
+    clean: (text) => cleanDictation(text, hostId, { backend: target, repo, runId }),
   });
   voiceBusy.current = voice.phase !== "idle";
   const canSend = !!onSend && !disabledReason && !empty && !uploading && !voiceBusy.current;
@@ -1841,12 +1841,12 @@ export function Composer({
     editor.setEditable(voice.phase === "idle" && !uploading);
     if (voice.phase === "idle" && focusAfterVoice.current) {
       focusAfterVoice.current = false;
-      // Not from a field the user moved to while it was cleaned up.
+      // Not from a field or tile the user moved to while it was cleaned up.
       const active = document.activeElement;
-      if (!active || active === document.body || box.current?.contains(active))
+      if (voiceFocused && (!active || active === document.body || box.current?.contains(active)))
         editor.commands.focus();
     }
-  }, [editor, voice.phase, uploading]);
+  }, [editor, voice.phase, uploading, voiceFocused]);
 
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {

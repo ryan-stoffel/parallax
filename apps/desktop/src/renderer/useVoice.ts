@@ -36,7 +36,8 @@ export function useVoice(options: {
         },
         setPhase,
         (text) => {
-          if (text && current.current.enabled) current.current.inserted(text);
+          // Whatever happened since it was confirmed, what was said still goes in.
+          if (text) current.current.inserted(text);
         },
         (error) => {
           notify({ tone: "error", title: "Voice input failed", body: voiceError(error) });
@@ -81,7 +82,7 @@ export function useVoice(options: {
     };
   }, [session, options.scope]);
   useEffect(() => {
-    if (!options.enabled || (!options.focused && session.phase !== "finishing")) session.cancel();
+    if ((!options.enabled || !options.focused) && session.phase !== "finishing") session.cancel();
     if (!options.enabled || !options.focused || !options.hotkey || !window.parallax?.voiceHotkey)
       return;
     let live = true;
@@ -107,7 +108,7 @@ export function useVoice(options: {
         }
       } else {
         held.current = false;
-        session.cancel();
+        if (session.phase !== "finishing") session.cancel();
       }
     });
     void window.parallax
@@ -132,7 +133,7 @@ export function useVoice(options: {
       off?.();
       void window.parallax.voiceHotkey?.(false, owner);
       held.current = false;
-      session.cancel();
+      if (session.phase !== "finishing") session.cancel();
     };
   }, [session, owner, options.enabled, options.focused, options.hotkey, options.scope]);
   return {

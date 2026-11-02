@@ -11,12 +11,14 @@ export function voiceText(text: string, before: string, after: string): string {
 export async function cleanDictation(
   text: string,
   hostId: string | undefined,
-  backend: string | undefined,
+  where: { backend?: string | undefined; repo?: string | undefined; runId?: string | undefined },
 ): Promise<string> {
   if (!hostId || !behaviorPrefs.get().cleanDictation) return text;
+  const { backend, repo, runId } = where;
   const response = await window.parallax.request(hostId, "voice/clean", {
     text,
     ...(backend && { backend }),
+    ...(runId ? { runId } : repo ? { repo } : {}),
   });
   return "result" in response ? response.result.text : text;
 }
