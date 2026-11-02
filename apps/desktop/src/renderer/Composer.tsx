@@ -1328,6 +1328,10 @@ export function Composer({
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
   const box = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
+  // Set directly, as a render would be for nothing: what arrives from now on opens its room.
+  useEffect(() => {
+    box.current?.setAttribute("data-settled", "");
+  }, []);
   // Focus moving between the box and the bar under it stays with them.
   const leave = (e: FocusEvent<HTMLDivElement>) => {
     const to = e.relatedTarget;

@@ -1327,16 +1327,27 @@ body {
     padding-top var(--transition-duration-base) var(--ease-out),
     opacity var(--transition-duration-base) var(--ease-out);
 }
+/* Clipped as its room opens, past the corners of the remove buttons. */
+.composer-attachments {
+  overflow: clip;
+  overflow-clip-margin: 0.5rem;
+}
+.composer-attachments > * {
+  transition:
+    scale var(--transition-duration-base) var(--ease-spring),
+    opacity var(--transition-duration-base) var(--ease-out);
+}
+/* Only once the box is up (Composer.tsx), so reopening a thread with a draft doesn't replay it. */
 @starting-style {
-  .composer-attachments,
-  .composer-tabs {
+  [data-settled] :is(.composer-attachments, .composer-tabs) {
     height: 0;
     padding-top: 0;
     opacity: 0;
   }
-}
-.composer-attachments > * {
-  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
+  [data-settled] .composer-attachments > * {
+    scale: 0.7;
+    opacity: 0;
+  }
 }
 /* The reasoning bars fill or empty one after another as the level changes. */
 .reasoning-bars rect {
@@ -1373,6 +1384,8 @@ body {
   justify-content: space-between;
   gap: 0.5rem;
   min-width: 0;
+  /* Always this tall, whatever it holds, for the slide behind the box below. */
+  height: 3.0625rem;
   margin: -1rem 0.75rem 0;
   padding: calc(1rem + 2px) 0.25rem 2px;
   border: 1px solid var(--border);
