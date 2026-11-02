@@ -1,6 +1,6 @@
 //! Read-only account metadata from each instance's CLI, with its own configuration home.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use parallax_protocol::{ProviderInstance, ProviderKind, ProviderModel};
@@ -23,10 +23,6 @@ pub(super) async fn probe(
     found.signed_in = None;
     found.account = None;
     found.plan = None;
-    let plan_name = match instance.kind {
-        ProviderKind::Claude => claude_plan_name(&env).await,
-        _ => None,
-    };
     let mut spec = detect::probe_spec(program);
     spec.inject = env.into_iter().collect();
     match instance.kind {
@@ -35,8 +31,12 @@ pub(super) async fn probe(
             match detect::run_spec(launcher, &spec, b"", detect::PROBE_TIMEOUT).await {
                 Ok(ran) => {
                     apply_claude(found, &ran.stdout, ran.exit_code);
-                    if found.signed_in == Some(true) {
-                        found.plan = plan_name.or(found.plan.take());
+                    // Only a subscription has a plan: an API key's login reports none, though
+                    // the config file may still hold an earlier sign-in's.
+                    if found.plan.is_some()
+                        && let Some(name) = claude_plan_name(launcher, &spec).await
+                    {
+                        found.plan = Some(name);
                     }
                 }
                 Err(note) => found.note = Some(note),
@@ -60,14 +60,22 @@ pub(super) async fn probe(
 
 /// Claude Code's own name for this account's plan, such as `ultra`, which `auth status` reports as
 /// its older type, `max`. Claude Code keeps it in its config file, which holds no credentials.
-async fn claude_plan_name(env: &[(OsString, OsString)]) -> Option<String> {
-    let folder = env
-        .iter()
-        .find(|(name, _)| name == "CLAUDE_CONFIG_DIR")
-        .map(|(_, dir)| PathBuf::from(dir))
-        .or_else(std::env::home_dir)?;
-    let config = tokio::fs::read(folder.join(".claude.json")).await.ok()?;
+async fn claude_plan_name(launcher: &Launcher, spec: &ProcessSpec) -> Option<String> {
+    // The environment `auth status` just ran with, so it's the same account's file.
+    let env = launcher.environment(spec);
+    let config = tokio::fs::read(claude_config_file(env.get("CLAUDE_CONFIG_DIR"))?)
+        .await
+        .ok()?;
     plan_name_in(&config)
+}
+
+/// Where Claude Code keeps its account's details: in its config folder, else the home folder.
+fn claude_config_file(config_dir: Option<&OsStr>) -> Option<PathBuf> {
+    config_dir
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(std::env::home_dir)
+        .map(|folder| folder.join(".claude.json"))
 }
 
 fn plan_name_in(config: &[u8]) -> Option<String> {
@@ -242,7 +250,7 @@ fn codex_models(value: &Value) -> Vec<ProviderModel> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Found, apply_claude, apply_codex, plan_name_in};
+    use super::{Found, apply_claude, apply_codex, claude_config_file, plan_name_in};
     use serde_json::json;
 
     #[test]
@@ -283,6 +291,17 @@ mod tests {
         );
         assert_eq!(plan_name_in(br#"{"oauthAccount":{}}"#), None);
         assert_eq!(plan_name_in(b"not json"), None);
+    }
+
+    #[test]
+    fn claude_config_file_follows_its_config_folder() {
+        let home = std::env::home_dir().map(|home| home.join(".claude.json"));
+        assert_eq!(claude_config_file(None), home);
+        assert_eq!(claude_config_file(Some("".as_ref())), home);
+        assert_eq!(
+            claude_config_file(Some("/work/.claude".as_ref())),
+            Some(std::path::Path::new("/work/.claude/.claude.json").to_owned())
+        );
     }
 
     #[test]

@@ -984,6 +984,8 @@ fn claude_plan(profile: &Value) -> Option<String> {
     let organization = &profile["organization"];
     organization["plan_display_name"]
         .as_str()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
         .map(str::to_lowercase)
         .or_else(|| {
             organization["organization_type"]

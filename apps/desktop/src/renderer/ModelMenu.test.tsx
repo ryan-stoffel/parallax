@@ -145,8 +145,8 @@ test("accounts whose emails start the same keep their full names", () => {
 });
 
 test("each provider's plans have their name and mark, and an unknown one its id", () => {
-  expect(planOf("claude", "max")).toEqual({ label: "Max", mark: "budding" });
-  expect(planOf("claude", "claude_ultra")).toEqual({ label: "Ultra", mark: "bloom" });
+  expect(planOf("claude", "max")).toEqual({ label: "Max", mark: "claude-max" });
+  expect(planOf("claude", "claude_ultra")).toEqual({ label: "Ultra", mark: "claude-ultra" });
   expect(planOf("codex", "plus")).toEqual({ label: "Plus", mark: "sparkle" });
   expect(planOf("codex", "promax")).toEqual({ label: "Pro", mark: "gem" });
   expect(planOf("codex", "self_serve_business")).toEqual({ label: "Self Serve Business" });

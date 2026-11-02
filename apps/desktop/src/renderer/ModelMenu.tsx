@@ -282,12 +282,9 @@ export function ModelMenu({
                 </div>
               )}
               {shownAccounts.length > 0 && (
-                <ul className="flex max-h-[4.25rem] flex-col gap-1 overflow-y-auto text-meta text-muted-foreground">
+                <ul className="flex max-h-[4.75rem] flex-col gap-1 overflow-y-auto text-meta text-muted-foreground">
                   {shownAccounts.map((a, i) => (
-                    <li
-                      key={`${a.email}/${i}`}
-                      className="flex min-h-[1.125rem] items-center gap-2"
-                    >
+                    <li key={`${a.email}/${i}`} className="flex min-h-5 items-center gap-2">
                       <span className="min-w-0 flex-1 truncate">
                         {a.email ?? kindOf(instance(account)?.kind ?? "").name}
                       </span>

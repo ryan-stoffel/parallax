@@ -1,7 +1,13 @@
-import type { ReactNode } from "react";
+import claudeFree from "./assets/plans/claude-free.svg";
+import claudeMax from "./assets/plans/claude-max.svg";
+import claudePro from "./assets/plans/claude-pro.svg";
+import claudeUltra from "./assets/plans/claude-ultra.svg";
+import gem from "./assets/plans/chatgpt-gem.svg";
+import sparkle from "./assets/plans/chatgpt-sparkle.svg";
+import { maskLogo } from "./logos";
 
-/** A plan's line-art mark: Claude's sprout grows with its plan, and ChatGPT's is a sparkle, then a gem. */
-type Mark = "sprout" | "budding" | "bloom" | "sparkle" | "gem";
+/** A plan's mark, in the provider's own artwork from its pricing page, drawn in the text's color. */
+type Mark = "claude-free" | "claude-pro" | "claude-max" | "claude-ultra" | "sparkle" | "gem";
 
 interface Plan {
   label: string;
@@ -12,10 +18,10 @@ interface Plan {
 // `organization_type`, and Codex's `planType`. ChatGPT sells one Pro, with three usage tiers.
 const plans: Record<string, Record<string, Plan>> = {
   claude: {
-    free: { label: "Free" },
-    pro: { label: "Pro", mark: "sprout" },
-    max: { label: "Max", mark: "budding" },
-    ultra: { label: "Ultra", mark: "bloom" },
+    free: { label: "Free", mark: "claude-free" },
+    pro: { label: "Pro", mark: "claude-pro" },
+    max: { label: "Max", mark: "claude-max" },
+    ultra: { label: "Ultra", mark: "claude-ultra" },
     team: { label: "Team" },
     enterprise: { label: "Enterprise" },
   },
@@ -43,67 +49,22 @@ export function planOf(kind: string, plan: string): Plan {
   );
 }
 
-/** A pair of buds on branches, from the stem at height `y` up and out by `reach`. */
-const buds = (y: number, reach: number) => (
-  <>
-    <path d={`M8 ${y} ${8 - reach} ${y - 3}M8 ${y} ${8 + reach} ${y - 3}`} />
-    <circle cx={8 - reach} cy={y - 3} r={0.9} />
-    <circle cx={8 + reach} cy={y - 3} r={0.9} />
-  </>
-);
-
-const marks: Record<Mark, ReactNode> = {
-  sprout: (
-    <>
-      <path d="M8 15V6.25" />
-      <circle cx={8} cy={4} r={2.25} />
-      {buds(12, 3.25)}
-    </>
-  ),
-  budding: (
-    <>
-      <path d="M8 15V6.25" />
-      <circle cx={8} cy={4} r={2.25} />
-      {buds(10.5, 3)}
-      {buds(14.5, 4.5)}
-    </>
-  ),
-  bloom: (
-    <>
-      <path d="M8 15V8.75" />
-      <circle cx={8} cy={5} r={3.75} />
-      <circle cx={8} cy={5} r={1.25} />
-      <path d="M5.35 2.35l1.77 1.77M8.88 5.88l1.77 1.77M5.35 7.65l1.77-1.77M8.88 4.12l1.77-1.77" />
-      {buds(14.5, 3.5)}
-    </>
-  ),
-  sparkle: (
-    <path d="M8 2c.5 3.5 2.5 5.5 6 6-3.5.5-5.5 2.5-6 6-.5-3.5-2.5-5.5-6-6 3.5-.5 5.5-2.5 6-6Z" />
-  ),
-  gem: (
-    <path d="M4.5 2.75h7L14.5 6.5 8 13.5 1.5 6.5ZM1.5 6.5h13M5.75 6.5 8 13.5l2.25-7M4.5 2.75l1.25 3.75L8 2.75l2.25 3.75 1.25-3.75" />
-  ),
+const marks: Record<Mark, string> = {
+  "claude-free": claudeFree,
+  "claude-pro": claudePro,
+  "claude-max": claudeMax,
+  "claude-ultra": claudeUltra,
+  sparkle,
+  gem,
 };
 
-/** A subscription's plan: a line-art mark in the text's color, and its plain name. */
+/** A subscription's plan: its provider's mark, in the text's color, and its plain name. */
 export function PlanLabel({ kind, plan }: { kind: string; plan: string }) {
   const { label, mark } = planOf(kind, plan);
+  const Mark = mark && maskLogo(marks[mark]);
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground">
-      {mark && (
-        <svg
-          aria-hidden
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="size-4 shrink-0"
-        >
-          {marks[mark]}
-        </svg>
-      )}
+      {Mark && <Mark className="size-5 shrink-0" />}
       {label}
     </span>
   );
