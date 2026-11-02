@@ -1390,6 +1390,9 @@ body {
   [data-back] .composer-run {
     max-width: 3.5rem;
   }
+  [data-back] :is(.composer-effort, .composer-access > span) {
+    display: none;
+  }
   [data-back] .composer-placeholder {
     right: 9.5rem;
   }

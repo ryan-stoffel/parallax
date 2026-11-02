@@ -1332,6 +1332,7 @@ export function Composer({
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
   const box = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
+  const leftWindow = useRef(false);
   // Set directly, as a render would be for nothing: what arrives from now on opens its room.
   useEffect(() => {
     box.current?.setAttribute("data-settled", "");
@@ -1340,6 +1341,8 @@ export function Composer({
   const leave = (e: FocusEvent<HTMLDivElement>) => {
     const to = e.relatedTarget;
     if (!box.current?.contains(to) && !bar.current?.contains(to)) setFocused(false);
+    // The window losing focus leaves the element active, and gives it focus again on return.
+    leftWindow.current = document.activeElement === e.target;
   };
   // Narrow, as in a small window or a split's tile, the usage ring gives its room to the text.
   const [narrow, setNarrow] = useState(false);
@@ -1960,7 +1963,10 @@ export function Composer({
           }}
           // Only the text's focus brings a stepped-back box back, so Attach and Stop, which a press
           // focuses, take their click where they are.
-          onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
+          onFocus={(e) => {
+            if (!leftWindow.current && textArea.current?.contains(e.target)) setFocused(true);
+            leftWindow.current = false;
+          }}
           onBlur={leave}
           data-back={back || undefined}
           className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${dropOver ? "border-ring" : "border-border"}`}

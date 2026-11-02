@@ -167,6 +167,18 @@ test("scrolling up steps back with the caret in an empty box, until the text is 
   expect(shell.dataset["back"]).toBeUndefined();
 });
 
+test("coming back to the window doesn't bring a stepped-back box back", () => {
+  const { box } = render(async () => undefined, caps, { away: true });
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  act(() => box.focus());
+  expect(shell.dataset["back"]).toBeUndefined();
+  // Leaving the window leaves the element active, unlike a blur to something else.
+  act(() => void box.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
+  act(() => void box.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
+});
+
 test("dragging files over the box marks it, until they leave", () => {
   const { box } = render(async () => undefined, caps);
   const shell = box.closest<HTMLElement>(".composer-shell")!;
