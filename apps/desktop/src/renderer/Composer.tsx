@@ -1802,11 +1802,14 @@ export function Composer({
 
   const voiceSelection = useRef({ from: 1, to: 1 });
   const focusAfterVoice = useRef(false);
+  // Where this box dictates. `menus` goes while a host is disconnected, which isn't moving.
+  const voiceScope = useRef("");
+  if (menus) voiceScope.current = `${hostId}:${runId ?? repo ?? ""}`;
   const voice = useVoice({
     focused: voiceFocused,
     enabled: !!onSend && !disabledReason && !uploading,
     hotkey: !newThread,
-    scope: `${hostId ?? ""}:${runId ?? repo ?? ""}`,
+    scope: voiceScope.current,
     starting() {
       voiceSelection.current = { from: editor.state.selection.from, to: editor.state.selection.to };
       setTrigger(undefined);

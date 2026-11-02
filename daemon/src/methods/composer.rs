@@ -104,6 +104,9 @@ pub(crate) async fn files(
     Ok(RepoFilesResult { files, truncated })
 }
 
+/// How long dictation waits for a thread's file names, while the speaker waits for their text.
+const VOICE_LIST_LIMIT: Duration = Duration::from_secs(2);
+
 /// `voice/clean`, with the file names of the thread's folder, when there is one. Without them, it
 /// still cleans the text.
 pub(crate) async fn voice_clean(
@@ -111,11 +114,12 @@ pub(crate) async fn voice_clean(
     params: VoiceCleanParams,
 ) -> Result<VoiceCleanResult, ErrorObject> {
     let (repo, run_id) = (params.repo, params.run_id);
+    let listed = files(context, RepoFilesParams { repo, run_id });
     let files = if repo.is_some() || run_id.is_some() {
-        files(context, RepoFilesParams { repo, run_id })
-            .await
-            .map(|listed| listed.files)
-            .unwrap_or_default()
+        match tokio::time::timeout(VOICE_LIST_LIMIT, listed).await {
+            Ok(Ok(listed)) => listed.files,
+            _ => Vec::new(),
+        }
     } else {
         Vec::new()
     };
