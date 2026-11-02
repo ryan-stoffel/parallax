@@ -149,7 +149,7 @@ export function arranged(list: Model[], p: ModelPrefs | undefined): Model[] {
  * as Cursor refuses a free account. A sign-in plxd can't tell (`null`) counts, so a probe that
  * timed out doesn't hide a provider.
  */
-const canRun = (info: ProviderInfo) =>
+export const canRun = (info: ProviderInfo) =>
   info.installed && info.signedIn !== false && !info.note?.startsWith("[plan_required]");
 
 /**

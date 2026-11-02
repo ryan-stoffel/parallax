@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
 import {
+  canLink,
   linkable,
   linkProviders,
   reconcile,
@@ -57,20 +58,37 @@ test("a list holds no secret or CLI path, and its homes work on any computer", (
   expect(linkable(instance("o", { kind: "ollamaCloud", home: "/Users/a/o" })).home).toBeUndefined();
 });
 
-test("a program the other computer can run stays in the list", () => {
-  expect(linkable(instance("a", { kind: "acp", program: "/opt/agent" })).program).toBe(
-    "/opt/agent",
+test("a new copy takes a runnable program, but a computer keeps the one it has", () => {
+  const acp = (program: string) => instance("a", { kind: "acp", program });
+  expect(linkable(acp("/opt/agent")).program).toBe("/opt/agent");
+  expect(reconcile([acp("/opt/mini")], []).saves).toEqual([acp("/opt/mini")]);
+  expect(reconcile([acp("/opt/mini")], [info(acp("/home/me/agent"))]).saves).toEqual([]);
+  const custom = instance("c", { program: "/usr/local/bin/codex" });
+  expect(reconcile([instance("c", { program: "codex-nightly" })], [info(custom)]).saves).toEqual(
+    [],
   );
-  expect(linkable(instance("o", { kind: "opencode", program: "opencode2" })).program).toBe(
-    "opencode2",
-  );
-  const on2 = instance("o", { kind: "opencode", program: "opencode2" });
-  // Back on 1.x, a computer leaves 2.x, but a program chosen for it stays.
-  expect(reconcile([instance("o", { kind: "opencode" })], [info(on2)]).saves).toEqual([
-    instance("o", { kind: "opencode" }),
-  ]);
+});
+
+test("a version's program follows the list both ways", () => {
+  const one = instance("o", { kind: "opencode" });
+  const two = instance("o", { kind: "opencode", program: "opencode2" });
+  expect(linkable(two).program).toBe("opencode2");
+  expect(reconcile([two], [info(one)]).saves).toEqual([two]);
+  expect(reconcile([one], [info(two)]).saves).toEqual([one]);
   const custom = instance("o", { kind: "opencode", program: "/opt/oc" });
-  expect(reconcile([instance("o", { kind: "opencode" })], [info(custom)]).saves).toEqual([]);
+  expect(reconcile([one], [info(custom)]).saves).toEqual([]);
+});
+
+test("only a list with a provider that can run can be linked", () => {
+  const on = instance("c");
+  expect(canLink([])).toBe(false);
+  expect(canLink([info(instance("o", { enabled: false }))])).toBe(false);
+  // A new computer's Cursor: on, with nothing installed.
+  expect(canLink([info(on, { installed: false })])).toBe(false);
+  expect(canLink([info(on, { signedIn: false })])).toBe(false);
+  expect(canLink([info(on, { note: "[plan_required] Upgrade." })])).toBe(false);
+  expect(canLink([info(on, { hub: "home" })])).toBe(false);
+  expect(canLink([info(on, { signedIn: true })])).toBe(true);
 });
 
 test("a computer's secret stays one, in its place, even if the list has that name as plain", () => {
@@ -218,17 +236,6 @@ test("linking uses the chosen computer's list, and later changes reach every com
   expect(lists.laptop.map((i) => i.id)).toEqual(["codex", "pi"]);
 });
 
-test("linking needs a provider that's on, so it can't turn everything off elsewhere", async () => {
-  const lists = { mini: [instance("off", { enabled: false })], laptop: [instance("codex")] };
-  const request = computers(lists);
-  await reach();
-  await loadProviders("mini");
-  await act(async () => {
-    await linkProviders("mini");
-  });
-  expect(saved(request, "laptop")).toEqual([]);
-});
-
 test("removing leaves another computer's provider of a different kind under that id", async () => {
   const lists = {
     mini: [instance("work"), instance("codex")],
@@ -249,6 +256,52 @@ test("removing leaves another computer's provider of a different kind under that
     ["work", "pi"],
     ["codex", "codex"],
   ]);
+});
+
+test("removing a different kind under a listed id stays on its own computer", async () => {
+  const lists = {
+    mini: [instance("work"), instance("codex")],
+    laptop: [instance("work", { kind: "pi" }), instance("codex")],
+  };
+  computers(lists);
+  await reach();
+  await loadProviders("mini");
+  await act(async () => {
+    await linkProviders("mini");
+  });
+  await loadProviders("laptop");
+  await act(async () => {
+    await removeEverywhere("laptop", "work");
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(lists.laptop.map((i) => i.id)).toEqual(["codex"]);
+  expect(lists.mini.map((i) => i.id)).toEqual(["work", "codex"]);
+});
+
+test("a change made during a pass isn't overwritten by it", async () => {
+  const lists = { mini: [instance("codex"), instance("x")], laptop: [instance("codex")] };
+  computers(lists);
+  await reach();
+  await loadProviders("mini");
+  await act(async () => {
+    const linking = linkProviders("mini");
+    // Made on the laptop while it's being brought in line, on the provider just added.
+    const edit = saveEverywhere("laptop", instance("x", { enabled: false }));
+    await Promise.all([linking, edit]);
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(lists.laptop.find((i) => i.id === "x")?.enabled).toBe(false);
+  expect(lists.mini.find((i) => i.id === "x")?.enabled).toBe(false);
+});
+
+test("an app that isn't linked asks a connecting computer nothing", async () => {
+  const request = computers({ mini: [instance("codex")], laptop: [instance("codex")] });
+  await reach();
+  expect(request).not.toHaveBeenCalled();
 });
 
 test("a save then a remove, in quick succession, ends removed everywhere", async () => {

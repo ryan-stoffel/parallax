@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useConnections } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
+import { canRun } from "./models";
 import { notify } from "./notifications";
 import { listedProviders, removeProvider, saveProvider, versions } from "./providers";
 import { stored } from "./stored";
@@ -90,10 +91,13 @@ export function reconcile(wanted: ProviderInstance[], current: ProviderInfo[]) {
     } else if (have.kind !== want.kind) {
       conflicts.push(want.id);
     } else {
-      // Its own CLI path, home, and secrets stay.
+      // Its own CLI path, home, and secrets stay. Only a version's program follows the list.
       const { program: _program, ...others } = have;
-      const program =
-        want.program ?? (isVersionProgram(have.kind, have.program) ? undefined : have.program);
+      const program = isVersionProgram(want.kind, want.program)
+        ? want.program
+        : isVersionProgram(have.kind, have.program)
+          ? undefined
+          : have.program;
       const next: ProviderInstance = {
         ...others,
         ...(program && { program }),
@@ -141,6 +145,7 @@ function inTurn(hostId: string, run: () => Promise<void>) {
 /** Saves what `hostId` needs to follow the list, and says what it couldn't take. */
 const bringInLine = (hostId: string) =>
   inTurn(hostId, async () => {
+    if (!linked.get()) return;
     const answer = await window.parallax.request(hostId, "providers/list", { refresh: false });
     if ("error" in answer) return report(hostId, describeError(answer.error));
     const wanted = linked.get();
@@ -156,41 +161,62 @@ const bringInLine = (hostId: string) =>
 const spread = (except: string) =>
   Promise.all([...reachable.keys()].filter((id) => id !== except).map(bringInLine));
 
-/** Links providers, with `hostId`'s as the list, if it has one turned on to run on. */
+/**
+ * Whether `providers` can be the list: one must be able to run. A new computer lists Cursor, on,
+ * with nothing installed, and following it would turn everything off on the others.
+ */
+export const canLink = (providers: ProviderInfo[]) =>
+  providers.some((p) => !p.hub && p.instance.enabled && canRun(p));
+
+/** Whether the list has provider `id`, whose removal then reaches the other computers. */
+export const isListed = (id: string | undefined) => !!linked.get()?.some((i) => i.id === id);
+
+/** Links providers, with `hostId`'s as the list, if it can be. */
 export async function linkProviders(hostId: string) {
-  const list = (listedProviders(hostId)?.providers ?? []).filter((p) => !p.hub);
-  if (!list.some((p) => p.instance.enabled)) return;
-  linked.set(list.map((p) => linkable(p.instance)));
+  const list = listedProviders(hostId)?.providers ?? [];
+  if (!canLink(list)) return;
+  linked.set(list.filter((p) => !p.hub).map((p) => linkable(p.instance)));
   await spread(hostId);
 }
 
 /** Unlinks providers. Each computer keeps the ones it has. */
 export const unlinkProviders = () => linked.set(null);
 
-/** `saveProvider`, and while linked, on every other computer too. */
+/**
+ * `saveProvider`, and while linked, on every other computer too. It takes its computer's turn, so a
+ * pass bringing that computer in line can't overwrite it.
+ */
 export async function saveEverywhere(hostId: string, instance: ProviderInstance) {
-  const failed = await saveProvider(hostId, instance);
-  const wanted = linked.get();
-  if (failed || !wanted) return failed;
-  const entry = linkable(instance);
-  linked.set(
-    wanted.some((i) => i.id === entry.id)
-      ? wanted.map((i) => (i.id === entry.id ? entry : i))
-      : [...wanted, entry],
-  );
-  void spread(hostId);
-  return undefined;
+  let failed: string | undefined;
+  await inTurn(hostId, async () => {
+    failed = await saveProvider(hostId, instance);
+    const wanted = linked.get();
+    if (failed || !wanted) return;
+    const entry = linkable(instance);
+    linked.set(
+      wanted.some((i) => i.id === entry.id)
+        ? wanted.map((i) => (i.id === entry.id ? entry : i))
+        : [...wanted, entry],
+    );
+  });
+  if (!failed && linked.get()) void spread(hostId);
+  return failed;
 }
 
-/** `removeProvider`, and while linked, on every other computer that has it too. */
+/** `removeProvider`, and while linked, on every other computer that has that provider too. */
 export async function removeEverywhere(hostId: string, id: string) {
-  const failed = await removeProvider(hostId, id);
-  const wanted = linked.get();
-  if (failed || !wanted) return failed;
-  const entry = wanted.find((i) => i.id === id);
-  // One outside the list is only this computer's to remove.
-  if (!entry) return undefined;
-  linked.set(wanted.filter((i) => i.id !== id));
+  const kind = listedProviders(hostId)?.providers.find((p) => p.instance.id === id)?.instance.kind;
+  let failed: string | undefined;
+  let entry: ProviderInstance | undefined;
+  await inTurn(hostId, async () => {
+    failed = await removeProvider(hostId, id);
+    const wanted = linked.get();
+    // One outside the list, or of another kind under its id, is only this computer's to remove.
+    entry = wanted?.find((i) => i.id === id && i.kind === kind);
+    if (!failed && entry) linked.set(wanted!.filter((i) => i !== entry));
+  });
+  const removed = entry;
+  if (failed || !removed) return failed;
   for (const other of reachable.keys()) {
     if (other === hostId) continue;
     void inTurn(other, async () => {
@@ -198,7 +224,7 @@ export async function removeEverywhere(hostId: string, id: string) {
       if ("error" in answer) return report(other, describeError(answer.error));
       // A provider of another kind under this id isn't the one that was removed.
       const same = answer.result.providers.some(
-        (p) => p.instance.id === id && p.instance.kind === entry.kind && !p.hub,
+        (p) => p.instance.id === id && p.instance.kind === removed.kind && !p.hub,
       );
       const problem = same ? await removeProvider(other, id) : undefined;
       if (problem) report(other, problem);

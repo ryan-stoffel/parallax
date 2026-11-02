@@ -30,6 +30,8 @@ import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
 import { loadHubs, useHubs } from "./hubs";
 import {
+  canLink,
+  isListed,
   linkProviders,
   removeEverywhere,
   saveEverywhere,
@@ -797,7 +799,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
             <Switch
               label="Link providers across computers"
               checked={linkOn}
-              disabled={!linkOn && on.length === 0}
+              disabled={!linkOn && !canLink(list ?? [])}
               onChange={(next) => void (next ? linkProviders(host.id) : unlinkProviders())}
             />
           </Row>
@@ -810,8 +812,8 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           <div className="flex items-center gap-2 text-body text-muted-foreground">
             <span>
               Remove <span className="font-medium text-foreground">{chosenName}</span>? Its settings
-              and secrets leave {linkOn ? "every connected computer" : "this host"}; its threads
-              keep their transcripts.
+              and secrets leave {isListed(chosenTab) ? "every connected computer" : "this host"};
+              its threads keep their transcripts.
             </span>
             <ConfirmRemove
               disabled={removing}
