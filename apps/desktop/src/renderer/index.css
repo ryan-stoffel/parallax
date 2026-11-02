@@ -1369,19 +1369,20 @@ body {
   opacity: 0;
   visibility: hidden;
 }
-/* Where a new thread runs, in the box's top row (NewThread.tsx), its pickers lined up with the
-   footer's: where it runs on the left, and what it starts from on the right. */
-.composer-places {
+/* Where it runs, grouped as one chip at the footer's end, apart from the run's own settings. */
+.composer-tab {
   display: flex;
+  flex-shrink: 1;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  gap: 2px;
   min-width: 0;
-  padding: 0.25rem 0.5rem 0;
+  margin-left: auto;
+  border-radius: 10px;
+  background-color: color-mix(in oklab, var(--foreground) 5%, transparent);
 }
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */
-:is(.composer-footer, .composer-places) button[aria-haspopup]:not([popover] *) {
+.composer-footer button[aria-haspopup]:not([popover] *) {
   height: 1.75rem;
   padding-block: 0;
   padding-right: 0.5rem;

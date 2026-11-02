@@ -2129,11 +2129,7 @@ export function Composer({
           <div className="composer-footer">
             <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2">
               {pickers}
-              {tab && (
-                <div className="ml-auto flex min-w-0 shrink items-center justify-end gap-1">
-                  {tab}
-                </div>
-              )}
+              {tab && <div className="composer-tab">{tab}</div>}
             </div>
           </div>
         )}
