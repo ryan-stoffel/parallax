@@ -108,12 +108,19 @@ afterEach(() => {
 async function renderSettings(
   name: SettingsSection = "providers",
   listed: ComponentProps<typeof Settings>["listed"] = [],
+  openHost = "local",
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
       <>
-        <Settings section={name} listed={listed} theme="system" onThemeChange={() => {}} />
+        <Settings
+          section={name}
+          listed={listed}
+          theme="system"
+          onThemeChange={() => {}}
+          openHost={openHost}
+        />
         <Notifications />
       </>,
     ),
@@ -234,6 +241,17 @@ test("Storage deletes only a host's archived threads, after asking", async () =>
   expect(calls("thread/delete")).toEqual([]);
   await click(button(archived, "Delete all"));
   expect(calls("thread/delete")).toEqual([{ host: "local", params: { runId: "t-old" } }]);
+});
+
+test("Providers opens on the host the window has open, not always this computer", async () => {
+  const failed = states[mini.id]!;
+  states[mini.id] = { ...states["local"]!, capabilities: { providers: {} } } as ConnectionState;
+  answers["providers/list"] = () => ({
+    result: { providers: [], checkedAt: "2026-09-28T12:00:00Z" },
+  });
+  await renderSettings("providers", [], mini.id);
+  expect(calls("providers/list").at(-1)!.host).toBe(mini.id);
+  states[mini.id] = failed;
 });
 
 describe("on a plxd with providers", () => {

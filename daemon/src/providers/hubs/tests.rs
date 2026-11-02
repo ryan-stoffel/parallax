@@ -129,7 +129,10 @@ fn cliproxy(request: &Request, _: &[Request]) -> (u16, Value) {
         ),
         "/v0/management/api-call" if management => {
             if request.body["url"] == super::CLAUDE_PROFILE {
-                let profile = json!({"organization": {"organization_type": "claude_max"}});
+                let profile = json!({"organization": {
+                    "organization_type": "claude_max",
+                    "plan_display_name": "Ultra",
+                }});
                 return (
                     200,
                     json!({"status_code": 200, "body": profile.to_string()}),
@@ -346,8 +349,8 @@ async fn a_hub_lists_its_models_accounts_and_limits_through_curl() {
     );
     assert_eq!(
         accounts[0].plan.as_deref(),
-        Some("max"),
-        "a Claude account's plan is from its profile"
+        Some("ultra"),
+        "a Claude account's plan is its profile's display name"
     );
     assert_eq!(
         accounts[1].plan.as_deref(),

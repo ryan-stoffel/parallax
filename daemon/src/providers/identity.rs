@@ -1,6 +1,7 @@
 //! Read-only account metadata from each instance's CLI, with its own configuration home.
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use parallax_protocol::{ProviderInstance, ProviderKind, ProviderModel};
 use serde_json::Value;
@@ -22,13 +23,22 @@ pub(super) async fn probe(
     found.signed_in = None;
     found.account = None;
     found.plan = None;
+    let plan_name = match instance.kind {
+        ProviderKind::Claude => claude_plan_name(&env).await,
+        _ => None,
+    };
     let mut spec = detect::probe_spec(program);
     spec.inject = env.into_iter().collect();
     match instance.kind {
         ProviderKind::Claude => {
             spec.args = vec!["auth".into(), "status".into()];
             match detect::run_spec(launcher, &spec, b"", detect::PROBE_TIMEOUT).await {
-                Ok(ran) => apply_claude(found, &ran.stdout, ran.exit_code),
+                Ok(ran) => {
+                    apply_claude(found, &ran.stdout, ran.exit_code);
+                    if found.signed_in == Some(true) {
+                        found.plan = plan_name.or(found.plan.take());
+                    }
+                }
                 Err(note) => found.note = Some(note),
             }
             if let Some(models) = claude_models(launcher, spec).await {
@@ -46,6 +56,24 @@ pub(super) async fn probe(
         },
         _ => {}
     }
+}
+
+/// Claude Code's own name for this account's plan, such as `ultra`, which `auth status` reports as
+/// its older type, `max`. Claude Code keeps it in its config file, which holds no credentials.
+async fn claude_plan_name(env: &[(OsString, OsString)]) -> Option<String> {
+    let folder = env
+        .iter()
+        .find(|(name, _)| name == "CLAUDE_CONFIG_DIR")
+        .map(|(_, dir)| PathBuf::from(dir))
+        .or_else(std::env::home_dir)?;
+    let config = tokio::fs::read(folder.join(".claude.json")).await.ok()?;
+    plan_name_in(&config)
+}
+
+fn plan_name_in(config: &[u8]) -> Option<String> {
+    let config = serde_json::from_slice::<Value>(config).ok()?;
+    let name = config.pointer("/oauthAccount/planDisplayName")?.as_str()?;
+    Some(name.trim().to_lowercase()).filter(|name| !name.is_empty())
 }
 
 fn text(value: &Value, keys: &[&str]) -> Option<String> {
@@ -214,7 +242,7 @@ fn codex_models(value: &Value) -> Vec<ProviderModel> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Found, apply_claude, apply_codex};
+    use super::{Found, apply_claude, apply_codex, plan_name_in};
     use serde_json::json;
 
     #[test]
@@ -242,6 +270,19 @@ mod tests {
         assert_eq!(codex.len(), 1);
         assert_eq!(codex[0].id, "new-id");
         assert_eq!(codex[0].name, "New Codex name");
+    }
+
+    #[test]
+    fn a_plan_name_comes_from_claude_codes_account_config() {
+        let config =
+            br#"{"oauthAccount":{"organizationType":"claude_max","planDisplayName":"Ultra"}}"#;
+        assert_eq!(plan_name_in(config).as_deref(), Some("ultra"));
+        assert_eq!(
+            plan_name_in(br#"{"oauthAccount":{"planDisplayName":" "}}"#),
+            None
+        );
+        assert_eq!(plan_name_in(br#"{"oauthAccount":{}}"#), None);
+        assert_eq!(plan_name_in(b"not json"), None);
     }
 
     #[test]

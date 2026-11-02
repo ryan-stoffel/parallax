@@ -978,12 +978,19 @@ async fn limits(
     (usage.map(|usage| claude_windows(&usage)), plan)
 }
 
-/// A Claude login's plan from Anthropic's profile: `claude_max` as `max`.
+/// A Claude login's plan from Anthropic's profile: its display name, such as `Ultra` as `ultra`,
+/// which Claude Code shows too, else its older type, such as `claude_max` as `max`.
 fn claude_plan(profile: &Value) -> Option<String> {
-    profile["organization"]["organization_type"]
-        .as_str()?
-        .strip_prefix("claude_")
-        .map(str::to_owned)
+    let organization = &profile["organization"];
+    organization["plan_display_name"]
+        .as_str()
+        .map(str::to_lowercase)
+        .or_else(|| {
+            organization["organization_type"]
+                .as_str()?
+                .strip_prefix("claude_")
+                .map(str::to_owned)
+        })
 }
 
 /// Anthropic's OAuth usage as windows: `five_hour`, `seven_day`, and each model's weekly window

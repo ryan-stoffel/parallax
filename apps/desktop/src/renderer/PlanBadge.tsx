@@ -8,8 +8,8 @@ interface Plan {
   tier?: Tier;
 }
 
-// The plans each provider's CLI reports: Claude Code's `subscriptionType` and Anthropic's
-// `organization_type`, and Codex's `planType`. `ultra` isn't reported yet.
+// The plans each provider reports: Anthropic's plan display name, or for an older account its
+// `organization_type`, and Codex's `planType`.
 const plans: Record<string, Record<string, Plan>> = {
   claude: {
     free: { label: "Free" },

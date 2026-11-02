@@ -1411,6 +1411,7 @@ export function App() {
           theme={theme}
           onThemeChange={setTheme}
           sourceControlHost={settingsHost}
+          openHost={host.id}
           focus={settingsFocus}
           onSection={(section, anchor) => {
             openSettings(section);

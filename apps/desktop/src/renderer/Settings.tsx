@@ -27,7 +27,7 @@ import { AddProviderDialog } from "./AddProviderDialog";
 import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
-import { localId, useHosts, type Host } from "./hosts";
+import { useHosts, type Host } from "./hosts";
 import { loadHubs, useHubs } from "./hubs";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
@@ -98,6 +98,8 @@ interface SettingsProps {
   onThemeChange: (theme: ThemePreference) => void;
   /** The host Source control opens on, as Set up GitHub picks it (PLX-423). */
   sourceControlHost?: string;
+  /** The host the window has open, which Settings > Providers opens on. */
+  openHost: string;
   /** The setting search picked, scrolled to and flashed once it shows. */
   focus?: { anchor: string };
 }
@@ -192,6 +194,7 @@ export function Settings({
   theme,
   onThemeChange,
   sourceControlHost,
+  openHost,
   focus,
 }: SettingsProps) {
   useScrollTo(focus);
@@ -212,7 +215,7 @@ export function Settings({
         ) : section === "keybinds" ? (
           <KeybindSettings />
         ) : section === "providers" ? (
-          <ProvidersSettings />
+          <ProvidersSettings openHost={openHost} />
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
         ) : section === "computerUse" ? (
@@ -254,11 +257,12 @@ function checkedLabel(checkedAt: string): string {
 
 /**
  * Settings > Providers: one host's vendor CLIs as a list, and the chosen one's account, usage,
- * API keys, and models. With more than one host, a picker chooses which.
+ * API keys, and models. It opens on the host the window has open, whose providers the model picker
+ * lists, and with more than one host, a picker chooses which.
  */
-function ProvidersSettings() {
+function ProvidersSettings({ openHost }: { openHost: string }) {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
+  const [hostId, setHostId] = useState(openHost);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} always />;
   return <HostProviders key={host.id} host={host} picker={picker} />;
