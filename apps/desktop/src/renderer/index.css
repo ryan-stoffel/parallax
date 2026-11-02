@@ -587,7 +587,8 @@ svg.lucide[stroke-width="2"] * {
 }
 
 /* Reduced motion (Settings > Appearance, or the OS) stops every CSS animation and transition at
-   its end state. Animations started from JS go through motion.ts's `animate`, which skips them. */
+   its end state, except the sidebar's scroll-driven row fade, which follows the user's scrolling.
+   Animations started from JS go through motion.ts's `animate`, which skips them. */
 :root.reduce-motion *,
 :root.reduce-motion *::before,
 :root.reduce-motion *::after,
@@ -807,6 +808,10 @@ body {
   animation: under-heading linear both !important;
   animation-timeline: view(block 28px 0) !important;
   animation-range: exit 0 exit 12px !important;
+}
+/* Keyboard stepping stops below the heading, the taller one's 32px, not on a row that has faded. */
+:root.translucent .sticky.bg-sidebar + * [data-row] {
+  scroll-margin-top: 32px;
 }
 @keyframes under-heading {
   to {
