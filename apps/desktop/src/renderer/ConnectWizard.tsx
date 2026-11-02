@@ -60,17 +60,23 @@ export function ConnectWizard({
   }, []);
   const computers = devices.filter((d) => d.id.startsWith("account:"));
   // The computers this dialog isn't about: those on the account already when it opened, less any
-  // still waiting on a code. Add another adds the ones it showed.
+  // still joining. Add another adds the ones it showed.
   const [known, setKnown] = useState(
-    () =>
-      new Set(
-        devices.filter((d) => d.id.startsWith("account:") && !isNew(d.access)).map((d) => d.id),
-      ),
+    () => new Set(computers.filter((d) => !isNew(d.access)).map((d) => d.id)),
   );
+  // Those whose code the user chose not to type now.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
+  // A computer listed before it refused this app only turns out to be new once it does.
+  const turnedNew = computers.filter((d) => known.has(d.id) && isNew(d.access));
+  if (turnedNew.length) {
+    const left = new Set(known);
+    for (const d of turnedNew) left.delete(d.id);
+    setKnown(left);
+  }
   const [connected, setConnected] = useState<ReadonlySet<string>>(new Set());
   // An offline computer's Enter code, for one whose code the dialog wouldn't ask for on its own.
   const [chosen, setChosen] = useState<string>();
-  const found = computers.filter((d) => !known.has(d.id));
+  const found = computers.filter((d) => !known.has(d.id) && !dismissed.has(d.id));
   const asking =
     computers.find((d) => d.id === chosen && d.access) ?? found.find((d) => asksForCode(d));
   const finished = !asking && found.some((d) => connected.has(d.id));
@@ -104,7 +110,7 @@ export function ConnectWizard({
             onCancel={() => {
               skipCodePrompt(asking.id);
               setChosen(undefined);
-              setKnown((old) => new Set(old).add(asking.id));
+              setDismissed((old) => new Set(old).add(asking.id));
             }}
             onPaired={() => setChosen(undefined)}
           />
@@ -165,7 +171,8 @@ export function ConnectWizard({
 }
 
 /** Whether an account computer's `access` says it hasn't joined yet, so the dialog is about it. */
-const isNew = (access: DeviceHost["access"]) => access?.step === "needsCode";
+const isNew = (access: DeviceHost["access"]) =>
+  access?.step === "needsCode" || access?.step === "pairing";
 
 /** How to set the other computer up, with the app or in a terminal. */
 function Setup({ channel }: { channel: "stable" | "nightly" }) {

@@ -127,6 +127,50 @@ test("computers already on the account aren't what it's about", async () => {
   expect(document.body.textContent).toContain("Looking for your computer");
 });
 
+test("a computer already listed that turns out to need its code is asked for here, once", async () => {
+  bridge(() => []);
+  const show = (devices: DeviceHost[]) =>
+    act(async () =>
+      root!.render(
+        <>
+          <AccountPrompts />
+          <ConnectWizard channel="stable" devices={devices} onClose={() => {}} />
+        </>,
+      ),
+    );
+  await renderWizard([computer()]);
+  expect(document.body.textContent).not.toContain("Found build-box");
+
+  await show([computer({ access: { step: "needsCode" } })]);
+  expect(document.body.textContent).toContain("Found build-box");
+  expect(document.querySelectorAll("dialog").length).toBe(1);
+
+  // Not now stands, with no prompt in its place, however often the account lists it again.
+  const notNow = [...document.querySelectorAll("button")].find((b) => b.textContent === "Not now");
+  await act(async () => notNow!.click());
+  await show([computer({ access: { step: "needsCode" } })]);
+  expect(document.body.textContent).not.toContain("build-box");
+  expect(document.querySelectorAll("dialog").length).toBe(1);
+});
+
+test("a failed pairing already under way when it opens asks for the code again", async () => {
+  bridge(() => []);
+  await renderWizard([computer({ access: { step: "pairing" } })]);
+  await act(async () =>
+    root!.render(
+      <>
+        <AccountPrompts />
+        <ConnectWizard
+          channel="stable"
+          devices={[computer({ access: { step: "needsCode", error: "That code is wrong." } })]}
+          onClose={() => {}}
+        />
+      </>,
+    ),
+  );
+  expect(document.body.textContent).toContain("Found build-box");
+});
+
 test("Show setup code shows the code, then who used it", async () => {
   const parallax = bridge(() => []);
   const onReady = vi.fn();
