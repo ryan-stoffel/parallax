@@ -75,6 +75,7 @@ using the same words in ordinary speech, leave the words alone.";
 
 /// What the model answers: plain text ([`namer::claude_text`]), or JSON of this shape.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Answer {
     text: String,
 }
@@ -150,14 +151,46 @@ fn prompt(raw: &str, names: &[String]) -> String {
     format!("{INSTRUCTIONS}{names}\nTranscript:\n{raw}")
 }
 
+/// `answer` without what a model can wrap around plain text: JSON of [`Answer`]'s shape, a code
+/// fence, a whole-answer quote, or a lead-in such as "Here's the cleaned text:". A lead-in the
+/// speaker said stays.
+fn unwrapped<'a>(raw: &str, answer: &'a str) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
+    let mut text = answer.trim();
+    if let Ok(inner) = serde_json::from_str::<Answer>(text) {
+        return Cow::Owned(unwrapped(raw, &inner.text).into_owned());
+    }
+    if !raw.to_lowercase().starts_with("here")
+        && let Some((first, rest)) = text.split_once('\n')
+    {
+        let lead = first.trim().to_lowercase();
+        if lead.starts_with("here") && lead.ends_with(':') {
+            text = rest.trim();
+        }
+    }
+    if let Some(inner) = text.strip_prefix("```").and_then(|t| t.strip_suffix("```")) {
+        // Past the fence's language, if it has one.
+        text = inner
+            .split_once('\n')
+            .map_or(inner, |(_, body)| body)
+            .trim();
+    }
+    for (open, close) in [('"', '"'), ('\u{201c}', '\u{201d}')] {
+        if let Some(inner) = text.strip_prefix(open).and_then(|t| t.strip_suffix(close))
+            && !inner.contains(open)
+            && !inner.contains(close)
+        {
+            text = inner.trim();
+        }
+    }
+    Cow::Borrowed(text)
+}
+
 /// `answer`, when it reads as a cleanup of `raw`. A model that answered the transcript, rather than
-/// cleaning it, writes something empty or much longer. A model that answers in JSON anyway has it
-/// unwrapped, since that mustn't reach the draft.
+/// cleaning it, writes something empty or much longer.
 fn checked(raw: &str, answer: &str) -> Option<String> {
-    let trimmed = answer.trim();
-    let wrapped = serde_json::from_str::<Answer>(trimmed).ok();
-    let text = wrapped.as_ref().map_or(trimmed, |inner| inner.text.trim());
-    (!text.is_empty() && text.len() <= raw.len() * 2 + 200).then(|| text.to_owned())
+    let text = unwrapped(raw, answer);
+    (!text.is_empty() && text.len() <= raw.len() * 2 + 200).then(|| text.into_owned())
 }
 
 /// `voice/clean`: `params.text`, tidied by a small model that also sees the `files` it names. On the fake backend, as
@@ -245,6 +278,29 @@ mod tests {
             checked("{ not json", "{ not json"),
             Some("{ not json".to_owned())
         );
+        // Text that only looks like the answer's shape stays as it is.
+        let other = r#"{"text":"hello","id":1}"#;
+        assert_eq!(checked(other, other), Some(other.to_owned()));
+    }
+
+    #[test]
+    fn what_a_model_wraps_around_the_text_doesnt_reach_the_draft() {
+        let clean = Some("Fix the bug.".to_owned());
+        assert_eq!(
+            checked("fix the bug", "Here's the cleaned text:\n\nFix the bug."),
+            clean
+        );
+        assert_eq!(checked("fix the bug", "```\nFix the bug.\n```"), clean);
+        assert_eq!(checked("fix the bug", "```text\nFix the bug.\n```"), clean);
+        assert_eq!(checked("fix the bug", "\"Fix the bug.\""), clean);
+        // What the speaker said stays: their own lead-in, and quotes inside the text.
+        let list = "Here are three things:\n1. One";
+        assert_eq!(
+            checked("here are three things one", list),
+            Some(list.to_owned())
+        );
+        let quoted = "\"A\" and \"B\"";
+        assert_eq!(checked("a and b", quoted), Some(quoted.to_owned()));
     }
 
     fn files(names: &[&str]) -> Vec<String> {
