@@ -1939,7 +1939,7 @@ export function ThreadList({
       <div
         onScroll={hideCard}
         data-flip-scroll
-        className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-4 *:shrink-0 ${fadeBottom}`}
+        className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 *:shrink-0 ${fadeBottom}`}
       >
         {errors.map((e) => (
           <p key={e} role="alert" className="px-2 pb-1 text-meta text-danger">
@@ -2065,10 +2065,12 @@ export function ThreadList({
 const dropLook = "bg-hover outline-1 outline-border outline-dashed";
 
 /**
- * Rows that scroll past a list's bottom edge fade out in place of a line. The list needs `pb-4`,
- * the fade's height, so its last row clears the fade. A mask, since glass shows through the sidebar.
+ * Rows that scroll past a list's bottom edge fade out in place of a line. Padding the fade's height
+ * lets the last row clear it, and scroll padding stops a row stepped to by key above it. A mask,
+ * since glass shows through the sidebar.
  */
-const fadeBottom = "[mask-image:linear-gradient(to_bottom,#000_calc(100%-1rem),transparent)]";
+const fadeBottom =
+  "pb-4 scroll-pb-4 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1rem),transparent)]";
 
 const cardButton =
   "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-body font-medium text-foreground hover:bg-hover";
@@ -2278,10 +2280,7 @@ function Drawer<T>({
         />
       </summary>
       {/* Only the rows scroll, so none pass under the heading, which has no fill of its own. */}
-      <div
-        data-flip-scroll
-        className={`min-h-0 overflow-y-auto ${open ? `pb-4 ${fadeBottom}` : ""}`}
-      >
+      <div data-flip-scroll className={`min-h-0 overflow-y-auto ${open ? fadeBottom : ""}`}>
         {open && <ul className={`${cardGap} ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>}
         {open && more > 0 && (
           <button
