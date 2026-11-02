@@ -2159,7 +2159,7 @@ export function Composer({
                     title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
                     disabled={!onSend || !!disabledReason || uploading}
                     onClick={voice.start}
-                    className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
+                    className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
                   >
                     <Mic />
                   </button>
@@ -2169,7 +2169,7 @@ export function Composer({
                       aria-label={stopping ? "Stopping" : "Stop"}
                       disabled={stopping}
                       onClick={() => void stop()}
-                      className="composer-pop grid size-8 place-items-center rounded-full bg-danger/15 text-danger transition-colors hover:bg-danger/25 disabled:opacity-50"
+                      className="composer-pop grid size-8 place-items-center rounded-full bg-danger/15 text-danger transition-colors enabled:hover:bg-danger/25 disabled:opacity-50"
                     >
                       {stopping ? (
                         <LoaderCircle className="size-4 animate-spin" />
