@@ -150,6 +150,23 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("focus moving to the bar under the box keeps it from stepping back, and leaving both does", () => {
+  const { box } = render(async () => undefined, caps, {
+    away: true,
+    tab: <button aria-label="Runs on" />,
+  });
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  const picker = document.querySelector('[aria-label="Runs on"]')!;
+  act(() => box.focus());
+  expect(shell.dataset["back"]).toBeUndefined();
+  const leaving = (from: Element, to: Element | null) =>
+    act(() => from.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: to })));
+  leaving(box, picker);
+  expect(shell.dataset["back"]).toBeUndefined();
+  leaving(picker, null);
+  expect(shell.dataset["back"]).toBe("true");
+});
+
 test("a footer search cannot implicitly send the draft, while Send still can", async () => {
   const onSend = vi.fn(async () => undefined);
   const { box, type } = render(onSend, caps, { tab: <input aria-label="Search refs" /> });

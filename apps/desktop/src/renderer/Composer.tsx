@@ -63,6 +63,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type FocusEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -1308,6 +1309,12 @@ export function Composer({
   const highlighted = Math.min(active, entries.length - 1);
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
   const box = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  // Focus moving between the box and the bar under it stays with them.
+  const leave = (e: FocusEvent<HTMLDivElement>) => {
+    const to = e.relatedTarget;
+    if (!box.current?.contains(to) && !bar.current?.contains(to)) setFocused(false);
+  };
   // Narrow, as in a small window or a split's tile, the usage ring gives its room to the text.
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
@@ -1888,9 +1895,7 @@ export function Composer({
         // Only the text's focus brings a stepped-back box back, so Attach and Stop, which a press
         // focuses, take their click where they are.
         onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
-        onBlur={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
-        }}
+        onBlur={leave}
         data-back={back || undefined}
         data-running={!!onStop || undefined}
         className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${threadOver ? "border-ring" : "border-border"}`}
@@ -2133,8 +2138,17 @@ export function Composer({
           </div>
         )}
       </div>
-      {/* Gone while the box steps back, with the footer. */}
-      {tab && !back && <div className="composer-bar tucked @container/composer">{tab}</div>}
+      {tab && (
+        <div
+          ref={bar}
+          onBlur={leave}
+          // Hidden while the box steps back (index.css), so a menu it opened stays open.
+          data-back={back || undefined}
+          className="composer-bar tucked @container/composer"
+        >
+          {tab}
+        </div>
+      )}
       {footer}
     </div>
   );

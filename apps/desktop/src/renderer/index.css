@@ -1384,6 +1384,9 @@ body {
   border-radius: 0 0 14px 14px;
   background-color: color-mix(in oklab, var(--foreground) 4%, var(--background));
 }
+.composer-bar[data-back]:not(:has(:popover-open)) {
+  display: none;
+}
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */
 :is(.composer-footer, .composer-bar) button[aria-haspopup]:not([popover] *) {
