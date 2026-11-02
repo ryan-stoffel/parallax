@@ -1173,15 +1173,22 @@ body {
     border-color var(--transition-duration-base) var(--ease-out),
     box-shadow var(--transition-duration-base) var(--ease-out);
 }
+/* The field is a plate raised off the shell: lit along its top, casting down onto it. */
 .composer-entry {
   background-color: light-dark(
     var(--surface),
     color-mix(in oklab, var(--foreground) 6%, var(--surface))
   );
-  /* A hairline around it in light, a lit top edge in dark. light-dark() only takes colors. */
+  background-image: linear-gradient(
+    light-dark(transparent, rgb(255 255 255 / 3%)),
+    transparent 70%
+  );
   box-shadow:
-    0 0 0 1px light-dark(color-mix(in oklab, var(--foreground) 6%, transparent), transparent),
-    inset 0 1px 0 light-dark(transparent, rgb(255 255 255 / 4%));
+    0 0 0 1px light-dark(color-mix(in oklab, var(--foreground) 7%, transparent), transparent),
+    inset 0 1px 0 light-dark(transparent, rgb(255 255 255 / 8%)),
+    0 1px 2px light-dark(color-mix(in oklab, var(--foreground) 8%, transparent), rgb(0 0 0 / 60%)),
+    0 8px 16px -8px
+      light-dark(color-mix(in oklab, var(--foreground) 16%, transparent), rgb(0 0 0 / 80%));
   transition: background-color var(--transition-duration-base) var(--ease-out);
 }
 .composer-shell:focus-within .composer-entry {
@@ -1189,6 +1196,116 @@ body {
     var(--surface),
     color-mix(in oklab, var(--foreground) 9%, var(--surface))
   );
+}
+/* The logo on the box's edge: its blue and coral rest on the top, meeting in its overlap, and only
+   in the 1px ring the mask leaves. Taking focus, a light from each runs up either side from the
+   bottom and they meet at that spot. While the agent runs, the two circle the box in opposite
+   directions. Only moving layers repaint, so an idle or long run stays cheap. */
+.composer-shell::before,
+.composer-edge {
+  position: absolute;
+  inset: -1px;
+  z-index: 1;
+  padding: 1px;
+  border-radius: inherit;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  pointer-events: none;
+}
+.composer-shell::before {
+  background: linear-gradient(
+      90deg,
+      transparent 22%,
+      var(--mark-blue) 38%,
+      var(--mark-overlap) 50%,
+      var(--mark-coral) 62%,
+      transparent 78%
+    )
+    top / 100% 1px no-repeat;
+  opacity: 0.45;
+  transition: opacity var(--transition-duration-slow) var(--ease-out);
+  content: "";
+}
+.composer-shell:focus-within::before {
+  opacity: 1;
+}
+.composer-edge::before,
+.composer-edge::after {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 140px;
+  height: 140px;
+  offset-path: inset(0 round var(--radius-prompt));
+  offset-rotate: 0deg;
+  mix-blend-mode: plus-lighter;
+  opacity: 0;
+  content: "";
+}
+.composer-edge::before {
+  background: radial-gradient(closest-side, var(--mark-blue), transparent);
+}
+.composer-edge::after {
+  background: radial-gradient(closest-side, var(--mark-coral), transparent);
+}
+.composer-shell:focus-within .composer-edge::before {
+  animation: composer-meet-blue 800ms var(--ease-in-out);
+}
+.composer-shell:focus-within .composer-edge::after {
+  animation: composer-meet-coral 800ms var(--ease-in-out);
+}
+.composer-shell[data-running] .composer-edge::before {
+  opacity: 0.8;
+  animation: composer-orbit-blue 9s linear infinite;
+}
+.composer-shell[data-running] .composer-edge::after {
+  opacity: 0.8;
+  animation: composer-orbit-coral 9s linear infinite;
+}
+@keyframes composer-meet-blue {
+  from {
+    offset-distance: 75%;
+    opacity: 0;
+  }
+  20%,
+  85% {
+    opacity: 1;
+  }
+  to {
+    offset-distance: 125%;
+    opacity: 0;
+  }
+}
+@keyframes composer-meet-coral {
+  from {
+    offset-distance: 75%;
+    opacity: 0;
+  }
+  20%,
+  85% {
+    opacity: 1;
+  }
+  to {
+    offset-distance: 25%;
+    opacity: 0;
+  }
+}
+@keyframes composer-orbit-blue {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
+@keyframes composer-orbit-coral {
+  from {
+    offset-distance: 50%;
+  }
+  to {
+    offset-distance: -50%;
+  }
 }
 /* The text's height follows the editor's (Composer.tsx), so the box eases as lines wrap. */
 .composer-text {
@@ -1203,8 +1320,19 @@ body {
     scale var(--transition-duration-base) var(--ease-spring),
     filter var(--transition-duration-fast);
 }
-.composer-send:disabled {
+.composer-shell .composer-send.send-sky:disabled {
   scale: 0.88;
+}
+/* With nothing to send, a nightly's sky stays out of sight: a quiet disc. It pops in with text. */
+:root.nightly .composer-shell .composer-send.send-sky:disabled {
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  color: var(--faint-foreground);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+}
+:root.nightly .composer-shell .composer-send.send-sky:enabled {
+  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
 }
 .composer-pop {
   animation: composer-pop var(--transition-duration-base) var(--ease-spring);
