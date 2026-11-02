@@ -1,8 +1,9 @@
-//! A short hidden call to the user's own model, for a thread's name (0058) and a pull request's
-//! guide (0095): [`Backend::namer`](super::Backend::namer) starts the CLI with no tools in an
-//! empty folder that holds the answer's JSON schema ([`SCHEMA_FILE`]), [`ask`] writes it the
-//! prompt on stdin and reads its output until one line holds the answer, a JSON object in that
-//! schema's shape:
+//! A short hidden call to the user's own model, for a thread's name (0058), a pull request's
+//! guide (0095), and dictated text (PLX-1232): [`Backend::namer`](super::Backend::namer) starts
+//! the CLI with no tools in an empty folder that holds the answer's JSON schema ([`SCHEMA_FILE`]),
+//! [`ask`] writes it the prompt on stdin and reads its output until one line holds the answer, a
+//! JSON object in that schema's shape. With no schema in the folder the model answers in plain
+//! text, which takes one model call less, and the answer is `{"text": ...}`:
 //!
 //! - **Claude Code**: `claude -p --output-format json --json-schema <schema>`, whose one line is
 //!   the `result` message, with the answer as its `structured_output`.
@@ -88,6 +89,31 @@ pub fn claude(message: &Value) -> Parsed<Value> {
     Some(Ok(message["structured_output"].clone()))
 }
 
+/// Claude Code's `result` message, for a call with no schema: its `result` text as `{"text": ...}`.
+#[must_use]
+pub fn claude_text(message: &Value) -> Parsed<Value> {
+    if message["type"] != "result" {
+        return None;
+    }
+    if message["is_error"] == true {
+        return Some(Err(text(&message["result"])));
+    }
+    Some(Ok(json!({"text": message["result"]})))
+}
+
+/// Codex's `agent_message` item for a call with no schema: its text as `{"text": ...}`, or its
+/// failed turn.
+#[must_use]
+pub fn codex_text(message: &Value) -> Parsed<Value> {
+    match message["type"].as_str()? {
+        "item.completed" if message["item"]["type"] == "agent_message" => {
+            Some(Ok(json!({"text": message["item"]["text"]})))
+        }
+        "turn.failed" => Some(Err(text(&message["error"]["message"]))),
+        _ => None,
+    }
+}
+
 /// Codex's `agent_message` item, whose text is the answer, or its failed turn.
 #[must_use]
 pub fn codex(message: &Value) -> Parsed<Value> {
@@ -98,5 +124,22 @@ pub fn codex(message: &Value) -> Parsed<Value> {
         }
         "turn.failed" => Some(Err(text(&message["error"]["message"]))),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_call_with_no_schema_answers_in_plain_text() {
+        let answer = claude_text(&json!({"type": "result", "result": "Hello."}));
+        assert_eq!(answer, Some(Ok(json!({"text": "Hello."}))));
+        let failed = claude_text(&json!({"type": "result", "is_error": true, "result": "No."}));
+        assert!(matches!(failed, Some(Err(_))));
+        let item =
+            json!({"type": "item.completed", "item": {"type": "agent_message", "text": "Hi."}});
+        assert_eq!(codex_text(&item), Some(Ok(json!({"text": "Hi."}))));
+        assert_eq!(claude_text(&json!({"type": "assistant"})), None);
     }
 }
