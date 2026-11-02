@@ -1161,23 +1161,20 @@ body {
   scrollbar-width: none;
 }
 
-/* The composer (Composer.tsx) is one surface: the text, then a row of its controls. */
-.composer-shell {
+/* The composer (Composer.tsx) is one surface: the text, then a row of its controls. The bar under
+   it (.composer-bar) is the same color. */
+.composer-shell,
+.composer-bar {
   background-color: light-dark(
     var(--surface),
     color-mix(in oklab, var(--foreground) 4%, var(--surface))
   );
+}
+.composer-shell {
   transition:
-    background-color var(--transition-duration-base) var(--ease-out),
     border-color var(--transition-duration-base) var(--ease-out),
     box-shadow var(--transition-duration-base) var(--ease-out),
     opacity var(--transition-duration-base) var(--ease-out);
-}
-.composer-shell:focus-within {
-  background-color: light-dark(
-    var(--surface),
-    color-mix(in oklab, var(--foreground) 6%, var(--surface))
-  );
 }
 /* The model picker opens off the box rather than its button, so it covers neither the text nor
    the box's row: above it, lined up with its right edge, and as tall as there's room for. */
@@ -1210,7 +1207,8 @@ body {
   }
 }
 /* The heavy box at the end of the controls' row, holding voice and send or stop as wide tiles whose
-   corners follow its own (Composer.tsx). With nothing to send, Send is only its arrow. */
+   corners follow its own (Composer.tsx). With nothing to send, Send is only its arrow, except
+   in a nightly, which keeps its sky. */
 .composer-actions {
   display: flex;
   align-items: center;
@@ -1231,7 +1229,7 @@ body {
   border-radius: 9px;
   transition: background-color var(--transition-duration-fast) var(--ease-out);
 }
-:is(:root.nightly, :root) .composer-shell .composer-actions .composer-send.send-sky:disabled {
+:root:not(.nightly) .composer-shell .composer-actions .composer-send.send-sky:disabled {
   background: transparent;
   color: var(--faint-foreground);
   box-shadow: none;
@@ -1252,16 +1250,10 @@ body {
     scale var(--transition-duration-base) var(--ease-spring),
     filter var(--transition-duration-fast);
 }
-.composer-shell .composer-send.send-sky:disabled {
-  scale: 0.88;
-}
-/* With nothing to send, a nightly's sky stays out of sight: a quiet disc. It pops in with text. */
+/* With nothing to send, a nightly's sky stays, dimmed and without its glow. It pops up with text. */
 :root.nightly .composer-shell .composer-send.send-sky:disabled {
-  background: color-mix(in oklab, var(--foreground) 8%, transparent);
-  color: var(--faint-foreground);
-  box-shadow: none;
   filter: none;
-  opacity: 1;
+  opacity: 0.75;
 }
 .composer-shell .composer-send.send-sky:enabled {
   animation: composer-pop var(--transition-duration-base) var(--ease-spring);
@@ -1310,7 +1302,7 @@ body {
   right: 6.5rem;
 }
 /* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
-   its corners following the box's. A step darker, so it reads as behind it. */
+   its corners following the box's. */
 .composer-bar {
   display: flex;
   align-items: center;
@@ -1322,7 +1314,6 @@ body {
   border: 1px solid var(--border);
   border-top: 0;
   border-radius: 0 0 14px 14px;
-  background-color: color-mix(in oklab, var(--foreground) 4%, var(--background));
   transition: opacity var(--transition-duration-base) var(--ease-out);
 }
 .composer-bar[data-back]:not(:has(:popover-open)) {
