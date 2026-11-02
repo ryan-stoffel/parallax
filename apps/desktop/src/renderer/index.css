@@ -1402,6 +1402,12 @@ body {
     display: none;
   }
 }
+/* Rather than cut a computer's name to a letter, it's only its icon. */
+@container composer (width < 28rem) {
+  .composer-host {
+    display: none;
+  }
+}
 @container composer (width < 22rem) {
   .composer-effort {
     display: none;

@@ -168,7 +168,7 @@ export function RunTargetMenu({
         className={`${menuButton} min-w-0`}
       >
         {busy ? <LoaderCircle aria-hidden className="animate-spin" /> : hostIcon(host)}
-        <span className="truncate">{host.name}</span>
+        <span className="composer-host truncate">{host.name}</span>
         {workspace && (
           <span className="composer-detail flex shrink-0 items-center gap-1.5">
             <span aria-hidden className="text-faint-foreground">
