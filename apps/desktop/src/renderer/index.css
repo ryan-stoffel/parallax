@@ -1265,7 +1265,8 @@ body {
   }
 }
 /* The box fades out from under the voice pill (VoicePill.tsx), which grows out of it. */
-.composer-shell[data-voice] {
+.composer-shell[data-voice],
+.composer-bar[data-voice] {
   opacity: 0;
 }
 /* The footer folds away while the box steps back, unless one of its menus is open. */
@@ -1299,6 +1300,7 @@ body {
   border-top: 0;
   border-radius: 0 0 14px 14px;
   background-color: color-mix(in oklab, var(--foreground) 4%, var(--background));
+  transition: opacity var(--transition-duration-base) var(--ease-out);
 }
 .composer-bar[data-back]:not(:has(:popover-open)) {
   display: none;

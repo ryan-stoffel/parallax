@@ -2206,8 +2206,11 @@ export function Composer({
         <div
           ref={bar}
           onBlur={leave}
-          // Hidden while the box steps back (index.css), so a menu it opened stays open.
+          // Hidden while the box steps back (index.css), so a menu it opened stays open, and held in
+          // place with the box while the pill stands in for them.
+          inert={voice.phase !== "idle"}
           data-back={back || undefined}
+          data-voice={voice.phase !== "idle" || undefined}
           className="composer-bar tucked @container/composer"
         >
           {tab}
