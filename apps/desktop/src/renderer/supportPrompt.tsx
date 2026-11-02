@@ -1,3 +1,4 @@
+import { GitHubLogo, GitHubStarIcon, KoFiLogo } from "./logos";
 import { notify } from "./notifications";
 
 /** The sent prompt that brings up the ask to star and support Parallax. */
@@ -17,8 +18,21 @@ export function countSentPrompt() {
     tone: "info",
     title: "Enjoying Parallax?",
     body: "A GitHub star helps people find it, and Ko-fi helps fund the work.",
-    action: { label: "Star on GitHub", href: "https://github.com/ryan-stoffel/parallax" },
-    secondLink: { label: "Support on Ko-fi", href: "https://ko-fi.com/parallax_team" },
+    action: {
+      label: "Star on GitHub",
+      href: "https://github.com/ryan-stoffel/parallax",
+      icon: (
+        <>
+          <GitHubLogo className="mr-0.5 size-3.5" />
+          <GitHubStarIcon className="mr-0.5 size-3.5" />
+        </>
+      ),
+    },
+    secondLink: {
+      label: "Support on Ko-fi",
+      href: "https://ko-fi.com/parallax_team",
+      icon: <KoFiLogo className="mr-0.5 size-3.5" />,
+    },
     // It shows only once, so it stays until closed.
     sticky: true,
   });

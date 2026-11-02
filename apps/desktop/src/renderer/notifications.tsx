@@ -19,6 +19,9 @@ import { behaviorPrefs } from "./prefs";
 /** A notice's color and icon: done, waiting on the user, gone wrong, or just news. */
 export type Tone = "success" | "attention" | "error" | "info";
 
+/** A link to a page. An `icon` says where it goes, in place of the arrow that says it leaves. */
+type NoticeLink = { label: string; href: string; icon?: ReactNode };
+
 export type Notice = {
   /**
    * A notice with the same key replaces this one, as a reconnect replaces a lost connection, in
@@ -29,9 +32,9 @@ export type Notice = {
   title: string;
   body?: string;
   /** The underlined link after the body: a page to open, or something to do in the app. */
-  action?: { label: string; href: string } | { label: string; run: () => void };
+  action?: NoticeLink | { label: string; run: () => void };
   /** A second page to open, as a link beside `action`. */
-  secondLink?: { label: string; href: string };
+  secondLink?: NoticeLink;
   /**
    * Work under way: a spinner, and a bar at `percent`, or pulsing without one. `update` it by its
    * key as it goes, and replace it with another or `dismiss` it once it's done.
@@ -112,11 +115,12 @@ const link =
   "inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-4 hover:text-foreground";
 
 /** A toast's link to a page, which main opens in the system browser. */
-function PageLink({ label, href }: { label: string; href: string }) {
+function PageLink({ label, href, icon }: NoticeLink) {
   return (
     <a href={href} className={link}>
+      {icon}
       {label}
-      <ArrowUpRight className="size-3" />
+      {!icon && <ArrowUpRight className="size-3" />}
     </a>
   );
 }
