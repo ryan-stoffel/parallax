@@ -1374,27 +1374,23 @@ body {
     display: none;
   }
 }
-/* What's beside the text stays in the room the placeholder leaves it, whatever it holds. */
+/* Beside the text, the model keeps its whole name, and the placeholder gives way to it. A name
+   longer than this, such as a raw id, is cut. --beside is what's left of the box's width after
+   voice and send or stop. */
+[data-back] {
+  --beside: min(14rem, 100cqw - 7rem);
+}
 [data-back] .composer-run {
-  max-width: 7.5rem;
+  max-width: var(--beside);
   overflow: clip;
 }
 [data-back] .composer-placeholder {
-  right: 13.5rem;
+  right: calc(var(--beside) + 6rem);
 }
-/* In a narrow box, the model is only its logo and bars while the box is one line. */
+/* With no model, its standalone menus are only their icons in a narrow box. */
 @container composer (width < 28rem) {
-  [data-back] .model-name {
-    display: none;
-  }
-  [data-back] .composer-run {
-    max-width: 3.5rem;
-  }
   [data-back] :is(.composer-effort, .composer-access > span) {
     display: none;
-  }
-  [data-back] .composer-placeholder {
-    right: 9.5rem;
   }
 }
 /* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
