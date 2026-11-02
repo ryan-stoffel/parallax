@@ -16,6 +16,8 @@ export function stored<T>(key: string, fallback: T, parse: (raw: unknown, fallba
   const kept = memory(value);
   return {
     ...kept,
+    /** Takes a value another window stored, without storing it again. */
+    adopt: (next: T) => kept.set(next),
     set(next: T) {
       try {
         localStorage.setItem(key, JSON.stringify(next));

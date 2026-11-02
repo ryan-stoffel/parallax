@@ -7,7 +7,6 @@ import {
   keepRegistryIcon,
   kindOf,
   presets,
-  saveProvider,
   slug,
   unique,
   versionOf,
@@ -15,6 +14,7 @@ import {
   withVersion,
   type Preset,
 } from "./providers";
+import { saveEverywhere } from "./linkedProviders";
 import { field, primaryButton, quietButton } from "./settings/parts";
 import { hasAccountOf, SeveralAccountsNote } from "./SeveralAccounts";
 import { IconButton, Segmented } from "./ui";
@@ -164,7 +164,7 @@ export function AddProviderDialog({
   const add = async () => {
     if (!draft) return;
     setSaving(true);
-    const failed = await saveProvider(hostId, {
+    const failed = await saveEverywhere(hostId, {
       id,
       kind: draft.kind,
       name: name.trim(),

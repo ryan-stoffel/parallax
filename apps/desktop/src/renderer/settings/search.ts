@@ -279,6 +279,11 @@ export const settingsIndex: SettingEntry[] = [
     ],
     ["Models", "The models a provider offers", "custom model add model"],
     ["Hubs", "Run Claude Code and Codex through a CLIProxyAPI hub", "cliproxyapi proxy accounts"],
+    [
+      "Link providers across computers",
+      "Use the same providers on every computer",
+      "sync share same hosts machines",
+    ],
   ]),
   {
     section: "providers",

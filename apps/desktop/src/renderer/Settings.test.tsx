@@ -254,6 +254,18 @@ test("Providers opens on the host the window has open, not always this computer"
   states[mini.id] = failed;
 });
 
+test("Link providers across computers says which computer's list it would use", async () => {
+  const failed = states[mini.id]!;
+  states[mini.id] = { ...states["local"]!, capabilities: { providers: {} } } as ConnectionState;
+  answers["providers/list"] = () => ({
+    result: { providers: [], checkedAt: "2026-09-28T12:00:00Z" },
+  });
+  await renderSettings("providers", [], mini.id);
+  expect(document.querySelector('[aria-label="Link providers across computers"]')).not.toBeNull();
+  expect(document.body.textContent).toContain("Use Mac mini's providers on every computer.");
+  states[mini.id] = failed;
+});
+
 describe("on a plxd with providers", () => {
   const instance = (id: string, kind: ProviderKind, name: string): ProviderInstance => ({
     id,

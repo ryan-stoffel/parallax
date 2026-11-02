@@ -49,6 +49,7 @@ import { Onboarding } from "./Onboarding";
 import { Splash } from "./Splash";
 import { useOnboarding } from "./firstRun";
 import { localId, useHosts } from "./hosts";
+import { useProviderLink } from "./linkedProviders";
 import { iconImageBytes } from "./images";
 import { ThreadDetails, ThreadDetailsButton, useThreadDetails } from "./ThreadDetails";
 import { AgentsPanel, useOrchestratorAgents } from "./OrchestratorAgents";
@@ -174,6 +175,7 @@ export function App() {
   const onboarding = useOnboarding();
   useAppearanceEffects(onboarding);
   const hosts = useHosts();
+  useProviderLink(hosts);
   const [hostId, setHostId] = useState(localId);
   // The open host, or this computer once the open one is removed.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
