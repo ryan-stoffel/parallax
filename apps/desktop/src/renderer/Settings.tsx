@@ -29,6 +29,13 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
 import { loadHubs, useHubs } from "./hubs";
+import {
+  linkProviders,
+  removeEverywhere,
+  saveEverywhere,
+  unlinkProviders,
+  useProvidersLinked,
+} from "./linkedProviders";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
 import {
@@ -36,8 +43,6 @@ import {
   kindOf,
   logoOf,
   loadProviders,
-  removeProvider,
-  saveProvider,
   useProviders,
   versionOf,
   versions,
@@ -688,6 +693,7 @@ const instanceTone = (info: ProviderInfo) =>
  */
 function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const providers = useProviders(host.id);
+  const linkOn = useProvidersLinked();
   const connection = useConnection(host.id);
   const hubsOn = connection?.status === "connected" && "hubs" in connection.capabilities;
   const hubs = useHubs(host.id);
@@ -744,7 +750,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     setHubsError(errors[2]);
   };
   const save = async (instance: ProviderInstance) => {
-    const failed = await saveProvider(host.id, instance);
+    const failed = await saveEverywhere(host.id, instance);
     if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
   };
 
@@ -766,7 +772,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const remove = async (id: string) => {
     const name = list?.find((p) => p.instance.id === id)?.instance.name ?? "the provider";
     setRemoving(true);
-    const failed = await removeProvider(host.id, id);
+    const failed = await removeEverywhere(host.id, id);
     // Gone from the list, its pane goes too, and the next one is chosen.
     setRemoving(false);
     setConfirming(undefined);
@@ -777,6 +783,25 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   return (
     <>
       <div className="mb-8 text-reading">{picker}</div>
+      {hosts.length > 1 && (
+        <div className="mb-8 overflow-hidden rounded-xl border border-border">
+          <Row
+            title="Link providers across computers"
+            description={
+              linkOn
+                ? "Every computer uses the same providers. API keys and sign-ins stay on each computer."
+                : `Use ${host.name}'s providers on every computer. Any others are turned off, not removed. API keys and sign-ins stay on each computer.`
+            }
+          >
+            <Switch
+              label="Link providers across computers"
+              checked={linkOn}
+              disabled={!providers}
+              onChange={(on) => void (on ? linkProviders(host.id) : unlinkProviders())}
+            />
+          </Row>
+        </div>
+      )}
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
         <h1 className="text-reading font-semibold">Providers</h1>
         {asking ? (
@@ -784,7 +809,8 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           <div className="flex items-center gap-2 text-body text-muted-foreground">
             <span>
               Remove <span className="font-medium text-foreground">{chosenName}</span>? Its settings
-              and secrets leave this host; its threads keep their transcripts.
+              and secrets leave {linkOn ? "every linked computer" : "this host"}; its threads keep
+              their transcripts.
             </span>
             <ConfirmRemove
               disabled={removing}
@@ -1099,7 +1125,7 @@ function InstancePane({
     (instance.kind !== "pi" || piCommand === "pi");
   const save = async (change: Partial<ProviderInstance>) => {
     retry();
-    const problem = await saveProvider(hostId, { ...instance, ...change });
+    const problem = await saveEverywhere(hostId, { ...instance, ...change });
     if (problem) failed(`Couldn't save ${instance.name}`, problem);
   };
   const program = instance.program ?? kind.program ?? "the program";
