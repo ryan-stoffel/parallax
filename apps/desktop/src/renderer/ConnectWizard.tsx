@@ -1,12 +1,21 @@
-import { Check, CircleCheck, Copy, Download, Hash, KeyRound, RefreshCw, X } from "lucide-react";
+import { Check, CircleCheck, Copy, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import type { DeviceHost } from "../preload/bridge";
-import { spacedCode } from "./AccountPrompts";
+import type { DeviceHost, SetupCode } from "../preload/bridge";
+import {
+  asksForCode,
+  Modal,
+  SetupCodeField,
+  skipCodePrompt,
+  spacedCode,
+  useHoldCodePrompts,
+  useSetupCode,
+} from "./AccountPrompts";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { DeviceIcon } from "./DeviceIcon";
+import { useProfile } from "./profile";
 import { primaryButton, quietButton } from "./settings/parts";
-import { IconButton } from "./ui";
+import { IconButton, Segmented } from "./ui";
 
 /** Tailscale's OS name for people. */
 export const osName = (os: string) =>
@@ -17,137 +26,317 @@ export const osName = (os: string) =>
 export const connectCommand = (channel: "stable" | "nightly") =>
   `npx plx-cli connect${channel === "nightly" ? " --channel nightly" : ""}`;
 
+/** Where the app is downloaded. */
+const DOWNLOAD_URL = "https://github.com/ryan-stoffel/parallax/releases/latest";
+
+/** How often Add a computer asks the account for its computers while it's open (0091). */
+const LOOK_MS = 5_000;
+
 /**
- * Add computer (0091), a modal dialog open while it's mounted: the command to run on the computer
- * to add, which signs it in to the account and shows a code, then this account's computers as
- * they show up, each connected, waiting for its code, or waiting for approval. Opening it asks the
- * account for its computers.
+ * Add a computer (0091), a modal dialog open while it's mounted. It says how to set the other
+ * computer up, with the app or in a terminal, and asks the account for its computers every
+ * `LOOK_MS`. A computer that wants its code asks for it here, and the dialog ends by showing the
+ * computers that joined.
  */
 export function ConnectWizard({
   channel,
   devices,
   onClose,
-  onEnterCode,
 }: {
   /** The channel it installs, this app's own. */
   channel: "stable" | "nightly";
   /** The devices this app lists. */
   devices: DeviceHost[];
   onClose: () => void;
-  /** Opens the code dialog for a new computer. */
-  onEnterCode: (device: DeviceHost) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  const [copied, setCopied] = useState(false);
+  useHoldCodePrompts();
   useEffect(() => dialog.current?.showModal(), []);
-  useEffect(() => void window.parallax.discoverAccount(), []);
-  const command = connectCommand(channel);
+  useEffect(() => {
+    void window.parallax.discoverAccount();
+    const timer = setInterval(() => void window.parallax.discoverAccount(), LOOK_MS);
+    return () => clearInterval(timer);
+  }, []);
   const computers = devices.filter((d) => d.id.startsWith("account:"));
+  // The computers this dialog isn't about: those on the account already when it opened, less any
+  // still joining. Add another adds the ones it showed.
+  const [known, setKnown] = useState(
+    () => new Set(computers.filter((d) => !isNew(d.access)).map((d) => d.id)),
+  );
+  // Those whose code the user chose not to type now.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
+  // A computer listed before it refused this app only turns out to be new once it does.
+  const turnedNew = computers.filter((d) => known.has(d.id) && isNew(d.access));
+  if (turnedNew.length) {
+    const left = new Set(known);
+    for (const d of turnedNew) left.delete(d.id);
+    setKnown(left);
+  }
+  const [connected, setConnected] = useState<ReadonlySet<string>>(new Set());
+  // An offline computer's Enter code, for one whose code the dialog wouldn't ask for on its own.
+  const [chosen, setChosen] = useState<string>();
+  const found = computers.filter((d) => !known.has(d.id) && !dismissed.has(d.id));
+  const asking =
+    computers.find((d) => d.id === chosen && d.access) ?? found.find((d) => asksForCode(d));
+  const finished = !asking && found.some((d) => connected.has(d.id));
+  const close = () => {
+    // Its prompt stays shut: the user just closed the screen that was asking.
+    if (asking) skipCodePrompt(asking.id);
+    dialog.current?.close();
+  };
 
   return (
     <dialog
       ref={dialog}
       aria-labelledby={titleId}
       onClose={onClose}
+      onCancel={() => asking && skipCodePrompt(asking.id)}
       className="m-auto w-[32rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
     >
       <div className="flex max-h-[85vh] flex-col">
-        <header className="flex items-start gap-3 px-5 pt-4 pb-3">
-          <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="truncate text-reading font-semibold">
-              Add a computer
-            </h2>
-            <p className="mt-0.5 text-body text-muted-foreground">
-              Run this in a terminal on the computer you want to add.
-            </p>
-          </div>
-          <IconButton label="Close" onClick={() => dialog.current?.close()}>
+        <header className="flex items-center gap-3 px-5 pt-4 pb-3">
+          <h2 id={titleId} className="min-w-0 flex-1 truncate text-reading font-semibold">
+            Add a computer
+          </h2>
+          <IconButton label="Close" onClick={close}>
             <X aria-hidden />
           </IconButton>
         </header>
-        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-4">
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-background py-1.5 pr-1.5 pl-3">
-            <code aria-label="Command" className="min-w-0 flex-1 truncate font-mono text-body">
-              {command}
-            </code>
-            <IconButton
-              label={copied ? "Copied" : "Copy command"}
-              onClick={() => {
-                void navigator.clipboard.writeText(command);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1_500);
-              }}
-            >
-              {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-            </IconButton>
-          </div>
-          <ul className="rounded-lg border border-border">
-            <Plan icon={<KeyRound aria-hidden />} title="Signs in to your Parallax account">
-              In a browser there, or with a link you open on any device.
-            </Plan>
-            <Plan icon={<Download aria-hidden />} title="Installs plxd">
-              Parallax's service, which starts at login, so your other computers reach it.
-            </Plan>
-            <Plan icon={<Hash aria-hidden />} title="Shows a 6-digit code">
-              Type it here when Parallax asks, to let this computer in.
-            </Plan>
-          </ul>
-          <section aria-label="Your computers">
-            <h3 className="mb-1.5 text-body font-medium">Your computers</h3>
-            {computers.length ? (
-              <ul className="rounded-lg border border-border">
-                {computers.map((d) => (
-                  <ComputerRow key={d.id} device={d} onEnterCode={() => onEnterCode(d)} />
+        {asking ? (
+          <CodeStep
+            key={asking.id}
+            computer={asking}
+            onCancel={() => {
+              skipCodePrompt(asking.id);
+              setChosen(undefined);
+              setDismissed((old) => new Set(old).add(asking.id));
+            }}
+            onPaired={() => setChosen(undefined)}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-4">
+            {finished ? <Finished /> : <Setup channel={channel} />}
+            {found.length > 0 && (
+              <ul aria-label="New computers" className="rounded-lg border border-border">
+                {found.map((d) => (
+                  <ComputerRow
+                    key={d.id}
+                    device={d}
+                    onEnterCode={() => setChosen(d.id)}
+                    onConnected={() => setConnected((old) => new Set(old).add(d.id))}
+                  />
                 ))}
               </ul>
-            ) : (
-              <p className="text-body text-muted-foreground">
-                A computer shows up here once it's signed in.
-              </p>
             )}
-          </section>
-        </div>
-        <footer className="flex items-center gap-2 border-t border-border px-5 py-3">
-          <div className="flex-1">
-            <button
-              type="button"
-              onClick={() => void window.parallax.discoverAccount()}
-              className={`${quietButton} -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
-            >
-              <RefreshCw aria-hidden />
-              Refresh
-            </button>
           </div>
-          <button type="button" className={primaryButton} onClick={() => dialog.current?.close()}>
-            Done
-          </button>
-        </footer>
+        )}
+        {!asking && (
+          <footer className="flex items-center gap-2 border-t border-border px-5 py-3">
+            {finished ? (
+              <>
+                <button
+                  type="button"
+                  className={`${quietButton} -ml-2.5 mr-auto`}
+                  onClick={() => {
+                    setKnown((old) => new Set([...old, ...found.map((d) => d.id)]));
+                    setConnected(new Set());
+                  }}
+                >
+                  Add another
+                </button>
+                <button type="button" className={primaryButton} onClick={close}>
+                  Done
+                </button>
+              </>
+            ) : (
+              <>
+                <span
+                  role="status"
+                  className="mr-auto flex items-center gap-2 text-body text-muted-foreground [&_svg]:size-3.5"
+                >
+                  <LoaderCircle aria-hidden className="animate-spin" />
+                  Looking for your computer…
+                </span>
+                <button type="button" className={quietButton} onClick={close}>
+                  Close
+                </button>
+              </>
+            )}
+          </footer>
+        )}
       </div>
     </dialog>
   );
 }
 
-/** One account computer in Add computer: its name and where it stands. */
-function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode: () => void }) {
+/** Whether an account computer's `access` says it hasn't joined yet, so the dialog is about it. */
+const isNew = (access: DeviceHost["access"]) =>
+  access?.step === "needsCode" || access?.step === "pairing";
+
+/** How to set the other computer up, with the app or in a terminal. */
+function Setup({ channel }: { channel: "stable" | "nightly" }) {
+  const [path, setPath] = useState<"app" | "terminal">("app");
+  const email = useProfile()?.email;
+  return (
+    <>
+      <p className="text-body text-muted-foreground">
+        Run agents on your other computers from here. Do this on the computer you want to add.
+      </p>
+      <div className="flex">
+        <Segmented
+          label="How to add it"
+          value={path}
+          onChange={setPath}
+          options={[
+            { value: "app", name: "With the app" },
+            { value: "terminal", name: "In a terminal" },
+          ]}
+        />
+      </div>
+      {path === "app" ? (
+        <ol className="rounded-lg border border-border">
+          <Step n={1} title="Install Parallax">
+            <a href={DOWNLOAD_URL} target="_blank" rel="noreferrer" className="underline">
+              Download it
+            </a>{" "}
+            for macOS, Windows, or Linux.
+          </Step>
+          <Step n={2} title="Sign in">
+            Use the same account{email && <>, {email}</>}.
+          </Step>
+          <Step n={3} title="Choose Show setup code">
+            It's in Settings › Connections there. Then type the code here.
+          </Step>
+        </ol>
+      ) : (
+        <ol className="rounded-lg border border-border">
+          <Step n={1} title="Run this">
+            <Command command={connectCommand(channel)} />
+            It needs Node.js, and works on a server or over SSH.
+          </Step>
+          <Step n={2} title="Sign in">
+            In a browser there, or with a link it prints that opens on any device.
+          </Step>
+          <Step n={3} title="Leave it showing its code">
+            Then type the code here.
+          </Step>
+        </ol>
+      )}
+    </>
+  );
+}
+
+/** What the dialog says once a new computer has connected. */
+function Finished() {
+  return (
+    <div className="flex gap-3 [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-added">
+      <CircleCheck aria-hidden />
+      <p className="text-body text-muted-foreground">
+        <span className="block font-medium text-foreground">You're connected</span>
+        Pick it under Runs on when you start a thread. Its threads show up in your sidebar.
+      </p>
+    </div>
+  );
+}
+
+/** A new computer's code, typed in the dialog. */
+function CodeStep({
+  computer,
+  onCancel,
+  onPaired,
+}: {
+  computer: DeviceHost;
+  onCancel: () => void;
+  onPaired: () => void;
+}) {
+  const form = useSetupCode(computer, onPaired);
+  return (
+    <form onSubmit={(e) => void form.submit(e)} className="px-5 pb-4">
+      <h3 className="flex items-center gap-2 text-body font-medium">
+        <DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate">Found {computer.name}</span>
+      </h3>
+      <SetupCodeField name={computer.name} form={form} />
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className={quietButton} onClick={onCancel}>
+          Not now
+        </button>
+        <button type="submit" className={primaryButton} disabled={!form.ready}>
+          {form.busy ? "Connecting…" : "Connect"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** The command to run, with its Copy. */
+function Command({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="my-1.5 flex items-center gap-2 rounded-lg border border-border bg-background py-1 pr-1 pl-3">
+      <code aria-label="Command" className="min-w-0 flex-1 truncate font-mono text-body">
+        {command}
+      </code>
+      <IconButton
+        label={copied ? "Copied" : "Copy command"}
+        onClick={() => {
+          void navigator.clipboard.writeText(command);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1_500);
+        }}
+      >
+        {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+      </IconButton>
+    </span>
+  );
+}
+
+/** One new computer in Add a computer: its name and where it stands. */
+function ComputerRow({
+  device,
+  onEnterCode,
+  onConnected,
+}: {
+  device: DeviceHost;
+  onEnterCode: () => void;
+  onConnected: () => void;
+}) {
   const state = useConnection(device.id);
   const { access } = device;
+  const up = !access && state?.status === "connected";
+  useEffect(() => {
+    if (up) onConnected();
+    // `onConnected` is new each render; only the connection coming up counts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [up]);
   const status = accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…");
   return (
     <li className="flex items-center gap-3 border-border px-3 py-2.5 not-last:border-b">
       <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
       <p className="min-w-0 flex-1 truncate text-body font-medium">{device.name}</p>
-      {access?.step === "needsCode" ? (
-        <button type="button" className={primaryButton} onClick={onEnterCode}>
-          Enter code
-        </button>
-      ) : state?.status === "connected" ? (
+      {up ? (
         <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
           <CircleCheck aria-hidden />
           Connected
         </span>
       ) : (
         <span className="text-body text-muted-foreground">{status}</span>
+      )}
+      {access?.step === "needsCode" && (
+        <button type="button" className={quietButton} onClick={onEnterCode}>
+          Enter code
+        </button>
+      )}
+      {access?.step === "ask" && (
+        <button
+          type="button"
+          onClick={() => void window.parallax.askAgain(device.id)}
+          className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+        >
+          <RefreshCw aria-hidden />
+          Ask again
+        </button>
       )}
     </li>
   );
@@ -157,7 +346,7 @@ function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode:
 export function accessLabel({ access }: Pick<DeviceHost, "access">): string | undefined {
   switch (access?.step) {
     case "needsCode":
-      return access.offline ? "Offline · needs the code it shows" : "Needs the code it shows";
+      return access.offline ? "Waiting for it to come online" : "Needs its setup code";
     case "pairing":
     case "signingIn":
       return "Connecting…";
@@ -170,23 +359,115 @@ export function accessLabel({ access }: Pick<DeviceHost, "access">): string | un
   }
 }
 
-/** One thing a setup does, in a list of what it will do. */
-export function Plan({
-  icon,
-  title,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  children: ReactNode;
-}) {
+/** One numbered thing to do, in a list of them. */
+function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    <li className="flex gap-3 border-border px-3 py-2.5 not-last:border-b [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
-      {icon}
-      <span>
+    <li className="flex gap-3 border-border px-3 py-2.5 not-last:border-b">
+      <span
+        aria-hidden
+        className="grid size-5 shrink-0 place-items-center rounded-full border border-border text-meta text-muted-foreground tabular-nums"
+      >
+        {n}
+      </span>
+      <span className="min-w-0 flex-1">
         <span className="block text-body font-medium">{title}</span>
         <span className="block text-body text-muted-foreground">{children}</span>
       </span>
     </li>
+  );
+}
+
+/**
+ * Show setup code (0091), a modal dialog open while it's mounted: readies this computer for
+ * another to add it and shows the code to type there, a new one each time one lapses, until that
+ * computer uses it.
+ */
+export function SetupCodeDialog({
+  name,
+  onReady,
+  onClose,
+}: {
+  /** This computer's name. */
+  name: string;
+  /** Runs after each ask, which may change this computer's settings, so a page reads them again. */
+  onReady: () => void;
+  onClose: () => void;
+}) {
+  useHoldCodePrompts();
+  const [shown, setShown] = useState<SetupCode | string>();
+  const [approved, setApproved] = useState<string>();
+  // Only the latest ask's answer shows: an older code stopped working when a newer one was made.
+  const latest = useRef(0);
+  const ask = async () => {
+    const n = ++latest.current;
+    setShown(undefined);
+    const answer = await window.parallax.showSetupCode();
+    if (n !== latest.current) return;
+    setShown(answer);
+    onReady();
+  };
+  useEffect(() => void ask(), []);
+  useEffect(() => window.parallax.onSetupApproved(setApproved), []);
+  const lapses = typeof shown === "object" ? Date.parse(shown.expiresAt) - Date.now() : undefined;
+  useEffect(() => {
+    if (lapses === undefined || approved) return;
+    const timer = setTimeout(() => void ask(), Math.max(lapses, 1_000));
+    return () => clearTimeout(timer);
+  }, [lapses, approved]);
+
+  return (
+    <Modal
+      title={approved ? `${name} is connected` : "Show setup code"}
+      onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+    >
+      {approved ? (
+        <p className="mt-1.5 text-body text-muted-foreground">
+          {approved} can reach {name} now, and so can your other signed-in computers.
+        </p>
+      ) : typeof shown === "string" ? (
+        <p role="alert" className="mt-2 text-body text-danger">
+          {shown}
+        </p>
+      ) : shown ? (
+        <>
+          <p className="mt-1.5 text-body text-muted-foreground">
+            Type this in Parallax on your other computer. It asks when it finds {name}, or choose
+            Enter code beside {name} in Settings › Connections there.
+          </p>
+          <p
+            aria-label="Code"
+            className="mt-3 rounded-md border border-border py-2 text-center font-mono text-xl tracking-[0.3em] tabular-nums"
+          >
+            {spacedCode(shown.code)}
+          </p>
+          <p className="mt-2 text-meta text-faint-foreground">
+            Works once, for 10 minutes. This keeps Reach from anywhere and pairing on, so your
+            signed-in computers can reach {name}.
+          </p>
+        </>
+      ) : (
+        <p
+          role="status"
+          className="mt-1.5 flex items-center gap-2 text-body text-muted-foreground [&_svg]:size-3.5"
+        >
+          <LoaderCircle aria-hidden className="animate-spin" />
+          Getting {name} ready…
+        </p>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        {!approved && shown !== undefined && (
+          <button type="button" className={quietButton} onClick={() => void ask()}>
+            {typeof shown === "string" ? "Try again" : "New code"}
+          </button>
+        )}
+        <button type="submit" className={primaryButton}>
+          Done
+        </button>
+      </div>
+    </Modal>
   );
 }

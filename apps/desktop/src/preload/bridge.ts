@@ -425,15 +425,24 @@ export interface ParallaxBridge {
    */
   removeDevice(hostId: string): Promise<void>;
   /**
-   * Asks the account for its computers now (0091), as Settings > Connections and Add computer do
-   * when they open, and starts again any connection to one that stopped retrying.
+   * Asks the account for its computers now (0091), as Settings > Connections does when it opens
+   * and Add computer does while it's open, and starts again any connection to one that stopped
+   * retrying.
    */
   discoverAccount(): Promise<void>;
   /**
-   * Pairs with new account computer `hostId` with the 6-digit code `plx connect` shows there
-   * (0091). Each code is good for one try. Resolves to an error for people, or undefined.
+   * Pairs with new account computer `hostId` with the 6-digit code it shows, from `plx connect` or
+   * `showSetupCode` (0091). Each code is good for one try. Resolves to an error for people, or
+   * undefined.
    */
   enterSetupCode(hostId: string, code: string): Promise<string | undefined>;
+  /**
+   * Readies this computer for another to add it, turning on `relay` and `remote`, and makes a
+   * setup code to type there (0091). Resolves to the code, or an error for people.
+   */
+  showSetupCode(): Promise<SetupCode | string>;
+  /** Calls `listener` with the name of the device that used this computer's setup code. */
+  onSetupApproved(listener: (name: string) => void): () => void;
   /** Asks account computer `hostId` again to approve this device, after a denial or a lapse. */
   askAgain(hostId: string): Promise<void>;
   /**
@@ -731,6 +740,9 @@ export type AccountAccess =
   | { step: "signingIn" }
   | { step: "pending"; code: string }
   | { step: "ask"; why: string };
+
+/** A setup code from `showSetupCode`, and when it lapses, as an RFC 3339 time. */
+export type SetupCode = { code: string; expiresAt: string };
 
 /** A new device asking to sign in to the user's computers (0091), as "Allow <name>?" shows it. */
 export type AccessPrompt = {

@@ -126,7 +126,7 @@ test("the loopback flow takes only the callback with its state, and redeems its 
         const guessed = await fetch(`${redirect.href}?code=good-code&state=guess`);
         assert.equal(guessed.status, 403);
         void fetch(`${redirect.href}?code=good-code&state=${params.get("state")}`).then(async (res) => {
-          assert.match(await res.text(), /Signed in to Parallax/);
+          assert.match(await res.text(), /You're signed in/);
         });
         return true;
       },

@@ -19,7 +19,7 @@ import {
 } from "../../preload/bridge";
 import { NewComputerDialog } from "../AccountPrompts";
 import { statusLabel, useConnection } from "../ConnectionStatus";
-import { accessLabel, ConnectWizard } from "../ConnectWizard";
+import { accessLabel, ConnectWizard, SetupCodeDialog } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, useConnect, useHosts } from "../hosts";
 import { notify } from "../notifications";
@@ -28,104 +28,114 @@ import { menuItem, menuPanel } from "../ui";
 import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./parts";
 
 /**
- * Settings > Connections' Parallax Connect section (0091): signed in, every other computer on the
- * Parallax account is listed as a card with its health, beside this computer, and Add computer
- * shows the command that adds one. Opening it asks the account for its computers. A switch still
- * turns on the tailnet's devices (0056), until Tailscale is only a route. A device's switch says
- * whether this app uses it, and its menu changes its icon, renames it on the device's own plxd,
- * or removes it from this app's list.
+ * Settings > Connections' Parallax Connect section (0091): this computer, then every other computer
+ * on the Parallax account, each with its health. Signed in, Add computer sets one up, and Show
+ * setup code is this computer's side of being added from another. Signed out, Sign in is here.
+ * Opening it asks the account for its computers. A device's switch says whether this app uses it,
+ * and its menu changes its icon, renames it on the device's own plxd, or removes it from this
+ * app's list.
  */
-export function ConnectSettings() {
+export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () => void }) {
   const connect = useConnect();
   const profile = useProfile();
   const hosts = useHosts();
   const [devices, setDevices] = useState<DeviceHost[]>([]);
   const [adding, setAdding] = useState(false);
+  const [showingCode, setShowingCode] = useState(false);
   const [entering, setEntering] = useState<DeviceHost>();
+  const [signingIn, setSigningIn] = useState(false);
   useEffect(() => window.parallax.onDevices(setDevices), []);
   useEffect(() => void window.parallax.discoverAccount(), []);
   const local = hosts.find((h) => h.id === localId)!;
-  const listed = !!profile || !!connect?.on || devices.length > 0;
 
-  const toggle = async (on: boolean) => {
-    const failed = await window.parallax.setConnect(on);
-    if (failed)
-      notify({
-        tone: "error",
-        title: `Couldn't turn Tailscale ${on ? "on" : "off"}`,
-        body: failed,
-      });
+  const signIn = async () => {
+    setSigningIn(true);
+    const failed = await window.parallax.signIn(false);
+    setSigningIn(false);
+    if (failed) notify({ tone: "error", title: "Couldn't sign in", body: failed });
   };
 
   return (
     <>
-      <Section title="Parallax Connect">
-        <Row
-          title="Connect your computers"
-          description={
-            profile === null
-              ? "Sign in to Parallax from Profile in the sidebar, then add your other computers."
-              : "Every computer signed in to your Parallax account, over your network or Parallax Relay."
-          }
-        >
-          <button
-            type="button"
-            disabled={!profile}
-            onClick={() => setAdding(true)}
-            className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
-          >
-            <Plus aria-hidden />
-            Add computer
-          </button>
-        </Row>
-        <Row
-          title="Tailscale"
-          description="Also find the computers on your tailnet that run Parallax Connect."
-        >
-          {connect ? (
-            <Switch
-              label="Tailscale"
-              checked={!!connect.on}
-              disabled={connect.on === undefined}
-              onChange={(on) => void toggle(on)}
-            />
-          ) : (
-            <span className="text-body text-muted-foreground">Checking…</span>
-          )}
-        </Row>
-      </Section>
-      {listed && connect && (
-        <section aria-label="Computers" className="mb-8">
-          <h2 className="mb-2 flex min-h-7 items-center text-reading font-semibold">Computers</h2>
-          <ul className="flex flex-col gap-2">
+      <Section
+        title="Parallax Connect"
+        action={
+          profile && (
+            <button
+              type="button"
+              disabled={!connect}
+              onClick={() => setAdding(true)}
+              className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
+            >
+              <Plus aria-hidden />
+              Add computer
+            </button>
+          )
+        }
+      >
+        <ul aria-label="Computers" className="border-border not-last:border-b">
+          <DeviceCard
+            device={{
+              id: localId,
+              name: local.name,
+              icon: connect?.icon ?? local.icon ?? "laptop",
+            }}
+            detected={iconFor(local.name)}
+            local
+          />
+          {devices.map((d) => (
             <DeviceCard
-              device={{ id: localId, name: local.name, icon: connect.icon }}
-              detected={iconFor(local.name)}
-              local
+              key={d.id}
+              device={d}
+              detected={d.detected}
+              enabled={d.enabled}
+              onEnterCode={() => setEntering(d)}
             />
-            {devices.map((d) => (
-              <DeviceCard
-                key={d.id}
-                device={d}
-                detected={d.detected}
-                enabled={d.enabled}
-                onEnterCode={() => setEntering(d)}
-              />
-            ))}
-          </ul>
-          {!devices.length && (
-            <p className="mt-2 text-body text-muted-foreground">
-              No other computers yet. Add one with Add computer.
-            </p>
-          )}
-        </section>
-      )}
+          ))}
+        </ul>
+        {profile === null && (
+          <Row
+            title="Connect your other computers"
+            description="Sign in to run agents on every computer on your account from here, wherever they are."
+          >
+            <button
+              type="button"
+              disabled={signingIn}
+              onClick={() => void signIn()}
+              className={primaryButton}
+            >
+              {signingIn ? "Waiting for your browser…" : "Sign in"}
+            </button>
+          </Row>
+        )}
+        {profile && (
+          <Row
+            title="Adding this computer from another?"
+            description="Show a one-time code to type there."
+          >
+            <button
+              type="button"
+              onClick={() => setShowingCode(true)}
+              className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+            >
+              <KeyRound aria-hidden />
+              Show setup code
+            </button>
+          </Row>
+        )}
+      </Section>
       {adding && connect && (
         <ConnectWizard
           channel={connect.channel}
           devices={devices}
           onClose={() => setAdding(false)}
-          onEnterCode={setEntering}
+        />
+      )}
+      {showingCode && (
+        <SetupCodeDialog
+          name={local.name}
+          onReady={onSettingsChanged}
+          onClose={() => setShowingCode(false)}
         />
       )}
       {entering && (
@@ -206,7 +216,7 @@ export function uptime(seconds: number): string {
 }
 
 /**
- * A Connect device's card, or this computer's with `local`: its icon, name, details, and health;
+ * A Connect device's row, or this computer's with `local`: its icon, name, details, and health;
  * an account computer's sign-in while it needs the user (0091), with Enter code or Ask again;
  * then, for a device, whether this app uses it; then its menu.
  */
@@ -271,10 +281,11 @@ function DeviceCard({
     ? `Parallax can't reach ${device.name} right now.`
     : `Turn ${device.name} on to change it.`;
   const access = enabled && !connected ? device.access : undefined;
+  // A computer still joining says where it stands once, in `accessLabel` below.
   const status = !enabled
     ? "Off"
-    : access?.step === "needsCode" && access.offline
-      ? "Offline"
+    : access
+      ? undefined
       : state
         ? connected
           ? "Connected"
@@ -291,7 +302,8 @@ function DeviceCard({
   return (
     <li
       data-device={device.id}
-      className={`flex items-center gap-4 rounded-xl border border-border bg-surface px-4 py-3 ${enabled ? "" : "opacity-60"}`}
+      data-setting={local ? "this-computer" : undefined}
+      className={`flex items-center gap-4 border-border px-4 py-3 not-last:border-b ${enabled ? "" : "opacity-60"}`}
     >
       <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
@@ -369,7 +381,7 @@ function DeviceCard({
           Ask again
         </button>
       )}
-      {!local && (
+      {!local && access?.step !== "needsCode" && (
         <Switch
           label={`Use ${device.name} in Parallax`}
           checked={enabled}

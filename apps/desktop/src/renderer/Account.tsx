@@ -829,15 +829,8 @@ const deviceKinds: Record<string, string> = {
  * device changes.
  */
 function ConnectRows() {
-  const connect = useConnect();
   const [devices, setDevices] = useState<DeviceHost[]>([]);
   useEffect(() => window.parallax.onDevices(setDevices), []);
-  if (!connect?.on && !devices.length)
-    return (
-      <p className="text-body text-muted-foreground">
-        Parallax Connect is off. Turn it on in Settings › Connections to add your other computers.
-      </p>
-    );
   if (!devices.length)
     return (
       <p className="text-body text-muted-foreground">

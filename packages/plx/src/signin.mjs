@@ -15,6 +15,45 @@ const PUBLISHABLE_KEY = "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW5
 const CLIENT_ID = "SXDueyOLOJ2v4Vmq";
 const SCOPES = "profile email";
 
+/**
+ * The page the browser lands on after a loopback sign-in, styled as the relay's /connect/code page.
+ * @param {string} [error] Why the sign-in failed, from Clerk.
+ */
+export function signedInPage(error) {
+  const body = error
+    ? `<h1>Couldn't sign in</h1><p class="error">${escapeHtml(error)}</p><p>Run plx connect again.</p>`
+    : `<h1>You're signed in</h1><p>Close this tab and go back to your terminal to finish setting up this computer.</p>`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallax Connect</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f7f7f7; --fg: #181818; --muted: #4f4f4f; --danger: #c42b2b; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #000; --fg: #ececec; --muted: #a3a3a3; --danger: #f87171; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg);
+    color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: min(440px, 100% - 32px); }
+  .brand, p { color: var(--muted); }
+  .brand { font-weight: 600; }
+  h1 { font-size: 22px; font-weight: 600; }
+  .error { color: var(--danger); }
+</style>
+</head>
+<body>
+<main>
+<p class="brand">Parallax</p>
+${body}
+</main>
+</body>
+</html>`;
+}
+
+/** @param {string} text */
+const escapeHtml = (text) =>
+  text.replace(/[&<>"']/g, (c) => /** @type {Record<string, string>} */ ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+
 /** Parallax Relay, whose /connect/code page is the pasted sign-in's redirect URI. */
 const RELAY_URL = "https://relay.parallax.codes";
 
@@ -164,8 +203,7 @@ async function signInHere({ clerk, open, timeoutMs = 10 * 60_000 }) {
       ? redeem(clerk, { code, verifier, redirectUri }).then((token) => ({ token }), (error) => ({ error: String(error.message) }))
       : Promise.resolve({ error: url.searchParams.get("error_description") ?? url.searchParams.get("error") ?? "Clerk sent no code." });
     void redeemed.then((result) => {
-      const text = result.error ? `Couldn't sign in: ${result.error}` : "Signed in to Parallax. You can close this tab and go back to the terminal.";
-      res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", connection: "close" }).end(text);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", connection: "close" }).end(signedInPage(result.error));
       settle(result);
     });
   });

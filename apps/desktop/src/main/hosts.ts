@@ -31,6 +31,7 @@ import {
   type RendererMethod,
   type RpcResponse,
   type SavedHost,
+  type SetupCode,
   type SshHost,
   type SubscribeParams,
   type WatchParams,
@@ -38,6 +39,7 @@ import {
 import {
   accountId,
   coalesced,
+  waitForListener,
   countPairRun,
   directRoutes,
   lacks,
@@ -244,6 +246,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
     enterSetupCode(hostId, code),
   );
+  ipcMain.handle("parallax:showSetupCode", () => showSetupCode());
   ipcMain.handle("parallax:askAgain", (_event, hostId: unknown) => {
     const saved = accountOf(hostId);
     if (saved && accountAccess.get(accountId(saved.hostId))?.step === "ask")
@@ -1660,7 +1663,8 @@ function dropAccountConnection(id: string): void {
 /**
  * Asks the local plxd for the account's computers (`relay/hosts`), keeps them, and connects to
  * each, reviving any that stopped. Runs on a sign-in, the network coming back or changing, focus,
- * and Settings > Connections or Add computer opening, with no timer, as T3 Connect does.
+ * and Settings > Connections opening, with no timer, as T3 Connect does. Add computer also runs it
+ * on a timer while it's open, since the computer it waits on changes none of those here.
  */
 const discoverAccounts = coalesced(async () => {
   const token = await account?.accessToken();
@@ -1785,7 +1789,7 @@ async function vouchedHosts(): Promise<Set<string> | undefined> {
 
 /**
  * What an account computer that refused this app for want of a session needs: a sign-in when the
- * user's computers vouch for it, else the code its `plx connect` shows. One sign-in runs on its
+ * user's computers vouch for it, else the setup code it shows. One sign-in runs on its
  * own after each time the computer answered; after that, a denied or lapsed request waits for
  * the user to ask again, since a new request starts only when the user asks (0091).
  */
@@ -1807,7 +1811,7 @@ const offlineAccounts = new Set<string>();
 const probing = new Set<string>();
 
 /**
- * Marks new account computer `id` as needing the code its `plx connect` shows. The dialog asks
+ * Marks new account computer `id` as needing the setup code it shows. The dialog asks
  * for it only once the computer answers: one the relay lists as offline, or none of whose routes
  * presents its key, as an old install's leftover entry never does, stays `offline`, listed in
  * Settings > Connections, where Enter code still asks (0091). Discovery checks again.
@@ -1898,7 +1902,7 @@ function learn(relayId: string, name: string, routes: string[]): void {
 
 /**
  * `window.parallax.enterSetupCode`: pairs with new account computer `hostId` with the 6-digit code
- * its `plx connect` shows (0091), through `plxd dial --account --pair`. Each typed code gets one
+ * it shows (0091), through `plxd dial --account --pair`. Each typed code gets one
  * run, at most `MAX_PAIR_RUNS` an hour per computer, since a computer the relay made up sets no
  * limit of its own. Then this app vouches for it to the user's other computers. Resolves to an
  * error for people.
@@ -1947,6 +1951,34 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
   setAccess(id, undefined);
   connections.get(id)?.retry();
   return undefined;
+}
+
+/** Whether a code from `showSetupCode` is waiting, so its use is told once and an old one never. */
+let setupCodeShown = false;
+
+/**
+ * `window.parallax.showSetupCode`: readies this computer for another to add it (0091), as `plx
+ * connect` does: registers it under the signed-in account, turns on `relay` and `remote`, and
+ * waits for its listener, then makes a setup code. `access/setupCode` stays withheld from the
+ * renderer, which gets the code only from this. Resolves to it, or an error for people.
+ */
+async function showSetupCode(): Promise<SetupCode | string> {
+  const local = connections.get("local");
+  if (local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  const registered = await registerRelay();
+  if (registered) return registered;
+  const on = await local.request("host/settings/set", { relay: true, remote: true });
+  if ("error" in on) return on.error.message;
+  const unreachable = await waitForListener(async () => {
+    const answer = await local.request("remote/sessions", {});
+    return "error" in answer ? answer.error.message : answer.result;
+  });
+  if (unreachable) return unreachable;
+  const answer = await local.request("access/setupCode", {});
+  if ("error" in answer) return answer.error.message;
+  setupCodeShown = true;
+  return answer.result;
 }
 
 /** Reads a `tailnet:` device's relay id, which matches it to its account computer (0091). */
@@ -2024,6 +2056,19 @@ function watchAccess(hostId: string): void {
       }
       after = answer.result.version;
       showRequest(hostId, answer.result.pending);
+      // Another of the user's computers vouched for one waiting on its code, as the computer it
+      // just joined does (`syncAccess`), so it signs in with no code asked for.
+      for (const vouched of answer.result.approvedHosts) {
+        const id = accountId(vouched);
+        if (accountAccess.get(id)?.step !== "needsCode") continue;
+        setAccess(id, undefined);
+        void beginAccess(id);
+      }
+      if (hostId === "local" && setupCodeShown && answer.result.setupApproved) {
+        setupCodeShown = false;
+        broadcast("parallax:setupApproved", answer.result.setupApproved);
+        void discoverAccounts();
+      }
     }
     if (watchedAccess.get(hostId) === host) watchedAccess.delete(hostId);
     showRequest(hostId, undefined);

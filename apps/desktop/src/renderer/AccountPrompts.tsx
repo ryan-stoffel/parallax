@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import type { AccessPrompt, DeviceHost } from "../preload/bridge";
 import { DeviceIcon } from "./DeviceIcon";
@@ -6,6 +14,33 @@ import { primaryButton, quietButton } from "./settings/parts";
 
 /** 6 digits as both ends show them: "123 456". */
 export const spacedCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
+
+/** How many setup screens are open, and the computers they've already asked about. */
+let holds = { open: 0, asked: new Set<string>() };
+const holdWatchers = new Set<() => void>();
+const setHolds = (next: typeof holds) => {
+  holds = next;
+  for (const watcher of holdWatchers) watcher();
+};
+const watchHolds = (watcher: () => void) => {
+  holdWatchers.add(watcher);
+  return () => holdWatchers.delete(watcher);
+};
+
+/**
+ * Holds back the prompt for a new computer's code while the calling screen is mounted, since that
+ * screen handles codes itself, as Add a computer does, or shows this computer's own.
+ */
+export function useHoldCodePrompts() {
+  useEffect(() => {
+    setHolds({ ...holds, open: holds.open + 1 });
+    return () => setHolds({ ...holds, open: holds.open - 1 });
+  }, []);
+}
+
+/** Keeps the prompt for computer `id` shut after a setup screen already asked for its code. */
+export const skipCodePrompt = (id: string) =>
+  setHolds({ ...holds, asked: new Set(holds.asked).add(id) });
 
 /**
  * The prompts account sign-in raises anywhere in the app (0091): a new computer's code, asked
@@ -21,15 +56,14 @@ export function AccountPrompts() {
   useEffect(() => window.parallax.onDevices(setDevices), []);
   useEffect(() => window.parallax.onAccessRequests(setRequests), []);
   const close = (id: string) => setClosed((old) => new Set(old).add(id));
+  const held = useSyncExternalStore(watchHolds, () => holds);
 
   const request = requests.find((r) => !closed.has(r.id));
   if (request)
     return <AllowDialog key={request.id} request={request} onClose={() => close(request.id)} />;
-  const computer = devices.find(
-    (d) =>
-      ((d.access?.step === "needsCode" && !d.access.offline) || d.access?.step === "pairing") &&
-      !closed.has(d.id),
-  );
+  const computer = held.open
+    ? undefined
+    : devices.find((d) => asksForCode(d) && !closed.has(d.id) && !held.asked.has(d.id));
   if (computer)
     return (
       <NewComputerDialog key={computer.id} computer={computer} onClose={() => close(computer.id)} />
@@ -37,8 +71,12 @@ export function AccountPrompts() {
   return null;
 }
 
+/** Whether computer `d` is waiting on its code now and answers, so a screen can ask for it. */
+export const asksForCode = (d: Pick<DeviceHost, "access">) =>
+  (d.access?.step === "needsCode" && !d.access.offline) || d.access?.step === "pairing";
+
 /** A small modal, as the app's confirmations are, shown while it's mounted. */
-function Modal({
+export function Modal({
   title,
   icon,
   onClose,
@@ -73,42 +111,42 @@ function Modal({
 }
 
 /**
- * A new computer on the account asks for the 6-digit code its `plx connect` shows (0091). Typing
- * it proves the user saw that terminal. Each code is good for one try, so a wrong one is cleared.
+ * Typing a new computer's 6-digit code (0091): what the field holds, and pairing with it. Typing
+ * proves the user saw that computer's screen. Each code is good for one try, so a wrong one is
+ * cleared. `onPaired` runs once it pairs.
  */
-export function NewComputerDialog({
-  computer,
-  onClose,
-}: {
-  computer: Pick<DeviceHost, "id" | "name" | "icon" | "access">;
-  onClose: () => void;
-}) {
+export function useSetupCode(computer: Pick<DeviceHost, "id" | "access">, onPaired: () => void) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(
     computer.access?.step === "needsCode" ? computer.access.error : undefined,
   );
   const digits = code.replace(/\D/g, "");
+  const ready = digits.length === 6 && !busy;
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (digits.length !== 6 || busy) return;
+    if (!ready) return;
     setBusy(true);
     const failed = await window.parallax.enterSetupCode(computer.id, digits);
     setBusy(false);
-    if (!failed) return onClose();
+    if (!failed) return onPaired();
     setError(failed);
     setCode("");
   };
+  return { code, setCode, busy, error, ready, submit };
+}
+
+/** The field for a setup code, what to type there, and where to find the code. */
+export function SetupCodeField({
+  name,
+  form: { code, setCode, busy, error },
+}: {
+  name: string;
+  form: ReturnType<typeof useSetupCode>;
+}) {
   return (
-    <Modal
-      title={`Connect ${computer.name}`}
-      icon={<DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />}
-      onClose={onClose}
-      onSubmit={(e) => void submit(e)}
-    >
-      <p className="mt-1.5 text-body text-muted-foreground">
-        Type the code that <code className="font-mono">plx connect</code> shows on {computer.name}.
-      </p>
+    <>
+      <p className="mt-1.5 text-body text-muted-foreground">Type the 6-digit code {name} shows.</p>
       <input
         aria-label="Code"
         autoFocus
@@ -126,12 +164,37 @@ export function NewComputerDialog({
           {error}
         </p>
       )}
+      <p className="mt-2 text-meta text-faint-foreground">
+        No code there? In Parallax on {name}, choose Show setup code in Settings › Connections.
+        Without the app, run <code className="font-mono">npx plx-cli connect approve</code>.
+      </p>
+    </>
+  );
+}
+
+/** A new computer on the account asks for its code (0091), in a dialog of its own. */
+export function NewComputerDialog({
+  computer,
+  onClose,
+}: {
+  computer: Pick<DeviceHost, "id" | "name" | "icon" | "access">;
+  onClose: () => void;
+}) {
+  const form = useSetupCode(computer, onClose);
+  return (
+    <Modal
+      title={`Connect ${computer.name}`}
+      icon={<DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />}
+      onClose={onClose}
+      onSubmit={(e) => void form.submit(e)}
+    >
+      <SetupCodeField name={computer.name} form={form} />
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" className={quietButton} onClick={onClose}>
           Cancel
         </button>
-        <button type="submit" className={primaryButton} disabled={digits.length !== 6 || busy}>
-          {busy ? "Connecting…" : "Connect"}
+        <button type="submit" className={primaryButton} disabled={!form.ready}>
+          {form.busy ? "Connecting…" : "Connect"}
         </button>
       </div>
     </Modal>

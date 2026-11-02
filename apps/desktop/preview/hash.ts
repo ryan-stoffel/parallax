@@ -7,6 +7,7 @@
 //   #thread=Rework the updater            a plain thread, by its title
 //   #settings                             Settings; #usage, the Usage page
 //   #connect                              with Parallax Connect set up on three computers
+//   #signedout                            signed out of Parallax, without onboarding
 
 /** An element to click, `true` when there is nothing to do, or nothing while it isn't there yet. */
 type Step = () => HTMLElement | true | null | undefined;

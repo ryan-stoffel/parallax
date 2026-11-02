@@ -436,7 +436,6 @@ export function MoveRemoteControl({
           channel={connect.channel}
           devices={devices}
           onClose={() => setAdding(false)}
-          onEnterCode={setEntering}
         />
       )}
       {entering && (

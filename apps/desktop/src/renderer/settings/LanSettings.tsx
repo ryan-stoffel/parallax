@@ -1,4 +1,4 @@
-import { Plus, Wifi } from "lucide-react";
+import { ChevronRight, Plus, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type {
@@ -7,7 +7,7 @@ import type {
   RemoteSessionsResult,
 } from "../../protocol/generated/protocol";
 import { statusLabel, useConnection } from "../ConnectionStatus";
-import { localId, useHosts, type Host } from "../hosts";
+import { localId, useConnect, useHosts, type Host } from "../hosts";
 import { dismiss, notify } from "../notifications";
 import {
   ConfirmRemove,
@@ -29,20 +29,23 @@ const GRANTS =
   "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers. Pair only your own computers.";
 
 /**
- * Settings > Connections' Same network section (PLX-641, 0065). Its switch, the local plxd's
- * `remote`, has it listen for paired computers over HTTPS with its own pinned certificate, and Open
- * in a browser, its `remoteWeb`, also serves the app there for a browser to pair with (PLX-651).
- * Reach from anywhere, its `relay`, registers it with Parallax Relay and keeps it connected there,
- * for phone notifications and, with pairing on, reach from anywhere, and lists the account's
- * computers on the relay, each with Remove (PLX-652). Shown with pairing off too, since signing in
- * turns it on (PLX-1146). Pair a device shows a short one-time code while this computer advertises itself by
- * name over mDNS, and the computers paired with this one can be revoked, even with the switch off.
- * Below, the computers this app paired with, each with its connection and Remove, and Add
- * computer, which finds the computers showing a code, or takes an address, then the code.
+ * Settings > Connections' sections on how computers reach this one. Reach from anywhere, the local
+ * plxd's `relay`, registers it with Parallax Relay and keeps it connected there, for phone
+ * notifications and, with pairing on, reach from anywhere, and lists the account's computers on the
+ * relay, each with Remove (PLX-652). Shown with pairing off too, since signing in turns it on
+ * (PLX-1146). Beside it, Tailscale also finds the tailnet's devices (0056), until Tailscale is only
+ * a route. Same network (PLX-641, 0065): its switch, `remote`, has plxd listen for paired computers
+ * over HTTPS with its own pinned certificate, and Open in a browser, its `remoteWeb`, also serves
+ * the app there for a browser to pair with (PLX-651). Pair a device shows a short one-time code
+ * while this computer advertises itself by name over mDNS, and the computers paired with this one
+ * can be revoked, even with the switch off. Below, the computers this app paired with, each with
+ * its connection and Remove, and Pair computer, which finds the computers showing a code, or takes
+ * an address, then the code.
  */
 export function LanSettings() {
   const local = useConnection(localId);
   const connected = local?.status === "connected";
+  const connect = useConnect();
   const computers = useHosts().filter((h) => h.routes);
   const [on, setOn] = useState<boolean>();
   const [web, setWeb] = useState<boolean>();
@@ -119,6 +122,10 @@ export function LanSettings() {
     setRelay(answer.result.relay);
     void readSessions();
   };
+  const toggleTailscale = async (next: boolean) => {
+    const answer = await window.parallax.setConnect(next);
+    if (answer) failed(`Couldn't turn Tailscale ${next ? "on" : "off"}`, answer);
+  };
   const removeRelayHost = async (hostId: string) => {
     retry();
     setConfirmingRelay(undefined);
@@ -144,6 +151,86 @@ export function LanSettings() {
 
   return (
     <>
+      <Section title="Reach from anywhere">
+        {relay !== undefined && (
+          <Row
+            title="Reach from anywhere"
+            description={
+              <>
+                Your phone hears when a thread here finishes, needs you, or fails, and webhooks get
+                a public address. With pairing on, your signed-in computers and devices reach this
+                one too. It all goes through Parallax Relay, which passes only encrypted traffic, so
+                it can't read your threads. Signing in turns this on.
+                {relay && (
+                  <span role="status" className="mt-1 block text-foreground">
+                    {status?.relay?.connected
+                      ? "Connected to the relay."
+                      : (status?.relay?.problem ?? "Connecting to the relay…")}
+                  </span>
+                )}
+              </>
+            }
+          >
+            <Switch
+              label="Reach from anywhere"
+              checked={relay}
+              onChange={(next) => void toggleRelay(next)}
+            />
+          </Row>
+        )}
+        <Row
+          title="Tailscale"
+          description="Also find the computers on your Tailscale network that run Parallax Connect."
+        >
+          {connect ? (
+            <Switch
+              label="Tailscale"
+              checked={!!connect.on}
+              disabled={connect.on === undefined}
+              onChange={(next) => void toggleTailscale(next)}
+            />
+          ) : (
+            <span className="text-body text-muted-foreground">Checking…</span>
+          )}
+        </Row>
+        {relay && !!relayHosts?.length && (
+          <details className="border-border not-last:border-b [&[open]>summary_svg]:rotate-90">
+            <summary className="flex cursor-default list-none items-center gap-1.5 px-4 py-3 text-body font-medium [&_svg]:size-3.5 [&_svg]:text-muted-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight aria-hidden />
+              Computers on your account ({relayHosts.length} of 10)
+            </summary>
+            <div className="border-t border-border">
+              {relayHosts.map((h) => (
+                <Row
+                  key={h.hostId}
+                  title={h.name || "Unnamed computer"}
+                  description={
+                    confirmingRelay === h.hostId
+                      ? "Remove this computer from the relay? One Parallax still connects to joins again, unless its Reach from anywhere is off."
+                      : `On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`
+                  }
+                >
+                  {confirmingRelay === h.hostId ? (
+                    <ConfirmRemove
+                      onRemove={() => void removeRelayHost(h.hostId)}
+                      onCancel={() => setConfirmingRelay(undefined)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className={quietButton}
+                      aria-label={`Remove ${h.name || "Unnamed computer"} from the relay`}
+                      onClick={() => setConfirmingRelay(h.hostId)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </Row>
+              ))}
+            </div>
+          </details>
+        )}
+      </Section>
       <Section title="Same network">
         <Row title="Pair computers on this network" description={GRANTS}>
           <Switch
@@ -193,69 +280,13 @@ export function LanSettings() {
             />
           </Row>
         )}
-        {relay !== undefined && (
-          <Row
-            title="Reach from anywhere"
-            description={
-              <>
-                Your phone hears when a thread here finishes, needs you, or fails, and webhooks get
-                a public address, through Parallax Relay. Signing in to Parallax turns this on. With
-                pairing on, your devices signed in to your Parallax account also reach this computer
-                through the relay, which passes only encrypted traffic, so it can't read your
-                threads. Pair each device once, as on this network. An account holds 10 computers on
-                the relay: remove the ones you no longer use below.
-                {relay && (
-                  <span role="status" className="mt-1 block text-foreground">
-                    {status?.relay?.connected
-                      ? "Connected to the relay."
-                      : (status?.relay?.problem ?? "Connecting to the relay…")}
-                  </span>
-                )}
-              </>
-            }
-          >
-            <Switch
-              label="Reach from anywhere"
-              checked={relay}
-              onChange={(next) => void toggleRelay(next)}
-            />
-          </Row>
-        )}
-        {relay &&
-          relayHosts?.map((h) => (
-            <Row
-              key={h.hostId}
-              title={h.name || "Unnamed computer"}
-              description={
-                confirmingRelay === h.hostId
-                  ? "Remove this computer from the relay? One Parallax still connects to joins again, unless its Reach from anywhere is off."
-                  : `On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`
-              }
-            >
-              {confirmingRelay === h.hostId ? (
-                <ConfirmRemove
-                  onRemove={() => void removeRelayHost(h.hostId)}
-                  onCancel={() => setConfirmingRelay(undefined)}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className={quietButton}
-                  aria-label={`Remove ${h.name || "Unnamed computer"} from the relay`}
-                  onClick={() => setConfirmingRelay(h.hostId)}
-                >
-                  Remove
-                </button>
-              )}
-            </Row>
-          ))}
         {on && status?.listening && (
           <Row
             title="Pair a device"
             description={
               showing ? (
                 <>
-                  On the other computer, choose Add computer, pick{" "}
+                  On the other computer, choose Pair computer, pick{" "}
                   <span className="text-foreground">{showing.name}</span>, and enter this code. It
                   works once, for 5 minutes. Share it only with your own computer.
                 </>
@@ -299,7 +330,7 @@ export function LanSettings() {
             className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
           >
             <Plus aria-hidden />
-            Add computer
+            Pair computer
           </button>
         }
       >
@@ -323,7 +354,7 @@ export function LanSettings() {
 }
 
 /**
- * Add computer: the computers showing a code on this network, by name, or an address typed in
+ * Pair computer: the computers showing a code on this network, by name, or an address typed in
  * when mDNS can't find them; then the code, and Pair.
  */
 function PairForm({ onDone }: { onDone: () => void }) {

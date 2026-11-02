@@ -11,6 +11,7 @@ import {
   Routes,
   tokenSubject,
   unionLists,
+  waitForListener,
   type SavedAccount,
 } from "./accountHosts";
 
@@ -204,4 +205,17 @@ test("a Clerk token's user id is its JWT's sub, and anything else has none", () 
   expect(tokenSubject(jwt({ sub: "user_2abc", sid: "sess_1" }))).toBe("user_2abc");
   expect(tokenSubject(jwt({ sid: "sess_1" }))).toBeUndefined();
   expect(tokenSubject("not-a-jwt")).toBeUndefined();
+});
+
+test("a setup code waits for the listener and the relay, and a listener alone is enough in the end", async () => {
+  const answers = [{ listening: false }, { listening: true, relay: { connected: true } }];
+  expect(await waitForListener(async () => answers.shift()!, 1_000, 1)).toBeUndefined();
+  expect(answers).toEqual([]);
+  // The relay never answers, but the code still works on this network.
+  expect(await waitForListener(async () => ({ listening: true }), 5, 1)).toBeUndefined();
+  // Nothing is listening: the code would be refused, so it says why.
+  expect(
+    await waitForListener(async () => ({ listening: false, problem: "port in use" }), 5, 1),
+  ).toBe("port in use");
+  expect(await waitForListener(async () => "plxd went away", 5, 1)).toBe("plxd went away");
 });
