@@ -1897,11 +1897,8 @@ export function Composer({
         onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
         onBlur={leave}
         data-back={back || undefined}
-        data-running={!!onStop || undefined}
         className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${threadOver ? "border-ring" : "border-border"}`}
       >
-        {/* The logo's two lights, which travel this edge (index.css). */}
-        <span aria-hidden className="composer-edge" />
         {menuOpen && (
           <div
             className={`absolute inset-x-0 animate-fade-in ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
