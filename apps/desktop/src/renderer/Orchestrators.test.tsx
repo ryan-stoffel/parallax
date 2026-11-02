@@ -548,7 +548,9 @@ test("an orchestrator's first message starts its orchestrator and shows at once;
   await renderApp();
   await openEmber();
   // Claude's models and permission modes: an orchestrator runs in the mode it's given (0027).
-  expect(button("Model: Claude Opus 5.5")).not.toBeNull();
+  expect(
+    document.querySelector('main button[aria-label^="Model: Claude Opus 5.5"]'),
+  ).not.toBeNull();
   expect(button("Access: Auto-accept edits")).not.toBeNull();
   // Every message goes to the orchestrator, with no target to pick.
   expect(document.querySelector('main button[aria-label^="Sends to: "]')).toBeNull();

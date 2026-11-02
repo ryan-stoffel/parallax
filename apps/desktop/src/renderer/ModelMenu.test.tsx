@@ -338,3 +338,61 @@ test("opening the picker asks a host with listed providers for them again", asyn
     refresh: false,
   });
 });
+
+test("with options, it offers reasoning, speed, and a context window, and shows them on its button", () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const onEffort = vi.fn();
+  const onFast = vi.fn();
+  const options = {
+    effort: "high" as const,
+    onEffort,
+    contexts: [200_000, 1_000_000],
+    context: 200_000,
+    onContext: () => {},
+    fast: true,
+    onFast,
+  };
+  act(() =>
+    root!.render(
+      <ModelMenu
+        catalog={catalog}
+        value={catalog.models[0]!}
+        onChange={() => {}}
+        options={options}
+      />,
+    ),
+  );
+  const trigger = document.querySelector('[aria-label^="Model: "]')!;
+  expect(trigger.getAttribute("aria-label")).toMatch(/, reasoning High, fast$/);
+  const levels = [...document.querySelectorAll<HTMLElement>('[aria-label="Reasoning"] button')];
+  expect(levels.map((l) => l.textContent)).toEqual(["Low", "Medium", "High", "Extra high", "Max"]);
+  expect(levels.find((l) => l.getAttribute("aria-checked") === "true")?.textContent).toBe("High");
+  act(() => levels[4]!.click());
+  expect(onEffort).toHaveBeenCalledExactlyOnceWith("max");
+  act(() => choice("Standard")!.click());
+  expect(onFast).toHaveBeenCalledExactlyOnceWith(false);
+  expect(document.querySelector('[aria-label^="Context window"]')).not.toBeNull();
+});
+
+test("what a model doesn't have isn't offered", () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const options = {
+    onEffort: () => {},
+    contexts: [],
+    onContext: () => {},
+    onFast: () => {},
+  };
+  act(() =>
+    root!.render(
+      <ModelMenu
+        catalog={catalog}
+        value={catalog.models[0]!}
+        onChange={() => {}}
+        options={options}
+      />,
+    ),
+  );
+  expect(document.querySelector('[aria-label="Reasoning"]')).toBeNull();
+  expect(document.querySelector('[aria-label="Speed"]')).toBeNull();
+  expect(document.querySelector('[aria-label^="Context window"]')).toBeNull();
+});

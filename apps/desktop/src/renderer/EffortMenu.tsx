@@ -52,7 +52,7 @@ function EffortGauge({ value }: { value: AgentEffort }) {
 }
 
 /** A context window's size, such as `200K` or `1M`. */
-const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
+export const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
 
 // What each kind of instance with fast mode calls it, and its two settings. Cursor has none (0036).
 const fastNames: Partial<Record<string, { label: string; on: string; off: string }>> = {
@@ -106,7 +106,7 @@ export function EffortMenu({
       >
         <EffortGauge value={value} />
         <span className="composer-effort">{name}</span>
-        {fast && <Zap aria-hidden className="fill-current text-orange-500" />}
+        {fast && <Zap aria-hidden className="fill-current" />}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div

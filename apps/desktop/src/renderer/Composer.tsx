@@ -1218,7 +1218,8 @@ export function Composer({
             name: "effort",
             description: "Set the reasoning effort",
             icon: <Brain />,
-            act: () => openControl("Reasoning effort:"),
+            // Without a model, the effort menu stands alone.
+            act: () => openControl(model ? "Model:" : "Reasoning effort:"),
           },
           efforts &&
             hasFast && {
@@ -1231,7 +1232,11 @@ export function Composer({
             name: "permissions",
             description: "Choose what it may do without asking",
             icon: <LockOpen />,
-            act: () => openControl("Access:"),
+            act: () => {
+              // Inside the model picker, which has to open first.
+              if (model) openControl("Model:");
+              openControl("Access:");
+            },
           },
         ].filter((c) => !!c);
   let entries: MenuEntry[] = [];
@@ -1847,7 +1852,26 @@ export function Composer({
       .run();
   }, [cite, editor]);
 
-  // The run's model, effort, and access stay in the footer while the message grows above them.
+  // One permission is no choice, so there's nothing to show.
+  const accessPicker = permissions.length > 1 && (
+    <Picker
+      label="Access"
+      value={permission}
+      onChange={(value) => {
+        const picked = value as AgentPermission;
+        setPermission(picked);
+        if (run && started && target === backend && picked !== permission) onPermission?.(picked);
+      }}
+      options={permissions.map((p) =>
+        p === "manual" && manualDenied
+          ? { ...accessOptions[p], description: manualDenials[manualDenied] }
+          : accessOptions[p],
+      )}
+      panelClassName="w-[25rem]"
+      align="end"
+    />
+  );
+  // The run's model, effort, and access: in the box's row, or under it while it's stepped back.
   const pickers = run && (
     // A disabled fieldset turns off every control in it, and its title says why.
     <fieldset
@@ -1857,46 +1881,29 @@ export function Composer({
       className="flex shrink-0 items-center gap-1.5"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
-      {model && (
+      {model ? (
         <ModelMenu
           key={backend}
           catalog={catalog}
           unavailable={blocked}
           value={model}
           onChange={setModel}
-        />
-      )}
-      {efforts && (
-        <EffortMenu
-          value={effort}
-          onChange={setEffort}
-          contexts={contexts}
-          context={context}
-          onContext={setContext}
-          fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
-          fast={fast}
-          onFast={setFast}
-        />
-      )}
-      {/* One permission is no choice, so there's nothing to show. */}
-      {permissions.length > 1 && (
-        <Picker
-          label="Access"
-          value={permission}
-          onChange={(value) => {
-            const picked = value as AgentPermission;
-            setPermission(picked);
-            if (run && started && target === backend && picked !== permission)
-              onPermission?.(picked);
+          options={{
+            ...(efforts && { effort }),
+            onEffort: setEffort,
+            contexts: efforts ? contexts : [],
+            ...(context !== undefined && { context }),
+            onContext: setContext,
+            ...(efforts && hasFast && { fast }),
+            onFast: setFast,
+            access: accessPicker,
           }}
-          options={permissions.map((p) =>
-            p === "manual" && manualDenied
-              ? { ...accessOptions[p], description: manualDenials[manualDenied] }
-              : accessOptions[p],
-          )}
-          panelClassName="w-[25rem]"
-          className="composer-access"
         />
+      ) : (
+        <>
+          {efforts && <EffortMenu value={effort} onChange={setEffort} />}
+          {accessPicker}
+        </>
       )}
     </fieldset>
   );

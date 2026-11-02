@@ -307,10 +307,17 @@ export function openOnContextMenu(e: MouseEvent<HTMLElement>, trigger: HTMLEleme
 /** Up and Down move focus between a menu's items, wrapping at the ends and passing disabled ones. */
 export function moveFocus(e: KeyboardEvent<HTMLElement>) {
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  // A popover nested in this one, such as the model picker's Access, moves its own focus.
+  const root = e.currentTarget;
+  const nested = (el: Element) => {
+    const popover = el.closest("[popover]");
+    return !!popover && popover !== root && root.contains(popover);
+  };
+  if (nested(e.target as Element)) return;
   e.preventDefault();
-  const items = [
-    ...e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)'),
-  ];
+  const items = [...root.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)')].filter(
+    (el) => !nested(el),
+  );
   const step = e.key === "ArrowDown" ? 1 : -1;
   const i = items.indexOf(document.activeElement as HTMLElement);
   // From outside the items (a search box), Down starts at the top and Up at the bottom.
