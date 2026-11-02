@@ -64,6 +64,7 @@ import {
   useRef,
   useState,
   type FocusEvent,
+  type HTMLAttributes,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -1921,42 +1922,45 @@ export function Composer({
     </fieldset>
   );
 
+  // Files and sidebar threads dropped anywhere on the box or its bars are added, before the editor
+  // can take them as text. Not while the voice pill holds the box.
+  const dropTarget = {
+    onDragOver: (e) => {
+      const { types } = e.dataTransfer;
+      if (voiceBusy.current) return;
+      const thread = !!attach && types.includes(threadDragType);
+      if (types.includes("Files") || thread) e.preventDefault();
+      if (thread) e.dataTransfer.dropEffect = "copy";
+      setDropOver(types.includes("Files") || thread);
+    },
+    onDragLeave: (e) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver(false);
+    },
+    onDropCapture: (e) => {
+      setDropOver(false);
+      if (voiceBusy.current) return;
+      const thread = attach ? draggedThread(e.dataTransfer) : undefined;
+      if (e.dataTransfer.files.length === 0 && !thread) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!thread) return void addFiles([...e.dataTransfer.files]);
+      // Run ids are the host's own, so another computer's thread can't come along.
+      if (thread.hostId !== attach?.hostId)
+        setAttachError("A thread on another computer can't be attached here.");
+      else {
+        // Where it's dropped in the text, else at its end.
+        const at = editor.view.dom.contains(e.target as Node)
+          ? editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos
+          : undefined;
+        if (at === undefined) editor.commands.focus("end");
+        addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
+      }
+    },
+  } satisfies HTMLAttributes<HTMLDivElement>;
+
   return (
-    <div
-      className="w-full"
-      // Files and sidebar threads dropped anywhere on the box are added, before the editor can
-      // take them as text.
-      onDragOver={(e) => {
-        const { types } = e.dataTransfer;
-        const thread = !!attach && types.includes(threadDragType);
-        if (types.includes("Files") || thread) e.preventDefault();
-        if (thread) e.dataTransfer.dropEffect = "copy";
-        setDropOver(types.includes("Files") || thread);
-      }}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver(false);
-      }}
-      onDropCapture={(e) => {
-        setDropOver(false);
-        const thread = attach ? draggedThread(e.dataTransfer) : undefined;
-        if (e.dataTransfer.files.length === 0 && !thread) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (!thread) return void addFiles([...e.dataTransfer.files]);
-        // Run ids are the host's own, so another computer's thread can't come along.
-        if (thread.hostId !== attach?.hostId)
-          setAttachError("A thread on another computer can't be attached here.");
-        else {
-          // Where it's dropped in the text, else at its end.
-          const at = editor.view.dom.contains(e.target as Node)
-            ? editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos
-            : undefined;
-          if (at === undefined) editor.commands.focus("end");
-          addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
-        }
-      }}
-    >
-      <div className="relative">
+    <div className="w-full">
+      <div {...dropTarget} className="relative">
         <VoicePill {...voice} anchor={box} />
         {/* A wrapper for the pill's sake, as the bar under the box has: held in place, and hidden. */}
         <div
@@ -2237,6 +2241,7 @@ export function Composer({
       </div>
       {tab && (
         <div
+          {...dropTarget}
           ref={bar}
           onBlur={leave}
           // Hidden while the box steps back (index.css), so a menu it opened stays open, and held in
