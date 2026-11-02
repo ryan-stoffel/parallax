@@ -19,6 +19,9 @@ import { behaviorPrefs } from "./prefs";
 /** A notice's color and icon: done, waiting on the user, gone wrong, or just news. */
 export type Tone = "success" | "attention" | "error" | "info";
 
+/** A link to a page. An `icon` says where it goes, in place of the arrow that says it leaves. */
+type NoticeLink = { label: string; href: string; icon?: ReactNode };
+
 export type Notice = {
   /**
    * A notice with the same key replaces this one, as a reconnect replaces a lost connection, in
@@ -29,7 +32,9 @@ export type Notice = {
   title: string;
   body?: string;
   /** The underlined link after the body: a page to open, or something to do in the app. */
-  action?: { label: string; href: string } | { label: string; run: () => void };
+  action?: NoticeLink | { label: string; run: () => void };
+  /** A second page to open, as a link beside `action`. */
+  secondLink?: NoticeLink;
   /**
    * Work under way: a spinner, and a bar at `percent`, or pulsing without one. `update` it by its
    * key as it goes, and replace it with another or `dismiss` it once it's done.
@@ -109,6 +114,17 @@ const icons: Record<Tone, ReactNode> = {
 const link =
   "inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-4 hover:text-foreground";
 
+/** A toast's link to a page, which main opens in the system browser. */
+function PageLink({ label, href, icon }: NoticeLink) {
+  return (
+    <a href={href} className={link}>
+      {icon}
+      {label}
+      {!icon && <ArrowUpRight className="size-3" />}
+    </a>
+  );
+}
+
 // A manual popover sits in the top layer, above dialogs opened before it. The stack mounts only
 // while it has notices, so it shows once per mount.
 const show = (stack: HTMLDivElement | null) => stack?.showPopover();
@@ -184,7 +200,7 @@ export function Notifications() {
  * focus last left it.
  */
 function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
-  const { tone, title, body, action, progress } = notice;
+  const { tone, title, body, action, secondLink, progress } = notice;
   const sticky = notice.sticky ?? (tone === "attention" || tone === "error" || !!progress);
   const [held, setHeld] = useState(false);
   const close = useRef(onClose);
@@ -236,25 +252,24 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
           />
         </div>
       )}
-      {action && (
-        <div className="mt-1 text-body text-muted-foreground">
-          {"href" in action ? (
-            <a href={action.href} className={link}>
-              {action.label}
-              <ArrowUpRight className="size-3" />
-            </a>
-          ) : (
-            <button
-              type="button"
-              className={link}
-              onClick={() => {
-                onClose();
-                action.run();
-              }}
-            >
-              {action.label}
-            </button>
-          )}
+      {(action || secondLink) && (
+        <div className="mt-1 flex flex-wrap gap-x-3 text-body text-muted-foreground">
+          {action &&
+            ("href" in action ? (
+              <PageLink {...action} />
+            ) : (
+              <button
+                type="button"
+                className={link}
+                onClick={() => {
+                  onClose();
+                  action.run();
+                }}
+              >
+                {action.label}
+              </button>
+            ))}
+          {secondLink && <PageLink {...secondLink} />}
         </div>
       )}
       <button

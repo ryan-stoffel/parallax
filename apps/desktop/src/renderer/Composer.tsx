@@ -101,6 +101,7 @@ import { lookOf, type AttachThreads } from "./threadContext";
 import type { ThreadsState } from "./threads";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { stored } from "./stored";
+import { countSentPrompt } from "./supportPrompt";
 import { Picker, type PickerOption } from "./ui";
 
 const access = (value: AgentPermission, icon: ReactNode): PickerOption => ({
@@ -1455,8 +1456,10 @@ export function Composer({
       sentImages,
       sentThreads,
     );
-    if (failed === undefined) setFiles((all) => all.filter((f) => !sentFiles.includes(f)));
-    else if (!editor.isDestroyed) {
+    if (failed === undefined) {
+      setFiles((all) => all.filter((f) => !sentFiles.includes(f)));
+      countSentPrompt();
+    } else if (!editor.isDestroyed) {
       // Put it back ahead of anything typed or added while it was in flight.
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
       editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });

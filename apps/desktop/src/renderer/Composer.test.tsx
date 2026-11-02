@@ -216,6 +216,18 @@ test("a failed send puts the same text and images back, ahead of anything added 
   );
 });
 
+test("a sent prompt counts toward the support ask, and a failed one doesn't (PLX-1233)", async () => {
+  localStorage.clear();
+  const onSend = vi.fn(async () => undefined as string | undefined);
+  onSend.mockResolvedValueOnce("plxd is busy");
+  const { type, press } = render(onSend);
+  type("hello");
+  await press("Enter");
+  expect(localStorage.getItem("parallax.promptsBeforeSupportAsk")).toBeNull();
+  await press("Enter");
+  expect(localStorage.getItem("parallax.promptsBeforeSupportAsk")).toBe("1");
+});
+
 test("an image plxd can't take isn't added, past 10 images included", async () => {
   const { paste } = render(vi.fn(async () => undefined));
   await paste([new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" })]);
