@@ -10565,8 +10565,8 @@ export type VoiceCleanParams = {
 	 */
 	text: string,
 	/**
-	 * The instance whose small model goes first, the one the message is going to. Any other that
-	 * can answer goes next.
+	 * The instance whose small model answers, the one the message is going to. Without a small
+	 * model there, the first instance by name that has one answers.
 	 */
 	backend?: string,
 };

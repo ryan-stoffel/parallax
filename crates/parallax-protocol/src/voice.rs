@@ -10,8 +10,8 @@ use ts_rs::TS;
 pub struct VoiceCleanParams {
     /// What the speech transcribed to.
     pub text: String,
-    /// The instance whose small model goes first, the one the message is going to. Any other that
-    /// can answer goes next.
+    /// The instance whose small model answers, the one the message is going to. Without a small
+    /// model there, the first instance by name that has one answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub backend: Option<String>,

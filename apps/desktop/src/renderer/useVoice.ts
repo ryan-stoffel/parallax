@@ -36,8 +36,7 @@ export function useVoice(options: {
         },
         setPhase,
         (text) => {
-          if (text && current.current.focused && current.current.enabled)
-            current.current.inserted(text);
+          if (text && current.current.enabled) current.current.inserted(text);
         },
         (error) => {
           notify({ tone: "error", title: "Voice input failed", body: voiceError(error) });
@@ -57,8 +56,12 @@ export function useVoice(options: {
       held.current = false;
       session.cancel();
     };
+    // Leaving the window stops a recording, but what was already said still goes in.
+    const left = () => {
+      if (session.phase !== "finishing") cancel();
+    };
     const visibility = () => {
-      if (document.hidden) cancel();
+      if (document.hidden) left();
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && session.phase !== "idle") {
@@ -67,18 +70,18 @@ export function useVoice(options: {
         cancel();
       }
     };
-    window.addEventListener("blur", cancel);
+    window.addEventListener("blur", left);
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("keydown", escape, true);
     return () => {
       cancel();
-      window.removeEventListener("blur", cancel);
+      window.removeEventListener("blur", left);
       document.removeEventListener("visibilitychange", visibility);
       window.removeEventListener("keydown", escape, true);
     };
   }, [session, options.scope]);
   useEffect(() => {
-    if (!options.enabled || !options.focused) session.cancel();
+    if (!options.enabled || (!options.focused && session.phase !== "finishing")) session.cancel();
     if (!options.enabled || !options.focused || !options.hotkey || !window.parallax?.voiceHotkey)
       return;
     let live = true;

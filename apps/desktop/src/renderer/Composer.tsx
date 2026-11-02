@@ -107,7 +107,7 @@ import { countSentPrompt } from "./supportPrompt";
 import { Picker, type PickerOption } from "./ui";
 import { useVoice } from "./useVoice";
 import { VoicePill } from "./VoicePill";
-import { voiceText } from "./voiceText";
+import { cleanDictation, voiceText } from "./voiceText";
 
 const access = (value: AgentPermission, icon: ReactNode): PickerOption => ({
   value,
@@ -1817,24 +1817,23 @@ export function Composer({
       const doc = editor.state.doc;
       const before = doc.textBetween(Math.max(0, from - 1), from, "\n");
       const after = doc.textBetween(to, Math.min(doc.content.size, to + 1), "\n");
-      // A cleaned-up transcript can hold paragraphs and lists, typed as lines with Shift+Enter.
-      const { schema } = editor.state;
-      const lines = voiceText(transcript, before, after).split("\n");
+      // A cleaned-up transcript can hold paragraphs and lists: lines as Shift+Enter types them, or
+      // in a code block, its plain text.
+      const { schema, tr, selection } = editor.state;
+      const inserted = voiceText(transcript, before, after);
+      const lines = inserted.split("\n");
       const nodes = lines.flatMap((line, i) => [
         ...(i > 0 ? [schema.nodes["hardBreak"]!.create()] : []),
         ...(line ? [schema.text(line)] : []),
       ]);
-      editor.view.dispatch(editor.state.tr.replaceWith(from, to, nodes));
+      editor.view.dispatch(
+        selection.$from.parent.type.spec.code
+          ? tr.insertText(inserted, from, to)
+          : tr.replaceWith(from, to, nodes),
+      );
       focusAfterVoice.current = true;
     },
-    clean: async (text) => {
-      if (!hostId) return text;
-      const response = await window.parallax.request(hostId, "voice/clean", {
-        text,
-        ...(target && { backend: target }),
-      });
-      return "result" in response ? response.result.text : text;
-    },
+    clean: (text) => cleanDictation(text, hostId, target),
   });
   voiceBusy.current = voice.phase !== "idle";
   const canSend = !!onSend && !disabledReason && !empty && !uploading && !voiceBusy.current;
@@ -1842,7 +1841,10 @@ export function Composer({
     editor.setEditable(voice.phase === "idle" && !uploading);
     if (voice.phase === "idle" && focusAfterVoice.current) {
       focusAfterVoice.current = false;
-      editor.commands.focus();
+      // Not from a field the user moved to while it was cleaned up.
+      const active = document.activeElement;
+      if (!active || active === document.body || box.current?.contains(active))
+        editor.commands.focus();
     }
   }, [editor, voice.phase, uploading]);
 
