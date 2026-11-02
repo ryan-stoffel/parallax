@@ -1,5 +1,5 @@
 import type { DeviceIcon } from "../preload/bridge";
-import type { AccessState, RelayHost } from "../protocol/generated/protocol";
+import type { AccessState, RelayHost, RemoteSessionsResult } from "../protocol/generated/protocol";
 import { isDeviceIcon } from "./connect";
 import { isRoute } from "./settings";
 
@@ -106,6 +106,33 @@ const HOUR_MS = 60 * 60_000;
 export function countPairRun(runs: number[] | undefined, now: number): number[] | undefined {
   const recent = (runs ?? []).filter((at) => now - at < HOUR_MS);
   return recent.length >= MAX_PAIR_RUNS ? undefined : [...recent, now];
+}
+
+/** How long `waitForListener` waits for plxd to listen and reach the relay. */
+const LISTENER_WAIT_MS = 15_000;
+
+/**
+ * Waits until plxd is listening and connected to the relay, as `plx connect` does before it shows
+ * a code. Past `waitMs`, listening alone is enough, since the code still works on this network.
+ * Resolves to why it isn't listening, for people, or undefined. `read` answers plxd's
+ * `remote/sessions`, or an error for people.
+ */
+export async function waitForListener(
+  read: () => Promise<Pick<RemoteSessionsResult, "listening" | "problem" | "relay"> | string>,
+  waitMs = LISTENER_WAIT_MS,
+  pollMs = 500,
+): Promise<string | undefined> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const status = await read();
+    if (typeof status === "string") return status;
+    if (status.listening && status.relay?.connected) return undefined;
+    if (Date.now() >= deadline)
+      return status.listening
+        ? undefined
+        : (status.problem ?? "This computer didn't start listening in time. Try again.");
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
 }
 
 /** How often a connection on the relay checks its direct routes again (0091). */

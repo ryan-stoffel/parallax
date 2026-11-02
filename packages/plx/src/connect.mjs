@@ -181,7 +181,7 @@ async function link(plxd, token, deps) {
  * @param {Deps} deps
  */
 async function approveNewDevice(plxd, deps) {
-  console.log("\nOn a device signed in to Parallax, open this computer and type its code there.");
+  console.log("\nParallax on your other computer asks for this code. Type it there.");
   for (;;) {
     const { code, expiresAt } = await plxd.call("access/setupCode");
     console.log(`\n  ${code}\n\nWaiting for a device (Ctrl-C to stop; plx connect approve shows a new code later).`);

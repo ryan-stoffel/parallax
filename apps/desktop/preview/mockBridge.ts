@@ -1619,6 +1619,7 @@ let accessRequests: AccessPrompt[] = accountsShown
   ? [{ id: "req-1", name: "Ryan's iPhone", code: "731905", host: "studio" }]
   : [];
 const accessListeners = new Set<(requests: AccessPrompt[]) => void>();
+const setupApprovedListeners = new Set<(name: string) => void>();
 
 function deviceHosts(): DeviceHost[] {
   if (!connect.on) return [...accounts];
@@ -1641,7 +1642,8 @@ function connectChanged() {
   for (const l of connectListeners) l({ ...connect });
   const devices = deviceHosts();
   for (const l of deviceListeners) l(devices);
-  for (const d of devices) if (d.enabled) for (const l of connectionListeners) l(d.id, connected);
+  for (const d of devices)
+    if (d.enabled && !d.access) for (const l of connectionListeners) l(d.id, connected);
 }
 
 /** What a device's plxd answers itself; the rest of a device's calls share the fixtures. */
@@ -2098,9 +2100,14 @@ export const mockBridge: ParallaxBridge = {
     return () => listeners.delete(entry);
   },
   connectionState: (hostId) =>
-    hostId === LOCAL || deviceOf(hostId) || isLanHost(hostId)
-      ? delay(connected, 10)
-      : Promise.reject(new Error(`no host ${hostId}`)),
+    accounts.some((a) => a.id === hostId && a.access)
+      ? delay({ status: "connecting" }, 10)
+      : hostId === LOCAL ||
+          deviceOf(hostId) ||
+          isLanHost(hostId) ||
+          accounts.some((a) => a.id === hostId)
+        ? delay(connected, 10)
+        : Promise.reject(new Error(`no host ${hostId}`)),
   onConnectionState: (listener) => {
     connectionListeners.add(listener);
     return () => connectionListeners.delete(listener);
@@ -2199,6 +2206,18 @@ export const mockBridge: ParallaxBridge = {
     connectChanged();
     return undefined;
   },
+  showSetupCode: () => {
+    lan.on = true;
+    lan.relay = true;
+    return delay(
+      { code: "482913", expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() },
+      700,
+    );
+  },
+  onSetupApproved: (listener) => {
+    setupApprovedListeners.add(listener);
+    return () => setupApprovedListeners.delete(listener);
+  },
   askAgain: () => delay(undefined),
   turnOnReach: (hostId) => {
     const device = deviceOf(hostId);
@@ -2286,7 +2305,7 @@ export const mockBridge: ParallaxBridge = {
 
   onProfile: (listener) => {
     profileListeners.add(listener);
-    listener(onboarding ? null : profile);
+    listener(onboarding || location.hash.includes("signedout") ? null : profile);
     return () => profileListeners.delete(listener);
   },
   // The browser's sign-in, done a moment later.
@@ -2327,6 +2346,23 @@ export const mockBridge: ParallaxBridge = {
 
 /** For the console: the mock's state, to poke at while looking at the preview. */
 export const previewState = {
+  /** A computer signs in to the account, as Add a computer would find it. 482913 is its code. */
+  addAccountComputer(name: string, offline = false) {
+    accounts.push({
+      id: `account:${name}`,
+      name,
+      icon: "server",
+      detected: "server",
+      hostName: name,
+      enabled: true,
+      access: offline ? { step: "needsCode", offline: true } : { step: "needsCode" },
+    });
+    connectChanged();
+  },
+  /** Another computer types this computer's setup code. */
+  approveSetup(name: string) {
+    for (const listener of setupApprovedListeners) listener(name);
+  },
   db,
   logs,
   repoPath: PARALLAX_PATH,

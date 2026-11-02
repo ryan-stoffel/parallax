@@ -1,25 +1,14 @@
-import { Pencil, Plus, Server } from "lucide-react";
+import { Plus, Server } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
 import { olderVersion, type ConnectionError, type ConnectionState } from "../../preload/bridge";
 import { statusLabel, useConnection } from "../ConnectionStatus";
-import { DeviceIcon } from "../DeviceIcon";
-import { localId, useHosts, type Host } from "../hosts";
+import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
-import { IconButton } from "../ui";
 import { ConnectSettings } from "./ConnectSettings";
 import { LanSettings } from "./LanSettings";
 import { SshHostDialog } from "./SshHostDialog";
-import {
-  PageTitle,
-  primaryButton,
-  quietButton,
-  RenameForm,
-  Row,
-  Section,
-  settingRow,
-  StatusDot,
-} from "./parts";
+import { PageTitle, primaryButton, quietButton, Section, settingRow, StatusDot } from "./parts";
 
 // xterm.js is large, so it loads when a sign-in first opens.
 const SignInTerminal = lazy(() =>
@@ -64,17 +53,18 @@ const tone = (state?: ConnectionState) =>
   state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
 
 /**
- * Settings > Connections: this computer, renamable, with its plxd and the app's version; then
- * Parallax Connect and its devices (0056); then pairing on the same network (PLX-641); then the
- * SSH hosts, which can be added, edited, and removed.
+ * Settings > Connections: Parallax Connect, with this computer and the others on the account
+ * (0091); then how they reach each other and pairing on the same network (PLX-641); then the SSH
+ * hosts, which can be added, edited, and removed.
  */
 export function ConnectionSettings() {
   const hosts = useHosts();
-  const local = hosts.find((h) => h.id === localId)!;
   const remote = hosts.filter((h) => h.destination);
   // The host whose Add host dialog is open: its id, "new", or none.
   const [editing, setEditing] = useState<string>();
   const [appVersion, setAppVersion] = useState<string>();
+  // Bumped when Show setup code changes this computer's settings, so LanSettings reads them again.
+  const [lanRead, setLanRead] = useState(0);
   useEffect(() => void window.parallax.version().then(setAppVersion), []);
   const remove = async (host: Host) => {
     const failed = await window.parallax.removeHost(host.id);
@@ -87,9 +77,8 @@ export function ConnectionSettings() {
         Where your agents run: this computer, your other computers through Parallax Connect or on
         the same network, and machines you reach over SSH.
       </PageTitle>
-      <LocalHost host={local} />
-      <ConnectSettings />
-      <LanSettings />
+      <ConnectSettings onSettingsChanged={() => setLanRead((n) => n + 1)} />
+      <LanSettings key={lanRead} />
 
       <Section
         title="SSH hosts"
@@ -131,54 +120,6 @@ export function ConnectionSettings() {
         )}
       </Section>
     </>
-  );
-}
-
-/** This computer: its name, which Rename edits in place, and its plxd. */
-function LocalHost({ host }: { host: Host }) {
-  const state = useConnection(host.id);
-  const [renaming, setRenaming] = useState(false);
-  const rename = async (name: string) => {
-    const failed = await window.parallax.renameLocal(name);
-    if (failed) notify({ tone: "error", title: "Couldn't rename this computer", body: failed });
-    else setRenaming(false);
-  };
-
-  return (
-    <section aria-label="This computer" data-setting="this-computer" className="mb-8">
-      <div className="mb-2 flex min-h-7 items-center gap-2 text-reading text-muted-foreground [&_svg]:size-4">
-        <DeviceIcon icon={host.icon ?? "laptop"} />
-        {renaming ? (
-          <RenameForm
-            label="Computer name"
-            value={host.name}
-            onSave={(name) => void rename(name)}
-            onCancel={() => setRenaming(false)}
-          />
-        ) : (
-          <>
-            <span className="font-semibold text-foreground">{host.name}</span>
-            <IconButton label="Rename this computer" onClick={() => setRenaming(true)}>
-              <Pencil aria-hidden />
-            </IconButton>
-          </>
-        )}
-      </div>
-      <div className="rounded-xl border border-border bg-surface">
-        <Row
-          title="Local plxd"
-          description="Runs agents on this computer. Parallax starts it and keeps it connected."
-        >
-          <span className="flex items-center gap-1.5 text-body text-muted-foreground">
-            <StatusDot tone={tone(state)} />
-            {state ? statusLabel(state) : "Connecting…"}
-            {state?.status === "connected" && (
-              <span className="font-mono text-meta">· {state.plxd}</span>
-            )}
-          </span>
-        </Row>
-      </div>
-    </section>
   );
 }
 

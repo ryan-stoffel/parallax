@@ -325,12 +325,17 @@ export const settingsIndex: SettingEntry[] = [
     ["From parallax.json", "Scripts a repository defines", "parallax json import config"],
   ]),
   // Connections
-  ...entries("connections", undefined, [
-    ["This computer", "Its name and plxd", "rename computer name local"],
-    ["Local plxd", "Runs agents on this computer", "daemon status version"],
-  ]),
   ...entries("connections", "Parallax Connect", [
-    ["Parallax Connect", "Your computers, wherever they are", "relay remote devices account sync"],
+    [
+      "Parallax Connect",
+      "Your computers, wherever they are",
+      "add computer relay remote devices account sync setup code",
+    ],
+    ["This computer", "Its name and plxd", "rename computer name local daemon status version plxd"],
+  ]),
+  ...entries("connections", "Reach from anywhere", [
+    ["Reach from anywhere", "Through Parallax Relay", "relay internet remote"],
+    ["Tailscale", "Find computers on your Tailscale network", "tailnet vpn"],
   ]),
   ...entries("connections", "Same network", [
     ["Same network", "Pair computers on this network", "lan local network wifi"],
@@ -340,7 +345,6 @@ export const settingsIndex: SettingEntry[] = [
       "Use Parallax from a browser on this network",
       "web phone mobile certificate",
     ],
-    ["Reach from anywhere", "Through Parallax Relay", "relay internet remote"],
     ["Pair a device", "With a pairing code", "pairing code phone"],
     ["Computers on this network", undefined, "lan nearby devices"],
   ]),

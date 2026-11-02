@@ -137,7 +137,7 @@ pub(crate) async fn access_remove(
     access_now(context).await
 }
 
-/// `access/setupCode`: a new computer's code, for `plx connect` to show.
+/// `access/setupCode`: a new computer's code, for `plx connect` or the app to show.
 pub(crate) async fn access_setup_code(
     context: &Context,
     _: AccessSetupCodeParams,

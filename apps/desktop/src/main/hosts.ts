@@ -31,6 +31,7 @@ import {
   type RendererMethod,
   type RpcResponse,
   type SavedHost,
+  type SetupCode,
   type SshHost,
   type SubscribeParams,
   type WatchParams,
@@ -38,6 +39,7 @@ import {
 import {
   accountId,
   coalesced,
+  waitForListener,
   countPairRun,
   directRoutes,
   lacks,
@@ -244,6 +246,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
     enterSetupCode(hostId, code),
   );
+  ipcMain.handle("parallax:showSetupCode", () => showSetupCode());
   ipcMain.handle("parallax:askAgain", (_event, hostId: unknown) => {
     const saved = accountOf(hostId);
     if (saved && accountAccess.get(accountId(saved.hostId))?.step === "ask")
@@ -1949,6 +1952,34 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
   return undefined;
 }
 
+/** Whether a code from `showSetupCode` is waiting, so its use is told once and an old one never. */
+let setupCodeShown = false;
+
+/**
+ * `window.parallax.showSetupCode`: readies this computer for another to add it (0091), as `plx
+ * connect` does: registers it under the signed-in account, turns on `relay` and `remote`, and
+ * waits for its listener, then makes a setup code. `access/setupCode` stays withheld from the
+ * renderer, which gets the code only from this. Resolves to it, or an error for people.
+ */
+async function showSetupCode(): Promise<SetupCode | string> {
+  const local = connections.get("local");
+  if (local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  const registered = await registerRelay();
+  if (registered) return registered;
+  const on = await local.request("host/settings/set", { relay: true, remote: true });
+  if ("error" in on) return on.error.message;
+  const unreachable = await waitForListener(async () => {
+    const answer = await local.request("remote/sessions", {});
+    return "error" in answer ? answer.error.message : answer.result;
+  });
+  if (unreachable) return unreachable;
+  const answer = await local.request("access/setupCode", {});
+  if ("error" in answer) return answer.error.message;
+  setupCodeShown = true;
+  return answer.result;
+}
+
 /** Reads a `tailnet:` device's relay id, which matches it to its account computer (0091). */
 async function matchTailnet(tailnetId: string): Promise<void> {
   const answer = await connections.get(tailnetId)?.request("relay/id", {});
@@ -2024,6 +2055,11 @@ function watchAccess(hostId: string): void {
       }
       after = answer.result.version;
       showRequest(hostId, answer.result.pending);
+      if (hostId === "local" && setupCodeShown && answer.result.setupApproved) {
+        setupCodeShown = false;
+        broadcast("parallax:setupApproved", answer.result.setupApproved);
+        void discoverAccounts();
+      }
     }
     if (watchedAccess.get(hostId) === host) watchedAccess.delete(hostId);
     showRequest(hostId, undefined);
