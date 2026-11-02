@@ -1332,15 +1332,16 @@ export function Composer({
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
   const box = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
+  const tabs = useRef<HTMLDivElement>(null);
   const leftWindow = useRef(false);
   // Set directly, as a render would be for nothing: what arrives from now on opens its room.
   useEffect(() => {
     box.current?.setAttribute("data-settled", "");
   }, []);
-  // Focus moving between the box and the bar under it stays with them.
+  // Focus moving between the box and the bars around it stays with them.
   const leave = (e: FocusEvent<HTMLDivElement>) => {
     const to = e.relatedTarget;
-    if (!box.current?.contains(to) && !bar.current?.contains(to)) setFocused(false);
+    if (![box, bar, tabs].some((part) => part.current?.contains(to))) setFocused(false);
     // The window losing focus leaves the element active, and gives it focus again on return.
     leftWindow.current = document.activeElement === e.target;
   };
@@ -1921,11 +1922,46 @@ export function Composer({
   );
 
   return (
-    <div className="w-full">
+    <div
+      className="w-full"
+      // Files and sidebar threads dropped anywhere on the box are added, before the editor can
+      // take them as text.
+      onDragOver={(e) => {
+        const { types } = e.dataTransfer;
+        const thread = !!attach && types.includes(threadDragType);
+        if (types.includes("Files") || thread) e.preventDefault();
+        if (thread) e.dataTransfer.dropEffect = "copy";
+        setDropOver(types.includes("Files") || thread);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver(false);
+      }}
+      onDropCapture={(e) => {
+        setDropOver(false);
+        const thread = attach ? draggedThread(e.dataTransfer) : undefined;
+        if (e.dataTransfer.files.length === 0 && !thread) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!thread) return void addFiles([...e.dataTransfer.files]);
+        // Run ids are the host's own, so another computer's thread can't come along.
+        if (thread.hostId !== attach?.hostId)
+          setAttachError("A thread on another computer can't be attached here.");
+        else {
+          // Where it's dropped in the text, else at its end.
+          const at = editor.view.dom.contains(e.target as Node)
+            ? editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos
+            : undefined;
+          if (at === undefined) editor.commands.focus("end");
+          addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
+        }
+      }}
+    >
       <div className="relative">
         <VoicePill {...voice} anchor={box} />
         {/* A wrapper for the pill's sake, as the bar under the box has: held in place, and hidden. */}
         <div
+          ref={tabs}
+          onBlur={leave}
           inert={voice.phase !== "idle"}
           data-voice={voice.phase !== "idle" || undefined}
           className="composer-top contents"
@@ -1938,37 +1974,6 @@ export function Composer({
           inert={voice.phase !== "idle"}
           data-voice={voice.phase !== "idle" || undefined}
           ref={box}
-          // Files and sidebar threads dropped anywhere on the box are added, before the editor can
-          // take them as text.
-          onDragOver={(e) => {
-            const { types } = e.dataTransfer;
-            const thread = !!attach && types.includes(threadDragType);
-            if (types.includes("Files") || thread) e.preventDefault();
-            if (thread) e.dataTransfer.dropEffect = "copy";
-            setDropOver(types.includes("Files") || thread);
-          }}
-          onDragLeave={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver(false);
-          }}
-          onDropCapture={(e) => {
-            setDropOver(false);
-            const thread = attach ? draggedThread(e.dataTransfer) : undefined;
-            if (e.dataTransfer.files.length === 0 && !thread) return;
-            e.preventDefault();
-            e.stopPropagation();
-            if (!thread) return void addFiles([...e.dataTransfer.files]);
-            // Run ids are the host's own, so another computer's thread can't come along.
-            if (thread.hostId !== attach?.hostId)
-              setAttachError("A thread on another computer can't be attached here.");
-            else {
-              // Where it's dropped in the text, else at its end.
-              const at = editor.view.dom.contains(e.target as Node)
-                ? editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos
-                : undefined;
-              if (at === undefined) editor.commands.focus("end");
-              addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
-            }
-          }}
           // Only the text's focus brings a stepped-back box back, so Attach and Stop, which a press
           // focuses, take their click where they are.
           onFocus={(e) => {

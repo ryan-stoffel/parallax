@@ -167,6 +167,23 @@ test("scrolling up steps back with the caret in an empty box, until the text is 
   expect(shell.dataset["back"]).toBeUndefined();
 });
 
+test("pressing a tab over the box doesn't fold it out from under the click", () => {
+  const { box } = render(async () => undefined, caps, {
+    away: true,
+    top: <button aria-label="Plan" />,
+  });
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  act(() => box.focus());
+  const tab = document.querySelector('[aria-label="Plan"]')!;
+  act(
+    () => void box.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: tab })),
+  );
+  expect(shell.dataset["back"]).toBeUndefined();
+  // Leaving it folds the box.
+  act(() => void tab.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
+});
+
 test("coming back to the window doesn't bring a stepped-back box back", () => {
   const { box } = render(async () => undefined, caps, { away: true });
   const shell = box.closest<HTMLElement>(".composer-shell")!;

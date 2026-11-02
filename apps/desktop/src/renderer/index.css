@@ -1398,6 +1398,7 @@ body {
 }
 /* The tabs, on a bar tucked behind the box's top edge, the mirror of the bar under it. */
 .composer-tabs {
+  interpolate-size: allow-keywords;
   margin: 0 0.75rem -1rem;
   padding: 2px 0.25rem calc(1rem + 2px);
   border: 1px solid var(--border);
