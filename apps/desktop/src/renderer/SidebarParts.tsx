@@ -161,7 +161,8 @@ export function Fold({ open, children }: { open: boolean; children: ReactNode })
       inert={!open}
       className={`grid transition-[grid-template-rows,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none ${open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
     >
-      <div className="min-h-0 overflow-hidden">{children}</div>
+      {/* Clip, not hidden, so scroll-driven row fades (index.css) follow the sidebar's scroller. */}
+      <div className="min-h-0 overflow-clip">{children}</div>
     </div>
   );
 }

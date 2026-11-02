@@ -795,22 +795,20 @@ body {
   backdrop-filter: var(--glass);
 }
 /* The thread list's sticky headings sit on the sidebar's own glass with nothing of their own: a
-   backdrop-filter there adds the glass's alpha again, which reads as a black box (PLX-1230). Only
-   while stuck, with rows passing under, do they cover them, solidly, so text never overlaps. */
+   fill or backdrop-filter there reads as a black box (PLX-1230). Rows dissolve as they reach the
+   heading instead, so their text never overlaps it. The 28px is the shorter heading's height. */
 :root.translucent .sticky.bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
   background-color: transparent;
   backdrop-filter: none;
-  container-type: scroll-state;
 }
-:root.translucent .sticky.bg-sidebar::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
+:root.translucent .sticky.bg-sidebar + * ul > li:not(.row-flash) {
+  animation: under-heading linear both;
+  animation-timeline: view(block 28px 0);
+  animation-range: exit 0 exit 12px;
 }
-@container scroll-state(stuck: top) {
-  :root.translucent .sticky.bg-sidebar::before {
-    background-color: var(--sidebar);
+@keyframes under-heading {
+  to {
+    opacity: 0;
   }
 }
 /* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
