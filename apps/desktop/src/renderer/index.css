@@ -1161,44 +1161,55 @@ body {
   scrollbar-width: none;
 }
 
-/* The composer (Composer.tsx) is one shape: a shell holding a field for the text and its actions,
-   a step brighter than the shell in dark and white on a tinted shell in light, with its corners
-   concentric to the shell's. */
+/* The composer (Composer.tsx) is one surface: the text, then a row of its controls. */
 .composer-shell {
   background-color: light-dark(
-    color-mix(in oklab, var(--foreground) 4%, var(--surface)),
-    var(--surface)
+    var(--surface),
+    color-mix(in oklab, var(--foreground) 4%, var(--surface))
   );
   transition:
+    background-color var(--transition-duration-base) var(--ease-out),
     border-color var(--transition-duration-base) var(--ease-out),
     box-shadow var(--transition-duration-base) var(--ease-out),
     opacity var(--transition-duration-base) var(--ease-out);
 }
-/* The field is a plate raised off the shell: lit along its top, casting down onto it. */
-.composer-entry {
+.composer-shell:focus-within {
   background-color: light-dark(
     var(--surface),
     color-mix(in oklab, var(--foreground) 6%, var(--surface))
   );
-  background-image: linear-gradient(
-    light-dark(transparent, rgb(255 255 255 / 3%)),
-    transparent 70%
-  );
-  box-shadow:
-    0 0 0 1px light-dark(color-mix(in oklab, var(--foreground) 7%, transparent), transparent),
-    inset 0 1px 0 light-dark(transparent, rgb(255 255 255 / 8%)),
-    0 1px 2px light-dark(color-mix(in oklab, var(--foreground) 8%, transparent), rgb(0 0 0 / 60%)),
-    0 8px 16px -8px
-      light-dark(color-mix(in oklab, var(--foreground) 16%, transparent), rgb(0 0 0 / 80%));
-  transition: background-color var(--transition-duration-base) var(--ease-out);
 }
-.composer-shell:focus-within .composer-entry {
-  background-color: light-dark(
-    var(--surface),
-    color-mix(in oklab, var(--foreground) 9%, var(--surface))
-  );
+/* The model picker opens off the box rather than its button, so it covers neither the text nor
+   the box's row: above it, lined up with its right edge, and as tall as there's room for. */
+.composer-shell {
+  anchor-name: --composer;
+  anchor-scope: --composer;
 }
-/* The heavy box at the end of the field's row, holding voice and send or stop as wide tiles whose
+.composer-shell .model-menu {
+  position-anchor: --composer;
+  position-area: top span-left;
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline;
+  height: min(26rem, 100% - 1rem);
+  min-height: 16rem;
+  max-width: calc(100vw - 1rem);
+  margin: 0 0 0.5rem;
+  transform-origin: bottom right;
+  container: model-menu / inline-size;
+}
+/* In a narrow window, the models keep their names: the Reasoning column and Access give way. */
+@container model-menu (width < 30rem) {
+  .model-menu-reasoning {
+    width: 8.5rem;
+  }
+  .model-menu-for,
+  .composer-access > span {
+    display: none;
+  }
+}
+/* The heavy box at the end of the controls' row, holding voice and send or stop as wide tiles whose
    corners follow its own (Composer.tsx). With nothing to send, Send is only its arrow. */
 .composer-actions {
   display: flex;
@@ -1269,22 +1280,34 @@ body {
 .composer-bar[data-voice] {
   opacity: 0;
 }
-/* The footer folds away while the box steps back, unless one of its menus is open. */
-.composer-footer {
-  display: grid;
-  grid-template-rows: 1fr;
-  padding-block: 2px 6px;
+/* The controls' row, under the text. While the box steps back, voice and send or stop rise level
+   with the text, which is empty then, and the rest goes unless one of its menus is open. */
+.composer-controls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0 6px 6px;
+  pointer-events: none;
   transition:
-    grid-template-rows var(--transition-duration-base) var(--ease-out),
-    padding-block var(--transition-duration-base) var(--ease-out),
-    opacity var(--transition-duration-fast) var(--ease-out),
-    visibility var(--transition-duration-fast);
+    margin-top var(--transition-duration-base) var(--ease-out),
+    padding-bottom var(--transition-duration-base) var(--ease-out);
+  > * {
+    pointer-events: auto;
+    transition: opacity var(--transition-duration-fast) var(--ease-out);
+  }
 }
-[data-back] > .composer-footer:not(:has(:popover-open)) {
-  grid-template-rows: 0fr;
-  padding-block: 0;
-  opacity: 0;
-  visibility: hidden;
+[data-back] > .composer-controls {
+  margin-top: -2.625rem;
+  padding-bottom: 4px;
+  > :not(.composer-actions, :has(:popover-open)) {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+[data-back] .composer-placeholder {
+  right: 6.5rem;
 }
 /* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
    its corners following the box's. A step darker, so it reads as behind it. */
@@ -1307,7 +1330,7 @@ body {
 }
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */
-:is(.composer-footer, .composer-bar) button[aria-haspopup]:not([popover] *) {
+:is(.composer-controls, .composer-bar) button[aria-haspopup]:not([popover] *) {
   height: 1.75rem;
   padding-block: 0;
   padding-right: 0.5rem;
@@ -1317,11 +1340,6 @@ body {
   }
 }
 /* Labels give way to their icons as the box narrows, least needed first. Each keeps its title. */
-@container composer (width < 24rem) {
-  .composer-access > span {
-    display: none;
-  }
-}
 @container composer (width < 36rem) {
   .composer-detail {
     display: none;

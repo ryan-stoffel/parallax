@@ -880,8 +880,8 @@ export interface ComposerProps {
   contents?: RefObject<ComposerContents | undefined>;
   /**
    * Whether the transcript over it is scrolled up from its end. An empty box no one is typing in
-   * then steps back: marked `data-back`, it folds its footer away (index.css), leaving one line
-   * with Attach and Send or Stop until the text takes focus.
+   * then steps back: marked `data-back`, it folds to one line (index.css), with voice and Send or
+   * Stop beside the text, until the text takes focus.
    */
   away?: boolean;
   /** Told whether the box is stepped back, so its screen can shrink what sits with it. */
@@ -1585,7 +1585,7 @@ export function Composer({
           }),
         // One row beside its actions, growing up to seven before it scrolls, never beneath them.
         class:
-          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.5rem))] min-h-[calc(1.625em+1.5rem)] overflow-y-auto px-3.5 py-3 focus-visible:outline-none",
+          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.375rem))] min-h-[calc(1.625em+1.375rem)] overflow-y-auto px-4 pt-3.5 pb-2 focus-visible:outline-none",
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1869,16 +1869,17 @@ export function Composer({
       )}
       panelClassName="w-[25rem]"
       align="end"
+      className="composer-access"
     />
   );
-  // The run's model, effort, and access: in the box's row, or under it while it's stepped back.
+  // The run's model, effort, and access, beside Send, or their own menus without a model.
   const pickers = run && (
     // A disabled fieldset turns off every control in it, and its title says why.
     <fieldset
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      className="flex shrink-0 items-center gap-1.5"
+      className="flex min-w-0 items-center gap-1"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model ? (
@@ -2059,12 +2060,12 @@ export function Composer({
             </div>
           )}
           {top}
-          <div className="composer-entry m-1 rounded-xl">
+          <div>
             {(images.length > 0 || files.length > 0) && (
               <fieldset
                 // Locked while files upload: what's there now is what's sent.
                 disabled={uploading}
-                className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-3.5 pt-3"
+                className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
               >
                 {images.map((image, i) => (
                   <span key={i} className="relative">
@@ -2115,98 +2116,92 @@ export function Composer({
                 onClose={() => setShown(undefined)}
               />
             )}
-            <div className="flex min-w-0 items-end">
-              <div ref={textArea} className="composer-text group/scroll relative min-w-0 flex-1">
-                {!text && (
-                  <p
-                    aria-hidden
-                    className="pointer-events-none absolute inset-x-3.5 top-3 truncate text-reading leading-relaxed text-faint-foreground"
-                  >
-                    {placeholder}
-                  </p>
-                )}
-                <RefsContext.Provider
-                  // No removing while files upload, as in the tray: what's there now is what's sent.
-                  value={{
-                    images,
-                    removeImage: uploading ? undefined : removeImage,
-                    threads: attach?.state,
-                  }}
+            <div ref={textArea} className="composer-text group/scroll relative min-w-0">
+              {!text && (
+                <p
+                  aria-hidden
+                  className="composer-placeholder pointer-events-none absolute inset-x-4 top-3.5 truncate text-reading leading-relaxed text-faint-foreground"
                 >
-                  <EditorContent editor={editor} />
-                </RefsContext.Provider>
-                <ScrollThumb target={editorDom} />
-              </div>
-              <div className="flex shrink-0 items-center gap-1 pr-1 pb-1">
-                <input
-                  ref={filePicker}
-                  type="file"
-                  multiple
-                  hidden
-                  onChange={(e) => {
-                    void addFiles(Array.from(e.target.files ?? []));
-                    e.target.value = "";
-                  }}
-                />
-                {usage?.summary && !narrow && <UsageRing data={usage} />}
-                <button
-                  type="button"
-                  aria-label="Attach files"
-                  title="Attach files"
-                  onClick={() => filePicker.current?.click()}
-                  className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-4"
-                >
-                  <Paperclip />
-                </button>
-                {/* Voice and send or stop share one heavy box at the row's end. */}
-                <div className="composer-actions">
-                  <button
-                    type="button"
-                    aria-label="Voice input"
-                    title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
-                    disabled={!onSend || !!disabledReason || uploading}
-                    onClick={voice.start}
-                    className="composer-action text-foreground/80 enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
-                  >
-                    <Mic />
-                  </button>
-                  {showStop ? (
-                    <button
-                      type="button"
-                      aria-label={stopping ? "Stopping" : "Stop"}
-                      disabled={stopping}
-                      onClick={() => void stop()}
-                      className="composer-pop composer-action text-danger enabled:hover:bg-hover disabled:opacity-50"
-                    >
-                      {stopping ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : (
-                        <span className="size-3.5 rounded-[3px] bg-current" />
-                      )}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      aria-label="Send"
-                      disabled={!canSend}
-                      onClick={() => void submit()}
-                      className="composer-send composer-action send-sky bg-send text-send-foreground"
-                    >
-                      <ArrowUp className="size-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
+                  {placeholder}
+                </p>
+              )}
+              <RefsContext.Provider
+                // No removing while files upload, as in the tray: what's there now is what's sent.
+                value={{
+                  images,
+                  removeImage: uploading ? undefined : removeImage,
+                  threads: attach?.state,
+                }}
+              >
+                <EditorContent editor={editor} />
+              </RefsContext.Provider>
+              <ScrollThumb target={editorDom} />
             </div>
           </div>
-          {pickers && (
-            // On one line at any width: index.css trims labels to icons as the box narrows.
-            <div className="composer-footer">
-              <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2">
-                {pickers}
-              </div>
+          {/* Attach on the left, and what the message runs on beside voice and send or stop. */}
+          <div className="composer-controls">
+            <input
+              ref={filePicker}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                void addFiles(Array.from(e.target.files ?? []));
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              aria-label="Attach files"
+              title="Attach files"
+              onClick={() => filePicker.current?.click()}
+              className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-4"
+            >
+              <Paperclip />
+            </button>
+            <div className="ml-auto flex min-w-0 items-center gap-1">
+              {usage?.summary && !narrow && <UsageRing data={usage} />}
+              {pickers}
             </div>
-          )}
+            {/* Voice and send or stop share one heavy box at the row's end. */}
+            <div className="composer-actions">
+              <button
+                type="button"
+                aria-label="Voice input"
+                title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
+                disabled={!onSend || !!disabledReason || uploading}
+                onClick={voice.start}
+                className="composer-action text-foreground/80 enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
+              >
+                <Mic />
+              </button>
+              {showStop ? (
+                <button
+                  type="button"
+                  aria-label={stopping ? "Stopping" : "Stop"}
+                  disabled={stopping}
+                  onClick={() => void stop()}
+                  className="composer-pop composer-action text-danger enabled:hover:bg-hover disabled:opacity-50"
+                >
+                  {stopping ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <span className="size-3.5 rounded-[3px] bg-current" />
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  aria-label="Send"
+                  disabled={!canSend}
+                  onClick={() => void submit()}
+                  className="composer-send composer-action send-sky bg-send text-send-foreground"
+                >
+                  <ArrowUp className="size-4" />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
       {tab && (

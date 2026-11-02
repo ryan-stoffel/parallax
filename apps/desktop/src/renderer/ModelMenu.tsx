@@ -452,10 +452,12 @@ export function ModelMenu({
             </ul>
           </div>
           {options?.effort && (
-            <div className="flex w-48 shrink-0 flex-col border-l border-border">
+            <div className="model-menu-reasoning flex w-48 shrink-0 flex-col border-l border-border">
               <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-4 text-body text-muted-foreground">
                 Reasoning
-                <span className="truncate text-meta text-faint-foreground">{shortName}</span>
+                <span className="model-menu-for truncate text-meta text-faint-foreground">
+                  {shortName}
+                </span>
               </div>
               <ul aria-label="Reasoning" className="min-h-0 flex-1 overflow-y-auto p-1.5">
                 {effortLevels.map((l) => {
