@@ -1939,7 +1939,7 @@ export function ThreadList({
       <div
         onScroll={hideCard}
         data-flip-scroll
-        className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2 *:shrink-0"
+        className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-4 *:shrink-0 ${fadeBottom}`}
       >
         {errors.map((e) => (
           <p key={e} role="alert" className="px-2 pb-1 text-meta text-danger">
@@ -2049,7 +2049,7 @@ export function ThreadList({
           : `its ${projectToDelete?.threads ?? 0} threads`}
         , instructions, and files.
       </ConfirmDialog>
-      <div className="border-t border-border p-2">
+      <div className="p-2">
         <ConnectionStatus hostId={host.id} />
         <Footer
           listed={hosts}
@@ -2063,6 +2063,12 @@ export function ThreadList({
 
 /** A section a dragged row is over and would drop into. */
 const dropLook = "bg-hover outline-1 outline-border outline-dashed";
+
+/**
+ * Rows that scroll past a list's bottom edge fade out in place of a line. The list needs `pb-4`,
+ * the fade's height, so its last row clears the fade. A mask, since glass shows through the sidebar.
+ */
+const fadeBottom = "[mask-image:linear-gradient(to_bottom,#000_calc(100%-1rem),transparent)]";
 
 const cardButton =
   "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-body font-medium text-foreground hover:bg-hover";
@@ -2250,10 +2256,10 @@ function Drawer<T>({
           onDrop();
         })
       }
-      className={`group/drawer mx-2 flex max-h-[40%] min-h-0 shrink-0 flex-col border-t border-border pb-1 transition-colors details-content:flex details-content:min-h-0 details-content:flex-col ${over ? `rounded-lg ${dropLook}` : ""}`}
+      className={`group/drawer mx-2 flex max-h-[40%] min-h-0 shrink-0 flex-col transition-colors details-content:flex details-content:min-h-0 details-content:flex-col ${over ? `rounded-lg ${dropLook}` : ""}`}
     >
-      {/* A line above each drawer sets its rows apart from the list's and the next drawer's; an
-          open drawer's heading reads brighter, so it's clear which rows are under it. */}
+      {/* Space sets a drawer's rows apart from the list's and the next drawer's; an open drawer's
+          heading reads brighter, so it's clear which rows are under it. */}
       <summary
         onClick={(e) => {
           e.preventDefault();
@@ -2272,7 +2278,10 @@ function Drawer<T>({
         />
       </summary>
       {/* Only the rows scroll, so none pass under the heading, which has no fill of its own. */}
-      <div data-flip-scroll className="min-h-0 overflow-y-auto">
+      <div
+        data-flip-scroll
+        className={`min-h-0 overflow-y-auto ${open ? `pb-4 ${fadeBottom}` : ""}`}
+      >
         {open && <ul className={`${cardGap} ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>}
         {open && more > 0 && (
           <button
