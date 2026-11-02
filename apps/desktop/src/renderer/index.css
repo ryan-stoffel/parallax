@@ -1162,9 +1162,10 @@ body {
 }
 
 /* The composer (Composer.tsx) is one surface: the text, then a row of its controls. The bar under
-   it (.composer-bar) is the same color. */
+   it (.composer-bar) and the tabs over it (.composer-tabs) are the same color. */
 .composer-shell,
-.composer-bar {
+.composer-bar,
+.composer-tabs {
   background-color: light-dark(
     var(--surface),
     color-mix(in oklab, var(--foreground) 4%, var(--surface))
@@ -1272,7 +1273,8 @@ body {
 }
 /* The box fades out from under the voice pill (VoicePill.tsx), which grows out of it. */
 .composer-shell[data-voice],
-.composer-bar[data-voice] {
+.composer-bar[data-voice],
+.composer-top[data-voice] > .composer-tabs {
   opacity: 0;
 }
 /* The controls' row, under the text. While the box steps back, the model, voice, and send or stop
@@ -1322,7 +1324,7 @@ body {
 .composer-tabs {
   transition:
     height var(--transition-duration-base) var(--ease-out),
-    padding-top var(--transition-duration-base) var(--ease-out),
+    padding-block var(--transition-duration-base) var(--ease-out),
     opacity var(--transition-duration-base) var(--ease-out);
 }
 /* Clipped as its room opens, past the corners of the remove buttons. */
@@ -1337,9 +1339,10 @@ body {
 }
 /* Only once the box is up (Composer.tsx), so reopening a thread with a draft doesn't replay it. */
 @starting-style {
-  [data-settled] :is(.composer-attachments, .composer-tabs) {
+  [data-settled] .composer-attachments,
+  .composer-top:has(+ [data-settled]) .composer-tabs {
     height: 0;
-    padding-top: 0;
+    padding-block: 0;
     opacity: 0;
   }
   [data-settled] .composer-attachments > * {
@@ -1392,6 +1395,20 @@ body {
   [data-back] :is(.composer-effort, .composer-access > span) {
     display: none;
   }
+}
+/* The tabs, on a bar tucked behind the box's top edge, the mirror of the bar under it. */
+.composer-tabs {
+  margin: 0 0.75rem -1rem;
+  padding: 2px 0.25rem calc(1rem + 2px);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+}
+/* Over glass, the same glass as the box, ending where the box starts. */
+:root.translucent .composer-tabs {
+  background-color: color-mix(in srgb, var(--raised) 78%, transparent);
+  backdrop-filter: var(--glass);
+  mask-image: linear-gradient(#000 calc(100% - 1rem), transparent calc(100% - 1rem));
 }
 /* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
    its corners following the box's. */

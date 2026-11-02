@@ -1924,6 +1924,14 @@ export function Composer({
     <div className="w-full">
       <div className="relative">
         <VoicePill {...voice} anchor={box} />
+        {/* A wrapper for the pill's sake, as the bar under the box has: held in place, and hidden. */}
+        <div
+          inert={voice.phase !== "idle"}
+          data-voice={voice.phase !== "idle" || undefined}
+          className="composer-top contents"
+        >
+          {top}
+        </div>
         {/* Not a form: its tabs hold forms of their own, and Enter in a footer search sends nothing. */}
         <div
           // Held in place under the pill, so the transcript doesn't jump as it takes the box's place.
@@ -2073,7 +2081,6 @@ export function Composer({
               )}
             </div>
           )}
-          {top}
           <div>
             {(images.length > 0 || files.length > 0) && (
               <fieldset

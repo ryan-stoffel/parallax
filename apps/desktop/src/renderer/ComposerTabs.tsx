@@ -9,11 +9,11 @@ export interface ComposerTab {
 }
 
 /**
- * The tabs in a composer's top row, such as the subagents, the plan, the queue, and what a thread
- * waits on, given back to front as one line. The first tab takes the line's free room as its full
- * row; the rest sit after it in their compact form, so the line never grows past one row. Each
- * tab's hover is a rounded piece of the box. `short`, over a box that stepped back, trims the
- * line's height to match the box's one row.
+ * The tabs on a bar tucked behind the composer's top edge, as where it runs is behind its bottom:
+ * the subagents, the plan, the queue, and what a thread waits on, given back to front as one line.
+ * The first tab takes the line's free room as its full row; the rest sit after it in their compact
+ * form, so the line never grows past one row. Each tab's hover is a rounded piece of the bar.
+ * `short`, over a box that stepped back, trims the line's height to match the box's one row.
  */
 export function ComposerTabs({
   tabs,
@@ -27,7 +27,7 @@ export function ComposerTabs({
     <div
       role="group"
       aria-label="Composer tabs"
-      className="composer-tabs flex min-w-0 items-center gap-1 overflow-hidden px-1.5 pt-1"
+      className="composer-tabs flex min-w-0 items-center gap-1 overflow-hidden"
     >
       {tabs.map((tab, i) => (
         <div
