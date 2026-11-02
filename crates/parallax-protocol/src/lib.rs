@@ -79,6 +79,7 @@ mod usage;
 
 #[cfg(test)]
 mod samples;
+mod voice;
 
 pub use account::{
     AccountId, AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams,
@@ -282,6 +283,7 @@ pub use usage::{
     UsageLimitWindow, UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem,
     UsageSessions, UsageSource,
 };
+pub use voice::{VoiceCleanParams, VoiceCleanResult};
 
 /// The newest protocol version this crate speaks. Versions start at 1.
 ///

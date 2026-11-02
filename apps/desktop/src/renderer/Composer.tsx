@@ -1817,10 +1817,23 @@ export function Composer({
       const doc = editor.state.doc;
       const before = doc.textBetween(Math.max(0, from - 1), from, "\n");
       const after = doc.textBetween(to, Math.min(doc.content.size, to + 1), "\n");
-      editor.view.dispatch(
-        editor.state.tr.insertText(voiceText(transcript, before, after), from, to),
-      );
+      // A cleaned-up transcript can hold paragraphs and lists, typed as lines with Shift+Enter.
+      const { schema } = editor.state;
+      const lines = voiceText(transcript, before, after).split("\n");
+      const nodes = lines.flatMap((line, i) => [
+        ...(i > 0 ? [schema.nodes["hardBreak"]!.create()] : []),
+        ...(line ? [schema.text(line)] : []),
+      ]);
+      editor.view.dispatch(editor.state.tr.replaceWith(from, to, nodes));
       focusAfterVoice.current = true;
+    },
+    clean: async (text) => {
+      if (!hostId) return text;
+      const response = await window.parallax.request(hostId, "voice/clean", {
+        text,
+        ...(target && { backend: target }),
+      });
+      return "result" in response ? response.result.text : text;
     },
   });
   voiceBusy.current = voice.phase !== "idle";

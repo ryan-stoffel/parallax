@@ -18,6 +18,8 @@ export function useVoice(options: {
   scope: string;
   starting(): void;
   inserted(text: string): void;
+  /** The transcript as it should go in, tidied up. Any failure inserts it raw. */
+  clean?(text: string): Promise<string>;
 }) {
   const current = useRef(options);
   current.current = options;
@@ -30,6 +32,7 @@ export function useVoice(options: {
         {
           engine: async (signal) => (await import("./voiceEngine")).loadVoiceEngine(signal),
           capture: async (signal) => (await import("./voiceCapture")).captureVoice(signal),
+          clean: async (text) => (await current.current.clean?.(text)) ?? text,
         },
         setPhase,
         (text) => {

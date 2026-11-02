@@ -104,7 +104,8 @@ use crate::{
     ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
     TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult, VoiceCleanParams,
+    VoiceCleanResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -749,6 +750,9 @@ method_table! {
         /// starts one regardless. Never reads GitHub itself, so the app polls it while one is
         /// written. Gated on `prGuide`.
         PrGuide = "pr/guide": PrGuideParams => PrGuideResult;
+        /// `voice/clean` (PLX-1232): dictated text tidied by the user's small model. An older plxd
+        /// answers it as an unknown method, and the app inserts the raw transcript on any error.
+        VoiceClean = "voice/clean": VoiceCleanParams => VoiceCleanResult;
         /// `pr/mergeWhenReady` (PLX-1022): watches a pull request for a run, as `pr/watch` does,
         /// and has plxd merge it, pinned to the head it judged, once it is ready, then wake the
         /// run with the result. Unwatching cancels the merge. Gated on `prWatch`.

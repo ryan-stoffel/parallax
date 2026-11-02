@@ -1,0 +1,18 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "voice/clean",
+    "params": {
+      "text": "um so fix the the login bug",
+      "backend": "claude"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "text": "Fix the login bug."
+    }
+  }
+]
