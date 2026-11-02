@@ -1171,6 +1171,9 @@ body {
   );
 }
 .composer-shell {
+  anchor-name: --composer;
+  anchor-scope: --composer;
+  interpolate-size: allow-keywords;
   transition:
     border-color var(--transition-duration-base) var(--ease-out),
     box-shadow var(--transition-duration-base) var(--ease-out),
@@ -1178,10 +1181,6 @@ body {
 }
 /* The model picker opens off the box rather than its button, so it covers neither the text nor
    the box's row: above it, lined up with its right edge, and as tall as there's room for. */
-.composer-shell {
-  anchor-name: --composer;
-  anchor-scope: --composer;
-}
 .composer-shell .model-menu {
   position-anchor: --composer;
   position-area: top span-left;
@@ -1190,7 +1189,7 @@ body {
     flip-inline,
     flip-block flip-inline;
   height: min(26rem, 100% - 1rem);
-  min-height: 16rem;
+  min-height: 10rem;
   max-width: calc(100vw - 1rem);
   margin: 0 0 0.5rem;
   transform-origin: bottom right;
@@ -1227,7 +1226,9 @@ body {
   width: 2.25rem;
   height: 2rem;
   border-radius: 9px;
-  transition: background-color var(--transition-duration-fast) var(--ease-out);
+  transition:
+    background-color var(--transition-duration-fast) var(--ease-out),
+    scale var(--transition-duration-fast) var(--ease-out);
 }
 :root:not(.nightly) .composer-shell .composer-actions .composer-send.send-sky:disabled {
   background: transparent;
@@ -1248,6 +1249,8 @@ body {
 .composer-shell .composer-send.send-sky {
   transition:
     scale var(--transition-duration-base) var(--ease-spring),
+    opacity var(--transition-duration-fast),
+    box-shadow var(--transition-duration-fast),
     filter var(--transition-duration-fast);
 }
 /* With nothing to send, a nightly's sky stays, dimmed and without its glow. It pops up with text. */
@@ -1287,8 +1290,69 @@ body {
     padding-bottom var(--transition-duration-base) var(--ease-out);
   > * {
     pointer-events: auto;
-    transition: opacity var(--transition-duration-fast) var(--ease-out);
+    transition:
+      opacity var(--transition-duration-fast) var(--ease-out),
+      visibility var(--transition-duration-fast);
   }
+}
+.composer-controls > button,
+.composer-actions {
+  flex-shrink: 0;
+}
+/* Quiet until the box is hovered or holds focus. */
+.composer-shell:not(:focus-within, :hover, [data-back])
+  > .composer-controls
+  > :not(.composer-actions) {
+  opacity: 0.75;
+}
+.composer-shell:hover:not(:focus-within, .border-ring) {
+  border-color: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+/* A press gives a little, and what joins the box opens its room as it arrives. */
+.composer-controls > button:active,
+.composer-controls button[aria-haspopup]:not([popover] *):active,
+.composer-action:enabled:active {
+  scale: 0.94;
+}
+.composer-controls button:not([popover] *) {
+  transition:
+    background-color var(--transition-duration-fast) var(--ease-out),
+    color var(--transition-duration-fast) var(--ease-out),
+    scale var(--transition-duration-fast) var(--ease-out);
+}
+.composer-attachments,
+.composer-tabs {
+  transition:
+    height var(--transition-duration-base) var(--ease-out),
+    padding-top var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-base) var(--ease-out);
+}
+@starting-style {
+  .composer-attachments,
+  .composer-tabs {
+    height: 0;
+    padding-top: 0;
+    opacity: 0;
+  }
+}
+.composer-attachments > * {
+  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
+}
+/* The reasoning bars fill or empty one after another as the level changes. */
+.reasoning-bars rect {
+  transition: opacity var(--transition-duration-fast) var(--ease-out);
+}
+.reasoning-bars rect:nth-child(2) {
+  transition-delay: 25ms;
+}
+.reasoning-bars rect:nth-child(3) {
+  transition-delay: 50ms;
+}
+.reasoning-bars rect:nth-child(4) {
+  transition-delay: 75ms;
+}
+.reasoning-bars rect:nth-child(5) {
+  transition-delay: 100ms;
 }
 [data-back] > .composer-controls {
   margin-top: -2.625rem;
@@ -1314,10 +1378,21 @@ body {
   border: 1px solid var(--border);
   border-top: 0;
   border-radius: 0 0 14px 14px;
-  transition: opacity var(--transition-duration-base) var(--ease-out);
+  transition:
+    margin-top var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-base) var(--ease-out),
+    visibility var(--transition-duration-base);
 }
+/* Over glass, the same glass as the box. */
+:root.translucent .composer-bar {
+  background-color: color-mix(in srgb, var(--raised) 78%, transparent);
+  backdrop-filter: var(--glass);
+}
+/* It slides up behind the box while the box steps back, unless one of its menus is open. */
 .composer-bar[data-back]:not(:has(:popover-open)) {
-  display: none;
+  margin-top: -3.0625rem;
+  opacity: 0;
+  visibility: hidden;
 }
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */

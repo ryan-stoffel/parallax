@@ -983,7 +983,7 @@ export function Composer({
       ? notify({ key: attachKey, tone: "error", title: "Couldn't attach that", body: why })
       : dismiss(attachKey);
   // Whether a sidebar row is dragged over the box, which outlines it.
-  const [threadOver, setThreadOver] = useState(false);
+  const [dropOver, setDropOver] = useState(false);
   const filePicker = useRef<HTMLInputElement>(null);
   // Which of `history` the box holds, unedited.
   const recalled = useRef<number>(undefined);
@@ -1926,13 +1926,13 @@ export function Composer({
             const thread = !!attach && types.includes(threadDragType);
             if (types.includes("Files") || thread) e.preventDefault();
             if (thread) e.dataTransfer.dropEffect = "copy";
-            setThreadOver(thread);
+            setDropOver(types.includes("Files") || thread);
           }}
           onDragLeave={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setThreadOver(false);
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver(false);
           }}
           onDropCapture={(e) => {
-            setThreadOver(false);
+            setDropOver(false);
             const thread = attach ? draggedThread(e.dataTransfer) : undefined;
             if (e.dataTransfer.files.length === 0 && !thread) return;
             e.preventDefault();
@@ -1955,7 +1955,7 @@ export function Composer({
           onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
           onBlur={leave}
           data-back={back || undefined}
-          className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${threadOver ? "border-ring" : "border-border"}`}
+          className={`composer-shell @container/composer relative z-10 rounded-prompt border bg-surface shadow-composer focus-within:border-foreground/20 ${dropOver ? "border-ring" : "border-border"}`}
         >
           {menuOpen && (
             <div
@@ -2065,7 +2065,7 @@ export function Composer({
               <fieldset
                 // Locked while files upload: what's there now is what's sent.
                 disabled={uploading}
-                className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
+                className="composer-attachments m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
               >
                 {images.map((image, i) => (
                   <span key={i} className="relative">
@@ -2120,7 +2120,7 @@ export function Composer({
               {!text && (
                 <p
                   aria-hidden
-                  className="composer-placeholder pointer-events-none absolute inset-x-4 top-3.5 truncate text-reading leading-relaxed text-faint-foreground"
+                  className="composer-placeholder animate-fade-in pointer-events-none absolute inset-x-4 top-3.5 truncate text-reading leading-relaxed text-faint-foreground"
                 >
                   {placeholder}
                 </p>

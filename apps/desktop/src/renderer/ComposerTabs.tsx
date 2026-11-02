@@ -27,7 +27,7 @@ export function ComposerTabs({
     <div
       role="group"
       aria-label="Composer tabs"
-      className="flex min-w-0 items-center gap-1 overflow-hidden px-1.5 pt-1"
+      className="composer-tabs flex min-w-0 items-center gap-1 overflow-hidden px-1.5 pt-1"
     >
       {tabs.map((tab, i) => (
         <div

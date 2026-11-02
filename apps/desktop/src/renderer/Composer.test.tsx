@@ -154,6 +154,20 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("dragging files over the box marks it, until they leave", () => {
+  const { box } = render(async () => undefined, caps);
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  const drag = (type: string) =>
+    Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+      dataTransfer: { types: ["Files"] },
+      relatedTarget: null,
+    });
+  act(() => void shell.dispatchEvent(drag("dragover")));
+  expect(shell.className).toContain("border-ring");
+  act(() => void shell.dispatchEvent(drag("dragleave")));
+  expect(shell.className).not.toContain("border-ring");
+});
+
 test("focus moving to the bar under the box keeps it from stepping back, and leaving both does", () => {
   const { box } = render(async () => undefined, caps, {
     away: true,
@@ -164,7 +178,10 @@ test("focus moving to the bar under the box keeps it from stepping back, and lea
   act(() => box.focus());
   expect(shell.dataset["back"]).toBeUndefined();
   const leaving = (from: Element, to: Element | null) =>
-    act(() => from.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: to })));
+    act(
+      () =>
+        void from.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: to })),
+    );
   leaving(box, picker);
   expect(shell.dataset["back"]).toBeUndefined();
   leaving(picker, null);

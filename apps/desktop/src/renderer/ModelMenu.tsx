@@ -43,7 +43,7 @@ const onCapitals = "[&>*]:-translate-y-[0.5px]";
 function ReasoningBars({ value }: { value: AgentEffort }) {
   const level = effortLevels.findIndex((l) => l.value === value);
   return (
-    <svg aria-hidden viewBox="0 0 16 16" fill="currentColor">
+    <svg aria-hidden viewBox="0 0 16 16" fill="currentColor" className="reasoning-bars">
       {effortLevels.map((l, i) => {
         const height = capHeight * ((i + 1.25) / (effortLevels.length + 0.25));
         return (
@@ -211,12 +211,12 @@ export function ModelMenu({
         popoverTarget={id}
         aria-haspopup="menu"
         aria-label={`Model: ${chosen.name}${effortName ? `, reasoning ${effortName}` : ""}${options?.fast ? ", fast" : ""}`}
-        className={`${menuButton} ${onCapitals}`}
+        className={`${menuButton} min-w-0 [&>:not(.model-name)]:-translate-y-[0.5px]`}
       >
         <Logo />
-        {shortName}
+        <span className="model-name min-w-0 truncate">{shortName}</span>
         {options?.effort && <ReasoningBars value={options.effort} />}
-        {options?.fast && <Zap aria-hidden className="fill-current" />}
+        {options?.fast && <Zap aria-hidden className="composer-pop fill-current" />}
         {!options && <ChevronDown aria-hidden className="opacity-70" />}
       </button>
       <div
