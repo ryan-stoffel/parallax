@@ -152,23 +152,26 @@ fn prompt(raw: &str, names: &[String]) -> String {
 }
 
 /// `answer` without what a model can wrap around plain text: JSON of [`Answer`]'s shape, a code
-/// fence, a whole-answer quote, or a lead-in such as "Here's the cleaned text:". A lead-in the
-/// speaker said stays.
-fn unwrapped<'a>(raw: &str, answer: &'a str) -> std::borrow::Cow<'a, str> {
+/// fence, a whole-answer quote, or a lead-in about the cleanup, such as "Here's the cleaned text:".
+fn unwrapped(answer: &str) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
     let mut text = answer.trim();
     if let Ok(inner) = serde_json::from_str::<Answer>(text) {
-        return Cow::Owned(unwrapped(raw, &inner.text).into_owned());
+        return Cow::Owned(unwrapped(&inner.text).into_owned());
     }
-    if !raw.to_lowercase().starts_with("here")
-        && let Some((first, rest)) = text.split_once('\n')
-    {
+    if let Some((first, rest)) = text.split_once('\n') {
         let lead = first.trim().to_lowercase();
-        if lead.starts_with("here") && lead.ends_with(':') {
+        // Only one about the cleanup itself: "here's the thing:" is the speaker's.
+        let about_it = ["clean", "transcript", "rewritten"]
+            .iter()
+            .any(|word| lead.contains(word));
+        if lead.starts_with("here") && lead.ends_with(':') && about_it {
             text = rest.trim();
         }
     }
-    if let Some(inner) = text.strip_prefix("```").and_then(|t| t.strip_suffix("```")) {
+    if let Some(inner) = text.strip_prefix("```").and_then(|t| t.strip_suffix("```"))
+        && !inner.contains("```")
+    {
         // Past the fence's language, if it has one.
         text = inner
             .split_once('\n')
@@ -189,7 +192,7 @@ fn unwrapped<'a>(raw: &str, answer: &'a str) -> std::borrow::Cow<'a, str> {
 /// `answer`, when it reads as a cleanup of `raw`. A model that answered the transcript, rather than
 /// cleaning it, writes something empty or much longer.
 fn checked(raw: &str, answer: &str) -> Option<String> {
-    let text = unwrapped(raw, answer);
+    let text = unwrapped(answer);
     (!text.is_empty() && text.len() <= raw.len() * 2 + 200).then(|| text.into_owned())
 }
 
@@ -293,14 +296,15 @@ mod tests {
         assert_eq!(checked("fix the bug", "```\nFix the bug.\n```"), clean);
         assert_eq!(checked("fix the bug", "```text\nFix the bug.\n```"), clean);
         assert_eq!(checked("fix the bug", "\"Fix the bug.\""), clean);
-        // What the speaker said stays: their own lead-in, and quotes inside the text.
-        let list = "Here are three things:\n1. One";
-        assert_eq!(
-            checked("here are three things one", list),
-            Some(list.to_owned())
-        );
-        let quoted = "\"A\" and \"B\"";
-        assert_eq!(checked("a and b", quoted), Some(quoted.to_owned()));
+        // What the speaker said stays: their own lead-ins, quotes inside the text, and fences.
+        for spoken in [
+            "Here are three things:\n1. One",
+            "Here's the thing:\nIt's slow.",
+            "\"A\" and \"B\"",
+            "```\na\n```\nand\n```\nb\n```",
+        ] {
+            assert_eq!(checked(spoken, spoken), Some(spoken.to_owned()));
+        }
     }
 
     fn files(names: &[&str]) -> Vec<String> {
