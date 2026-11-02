@@ -1538,6 +1538,20 @@ body {
   opacity: 1;
   filter: none;
 }
+/* A provider's pane: rows with dividers running edge to edge, under each section's title, and no
+   card around them. A card without a title is its section's only child. */
+.provider-pane section {
+  margin-bottom: 1.5rem;
+}
+.provider-pane section > div:not(:only-child):first-child {
+  padding-inline: 1rem;
+}
+.provider-pane section > div:last-child {
+  border-block: 1px solid var(--border);
+  border-inline: 0;
+  border-radius: 0;
+  background: none;
+}
 /* The search field's clear button, drawn as a lucide X at 1.5px in the faint color. */
 .model-menu input[type="search"]::-webkit-search-cancel-button {
   appearance: none;

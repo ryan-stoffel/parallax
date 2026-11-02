@@ -40,6 +40,7 @@ import {
 } from "./linkedProviders";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
+import { PlanLabel } from "./PlanLabel";
 import {
   accountLabel,
   kindOf,
@@ -806,43 +807,22 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         </div>
       )}
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
-        <h1 className="text-reading font-semibold">Providers</h1>
-        {asking ? (
-          // Remove and Cancel take the trash's place.
-          <div className="flex items-center gap-2 text-body text-muted-foreground">
-            <span>
-              Remove <span className="font-medium text-foreground">{chosenName}</span>? Its settings
-              and secrets leave {isListed(chosenTab) ? "every connected computer" : "this host"};
-              its threads keep their transcripts.
-            </span>
-            <ConfirmRemove
-              disabled={removing}
-              onRemove={() => void remove(chosenTab!)}
-              onCancel={() => setConfirming(undefined)}
-            />
-          </div>
-        ) : (
-          <div className="flex items-center gap-1 text-body text-muted-foreground">
-            <button
-              type="button"
-              aria-label="Refresh"
-              disabled={checking}
-              onClick={() => void refresh()}
-              className="flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-            >
-              <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
-              {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
-            </button>
-            <IconButton label="Add provider" onClick={() => setAdding(true)}>
-              <Plus aria-hidden />
-            </IconButton>
-            {chosenTab && (
-              <IconButton label={`Remove ${chosenName}`} onClick={() => setConfirming(chosenTab)}>
-                <Trash2 aria-hidden />
-              </IconButton>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-1">
+          <h1 className="text-reading font-semibold">Providers</h1>
+          <IconButton label="Add provider" onClick={() => setAdding(true)}>
+            <Plus aria-hidden />
+          </IconButton>
+        </div>
+        <button
+          type="button"
+          aria-label="Refresh"
+          disabled={checking}
+          onClick={() => void refresh()}
+          className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+        >
+          <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
+          {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
+        </button>
       </div>
       {error && (
         <p role="alert" className="mb-3 px-1 text-body text-danger">
@@ -888,7 +868,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         // Stacked until there's room for the list beside the pane; then one box the height of
         // Settings, in which the list and the pane each scroll.
         <div className="@container overflow-hidden rounded-xl border border-border">
-          <div className="grid @3xl:h-[calc(100vh-15rem)] @3xl:min-h-[28rem] @3xl:grid-cols-[17rem_minmax(0,1fr)]">
+          <div className="grid @3xl:h-[calc(100vh-15rem)] @3xl:min-h-[28rem] @3xl:grid-cols-[19rem_minmax(0,1fr)]">
             <div className="flex flex-col border-b border-border @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0">
               <div
                 role="tablist"
@@ -931,13 +911,12 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                               </span>
                             )}
                           </span>
-                          <span className="mt-0.5 line-clamp-2 text-body text-muted-foreground">
-                            {instance.enabled && tone && (
-                              <span className="mr-1.5 inline-flex align-middle">
-                                <StatusDot tone={tone} />
-                              </span>
-                            )}
-                            {instance.enabled ? instanceStatus(info) : "Off"}
+                          <span className="mt-0.5 flex min-h-5 items-center gap-1.5 text-meta text-muted-foreground">
+                            {instance.enabled && tone && <StatusDot tone={tone} />}
+                            <span className="line-clamp-2 min-w-0">
+                              {instance.enabled ? instanceStatus(info) : "Off"}
+                            </span>
+                            {instance.enabled && <InstancePlan info={info} />}
                           </span>
                         </span>
                       </button>
@@ -954,6 +933,14 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                   );
                 })}
               </div>
+              <button
+                type="button"
+                onClick={() => setAdding(true)}
+                className="flex shrink-0 items-center gap-3 px-4 py-3.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+              >
+                <Plus aria-hidden />
+                Add provider
+              </button>
             </div>
             {/* Every pane stays mounted, so a sign-in outlives a switch to another tab. */}
             {list.map((info) => (
@@ -972,6 +959,25 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                 keys={keys}
                 onKeys={setKeys}
                 onSignedIn={() => void loadProviders(host.id, true)}
+                onRemove={() => setConfirming(info.instance.id)}
+                removal={
+                  asking &&
+                  info === current && (
+                    <div className="mx-4 mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
+                      <span className="min-w-0 flex-1">
+                        Remove <span className="font-medium text-foreground">{chosenName}</span>?
+                        Its settings and secrets leave{" "}
+                        {isListed(chosenTab) ? "every connected computer" : "this host"}; its
+                        threads keep their transcripts.
+                      </span>
+                      <ConfirmRemove
+                        disabled={removing}
+                        onRemove={() => void remove(chosenTab!)}
+                        onCancel={() => setConfirming(undefined)}
+                      />
+                    </div>
+                  )
+                }
               />
             ))}
           </div>
@@ -1041,9 +1047,15 @@ function Card({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** The plan an instance is signed in on, if it reports one. */
+function InstancePlan({ info }: { info: ProviderInfo }) {
+  if (info.signedIn !== true || !info.plan) return null;
+  return <PlanLabel kind={info.instance.kind} plan={info.plan} />;
+}
+
 /**
- * A provider instance's pane, `hidden` unless its tab is chosen: its display name with its
- * account, and Sign in (in a terminal under it, after which the instances are probed again with
+ * A provider instance's pane, `hidden` unless its tab is chosen: its name, version, and Remove,
+ * with `removal` under them while Remove asks; its account and plan, and Sign in (in a terminal under it, after which the instances are probed again with
  * `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
  * its models; and Claude's and Codex's usage and API keys. An agent Parallax knows how to install
  * (Cursor, Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install in
@@ -1065,7 +1077,9 @@ function InstancePane({
   keys,
   onKeys,
   onSignedIn,
-}: PaneProps & { info: ProviderInfo }) {
+  onRemove,
+  removal,
+}: PaneProps & { info: ProviderInfo; onRemove: () => void; removal: ReactNode }) {
   const { instance } = info;
   const kind = kindOf(instance.kind);
   const KindLogo = logoOf(instance);
@@ -1198,37 +1212,31 @@ function InstancePane({
       role="tabpanel"
       aria-labelledby={tabId}
       hidden={hidden}
-      className="min-w-0 p-5 @3xl:overflow-y-auto"
+      className="provider-pane min-w-0 py-5 @3xl:overflow-y-auto"
     >
-      <div className="mb-6 flex items-center gap-3 px-1">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface">
-          <KindLogo className="size-5" />
-        </span>
-        <div className="min-w-0">
+      <div className="mb-5 flex items-center gap-3 px-4">
+        <KindLogo className="size-5 shrink-0" />
+        <div className="min-w-0 flex-1">
           <h2 className="truncate text-reading font-semibold">{accountLabel(info)}</h2>
-          {/* What it is, unless its name says so, and its version. */}
-          <p className="truncate text-body text-muted-foreground">
-            {kind.name !== instance.name && kind.name}
-            {kind.name !== instance.name && info.version && " · "}
-            {info.version && <span className="font-mono">{info.version}</span>}
-          </p>
+          {/* What it is, unless its name says so. */}
+          {kind.name !== instance.name && (
+            <p className="truncate text-meta text-muted-foreground">{kind.name}</p>
+          )}
         </div>
+        {info.version && (
+          <span className="truncate font-mono text-meta text-faint-foreground">{info.version}</span>
+        )}
+        <IconButton label={`Remove ${instance.name}`} onClick={onRemove}>
+          <Trash2 aria-hidden />
+        </IconButton>
       </div>
+      {removal}
       {!instance.enabled && (
-        <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
+        <p className="mx-4 mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
           Off on this host: new threads and model menus leave out {instance.name}'s models.
         </p>
       )}
       <Card label="Account">
-        <Row title="Display name" description="How threads and model menus name it.">
-          <SavedField
-            aria-label="Display name"
-            required
-            maxLength={64}
-            value={instance.name}
-            onSave={(name) => void save({ name: name.trim() })}
-          />
-        </Row>
         {canInstall ? (
           <Row
             title="Install"
@@ -1266,13 +1274,14 @@ function InstancePane({
           </Row>
         ) : (
           <Row
-            title="Account"
+            title="Status"
             description={
-              <span className="flex items-center gap-1.5">
+              <span className="flex min-h-5 items-center gap-1.5">
                 <StatusDot
                   tone={info.signedIn === true ? "on" : instanceTone(info) ? "error" : "off"}
                 />
                 <span className="min-w-0">{account}</span>
+                <InstancePlan info={info} />
               </span>
             }
           >
@@ -1298,6 +1307,15 @@ function InstancePane({
             )}
           </Row>
         )}
+        <Row title="Display name" description="How threads and model menus name it.">
+          <SavedField
+            aria-label="Display name"
+            required
+            maxLength={64}
+            value={instance.name}
+            onSave={(name) => void save({ name: name.trim() })}
+          />
+        </Row>
         {cursorWaiting && (
           <Row
             title="Sign-in"

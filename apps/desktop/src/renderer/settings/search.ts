@@ -268,7 +268,11 @@ export const settingsIndex: SettingEntry[] = [
   ]),
   // Providers
   ...entries("providers", undefined, [
-    ["Account", "Sign in to a provider", "sign in login authenticate subscription install"],
+    [
+      "Status",
+      "Sign in to a provider",
+      "account sign in login authenticate subscription plan install",
+    ],
     ["Display name", "How threads and model menus name a provider", "rename"],
     ["Binary path", "The binary a provider runs", "program executable path cli"],
     ["Launch arguments", "Arguments passed on session start", "args flags cli"],

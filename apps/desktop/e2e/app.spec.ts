@@ -179,7 +179,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", a
 test("Escape closes a dialog opened in Settings, and leaves Settings open (PLX-1050)", async () => {
   // The sign-in test left Settings open on Providers.
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Add provider" }).click();
+  await settings.getByRole("button", { name: "Add provider" }).first().click();
   const add = page.getByRole("dialog", { name: "Add provider" });
   await expect(add).toBeVisible();
   // Both modal backdrops must finish fading in for their blur to be visible (PLX-1212).
