@@ -1369,20 +1369,24 @@ body {
   opacity: 0;
   visibility: hidden;
 }
-/* Where it runs, grouped as one chip at the footer's end, apart from the run's own settings. */
-.composer-tab {
+/* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
+   its corners following the box's. A step darker, so it reads as behind it. */
+.composer-bar {
   display: flex;
-  flex-shrink: 1;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
+  gap: 0.5rem;
   min-width: 0;
-  margin-left: auto;
-  border-radius: 10px;
-  background-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+  margin: -1rem 0.75rem 0;
+  padding: calc(1rem + 2px) 0.25rem 2px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+  background-color: color-mix(in oklab, var(--foreground) 4%, var(--background));
 }
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */
-.composer-footer button[aria-haspopup]:not([popover] *) {
+:is(.composer-footer, .composer-bar) button[aria-haspopup]:not([popover] *) {
   height: 1.75rem;
   padding-block: 0;
   padding-right: 0.5rem;
@@ -1392,7 +1396,7 @@ body {
   }
 }
 /* Labels give way to their icons as the box narrows, least needed first. Each keeps its title. */
-@container composer (width < 30rem) {
+@container composer (width < 24rem) {
   .composer-access > span {
     display: none;
   }

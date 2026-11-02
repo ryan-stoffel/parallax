@@ -590,7 +590,7 @@ export function NewThread({
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Where it runs, at the footer's end. Chat picks only its computer here, and a Project only
+          // Where it runs, in the bar under the box. Chat picks only its computer here, and a Project only
           // among the computers that have it (`tray`), since its entry is on each computer alone.
           // While a start is under way it stays as it was, but inert, so the thread can't move.
           tab={

@@ -781,7 +781,7 @@ export interface ComposerProps {
   disabledReason?: string;
   /** The row inside the box, over the text: the thread's plan, queue, and what it waits on. */
   top?: ReactNode;
-  /** The footer controls inside the box: where the thread runs, or an open run's status. */
+  /** The bar tucked under the box: where the thread runs, or an open run's status. */
   tab?: ReactNode;
   /** What goes under the box, such as a new thread's account chooser. */
   footer?: ReactNode;
@@ -2124,16 +2124,17 @@ export function Composer({
             </div>
           </div>
         </div>
-        {(pickers || tab) && (
+        {pickers && (
           // On one line at any width: index.css trims labels to icons as the box narrows.
           <div className="composer-footer">
             <div className="flex min-h-0 min-w-0 items-center gap-2 overflow-hidden px-2">
               {pickers}
-              {tab && <div className="composer-tab">{tab}</div>}
             </div>
           </div>
         )}
       </div>
+      {/* Gone while the box steps back, with the footer. */}
+      {tab && !back && <div className="composer-bar tucked @container/composer">{tab}</div>}
       {footer}
     </div>
   );

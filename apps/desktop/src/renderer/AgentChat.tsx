@@ -287,7 +287,7 @@ export function AgentChat({
   /** The run as the thread list has it, which the composer shows until the transcript loads. */
   listed?: AgentRun;
   /**
-   * The tab in the composer's footer, such as an orchestrator's repository. A thread's own has
+   * The bar under the composer, such as an orchestrator's repository. A thread's own has
    * none: where it runs and its branch show in Thread details, as a new thread's picker did.
    */
   tab?: ReactNode;
