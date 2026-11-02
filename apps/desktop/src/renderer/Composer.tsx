@@ -2127,7 +2127,7 @@ export function Composer({
             <div
               ref={textArea}
               onPointerDown={() => setFocused(true)}
-              onKeyDown={() => setFocused(true)}
+              onInput={() => setFocused(true)}
               className="composer-text group/scroll relative min-w-0"
             >
               {!text && (

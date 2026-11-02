@@ -160,6 +160,9 @@ test("scrolling up steps back with the caret in an empty box, until the text is 
   act(() => box.focus());
   rerender({ away: true });
   expect(shell.dataset["back"]).toBe("true");
+  // A shortcut's keys don't bring it back, only pressing or typing in the text does.
+  act(() => void box.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
   act(() => void box.dispatchEvent(new Event("pointerdown", { bubbles: true })));
   expect(shell.dataset["back"]).toBeUndefined();
 });

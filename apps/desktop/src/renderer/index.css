@@ -1374,6 +1374,11 @@ body {
     display: none;
   }
 }
+/* What's beside the text stays in the room the placeholder leaves it, whatever it holds. */
+[data-back] .composer-run {
+  max-width: 7.5rem;
+  overflow: clip;
+}
 [data-back] .composer-placeholder {
   right: 13.5rem;
 }
@@ -1381,6 +1386,9 @@ body {
 @container composer (width < 28rem) {
   [data-back] .model-name {
     display: none;
+  }
+  [data-back] .composer-run {
+    max-width: 3.5rem;
   }
   [data-back] .composer-placeholder {
     right: 9.5rem;
