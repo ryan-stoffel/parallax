@@ -230,7 +230,12 @@ function createWindow() {
     if (saved?.maximized) win.maximize();
     win.show();
   });
-  win.on("close", () => writeWindowState(windowStateFile, { bounds, maximized }));
+  win.on("close", () => {
+    writeWindowState(windowStateFile, { bounds, maximized });
+    // Simple full screen hides the Dock and menu bar for the whole app, and closing the window
+    // doesn't bring them back.
+    if (win.isSimpleFullScreen()) win.setSimpleFullScreen(false);
+  });
   // Full screen hides Windows' window buttons, so the top row needs no room for them (main.tsx).
   win.on("enter-full-screen", () => win.webContents.send("parallax:fullScreen", true));
   win.on("leave-full-screen", () => win.webContents.send("parallax:fullScreen", false));

@@ -836,7 +836,7 @@ body {
 /* Over a see-through window, a modal's backdrop-filter leaves the app's text legible through the
    modal and around it, so the app itself blurs. Modals and menus are in the top layer, which an
    ancestor's filter doesn't reach. */
-:root.translucent #root:has(dialog:modal) {
+:root.translucent:has(dialog:modal) #root {
   filter: blur(28px);
 }
 /* Settings is a pane of the glass, as large as the window, rather than a slab over it. */
