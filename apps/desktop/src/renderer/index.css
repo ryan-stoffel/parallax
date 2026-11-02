@@ -796,15 +796,17 @@ body {
 }
 /* The thread list's sticky headings sit on the sidebar's own glass with nothing of their own: a
    fill or backdrop-filter there reads as a black box (PLX-1230). Rows dissolve as they reach the
-   heading instead, so their text never overlaps it. The 28px is the shorter heading's height. */
+   heading instead, so their text never overlaps it. The 28px is the shorter heading's height.
+   Important, since this follows the user's own scrolling and Reduce motion must keep it: without
+   it, rows there would overlap the heading. */
 :root.translucent .sticky.bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
   background-color: transparent;
   backdrop-filter: none;
 }
 :root.translucent .sticky.bg-sidebar + * ul > li:not(.row-flash) {
-  animation: under-heading linear both;
-  animation-timeline: view(block 28px 0);
-  animation-range: exit 0 exit 12px;
+  animation: under-heading linear both !important;
+  animation-timeline: view(block 28px 0) !important;
+  animation-range: exit 0 exit 12px !important;
 }
 @keyframes under-heading {
   to {
