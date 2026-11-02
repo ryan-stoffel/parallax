@@ -4,12 +4,12 @@ import { useConnections } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { notify } from "./notifications";
-import { listedProviders, removeProvider, saveProvider } from "./providers";
+import { listedProviders, removeProvider, saveProvider, versions } from "./providers";
 import { stored } from "./stored";
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
 
 // Linked providers (0096): one list of provider instances this app keeps every computer it reaches
-// on, through their own `providers/*`. A secret, a sign-in, a CLI's path, and a hub stay per computer.
+// on, through their own `providers/*`. Secrets, sign-ins, CLI paths, and hubs stay per computer.
 
 const key = "parallax.linkedProviders";
 const parse = (raw: unknown, fallback: ProviderInstance[] | null) =>
@@ -18,32 +18,39 @@ const parse = (raw: unknown, fallback: ProviderInstance[] | null) =>
 /** The list every computer follows, or null while providers aren't linked. */
 const linked = stored<ProviderInstance[] | null>(key, null, parse);
 
-// Another window's change, which `stored` alone only sees once this one reloads.
+// Another window's change, read from what's stored now, so an older event can't undo a newer one.
 window.addEventListener("storage", (e) => {
-  if (e.key === key) linked.set(e.newValue ? parse(JSON.parse(e.newValue), null) : null);
+  if (e.key !== key) return;
+  const raw = localStorage.getItem(key);
+  linked.adopt(raw ? parse(JSON.parse(raw), null) : null);
 });
 
 /** Whether providers are linked, kept current. */
 export const useProvidersLinked = () => linked.use() !== null;
 
 /** A home folder under a user's home as `~/...`, which each computer reads as its own. */
-const portableHome = (home: string) => {
-  const under = /^(?:\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)(?=[/\\]|$)/;
-  return under.test(home) ? home.replace(under, "~").replaceAll("\\", "/") : home;
-};
+function portableHome(id: string, home: string) {
+  const under = /^(?:\/Users\/[^/]+|\/home\/[^/]+|\/root|[A-Za-z]:\\Users\\[^\\]+)(?=[/\\]|$)/;
+  if (home.startsWith("~")) return home;
+  // A folder elsewhere may not exist or be allowed on another computer, so it gets its own there.
+  return under.test(home) ? home.replace(under, "~").replaceAll("\\", "/") : `~/.${id}`;
+}
+
+const isAbsolute = (path: string) => /^(?:[/\\]|[A-Za-z]:)/.test(path);
 
 /**
- * `instance` as the list keeps it: never a secret's value, which only its computer's keychain
- * holds, nor its CLI's path. Ollama Cloud's home is the one plxd makes in its own data folder.
+ * `instance` as the list keeps it. No secret: its value stays in its computer's keychain, and a
+ * variable with no value would make another computer look set up. A CLI's path stays on its
+ * computer too, but a command's name doesn't, as OpenCode 2.x's, and an ACP agent needs its program
+ * whatever it is. Ollama Cloud's home is the one plxd makes in its own data folder.
  */
 export function linkable(instance: ProviderInstance): ProviderInstance {
-  const { program: _program, home, ...rest } = instance;
+  const { program, home, ...rest } = instance;
   return {
     ...rest,
-    env: instance.env.map(({ name, value, secret }) =>
-      secret ? { name, secret } : { name, secret, ...(value !== undefined && { value }) },
-    ),
-    ...(home && instance.kind !== "ollamaCloud" && { home: portableHome(home) }),
+    env: instance.env.filter((v) => !v.secret),
+    ...(program && (instance.kind === "acp" || !isAbsolute(program)) && { program }),
+    ...(home && instance.kind !== "ollamaCloud" && { home: portableHome(instance.id, home) }),
   };
 }
 
@@ -54,6 +61,22 @@ const canonical = (value: unknown) =>
       ? Object.fromEntries(Object.entries(part).sort(([a], [b]) => a.localeCompare(b)))
       : part,
   );
+
+/**
+ * A computer's own variables with the list's plain ones: its secrets stay, in their order, since
+ * plxd reads the keychain when they change, and one the list has as plain stays a secret.
+ */
+const mergedEnv = (want: ProviderInstance, have: ProviderInstance) => [
+  ...have.env.flatMap((v) => {
+    const listed = want.env.find((w) => w.name === v.name);
+    return v.secret ? [v] : listed ? [listed] : [];
+  }),
+  ...want.env.filter((w) => !have.env.some((v) => v.name === w.name)),
+];
+
+/** A version's program, which follows the list, unlike a program someone chose for a computer. */
+const isVersionProgram = (kind: string, program: string | undefined) =>
+  !!versions[kind]?.some((v) => v.program && v.program === program);
 
 /** What a computer listing `current` must save to follow `wanted`, and the ids it can't take. */
 export function reconcile(wanted: ProviderInstance[], current: ProviderInfo[]) {
@@ -67,26 +90,29 @@ export function reconcile(wanted: ProviderInstance[], current: ProviderInfo[]) {
     } else if (have.kind !== want.kind) {
       conflicts.push(want.id);
     } else {
-      // Its own CLI path, home, and secrets stay, including a secret the list doesn't have.
+      // Its own CLI path, home, and secrets stay.
+      const { program: _program, ...others } = have;
+      const program =
+        want.program ?? (isVersionProgram(have.kind, have.program) ? undefined : have.program);
       const next: ProviderInstance = {
-        ...have,
+        ...others,
+        ...(program && { program }),
         name: want.name,
         enabled: want.enabled,
         args: want.args,
         models: want.models,
-        env: [
-          ...want.env,
-          ...have.env.filter((v) => v.secret && !want.env.some((w) => w.name === v.name)),
-        ],
+        env: mergedEnv(want, have),
         ...(want.reserve !== undefined && { reserve: want.reserve }),
       };
       if (canonical(next) !== canonical(have)) saves.push(next);
     }
   }
-  // Turned off, not removed, since removing one deletes its secrets.
-  for (const instance of own)
-    if (instance.enabled && !wanted.some((w) => w.id === instance.id))
-      saves.push({ ...instance, enabled: false });
+  // Turned off, not removed, since removing one deletes its secrets. A list with nothing on would
+  // leave a computer with nothing to run on, so it turns nothing off.
+  if (wanted.some((w) => w.enabled))
+    for (const instance of own)
+      if (instance.enabled && !wanted.some((w) => w.id === instance.id))
+        saves.push({ ...instance, enabled: false });
   return { saves, conflicts };
 }
 
@@ -101,28 +127,41 @@ function report(hostId: string, problem: string) {
   });
 }
 
-/** Saves what `hostId` needs to follow the list, and says what it couldn't take. */
-async function bringInLine(hostId: string) {
-  const wanted = linked.get();
-  if (!wanted) return;
-  const answer = await window.parallax.request(hostId, "providers/list", { refresh: false });
-  if ("error" in answer) return report(hostId, describeError(answer.error));
-  const { saves, conflicts } = reconcile(wanted, answer.result.providers);
-  for (const instance of saves) {
-    const failed = await saveProvider(hostId, instance);
-    if (failed) report(hostId, `${instance.name}: ${failed}`);
-  }
-  for (const id of conflicts) report(hostId, `It has a different kind of provider named ${id}.`);
+// One change at a time per computer, each reading the list when its turn comes, so a slow one can't
+// undo a newer one.
+const queues = new Map<string, Promise<unknown>>();
+function inTurn(hostId: string, run: () => Promise<void>) {
+  const next = (queues.get(hostId) ?? Promise.resolve())
+    .then(run)
+    .catch((error: unknown) => report(hostId, String(error)));
+  queues.set(hostId, next);
+  return next;
 }
+
+/** Saves what `hostId` needs to follow the list, and says what it couldn't take. */
+const bringInLine = (hostId: string) =>
+  inTurn(hostId, async () => {
+    const answer = await window.parallax.request(hostId, "providers/list", { refresh: false });
+    if ("error" in answer) return report(hostId, describeError(answer.error));
+    const wanted = linked.get();
+    if (!wanted) return;
+    const { saves, conflicts } = reconcile(wanted, answer.result.providers);
+    for (const instance of saves) {
+      const failed = await saveProvider(hostId, instance);
+      if (failed) report(hostId, `${instance.name}: ${failed}`);
+    }
+    for (const id of conflicts) report(hostId, `It has a different kind of provider named ${id}.`);
+  });
 
 const spread = (except: string) =>
   Promise.all([...reachable.keys()].filter((id) => id !== except).map(bringInLine));
 
-/** Links providers, with `hostId`'s as the list. */
-export function linkProviders(hostId: string) {
-  const list = listedProviders(hostId)?.providers ?? [];
-  linked.set(list.filter((p) => !p.hub).map((p) => linkable(p.instance)));
-  return spread(hostId);
+/** Links providers, with `hostId`'s as the list, if it has one turned on to run on. */
+export async function linkProviders(hostId: string) {
+  const list = (listedProviders(hostId)?.providers ?? []).filter((p) => !p.hub);
+  if (!list.some((p) => p.instance.enabled)) return;
+  linked.set(list.map((p) => linkable(p.instance)));
+  await spread(hostId);
 }
 
 /** Unlinks providers. Each computer keeps the ones it has. */
@@ -148,15 +187,22 @@ export async function removeEverywhere(hostId: string, id: string) {
   const failed = await removeProvider(hostId, id);
   const wanted = linked.get();
   if (failed || !wanted) return failed;
+  const entry = wanted.find((i) => i.id === id);
+  // One outside the list is only this computer's to remove.
+  if (!entry) return undefined;
   linked.set(wanted.filter((i) => i.id !== id));
   for (const other of reachable.keys()) {
     if (other === hostId) continue;
-    const answer = await window.parallax.request(other, "providers/list", { refresh: false });
-    if ("error" in answer) report(other, describeError(answer.error));
-    else if (answer.result.providers.some((p) => p.instance.id === id && !p.hub)) {
-      const problem = await removeProvider(other, id);
+    void inTurn(other, async () => {
+      const answer = await window.parallax.request(other, "providers/list", { refresh: false });
+      if ("error" in answer) return report(other, describeError(answer.error));
+      // A provider of another kind under this id isn't the one that was removed.
+      const same = answer.result.providers.some(
+        (p) => p.instance.id === id && p.instance.kind === entry.kind && !p.hub,
+      );
+      const problem = same ? await removeProvider(other, id) : undefined;
       if (problem) report(other, problem);
-    }
+    });
   }
   return undefined;
 }

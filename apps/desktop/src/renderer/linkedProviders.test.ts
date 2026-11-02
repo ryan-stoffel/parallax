@@ -31,13 +31,14 @@ const instance = (id: string, rest: Partial<ProviderInstance> = {}): ProviderIns
 const info = (i: ProviderInstance, rest: Partial<ProviderInfo> = {}) =>
   ({ instance: i, models: [], installed: true, ...rest }) as unknown as ProviderInfo;
 
-test("a list never holds a secret's value or a CLI's path, and its homes are portable", () => {
+test("a list holds no secret or CLI path, and its homes work on any computer", () => {
   const entry = linkable(
     instance("work", {
       program: "/opt/homebrew/bin/codex",
       home: "/Users/ada/.codex-work",
       env: [
         { name: "API_KEY", value: "sk-secret", secret: true },
+        { name: "STORED_KEY", secret: true },
         { name: "BASE_URL", value: "https://example.test", secret: false },
       ],
     }),
@@ -45,14 +46,57 @@ test("a list never holds a secret's value or a CLI's path, and its homes are por
   expect(JSON.stringify(entry)).not.toContain("sk-secret");
   expect(entry.program).toBeUndefined();
   expect(entry.home).toBe("~/.codex-work");
-  expect(entry.env).toEqual([
-    { name: "API_KEY", secret: true },
-    { name: "BASE_URL", value: "https://example.test", secret: false },
-  ]);
-  expect(linkable(instance("w", { home: "/home/ada/.w" })).home).toBe("~/.w");
-  expect(linkable(instance("w", { home: "C:\\Users\\ada\\.w\\x" })).home).toBe("~/.w/x");
-  expect(linkable(instance("w", { home: "/srv/codex" })).home).toBe("/srv/codex");
+  expect(entry.env).toEqual([{ name: "BASE_URL", value: "https://example.test", secret: false }]);
+  const home = (h: string) => linkable(instance("w", { home: h })).home;
+  expect(home("/home/ada/.w")).toBe("~/.w");
+  expect(home("/root/.w")).toBe("~/.w");
+  expect(home("C:\\Users\\ada\\.w\\x")).toBe("~/.w/x");
+  expect(home("~/.w")).toBe("~/.w");
+  // A folder elsewhere gets one of its own, since it may not be allowed on another computer.
+  expect(home("/srv/codex")).toBe("~/.w");
   expect(linkable(instance("o", { kind: "ollamaCloud", home: "/Users/a/o" })).home).toBeUndefined();
+});
+
+test("a program the other computer can run stays in the list", () => {
+  expect(linkable(instance("a", { kind: "acp", program: "/opt/agent" })).program).toBe(
+    "/opt/agent",
+  );
+  expect(linkable(instance("o", { kind: "opencode", program: "opencode2" })).program).toBe(
+    "opencode2",
+  );
+  const on2 = instance("o", { kind: "opencode", program: "opencode2" });
+  // Back on 1.x, a computer leaves 2.x, but a program chosen for it stays.
+  expect(reconcile([instance("o", { kind: "opencode" })], [info(on2)]).saves).toEqual([
+    instance("o", { kind: "opencode" }),
+  ]);
+  const custom = instance("o", { kind: "opencode", program: "/opt/oc" });
+  expect(reconcile([instance("o", { kind: "opencode" })], [info(custom)]).saves).toEqual([]);
+});
+
+test("a computer's secret stays one, in its place, even if the list has that name as plain", () => {
+  const have = instance("codex", {
+    env: [
+      { name: "B_KEY", secret: true },
+      { name: "A_KEY", secret: true },
+      { name: "OLD", value: "x", secret: false },
+    ],
+  });
+  const want = instance("codex", {
+    env: [
+      { name: "A_KEY", value: "plain", secret: false },
+      { name: "NEW", value: "y", secret: false },
+    ],
+  });
+  expect(reconcile([want], [info(have)]).saves[0]!.env).toEqual([
+    { name: "B_KEY", secret: true },
+    { name: "A_KEY", secret: true },
+    { name: "NEW", value: "y", secret: false },
+  ]);
+});
+
+test("a list with nothing on turns nothing off", () => {
+  const { saves } = reconcile([instance("a", { enabled: false })], [info(instance("b"))]);
+  expect(saves).toEqual([instance("a", { enabled: false })]);
 });
 
 test("a computer adds what's missing, updates what differs, and turns others off", () => {
@@ -73,7 +117,7 @@ test("a computer adds what's missing, updates what differs, and turns others off
 });
 
 test("a computer already in line saves nothing, and keeps its own secrets and home", () => {
-  const wanted = linkable(instance("codex", { env: [{ name: "A", value: "1", secret: false }] }));
+  const wanted = linkable(instance("codex", { env: [{ value: "1", name: "A", secret: false }] }));
   const have = instance("codex", {
     home: "/home/grace/.codex",
     env: [
@@ -170,8 +214,59 @@ test("linking uses the chosen computer's list, and later changes reach every com
   await act(async () => {
     await removeEverywhere("laptop", "claude");
   });
-  expect(lists.mini.map((i) => i.id)).toEqual(["codex"]);
+  await vi.waitFor(() => expect(lists.mini.map((i) => i.id)).toEqual(["codex"]));
   expect(lists.laptop.map((i) => i.id)).toEqual(["codex", "pi"]);
+});
+
+test("linking needs a provider that's on, so it can't turn everything off elsewhere", async () => {
+  const lists = { mini: [instance("off", { enabled: false })], laptop: [instance("codex")] };
+  const request = computers(lists);
+  await reach();
+  await loadProviders("mini");
+  await act(async () => {
+    await linkProviders("mini");
+  });
+  expect(saved(request, "laptop")).toEqual([]);
+});
+
+test("removing leaves another computer's provider of a different kind under that id", async () => {
+  const lists = {
+    mini: [instance("work"), instance("codex")],
+    laptop: [instance("work", { kind: "pi" }), instance("codex")],
+  };
+  computers(lists);
+  await reach();
+  await loadProviders("mini");
+  await act(async () => {
+    await linkProviders("mini");
+  });
+  await act(async () => {
+    await removeEverywhere("mini", "work");
+  });
+  await act(async () => {});
+  await vi.waitFor(() => expect(lists.mini.map((i) => i.id)).toEqual(["codex"]));
+  expect(lists.laptop.map((i) => [i.id, i.kind])).toEqual([
+    ["work", "pi"],
+    ["codex", "codex"],
+  ]);
+});
+
+test("a save then a remove, in quick succession, ends removed everywhere", async () => {
+  const lists = { mini: [instance("codex")], laptop: [instance("codex")] };
+  computers(lists);
+  await reach();
+  await loadProviders("mini");
+  await act(async () => {
+    await linkProviders("mini");
+  });
+  await act(async () => {
+    await saveEverywhere("mini", instance("new"));
+    await removeEverywhere("mini", "new");
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(lists.laptop.map((i) => i.id)).toEqual(["codex"]);
 });
 
 test("while not linked, a change stays on its own computer", async () => {

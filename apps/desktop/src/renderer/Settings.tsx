@@ -783,7 +783,8 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   return (
     <>
       <div className="mb-8 text-reading">{picker}</div>
-      {hosts.length > 1 && (
+      {/* Linked, it stays until it's turned off, even with one computer left. */}
+      {(hosts.length > 1 || linkOn) && (
         <div className="mb-8 overflow-hidden rounded-xl border border-border">
           <Row
             title="Link providers across computers"
@@ -796,8 +797,8 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
             <Switch
               label="Link providers across computers"
               checked={linkOn}
-              disabled={!providers}
-              onChange={(on) => void (on ? linkProviders(host.id) : unlinkProviders())}
+              disabled={!linkOn && on.length === 0}
+              onChange={(next) => void (next ? linkProviders(host.id) : unlinkProviders())}
             />
           </Row>
         </div>
@@ -809,8 +810,8 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           <div className="flex items-center gap-2 text-body text-muted-foreground">
             <span>
               Remove <span className="font-medium text-foreground">{chosenName}</span>? Its settings
-              and secrets leave {linkOn ? "every linked computer" : "this host"}; its threads keep
-              their transcripts.
+              and secrets leave {linkOn ? "every connected computer" : "this host"}; its threads
+              keep their transcripts.
             </span>
             <ConfirmRemove
               disabled={removing}
