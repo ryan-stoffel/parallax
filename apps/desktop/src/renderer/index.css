@@ -1230,6 +1230,10 @@ body {
 .composer-shell:focus-within::before {
   opacity: 1;
 }
+/* Clipped: a mask doesn't stop the lights from widening what scrolls around the box. */
+.composer-edge {
+  overflow: clip;
+}
 .composer-edge::before,
 .composer-edge::after {
   position: absolute;
@@ -1263,6 +1267,11 @@ body {
   opacity: 0.8;
   animation: composer-orbit-coral 9s linear infinite;
 }
+/* Without motion, there's no light to carry: the line on the top edge is enough. */
+:root.reduce-motion .composer-edge {
+  display: none;
+}
+/* The path starts just after the top-left corner, so the top's center is half the width on. */
 @keyframes composer-meet-blue {
   from {
     offset-distance: 75%;
@@ -1273,7 +1282,7 @@ body {
     opacity: 1;
   }
   to {
-    offset-distance: 125%;
+    offset-distance: calc(100% + 50cqw - var(--radius-prompt));
     opacity: 0;
   }
 }
@@ -1287,7 +1296,7 @@ body {
     opacity: 1;
   }
   to {
-    offset-distance: 25%;
+    offset-distance: calc(50cqw - var(--radius-prompt));
     opacity: 0;
   }
 }
@@ -1360,15 +1369,15 @@ body {
   opacity: 0;
   visibility: hidden;
 }
-/* Where a new thread runs, on a row of its own under the box (NewThread.tsx). */
+/* Where a new thread runs, in the box's top row (NewThread.tsx), its pickers lined up with the
+   footer's: where it runs on the left, and what it starts from on the right. */
 .composer-places {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
   min-width: 0;
-  margin-top: 0.375rem;
-  padding-inline: 0.5rem;
+  padding: 0.25rem 0.5rem 0;
 }
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */
