@@ -2130,7 +2130,7 @@ export function Composer({
                 </RefsContext.Provider>
                 <ScrollThumb target={editorDom} />
               </div>
-              <div className="flex shrink-0 items-center gap-1 pr-[5px] pb-[5px]">
+              <div className="flex shrink-0 items-center gap-1 pr-1 pb-1">
                 <input
                   ref={filePicker}
                   type="file"
@@ -2151,7 +2151,7 @@ export function Composer({
                 >
                   <Paperclip />
                 </button>
-                {/* Voice and send or stop sit in one pill-shaped well at the row's end. */}
+                {/* Voice and send or stop share one heavy box at the row's end. */}
                 <div className="composer-actions">
                   <button
                     type="button"
@@ -2159,7 +2159,7 @@ export function Composer({
                     title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
                     disabled={!onSend || !!disabledReason || uploading}
                     onClick={voice.start}
-                    className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
+                    className="composer-action text-foreground/80 enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
                   >
                     <Mic />
                   </button>
@@ -2169,12 +2169,12 @@ export function Composer({
                       aria-label={stopping ? "Stopping" : "Stop"}
                       disabled={stopping}
                       onClick={() => void stop()}
-                      className="composer-pop grid size-8 place-items-center rounded-full bg-danger/15 text-danger transition-colors enabled:hover:bg-danger/25 disabled:opacity-50"
+                      className="composer-pop composer-action text-danger enabled:hover:bg-hover disabled:opacity-50"
                     >
                       {stopping ? (
                         <LoaderCircle className="size-4 animate-spin" />
                       ) : (
-                        <span className="size-3 rounded-[3px] bg-current" />
+                        <span className="size-3.5 rounded-[3px] bg-current" />
                       )}
                     </button>
                   ) : (
@@ -2183,7 +2183,7 @@ export function Composer({
                       aria-label="Send"
                       disabled={!canSend}
                       onClick={() => void submit()}
-                      className="composer-send send-sky grid size-8 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
+                      className="composer-send composer-action send-sky bg-send text-send-foreground"
                     >
                       <ArrowUp className="size-4" />
                     </button>
