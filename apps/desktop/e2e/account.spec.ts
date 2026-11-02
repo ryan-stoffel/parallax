@@ -145,3 +145,42 @@ test("a new account computer takes its code in a dialog, then installs and signs
   await expect(card).toContainText("build-box");
   await expect(card).toContainText("Connected");
 });
+
+test("a computer waiting on its code stops asking once another computer vouches for it", async () => {
+  const port = await freePort();
+  const box = await startBuildBox(port);
+  // The relay is out of reach, so only the loopback route answers.
+  process.env["PLXD_RELAY_URL"] = "http://127.0.0.1:9";
+  launched = await launch("agent.json", undefined, undefined, undefined, false, {
+    accounts: [{ hostId: box.hostId, name: "build-box", routes: [`127.0.0.1:${port}`] }],
+  });
+  const { page, dataDir } = launched;
+  const dialog = page.getByRole("dialog", { name: "Connect build-box" });
+  await expect(dialog).toBeVisible();
+
+  // The other computer's app copies its list here, as `syncAccess` does once it has joined.
+  const local = spawn(plxd, ["attach"], { env: { ...process.env, PLXD_DATA_DIR: dataDir } });
+  try {
+    const answered = new Promise<void>((resolve) =>
+      createInterface({ input: local.stdout }).on("line", (line) => {
+        if ((JSON.parse(line) as { id?: number }).id === 2) resolve();
+      }),
+    );
+    const send = (id: number, method: string, params: object) =>
+      local.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    send(1, "initialize", {
+      protocol: { min: 1, max: 1 },
+      client: { name: "e2e", version: "0" },
+      capabilities: {},
+    });
+    send(2, "access/merge", {
+      approvedClients: [],
+      removedClients: [],
+      approvedHosts: [box.hostId],
+    });
+    await answered;
+    await expect(dialog).toBeHidden();
+  } finally {
+    local.kill();
+  }
+});

@@ -42,7 +42,7 @@ function portError(port: string): string | undefined {
 /**
  * Add host (PLX-580), a modal dialog open while it's mounted: an SSH host or alias, with the
  * hosts ssh already knows suggested as you type (click, arrow keys and Enter, or Mod+1 to 9);
- * then the username and port; then Add computer. With `host`, it edits that host, and asks for
+ * then the username and port; then Add host. With `host`, it edits that host, and asks for
  * its name too. `onDone` runs once it's saved or closed.
  */
 export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => void }) {
@@ -255,7 +255,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
           className={`${primaryButton} flex items-center justify-center gap-1.5 py-2 [&_svg]:size-4`}
         >
           {!host && <Plus aria-hidden />}
-          {host ? "Save" : "Add computer"}
+          {host ? "Save" : "Add host"}
         </button>
       </form>
     </dialog>

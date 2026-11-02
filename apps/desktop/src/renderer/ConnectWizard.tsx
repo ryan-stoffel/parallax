@@ -389,7 +389,7 @@ export function SetupCodeDialog({
 }: {
   /** This computer's name. */
   name: string;
-  /** Runs once this computer's settings changed, so a page showing them reads them again. */
+  /** Runs after each ask, which may change this computer's settings, so a page reads them again. */
   onReady: () => void;
   onClose: () => void;
 }) {
@@ -404,7 +404,7 @@ export function SetupCodeDialog({
     const answer = await window.parallax.showSetupCode();
     if (n !== latest.current) return;
     setShown(answer);
-    if (typeof answer !== "string") onReady();
+    onReady();
   };
   useEffect(() => void ask(), []);
   useEffect(() => window.parallax.onSetupApproved(setApproved), []);
