@@ -32,18 +32,25 @@ export interface RunOptions {
   access?: ReactNode;
 }
 
+// Where the text's baseline and capitals fall in a 16px icon beside it, once the icon is nudged up
+// to center on them (`onCapitals`). The bars stand on the one and rise to the other.
+const baseline = 12.75;
+const capHeight = 9.5;
+/** Centers its icons on the text's capitals, which sit half a pixel above the line's center. */
+const onCapitals = "[&>*]:-translate-y-[0.5px]";
+
 /** A reasoning level as a bar chart: one rising bar per level, lit up to `value`. */
 function ReasoningBars({ value }: { value: AgentEffort }) {
   const level = effortLevels.findIndex((l) => l.value === value);
   return (
     <svg aria-hidden viewBox="0 0 16 16" fill="currentColor">
       {effortLevels.map((l, i) => {
-        const height = 3 + i * 2.5;
+        const height = capHeight * ((i + 1.25) / (effortLevels.length + 0.25));
         return (
           <rect
             key={l.value}
             x={1 + i * 3}
-            y={14.5 - height}
+            y={baseline - height}
             width={2}
             height={height}
             rx={0.5}
@@ -204,7 +211,7 @@ export function ModelMenu({
         popoverTarget={id}
         aria-haspopup="menu"
         aria-label={`Model: ${chosen.name}${effortName ? `, reasoning ${effortName}` : ""}${options?.fast ? ", fast" : ""}`}
-        className={menuButton}
+        className={`${menuButton} ${onCapitals}`}
       >
         <Logo />
         {shortName}
@@ -444,7 +451,7 @@ export function ModelMenu({
                         aria-checked={current}
                         title={l.blurb}
                         onClick={() => options.onEffort(l.value)}
-                        className={`flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "bg-selected font-medium" : ""}`}
+                        className={`flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body hover:bg-hover [&_svg]:size-4 [&_svg]:shrink-0 ${onCapitals} ${current ? "bg-selected font-medium" : ""}`}
                       >
                         <ReasoningBars value={l.value} />
                         <span className="min-w-0 flex-1 truncate">{l.name}</span>
