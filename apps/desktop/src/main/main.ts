@@ -172,6 +172,13 @@ function createWindow() {
     show: false,
     transparent: clearAtLaunch,
     backgroundColor: clearAtLaunch ? "#00000000" : windowBackground(dark),
+    // macOS's full screen gives a window its own Space, with no wallpaper behind it to show or blur.
+    // A see-through window instead takes simple full screen from the View menu and its shortcut,
+    // covering the display on the Space it's on. Its green button zooms, since that button would
+    // still open the Space.
+    ...(clearAtLaunch && process.platform === "darwin"
+      ? { simpleFullscreen: true, fullscreenable: false }
+      : {}),
     // macOS keeps a blurred window's blur when it isn't focused, rather than going flat gray.
     visualEffectState: "active",
     ...frameOptions(process.platform, dark),
@@ -211,7 +218,7 @@ function createWindow() {
   let bounds = win.getBounds();
   let maximized = saved?.maximized ?? false;
   const track = () => {
-    if (win.isMinimized() || win.isFullScreen()) return;
+    if (win.isMinimized() || win.isFullScreen() || win.isSimpleFullScreen()) return;
     maximized = win.isMaximized();
     if (!maximized) bounds = win.getBounds();
   };

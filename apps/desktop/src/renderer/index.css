@@ -833,6 +833,18 @@ body {
   :is([popover], dialog):is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--raised) 92%, transparent);
 }
+/* Over a see-through window, a modal's backdrop-filter leaves the app's text legible through the
+   modal and around it, so the app itself blurs. Modals and menus are in the top layer, which an
+   ancestor's filter doesn't reach. */
+:root.translucent #root:has(dialog:modal) {
+  filter: blur(28px);
+}
+/* Settings is a pane of the glass, as large as the window, rather than a slab over it. */
+:root.translucent
+  dialog.settings-dialog:is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--background) 70%, transparent);
+  backdrop-filter: none;
+}
 /* xterm.js paints its viewport black under the rows, which are clear over glass (Terminal.tsx). */
 :root.translucent .xterm .xterm-viewport {
   background-color: transparent;
