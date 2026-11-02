@@ -62,6 +62,11 @@ pub struct Thread {
     pub pinned: bool,
     /// The Project the user added it to (0090), apart from `repo_id`.
     pub project_id: Option<Uuid>,
+    /// The orchestrator whose orchestration it runs (0093), when it is an orchestrator thread.
+    pub orchestrator_id: Option<Uuid>,
+    /// Why it last un-archived itself, as the daemon's JSON (0093). Cleared when it is archived
+    /// or un-archived by hand.
+    pub wake_reason: Option<String>,
 }
 
 /// The run and turn a thread was forked from (decision record 0041).
@@ -102,7 +107,7 @@ const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snooze
     forked_from_turn, title, settled, unarchived_at, pinned, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id AND from_user \
         AND substr(text, 1, 22) != 'Parallax, not the user'), created_at) AS last_user_prompt_at, \
-    project_id";
+    project_id, orchestrator_id, wake_reason";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (
@@ -168,6 +173,8 @@ struct RawThread {
     pinned: bool,
     last_user_prompt_at: String,
     project_id: Option<String>,
+    orchestrator_id: Option<String>,
+    wake_reason: Option<String>,
 }
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
@@ -188,6 +195,8 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
         pinned: row.get(13)?,
         last_user_prompt_at: row.get(14)?,
         project_id: row.get(15)?,
+        orchestrator_id: row.get(16)?,
+        wake_reason: row.get(17)?,
     })
 }
 
@@ -223,6 +232,8 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
             .transpose()?,
         pinned: raw.pinned,
         project_id: uuid(raw.project_id)?,
+        orchestrator_id: uuid(raw.orchestrator_id)?,
+        wake_reason: raw.wake_reason,
     })
 }
 
@@ -559,14 +570,15 @@ impl Store {
         Ok(())
     }
 
-    /// Archives thread `id` or brings it back, recording when it came back, and returns it.
+    /// Archives thread `id` or brings it back, recording when it came back, and returns it. Either
+    /// clears its wake reason, since the user moved it.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no thread has `id`, or a database error.
     pub fn set_thread_archived(&self, id: Uuid, archived: bool) -> Result<Thread, StoreError> {
         let changed = self.conn.execute(
-            "UPDATE threads SET archived = ?2, \
+            "UPDATE threads SET archived = ?2, wake_reason = NULL, \
              unarchived_at = CASE WHEN ?2 THEN unarchived_at ELSE ?3 END WHERE id = ?1",
             params![id.to_string(), archived, timestamp::now()],
         )?;
@@ -574,6 +586,101 @@ impl Store {
             return Err(StoreError::NotFound { id });
         }
         fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+    }
+
+    /// Makes run `id`, which must exist, orchestrator `orchestrator`'s thread (0093): a thread row
+    /// in the orchestrator, as its children's are, with orchestration on. The thread that had it,
+    /// from a run this one replaces, keeps its row with orchestration off, and moves its Project
+    /// and pin to the new one. Returns the new thread, and the old one when there was one.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn create_orchestrator_thread(
+        &mut self,
+        id: Uuid,
+        orchestrator: Uuid,
+    ) -> Result<(Thread, Option<Thread>), StoreError> {
+        let tx = self.conn.savepoint()?;
+        let before = tx
+            .query_row(
+                "SELECT id FROM threads WHERE orchestrator_id = ?1 AND id != ?2",
+                params![orchestrator.to_string(), id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let (project, pinned) = match &before {
+            Some(old) => tx.query_row(
+                "SELECT project_id, pinned FROM threads WHERE id = ?1",
+                params![old],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, bool>(1)?)),
+            )?,
+            None => (None, false),
+        };
+        if let Some(old) = &before {
+            tx.execute(
+                "UPDATE threads SET orchestrator_id = NULL, project_id = NULL, pinned = 0
+                 WHERE id = ?1",
+                params![old],
+            )?;
+        }
+        let now = timestamp::now();
+        tx.execute(
+            "INSERT INTO threads (id, repo_id, archived, created_at, seen_at, orchestrator_id,
+                                  project_id, pinned)
+             VALUES (?1, ?2, 0, ?3, ?3, ?2, ?4, ?5)
+             ON CONFLICT (id) DO UPDATE SET orchestrator_id = excluded.orchestrator_id",
+            params![
+                id.to_string(),
+                orchestrator.to_string(),
+                now,
+                project,
+                pinned
+            ],
+        )?;
+        let thread = fetch_thread(&tx, id)?.ok_or(StoreError::NotFound { id })?;
+        let before = before
+            .map(|old| fetch_thread(&tx, Uuid::parse_str(&old)?))
+            .transpose()?
+            .flatten();
+        tx.commit()?;
+        Ok((thread, before))
+    }
+
+    /// Orchestrator `orchestrator`'s thread (0093), once its first run started.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn orchestrator_thread(&self, orchestrator: Uuid) -> Result<Option<Thread>, StoreError> {
+        self.conn
+            .query_row(
+                &format!("SELECT {THREAD_COLUMNS} FROM threads WHERE orchestrator_id = ?1"),
+                params![orchestrator.to_string()],
+                thread_from_row,
+            )
+            .optional()?
+            .map(into_thread)
+            .transpose()
+    }
+
+    /// Brings orchestrator thread `id` back into the list because of `reason`, plxd's JSON (0093):
+    /// un-archives and un-settles it and records why. Only an archived or settled orchestrator
+    /// thread wakes, so this returns the thread when it changed and `None` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or an error if a stored id or timestamp is corrupt.
+    pub fn wake_thread(&self, id: Uuid, reason: &str) -> Result<Option<Thread>, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE threads SET archived = 0, settled = 0, wake_reason = ?2, unarchived_at = ?3
+             WHERE id = ?1 AND orchestrator_id IS NOT NULL AND (archived OR settled)",
+            params![id.to_string(), reason, timestamp::now()],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        fetch_thread(&self.conn, id)
     }
 
     /// Applies `update` to thread `id`: marks it seen now, snoozes it (decision record 0033), or

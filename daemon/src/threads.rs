@@ -44,6 +44,7 @@ use parallax_protocol::{
     RepoUpdateResult, RunId, ScopeId, Thread, ThreadArchiveParams, ThreadArchiveResult,
     ThreadDeleteResult, ThreadForkParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult,
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnId,
+    WakeReason,
 };
 use parallax_store::{RepoFields, ThreadFields, ThreadUpdate};
 use tokio_util::sync::CancellationToken;
@@ -134,6 +135,15 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
             .project_id
             .map(|id| RepoId::try_from(id).map_err(|_| corrupt("thread", row.id)))
             .transpose()?,
+        orchestrator: row
+            .orchestrator_id
+            .map(|id| ScopeId::try_from(id).map_err(|_| corrupt("thread", row.id)))
+            .transpose()?,
+        // A reason this plxd can't read, from a newer one, is left out.
+        wake_reason: row
+            .wake_reason
+            .as_deref()
+            .and_then(|reason| serde_json::from_str(reason).ok()),
     })
 }
 
@@ -163,25 +173,66 @@ fn repo_not_found(id: RepoId) -> ErrorObject {
     )
 }
 
-/// The repository a run's scope stands for: a project's, or a repo entry's path. For the scratch
-/// entry it is the folder that holds the scratch repositories.
-pub(crate) fn scope_path(
+/// The repository a run's scope stands for: an orchestrator's, or a repo entry's path. For the
+/// scratch entry it is the folder that holds the scratch repositories. `None` for an orchestrator
+/// with no repo (0093), whose children each get a scratch repository ([`child_scratch`]).
+pub(crate) fn scope_repo(
     db: &parallax_store::Store,
     scope: ScopeId,
-) -> Result<String, ErrorObject> {
-    if let Some(project) = db
+) -> Result<Option<String>, ErrorObject> {
+    if let Some(orchestrator) = db
         .get_orchestrator(scope.into())
         .map_err(|e| store_error(&e))?
     {
-        return Ok(project.repo_path);
+        return Ok(orchestrator.repo_path);
     }
     if let Some(repo) = db.get_repo(scope.into()).map_err(|e| store_error(&e))? {
-        return Ok(repo.fields.path);
+        return Ok(Some(repo.fields.path));
     }
     Err(ErrorObject::parallax(
         ErrorKind::OrchestratorNotFound,
         format!("no project has id {scope}"),
     ))
+}
+
+/// [`scope_repo`], failing with `notARepository` for an orchestrator with no repo.
+pub(crate) fn scope_path(
+    db: &parallax_store::Store,
+    scope: ScopeId,
+) -> Result<String, ErrorObject> {
+    scope_repo(db, scope)?.ok_or_else(|| {
+        ErrorObject::parallax(
+            ErrorKind::NotARepository,
+            format!("orchestrator {scope} has no repo"),
+        )
+    })
+}
+
+/// Whether `scope` is an orchestrator with no repo (0093), whose children run in scratch
+/// repositories as threads with no repo do.
+pub(crate) fn is_repoless(db: &parallax_store::Store, scope: ScopeId) -> Result<bool, ErrorObject> {
+    Ok(db
+        .get_orchestrator(scope.into())
+        .map_err(|e| store_error(&e))?
+        .is_some_and(|row| row.repo_path.is_none()))
+}
+
+/// The scratch repository a child of an orchestrator with no repo runs in (0093), made now, as
+/// a thread with no repo's is.
+pub(crate) async fn child_scratch(daemon: &Daemon, run_id: RunId) -> Result<PathBuf, ErrorObject> {
+    let dir = scratch_root(daemon)?.join(run_id.to_string());
+    daemon
+        .agents
+        .worktrees()
+        .init_scratch(&dir)
+        .await
+        .map_err(|error| {
+            ErrorObject::parallax(
+                ErrorKind::WorktreeFailed,
+                format!("could not make the child's scratch repository: {error}"),
+            )
+        })?;
+    Ok(dir)
 }
 
 /// Whether `scope` is plxd's scratch entry, whose threads have no repository of the user's.
@@ -236,6 +287,68 @@ pub(crate) fn stage_started(
         None,
         ParallaxEvent::ThreadStarted { thread },
     );
+    Ok(())
+}
+
+/// Stages `thread.updated` for `row`.
+pub(crate) fn stage_updated(
+    db: &mut crate::store::Tx,
+    row: &parallax_store::Thread,
+) -> Result<(), ErrorObject> {
+    let thread = thread_entry(row)?;
+    db.stage(
+        Timestamp::now(),
+        None,
+        ParallaxEvent::ThreadUpdated { thread },
+    );
+    Ok(())
+}
+
+/// Brings orchestrator `orchestrator`'s thread back into the list for `reason`, in the job of
+/// what woke it (0093): un-archived and un-settled, saying why, with `thread.updated`. A thread
+/// already in the list, or an orchestrator with no thread yet, stays as it is.
+pub(crate) fn wake_orchestrator(
+    db: &mut crate::store::Tx,
+    orchestrator: Uuid,
+    reason: &WakeReason,
+) -> Result<(), ErrorObject> {
+    let Some(thread) = db
+        .orchestrator_thread(orchestrator)
+        .map_err(|e| store_error(&e))?
+    else {
+        return Ok(());
+    };
+    wake_thread(db, thread.id, reason)
+}
+
+/// [`wake_orchestrator`] for thread `thread`, which wakes only when it is an orchestrator thread.
+fn wake_thread(
+    db: &mut crate::store::Tx,
+    thread: Uuid,
+    reason: &WakeReason,
+) -> Result<(), ErrorObject> {
+    let reason = serde_json::to_string(reason).map_err(ErrorObject::internal_error)?;
+    if let Some(row) = db
+        .wake_thread(thread, &reason)
+        .map_err(|e| store_error(&e))?
+    {
+        info!(thread = %row.id, %reason, "woke an orchestrator thread");
+        stage_updated(db, &row)?;
+    }
+    Ok(())
+}
+
+/// [`wake_orchestrator`] for run `run`, when it is an orchestrator's, whether current or one a
+/// Start over replaced, whose watches and schedules stay with it. Any other run's does nothing.
+pub(crate) fn wake_run(
+    db: &mut crate::store::Tx,
+    run: Uuid,
+    reason: &WakeReason,
+) -> Result<(), ErrorObject> {
+    let row = db.get_run(run).map_err(|e| store_error(&e))?;
+    if let Some(row) = row.filter(|row| row.fields.policy == agents::NO_WRITE) {
+        wake_orchestrator(db, row.fields.project_id, reason)?;
+    }
     Ok(())
 }
 
@@ -786,8 +899,50 @@ async fn existing_fork(
     .await
 }
 
+/// The repo entry a fork of thread `run_id` goes in: the thread's own, or for an orchestrator's
+/// thread or child, whose scope is no entry (0093), its repository's, registered if it has none,
+/// or the scratch entry for an orchestrator with no repo. The fork is an ordinary thread.
+async fn fork_entry(
+    daemon: &Arc<Daemon>,
+    run_id: RunId,
+) -> Result<parallax_store::Repo, ErrorObject> {
+    let id = Uuid::from(run_id);
+    let (entry, repo_path) = store(daemon, move |db| {
+        let error = |error| store_error(&error);
+        let thread = db
+            .get_thread(id)
+            .map_err(error)?
+            .ok_or_else(|| thread_not_found(run_id))?;
+        if let Some(entry) = db.get_repo(thread.repo_id).map_err(error)? {
+            return Ok((Some(entry), None));
+        }
+        let orchestrator = db
+            .get_orchestrator(thread.repo_id)
+            .map_err(error)?
+            .ok_or_else(|| corrupt("thread", id))?;
+        Ok((None, orchestrator.repo_path))
+    })
+    .await?;
+    if let Some(entry) = entry {
+        return Ok(entry);
+    }
+    let Some(path) = repo_path else {
+        return scratch_entry(daemon).await;
+    };
+    let added = add_repo(
+        daemon,
+        RepoAddParams {
+            id: RepoId::generate(),
+            path,
+        },
+    )
+    .await?;
+    start_entry(daemon, Some(added.repo.id)).await
+}
+
 /// Thread `run_id`, for `thread/fork`, or `threadNotFound`.
-async fn load_parent(daemon: &Daemon, run_id: RunId) -> Result<Parent, ErrorObject> {
+async fn load_parent(daemon: &Arc<Daemon>, run_id: RunId) -> Result<Parent, ErrorObject> {
+    let entry = fork_entry(daemon, run_id).await?;
     store(daemon, move |db| {
         let id = Uuid::from(run_id);
         let error = |error| store_error(&error);
@@ -799,10 +954,6 @@ async fn load_parent(daemon: &Daemon, run_id: RunId) -> Result<Parent, ErrorObje
             .get_run(id)
             .map_err(error)?
             .ok_or_else(|| thread_not_found(run_id))?;
-        let entry = db
-            .get_repo(thread.repo_id)
-            .map_err(error)?
-            .ok_or_else(|| corrupt("thread", id))?;
         let worktree = db.get_worktree(id).map_err(error)?;
         let status = agent_run(&run, worktree.as_ref())?.status;
         let commit = run
@@ -1281,12 +1432,18 @@ pub(crate) async fn delete(
     if replayed().await? {
         return Ok(ThreadDeleteResult {});
     }
-    store(daemon, move |db| {
+    let thread = store(daemon, move |db| {
         db.get_thread(run_id.into())
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| thread_not_found(run_id))
     })
     .await?;
+    // It goes only with its orchestrator: its memory, board, and children need it (0093).
+    if thread.orchestrator_id.is_some() {
+        return Err(ErrorObject::invalid_params(format!(
+            "thread {run_id} is an orchestrator's: delete the orchestrator with orchestrator/delete"
+        )));
+    }
     match agents::delete(daemon, run_id, false, command_id).await {
         Ok(()) => Ok(ThreadDeleteResult {}),
         Err(error)

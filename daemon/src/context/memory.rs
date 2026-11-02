@@ -256,7 +256,7 @@ pub(crate) async fn start(daemon: &Daemon, project: ScopeId) -> Result<Start, Er
             let repo_path = db
                 .get_orchestrator(project.into())
                 .map_err(|e| store_error(&e))?
-                .map(|row| row.repo_path);
+                .and_then(|row| row.repo_path);
             let repos = db.list_repos().map_err(|e| store_error(&e))?;
             Ok((repo_path, repos))
         })

@@ -70,7 +70,7 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
     let repos = temp_dir();
     let params = orchestrator_params(repos.path());
     // The fake CLI writes into `docs/`, so the repository needs one.
-    let docs = std::path::Path::new(&params.repo_path).join("docs");
+    let docs = std::path::Path::new(params.repo_path.as_deref().unwrap()).join("docs");
     std::fs::create_dir(&docs).unwrap();
     std::fs::write(docs.join("README.md"), "docs\n").unwrap();
     git(&docs, &["add", "-A"]);

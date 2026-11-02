@@ -64,7 +64,7 @@ async fn computer_needs_an_admitted_device_and_an_origin() {
     assert!(init.capabilities.0.contains_key("orchestratorComputer"));
     let path = repo(work.path(), "app", None);
     let mut params = create_params(work.path(), "app");
-    params.repo_path = path.to_str().unwrap().to_owned();
+    params.repo_path = Some(path.to_str().unwrap().to_owned());
     let orchestrator = client
         .call::<OrchestratorCreate>(params)
         .await

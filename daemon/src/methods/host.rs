@@ -205,7 +205,9 @@ pub(crate) fn initialize(
 /// and `orchestrator/update`, which an older plxd would silently ignore. `checks` (PLX-411, 0045):
 /// `checks` and `proposedChecks` on `Orchestrator` and `orchestrator/update`, which an older plxd
 /// would silently ignore, and the checks running after each landing. `orchestratorEpochs` (PLX-937,
-/// 0079): `orchestrator/fresh` and the `epoch` output item. `queue` (PLX-370, 0048): `queue/list`,
+/// 0079): `orchestrator/fresh` and the `epoch` output item. `orchestratorThreads` (PLX-1176,
+/// 0093): an orchestrator's run is a thread, with `orchestrator` and `wakeReason` on `Thread`, and
+/// `orchestrator/create`'s `repoPath` may be left out for an orchestrator with no repo. `queue` (PLX-370, 0048): `queue/list`,
 /// `queue/edit`, `queue/reorder`, `queue/cancel`, `queue/steer`, and `queue.updated`, and
 /// `agent/send` takes `delivery`, which an older plxd would silently ignore, queueing a steer.
 /// `questions` (PLX-402, 0043): `question/ask`, `question/answer`, `question/escalate`, and
@@ -375,6 +377,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "orchestratorPermission",
     "orchestratorPlacement",
     "orchestratorTasks",
+    "orchestratorThreads",
     "peerGit",
     "pins",
     "prActions",

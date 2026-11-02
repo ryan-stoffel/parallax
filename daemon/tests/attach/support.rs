@@ -285,7 +285,7 @@ pub fn create_params(dir: &Path, name: &str) -> OrchestratorCreateParams {
     OrchestratorCreateParams {
         id: ScopeId::generate(),
         name: name.to_owned(),
-        repo_path: path.to_str().expect("a UTF-8 path").to_owned(),
+        repo_path: Some(path.to_str().expect("a UTF-8 path").to_owned()),
         icon: None,
         permission: None,
         autonomy: None,

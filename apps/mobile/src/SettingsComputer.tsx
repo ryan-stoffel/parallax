@@ -933,7 +933,8 @@ function StoragePage({ m }: { m: Computer }) {
   const id = m.machine.id;
   const { settings, error, set } = useHostSettings(m);
   const supported = can(m, "worktreeCleanup");
-  const archived = m.view.state.threads.filter((t) => t.archived);
+  // An orchestrator's thread goes only with its orchestrator (0093).
+  const archived = m.view.state.threads.filter((t) => t.archived && !t.orchestrator);
   const [deleting, setDeleting] = useState(false);
   const count = archived.length;
   const deleteAll = () =>

@@ -523,15 +523,29 @@ pub(crate) fn quiet(db: &Store, tasks: &[Uuid]) -> Result<Vec<Uuid>, ErrorObject
 }
 
 /// The folder a checkout thread works in (0063): the worktree it shares, or else `scope`'s
-/// checkout.
+/// checkout. Fails with `notARepository` for an orchestrator with no repo (0093).
 pub(crate) fn workdir(db: &Store, scope: ScopeId, run: Uuid) -> Result<String, ErrorObject> {
+    workdir_repo(db, scope, run)?.ok_or_else(|| {
+        ErrorObject::parallax(
+            ErrorKind::NotARepository,
+            format!("orchestrator {scope} has no repo"),
+        )
+    })
+}
+
+/// [`workdir`], with `None` for an orchestrator with no repo.
+pub(crate) fn workdir_repo(
+    db: &Store,
+    scope: ScopeId,
+    run: Uuid,
+) -> Result<Option<String>, ErrorObject> {
     let lineage = db.lineage(run).map_err(|e| store_error(&e))?;
     match lineage
         .as_ref()
         .and_then(|lineage| payload(lineage).worktree)
     {
-        None => crate::threads::scope_path(db, scope),
-        Some(shared) if std::path::Path::new(&shared.path).is_dir() => Ok(shared.path),
+        None => crate::threads::scope_repo(db, scope),
+        Some(shared) if std::path::Path::new(&shared.path).is_dir() => Ok(Some(shared.path)),
         Some(shared) => Err(ErrorObject::parallax(
             ErrorKind::WorktreeFailed,
             format!(

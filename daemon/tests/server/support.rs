@@ -349,7 +349,7 @@ pub fn create_params(dir: &Path, name: &str) -> OrchestratorCreateParams {
     OrchestratorCreateParams {
         id: ScopeId::generate(),
         name: name.to_owned(),
-        repo_path: repo(dir, name),
+        repo_path: Some(repo(dir, name)),
         icon: None,
         permission: None,
         autonomy: None,

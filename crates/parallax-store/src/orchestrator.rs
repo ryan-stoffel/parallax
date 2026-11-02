@@ -13,7 +13,8 @@ use crate::{Store, StoredImage};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestratorFields {
     pub name: String,
-    pub repo_path: String,
+    /// Its repository, or `None` for an orchestrator with no repo (0093), stored as `''`.
+    pub repo_path: Option<String>,
     pub icon: Option<ChosenIcon>,
     /// The permission mode, `auto` or `bypass` (decision record 0042).
     pub permission: String,
@@ -95,7 +96,8 @@ pub struct OrchestratorEdit {
 pub struct Orchestrator {
     pub id: Uuid,
     pub name: String,
-    pub repo_path: String,
+    /// Its repository, or `None` when it has none (0093).
+    pub repo_path: Option<String>,
     pub icon: Option<ChosenIcon>,
     pub permission: String,
     pub autonomy: String,
@@ -164,7 +166,7 @@ impl RawOrchestrator {
 
     fn matches(&self, fields: &OrchestratorFields) -> bool {
         self.name == fields.name
-            && self.repo_path == fields.repo_path
+            && self.repo_path == fields.repo_path.as_deref().unwrap_or("")
             && self.icon == fields.icon
             && self.permission == fields.permission
             && self.autonomy == fields.autonomy
@@ -175,7 +177,7 @@ impl RawOrchestrator {
         Ok(Orchestrator {
             id: Uuid::parse_str(&self.id)?,
             name: self.name,
-            repo_path: self.repo_path,
+            repo_path: (!self.repo_path.is_empty()).then_some(self.repo_path),
             icon: self.icon,
             permission: self.permission,
             autonomy: self.autonomy,
@@ -267,7 +269,7 @@ impl Store {
             params![
                 id_text,
                 fields.name,
-                fields.repo_path,
+                fields.repo_path.as_deref().unwrap_or(""),
                 now,
                 fields.permission,
                 fields.base_branch,

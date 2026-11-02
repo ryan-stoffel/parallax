@@ -34,6 +34,7 @@ const INSTRUCTIONS: &str = include_str!("orchestrator.md");
 
 /// `orchestrator/start`: see the module documentation. Idempotent on the run id, and refused while
 /// the orchestrator is starting or running.
+#[expect(clippy::too_many_lines, reason = "the steps of a start, in order")]
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
     params: OrchestratorStartParams,
@@ -122,6 +123,15 @@ pub(crate) async fn start(
             .create_run(run_id.into(), &fields, &state)
             .map_err(|e| store_error(&e))?;
         stage_started(db, &row, None)?;
+        // Its run is the orchestrator's thread from here on (0093), taking over from the one it
+        // replaces.
+        let (thread, before) = db
+            .create_orchestrator_thread(row.id, orchestrator.into())
+            .map_err(|e| store_error(&e))?;
+        crate::threads::stage_started(db, &thread)?;
+        if let Some(before) = before {
+            crate::threads::stage_updated(db, &before)?;
+        }
         // In the job that makes the row, so no child's end is both handed over and sent to it
         // (PLX-936).
         let handed = super::wake::handed(db, orchestrator.into(), row.id);
@@ -232,14 +242,35 @@ pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
 
 /// The orchestrator's instructions, where it is, and the orchestrator's autonomy level (0043),
 /// which every CLI process of its run gets in its system prompt, so compaction never drops them and
-/// a new level applies from the next process (0078).
-pub(super) fn instructions(repo: &str, autonomy: OrchestratorAutonomy) -> String {
-    format!(
-        "{INSTRUCTIONS}\nThe orchestrator's repository is {repo}, the user's own checkout: leave it \
-         alone. Read the code in your working directory instead, a copy of the integration \
-         branch's latest commit that Parallax resets each time it starts you, so it doesn't have \
-         the user's uncommitted changes, and nothing written there is kept.\n\n{} Each question \
-         Parallax wakes you with names the level as it is then, since the user can change it.",
+/// a new level applies from the next process (0078). `repo` is `None` for one with no repo, and
+/// `project` the instructions of the Project its thread is in (0093).
+pub(super) fn instructions(
+    repo: Option<&str>,
+    autonomy: OrchestratorAutonomy,
+    project: Option<&str>,
+) -> String {
+    let place = match repo {
+        Some(repo) => format!(
+            "The orchestrator's repository is {repo}, the user's own checkout: leave it alone. \
+             Read the code in your working directory instead, a copy of the integration branch's \
+             latest commit that Parallax resets each time it starts you, so it doesn't have the \
+             user's uncommitted changes, and nothing written there is kept."
+        ),
+        None => "The orchestrator has no repository, so it has no integration branch and nothing \
+                 lands: each child works in a scratch repository of its own."
+            .to_owned(),
+    };
+    let mut text = format!(
+        "{INSTRUCTIONS}\n{place}\n\n{} Each question Parallax wakes you with names the level as \
+         it is then, since the user can change it.",
         level(autonomy)
-    )
+    );
+    if let Some(project) = project {
+        text.push_str("\n\n");
+        text.push_str(project);
+    }
+    text
 }
+
+#[cfg(test)]
+pub(crate) mod tests;

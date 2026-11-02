@@ -212,7 +212,7 @@ pub(crate) fn orchestrator_params(dir: &Path) -> OrchestratorCreateParams {
     OrchestratorCreateParams {
         id: ScopeId::generate(),
         name: "app".to_owned(),
-        repo_path: real_repo(dir).to_str().unwrap().to_owned(),
+        repo_path: Some(real_repo(dir).to_str().unwrap().to_owned()),
         icon: None,
         permission: None,
         autonomy: None,

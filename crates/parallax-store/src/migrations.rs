@@ -930,13 +930,35 @@ const MIGRATIONS: &[Migration] = &[
         );
         DROP TABLE provider_history;",
     },
+    // An orchestrator is a thread (0093 step 3, PLX-1176). `threads.orchestrator_id` is the
+    // orchestrator whose orchestration a thread runs, set on at most one thread each, and
+    // `wake_reason` plxd's JSON for why it last un-archived itself. Each orchestrator's newest
+    // no-write run, its current one, gets a thread row in the orchestrator, as its children's rows
+    // are, seen as of its creation. Its id, and so its `coordinators/` folder, memory, board,
+    // schedules, and children, stay as they were. An orchestrator with no repo keeps `''` in
+    // `repo_path`, which stays NOT NULL: rebuilding the table would cascade to `board_items`.
+    Migration {
+        version: 60,
+        sql: "ALTER TABLE threads ADD COLUMN orchestrator_id TEXT;
+        ALTER TABLE threads ADD COLUMN wake_reason TEXT;
+        INSERT INTO threads (id, repo_id, archived, created_at, seen_at, orchestrator_id)
+            SELECT runs.id, runs.project_id, 0, runs.created_at, runs.created_at, runs.project_id
+            FROM runs JOIN orchestrators ON orchestrators.id = runs.project_id
+            WHERE runs.id = (
+                SELECT newest.id FROM runs AS newest
+                WHERE newest.project_id = runs.project_id AND newest.policy = 'noWrite'
+                ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1)
+            ON CONFLICT (id) DO UPDATE SET orchestrator_id = excluded.orchestrator_id;
+        CREATE UNIQUE INDEX threads_orchestrator ON threads (orchestrator_id)
+            WHERE orchestrator_id IS NOT NULL;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
 /// WAL database consistently where a file copy could miss the WAL (0059). There is no downgrade,
 /// so the copy is the way back. It is `<database>.pre-<version>`, written once: before the
 /// oldest of these a store is missing, so one copy covers a jump over several.
-const BACKUP_BEFORE: &[i64] = &[39, 41, 56, 57];
+const BACKUP_BEFORE: &[i64] = &[39, 41, 56, 57, 60];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
 /// version isn't recorded, in order. A missing version below the newest
@@ -1198,6 +1220,89 @@ mod tests {
         let repo = store.get_repo(id).unwrap().unwrap();
         assert!(repo.fields.project);
         assert_eq!(repo.fields.name, "Coursework");
+    }
+
+    /// Migration 60 (0093 step 3) makes an orchestrator's current run its thread, with
+    /// orchestration on, and leaves the run it replaced, its child, schedule, watch, and board as
+    /// they were, under the same ids.
+    #[test]
+    fn a_version_59_database_makes_each_orchestrator_a_thread() {
+        let id =
+            |n: u32| uuid::Uuid::parse_str(&format!("01a0f8a0-0000-7000-8000-{n:012}")).unwrap();
+        let (orchestrator, old, current, child, task) = (id(1), id(2), id(3), id(4), id(5));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let conn = migrated_through(&path, 59);
+        let run = |run: uuid::Uuid, policy: &str, at: &str, parent: Option<uuid::Uuid>| {
+            conn.execute(
+                "INSERT INTO runs (id, project_id, prompt, policy, backend, account_id, status,
+                     created_at, updated_at, orchestrator_thread, parent)
+                 VALUES (?1, ?2, 'p', ?3, 'claude', 'a', 'completed', ?4, ?4, ?5, ?6)",
+                rusqlite::params![
+                    run.to_string(),
+                    orchestrator.to_string(),
+                    policy,
+                    at,
+                    (policy == "noWrite").then(|| run.to_string()),
+                    parent.map(|parent| parent.to_string())
+                ],
+            )
+            .unwrap();
+        };
+        conn.execute(
+            "INSERT INTO orchestrators (id, name, repo_path, created_at, updated_at, autonomy)
+             VALUES (?1, 'formula fly', '/r', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', 'full')",
+            [orchestrator.to_string()],
+        )
+        .unwrap();
+        run(old, "noWrite", "2026-10-01T00:00:00Z", None);
+        run(current, "noWrite", "2026-10-02T00:00:00Z", None);
+        run(
+            child,
+            "workspaceWrite",
+            "2026-10-03T00:00:00Z",
+            Some(current),
+        );
+        conn.execute_batch(&format!(
+            "INSERT INTO threads (id, repo_id, created_at) VALUES ('{child}', '{orchestrator}', '2026-10-01T00:00:00Z');
+             INSERT INTO scheduled_tasks (id, payload) VALUES ('{task}', '{{\"orchestrator\":\"{orchestrator}\"}}');
+             INSERT INTO pr_watches (run_id, url, payload) VALUES ('{current}', 'https://github.com/o/r/pull/1', '{{}}');
+             INSERT INTO board_items (orchestrator_id, text, status, section, links, created_at, updated_at)
+             VALUES ('{orchestrator}', 'ship it', 'open', 'now', '[]', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z');"
+        ))
+        .unwrap();
+        drop(conn);
+
+        let store = crate::Store::open(&path).unwrap();
+        let thread = store.orchestrator_thread(orchestrator).unwrap().unwrap();
+        assert_eq!(thread.id, current);
+        assert_eq!(thread.repo_id, orchestrator);
+        assert_eq!(thread.orchestrator_id, Some(orchestrator));
+        assert!(!thread.archived);
+        assert_eq!(thread.seen_at, Some(thread.created_at));
+        assert!(
+            store.get_thread(old).unwrap().is_none(),
+            "a replaced run stays a run"
+        );
+        let child_row = store.get_thread(child).unwrap().unwrap();
+        assert_eq!(
+            (child_row.parent, child_row.orchestrator_id),
+            (Some(current), None)
+        );
+        let row = store.get_orchestrator(orchestrator).unwrap().unwrap();
+        assert_eq!(
+            (row.repo_path.as_deref(), row.autonomy.as_str()),
+            (Some("/r"), "full")
+        );
+        assert!(store.scheduled_task(task).unwrap().is_some());
+        assert!(
+            store
+                .pr_watch(current, "https://github.com/o/r/pull/1")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(store.board_items(orchestrator).unwrap().len(), 1);
+        assert!(dir.path().join("plxd.sqlite3.pre-60").exists());
     }
 
     /// A backup that fails partway, here on a corrupt page, leaves no partial copy or journal

@@ -183,7 +183,11 @@ function ArchivedThreads() {
     setArchived(undefined);
     const answer = await window.parallax.request(host.id, "thread/list", {});
     if ("error" in answer) setError(describeError(answer.error));
-    else setArchived(answer.result.threads.filter((t) => t.archived).map((t) => t.id));
+    // An orchestrator's thread goes only with its orchestrator (0093).
+    else
+      setArchived(
+        answer.result.threads.filter((t) => t.archived && !t.orchestrator).map((t) => t.id),
+      );
   }, [host.id]);
   useEffect(() => {
     if (connected) void load();

@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult,
-    InboxSeenParams, InboxSeenResult, ParallaxEvent, RunId, ScopeId,
+    InboxSeenParams, InboxSeenResult, ParallaxEvent, RunId, ScopeId, WakeReason,
 };
 use parallax_store::Store;
 use tokio_util::sync::CancellationToken;
@@ -108,6 +108,15 @@ pub(crate) fn record(
         ParallaxEvent::InboxAdded { item },
     );
     info!(%orchestrator, %run, seq, "added an inbox item");
+    // A child's end, or something that waits on the user, wakes the orchestrator thread (0093).
+    let reason = match kind {
+        InboxKind::Done | InboxKind::Failed => Some(WakeReason::ChildFinished { child: run }),
+        InboxKind::NeedsYou => Some(WakeReason::NeedsYou { run }),
+        InboxKind::Decided | InboxKind::Learned | InboxKind::Unknown => None,
+    };
+    if let Some(reason) = reason {
+        crate::threads::wake_orchestrator(store, orchestrator.into(), &reason)?;
+    }
     Ok(())
 }
 

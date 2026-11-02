@@ -581,3 +581,68 @@ fn a_project_keeps_its_instructions_and_files_until_cleared() {
     assert_eq!(repo.instructions, None);
     assert!(repo.files.is_empty());
 }
+
+/// An orchestrator's Start over (0093): the new run takes over its thread's orchestration, Project,
+/// and pin, and the run it replaced keeps a thread with orchestration off.
+#[test]
+fn a_new_orchestrator_run_takes_over_its_thread() {
+    let (_dir, mut store) = open();
+    let orchestrator = Uuid::now_v7();
+    let fields = parallax_store::OrchestratorFields {
+        name: "formula fly".to_owned(),
+        repo_path: None,
+        icon: None,
+        permission: "auto".to_owned(),
+        autonomy: "routine".to_owned(),
+        base_branch: None,
+    };
+    store.create_orchestrator(orchestrator, &fields).unwrap();
+    assert_eq!(
+        store
+            .get_orchestrator(orchestrator)
+            .unwrap()
+            .unwrap()
+            .repo_path,
+        None
+    );
+    let (old, new) = (Uuid::now_v7(), Uuid::now_v7());
+    for run in [old, new] {
+        let run_fields = RunFields {
+            policy: "noWrite".to_owned(),
+            orchestrator_thread: Some(run),
+            ..run_fields(orchestrator)
+        };
+        store.create_run(run, &run_fields, &state()).unwrap();
+    }
+    let project = Uuid::now_v7();
+    store.create_orchestrator_thread(old, orchestrator).unwrap();
+    store.set_thread_project(old, Some(project)).unwrap();
+    store
+        .update_thread(
+            old,
+            &ThreadUpdate {
+                pinned: Some(true),
+                ..ThreadUpdate::default()
+            },
+        )
+        .unwrap();
+
+    let (thread, before) = store.create_orchestrator_thread(new, orchestrator).unwrap();
+    assert_eq!(
+        (thread.orchestrator_id, thread.project_id),
+        (Some(orchestrator), Some(project))
+    );
+    let before = before.unwrap();
+    assert_eq!(
+        (before.orchestrator_id, before.project_id, before.pinned),
+        (None, None, false)
+    );
+    assert_eq!(
+        store.orchestrator_thread(orchestrator).unwrap().unwrap().id,
+        new
+    );
+    // Only an orchestrator thread that left the list wakes.
+    assert!(store.wake_thread(new, "{}").unwrap().is_none());
+    store.set_thread_archived(old, true).unwrap();
+    assert!(store.wake_thread(old, "{}").unwrap().is_none());
+}

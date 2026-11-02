@@ -81,7 +81,9 @@ export function NewOrchestratorForm({
   const [creating, setCreating] = useState(false);
   // The last try's params, whose id a retry with the same host, name, path, icon, mode, and
   // autonomy sends again (0007).
-  const attempt = useRef<OrchestratorCreateParams & { hostId: string }>(undefined);
+  const attempt = useRef<OrchestratorCreateParams & { hostId: string; repoPath: string }>(
+    undefined,
+  );
 
   const submit = async (dialog: HTMLDialogElement) => {
     if (!workspace || !name) return;
