@@ -154,6 +154,16 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("scrolling up steps back with the caret in an empty box, until the text is pressed", () => {
+  const { box, rerender } = render(async () => undefined, caps);
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  act(() => box.focus());
+  rerender({ away: true });
+  expect(shell.dataset["back"]).toBe("true");
+  act(() => void box.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  expect(shell.dataset["back"]).toBeUndefined();
+});
+
 test("dragging files over the box marks it, until they leave", () => {
   const { box } = render(async () => undefined, caps);
   const shell = box.closest<HTMLElement>(".composer-shell")!;

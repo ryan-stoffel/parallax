@@ -1275,8 +1275,8 @@ body {
 .composer-bar[data-voice] {
   opacity: 0;
 }
-/* The controls' row, under the text. While the box steps back, voice and send or stop rise level
-   with the text, which is empty then, and the rest goes unless one of its menus is open. */
+/* The controls' row, under the text. While the box steps back, the model, voice, and send or stop
+   rise level with the text, which is empty then, and the rest goes. */
 .composer-controls {
   position: relative;
   display: flex;
@@ -1300,9 +1300,7 @@ body {
   flex-shrink: 0;
 }
 /* Quiet until the box is hovered or holds focus. */
-.composer-shell:not(:focus-within, :hover, [data-back])
-  > .composer-controls
-  > :not(.composer-actions) {
+.composer-shell:not(:focus-within, :hover) > .composer-controls > :not(.composer-actions) {
   opacity: 0.75;
 }
 .composer-shell:hover:not(:focus-within, .border-ring) {
@@ -1368,13 +1366,25 @@ body {
 [data-back] > .composer-controls {
   margin-top: -2.625rem;
   padding-bottom: 4px;
-  > :not(.composer-actions, :has(:popover-open)) {
+  > button {
     opacity: 0;
     visibility: hidden;
   }
+  > .composer-run > :not(fieldset) {
+    display: none;
+  }
 }
 [data-back] .composer-placeholder {
-  right: 6.5rem;
+  right: 13.5rem;
+}
+/* In a narrow box, the model is only its logo and bars while the box is one line. */
+@container composer (width < 28rem) {
+  [data-back] .model-name {
+    display: none;
+  }
+  [data-back] .composer-placeholder {
+    right: 9.5rem;
+  }
 }
 /* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
    its corners following the box's. */

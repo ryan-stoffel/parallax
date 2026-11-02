@@ -64,7 +64,10 @@ export function PlanLabel({ kind, plan }: { kind: string; plan: string }) {
   const Mark = mark && maskLogo(marks[mark]);
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground">
-      {Mark && <Mark className="size-5 shrink-0" />}
+      {/* Claude's are thin line art, which needs the room and full color to read. */}
+      {Mark && (
+        <Mark className={`shrink-0 ${kind === "claude" ? "size-7 text-foreground" : "size-5"}`} />
+      )}
       {label}
     </span>
   );

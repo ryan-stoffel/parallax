@@ -880,8 +880,8 @@ export interface ComposerProps {
   contents?: RefObject<ComposerContents | undefined>;
   /**
    * Whether the transcript over it is scrolled up from its end. An empty box no one is typing in
-   * then steps back: marked `data-back`, it folds to one line (index.css), with voice and Send or
-   * Stop beside the text, until the text takes focus.
+   * then steps back: marked `data-back`, it folds to one line (index.css), with the model, voice,
+   * and Send or Stop beside the text, until the text is pressed or typed in.
    */
   away?: boolean;
   /** Told whether the box is stepped back, so its screen can shrink what sits with it. */
@@ -968,6 +968,10 @@ export function Composer({
   // box must keep its height under the pill.
   const voiceBusy = useRef(false);
   const lastBack = useRef(false);
+  // Scrolling up steps back even with the caret in an empty box, until the text is pressed or typed in.
+  useEffect(() => {
+    if (away) setFocused(false);
+  }, [away]);
   const back = voiceBusy.current
     ? lastBack.current
     : away && !focused && !text && files.length === 0 && images.length === 0;
@@ -2120,7 +2124,12 @@ export function Composer({
                 onClose={() => setShown(undefined)}
               />
             )}
-            <div ref={textArea} className="composer-text group/scroll relative min-w-0">
+            <div
+              ref={textArea}
+              onPointerDown={() => setFocused(true)}
+              onKeyDown={() => setFocused(true)}
+              className="composer-text group/scroll relative min-w-0"
+            >
               {!text && (
                 <p
                   aria-hidden
@@ -2163,7 +2172,7 @@ export function Composer({
             >
               <Paperclip />
             </button>
-            <div className="ml-auto flex min-w-0 items-center gap-1">
+            <div className="composer-run ml-auto flex min-w-0 items-center gap-1">
               {usage?.summary && !narrow && <UsageRing data={usage} />}
               {pickers}
             </div>
