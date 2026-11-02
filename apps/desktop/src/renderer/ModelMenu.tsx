@@ -224,6 +224,19 @@ export function ModelMenu({
         id={id}
         popover="auto"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+          // A nested picker's, such as Access's: this panel stays as it is. A closing one still
+          // holds focus while it fades out, and would drop it, so focus comes back here.
+          if (e.target !== e.currentTarget) {
+            const panel = e.currentTarget;
+            const active = document.activeElement;
+            if (
+              e.newState === "closed" &&
+              panel.matches(":popover-open") &&
+              ((e.target as Element).contains(active) || !panel.contains(active))
+            )
+              search.current?.focus();
+            return;
+          }
           if (e.newState === "open") {
             setTab(group(chosen.provider));
             setAccount(chosen.provider);
@@ -232,7 +245,11 @@ export function ModelMenu({
             if (hasHub) void ensureHubs(catalog.hostId);
           } else setQuery("");
         }}
-        onKeyDown={moveFocus}
+        onKeyDown={(e) => {
+          // In the composer's form, Enter in a field would send the message.
+          if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault();
+          moveFocus(e);
+        }}
         className={`${menuPanel(options ? "end" : "start")} model-menu pop-in h-[26rem] ${options ? "w-[42rem] max-w-[90vw]" : "w-[30rem]"} flex-col overflow-hidden p-0 [&:popover-open]:flex`}
       >
         <div className="flex min-h-0 flex-1">
@@ -302,7 +319,7 @@ export function ModelMenu({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && shown[0]) pick(shown[0]);
+                  if (e.key === "Enter" && q && shown[0]) pick(shown[0]);
                 }}
                 className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
               />

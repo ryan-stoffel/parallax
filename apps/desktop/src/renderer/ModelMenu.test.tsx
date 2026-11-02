@@ -6,6 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import type { Hub } from "../protocol/generated/protocol";
 import { loadHubs, setHubAccountEnabled } from "./hubs";
 import { ModelMenu } from "./ModelMenu";
+import { Picker } from "./ui";
 import type { Catalog, Instance, Model } from "./models";
 import { planOf } from "./PlanLabel";
 import { loadProviders } from "./providers";
@@ -395,4 +396,63 @@ test("what a model doesn't have isn't offered", () => {
   expect(document.querySelector('[aria-label="Reasoning"]')).toBeNull();
   expect(document.querySelector('[aria-label="Speed"]')).toBeNull();
   expect(document.querySelector('[aria-label^="Context window"]')).toBeNull();
+});
+
+test("Enter picks a searched model, but with nothing typed it keeps the model and sends nothing", () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const onChange = vi.fn();
+  act(() =>
+    root!.render(<ModelMenu catalog={catalog} value={catalog.models[1]!} onChange={onChange} />),
+  );
+  const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const enter = () => {
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    act(() => {
+      search.dispatchEvent(event);
+    });
+    return event;
+  };
+  expect(enter().defaultPrevented).toBe(true);
+  expect(onChange).not.toHaveBeenCalled();
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      search,
+      catalog.models[0]!.name,
+    );
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(enter().defaultPrevented).toBe(true);
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(catalog.models[0]);
+});
+
+test("a nested picker closing leaves the panel's search as it is", () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const options = {
+    onEffort: () => {},
+    contexts: [],
+    onContext: () => {},
+    onFast: () => {},
+    access: <Picker label="Access" value="a" options={[{ value: "a", label: "A" }]} />,
+  };
+  act(() =>
+    root!.render(
+      <ModelMenu
+        catalog={catalog}
+        value={catalog.models[0]!}
+        onChange={() => {}}
+        options={options}
+      />,
+    ),
+  );
+  const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "son");
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const nested = document.querySelector('[role="menu"][aria-label="Access"]')!;
+  act(() => {
+    const event = Object.assign(new Event("toggle", { bubbles: true }), { newState: "closed" });
+    nested.dispatchEvent(event);
+  });
+  expect(search.value).toBe("son");
 });
