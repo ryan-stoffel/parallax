@@ -19,7 +19,7 @@ import { ClaudeLogo, OpenAILogo } from "../logos";
 import { slug, unique } from "../providers";
 import { IconButton } from "../ui";
 import { notify } from "../notifications";
-import { PlanBadge } from "../PlanBadge";
+import { PlanLabel } from "../PlanLabel";
 import { LimitLines } from "../Usage";
 import {
   ConfirmRemove,
@@ -325,7 +325,7 @@ function AccountRow({
       <div className="min-w-0 flex-1">
         <span className="flex items-center gap-2 text-body font-medium">
           <span className="truncate">{name}</span>
-          {account.plan && <PlanBadge kind={account.provider} plan={account.plan} />}
+          {account.plan && <PlanLabel kind={account.provider} plan={account.plan} />}
           {account.disabled && !manage && (
             <span className="shrink-0 text-meta text-faint-foreground">Off on the hub</span>
           )}

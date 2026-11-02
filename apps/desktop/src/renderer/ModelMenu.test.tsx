@@ -7,7 +7,7 @@ import type { Hub } from "../protocol/generated/protocol";
 import { loadHubs, setHubAccountEnabled } from "./hubs";
 import { ModelMenu } from "./ModelMenu";
 import type { Catalog, Instance, Model } from "./models";
-import { planOf } from "./PlanBadge";
+import { planOf } from "./PlanLabel";
 import { loadProviders } from "./providers";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -144,11 +144,11 @@ test("accounts whose emails start the same keep their full names", () => {
   ]);
 });
 
-test("each provider's plans have their label and tier, and an unknown one its id", () => {
-  expect(planOf("claude", "max")).toEqual({ label: "Max", tier: 2 });
-  expect(planOf("claude", "claude_ultra")).toEqual({ label: "Ultra", tier: 3 });
-  expect(planOf("codex", "plus")).toEqual({ label: "Plus", tier: 1 });
-  expect(planOf("codex", "promax")).toEqual({ label: "Pro Max", tier: 3 });
+test("each provider's plans have their name and mark, and an unknown one its id", () => {
+  expect(planOf("claude", "max")).toEqual({ label: "Max", mark: "budding" });
+  expect(planOf("claude", "claude_ultra")).toEqual({ label: "Ultra", mark: "bloom" });
+  expect(planOf("codex", "plus")).toEqual({ label: "Plus", mark: "sparkle" });
+  expect(planOf("codex", "promax")).toEqual({ label: "Pro", mark: "gem" });
   expect(planOf("codex", "self_serve_business")).toEqual({ label: "Self Serve Business" });
 });
 

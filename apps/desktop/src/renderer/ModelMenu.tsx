@@ -12,7 +12,7 @@ import {
 } from "./models";
 import { isNew } from "./catalog";
 import { ensureHubs, useHubs } from "./hubs";
-import { PlanBadge } from "./PlanBadge";
+import { PlanLabel } from "./PlanLabel";
 import { kindOf, listedProviders, loadProviders, logoOf } from "./providers";
 import { menuButton, menuPanel, moveFocus, Segmented } from "./ui";
 
@@ -291,7 +291,7 @@ export function ModelMenu({
                       <span className="min-w-0 flex-1 truncate">
                         {a.email ?? kindOf(instance(account)?.kind ?? "").name}
                       </span>
-                      {a.plan && <PlanBadge kind={instance(account)!.kind} plan={a.plan} />}
+                      {a.plan && <PlanLabel kind={instance(account)!.kind} plan={a.plan} />}
                     </li>
                   ))}
                 </ul>
