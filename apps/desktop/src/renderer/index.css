@@ -1340,7 +1340,7 @@ body {
   filter: none;
   opacity: 1;
 }
-:root.nightly .composer-shell .composer-send.send-sky:enabled {
+.composer-shell .composer-send.send-sky:enabled {
   animation: composer-pop var(--transition-duration-base) var(--ease-spring);
 }
 .composer-pop {

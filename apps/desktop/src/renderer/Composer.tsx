@@ -1802,7 +1802,7 @@ export function Composer({
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      className="flex min-w-0 items-center gap-1.5"
+      className="flex shrink-0 items-center gap-1.5"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
