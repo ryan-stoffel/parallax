@@ -1,24 +1,37 @@
 // A repo with no icon takes its repository's own favicon or logo before its initials (PLX-1272).
 import { useEffect, useRef } from "react";
 
+import type { ConnectionState } from "../preload/bridge";
 import type { ChosenIcon } from "../protocol/generated/protocol";
+import { useConnections } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { readRepoLogo } from "./images";
-import { isRepository, repoIconOf, type ThreadsView } from "./threads";
+import { emptyThreads, isRepository, repoIconOf, type ThreadsView } from "./threads";
 
 // The glyph under the image, for an app that doesn't draw images (0038).
 const glyph = "folder-git-2";
 
+/** Whether a computer has listed its repos, or is offline or can't list them, so none is coming. */
+const settled = (view: ThreadsView | undefined, connection: ConnectionState | undefined) =>
+  connection?.status === "failed" ||
+  !!view?.error ||
+  !!view?.outdated ||
+  (!!view && view.state !== emptyThreads && !view.loading);
+
 /**
  * Each repo to look for a logo in, by `<hostId>/<repoId>` as `tried` holds them: a repository with
  * no icon of its own or from a namesake, on a computer whose plxd finds logos and keeps images.
+ * None until every computer in `hosts`, whose states `connections` holds in order, has settled,
+ * since a stored logo would then draw over the icon of a namesake not yet listed.
  */
 export function reposWantingLogo(
   hosts: Host[],
   views: Readonly<Record<string, ThreadsView>>,
+  connections: readonly (ConnectionState | undefined)[],
   shared: ReadonlyMap<string, ChosenIcon>,
   tried: ReadonlySet<string>,
 ) {
+  if (!hosts.every((host, at) => settled(views[host.id], connections[at]))) return [];
   return hosts.flatMap((host) => {
     const view = views[host.id];
     if (!view || !("repoLogo" in view.capabilities) || !view.iconImageBytes) return [];
@@ -41,10 +54,12 @@ export function useRepoLogos(
   shared: ReadonlyMap<string, ChosenIcon>,
 ) {
   const tried = useRef(new Set<string>());
+  const connections = useConnections(hosts.map((host) => host.id));
   useEffect(() => {
     for (const { hostId, repo, maxBytes } of reposWantingLogo(
       hosts,
       views,
+      connections,
       shared,
       tried.current,
     )) {
@@ -58,5 +73,5 @@ export function useRepoLogos(
         if (image) await update(repo, { icon: { name: glyph, image }, iconIfUnset: true });
       })();
     }
-  }, [hosts, views, shared]);
+  }, [hosts, views, connections, shared]);
 }

@@ -31,12 +31,10 @@ const FORMATS: [(&str, &str); 7] = [
     ("gif", "image/gif"),
 ];
 
-/// Folders whose images are someone else's, or stand in for a real project's.
+/// Folders whose images are someone else's, or stand in for a real project's, matched by
+/// [`is_skipped`].
 const SKIPPED_FOLDERS: &[&str] = &[
-    "__fixtures__",
-    "__mocks__",
-    "__snapshots__",
-    "__tests__",
+    "bower_components",
     "demo",
     "demos",
     "dist",
@@ -45,11 +43,14 @@ const SKIPPED_FOLDERS: &[&str] = &[
     "examples",
     "fixture",
     "fixtures",
+    "mock",
     "mocks",
     "node_modules",
     "out",
+    "pods",
     "sample",
     "samples",
+    "snapshots",
     "spec",
     "specs",
     "target",
@@ -57,12 +58,14 @@ const SKIPPED_FOLDERS: &[&str] = &[
     "templates",
     "test",
     "testdata",
+    "testing",
     "tests",
     "third-party",
     "third_party",
     "thirdparty",
     "vendor",
     "vendored",
+    "vendors",
 ];
 
 /// Folders that hold a project's own assets, so that a logo in one is the project's.
@@ -105,15 +108,20 @@ const ASSET_FOLDERS: &[&str] = &[
 /// Folders whose children are each a project of a monorepo.
 const WORKSPACE_FOLDERS: &[&str] = &["apps", "packages", "services"];
 
+/// Whether a folder's name, or one part of it, is in [`SKIPPED_FOLDERS`], so `example-app` and
+/// `__tests__` count as `example` and `tests`.
+fn is_skipped(folder: &str) -> bool {
+    SKIPPED_FOLDERS.contains(&folder)
+        || folder
+            .split(['-', '_', '.'])
+            .any(|part| SKIPPED_FOLDERS.contains(&part))
+}
+
 /// Whether a logo in these folders, from the repository's root down, is the project's own: only
 /// asset folders, under at most one project folder or a monorepo's project. So `src/assets` and
 /// `react-native-app/assets` count, and `src/integrations/slack` doesn't.
 fn is_project_folder(folders: &[String]) -> bool {
-    if folders.len() > MAX_FOLDERS
-        || folders
-            .iter()
-            .any(|folder| SKIPPED_FOLDERS.contains(&folder.as_str()))
-    {
+    if folders.len() > MAX_FOLDERS || folders.iter().any(|folder| is_skipped(folder)) {
         return false;
     }
     let assets = match folders {
@@ -268,6 +276,18 @@ mod tests {
             "vendor/lib/assets/logo.png",
             "node_modules/pkg/logo.svg",
             "assets/a/b/c/d/e/logo.svg",
+            "example-app/public/favicon.ico",
+            "test-app/public/favicon.ico",
+            "packages/example-app/public/favicon.svg",
+            "apps/e2e-app/public/favicon.ico",
+            "__test__/favicon.ico",
+            "__fixtures__/logo.png",
+            "mock/favicon.ico",
+            "testing/logo.png",
+            "vendors/logo.png",
+            "bower_components/logo.png",
+            "Pods/logo.png",
+            "third-party/logo.png",
         ] {
             assert_eq!(best(&[path]), None, "{path}");
         }

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { ConnectionState } from "../preload/bridge";
 import type { ChosenIcon, Repo } from "../protocol/generated/protocol";
 import type { Host } from "./hosts";
 import { logoPlacement } from "./images";
 import { reposWantingLogo } from "./repoLogos";
-import type { ThreadsView } from "./threads";
+import { emptyThreads, type ThreadsView } from "./threads";
 
 const repo = (id: string, extra: Partial<Repo> = {}): Repo => ({
   id,
@@ -23,7 +24,7 @@ const view = (repos: Repo[], extra: Partial<ThreadsView> = {}) =>
 const hosts = [{ id: "a" }] as Host[];
 const icon: ChosenIcon = { name: "rocket" };
 const ids = (v: ThreadsView, shared = new Map<string, ChosenIcon>(), tried = new Set<string>()) =>
-  reposWantingLogo(hosts, { a: v }, shared, tried).map((r) => r.repo);
+  reposWantingLogo(hosts, { a: v }, [], shared, tried).map((r) => r.repo);
 
 describe("reposWantingLogo", () => {
   it("takes only repositories with no icon, not chats, Projects, or tried ones", () => {
@@ -41,6 +42,24 @@ describe("reposWantingLogo", () => {
   it("skips a computer whose plxd can't find logos or keep images", () => {
     expect(ids(view([repo("r")], { capabilities: {} }))).toEqual([]);
     expect(ids(view([repo("r")], { iconImageBytes: undefined }))).toEqual([]);
+  });
+
+  it("waits for every computer's first list, but not for an offline one", () => {
+    const wanted = (other: ThreadsView | undefined, connection: ConnectionState["status"]) =>
+      reposWantingLogo(
+        [{ id: "a" }, { id: "b" }] as Host[],
+        { a: view([repo("r")]), ...(other && { b: other }) },
+        [undefined, { status: connection } as ConnectionState],
+        new Map(),
+        new Set(),
+      ).map((r) => r.repo);
+    const unlisted = view([], { state: emptyThreads });
+    expect(wanted(undefined, "connecting")).toEqual([]);
+    expect(wanted(unlisted, "connected")).toEqual([]);
+    expect(wanted(view([], { loading: true }), "connected")).toEqual([]);
+    expect(wanted(view([]), "connected")).toEqual(["r"]);
+    expect(wanted(undefined, "failed")).toEqual(["r"]);
+    expect(wanted({ ...unlisted, error: "no list" }, "connected")).toEqual(["r"]);
   });
 });
 
