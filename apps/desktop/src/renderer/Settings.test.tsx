@@ -324,6 +324,19 @@ test("Worktrees starts on All computers, says where they differ, and sets them a
   delete answers["host/settings/set"];
 });
 
+test("About copies its version, and its bug report link fills the version in", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  await renderSettings("about");
+  await click(document.querySelector<HTMLElement>('[aria-label="Copy version 0.0.0-local"]')!);
+  expect(writeText).toHaveBeenCalledWith("0.0.0-local");
+  const bug = [...document.querySelectorAll("a")].find((a) =>
+    a.textContent?.startsWith("Report a bug"),
+  )!;
+  expect(new URL(bug.href).searchParams.get("template")).toBe("bug-report.yml");
+  expect(new URL(bug.href).searchParams.get("version")).toBe("0.0.0-local");
+});
+
 test("Projects lists each with its icon, and an icon picked there goes to every copy", async () => {
   const repo = { id: "r1", name: "ember", path: "/src/ember", icon: { name: "rocket" } };
   const updates: [string, unknown][] = [];

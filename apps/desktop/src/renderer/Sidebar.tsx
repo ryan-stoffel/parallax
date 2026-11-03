@@ -27,6 +27,7 @@ import {
   GitMerge,
   Globe,
   HardDrive,
+  Info,
   Keyboard,
   Layers,
   LayoutGrid,
@@ -4114,6 +4115,7 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   connections: Server,
   storage: HardDrive,
   beta: FlaskConical,
+  about: Info,
 };
 export const settingsNames = Object.fromEntries(
   settingsSections.map((s) => [s.id, s.name]),

@@ -53,6 +53,7 @@ import {
 } from "./providers";
 import { extraAccounts, SeveralAccountsMark } from "./SeveralAccounts";
 import { age, backendLogos, SettingsNav, settingsNames } from "./Sidebar";
+import { AboutSettings } from "./settings/AboutSettings";
 import { AccessibilitySettings } from "./settings/AccessibilitySettings";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
@@ -257,6 +258,8 @@ export function Settings({
           <ScheduleSettings />
         ) : section === "storage" ? (
           <StorageSettings />
+        ) : section === "about" ? (
+          <AboutSettings />
         ) : section === "beta" ? (
           <BetaSettings />
         ) : (

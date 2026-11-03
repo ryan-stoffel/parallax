@@ -70,6 +70,12 @@ export const settingsSections: {
     group: "System",
     keywords: "experimental preview labs early features flask",
   },
+  {
+    id: "about",
+    name: "About",
+    group: "System",
+    keywords: "version licenses credits bug report star support ko-fi discussion feedback",
+  },
 ];
 
 /**
@@ -148,10 +154,6 @@ export const settingsIndex: SettingEntry[] = [
       "Update Claude Code and Codex when a release is found",
       "auto upgrade claude codex",
     ],
-  ]),
-  ...entries("general", "About", [
-    ["Version", "This copy of Parallax", "about build release number"],
-    ["Open source licenses", "Notices for bundled fonts", "fonts notices legal credits"],
   ]),
   // Threads
   ...entries("threads", "New threads", [
@@ -413,6 +415,21 @@ export const settingsIndex: SettingEntry[] = [
       "ios android xcode iphone simctl studio sdk adb avd emulators apple",
     ],
     ["Simulators and emulators", "The devices on this computer", "boot start stop power"],
+  ]),
+  ...entries("about", undefined, [
+    ["Version", "This copy of Parallax, to copy", "about build release number"],
+    [
+      "Get involved",
+      "Report a bug, share an idea, star the repo, or support on Ko-fi",
+      "feedback issue discussion github kofi donate",
+    ],
+    ["This computer", "The plxd, Electron, and Chromium this copy runs on", "operating system os"],
+    ["Open source", "Parallax's license and source code", "apache repository github"],
+    [
+      "Licenses and credits",
+      "The code, fonts, logos, and models Parallax uses",
+      "third party notices legal attribution dependencies",
+    ],
   ]),
   ...entries("accessibility", "Vision", [
     ["Contrast", "Stronger text and borders", "high contrast"],

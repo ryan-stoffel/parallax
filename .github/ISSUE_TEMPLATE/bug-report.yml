@@ -50,7 +50,7 @@ body:
     id: version
     attributes:
       label: Parallax version
-      description: In the app, Settings > General > About > Version.
+      description: In the app, Settings > About. Hover over the version to copy it.
       placeholder: 2610.12704.13012-nightly
     validations:
       required: true

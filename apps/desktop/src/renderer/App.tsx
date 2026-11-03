@@ -178,7 +178,8 @@ export type SettingsSection =
   | "schedules"
   | "storage"
   | "connections"
-  | "beta";
+  | "beta"
+  | "about";
 
 /**
  * The app frame: sidebar, then the chat or a page, then the side panel, with Settings floating
