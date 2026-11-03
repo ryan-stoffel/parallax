@@ -1213,8 +1213,8 @@ export function App() {
         setMainPage(undefined);
         newThread();
       } else if (command === "closeTab") {
-        // With nothing to close, Close Window keeps its keys.
-        if (dialog || settings || !closableTab) return;
+        // With no tab in view to close, Close Window keeps its keys.
+        if (dialog || settings || mainPage || !closableTab) return;
         setWorkspace(closeTab(workspace, activeTab(workspace).id));
       } else if (command === "nextTab" || command === "previousTab") {
         if (dialog || settings) return;
