@@ -4428,7 +4428,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The user's message to the agent with a denial, cut short when it is long.
 	 */
-	message?: string, } | { "kind": "subagent",
+	message?: string,
+	/**
+	 * What the user answered a question with, one entry per question, each cut short when
+	 * it is long (PLX-245).
+	 */
+	answers?: Array<string>, } | { "kind": "subagent",
 	/**
 	 * The tool call that started the subagent, whose `toolCall` names its task.
 	 */
@@ -6153,6 +6158,12 @@ export type AgentApproveParams = {
 	 * With `deny`: what to tell the agent, at most 64 KiB. Absent says that the user denied it.
 	 */
 	message?: string,
+	/**
+	 * With `allow`, for a question (PLX-245): what the user answered, one entry per question and
+	 * at most 64 KiB in all, which the transcript shows. The agent reads the answer from `input`.
+	 * A client leaves out what must not be logged, such as a secret.
+	 */
+	answers?: Array<string>,
 };
 
 /**
@@ -6182,6 +6193,10 @@ export type AgentApproveResult = {
 	 * The user's message to the agent with a denial.
 	 */
 	message?: string,
+	/**
+	 * What the user answered a question with, one entry per question.
+	 */
+	answers?: Array<string>,
 };
 
 /**

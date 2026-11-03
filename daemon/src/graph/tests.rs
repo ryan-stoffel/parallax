@@ -96,6 +96,7 @@ fn resolved(approval_id: ApprovalId) -> AgentOutputItem {
         by: AgentApprovalBy::User,
         always: false,
         message: None,
+        answers: None,
     }
 }
 

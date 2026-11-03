@@ -1249,6 +1249,15 @@ body {
 .composer-tabs {
   background-color: var(--surface);
 }
+/* The agent's questions open from the tabs, as wide as their line (Question.tsx). Scoped, since a
+   split shows several composers. */
+.composer-tabs {
+  anchor-name: --composer-tabs;
+  anchor-scope: --composer-tabs;
+}
+.question-popover {
+  position-anchor: --composer-tabs;
+}
 .composer-shell {
   anchor-name: --composer;
   anchor-scope: --composer;

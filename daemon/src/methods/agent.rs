@@ -196,11 +196,17 @@ pub(crate) async fn approve(
                     )));
                 }
             }
+            let answered: usize = params.answers.iter().flatten().map(String::len).sum();
+            if answered > MAX_DENIAL_BYTES {
+                return Err(ErrorObject::invalid_params(format!(
+                    "answers must be at most {MAX_DENIAL_BYTES} bytes"
+                )));
+            }
         }
         AgentApprovalAnswer::Deny => {
-            if params.input.is_some() || params.always {
+            if params.input.is_some() || params.always || params.answers.is_some() {
                 return Err(ErrorObject::invalid_params(
-                    "input and always go only with decision allow",
+                    "input, always, and answers go only with decision allow",
                 ));
             }
             if params

@@ -116,6 +116,7 @@ fn resolved(
         by,
         always: false,
         message: None,
+        answers: None,
     }
 }
 
@@ -125,6 +126,7 @@ fn result(decision: AgentApprovalDecision, by: AgentApprovalBy) -> AgentApproveR
         by,
         always: false,
         message: None,
+        answers: None,
     }
 }
 
@@ -140,6 +142,7 @@ fn answer(
         input: None,
         always: false,
         message: None,
+        answers: None,
     }
 }
 
@@ -237,6 +240,50 @@ async fn a_denied_request_tells_the_agent_why() {
             by: AgentApprovalBy::User,
             always: false,
             message: Some(message.to_owned()),
+            answers: None,
+        }]
+    );
+}
+
+/// PLX-245: an allow's answers go in the log for the transcript, and the agent reads only its
+/// input. A denial takes no answers.
+#[tokio::test]
+async fn an_answered_question_logs_its_answers() {
+    let host = host(asking(bash()));
+    let (mut client, run_id, approval_id) = start(&host).await;
+    let answers = vec!["SQLite".to_owned()];
+    let invalid = AgentApproveParams {
+        answers: Some(answers.clone()),
+        ..answer(run_id, approval_id, AgentApprovalAnswer::Deny)
+    };
+    let error = client.call::<AgentApprove>(invalid).await.unwrap_err();
+    assert_eq!(error.code, INVALID_PARAMS);
+
+    let input = json!({"answers": {"Which database?": "SQLite"}});
+    let allow = AgentApproveParams {
+        input: Some(input.clone()),
+        answers: Some(answers.clone()),
+        ..answer(run_id, approval_id, AgentApprovalAnswer::Allow)
+    };
+    let allowed = AgentApproveResult {
+        answers: Some(answers.clone()),
+        ..result(AgentApprovalDecision::Allowed, AgentApprovalBy::User)
+    };
+    assert_eq!(client.call::<AgentApprove>(allow).await.unwrap(), allowed);
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert_eq!(
+        printed(&events),
+        [json!({"approvalId": approval_id, "decision": "allow", "input": input})]
+    );
+    assert_eq!(
+        resolutions(&events),
+        [AgentOutputItem::ApprovalResolved {
+            approval_id,
+            decision: AgentApprovalDecision::Allowed,
+            by: AgentApprovalBy::User,
+            always: false,
+            message: None,
+            answers: Some(answers),
         }]
     );
 }

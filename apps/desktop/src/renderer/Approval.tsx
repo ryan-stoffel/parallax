@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   ListRestart,
+  MessageCircleQuestion,
   MousePointerClick,
   ShieldCheck,
   ShieldQuestion,
@@ -33,6 +34,7 @@ import type { JsonValue } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { dismiss as dismissNotice, notify } from "./notifications";
 import { ProposedPlan } from "./Plan";
+import { questionsOf, type Filled } from "./questions";
 import {
   field,
   isObject,
@@ -106,19 +108,19 @@ const put = (approvalId: string, state: AnswerState) => (prev: ReadonlyMap<strin
 
 /**
  * This window's answers to permission requests, by approval id, and `answer`, which sends one with
- * `agent/approve`. A denial carries the user's note, if any. No answer edits the request's input,
- * so an `ExitPlanMode` answer never changes its `planFilePath` (0031). One that fails says why in a
- * notification. `dismiss` puts away a request that's gone.
+ * `agent/approve`. A denial carries the user's note, if any. Only answers to an agent's questions
+ * edit a request's input, so an `ExitPlanMode` answer never changes its `planFilePath` (0031). One
+ * that fails says why in a notification. `dismiss` puts away a request that's gone.
  */
 export function useAnswers(hostId: string) {
   const [answers, setAnswers] = useState<ReadonlyMap<string, AnswerState>>(new Map());
-  async function answer(asked: Asked, choice: Choice, message?: string) {
+  async function answer(asked: Asked, choice: Choice, message?: string, filled?: Filled) {
     const { approvalId } = asked.approval.request;
     setAnswers(put(approvalId, { state: "answering", choice }));
     const decision =
       choice === "deny"
         ? { decision: "deny" as const, ...(message && { message }) }
-        : { decision: "allow" as const, ...(choice === "always" && { always: true }) };
+        : { decision: "allow" as const, ...(choice === "always" && { always: true }), ...filled };
     const reply = await window.parallax.request(hostId, "agent/approve", {
       runId: asked.runId,
       approvalId,
@@ -181,6 +183,7 @@ const deniedBy: Partial<Record<string, string>> = {
 export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Outcome {
   const plan = isPlan(request);
   const at = resolved?.at ? ` at ${clock(resolved.at, now)}` : "";
+  if (questionsOf(request).length > 0) return questionOutcome(resolved, at);
   if (!resolved)
     return {
       verb: plan ? "Plan waiting for approval" : "Waiting for approval",
@@ -241,6 +244,36 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
           : `The agent stopped waiting for an answer${at}.`,
     };
   return { ...quiet, verb: plan ? "Plan ended" : "Ended", who: `It ended${at}.` };
+}
+
+/** How an agent's question came out (PLX-245). `at` says when, as a phrase. */
+function questionOutcome(resolved: ApprovalResolution | undefined, at: string): Outcome {
+  const Icon = MessageCircleQuestion;
+  const quiet = { Icon, color: "text-faint-foreground" };
+  if (!resolved)
+    return {
+      verb: "Waiting for your answer",
+      who: "Nobody has answered yet.",
+      Icon,
+      color: "text-foreground",
+    };
+  const { decision, by, gone } = resolved;
+  if (gone)
+    return {
+      ...quiet,
+      verb: "Question no longer waiting",
+      who: "It ended before your answer reached it.",
+    };
+  if (decision === "allowed")
+    return {
+      verb: "Answered",
+      who: `Answered by you${at}.`,
+      Icon,
+      color: "text-muted-foreground",
+    };
+  if (decision === "denied" && by === "user")
+    return { ...quiet, verb: "Skipped", who: `Skipped by you${at}.` };
+  return { ...quiet, verb: "Question ended", who: `It ended before anyone answered${at}.` };
 }
 
 // The input field a card's header shows beside the tool's name, by the names common tools use:
@@ -553,7 +586,7 @@ export const quietButton =
   "h-7 shrink-0 rounded-md px-2.5 text-body text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50";
 export const outlineButton =
   "h-7 shrink-0 rounded-md border border-border px-2.5 text-body text-foreground enabled:hover:bg-hover disabled:opacity-50";
-const approveButton =
+export const approveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 
 /** What a button says while its answer is on the way. */
@@ -960,7 +993,7 @@ const freshMs = 300;
  * it takes to see the change. A key's click (`detail` 0) always goes, since a new card's focus
  * starts on its frame, never on a button, and nothing looks turned off meanwhile.
  */
-function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNode }) {
+export function Pinned({ onLeave, children }: { onLeave: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [leave] = useState(() => onLeave);
   const moved = useRef(false);
@@ -1016,7 +1049,7 @@ export function ApprovalQueue({
 }: {
   asked: readonly Asked[];
   answers: ReadonlyMap<string, AnswerState>;
-  onAnswer: (asked: Asked, choice: Choice, message?: string) => void;
+  onAnswer: (asked: Asked, choice: Choice, message?: string, filled?: Filled) => void;
   onDismiss: (asked: Asked) => void;
   describe: (toolName: string, input?: JsonValue) => ToolLook;
   markdown: (text: string) => ReactNode;
@@ -1142,6 +1175,8 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
   const plan = isPlan(approval.request);
   const at = approval.resolved?.at ?? approval.at;
   const detail = tool.detail?.split("\n")[0];
+  const questions = questionsOf(approval.request);
+  const answer = questions.length === 1 ? approval.resolved?.answers?.[0] : undefined;
   return (
     <TraceLine>
       <TraceIcon className={color}>
@@ -1149,7 +1184,14 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
       </TraceIcon>
       <TraceTitle>
         <span className="font-medium">{verb}</span>
-        {!plan && (
+        {questions.length > 0 && (
+          <>
+            {" "}
+            {questions.length === 1 ? questions[0]!.text : `${questions.length} questions`}
+            {answer && ` · ${answer}`}
+          </>
+        )}
+        {!plan && questions.length === 0 && (
           <>
             {" "}
             {tool.label}
@@ -1178,6 +1220,21 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
 /** What a line in the transcript opens to: who decided and when, the user's note, and the request. */
 export function ApprovalDetails({ approval }: { approval: Approval }) {
   const { request, resolved } = approval;
+  const questions = questionsOf(request);
+  if (questions.length > 0)
+    return (
+      <div className="space-y-2 text-body">
+        <p className="text-muted-foreground">{outcomeOf(approval).who}</p>
+        {questions.map((question, i) => (
+          <div key={question.id}>
+            <p className="break-words whitespace-pre-wrap text-muted-foreground">{question.text}</p>
+            {resolved?.answers?.[i] && (
+              <p className="break-words whitespace-pre-wrap">{resolved.answers[i]}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
   return (
     <div className="space-y-2 text-body">
       <p className="text-muted-foreground">{outcomeOf(approval).who}</p>

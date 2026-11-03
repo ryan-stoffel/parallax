@@ -293,8 +293,10 @@ async fn assert_manual_writes(dir: &TempDir) {
     assert_eq!(
         written[2]["params"],
         json!({"cwd": "/", "approvalPolicy": "untrusted", "sandbox": "workspace-write",
-               "model": "gpt-6-sol"}),
-        "the user's own config, with only the mode and model on top"
+               "model": "gpt-6-sol",
+               "config": {"features.default_mode_request_user_input": true,
+                          "suppress_unstable_features_warning": true}}),
+        "the user's own config, with only the mode, model, and question tool on top"
     );
     assert_eq!(
         written[3]["params"],
@@ -677,6 +679,8 @@ fn thread_mcp_joins_user_config_on_start_resume_and_fork() {
             params["config"],
             json!({
                 "model_context_window": 872_000,
+                "features.default_mode_request_user_input": true,
+                "suppress_unstable_features_warning": true,
                 "mcp_servers.plxd.command": "/bin/plxd",
                 "mcp_servers.plxd.args":
                     ["mcp", "--data-dir", "/tmp/parallax data", "--thread", request.run_id.to_string()],

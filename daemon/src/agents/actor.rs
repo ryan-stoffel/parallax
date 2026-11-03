@@ -1901,6 +1901,7 @@ impl Actor {
             input,
             always,
             message,
+            answers,
             ..
         } = params;
         match self.approvals.lookup(approval_id) {
@@ -1951,7 +1952,7 @@ impl Actor {
             None => Err(AnswerError::Finished),
         };
         if sent.is_ok() {
-            let resolution = user_resolution(allow, always, message);
+            let resolution = user_resolution(allow, always, message, answers);
             self.resolve_approval(approval_id, resolution.clone()).await;
             self.flush().await;
             return Ok(resolution);
@@ -1989,7 +1990,7 @@ impl Actor {
                 .await
                 .map_err(|error| ErrorObject::internal_error(error.to_string()))??;
         }
-        let resolution = user_resolution(allow, always, message);
+        let resolution = user_resolution(allow, always, message, None);
         self.resolve_approval(approval_id, resolution.clone()).await;
         self.flush().await;
         Ok(resolution)
@@ -4377,7 +4378,12 @@ struct ForkSource {
 
 /// How the user's answer ended a permission request: allowed, `always` included, or denied with
 /// `message`.
-fn user_resolution(allow: bool, always: bool, message: Option<String>) -> AgentApproveResult {
+fn user_resolution(
+    allow: bool,
+    always: bool,
+    message: Option<String>,
+    answers: Option<Vec<String>>,
+) -> AgentApproveResult {
     AgentApproveResult {
         decision: if allow {
             AgentApprovalDecision::Allowed
@@ -4387,6 +4393,7 @@ fn user_resolution(allow: bool, always: bool, message: Option<String>) -> AgentA
         by: AgentApprovalBy::User,
         always: allow && always,
         message: if allow { None } else { message },
+        answers: if allow { answers } else { None },
     }
 }
 

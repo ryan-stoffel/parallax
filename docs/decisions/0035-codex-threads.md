@@ -41,12 +41,13 @@ With `approvals` (0031), each request is an `approvalRequested` item:
 | `item/fileChange/requestApproval` | `file_change` | the item's `changes` | `accept` | | `decline` | `cancel` |
 | `item/permissions/requestApproval` | `permissions` | `permissions`, `cwd` | the requested permissions, for the turn | | none, for the turn | |
 | `mcpServer/elicitation/request` | `mcp_elicitation`, interactive | the request | `accept` | | `decline` | `cancel` |
+| `item/tool/requestUserInput` (PLX-245) | `request_user_input`, interactive | its questions | the `answers` in the allow's input, by question id | | no answers | no answers |
 
 - `callId` is the item's id, which its `toolCall` carries. A file change's request names only its item, so its input is the changes from that item's `item/started`.
 - `alwaysAllow` is the command, and `always` answers `acceptForSession`, which lasts as long as the app-server process. plxd never answers `acceptWithExecpolicyAmendment`, which Codex offers and which writes a rule to the user's rules file.
 - Codex takes no edited input, so an allow whose input differs from the request's is sent as `decline`.
 - `serverRequest/resolved` for a request still waiting, or app-server exiting, withdraws it.
-- Without `approvals`, a thread runs with approval policy `never` inside its mode's sandbox, as a Claude thread without them keeps its sandbox (0034): its commands run sandboxed without asking, and plxd answers `decline` to any request that still comes, so a client that can't answer never leaves Codex waiting. Codex's other requests (`item/tool/requestUserInput`, `item/tool/call`, token refreshes, and the legacy v1 approvals) get a JSON-RPC error.
+- Without `approvals`, a thread runs with approval policy `never` inside its mode's sandbox, as a Claude thread without them keeps its sandbox (0034): its commands run sandboxed without asking, and plxd answers `decline` to any request that still comes, so a client that can't answer never leaves Codex waiting. Codex's other requests (`item/tool/call`, token refreshes, and the legacy v1 approvals) and an `item/tool/requestUserInput` with no questions get a JSON-RPC error. A thread with `approvals` turns on Codex's `default_mode_request_user_input` feature, without which Codex offers its question tool only in its own Plan mode.
 
 ### Events
 

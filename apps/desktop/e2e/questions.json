@@ -1,0 +1,67 @@
+[
+  { "init": { "sessionId": "e2e-questions", "model": "fake-model" } },
+  {
+    "emit": {
+      "kind": "toolCall",
+      "callId": "toolu_e2e_ask",
+      "name": "AskUserQuestion",
+      "input": {}
+    }
+  },
+  {
+    "requestApproval": {
+      "toolName": "AskUserQuestion",
+      "callId": "toolu_e2e_ask",
+      "interactive": true,
+      "input": {
+        "questions": [
+          {
+            "question": "Which database should the app use?",
+            "header": "Database",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "SQLite (Recommended)",
+                "description": "One writer and no server to run."
+              },
+              { "label": "Postgres", "description": "Runs as a server, for several writers." }
+            ]
+          },
+          {
+            "question": "Which platforms should ship first?",
+            "header": "Platforms",
+            "multiSelect": true,
+            "options": [
+              { "label": "macOS", "description": "Signed and notarized." },
+              { "label": "Windows", "description": "Unsigned for now." },
+              { "label": "Linux", "description": "AppImage." }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "awaitApproval",
+  {
+    "requestApproval": {
+      "toolName": "request_user_input",
+      "callId": "codex_e2e_ask",
+      "interactive": true,
+      "input": {
+        "questions": [
+          {
+            "id": "name",
+            "header": "Name",
+            "question": "What should the release be called?",
+            "isOther": false,
+            "isSecret": false,
+            "options": null
+          }
+        ]
+      }
+    }
+  },
+  "awaitApproval",
+  { "emit": { "kind": "text", "text": "The fake agent is done asking." } },
+  "hang"
+]
