@@ -104,6 +104,7 @@ import {
   serviceRuns,
   serviceStep,
 } from "./plxd";
+import { requestAccepted } from "./telemetry";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -166,6 +167,12 @@ let settings: Settings = { hosts: [] };
 /** Why `settings.json` couldn't be read, which blocks saving over it. */
 let settingsError: string | undefined;
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
+
+/** The local plxd's usage since a time, for telemetry. Absent while it can't answer. */
+export async function localUsage(since: string) {
+  const answer = await connections.get("local")?.request("usage/history", { since });
+  return answer && "result" in answer ? answer.result : undefined;
+}
 
 /**
  * Connects to the local plxd, as host id `local`, and to every saved SSH host at once, and
@@ -320,7 +327,10 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
                 : method === "thread/importable" || method === "thread/remoteControlOrigin"
                   ? IMPORTABLE_TIMEOUT_MS
                   : undefined;
-      return host.request(method as RendererMethod, params as never, timeout);
+      return host.request(method as RendererMethod, params as never, timeout).then((answer) => {
+        if ("result" in answer) requestAccepted(method, params);
+        return answer;
+      });
     },
   );
 

@@ -59,7 +59,7 @@ import {
   type FoundEditor,
 } from "./editors";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
-import { renderPage, savedHost, startHosts, streamFile } from "./hosts";
+import { localUsage, renderPage, savedHost, startHosts, streamFile } from "./hosts";
 import {
   addTab,
   addUnpacked,
@@ -894,7 +894,7 @@ void app.whenReady().then(async () => {
   await loadExtensions(browserSession);
   startHosts(startAccount(), () => updateState.available?.version ?? app.getVersion());
   startStorage();
-  startTelemetry();
+  startTelemetry(localUsage);
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
   const win = createWindow();

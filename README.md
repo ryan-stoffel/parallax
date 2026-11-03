@@ -127,7 +127,13 @@ The design lives in [docs/PLAN.md](docs/PLAN.md), and the decisions behind it in
 
 ## Usage data
 
-The installed app sends one `app_active` event to PostHog at launch and once a day while it runs, so we can count how many installs are in use. It carries a random id made for the install, the app's version and channel, and the OS and architecture. It carries no account, name, path, prompt, or code, and PostHog adds no location from it. Set `DO_NOT_TRACK=1` in the app's environment to turn it off. On macOS an app opened from the Dock or Finder doesn't read your shell profile, so run `launchctl setenv DO_NOT_TRACK 1` and restart the app.
+The installed app sends three events to PostHog, so we can count how many installs are in use and how much they do:
+
+- `app_active`, at launch and once a day while it runs.
+- `prompt_sent`, for each prompt you send from the app, saying whether it started a thread or followed one up.
+- `tokens_used`, for each hour and model the local `plxd` ran, with the tokens used and the cost when the vendor reports one.
+
+Each carries a random id made for the install, the app's version and channel, and the OS and architecture. None carries an account, name, path, the text of a prompt, or code, and PostHog adds no location from them. Set `DO_NOT_TRACK=1` in the app's environment to turn it off. On macOS an app opened from the Dock or Finder doesn't read your shell profile, so run `launchctl setenv DO_NOT_TRACK 1` and restart the app.
 
 ## License
 
