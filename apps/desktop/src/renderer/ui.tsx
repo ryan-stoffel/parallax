@@ -392,17 +392,20 @@ export function MenuOption({
   option: o,
   checked,
   disabled,
+  role = "menuitemradio",
   onClick,
 }: {
   option: PickerOption;
   checked: boolean;
   disabled?: boolean;
+  /** "menuitemcheckbox" for an on or off setting beside a menu's choices. */
+  role?: "menuitemradio" | "menuitemcheckbox";
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      role="menuitemradio"
+      role={role}
       aria-checked={checked}
       disabled={disabled}
       onClick={onClick}
@@ -438,7 +441,7 @@ export const menuHeading = "px-2 pt-1.5 pb-1 text-meta font-medium text-faint-fo
 export const unavailableBadge =
   "shrink-0 rounded-md border border-warning/30 px-2 py-0.5 text-meta text-warning";
 
-const separator = <div role="separator" className="-mx-1 my-1 h-px bg-border" />;
+export const separator = <div role="separator" className="-mx-1 my-1 h-px bg-border" />;
 
 /** A form control's look, for a `field` Picker's trigger and the fields beside it. */
 const fieldControl =

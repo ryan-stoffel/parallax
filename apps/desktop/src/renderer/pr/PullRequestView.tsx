@@ -46,6 +46,7 @@ import { GithubMarkdown } from "./GithubMarkdown";
 import { Guide } from "./Guide";
 import { MergeBox } from "./MergeBox";
 import {
+  baseIssue,
   checksOf,
   guideView,
   lineBreakdown,
@@ -113,6 +114,9 @@ export function PullRequestView({
   const [guideTick, setGuideTick] = useState(0);
   const regenerate = useRef(false);
   const [status, setStatus] = useState<PrStatusResult>();
+  // The pull requests whose branch was deleted from here, by URL: this view outlives the Summary
+  // tab, which unmounts when another opens, and shows each of a thread's pull requests in turn.
+  const [branchDeleted, setBranchDeleted] = useState<ReadonlySet<string>>(new Set());
   // Bumped after a write or an action, so `pr/status` is read again.
   const [statusTick, setStatusTick] = useState(0);
   const linked = prs.get(url);
@@ -206,7 +210,7 @@ export function PullRequestView({
     return false;
   };
   const act = (action: PrActionMore, extra?: PrActExtra) =>
-    void run(() => prs.act(url, action, extra), "Couldn't update the pull request");
+    run(() => prs.act(url, action, extra), "Couldn't update the pull request");
   const write = prs.write
     ? (w: PrWrite) =>
         run(async () => {
@@ -353,7 +357,11 @@ export function PullRequestView({
               <span className="shrink-0 text-meta text-muted-foreground">{ago(pr.createdAt)}</span>
             )}
             <span className="ml-auto flex min-w-0 justify-end">
-              <BranchChips head={pr.headBranch} base={pr.baseBranch} />
+              <BranchChips
+                head={pr.headBranch}
+                base={pr.baseBranch}
+                issue={baseIssue(pr, status)}
+              />
             </span>
           </div>
           <div className="mt-3 flex items-center gap-2">
@@ -399,8 +407,10 @@ export function PullRequestView({
               checks={checks}
               checkActions={checkActions}
               actions={!!prs.actions}
+              branchDeleted={branchDeleted.has(pr.url)}
               busy={busy}
               onAct={act}
+              onBranchDeleted={() => setBranchDeleted((done) => new Set(done).add(pr.url))}
               onReviews={() => setTab("timeline")}
               onCommits={() => setTab("code")}
             />
@@ -556,7 +566,7 @@ export function PullRequestView({
         action="Close pull request"
         onConfirm={() => {
           closeDialog.current?.close();
-          act("close");
+          void act("close");
         }}
       >
         “{pr.title}” closes without merging. It can be reopened on GitHub.

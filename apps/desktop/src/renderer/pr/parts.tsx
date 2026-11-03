@@ -9,7 +9,7 @@ import { icons } from "../icons";
 import { locale } from "../locale";
 import { age } from "../Sidebar";
 import { Badge } from "../ui";
-import { checkRollup, type Rollup } from "./model";
+import { checkRollup, type BaseIssue, type Rollup } from "./model";
 
 /**
  * How a pull request's state looks: open green, draft gray, merged violet, closed red. `tint` is
@@ -88,15 +88,38 @@ export function DiffStat({
   );
 }
 
-/** A pull request's branches as GitHub's chips, `base ← head`, the head truncating first. */
-export function BranchChips({ head, base }: { head: string; base: string }) {
-  const chip =
-    "truncate rounded-md bg-hover px-1.5 py-0.5 font-mono text-meta text-muted-foreground";
+const issueLook: Record<BaseIssue["kind"], { Icon: LucideIcon; tint: string }> = {
+  conflicts: { Icon: icons.failed, tint: "bg-danger/12 text-danger" },
+  behind: { Icon: icons.warning, tint: "bg-warning/12 text-warning" },
+};
+
+/**
+ * A pull request's branches as GitHub's chips, `base ← head`, the head truncating first. An
+ * `issue` with its base marks the base chip with an icon and color.
+ */
+export function BranchChips({
+  head,
+  base,
+  issue,
+}: {
+  head: string;
+  base: string;
+  issue?: BaseIssue;
+}) {
+  const chip = "truncate rounded-md px-1.5 py-0.5 font-mono text-meta";
+  const quiet = "bg-hover text-muted-foreground";
+  const look = issue && issueLook[issue.kind];
   return (
     <span title={`Merges ${head} into ${base}`} className="flex min-w-0 items-center gap-1">
-      <span className={`${chip} max-w-[45%] shrink-0`}>{base}</span>
+      <span
+        title={issue?.label}
+        className={`${chip} flex max-w-[45%] shrink-0 items-center gap-1 ${look?.tint ?? quiet}`}
+      >
+        {look && <look.Icon aria-label={issue?.label} className="size-3 shrink-0" />}
+        <span className="truncate">{base}</span>
+      </span>
       <icons.back aria-label="from" className="size-3.5 shrink-0 text-faint-foreground" />
-      <span className={`${chip} min-w-0`}>{head}</span>
+      <span className={`${chip} ${quiet} min-w-0`}>{head}</span>
     </span>
   );
 }
