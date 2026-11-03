@@ -1635,7 +1635,14 @@ export function Composer({
             .run();
           return true;
         }
-        if (event.key === "Escape" && showStop && !stopping && !event.isComposing) {
+        // A held Esc stops nothing: it may have just closed a popup.
+        if (
+          event.key === "Escape" &&
+          showStop &&
+          !stopping &&
+          !event.isComposing &&
+          !event.repeat
+        ) {
           void stop();
           return true;
         }
@@ -1647,7 +1654,8 @@ export function Composer({
         const modEnter = behaviorPrefs.get().sendKey === "modEnter";
         const alt = mod && (!modEnter || event.shiftKey);
         if (inCode || modEnter ? mod : !event.shiftKey) {
-          void submit(!!onSendInBackground && alt, !!onSteer && alt);
+          // A held Enter sends once: it may have just answered a question.
+          if (!event.repeat) void submit(!!onSendInBackground && alt, !!onSteer && alt);
           return true;
         }
         // Shift+Enter does what Enter does in other editors: a new line, list item, or line of

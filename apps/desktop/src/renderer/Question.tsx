@@ -48,6 +48,26 @@ export const SKIPPED = "The user skipped this question. Continue without an answ
 
 const unanswered: Choice = { picked: [], typed: "" };
 
+/** A dialog or a popover the user has open. A notification is a manual popover, which isn't one. */
+const overlayOpen = () =>
+  !!document.querySelector('dialog[open], [popover]:not([popover="manual"]):popover-open');
+
+/**
+ * Whether `panel` may take focus: from nothing, or from its own composer with nothing in it. Another
+ * pane's composer isn't free, since focus moving would change which thread the user is in.
+ */
+export function focusIsFree(panel: HTMLElement) {
+  const active = document.activeElement;
+  if (!active || active === document.body) return true;
+  if (!(active instanceof HTMLElement) || !active.isContentEditable) return false;
+  const composer = active.closest(".composer-shell");
+  return (
+    !!composer?.parentElement?.contains(panel) &&
+    !composer.querySelector(".composer-attachments") &&
+    !active.textContent?.trim()
+  );
+}
+
 /** `choice` with an option turned on or off: a single choice has one, and no typed answer. */
 function toggled(choice: Choice, question: Question, value: string, on: boolean): Choice {
   if (!question.multiple) return { picked: on ? [value] : [], typed: "" };
@@ -225,9 +245,14 @@ function QuestionPanel({
   };
   const formRef = useRef<HTMLFormElement>(null);
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (off || e.metaKey || e.ctrlKey || e.altKey) return;
     const target = e.target as HTMLElement;
     const typing = target.matches('input[type="text"], input[type="password"]');
+    // A held key answers nothing: its first press did, and the rest would answer what comes next.
+    if (e.repeat && (e.key === "Enter" || (!typing && /^[1-9]$/.test(e.key)))) {
+      e.preventDefault();
+      return;
+    }
+    if (off || e.metaKey || e.ctrlKey || e.altKey) return;
     const rows = [...e.currentTarget.querySelectorAll<HTMLInputElement>("fieldset input")];
     const at = rows.indexOf(target as HTMLInputElement);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -378,9 +403,10 @@ function QuestionPanel({
 
 /**
  * The questions' tab on the composer's top bar, which opens the panel above the bar as a question
- * arrives. Closed, it names the question and where it stands in the rest. Open, the panel says
- * those, so the tab only says what the thread waits on. Like the bar's other popovers, a click
- * elsewhere or Esc closes it, with what the user chose kept for when the tab opens it again.
+ * arrives, unless the user has a dialog or another popover open, which it would close or sit inert
+ * above. Closed, it names the question and where it stands in the rest. Open, the panel says those,
+ * so the tab only says what the thread waits on. Like the bar's other popovers, a click elsewhere
+ * or Esc closes it, with what the user chose kept for when the tab opens it again.
  */
 function QuestionTab(props: AskProps & { form: Form }) {
   const { form, focusRef } = props;
@@ -388,14 +414,15 @@ function QuestionTab(props: AskProps & { form: Form }) {
   const [open, setOpen] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    panel.current?.showPopover();
+    if (!overlayOpen()) panel.current?.showPopover();
   }, []);
   // Esc closes the panel before the page sees it: focus may still be in the composer, where Esc
-  // stops the run.
+  // stops the run. Under an expanded side panel, the panel is open but unseen, and Esc is the
+  // side panel's.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape" || e.isComposing) return;
+      if (e.key !== "Escape" || e.isComposing || !panel.current?.checkVisibility()) return;
       e.preventDefault();
       e.stopPropagation();
       panel.current?.hidePopover();
@@ -442,8 +469,9 @@ function QuestionTab(props: AskProps & { form: Form }) {
 
 /**
  * The requests with questions, oldest first, one at a time. `inline` draws the panel in place, for
- * a view with no composer bar. The next request's panel takes focus only from nothing or from the
- * panel just answered, and once the last goes, focus that was in it returns by `returnFocus`.
+ * a view with no composer bar. The next request's panel takes focus only from nothing, an empty
+ * composer, or the panel just answered, so a question never takes keys from someone typing. Once
+ * the last goes, focus that was in it returns by `returnFocus`.
  */
 export function QuestionQueue({
   asked,
@@ -473,8 +501,7 @@ export function QuestionQueue({
     returning?.();
   });
   useLayoutEffect(() => {
-    const active = document.activeElement;
-    if (panel.current && (hadFocus.current || !active || active === document.body))
+    if (panel.current && (hadFocus.current || focusIsFree(panel.current)))
       panel.current.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [key]);
