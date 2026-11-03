@@ -813,10 +813,12 @@ export function ThreadList({
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
   // pinned rows, unless Traditional's Pinned is folded, then Today's, then Working's, while it's open.
   const pinsShut = pinnedFolded.use() && folders;
+  // A search shows what it finds in Working, as it does in a folded group.
+  const workingOpen = sections.working || words.length > 0;
   const listed = [
     ...(pinsShut ? [] : [...pinnedOrchestrators, ...pinnedRows]),
     ...todayRows,
-    ...(sections.working ? workingTops : []),
+    ...(workingOpen ? workingTops : []),
   ];
   const modHeld = useModHeld();
   // Opening a row hides its card, which would cover what it opens.
@@ -1984,8 +1986,7 @@ export function ThreadList({
         quiet
         items={workingTops}
         row={(item) => rowOf(item)}
-        // A search shows what it finds here, as it does in a folded group.
-        open={sections.working || words.length > 0}
+        open={workingOpen}
         onOpenChange={(o) => toggleSection("working", o)}
       />
       <Drawer
