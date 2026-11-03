@@ -1,8 +1,27 @@
 // An agent's questions for the user (PLX-245): a tab that leads the composer's top bar and opens
 // the questions above it, or the same panel in place where a view has no bar. Question text is
 // untrusted, so it renders only as text.
-import { Check, ChevronUp, MessageCircleQuestion, Workflow } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState, type RefObject, type ToggleEvent } from "react";
+import {
+  ArrowRight,
+  ArrowUp,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  MessageCircleQuestion,
+  Pencil,
+  Workflow,
+} from "lucide-react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  type ToggleEvent,
+} from "react";
 
 import {
   approveButton,
@@ -21,6 +40,7 @@ import {
   type Filled,
   type Question,
 } from "./questions";
+import { IconButton } from "./ui";
 
 /** What the agent reads when the user skips, since no answer may otherwise read as a denial. */
 export const SKIPPED = "The user skipped this question. Continue without an answer.";
@@ -51,7 +71,22 @@ function useForm(asked: Asked) {
 
 type Form = ReturnType<typeof useForm>;
 
-/** One question: its text, its options as radios or checkboxes, and a typed answer if it takes one. */
+/** A row's mark, which stands for its radio or checkbox: its number or icon, or a check once on. */
+function Mark({ on, multiple, children }: { on: boolean; multiple: boolean; children: ReactNode }) {
+  return (
+    <span
+      aria-hidden
+      className={`grid size-5 shrink-0 place-items-center text-meta tabular-nums transition-colors motion-reduce:transition-none ${multiple ? "rounded-md" : "rounded-full"} ${on ? "bg-accent text-accent-foreground" : "border border-border text-muted-foreground"}`}
+    >
+      {on ? <Check className="size-3" strokeWidth={3} /> : children}
+    </span>
+  );
+}
+
+/**
+ * One question: its text, its options as numbered rows, and a box for a typed answer if it takes
+ * one. Each row's radio or checkbox covers it, unseen, so the row takes its clicks and keys.
+ */
 function QuestionFields({
   question,
   choice,
@@ -61,61 +96,74 @@ function QuestionFields({
   question: Question;
   choice: Choice;
   onChoose: (choice: Choice) => void;
-  /** A pointer picked a single-choice option, which moves on to the next question. */
+  /** A pointer picked a single-choice option, which moves on. */
   onPicked: () => void;
 }) {
   const name = useId();
   const { multiple, options, custom, secret } = question;
   return (
-    <fieldset className="min-w-0">
+    <fieldset className="approval-in min-w-0">
       <legend className="text-body leading-relaxed font-medium break-words whitespace-pre-wrap">
         {question.text}
       </legend>
       {options.length > 0 && (
-        <div className="mt-2 -mx-1.5 space-y-px">
-          {options.map((option) => (
-            <label
-              key={option.value}
-              className="flex items-start gap-2.5 rounded-md px-1.5 py-1 hover:bg-hover has-[:checked]:bg-hover has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring"
-            >
-              <input
-                type={multiple ? "checkbox" : "radio"}
-                name={name}
-                checked={choice.picked.includes(option.value)}
-                onChange={(e) =>
-                  onChoose(toggled(choice, question, option.value, e.target.checked))
-                }
-                onClick={(e) => {
-                  // A key's click (`detail` 0) only moves between options.
-                  if (!multiple && e.detail > 0) onPicked();
-                }}
-                className="mt-1 size-3.5 shrink-0 accent-accent"
-              />
-              <span className="min-w-0 flex-1 text-body leading-relaxed">
-                <span className="break-words">{option.label}</span>
-                {option.recommended && (
-                  <span className="ml-2 text-meta text-faint-foreground">Recommended</span>
-                )}
-                {option.description && (
-                  <span className="block text-meta break-words text-muted-foreground">
-                    {option.description}
-                  </span>
-                )}
-              </span>
-            </label>
-          ))}
+        <div className="-mx-2 mt-1.5 space-y-0.5">
+          {options.map((option, i) => {
+            const on = choice.picked.includes(option.value);
+            return (
+              <label
+                key={option.value}
+                className={`relative flex items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-hover has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring ${on ? "bg-hover" : ""}`}
+              >
+                <input
+                  type={multiple ? "checkbox" : "radio"}
+                  name={name}
+                  checked={on}
+                  onChange={(e) =>
+                    onChoose(toggled(choice, question, option.value, e.target.checked))
+                  }
+                  onClick={(e) => {
+                    // A key's click (`detail` 0) only turns it on.
+                    if (!multiple && e.detail > 0) onPicked();
+                  }}
+                  className="absolute inset-0 m-0 size-full opacity-0"
+                />
+                <Mark on={on} multiple={multiple}>
+                  {i < 9 ? i + 1 : ""}
+                </Mark>
+                <span className="min-w-0 flex-1 text-body leading-5">
+                  <span className="break-words">{option.label}</span>
+                  {option.recommended && (
+                    <span className="ml-2 rounded bg-accent/10 px-1.5 py-px text-meta text-accent">
+                      Recommended
+                    </span>
+                  )}
+                  {option.description && (
+                    <span className="mt-0.5 block text-meta break-words text-muted-foreground">
+                      {option.description}
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
         </div>
       )}
       {custom && (
-        <input
-          type={secret ? "password" : "text"}
-          autoComplete="off"
-          aria-label={options.length > 0 ? "Your own answer" : question.text}
-          placeholder={options.length > 0 ? "Something else" : "Your answer"}
-          value={choice.typed}
-          onChange={(e) => onChoose(typedIn(choice, question, e.target.value))}
-          className="mt-2 h-7 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-body placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
-        />
+        <label className="-mx-2 mt-1.5 flex h-9 items-center gap-2.5 rounded-lg border border-border px-2 focus-within:border-ring">
+          <Mark on={choice.typed.trim() !== ""} multiple={multiple}>
+            <Pencil className="size-3" />
+          </Mark>
+          <input
+            type={secret ? "password" : "text"}
+            autoComplete="off"
+            aria-label={options.length > 0 ? "Your own answer" : question.text}
+            placeholder={options.length > 0 ? "Something else" : "Your answer"}
+            value={choice.typed}
+            onChange={(e) => onChoose(typedIn(choice, question, e.target.value))}
+            className="h-full min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus:outline-none disabled:opacity-50"
+          />
+        </label>
       )}
     </fieldset>
   );
@@ -134,8 +182,13 @@ interface AskProps {
 }
 
 /**
- * The questions as a form. Several step through their headers, each marked once answered. Enter or
- * Next moves on, the last sends them all, and Skip answers none.
+ * The questions as a form, one at a time. The arrows step through them. Picking a single choice or
+ * pressing Next goes to the next one not yet answered, and once none is left, Send sends them all.
+ * Skip answers none. The controls sit at the panel's foot, which stays put as questions of other
+ * heights take its place, so the arrows don't move out from under a pointer.
+ *
+ * With focus in the panel, ↑ and ↓ move between the rows, ← and → between the questions, a number
+ * picks its option, and Enter picks the option in focus or moves on.
  */
 function QuestionPanel({
   form,
@@ -150,12 +203,54 @@ function QuestionPanel({
   const { questions, step, setStep, choices, choose } = form;
   const question = questions[step]!;
   const choice = choices[step] ?? unanswered;
-  const last = step === questions.length - 1;
   const busy = state?.state === "answering";
   const gone = state?.state === "gone";
-  const ready = last ? choices.every(isAnswered) : isAnswered(choice);
   const off = busy || gone || disabledReason !== undefined;
+  // The next question without an answer, going round from this one.
+  const open = questions
+    .map((_, i) => (step + 1 + i) % questions.length)
+    .find((i) => i !== step && !isAnswered(choices[i] ?? unanswered));
+  const ready = isAnswered(choice);
   const send = () => onAnswer("allow", undefined, fill(asked.approval.request, questions, choices));
+  const goOn = () => {
+    if (open !== undefined) setStep(open);
+  };
+  const pick = (i: number) => {
+    const option = question.options[i];
+    if (!option) return;
+    const on = question.multiple ? !choice.picked.includes(option.value) : true;
+    choose(toggled(choice, question, option.value, on));
+    if (!question.multiple) goOn();
+  };
+  const formRef = useRef<HTMLFormElement>(null);
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (off || e.metaKey || e.ctrlKey || e.altKey) return;
+    const target = e.target as HTMLElement;
+    const typing = target.matches('input[type="text"], input[type="password"]');
+    const rows = [...e.currentTarget.querySelectorAll<HTMLInputElement>("fieldset input")];
+    const at = rows.indexOf(target as HTMLInputElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const by = e.key === "ArrowDown" ? 1 : -1;
+      rows[at < 0 ? 0 : Math.min(Math.max(at + by, 0), rows.length - 1)]?.focus();
+    } else if (e.key === "Enter" && target instanceof HTMLInputElement && target.type === "radio") {
+      if (target.checked) return;
+      e.preventDefault();
+      pick(at);
+    } else if (e.key === "Enter" && target === e.currentTarget) {
+      e.preventDefault();
+      formRef.current?.requestSubmit();
+    } else if (typing) {
+      return;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const to = step + (e.key === "ArrowRight" ? 1 : -1);
+      if (to >= 0 && to < questions.length) setStep(to);
+    } else if (/^[1-9]$/.test(e.key)) {
+      e.preventDefault();
+      pick(Number(e.key) - 1);
+    }
+  };
   // The question that replaced the one in focus takes its place, so the next key or reader starts
   // there. Never on the first, which takes focus only from nothing (`QuestionQueue`).
   const shown = useRef(step);
@@ -170,14 +265,16 @@ function QuestionPanel({
       role="group"
       tabIndex={-1}
       aria-label="Question from the agent"
+      onKeyDown={onKey}
       className="flex max-h-[min(60vh,32rem)] min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface px-4 py-3 focus-visible:outline-none"
     >
       <form
+        ref={formRef}
         onSubmit={(e) => {
           e.preventDefault();
           if (off || !ready) return;
-          if (last) send();
-          else setStep(step + 1);
+          if (open === undefined) send();
+          else goOn();
         }}
         className="flex min-w-0 flex-col gap-2.5"
       >
@@ -196,34 +293,22 @@ function QuestionPanel({
             )}
           </p>
         )}
-        {questions.length > 1 ? (
-          <div className="-mx-1.5 flex flex-wrap items-center gap-1" aria-label="Questions">
-            {questions.map((q, i) => (
-              <button
-                key={q.id}
-                type="button"
-                aria-current={i === step ? "step" : undefined}
-                onClick={() => setStep(i)}
-                className={`flex h-6 max-w-40 items-center gap-1 rounded-md px-1.5 text-meta hover:bg-hover hover:text-foreground ${i === step ? "bg-hover text-foreground" : "text-muted-foreground"}`}
-              >
-                {isAnswered(choices[i] ?? unanswered) && (
-                  <Check aria-label="Answered" className="size-3 shrink-0" />
-                )}
-                <span className="truncate">{q.header ?? `Question ${i + 1}`}</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          question.header && <p className="text-meta text-faint-foreground">{question.header}</p>
+        {(question.header || question.multiple || count > 1) && (
+          <p className="flex items-center gap-1.5 text-meta text-faint-foreground">
+            {question.header && <span className="truncate">{question.header}</span>}
+            {question.header && question.multiple && <span aria-hidden>·</span>}
+            {question.multiple && <span className="shrink-0">Choose any</span>}
+            {count > 1 && (
+              <span className="ml-auto shrink-0 tabular-nums">{count - 1} more waiting</span>
+            )}
+          </p>
         )}
         <QuestionFields
           key={question.id}
           question={question}
           choice={choice}
           onChoose={choose}
-          onPicked={() => {
-            if (!last) setStep(step + 1);
-          }}
+          onPicked={goOn}
         />
         {gone ? (
           <div className="flex items-center justify-end gap-2">
@@ -236,10 +321,28 @@ function QuestionPanel({
           </div>
         ) : (
           <div className="flex items-center justify-end gap-2">
-            {count > 1 && (
-              <span className="mr-auto text-meta text-faint-foreground tabular-nums">
-                {count - 1} more waiting
-              </span>
+            {questions.length > 1 && (
+              <div role="group" aria-label="Questions" className="mr-auto flex items-center gap-1">
+                <IconButton
+                  label="Previous question"
+                  size="sm"
+                  disabled={step === 0}
+                  onClick={() => setStep(step - 1)}
+                >
+                  <ChevronLeft aria-hidden className="size-4" />
+                </IconButton>
+                <span className="text-meta text-muted-foreground tabular-nums">
+                  {step + 1} of {questions.length}
+                </span>
+                <IconButton
+                  label="Next question"
+                  size="sm"
+                  disabled={step === questions.length - 1}
+                  onClick={() => setStep(step + 1)}
+                >
+                  <ChevronRight aria-hidden className="size-4" />
+                </IconButton>
+              </div>
             )}
             <button
               type="button"
@@ -250,18 +353,19 @@ function QuestionPanel({
             >
               Skip
             </button>
-            {step > 0 && (
-              <button type="button" onClick={() => setStep(step - 1)} className={quietButton}>
-                Back
-              </button>
-            )}
             <button
               type="submit"
               disabled={off || !ready}
               title={disabledReason}
-              className={approveButton}
+              className={`${approveButton} inline-flex items-center gap-1`}
             >
-              {busy ? "Sending…" : last ? "Send" : "Next"}
+              {busy ? "Sending…" : open === undefined ? "Send" : "Next"}
+              {!busy &&
+                (open === undefined ? (
+                  <ArrowUp aria-hidden className="size-3.5" />
+                ) : (
+                  <ArrowRight aria-hidden className="size-3.5" />
+                ))}
             </button>
           </div>
         )}
@@ -271,9 +375,10 @@ function QuestionPanel({
 }
 
 /**
- * The questions' tab on the composer's top bar: the question and where it stands in the rest, which
- * opens the panel above the bar as it arrives. Like the bar's other popovers, a click elsewhere or
- * Esc closes it, with what the user chose kept for when the tab opens it again.
+ * The questions' tab on the composer's top bar, which opens the panel above the bar as a question
+ * arrives. Closed, it names the question and where it stands in the rest. Open, the panel says
+ * those, so the tab only says what the thread waits on. Like the bar's other popovers, a click
+ * elsewhere or Esc closes it, with what the user chose kept for when the tab opens it again.
  */
 function QuestionTab(props: AskProps & { form: Form }) {
   const { form, focusRef } = props;
@@ -294,8 +399,10 @@ function QuestionTab(props: AskProps & { form: Form }) {
         className="flex w-full min-w-0 items-center gap-2.5 py-0.5 pr-3.5 pl-4 text-left text-body hover:bg-hover"
       >
         <MessageCircleQuestion aria-hidden className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{question.text}</span>
-        {form.questions.length > 1 && (
+        <span className={`min-w-0 flex-1 truncate ${open ? "text-muted-foreground" : ""}`}>
+          {open ? "Waiting for your answer" : question.text}
+        </span>
+        {!open && form.questions.length > 1 && (
           <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
             {form.step + 1} of {form.questions.length}
           </span>

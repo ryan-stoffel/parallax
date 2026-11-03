@@ -45,7 +45,8 @@ test("answers an agent's questions from the composer's top bar, and keeps them a
 
   // It opens by itself, with the first question, and the bar says where it stands.
   await expect(panel.getByText("Which database should the app use?")).toBeVisible();
-  await expect(tab).toContainText("1 of 2");
+  await expect(panel).toContainText("1 of 2");
+  await expect(tab).toContainText("Waiting for your answer");
   await expect(panel.getByText("Recommended", { exact: true })).toBeVisible();
   await settle();
   await shot("question-open");
@@ -53,6 +54,8 @@ test("answers an agent's questions from the composer's top bar, and keeps them a
   // The tab hides it and shows it again.
   await tab.locator("button[popovertarget]").click();
   await expect(panel).toBeHidden();
+  await expect(tab).toContainText("Which database should the app use?");
+  await expect(tab).toContainText("1 of 2");
   await shot("question-closed");
   await tab.locator("button[popovertarget]").click();
   await expect(panel).toBeVisible();
@@ -64,10 +67,23 @@ test("answers an agent's questions from the composer's top bar, and keeps them a
   // Picking an option moves on to the next question.
   await panel.getByRole("radio", { name: /SQLite/ }).click();
   await expect(panel.getByText("Which platforms should ship first?")).toBeVisible();
-  await expect(tab).toContainText("2 of 2");
+  await expect(panel).toContainText("2 of 2");
+
+  // The arrows and the arrow keys go back and forth, with the choice kept.
+  await panel.getByRole("button", { name: "Previous question" }).click();
+  await expect(panel.getByRole("radio", { name: /SQLite/ })).toBeChecked();
+  await page.keyboard.press("ArrowRight");
+  await expect(panel.getByText("Which platforms should ship first?")).toBeVisible();
+
+  // A number picks its option.
+  await page.keyboard.press("1");
+  await expect(panel.getByRole("checkbox", { name: /macOS/ })).toBeChecked();
+  await page.keyboard.press("1");
+  await expect(panel.getByRole("checkbox", { name: /macOS/ })).not.toBeChecked();
   await panel.getByRole("checkbox", { name: /macOS/ }).click();
   await panel.getByRole("checkbox", { name: /Linux/ }).click();
   await panel.getByRole("textbox", { name: "Your own answer" }).fill("FreeBSD");
+  await settle();
   await shot("question-multiple");
   await panel.getByRole("button", { name: "Send" }).click();
 
