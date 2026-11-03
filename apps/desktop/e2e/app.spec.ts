@@ -123,7 +123,8 @@ test("the Usage page keeps the thread's panels shut, and the thread gets them ba
   await page.getByRole("button", { name: "Show side panel" }).click();
   await expect(sidePanel).toBeVisible();
 
-  await page.getByRole("button", { name: "Usage", exact: true }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Usage", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible();
   await expect(sidePanel).toBeHidden();
   // The side panel, browser, and terminal shortcuts do nothing here.
