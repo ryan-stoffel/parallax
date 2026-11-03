@@ -58,6 +58,8 @@ export type BehaviorPrefs = {
    * in the browser. Cmd+click (Ctrl+click elsewhere) or Shift+click does the other.
    */
   prLinkClick: "parallax" | "github";
+  /** Whether dictated text is tidied by a small model, which then receives it (PLX-1232). */
+  cleanDictation: boolean;
 };
 
 export const behaviorDefaults: BehaviorPrefs = {
@@ -67,6 +69,7 @@ export const behaviorDefaults: BehaviorPrefs = {
   sendKey: "enter",
   openPrsIn: "external",
   prLinkClick: "parallax",
+  cleanDictation: true,
 };
 
 export const behaviorPrefs = stored("parallax.behavior", behaviorDefaults, merged);

@@ -109,6 +109,7 @@ mod threads;
 pub mod transport;
 pub mod tui;
 pub mod usage;
+mod voice_clean;
 #[cfg(windows)]
 pub mod windows;
 pub mod worktree;

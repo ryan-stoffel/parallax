@@ -9,7 +9,7 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentCommandsParams, AgentCommandsResult, ErrorKind, RepoFilesParams, RepoFilesResult,
-    RepoGrepParams, RepoGrepResult, RepoId, RunId,
+    RepoGrepParams, RepoGrepResult, RepoId, RunId, VoiceCleanParams, VoiceCleanResult,
 };
 
 use super::Context;
@@ -102,6 +102,28 @@ pub(crate) async fn files(
     let truncated = files.len() > fits;
     files.truncate(fits);
     Ok(RepoFilesResult { files, truncated })
+}
+
+/// How long dictation waits for a thread's file names, while the speaker waits for their text.
+const VOICE_LIST_LIMIT: Duration = Duration::from_secs(2);
+
+/// `voice/clean`, with the file names of the thread's folder, when there is one. Without them, it
+/// still cleans the text.
+pub(crate) async fn voice_clean(
+    context: &Context,
+    params: VoiceCleanParams,
+) -> Result<VoiceCleanResult, ErrorObject> {
+    let (repo, run_id) = (params.repo, params.run_id);
+    let listed = files(context, RepoFilesParams { repo, run_id });
+    let files = if repo.is_some() || run_id.is_some() {
+        match tokio::time::timeout(VOICE_LIST_LIMIT, listed).await {
+            Ok(Ok(listed)) => listed.files,
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    crate::voice_clean::clean(&context.daemon, params, &files).await
 }
 
 /// `repo/grep`: `git grep` for plain text in the thread's folder, capped.

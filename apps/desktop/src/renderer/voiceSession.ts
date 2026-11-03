@@ -13,6 +13,8 @@ export interface VoiceEngine {
   close: () => Promise<void>;
 }
 export interface VoiceDependencies {
+  /** The transcript tidied up by a small model (PLX-1232). Without it, or if it fails, it's raw. */
+  clean?: (text: string) => Promise<string>;
   engine(signal: AbortSignal): Promise<VoiceEngine>;
   capture(signal: AbortSignal): Promise<VoiceCapture>;
 }
@@ -37,6 +39,13 @@ export class VoiceSession {
   private setPhase(phase: VoicePhase) {
     this.phase = phase;
     this.changed(phase);
+  }
+  private async clean(raw: string): Promise<string> {
+    try {
+      return (await this.dependencies.clean?.(raw)) ?? raw;
+    } catch {
+      return raw;
+    }
   }
   waveform = () => this.active?.capture?.waveform();
   start() {
@@ -82,8 +91,12 @@ export class VoiceSession {
       for await (const result of engine.stream(capture.chunks(), { abortSignal: signal })) {
         if (result.text.trim()) parts.push(result.text.trim());
       }
-      if (this.active === recording && !signal.aborted && recording.confirming)
-        this.inserted(parts.join(" "));
+      if (this.active === recording && !signal.aborted && recording.confirming) {
+        const raw = parts.join(" ");
+        // The raw words go in when they can't be cleaned, so dictation never depends on a model.
+        const text = raw ? await this.clean(raw) : raw;
+        if (this.active === recording && !signal.aborted) this.inserted(text);
+      }
     } catch (error) {
       if (this.active === recording && !signal.aborted) this.failed(error);
     } finally {

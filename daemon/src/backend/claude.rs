@@ -1076,15 +1076,13 @@ pub fn permission_mode(permission: Option<AgentPermission>) -> Result<&'static s
 fn namer_arguments(
     model: &str,
     effort: Option<AgentEffort>,
-    schema: &str,
+    schema: Option<&str>,
 ) -> Result<Vec<OsString>, StartError> {
     check_argument("model", model)?;
     let mut args: Vec<OsString> = [
         "-p",
         "--output-format",
         "json",
-        "--json-schema",
-        schema,
         "--model",
         model,
         "--tools",
@@ -1099,6 +1097,9 @@ fn namer_arguments(
     ]
     .map(OsString::from)
     .into();
+    if let Some(schema) = schema {
+        args.extend(["--json-schema".into(), schema.into()]);
+    }
     if let Some(effort) = effort {
         args.extend(["--effort".into(), effort_level(effort)?.into()]);
     }
@@ -1260,13 +1261,17 @@ impl Backend for ClaudeBackend {
         model: &str,
         effort: Option<AgentEffort>,
     ) -> Result<Option<NameProbe>, StartError> {
-        let schema = std::fs::read_to_string(dir.join(namer::SCHEMA_FILE))
-            .map_err(|error| StartError::Invalid(format!("no answer schema: {error}")))?;
-        let mut spec = self.probe_spec(dir, namer_arguments(model, effort, &schema)?)?;
+        let schema = std::fs::read_to_string(dir.join(namer::SCHEMA_FILE)).ok();
+        let parse = if schema.is_some() {
+            namer::claude
+        } else {
+            namer::claude_text
+        };
+        let mut spec = self.probe_spec(dir, namer_arguments(model, effort, schema.as_deref())?)?;
         self.pin_gateway_model(&mut spec, Some(model));
         Ok(Some(NameProbe {
             process: self.launcher.spawn(&spec)?,
-            parse: namer::claude,
+            parse,
         }))
     }
 

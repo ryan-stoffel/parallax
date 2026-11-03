@@ -107,7 +107,7 @@ import { countSentPrompt } from "./supportPrompt";
 import { Picker, type PickerOption } from "./ui";
 import { useVoice } from "./useVoice";
 import { VoicePill } from "./VoicePill";
-import { voiceText } from "./voiceText";
+import { cleanDictation, voiceText } from "./voiceText";
 
 const access = (value: AgentPermission, icon: ReactNode): PickerOption => ({
   value,
@@ -1802,11 +1802,14 @@ export function Composer({
 
   const voiceSelection = useRef({ from: 1, to: 1 });
   const focusAfterVoice = useRef(false);
+  // Where this box dictates. `menus` goes while a host is disconnected, which isn't moving.
+  const voiceScope = useRef("");
+  if (menus) voiceScope.current = `${hostId}:${runId ?? repo ?? ""}`;
   const voice = useVoice({
     focused: voiceFocused,
     enabled: !!onSend && !disabledReason && !uploading,
     hotkey: !newThread,
-    scope: `${hostId ?? ""}:${runId ?? repo ?? ""}`,
+    scope: voiceScope.current,
     starting() {
       voiceSelection.current = { from: editor.state.selection.from, to: editor.state.selection.to };
       setTrigger(undefined);
@@ -1817,11 +1820,23 @@ export function Composer({
       const doc = editor.state.doc;
       const before = doc.textBetween(Math.max(0, from - 1), from, "\n");
       const after = doc.textBetween(to, Math.min(doc.content.size, to + 1), "\n");
+      // A cleaned-up transcript can hold paragraphs and lists: lines as Shift+Enter types them, or
+      // in a code block, its plain text.
+      const { schema, tr } = editor.state;
+      const inserted = voiceText(transcript, before, after);
+      const lines = inserted.split("\n");
+      const nodes = lines.flatMap((line, i) => [
+        ...(i > 0 ? [schema.nodes["hardBreak"]!.create()] : []),
+        ...(line ? [schema.text(line)] : []),
+      ]);
       editor.view.dispatch(
-        editor.state.tr.insertText(voiceText(transcript, before, after), from, to),
+        doc.resolve(from).parent.type.spec.code
+          ? tr.insertText(inserted, from, to)
+          : tr.replaceWith(from, to, nodes),
       );
       focusAfterVoice.current = true;
     },
+    clean: (text) => cleanDictation(text, hostId, { backend: target, repo, runId }),
   });
   voiceBusy.current = voice.phase !== "idle";
   const canSend = !!onSend && !disabledReason && !empty && !uploading && !voiceBusy.current;
@@ -1829,9 +1844,12 @@ export function Composer({
     editor.setEditable(voice.phase === "idle" && !uploading);
     if (voice.phase === "idle" && focusAfterVoice.current) {
       focusAfterVoice.current = false;
-      editor.commands.focus();
+      // Not from a field or tile the user moved to while it was cleaned up.
+      const active = document.activeElement;
+      if (voiceFocused && (!active || active === document.body || box.current?.contains(active)))
+        editor.commands.focus();
     }
-  }, [editor, voice.phase, uploading]);
+  }, [editor, voice.phase, uploading, voiceFocused]);
 
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {

@@ -285,9 +285,13 @@ impl Backend for CodexBackend {
             "--json".into(),
             "--model".into(),
             model.into(),
-            "--output-schema".into(),
-            schema.into(),
         ];
+        let parse = if schema.exists() {
+            spec.args.extend(["--output-schema".into(), schema.into()]);
+            namer::codex
+        } else {
+            namer::codex_text
+        };
         if let Some(effort) = effort {
             let level = effort_level(effort)?;
             spec.args.extend([
@@ -298,7 +302,7 @@ impl Backend for CodexBackend {
         spec.args.push("-".into());
         Ok(Some(NameProbe {
             process: self.launcher.spawn(&spec)?,
-            parse: namer::codex,
+            parse,
         }))
     }
 

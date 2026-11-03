@@ -84,6 +84,59 @@ test("held Fn ignores hidden menus and inserts on release, then cancels on windo
   }
 });
 
+test("what was already said still goes in when the window loses focus during cleanup", async () => {
+  let key!: (key: VoiceKey) => void;
+  window.parallax = {
+    voiceHotkey: async () => ({ available: true }),
+    onVoiceKey: (callback: (key: VoiceKey) => void) => {
+      key = callback;
+      return () => {};
+    },
+  } as unknown as ParallaxBridge;
+  const inserted = vi.fn();
+  let finish!: (text: string) => void;
+  const clean = () => new Promise<string>((resolve) => (finish = resolve));
+  let voice!: ReturnType<typeof useVoice>;
+  let focused = true;
+  let enabled = true;
+  function Probe() {
+    voice = useVoice({
+      enabled,
+      focused,
+      hotkey: true,
+      scope: "thread-1",
+      starting: () => {},
+      inserted,
+      clean,
+    });
+    return null;
+  }
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<Probe />));
+    await act(async () => {
+      key("down");
+      for (let i = 0; i < 15; i++) await Promise.resolve();
+    });
+    await act(async () => key("up"));
+    expect(voice.phase).toBe("finishing");
+    await act(async () => window.dispatchEvent(new Event("blur")));
+    expect(voice.phase).toBe("finishing");
+    // Moving to another tile, or the host going away, doesn't lose it either.
+    focused = false;
+    enabled = false;
+    await act(async () => root.render(<Probe />));
+    expect(voice.phase).toBe("finishing");
+    await act(async () => finish("Hello."));
+    expect(inserted).toHaveBeenCalledExactlyOnceWith("Hello.");
+    expect(voice.phase).toBe("idle");
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 test("only the focused split composer owns Fn and a focus switch cancels its old recording", async () => {
   const listeners = new Set<(key: VoiceKey) => void>();
   let nativeOwner: string | undefined;

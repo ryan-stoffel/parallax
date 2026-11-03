@@ -954,6 +954,11 @@ export type ParallaxRequests = {
 	 */
 	"pr/guide": { params: PrGuideParams, result: PrGuideResult },
 	/**
+	 * `voice/clean` (PLX-1232): dictated text tidied by the user's small model. An older plxd
+	 * answers it as an unknown method, and the app inserts the raw transcript on any error.
+	 */
+	"voice/clean": { params: VoiceCleanParams, result: VoiceCleanResult },
+	/**
 	 * `pr/mergeWhenReady` (PLX-1022): watches a pull request for a run, as `pr/watch` does,
 	 * and has plxd merge it, pinned to the head it judged, once it is ready, then wake the
 	 * run with the result. Unwatching cancels the merge. Gated on `prWatch`.
@@ -1254,6 +1259,7 @@ export const REQUEST_METHODS = [
 	"pr/sharedDiff",
 	"pr/write",
 	"pr/guide",
+	"voice/clean",
 	"pr/mergeWhenReady",
 	"repo/scripts",
 	"repo/saveScripts",
@@ -10548,6 +10554,40 @@ export type PrGuideHunk = {
 	 * The last line, at or after `start`.
 	 */
 	end: number,
+};
+
+/**
+ * Params of `voice/clean`: a dictated transcript to tidy.
+ */
+export type VoiceCleanParams = {
+	/**
+	 * What the speech transcribed to.
+	 */
+	text: string,
+	/**
+	 * The instance whose small model answers, the one the message is going to. Without a small
+	 * model there, the first instance by name that has one answers.
+	 */
+	backend?: string,
+	/**
+	 * The repo being dictated about, without `runId`. Its file names that match what was said
+	 * help the model spell them.
+	 */
+	repo?: RepoId,
+	/**
+	 * The thread being dictated into, for the same.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `voice/clean`.
+ */
+export type VoiceCleanResult = {
+	/**
+	 * The tidied text.
+	 */
+	text: string,
 };
 
 /**

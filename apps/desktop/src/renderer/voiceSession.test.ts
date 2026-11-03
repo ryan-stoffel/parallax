@@ -9,7 +9,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 async function settle() {
-  for (let i = 0; i < 8; i++) await Promise.resolve();
+  for (let i = 0; i < 16; i++) await Promise.resolve();
 }
 function fixture() {
   const finish = deferred<void>();
@@ -49,6 +49,37 @@ test("confirmation inserts the captured transcript once, after final audio flush
   expect(f.inserted).toHaveBeenCalledExactlyOnceWith("hello world");
   expect(f.phases).toEqual(["loading", "recording", "finishing", "idle"]);
   expect(f.engine.close).toHaveBeenCalled();
+});
+test("the transcript goes in cleaned up, or raw when that fails", async () => {
+  const f = fixture();
+  Object.assign(f.dependencies, { clean: vi.fn(async () => "Hello, world.") });
+  f.session.start();
+  await settle();
+  f.session.confirm();
+  await settle();
+  expect(f.inserted).toHaveBeenCalledExactlyOnceWith("Hello, world.");
+
+  const g = fixture();
+  Object.assign(g.dependencies, { clean: vi.fn(() => Promise.reject(new Error("no model"))) });
+  g.session.start();
+  await settle();
+  g.session.confirm();
+  await settle();
+  expect(g.inserted).toHaveBeenCalledExactlyOnceWith("hello world");
+});
+test("cancelling while it's cleaned up discards the text", async () => {
+  const f = fixture();
+  const pending = deferred<string>();
+  Object.assign(f.dependencies, { clean: () => pending.promise });
+  f.session.start();
+  await settle();
+  f.session.confirm();
+  await settle();
+  expect(f.session.phase).toBe("finishing");
+  f.session.cancel();
+  pending.resolve("Hello, world.");
+  await settle();
+  expect(f.inserted).not.toHaveBeenCalled();
 });
 test("Fn release while loading never asks for microphone access", async () => {
   const f = fixture();
