@@ -612,6 +612,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     selectBrowserTab: () => {},
     // A browser has no userData: its own localStorage count is the only record.
     claimSupportAsk: () => Promise.resolve(true),
+    claimConnectMove: () => Promise.resolve(false),
     clearBrowsingData: () => Promise.resolve(),
     downloads: () => Promise.resolve([]),
     onDownloads: () => () => {},
@@ -675,7 +676,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     onAccessRequests: (listener) => (listener([]), () => {}),
     answerAccess: async () => NOT_HERE,
     revokeDevice: async () => NOT_HERE,
-    turnOnReach: async () => NOT_HERE,
+    moveConnect: async () => NOT_HERE,
 
     acpRegistry: async () => NOT_HERE,
 

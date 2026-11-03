@@ -20,6 +20,7 @@ import {
 import { NewComputerDialog } from "../AccountPrompts";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { accessLabel, ConnectWizard, SetupCodeDialog } from "../ConnectWizard";
+import { moveConnect, useNeedsConnectMove } from "../connectMove";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, useConnect, useHosts } from "../hosts";
 import { notify } from "../notifications";
@@ -31,6 +32,7 @@ import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./
  * Settings > Connections' Parallax Connect section (0091): this computer, then every other computer
  * on the Parallax account, each with its health. Signed in, Add computer sets one up, and Show
  * setup code is this computer's side of being added from another. Signed out, Sign in is here.
+ * While this computer still runs Connect over Tailscale, Move to new Connect replaces Sign in.
  * Opening it asks the account for its computers. A device's switch says whether this app uses it,
  * and its menu changes its icon, renames it on the device's own plxd, or removes it from this
  * app's list.
@@ -47,6 +49,13 @@ export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () =
   useEffect(() => window.parallax.onDevices(setDevices), []);
   useEffect(() => void window.parallax.discoverAccount(), []);
   const local = hosts.find((h) => h.id === localId)!;
+  const needsMove = useNeedsConnectMove();
+  const [moving, setMoving] = useState(false);
+  const move = async () => {
+    setMoving(true);
+    await moveConnect();
+    setMoving(false);
+  };
 
   const signIn = async () => {
     setSigningIn(true);
@@ -93,7 +102,27 @@ export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () =
             />
           ))}
         </ul>
-        {profile === null && (
+        {needsMove && (
+          <Row
+            title="Try the new Parallax Connect"
+            description={
+              profile === null
+                ? "Reach your computers from anywhere through Parallax's own tunnel, with no Tailscale needed. Sign in once and Parallax moves them."
+                : "Reach your computers from anywhere through Parallax's own tunnel, with no Tailscale needed. Parallax moves them for you."
+            }
+          >
+            <button
+              type="button"
+              disabled={moving}
+              onClick={() => void move()}
+              className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
+            >
+              <Globe aria-hidden />
+              {moving ? "Moving…" : "Move to new Connect"}
+            </button>
+          </Row>
+        )}
+        {profile === null && !needsMove && (
           <Row
             title="Connect your other computers"
             description="Sign in to run agents on every computer on your account from here, wherever they are."
@@ -185,26 +214,6 @@ function useHealth(hostId: string, connected: boolean): Health | undefined {
   return health;
 }
 
-/**
- * Whether connected `tailnet:` device `hostId` was kept on Tailscale only, with `relay` or `remote`
- * turned off there, so the account can't reach it once the Tailscale-only path goes (0091).
- */
-function useTailnetOnly(hostId: string, connected: boolean) {
-  const [only, setOnly] = useState(false);
-  useEffect(() => {
-    if (!connected || !hostId.startsWith("tailnet:")) return setOnly(false);
-    let live = true;
-    void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
-      if (live && "result" in answer)
-        setOnly(answer.result.relay === false || answer.result.remote === false);
-    });
-    return () => {
-      live = false;
-    };
-  }, [hostId, connected]);
-  return [only, setOnly] as const;
-}
-
 /** 7260 → "2h 1m": how long plxd has run. */
 export function uptime(seconds: number): string {
   const days = Math.floor(seconds / 86_400);
@@ -239,16 +248,6 @@ function DeviceCard({
   const state = useConnection(device.id);
   const connected = enabled && state?.status === "connected";
   const health = useHealth(device.id, connected);
-  const [tailnetOnly, setTailnetOnly] = useTailnetOnly(device.id, connected);
-  const [reaching, setReaching] = useState(false);
-  const reach = async () => {
-    setReaching(true);
-    const failed = await window.parallax.turnOnReach(device.id);
-    setReaching(false);
-    if (failed)
-      notify({ tone: "error", title: `Couldn't turn on Reach from anywhere`, body: failed });
-    else setTailnetOnly(false);
-  };
   const [renaming, setRenaming] = useState(false);
   const menuId = useId();
   const iconsId = useId();
@@ -335,11 +334,6 @@ function DeviceCard({
             {health.store !== "ok" && ` · store ${health.store}`}
           </p>
         )}
-        {tailnetOnly && (
-          <p className="text-meta text-faint-foreground">
-            Only on Tailscale. Turn on Reach from anywhere to keep it in Parallax.
-          </p>
-        )}
         {access ? (
           <p className="text-meta text-faint-foreground">{accessLabel({ access })}</p>
         ) : (
@@ -357,18 +351,6 @@ function DeviceCard({
         >
           <KeyRound aria-hidden />
           Enter code
-        </button>
-      )}
-      {tailnetOnly && (
-        <button
-          type="button"
-          disabled={reaching}
-          title="Parallax Connect is moving off Tailscale-only connections. Reach from anywhere keeps this computer connected through your Parallax account."
-          onClick={() => void reach()}
-          className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
-        >
-          <Globe aria-hidden />
-          {reaching ? "Turning on…" : "Reach from anywhere"}
         </button>
       )}
       {access?.step === "ask" && (

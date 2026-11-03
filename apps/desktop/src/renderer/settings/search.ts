@@ -460,6 +460,11 @@ export const settingsIndex: SettingEntry[] = [
       "add computer relay remote devices account sync setup code",
     ],
     ["This computer", "Its name and plxd", "rename computer name local daemon status version plxd"],
+    [
+      "Try the new Parallax Connect",
+      "Move your computers off Tailscale",
+      "migrate tailscale tailnet relay tunnel",
+    ],
   ]),
   ...entries("connections", "Reach from anywhere", [
     ["Reach from anywhere", "Through Parallax Relay", "relay internet remote"],

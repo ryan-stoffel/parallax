@@ -102,6 +102,7 @@ const bridge: ParallaxBridge = {
   onExtensionsChanged: (listener) => follow("parallax:extensionsChanged", listener, false),
   selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
   claimSupportAsk: () => ipcRenderer.invoke("parallax:claimSupportAsk"),
+  claimConnectMove: () => ipcRenderer.invoke("parallax:claimConnectMove"),
   clearBrowsingData: (what) => ipcRenderer.invoke("parallax:clearBrowsingData", what),
   downloads: () => ipcRenderer.invoke("parallax:downloads"),
   googleAccount: () => ipcRenderer.invoke("parallax:googleAccount"),
@@ -167,7 +168,7 @@ const bridge: ParallaxBridge = {
   onAccessRequests: (listener) => follow("parallax:accessRequests", listener),
   answerAccess: (id, allow) => ipcRenderer.invoke("parallax:answerAccess", id, allow),
   revokeDevice: (id) => ipcRenderer.invoke("parallax:revokeDevice", id),
-  turnOnReach: (hostId) => ipcRenderer.invoke("parallax:turnOnReach", hostId),
+  moveConnect: () => ipcRenderer.invoke("parallax:moveConnect"),
 
   acpRegistry: () => ipcRenderer.invoke("parallax:acpRegistry"),
 

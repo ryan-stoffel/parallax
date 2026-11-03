@@ -1538,8 +1538,6 @@ const tailnet: (TailnetDevice & {
   repos?: (here: Repo[]) => Repo[];
   off?: boolean;
   removed?: boolean;
-  /** Reach from anywhere turned on from Settings. */
-  reach?: boolean;
 })[] = [
   {
     id: "nMini7Q2kX",
@@ -1771,12 +1769,11 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
       }
       return { thread, run };
     }
-    // The Windows PC was kept on Tailscale only, so Settings offers Reach from anywhere (0091).
     case "host/settings/get":
       return {
         autoResume: true,
         connect: true,
-        relay: device.os !== "windows" || !!device.reach,
+        relay: true,
         remote: true,
         deviceName: device.name,
         deviceIcon: device.icon,
@@ -2020,6 +2017,7 @@ export const mockBridge: ParallaxBridge = {
   onExtensionsChanged: () => () => {},
   selectBrowserTab: () => {},
   claimSupportAsk: async () => true,
+  claimConnectMove: async () => true,
   clearBrowsingData: () => delay(undefined),
   downloads: () => delay([]),
   onDownloads: () => () => {},
@@ -2294,10 +2292,12 @@ export const mockBridge: ParallaxBridge = {
     return () => setupApprovedListeners.delete(listener);
   },
   askAgain: () => delay(undefined),
-  turnOnReach: (hostId) => {
-    const device = deviceOf(hostId);
-    if (device) device.reach = true;
-    return delay(undefined, 400);
+  // Each computer on Tailscale answers through the account a moment later.
+  moveConnect: async () => {
+    await delay(undefined, 1500);
+    for (const d of tailnet) d.removed = true;
+    connectChanged();
+    return undefined;
   },
   revokeDevice: (id) => {
     lan.sessions = lan.sessions.filter((s) => s.id !== id);

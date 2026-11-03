@@ -830,6 +830,10 @@ ipcMain.on("parallax:windowLook", (event, look: unknown) => {
 ipcMain.handle("parallax:claimSupportAsk", () =>
   claimOnce(path.join(app.getPath("userData"), "support-asked")),
 );
+// Whether this is the one time this computer shows the notice about moving off Tailscale.
+ipcMain.handle("parallax:claimConnectMove", () =>
+  claimOnce(path.join(app.getPath("userData"), "connect-move-asked")),
+);
 // Restarts Parallax, for a window background that applies at launch.
 ipcMain.on("parallax:relaunch", () => {
   app.relaunch();
