@@ -100,8 +100,8 @@ export function ProjectTile({
 }
 
 /**
- * The Projects page: a search, a filter (All, Pinned, With files, With instructions), a sort kept on
- * this computer, and New project over the Projects as cards in a grid.
+ * The Projects page. The header stays put above the scrolling grid of cards, with New project, a
+ * search, a filter (All, Pinned, With files, With instructions), and a sort kept on this computer.
  */
 export function ProjectsPage({
   entries,
@@ -128,9 +128,9 @@ export function ProjectsPage({
   const shown = sortProjects(filterProjects(entries, filter, pins, query), sort);
   const typed = query.trim();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
-        <header className="flex items-center gap-3">
+    <>
+      <header className="mx-auto w-full max-w-5xl px-8 pt-6 pb-4">
+        <div className="flex items-center gap-3">
           <h1 className="mr-auto text-heading font-semibold">Projects</h1>
           {onNewProject && (
             <Button variant="primary" onClick={onNewProject}>
@@ -138,109 +138,107 @@ export function ProjectsPage({
               New project
             </Button>
           )}
-        </header>
-
-        {entries.length === 0 ? (
-          <EmptyState
-            className="mt-16"
-            icon={<icons.projects aria-hidden />}
-            title="No projects yet"
-            body="A Project keeps threads together with the instructions and files they share."
-          />
-        ) : (
-          <>
-            <div className="mt-5 flex flex-wrap items-center gap-2">
-              <label className={`min-w-48 flex-1 ${searchField}`}>
-                <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-                <input
-                  type="search"
-                  aria-label="Search projects"
-                  placeholder="Search projects"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-                  className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
-                />
-              </label>
-              <Segmented label="Show" options={filters} value={filter} onChange={setFilter} />
-              <button
-                type="button"
-                popoverTarget={sortMenu}
-                aria-haspopup="menu"
-                title="Sort by"
-                className={buttonClass("outline")}
-              >
-                <icons.sort aria-hidden />
-                {sorts.find((s) => s.value === sort)?.label}
-                <icons.expand aria-hidden className="text-faint-foreground" />
-              </button>
-              <Menu
-                id={sortMenu}
-                label="Sort by"
-                align="end"
-                focus='[role="menuitemradio"]'
-                className="w-44 p-1"
-              >
-                {sorts.map((s) => (
-                  <button
-                    key={s.value}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={s.value === sort}
-                    popoverTarget={sortMenu}
-                    popoverTargetAction="hide"
-                    onClick={() => projectSort.set(s.value)}
-                    className={menuItem}
-                  >
-                    <span className="flex-1">{s.label}</span>
-                    {s.value === sort && <icons.done aria-hidden className="text-accent" />}
-                  </button>
-                ))}
-              </Menu>
-            </div>
-
-            {shown.length === 0 ? (
-              <EmptyState
-                className="mt-12"
-                icon={<icons.search aria-hidden />}
-                title="No matching projects"
-                body={
-                  typed || filter === "all" ? `Nothing matches “${typed}”.` : filteredOut[filter]
-                }
-                action={
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setQuery("");
-                      setFilter("all");
-                    }}
-                  >
-                    Show all projects
-                  </Button>
-                }
+        </div>
+        {entries.length > 0 && (
+          <div className="mt-5 flex flex-wrap items-center gap-2">
+            <label className={`min-w-48 flex-1 ${searchField}`}>
+              <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+              <input
+                type="search"
+                aria-label="Search projects"
+                placeholder="Search projects"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+                className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
               />
-            ) : (
-              <ul
-                aria-label="Projects"
-                className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-2"
-              >
-                {shown.map((e) => (
-                  <ProjectCard
-                    key={e.key}
-                    entry={e}
-                    pinned={pins.includes(e.key)}
-                    framed
-                    onOpen={() => onOpen(e)}
-                    onTogglePin={() => onTogglePin(e.key)}
-                    actionsFor={() => actionsFor(e)}
-                  />
-                ))}
-              </ul>
-            )}
-          </>
+            </label>
+            <Segmented label="Show" options={filters} value={filter} onChange={setFilter} />
+            <button
+              type="button"
+              popoverTarget={sortMenu}
+              aria-haspopup="menu"
+              title="Sort by"
+              className={buttonClass("outline")}
+            >
+              <icons.sort aria-hidden />
+              {sorts.find((s) => s.value === sort)?.label}
+              <icons.expand aria-hidden className="text-faint-foreground" />
+            </button>
+            <Menu
+              id={sortMenu}
+              label="Sort by"
+              align="end"
+              focus='[role="menuitemradio"]'
+              className="w-44 p-1"
+            >
+              {sorts.map((s) => (
+                <button
+                  key={s.value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={s.value === sort}
+                  popoverTarget={sortMenu}
+                  popoverTargetAction="hide"
+                  onClick={() => projectSort.set(s.value)}
+                  className={menuItem}
+                >
+                  <span className="flex-1">{s.label}</span>
+                  {s.value === sort && <icons.done aria-hidden className="text-accent" />}
+                </button>
+              ))}
+            </Menu>
+          </div>
         )}
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-5xl px-8 pb-16">
+          {entries.length === 0 ? (
+            <EmptyState
+              className="mt-12"
+              icon={<icons.projects aria-hidden />}
+              title="No projects yet"
+              body="A Project keeps threads together with the instructions and files they share."
+            />
+          ) : shown.length === 0 ? (
+            <EmptyState
+              className="mt-8"
+              icon={<icons.search aria-hidden />}
+              title="No matching projects"
+              body={typed || filter === "all" ? `Nothing matches “${typed}”.` : filteredOut[filter]}
+              action={
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setQuery("");
+                    setFilter("all");
+                  }}
+                >
+                  Show all projects
+                </Button>
+              }
+            />
+          ) : (
+            <ul
+              aria-label="Projects"
+              className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-2"
+            >
+              {shown.map((e) => (
+                <ProjectCard
+                  key={e.key}
+                  entry={e}
+                  pinned={pins.includes(e.key)}
+                  framed
+                  onOpen={() => onOpen(e)}
+                  onTogglePin={() => onTogglePin(e.key)}
+                  actionsFor={() => actionsFor(e)}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
