@@ -280,7 +280,7 @@ export function TerminalDrawer({
       aria-label="Terminal"
       hidden={!open}
       style={{ height }}
-      className="relative flex shrink-0 flex-col border-t border-border bg-background"
+      className="relative mx-1.5 mb-1.5 flex shrink-0 flex-col rounded-xl bg-pane"
     >
       <div
         role="separator"

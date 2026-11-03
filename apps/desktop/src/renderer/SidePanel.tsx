@@ -524,7 +524,7 @@ export function SidePanel({
         pick(next);
       }}
       style={expanded ? undefined : { width }}
-      className={`relative flex min-w-0 flex-col bg-pane ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
+      className={`relative m-1.5 ml-0 flex min-w-0 flex-col overflow-clip rounded-xl bg-pane ${expanded ? "flex-1" : "shrink-0"}`}
     >
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
       {/* While a browser tab is in front, the browser's theme paints the top bar and the browser, and

@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Columns2, PanelTop, Rows2 } from "lucide-react";
+import { Columns2, PanelTop, Rows2 } from "lucide-react";
 import {
   useLayoutEffect,
   useRef,
@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { tileDragType } from "./threadDrag";
+import { ThreadTabs, type TabDrop, type TabItem } from "./ThreadTabs";
 import {
   clampRatio,
   evenRatio,
@@ -21,20 +21,30 @@ import {
   type Rect,
 } from "./splitLayout";
 
+/** The gap around a card in pixels, half of what shows between two. */
+const gutter = 3;
+
+/** The height of a card's row of tabs in pixels, `h-10`. */
+const stripHeight = 40;
+
 /** How far an arrow key moves a focused divider. */
 const keyStep = 0.05;
 
-/** A rect as CSS, inset by `inset` pixels on every side. */
-const placed = (r: Rect, inset = 0): CSSProperties => ({
+/** A rect as CSS, inset by `inset` pixels on every side and `top` more from its top. */
+const placed = (r: Rect, inset = 0, top = 0): CSSProperties => ({
   left: `calc(${r.left * 100}% + ${inset}px)`,
-  top: `calc(${r.top * 100}% + ${inset}px)`,
+  top: `calc(${r.top * 100}% + ${inset + top}px)`,
   width: `calc(${r.width * 100}% - ${inset * 2}px)`,
-  height: `calc(${r.height * 100}% - ${inset * 2}px)`,
+  height: `calc(${r.height * 100}% - ${inset * 2 + top}px)`,
 });
 
-/** One thread in the split: its chat. */
+/** One pane: its tabs, the one it shows, and that tab's view. */
 export interface TileItem {
+  /** The shown tab's view, so another tab starts from a fresh one. */
   key: string;
+  paneId: string;
+  tabs: TabItem[];
+  active: string;
   node: ReactNode;
 }
 
@@ -42,46 +52,64 @@ export interface TileItem {
 interface DropTarget {
   at: number;
   rect: Rect;
-  label: "beside" | "tab" | "replace" | "swap";
+  label: "beside" | "tab" | "here";
 }
 
 /**
- * The split's threads tiled in their Fibonacci layout (splitLayout.ts). With `tiled` off it holds
- * one thread, full size. Tiled, a line marks the focused one, and as many threads tile as keep
- * `minTile`: the rest stack in the last tile, which shows the focused one, or the last one shown.
- * `maximized` stacks them all in one tile. The top bar's tab names them all and picks among them.
- * Chats are siblings keyed by `key`, so a tile coming, going, or stacking never remounts the
- * others, and they glide to their places.
+ * The window's panes, as cards in their Fibonacci layout (splitLayout.ts) on the window's background.
+ * Each card's tabs sit in a notch cut from its top left, as the fill beside them rises to meet the
+ * top of the window. `leading` starts the first card's notch, and `controls` get a notch of their own
+ * at the top right of the top right card. As many panes tile as keep `minTile`: the rest stack in the
+ * last tile, which shows the focused one, or the last one shown, and lists all their tabs. `maximized`
+ * stacks them all in one tile. Views are siblings keyed by `key`, so a tile coming, going, or stacking
+ * never remounts the others, and they glide to their places.
  *
  * A divider on each cut drags or arrow-keys to resize and double-clicks back to even. A drag shows
  * its ratios here and hands them up once it ends, so App doesn't render on every move. `details`
- * floats over the focused thread's tile. A thread `drop` accepts, dragged over, previews where it
- * would open: a new tile while there's room, as a tab once one won't fit, or in place of the tile
- * under the pointer when the split is full. A tile dragged from the top bar's tab, `draggedTile`,
- * swaps with the one under the pointer.
+ * floats over the focused pane's card. A tab or sidebar thread `drop` accepts, dragged over a card,
+ * previews where it would open: a new pane while there's room, else a tab in the pane under the
+ * pointer, or the last pane when a new one wouldn't fit.
  */
 export function SplitTiles({
   items,
-  tiled,
   focused,
   ratios,
   onResize,
   maximized,
-  onSwap,
-  draggedTile,
+  leading,
+  leadingClass = "",
+  controls,
+  controlsClass = "",
+  closable,
+  onSelectTab,
+  onCloseTab,
+  onNewTab,
+  onDropOnTabs,
+  onDragTab,
   details,
   drop,
 }: {
   items: TileItem[];
-  tiled: boolean;
   focused: number;
   ratios: number[];
   onResize: (ratios: number[]) => void;
   maximized: boolean;
-  onSwap: (from: number, to: number) => void;
-  draggedTile: () => number | undefined;
+  leading?: ReactNode;
+  leadingClass?: string;
+  controls?: ReactNode;
+  controlsClass?: string;
+  closable: boolean;
+  onSelectTab: (tabId: string) => void;
+  onCloseTab: (tabId: string) => void;
+  onNewTab: (paneId: string) => void;
+  onDropOnTabs: (drop: TabDrop, paneId: string, before?: string) => void;
+  onDragTab: (tabId: string | undefined) => void;
   details?: ReactNode;
-  drop?: { accepts: (e: DragEvent) => boolean; onDrop: (at: number, e: DragEvent) => void };
+  drop?: {
+    accepts: (e: DragEvent) => boolean;
+    /** With the pane the drop goes in, or undefined for a new one. */
+    onDrop: (paneId: string | undefined, e: DragEvent) => void;
+  };
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -108,13 +136,13 @@ export function SplitTiles({
   const fit = (count: number, cuts: readonly number[]) =>
     fittingTiles(count, cuts, size.width, size.height);
   // How many tiles show; the last holds the threads from `last` on, as tabs.
-  const visible = !tiled ? n : maximized ? 1 : fit(n, shown);
+  const visible = maximized ? 1 : fit(n, shown);
   const last = visible - 1;
   const { tiles, cuts } = tileLayout(visible, shown);
   // The stack's shown thread: the focused one when it's there, else the one shown last.
   const stackShown = useRef<string>(undefined);
-  if (focused >= last) stackShown.current = items[focused]?.key;
-  const remembered = items.findIndex((item, i) => i >= last && item.key === stackShown.current);
+  if (focused >= last) stackShown.current = items[focused]?.paneId;
+  const remembered = items.findIndex((item, i) => i >= last && item.paneId === stackShown.current);
   const stackActive = focused >= last ? focused : remembered === -1 ? last : remembered;
   const tileOf = (i: number) => Math.min(i, last);
   const activeIn = (tile: number) => (tile === last ? stackActive : tile);
@@ -133,23 +161,17 @@ export function SplitTiles({
     return tileAt(tiles, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
   };
   const targetOf = (e: DragEvent<HTMLElement>): DropTarget | undefined => {
-    if (e.dataTransfer.types.includes(tileDragType)) {
-      const tile = tileUnder(e);
-      const dragged = draggedTile();
-      if (dragged === undefined || tile === tileOf(dragged)) return undefined;
-      return { at: activeIn(tile), rect: tiles[tile]!, label: "swap" };
-    }
-    if (!drop?.accepts(e)) return undefined;
+    // The row of tabs takes its own drops.
+    if (!drop?.accepts(e) || (e.target as Element).closest(".titlebar")) return undefined;
     if (n < maxTiles) {
-      // A new thread unmaximizes the split, as Open side by side asks for.
       const next = [...ratios, evenRatio];
       const fits = fit(n + 1, next);
       return fits === n + 1
         ? { at: n, rect: tileLayout(n + 1, next).tiles[n]!, label: "beside" }
-        : { at: n, rect: tileLayout(fits, next).tiles[fits - 1]!, label: "tab" };
+        : { at: activeIn(last), rect: tiles[last]!, label: "tab" };
     }
     const tile = tileUnder(e);
-    return { at: activeIn(tile), rect: tiles[tile]!, label: "replace" };
+    return { at: activeIn(tile), rect: tiles[tile]!, label: "here" };
   };
   const over = (e: DragEvent<HTMLElement>) => {
     const next = targetOf(e);
@@ -176,27 +198,61 @@ export function SplitTiles({
         setTarget(undefined);
         if (!next) return;
         e.preventDefault();
-        if (next.label === "swap") onSwap(draggedTile()!, next.at);
-        else drop!.onDrop(next.at, e);
+        drop!.onDrop(next.label === "beside" ? undefined : items[next.at]!.paneId, e);
       }}
     >
+      {tiles.map((rect, tile) => {
+        const group = tile === last ? items.map((_, i) => i).slice(last) : [tile];
+        const shownPane = items[activeIn(tile)]!;
+        // The top right card.
+        const corner = tile === Math.min(1, last);
+        return (
+          <div
+            key={`frame-${tile}`}
+            style={{ ...placed(rect, gutter), height: stripHeight }}
+            className={`titlebar @container absolute flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
+          >
+            <div
+              className={`-ml-1.5 flex min-w-0 shrink items-center gap-1 pr-2 pl-3 ${tile === 0 ? leadingClass : ""}`}
+            >
+              {tile === 0 && leading}
+              <ThreadTabs
+                tabs={group.flatMap((i) => items[i]!.tabs)}
+                active={shownPane.active}
+                focused={group.includes(focused)}
+                onSelect={onSelectTab}
+                onClose={onCloseTab}
+                onNew={() => onNewTab(shownPane.paneId)}
+                onDrop={(tabDrop, before) => onDropOnTabs(tabDrop, shownPane.paneId, before)}
+                closable={closable}
+                onDragTab={onDragTab}
+              />
+            </div>
+            <div
+              className={`card-rise relative min-w-4 flex-1 rounded-tl-xl bg-pane ${corner && controls ? "card-rise-end rounded-tr-xl" : "rounded-tr-xl"}`}
+            />
+            {corner && controls && (
+              <div
+                className={`flex min-w-0 shrink-0 items-center gap-2 pr-1.5 pl-3 ${controlsClass}`}
+              >
+                {controls}
+              </div>
+            )}
+          </div>
+        );
+      })}
       {items.map(({ key, node }, i) => {
         const tile = tileOf(i);
         const active = activeIn(tile) === i;
+        const corner = tile === Math.min(1, last);
         return (
           <div
             key={key}
-            // A stacked thread behind its tile's tab stays mounted, out of sight and reach.
+            // A stacked pane's view stays mounted, out of sight and reach.
             inert={!active}
-            style={placed(tiles[tile]!)}
-            className={`absolute flex min-h-0 min-w-0 transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"} ${tiles[tile]!.left > 0 ? "border-l border-border" : ""} ${tiles[tile]!.top > 0 ? "border-t border-border" : ""}`}
+            style={placed(tiles[tile]!, gutter, stripHeight)}
+            className={`absolute flex min-h-0 min-w-0 overflow-clip rounded-b-xl rounded-tl-xl transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${corner && controls ? "rounded-tr-xl" : ""} ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
-            {tiled && i === focused && (
-              <span
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 top-0 z-[2] h-0.5 bg-accent"
-              />
-            )}
             {node}
             {i === focused && details}
           </div>
@@ -277,23 +333,15 @@ export function SplitTiles({
         <div
           aria-hidden
           style={placed(target.rect, 8)}
-          className="pointer-events-none absolute z-20 grid place-items-center rounded-xl border-2 border-dashed border-accent bg-background/85 backdrop-blur-sm transition-[left,top,width,height] duration-150 ease-out motion-reduce:transition-none"
+          className="pointer-events-none absolute z-20 grid place-items-center rounded-xl border-2 border-accent bg-background/85 backdrop-blur-sm transition-[left,top,width,height] duration-150 ease-out motion-reduce:transition-none"
         >
           <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-body font-medium text-accent-foreground [&_svg]:size-4">
-            {target.label === "tab" ? (
-              <PanelTop />
-            ) : target.label === "swap" ? (
-              <ArrowLeftRight />
-            ) : (
-              <NewCut />
-            )}
+            {target.label === "beside" ? <NewCut /> : <PanelTop />}
             {target.label === "beside"
               ? "Open side by side"
               : target.label === "tab"
                 ? "Open as a tab"
-                : target.label === "swap"
-                  ? "Swap"
-                  : "Open here"}
+                : "Open here"}
           </span>
         </div>
       )}

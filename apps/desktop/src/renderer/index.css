@@ -239,6 +239,8 @@
   --background: #000000;
   --sidebar: #000000;
   --surface: #0e0e0e;
+  /* A pane's card, a step off the black window around it (PLX-1289). */
+  --pane-lift: #141414;
   --foreground: #e8e8e8;
   --muted-foreground: #a3a3a3;
   --faint-foreground: #8a8a8a;
@@ -748,7 +750,7 @@ body {
 /* The window's panes, the main pane, side panel, and sidebar, paint these, and Settings' cards
    --pane-card. Opaque, they're the theme's colors. */
 :root {
-  --pane: var(--background);
+  --pane: var(--pane-lift, var(--background));
   --pane-sidebar: var(--sidebar);
   --pane-card: var(--surface);
 }
@@ -771,40 +773,28 @@ body {
   }
 }
 
-/* The workspace is one surface beside the sidebar, including an expanded side panel. */
-.workspace-shell[data-sidebar-open="true"] {
-  border-radius: 16px 0 0 16px;
-  box-shadow: -6px 0 18px -8px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 30%));
+/* A pane's card rises beside its tabs to meet the top of the window (SplitTiles.tsx). The corner it
+   makes with the card under the tabs curves away from them, on its right too when controls sit
+   there. It overlaps the card a pixel so antialiasing never shows a seam. */
+.card-rise {
+  margin-bottom: -1px;
 }
-.workspace-shell[data-sidebar-open="true"]::after {
+.card-rise::before,
+.card-rise-end::after {
   content: "";
   position: absolute;
-  inset: 0;
-  z-index: 40;
+  bottom: 1px;
+  width: 12px;
+  height: 12px;
   pointer-events: none;
-  border: 1px solid var(--border);
-  border-right: 0;
-  border-radius: inherit;
 }
-/* Underlap the rounded edge by a pixel so its antialiasing never exposes a seam. */
-#sidebar::before {
-  content: "";
-  position: absolute;
-  inset: 0 -24px 0 auto;
-  width: 24px;
-  pointer-events: none;
-  background: inherit;
-  mask:
-    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top left / 17px 17px no-repeat,
-    radial-gradient(circle at 16px 1px, transparent 15px, #000 16px) bottom left / 17px 17px
-      no-repeat;
+.card-rise::before {
+  left: -12px;
+  background: radial-gradient(circle at 0 0, transparent 11.5px, var(--pane) 12px);
 }
-:root.nightly #sidebar > .night-sky {
-  right: -24px;
-  mask:
-    linear-gradient(#000 0 0) left / calc(100% - 24px) 100% no-repeat,
-    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top right 7px / 17px 17px
-      no-repeat;
+.card-rise-end::after {
+  right: -12px;
+  background: radial-gradient(circle at 100% 0, transparent 11.5px, var(--pane) 12px);
 }
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's

@@ -23,10 +23,9 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   })`);
   await page.reload();
 
-  const strip = page.getByRole("tablist", { name: "Open tabs" });
-  const tabs = strip.getByRole("tab");
-  const groups = strip.locator("[data-tab]");
-  const tiles = page.locator("[data-pane]");
+  const strips = page.getByRole("tablist", { name: "Open tabs" });
+  const tabs = strips.getByRole("tab");
+  const panes = page.locator("[data-pane]");
   const start = async (prompt: string) => {
     await page.getByRole("textbox", { name: "Message" }).fill(prompt);
     await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -54,25 +53,21 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await drag(tabs.nth(0), second.x + second.width - 2, second.y + second.height / 2);
   await expect(tabs).toHaveText(["Second", "First"]);
 
-  // Dragged into the open thread, a tab tiles beside it, its title joining that tab's.
-  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true");
+  // Dragged into the open thread, a tab opens in a pane of its own beside it.
   const pane = page.getByRole("log", { name: "Transcript" }).first();
   const paneBox = (await pane.boundingBox())!;
   await drag(tabs.nth(0), paneBox.x + paneBox.width / 2, paneBox.y + paneBox.height / 2);
-  await expect(tiles).toHaveCount(2);
-  await expect(groups).toHaveCount(1);
-  await expect(tabs).toHaveText(["First", "Second"]);
+  await expect(panes).toHaveCount(2);
+  await expect(strips).toHaveCount(2);
+  await expect(strips.nth(0).getByRole("tab")).toHaveText(["First"]);
+  await expect(strips.nth(1).getByRole("tab")).toHaveText(["Second"]);
 
-  // Dragged onto the other tile, a part swaps them.
-  const right = (await tiles.nth(1).boundingBox())!;
-  await drag(tabs.nth(0), right.x + right.width / 2, right.y + 200);
+  // Dragged to the other pane's tabs, it joins them, and the pane it left closes.
+  const target = (await strips.nth(1).boundingBox())!;
+  await drag(tabs.nth(0), target.x + target.width - 2, target.y + target.height / 2);
+  await expect(panes).toHaveCount(0);
+  await expect(strips).toHaveCount(1);
   await expect(tabs).toHaveText(["Second", "First"]);
-
-  // Dragged back along the strip, a part gets its own tab again.
-  const end = (await strip.boundingBox())!;
-  await drag(tabs.nth(0), end.x + end.width - 2, end.y + end.height / 2);
-  await expect(groups).toHaveCount(2);
-  await expect(tiles).toHaveCount(0);
 
   await page.keyboard.press("ControlOrMeta+T");
   await expect(tabs).toHaveCount(3);

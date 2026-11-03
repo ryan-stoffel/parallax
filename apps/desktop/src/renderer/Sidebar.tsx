@@ -225,19 +225,22 @@ interface SidebarProps {
   open: boolean;
   onClose: () => void;
   onNewThread: () => void;
+  /** Back and Forward, at the end of its top row. */
+  history?: ReactNode;
   children: ReactNode;
 }
 
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread. A nightly build paints a sky behind that row and the Search row under it, as
+ * open a new thread, and Back and Forward. A nightly build paints a sky behind that row and the Search row under it, as
  * the column's own background (index.css), with stars and clouds (NightSky.tsx).
  */
 export function Sidebar({
   open,
   onClose,
   onNewThread,
+  history,
   children,
   width = 288,
   onResize,
@@ -276,6 +279,7 @@ export function Sidebar({
           <ParallaxMark className="size-5" />
           Parallax
         </button>
+        {history}
       </TopBar>
       {children}
     </nav>
