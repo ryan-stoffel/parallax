@@ -41,7 +41,6 @@ export function ThreadTabs({
   onNew,
   onDrop,
   closable,
-  onDragTab,
 }: {
   tabs: TabItem[];
   active: string;
@@ -52,8 +51,6 @@ export function ThreadTabs({
   onDrop: (drop: TabDrop, before?: string) => void;
   /** False for the window's only tab on New thread, with nothing to close to. */
   closable: boolean;
-  /** The tab that starts dragging, or undefined once it ends. */
-  onDragTab: (id: string | undefined) => void;
 }) {
   // Where a drop would land: before this tab, or last for null.
   const [landing, setLanding] = useState<string | null>();
@@ -116,12 +113,8 @@ export function ThreadTabs({
               onDragStart={(e) => {
                 e.dataTransfer.setData(tabDragType, tab.id);
                 e.dataTransfer.effectAllowed = "copyMove";
-                onDragTab(tab.id);
               }}
-              onDragEnd={() => {
-                onDragTab(undefined);
-                setLanding(undefined);
-              }}
+              onDragEnd={() => setLanding(undefined)}
               onAuxClick={(e) => {
                 if (e.button !== 1 || !closable) return;
                 e.preventDefault();

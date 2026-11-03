@@ -1139,8 +1139,6 @@ export function App() {
     );
   };
 
-  // The tab being dragged, which a drag over a pane can't read from its data.
-  const draggingTab = useRef<string>(undefined);
   // The window's only tab, on New thread, closes to itself.
   const closableTab = everyTab.length > 1 || selection.kind !== "new";
   // The crumbs but the last, when the shown tab says the same, as it does for the page.
@@ -1819,8 +1817,20 @@ export function App() {
                         onSelectTab={(tabId) => setWorkspace((state) => selectTab(state, tabId))}
                         onCloseTab={(tabId) => setWorkspace((state) => closeTab(state, tabId))}
                         onNewTab={(paneId) => {
-                          setWorkspace((state) => ({ ...state, focused: paneId }));
-                          newThread();
+                          if (paneId === workspace.focused) return newThread();
+                          // In another pane, New thread takes that pane's computer and repository.
+                          const tab = shownTab(workspace.panes.find((p) => p.id === paneId)!);
+                          const { state } = views[tab.hostId] ?? idleThreads;
+                          const thread = state.threads.find((t) => t.id === threadOf(tab));
+                          setWorkspace((w) => ({ ...w, focused: paneId }));
+                          openOnHost(tab.hostId, {
+                            kind: "new",
+                            groupId: thread
+                              ? groupOf(state, thread)
+                              : tab.selection.kind === "new"
+                                ? tab.selection.groupId
+                                : undefined,
+                          });
                         }}
                         onDropOnTabs={(drop, paneId, before) =>
                           setWorkspace((state) =>
@@ -1829,7 +1839,6 @@ export function App() {
                               : placeThread(state, drop.hostId, drop.runId, paneId, before),
                           )
                         }
-                        onDragTab={(tabId) => (draggingTab.current = tabId)}
                         details={
                           tiled && selection.kind === "thread" && !group.project
                             ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")

@@ -85,7 +85,6 @@ export function SplitTiles({
   onCloseTab,
   onNewTab,
   onDropOnTabs,
-  onDragTab,
   details,
   drop,
 }: {
@@ -103,7 +102,6 @@ export function SplitTiles({
   onCloseTab: (tabId: string) => void;
   onNewTab: (paneId: string) => void;
   onDropOnTabs: (drop: TabDrop, paneId: string, before?: string) => void;
-  onDragTab: (tabId: string | undefined) => void;
   details?: ReactNode;
   drop?: {
     accepts: (e: DragEvent) => boolean;
@@ -223,9 +221,12 @@ export function SplitTiles({
                 onSelect={onSelectTab}
                 onClose={onCloseTab}
                 onNew={() => onNewTab(shownPane.paneId)}
-                onDrop={(tabDrop, before) => onDropOnTabs(tabDrop, shownPane.paneId, before)}
+                onDrop={(tabDrop, before) => {
+                  // Among stacked panes, the one holding the tab it lands before.
+                  const holder = group.find((i) => items[i]!.tabs.some((t) => t.id === before));
+                  onDropOnTabs(tabDrop, items[holder ?? activeIn(tile)]!.paneId, before);
+                }}
                 closable={closable}
-                onDragTab={onDragTab}
               />
             </div>
             <div
