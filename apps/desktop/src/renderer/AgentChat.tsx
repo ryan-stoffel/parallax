@@ -120,6 +120,8 @@ import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from 
 import { GoalStrip } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
 import { ComposerTabs, type ComposerTab } from "./ComposerTabs";
+import { isQuestion, questionsOf } from "./questions";
+import { QuestionQueue } from "./Question";
 import { useShortcutLabel } from "./keybindings";
 import { ResumeCard } from "./ResumeCard";
 import { SecretCard, SecretLine } from "./Secret";
@@ -231,16 +233,36 @@ const markdown = (text: string) => <MarkdownText text={text} />;
  * The permission requests waiting on the user, pinned over the composer (PLX-196): tools named as
  * the transcript names them, and focus back to the composer once the last one goes.
  */
-export function PinnedApprovals(
-  props: Omit<ComponentProps<typeof ApprovalQueue>, "describe" | "markdown" | "returnFocus">,
-) {
+export function PinnedApprovals({
+  asked,
+  questionsOnBar = false,
+  ...props
+}: Omit<ComponentProps<typeof ApprovalQueue>, "describe" | "markdown" | "returnFocus"> & {
+  /** The composer's bar shows the questions (`QuestionQueue`), so only their status goes here. */
+  questionsOnBar?: boolean;
+}) {
+  const requests = asked.filter((a) => !isQuestion(a.approval.request));
+  const questions = asked.filter((a) => isQuestion(a.approval.request));
+  const head = questions[0] && questionsOf(questions[0].approval.request)[0];
   return (
-    <ApprovalQueue
-      {...props}
-      describe={describeTool}
-      markdown={markdown}
-      returnFocus={focusComposer}
-    />
+    <>
+      {/* Always on the page, so a screen reader hears each new question. */}
+      <p aria-live="polite" aria-atomic="true" className="sr-only">
+        {head && `Question from the agent: ${head.text}`}
+      </p>
+      <ApprovalQueue
+        {...props}
+        asked={requests}
+        describe={describeTool}
+        markdown={markdown}
+        returnFocus={focusComposer}
+      />
+      {!questionsOnBar && questions.length > 0 && (
+        <section aria-label="Questions" className="mb-3 flex min-h-0 flex-col">
+          <QuestionQueue {...props} asked={questions} returnFocus={focusComposer} inline />
+        </section>
+      )}
+    </>
   );
 }
 
@@ -750,9 +772,10 @@ export function AgentChat({
       <PinnedApprovals
         asked={asked}
         answers={answers}
-        onAnswer={(a, choice, message) => void answer(a, choice, message)}
+        onAnswer={(a, choice, message, filled) => void answer(a, choice, message, filled)}
         onDismiss={dismiss}
         disabledReason={offlineReason(connection)}
+        questionsOnBar={!subagent}
       />
       {secret && (
         <SecretCard
@@ -847,6 +870,22 @@ export function AgentChat({
     if (needsAttention(remoteSession?.state)) tabs.unshift(tab);
     else tabs.push(tab);
   }
+  // The agent's questions lead the line, and open above it.
+  const questions = asked.filter((a) => isQuestion(a.approval.request));
+  if (questions.length > 0)
+    tabs.unshift({
+      key: "question",
+      node: (
+        <QuestionQueue
+          asked={questions}
+          answers={answers}
+          onAnswer={(a, choice, message, filled) => void answer(a, choice, message, filled)}
+          onDismiss={dismiss}
+          disabledReason={offlineReason(connection)}
+          returnFocus={focusComposer}
+        />
+      ),
+    });
 
   const dock = (
     // A column the window bounds, so a pinned card's preview gives way to a grown composer. Only
@@ -1207,7 +1246,7 @@ export function TranscriptView({
   // agent gets both too, even before the run goes again. The musing goes before any notices
   // after the last row, where the work it stands for will be.
   const view = useMemo(() => {
-    const grouped: ViewRow[] = groupWork(withPlanApprovals(withPlans(rows)));
+    const grouped: ViewRow[] = groupWork(withoutQuestionCalls(withPlanApprovals(withPlans(rows))));
     const tail = grouped.findLastIndex((r) => r.kind !== "notice");
     // A compaction under way shows only while it's what the agent is doing.
     const shown = grouped.filter(
@@ -1528,6 +1567,19 @@ function withPlanApprovals(rows: Exclude<ViewRow, Work>[]): Exclude<ViewRow, Wor
     sentBack.set(row, denied);
     return [denied];
   });
+}
+
+/** Rows without the tool calls of an agent's questions, whose own rows read as the answer. */
+function withoutQuestionCalls(rows: Exclude<ViewRow, Work>[]): Exclude<ViewRow, Work>[] {
+  const asked = new Set(
+    rows.flatMap((row) =>
+      row.kind === "approval" && row.request.callId && isQuestion(row.request)
+        ? [row.request.callId]
+        : [],
+    ),
+  );
+  if (asked.size === 0) return rows;
+  return rows.filter((row) => row.kind !== "tool" || !asked.has(row.callId));
 }
 
 interface RowProps {

@@ -77,6 +77,8 @@ pub(super) enum AskKind {
     Permissions(Value),
     /// `mcpServer/elicitation/request`.
     Elicitation,
+    /// `item/tool/requestUserInput`: the agent's questions for the user (PLX-245).
+    UserInput,
 }
 
 /// What answering an approval request needs.
@@ -93,8 +95,18 @@ pub(super) struct Ask {
 /// The JSON-RPC result that answers `ask` with `decision`. Codex takes no edited input, so an allow
 /// whose input differs from what Codex asked with is a denial, never a run of something else.
 /// `always` allows the same command for the rest of the session (`acceptForSession`), and adds no
-/// rule to the user's files, as 0031 asks.
+/// rule to the user's files, as 0031 asks. A question is the exception: an allow's input carries
+/// the user's `answers`, by question id, and anything else answers nothing.
 pub(super) fn answer_response(ask: &Ask, decision: &Decision) -> Value {
+    if ask.kind == AskKind::UserInput {
+        let answers = match decision {
+            Decision::Allow {
+                input: Some(input), ..
+            } => input.get("answers").filter(|answers| answers.is_object()),
+            _ => None,
+        };
+        return json!({ "answers": answers.cloned().unwrap_or_else(|| json!({})) });
+    }
     let allow = match decision {
         Decision::Allow {
             input: Some(input), ..
@@ -132,6 +144,7 @@ pub(super) fn answer_response(ask: &Ask, decision: &Decision) -> Value {
             };
             json!({ "action": action, "content": null, "_meta": null })
         }
+        AskKind::UserInput => unreachable!("answered above"),
     }
 }
 
@@ -367,6 +380,16 @@ impl Translator {
             "mcpServer/elicitation/request" => {
                 let input = Value::Object(params.clone());
                 ("mcp_elicitation", AskKind::Elicitation, input, None, true)
+            }
+            // With nothing to ask, it is refused as a request plxd doesn't serve.
+            "item/tool/requestUserInput"
+                if params
+                    .get("questions")
+                    .and_then(Value::as_array)
+                    .is_some_and(|questions| !questions.is_empty()) =>
+            {
+                let input = json!({ "questions": params["questions"] });
+                ("request_user_input", AskKind::UserInput, input, None, true)
             }
             _ => {
                 return vec![Step::Refuse {
@@ -718,6 +741,51 @@ mod tests {
                 ..
             })]
         ));
+    }
+
+    /// PLX-245: Codex's questions reach the app whole, and only the user's answers go back.
+    #[test]
+    fn a_question_carries_its_questions_and_takes_answers_by_id() {
+        let questions = json!([{
+            "id": "db",
+            "header": "Database",
+            "question": "Which one?",
+            "isOther": true,
+            "isSecret": false,
+            "options": [{"label": "SQLite (Recommended)", "description": "One writer"}],
+        }]);
+        let line = json!({
+            "method": "item/tool/requestUserInput",
+            "id": 7,
+            "params": {"itemId": "q", "questions": questions, "isBlocking": true},
+        });
+        let steps = Translator::default().line(line.to_string().as_bytes());
+        let [Step::Ask(request, ask)] = &steps[..] else {
+            panic!("{steps:?}")
+        };
+        assert_eq!(request.tool_name, "request_user_input");
+        assert_eq!(request.call_id.as_deref(), Some("q"));
+        assert!(request.interactive);
+        assert_eq!(request.input["questions"], questions);
+
+        let answers = json!({"db": {"answers": ["SQLite (Recommended)"]}});
+        let allow = Decision::Allow {
+            input: Some(json!({"answers": answers})),
+            always: false,
+        };
+        assert_eq!(answer_response(ask, &allow), json!({"answers": answers}));
+        for nothing in [
+            Decision::Allow {
+                input: None,
+                always: false,
+            },
+            Decision::Deny {
+                message: "Skipped".into(),
+                interrupt: false,
+            },
+        ] {
+            assert_eq!(answer_response(ask, &nothing), json!({"answers": {}}));
+        }
     }
 
     #[test]

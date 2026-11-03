@@ -35,8 +35,9 @@
 //!
 //! Codex asks the client before what its approval policy doesn't allow: a command
 //! (`item/commandExecution/requestApproval`), a patch (`item/fileChange/requestApproval`), more
-//! sandbox permissions (`item/permissions/requestApproval`), or an MCP server's question
-//! (`mcpServer/elicitation/request`). With [`RunRequest::approvals`], each is an
+//! sandbox permissions (`item/permissions/requestApproval`), an MCP server's question
+//! (`mcpServer/elicitation/request`), or the agent's own questions
+//! (`item/tool/requestUserInput`). With [`RunRequest::approvals`], each is an
 //! [`Event::ApprovalRequested`], and [`Run::answer`](super::super::Run::answer)'s answer is the
 //! request's JSON-RPC response ([`translate::answer_response`]). `serverRequest/resolved` for a
 //! request still waiting, or app-server exiting, withdraws it. Without `approvals`, the thread
@@ -266,6 +267,15 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
         thread["approvalsReviewer"] = reviewer.into();
     }
     let mut config = serde_json::Map::new();
+    // Codex offers `request_user_input` outside its Plan mode only behind this flag, and warns of
+    // the flag on every thread unless told not to (PLX-245).
+    if request.approvals {
+        config.insert(
+            "features.default_mode_request_user_input".into(),
+            true.into(),
+        );
+        config.insert("suppress_unstable_features_warning".into(), true.into());
+    }
     if (request.approvals || request.permission == Some(AgentPermission::Bypass))
         && let Some(tools) = request.full_agent_tools()
     {

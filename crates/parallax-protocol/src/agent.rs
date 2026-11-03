@@ -775,6 +775,11 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         message: Option<String>,
+        /// What the user answered a question with, one entry per question, each cut short when
+        /// it is long (PLX-245).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        answers: Option<Vec<String>>,
     },
     /// What one of the agent's own subagents did (PLX-382, decision 0041), such as Claude Code's
     /// Agent tool: an item from its own transcript, not the agent's. Show it with the subagent,

@@ -265,6 +265,7 @@ mod tests {
             by: AgentApprovalBy::User,
             always: false,
             message: None,
+            answers: None,
         };
         let output = |run_id, items: Vec<AgentOutputItem>| ParallaxEvent::AgentOutput {
             run_id,

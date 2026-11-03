@@ -87,7 +87,7 @@ What plxd answers, as the SDK does:
 {"runId":"...","approvalId":"...","decision":"deny","message":"..."}
 ```
 
-- `input` (a JSON object, at most 1 MiB) and `always` go only with `allow`, and `always` only to a request whose `alwaysAllow` isn't empty. `message` (at most 64 KiB) goes only with `deny`. Anything else is `invalidParams`.
+- `input` (a JSON object, at most 1 MiB), `always`, and `answers` (at most 64 KiB in all) go only with `allow`, and `always` only to a request whose `alwaysAllow` isn't empty. `message` (at most 64 KiB) goes only with `deny`. Anything else is `invalidParams`.
 - In a worker or a normal thread (`workspaceWrite`), an edited `input` must keep the request's `file_path`, `notebook_path`, and `path` as they were, none added or dropped, or the answer is `invalidParams`. No test shows that Claude Code holds an edited input to `--restricted`'s confinement to the worktree, so plxd doesn't rely on it: an edit can change what a file tool does, never which file. The same goes for `ExitPlanMode`'s `planFilePath` (PLX-243). An edit may leave it out, as a client that sends back only the edited `plan` does, but not change or add one.
 - The result is the resolution, `{"decision","by","always"?,"message"?}`. It is idempotent: answering a request that already ended changes nothing and returns how it ended, which may be another answer, a cancel, or a withdrawal.
 - A request this plxd never saw, including one from before it started or any for a run without `approvals`, is the new error kind `approvalNotFound`.
@@ -118,7 +118,13 @@ Why a worker may have `ExitPlanMode`:
 - plxd's answer drops the request's other suggestions, as for any request, and an edited input keeps the path check above. An edited `plan` is the user's own text, which 2.1.283 saves to its own plan file. 2.1.283 also ignores an edited `planFilePath` and writes the file it chose, but plxd doesn't rely on that: the plan file is the CLI's own write, not a file tool's, so `--restricted` wouldn't confine it if a later CLI honored the field. An edited input may leave `planFilePath` out but not change or add it, or the answer is `invalidParams`.
 - The plan file sits in Claude Code's configuration folder, outside the worktree, and a plan worker's `Write` to it succeeds under `--restricted` without asking. Whether that should stay is PLX-244.
 
-The tool stays listed after the plan is approved, and a later call answers "You are not in plan mode" without asking. A worker gets no `AskUserQuestion` (PLX-245).
+The tool stays listed after the plan is approved, and a later call answers "You are not in plan mode" without asking.
+
+### Questions (PLX-245)
+
+`AskUserQuestion` arrives as an ordinary request, in every mode, Bypass included, since only the user can answer it. The answer is an allow whose edited `input` is the request's own with `answers` added, each by its question's text and several joined with commas, as the Agent SDK does it. The model reads them as the tool's result. Skipping is a denial with a message that says so. A sandboxed worker's `--tools` still leaves the tool out, so only threads and orchestrators ask.
+
+`agent/approve` also takes optional `answers`, one line per question, which `approvalResolved` logs so the transcript keeps what was answered. They are for reading only, and the client leaves out what must not be logged, such as a secret. An older plxd ignores the field (0007), and its transcript shows only that the question was answered.
 
 ### Codex
 

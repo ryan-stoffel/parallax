@@ -1360,6 +1360,7 @@ impl App {
                 input: None,
                 always,
                 message: None,
+                answers: None,
             })
             .await;
         if let Err(error) = answered {

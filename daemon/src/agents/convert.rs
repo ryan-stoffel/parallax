@@ -490,6 +490,12 @@ pub(super) fn approval_resolved(
             .message
             .as_deref()
             .map(|message| truncate(message, MAX_TEXT_ITEM_BYTES)),
+        answers: resolution.answers.as_ref().map(|answers| {
+            answers
+                .iter()
+                .map(|answer| truncate(answer, MAX_TEXT_ITEM_BYTES))
+                .collect()
+        }),
     }
 }
 

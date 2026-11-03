@@ -106,6 +106,12 @@ pub struct AgentApproveParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub message: Option<String>,
+    /// With `allow`, for a question (PLX-245): what the user answered, one entry per question and
+    /// at most 64 KiB in all, which the transcript shows. The agent reads the answer from `input`.
+    /// A client leaves out what must not be logged, such as a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub answers: Option<Vec<String>>,
 }
 
 /// Result of `agent/approve`: how the request was resolved, as its `approvalResolved` says.
@@ -123,4 +129,8 @@ pub struct AgentApproveResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub message: Option<String>,
+    /// What the user answered a question with, one entry per question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub answers: Option<Vec<String>>,
 }

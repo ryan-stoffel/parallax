@@ -16,6 +16,7 @@ import { diffLines } from "./diffLines";
 import type { Approval, ApprovalRequest, ApprovalResolution, Item } from "./transcript";
 import { fakeWatch } from "./fakeWatch";
 import { Notifications } from "./notifications";
+import { SKIPPED } from "./Question";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.
@@ -468,4 +469,100 @@ test("ExitPlanMode: Approve plan allows it as asked, and the plan returns to the
   expect(approveCalls()).toEqual([{ runId, approvalId: "p1", decision: "allow" }]);
   expect(pinned()).toBeNull();
   expect(transcript().textContent).toContain("Keep the sidebar's list while a host reconnects");
+});
+
+// --- An agent's questions (PLX-245) ---
+
+const questionItem = (approvalId: string): AgentOutputItem =>
+  asked(approvalId, {
+    toolName: "AskUserQuestion",
+    interactive: true,
+    input: {
+      questions: [
+        {
+          question: "Which database?",
+          header: "Database",
+          options: [{ label: "SQLite (Recommended)" }, { label: "Postgres" }],
+        },
+        { question: "Which runtime?", header: "Runtime", options: [{ label: "Node" }] },
+      ],
+    },
+  });
+const questionTab = () => document.querySelector('section[aria-label="Question"]');
+const questionPanel = () => document.querySelector('[aria-label="Question from the agent"]');
+const inPanel = (name: string) =>
+  [...(questionPanel()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === name);
+const pick = async (label: string) => {
+  const option = [...(questionPanel()?.querySelectorAll("label") ?? [])].find((l) =>
+    l.textContent.includes(label),
+  );
+  await act(async () => {
+    const input = option!.querySelector("input")!;
+    input.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, buttons: 0 }));
+    input.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+  });
+  await settle();
+};
+// A new panel ignores a pointer's clicks until the pointer moves and 300 ms pass, as a card does.
+const seen = async () => {
+  await act(async () => {
+    questionPanel()!.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, buttons: 0 }));
+    await new Promise((resolve) => setTimeout(resolve, 320));
+  });
+};
+
+test("a question leads the composer's bar, not the approval cards, and Send answers every question", async () => {
+  output(questionItem("q1"));
+  await renderChat();
+  expect(pinned()).toBeNull();
+  expect(questionTab()?.textContent).toContain("Which database?");
+  expect(questionTab()?.textContent).toContain("1 of 2");
+  expect(questionPanel()?.textContent).toContain("Recommended");
+  await seen();
+
+  await pick("SQLite");
+  expect(questionTab()?.textContent).toContain("Which runtime?");
+  expect(inPanel("Send")?.disabled).toBe(true);
+  await pick("Node");
+  expect(inPanel("Send")?.disabled).toBe(false);
+  await act(async () =>
+    questionPanel()!
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  await settle();
+
+  expect(approveCalls()).toEqual([
+    expect.objectContaining({
+      approvalId: "q1",
+      decision: "allow",
+      answers: ["SQLite (Recommended)", "Node"],
+      input: expect.objectContaining({
+        answers: { "Which database?": "SQLite (Recommended)", "Which runtime?": "Node" },
+      }),
+    }),
+  ]);
+  expect(questionTab()).toBeNull();
+});
+
+test("Skip denies with a message that says so, and the line says Skipped", async () => {
+  output(questionItem("q2"));
+  await renderChat();
+  await seen();
+  await click(inPanel("Skip"));
+  expect(approveCalls()).toEqual([
+    expect.objectContaining({ approvalId: "q2", decision: "deny", message: SKIPPED }),
+  ]);
+  expect(questionTab()).toBeNull();
+  expect(transcript().textContent).toContain("Skipped");
+});
+
+test("the question's own tool call stays out of the transcript", async () => {
+  output(
+    { kind: "toolCall", callId: "toolu_q3", name: "AskUserQuestion", input: {} },
+    questionItem("q3"),
+  );
+  await renderChat();
+  expect(transcript().textContent).not.toContain("AskUserQuestion");
+  expect(transcript().textContent).toContain("Waiting for your answer");
 });

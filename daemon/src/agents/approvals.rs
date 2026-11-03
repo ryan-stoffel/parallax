@@ -126,6 +126,7 @@ pub(super) fn ended(decision: AgentApprovalDecision, by: AgentApprovalBy) -> Age
         by,
         always: false,
         message: None,
+        answers: None,
     }
 }
 

@@ -232,7 +232,7 @@ export function OrchestratorChat({
         <PinnedApprovals
           asked={asked}
           answers={answers}
-          onAnswer={(a, choice, message) => void answer(a, choice, message)}
+          onAnswer={(a, choice, message, filled) => void answer(a, choice, message, filled)}
           onDismiss={dismiss}
           disabledReason={connected ? undefined : "Connecting to plxd…"}
         />
