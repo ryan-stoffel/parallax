@@ -62,7 +62,8 @@ const page = 5;
 /**
  * Mod+N's picker, laid out as Add Repository is. Thread lists which repository, or Chat, a new
  * thread goes in, then the orchestrator threads to continue (0093). Orchestrator lists the
- * repositories to start one in, then the same orchestrators. Tab switches between them.
+ * repositories to start one in, then the same orchestrators. Tab switches between them, and
+ * Shift+Tab moves focus as usual.
  * Up and Down move and wrap, Home, End, Page Up, and Page Down jump, Enter picks, Mod+1 to Mod+9
  * pick that row, Escape closes. The footer's menu sets the order, row size, and whether Thread
  * lists orchestrators (`pickerPrefs`). Picking closes it and calls `onPick` with the group's id,
@@ -111,11 +112,16 @@ export function NewThreadPicker({
   const modHeld = useModHeld();
   const listId = useId();
   const menuId = useId();
+  // As of opening, so another thread's prompt never moves a row under the active one.
+  const [usedAtOpen, setUsedAtOpen] = useState(lastUsed);
 
   useImperativeHandle(ref, () => ({
     open: (start = "thread") => {
       // Rendered before showModal, so it never shows the other kind's rows first.
-      flushSync(() => setKind(start));
+      flushSync(() => {
+        setKind(start);
+        setUsedAtOpen(lastUsed);
+      });
       dialog.current?.showModal();
     },
   }));
@@ -159,7 +165,7 @@ export function NewThreadPicker({
       name: o.repo.name,
     })),
   ];
-  const used = (p: (typeof places)[number]) => lastUsed.get(`${p.hostId}/${p.repo.id}`) ?? 0;
+  const used = (p: (typeof places)[number]) => usedAtOpen.get(`${p.hostId}/${p.repo.id}`) ?? 0;
   if (prefs.order === "name") places.sort((a, b) => a.name.localeCompare(b.name));
   if (prefs.order === "recent") places.sort((a, b) => used(b) - used(a));
   if (prefs.order === "added")
@@ -265,7 +271,9 @@ export function NewThreadPicker({
       >
         {row.icon}
         <span className={`min-w-0 flex-1 ${prefs.compact ? "flex items-baseline gap-2.5" : ""}`}>
-          <span className={`text-reading ${prefs.compact ? "shrink-0" : "block truncate"}`}>
+          <span
+            className={`truncate text-reading ${prefs.compact ? "max-w-[60%] shrink-0" : "block"}`}
+          >
             {row.name}
           </span>
           <RowHint row={row} />
@@ -319,7 +327,8 @@ export function NewThreadPicker({
           } else if (to !== undefined && shown.length > 0) {
             e.preventDefault();
             setActive(to);
-          } else if (e.key === "Tab" && onNewOrchestrator) {
+            // Shift+Tab stays the browser's, which is how the keyboard reaches the options button.
+          } else if (e.key === "Tab" && !e.shiftKey && onNewOrchestrator) {
             e.preventDefault();
             switchKind(kind === "thread" ? "orchestrator" : "thread");
           } else if (e.key === "Enter" && e.target instanceof HTMLInputElement) {

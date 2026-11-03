@@ -145,3 +145,28 @@ test("Date added mixes other computers' repositories in by when they were added"
   render([], [{ host: { id: "mini", name: "mini" } as OtherRepo["host"], repo: older }]);
   expect(names()).toEqual(["dune", "atlas", "beacon", "cobalt", "No repo", "photon"]);
 });
+
+test("a repository used while the picker is open keeps its place until it opens again", () => {
+  pickerPrefs.set({ order: "recent", compact: false, orchestrators: false });
+  const picker = (used: [string, number][]) => (
+    <NewThreadPicker
+      ref={handle}
+      groups={repos.map((r) => ({ id: r.id, name: r.name }))}
+      repos={repos}
+      hostId="local"
+      elsewhere={[]}
+      lastUsed={new Map(used)}
+      onPick={onPick}
+      onPickElsewhere={vi.fn()}
+    />
+  );
+  handle = createRef();
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(picker([])));
+  act(() => handle.current!.open());
+  act(() => root.render(picker([["local/cobalt", 9]])));
+  expect(names()).toEqual(["atlas", "beacon", "cobalt"]);
+  act(() => document.querySelector("dialog")!.close());
+  act(() => handle.current!.open());
+  expect(names()).toEqual(["cobalt", "atlas", "beacon"]);
+});
