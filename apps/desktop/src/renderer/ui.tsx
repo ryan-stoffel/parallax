@@ -14,7 +14,7 @@ import {
   type ToggleEvent,
 } from "react";
 
-import { commandOf, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
+import { activeCommand, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
 import { Check as CheckSymbol } from "./symbols";
 import { Kbd } from "./ui/marks";
 
@@ -46,7 +46,7 @@ export type KeyPress = Pick<
 export function appShortcut(e: KeyPress): Command | "row" | undefined {
   if (rowShortcut(e) !== undefined) return "row";
   const keybinding = keybindingOf(e);
-  return keybinding ? commandOf(keybinding) : undefined;
+  return keybinding ? activeCommand(keybinding) : undefined;
 }
 
 /**
@@ -472,10 +472,13 @@ export function Picker({
   search,
   custom,
   footer,
+  placeholder,
 }: {
   id?: string;
   button?: boolean;
   label: string;
+  /** What the trigger reads with no option chosen, as when `value` is "". */
+  placeholder?: string;
   options: PickerOption[];
   value?: string;
   onChange?: (value: string) => void;
@@ -525,8 +528,11 @@ export function Picker({
           className={field ? `${fieldControl} ${className}` : `${menuButton} min-w-0 ${className}`}
         >
           {current?.icon}
-          <span className={`truncate ${field ? "flex-1 text-left" : ""}`} style={current?.style}>
-            {current?.label}
+          <span
+            className={`truncate ${field ? "flex-1 text-left" : ""} ${current ? "" : "text-faint-foreground"}`}
+            style={current?.style}
+          >
+            {current?.label ?? placeholder}
           </span>
           <ChevronDown aria-hidden className={field ? "text-faint-foreground" : "opacity-70"} />
         </button>

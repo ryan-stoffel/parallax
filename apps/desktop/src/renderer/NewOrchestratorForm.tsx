@@ -15,6 +15,7 @@ import { type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { iconImageBytes } from "./images";
 import { autonomyLevels } from "./OrchestratorPermission";
+import { orchestratorPrefs } from "./prefs";
 import { ProjectIcon } from "./Sidebar";
 import { isRepository, type ThreadsView } from "./threads";
 import { IconButton, Segmented } from "./ui";
@@ -63,8 +64,11 @@ export function NewOrchestratorForm({
   const name = (typed ?? workspace?.repo.name ?? "").trim();
   const pickerId = useId();
   const [chosenIcon, setChosenIcon] = useState<ChosenIcon>();
-  const [fullAccess, setFullAccess] = useState(true);
-  const [chosenAutonomy, setAutonomy] = useState<OrchestratorAutonomy>("routine");
+  // Settings > Orchestrators' defaults.
+  const [fullAccess, setFullAccess] = useState(() => orchestratorPrefs.get().fullAccess);
+  const [chosenAutonomy, setAutonomy] = useState<OrchestratorAutonomy>(
+    () => orchestratorPrefs.get().autonomy,
+  );
   // The Workspace's host decides, since the orchestrator is made there. Without `orchestratorEdit`
   // its plxd would drop an icon, so none is shown or sent.
   const connection = useConnection(workspace?.hostId ?? hostId);

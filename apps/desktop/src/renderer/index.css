@@ -156,8 +156,13 @@
   );
   /* The semantic amber, for marks and icons beside a label (--danger is the red). */
   --warning: #b45309;
-  /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
+  /* Done work, and what a theme calls added. A diff's lines have their own colors below. */
   --added: #15803d;
+  /* A diff's added and removed lines: their sign and edge, and their background mixed by
+     --diff-tint (Settings > Accessibility). The text on them stays --foreground. */
+  --diff-added: var(--diff-added-custom, #1a7f37);
+  --diff-removed: var(--diff-removed-custom, #cf222e);
+  --diff-tint: 16%;
   /* The PR view's merge button, by the pull request's state (mergeTone), dark enough for white
      text but running's yellow, which takes black. Each foreground picks black or white. */
   --merge-ready: #1a7f37;
@@ -250,6 +255,8 @@
   --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
+  --diff-added: var(--diff-added-custom, #3fb950);
+  --diff-removed: var(--diff-removed-custom, #f85149);
   --merge-ready: #238636;
   --merge-running: #d29922;
   --merge-blocked: #da3633;
@@ -299,10 +306,51 @@
 :root.diff-blue-orange {
   --added: #0969da;
   --danger: #bc4c00;
+  --diff-added: #0969da;
+  --diff-removed: #bc4c00;
 }
 :root.dark.diff-blue-orange {
   --added: #58a6ff;
   --danger: #f0883e;
+  --diff-added: #58a6ff;
+  --diff-removed: #f0883e;
+}
+/* Teal and pink, apart for red-green and blue-yellow color blindness alike. Diffs only. */
+:root.diff-teal-pink {
+  --diff-added: #0f766e;
+  --diff-removed: #be185d;
+}
+:root.dark.diff-teal-pink {
+  --diff-added: #2dd4bf;
+  --diff-removed: #f472b6;
+}
+
+/* A diff's changed lines (diffLook), and the words that changed in them. */
+.diff-row-added {
+  background: color-mix(in srgb, var(--diff-added) var(--diff-tint), transparent);
+  box-shadow: inset 2px 0 0 var(--diff-added);
+}
+.diff-row-removed {
+  background: color-mix(in srgb, var(--diff-removed) var(--diff-tint), transparent);
+  box-shadow: inset 2px 0 0 var(--diff-removed);
+}
+.diff-word-added {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--diff-added) calc(var(--diff-tint) * 2.2), transparent);
+}
+.diff-word-removed {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--diff-removed) calc(var(--diff-tint) * 2.2), transparent);
+}
+
+/* Settings > Accessibility. */
+.focus-strong :focus-visible {
+  outline: 3px solid var(--ring) !important;
+  outline-offset: 2px;
+}
+.underline-links a[href] {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* A nightly build (main.tsx sets .nightly): a sky at the top of the sidebar, with stars and
@@ -633,6 +681,8 @@ svg.lucide[stroke-width="2"] * {
   --color-danger-foreground: var(--danger-foreground);
   --color-warning: var(--warning);
   --color-added: var(--added);
+  --color-diff-added: var(--diff-added);
+  --color-diff-removed: var(--diff-removed);
   --color-code: var(--code);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
@@ -1926,20 +1976,6 @@ body {
 .model-menu-rail button:is(:hover, :focus-visible, [aria-pressed="true"]) > * {
   opacity: 1;
   filter: none;
-}
-/* A provider's pane: rows with dividers running edge to edge, under each section's title, and no
-   card around them. A card without a title is its section's only child. */
-.provider-pane section {
-  margin-bottom: 1.5rem;
-}
-.provider-pane section > div:not(:only-child):first-child {
-  padding-inline: 1rem;
-}
-.provider-pane section > div:last-child {
-  border-block: 1px solid var(--border);
-  border-inline: 0;
-  border-radius: 0;
-  background: none;
 }
 /* The search field's clear button, drawn as a lucide X at 1.5px in the faint color. */
 .model-menu input[type="search"]::-webkit-search-cancel-button {

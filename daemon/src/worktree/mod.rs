@@ -138,6 +138,32 @@ const DEFAULT_MAX_GIT_LINE_BYTES: usize = 64 * 1024 * 1024;
 
 const WORKTREES_DIR: &str = "worktrees";
 
+/// What a new thread's branch starts with until `branchPrefix` says otherwise (PLX-1249).
+pub const DEFAULT_BRANCH_PREFIX: &str = "parallax/";
+
+/// The longest `branchPrefix`, in bytes.
+const MAX_BRANCH_PREFIX_BYTES: usize = 64;
+
+/// Whether git can start a branch name with `prefix`: empty, or a safe subset of what a ref allows,
+/// ending in `/` or `-` so a slug reads apart from it.
+#[must_use]
+pub fn valid_branch_prefix(prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    prefix.len() <= MAX_BRANCH_PREFIX_BYTES
+        && prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+        && (prefix.ends_with('/') || prefix.ends_with('-'))
+        && !prefix.starts_with(['/', '-', '.'])
+        && !prefix.contains("..")
+        && !prefix.contains("//")
+        && !prefix.contains("/.")
+        && !prefix.contains("/-")
+        && !prefix.contains(".lock/")
+}
+
 /// The folder under the data directory holding each orchestrator's integration worktree (0045).
 const INTEGRATION_DIR: &str = "integration";
 
@@ -426,6 +452,9 @@ pub struct WorktreeManager {
     max_git_line_bytes: usize,
     merge_timeout: Duration,
     repo_locks: Arc<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>>,
+    /// What a new thread's branch starts with (PLX-1249), which plxd loads at startup and
+    /// `host/settings/set` changes.
+    branch_prefix: Arc<StdMutex<String>>,
     /// [`WorktreeManager::shared_diff`]'s diffs by pull request URL and head SHA, oldest first.
     pr_diffs: Arc<StdMutex<VecDeque<(String, parallax_protocol::PrDiffResult)>>>,
 }
@@ -444,6 +473,7 @@ impl WorktreeManager {
             max_git_line_bytes: DEFAULT_MAX_GIT_LINE_BYTES,
             merge_timeout: review::MERGE_TIMEOUT,
             repo_locks: Arc::new(StdMutex::new(HashMap::new())),
+            branch_prefix: Arc::new(StdMutex::new(DEFAULT_BRANCH_PREFIX.to_owned())),
             pr_diffs: Arc::default(),
         }
     }
@@ -462,10 +492,29 @@ impl WorktreeManager {
         self
     }
 
+    /// Sets what a new thread's branch starts with. A branch already made keeps its name.
+    pub fn set_branch_prefix(&self, prefix: &str) {
+        prefix.clone_into(
+            &mut self
+                .branch_prefix
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+    }
+
+    /// What a new thread's branch starts with.
+    fn branch_prefix(&self) -> String {
+        self.branch_prefix
+            .lock()
+            .expect("branch prefix lock")
+            .clone()
+    }
+
     /// Creates a worktree of `repo_path` for `run_id`, on a new branch starting from `base` (a
     /// commit-ish git can resolve), or the repo's current branch `HEAD` when `base` is `None`. The
-    /// branch is `parallax/<slug>` when `slug` is given ([`valid_branch_slug`]), with the short
-    /// run id after it when a branch already has that name, or else `parallax/<short run id>`.
+    /// branch is the host's prefix then `<slug>` when `slug` is given ([`valid_branch_slug`]), with
+    /// the short run id after it when a branch already has that name, or else the prefix then the
+    /// short run id.
     ///
     /// # Errors
     ///
@@ -541,9 +590,9 @@ impl WorktreeManager {
         })
     }
 
-    /// The branch run `run_id` gets in `repo_root`: `parallax/<slug>` for a valid `slug`, with the
-    /// short run id after it when a branch already has that name, or else `parallax/<short run
-    /// id>`. The caller holds the repo's lock.
+    /// The branch run `run_id` gets in `repo_root`: the host's prefix then `<slug>` for a valid
+    /// `slug`, with the short run id after it when a branch already has that name, or else the
+    /// prefix then the short run id. The caller holds the repo's lock.
     async fn free_branch(
         &self,
         repo_root: &Path,
@@ -551,10 +600,11 @@ impl WorktreeManager {
         slug: Option<&str>,
     ) -> Result<String, WorktreeError> {
         let short = short_hash(&run_id.to_string());
+        let prefix = self.branch_prefix();
         let Some(slug) = slug.filter(|slug| valid_branch_slug(slug)) else {
-            return Ok(format!("parallax/{short}"));
+            return Ok(format!("{prefix}{short}"));
         };
-        let named = format!("parallax/{slug}");
+        let named = format!("{prefix}{slug}");
         let taken = self
             .run_git(
                 repo_root,
@@ -600,7 +650,10 @@ impl WorktreeManager {
             )
             .await?
             .success();
-        if upstream || !valid_branch_slug(slug) || branch == format!("parallax/{slug}") {
+        if upstream
+            || !valid_branch_slug(slug)
+            || branch == format!("{}{slug}", self.branch_prefix())
+        {
             return Ok(None);
         }
         let renamed = self.free_branch(&repo_root, run_id, Some(slug)).await?;

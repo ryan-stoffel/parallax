@@ -2,7 +2,7 @@ import { ArrowUpRight, Check, Copy, LoaderCircle, RefreshCw } from "lucide-react
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { RpcError } from "../../preload/bridge";
-import type { GithubStatus } from "../../protocol/generated/protocol";
+import type { GithubStatus, PrMergeMethod } from "../../protocol/generated/protocol";
 import { useCopy } from "../AgentChat";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
@@ -10,17 +10,19 @@ import { localId, useHosts, type Host } from "../hosts";
 import { locale } from "../locale";
 import { GitHubLogo } from "../logos";
 import { notify } from "../notifications";
-import { IconButton } from "../ui";
+import { IconButton, Picker } from "../ui";
 import {
   HostPicker,
   PageTitle,
   primaryButton,
   quietButton,
+  Row,
   Section,
   settingRow,
   StatusDot,
+  Switch,
 } from "./parts";
-import { clockOptions } from "../prefs";
+import { behaviorPrefs, clockOptions, setBehaviorPrefs, type BehaviorPrefs } from "../prefs";
 import { githubLine } from "./shared";
 
 /** How often the status is read while plxd installs `gh` or waits on a sign-in. */
@@ -39,10 +41,93 @@ export function SourceControlSettings({ hostId: opened }: { hostId?: string }) {
   return (
     <>
       <PageTitle title="Source control">
-        Parallax opens and follows pull requests with the GitHub CLI on each host.
+        Parallax opens and follows pull requests with the GitHub CLI on each host. How worktrees and
+        branches work is in Worktrees.
       </PageTitle>
       <GitHub key={host.id} host={host} hosts={hosts} onHost={setHostId} />
+      <PullRequests />
     </>
+  );
+}
+
+const mergeMethods: { value: PrMergeMethod | "default"; label: string; description?: string }[] = [
+  {
+    value: "default",
+    label: "Repository's first",
+    description: "Whichever the repository lists first.",
+  },
+  { value: "squash", label: "Squash and merge" },
+  { value: "merge", label: "Create a merge commit" },
+  { value: "rebase", label: "Rebase and merge" },
+];
+
+/** How pull requests open and merge, on this computer. */
+function PullRequests() {
+  const prefs = behaviorPrefs.use();
+  const mac = window.parallax.platform === "darwin";
+  return (
+    <Section title="Pull requests">
+      <Row title="Open pull requests in" description="Where Open on GitHub goes.">
+        <Picker
+          field
+          label="Open pull requests in"
+          value={prefs.openPrsIn}
+          onChange={(v) => setBehaviorPrefs({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
+          options={[
+            { value: "external", label: "System browser" },
+            { value: "browser", label: "Side panel browser" },
+          ]}
+          align="end"
+          className="w-56"
+          panelClassName="min-w-56"
+        />
+      </Row>
+      <Row
+        title="Click a pull request link to"
+        description={`A link to the thread's pull request. ${mac ? "⌘-click" : "Ctrl+click"} does the other.`}
+      >
+        <Picker
+          field
+          label="Click a pull request link to"
+          value={prefs.prLinkClick}
+          onChange={(v) => setBehaviorPrefs({ prLinkClick: v as BehaviorPrefs["prLinkClick"] })}
+          options={[
+            { value: "parallax", label: "Open in Parallax" },
+            { value: "github", label: "Open on GitHub" },
+          ]}
+          align="end"
+          className="w-56"
+          panelClassName="min-w-56"
+        />
+      </Row>
+      <Row
+        title="Merge method"
+        description="What a pull request's merge box starts on, where the repository allows it."
+      >
+        <Picker
+          field
+          label="Merge method"
+          value={prefs.mergeMethod ?? "default"}
+          onChange={(v) =>
+            setBehaviorPrefs({ mergeMethod: v === "default" ? undefined : (v as PrMergeMethod) })
+          }
+          options={mergeMethods}
+          align="end"
+          className="w-56"
+          panelClassName="w-72"
+        />
+      </Row>
+      <Row
+        title="Delete branch on merge"
+        description="Whether the merge box's Delete branch starts checked."
+      >
+        <Switch
+          label="Delete branch on merge"
+          checked={prefs.deleteBranchOnMerge}
+          onChange={(deleteBranchOnMerge) => setBehaviorPrefs({ deleteBranchOnMerge })}
+        />
+      </Row>
+    </Section>
   );
 }
 

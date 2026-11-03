@@ -3,38 +3,27 @@ import { useCallback, useEffect, useState } from "react";
 import type { RepoScript } from "../../protocol/generated/protocol";
 import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
-import { localId, useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
-import { isRepository, type ThreadsView } from "../threads";
-import { Picker } from "../ui";
-import {
-  field,
-  HostPicker,
-  PageTitle,
-  primaryButton,
-  quietButton,
-  Section,
-  settingRow,
-  Switch,
-} from "./parts";
+import { field, primaryButton, quietButton, Section, settingRow, Switch } from "./parts";
 import { scriptRoles } from "./shared";
 
 const blank: RepoScript = { id: "", name: "", command: "", runOnWorktreeCreate: true };
 
 /**
- * Settings > Scripts (PLX-650): a repository's setup and settle scripts, which plxd runs in a
- * thread's worktree, and its parallax.json's, which run only once imported, as T3 Code's t3.json.
+ * One repository's setup and settle scripts (PLX-650), which plxd runs in a thread's worktree, in a
+ * terminal under the thread, and its parallax.json's, which run only once imported, as T3 Code's
+ * t3.json. Settings > Projects shows them.
  */
-export function ScriptSettings({ listed }: { listed: { host: Host; view: ThreadsView }[] }) {
-  const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
+export function RepoScripts({
+  hostId,
+  repo,
+}: {
+  hostId: string;
+  repo: { id: string; name: string };
+}) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && "setupScripts" in connection.capabilities;
-  const repos =
-    listed.find((l) => l.host.id === hostId)?.view.state.repos.filter(isRepository) ?? [];
-  const [repoId, setRepoId] = useState<string>();
-  const repo = repos.find((r) => r.id === repoId) ?? repos[0];
   const [saved, setSaved] = useState<RepoScript[]>();
   const [scripts, setScripts] = useState<RepoScript[]>([]);
   const [file, setFile] = useState<{ scripts: RepoScript[]; error?: string }>();
@@ -42,14 +31,13 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    if (!repo) return;
     const answer = await window.parallax.request(hostId, "repo/scripts", { repo: repo.id });
     if ("error" in answer) return setError(describeError(answer.error));
     setSaved(answer.result.scripts);
     setScripts(answer.result.scripts);
     setFile({ scripts: answer.result.fileScripts ?? [], error: answer.result.fileError });
     setError(undefined);
-  }, [hostId, repo]);
+  }, [hostId, repo.id]);
   useEffect(() => {
     setSaved(undefined);
     setFile(undefined);
@@ -58,7 +46,6 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
   }, [supported, load]);
 
   const save = async () => {
-    if (!repo) return;
     setBusy(true);
     const answer = await window.parallax.request(hostId, "repo/saveScripts", {
       repo: repo.id,
@@ -82,33 +69,11 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
     ? "Not connected"
     : !supported
       ? "This host's plxd can't run setup scripts."
-      : !repo
-        ? "No repositories on this host yet."
-        : saved === undefined
-          ? (error ?? "Loading…")
-          : undefined;
+      : saved === undefined
+        ? (error ?? "Loading…")
+        : undefined;
   return (
     <>
-      <PageTitle title="Scripts">
-        Commands that run in a thread&apos;s own worktree: a setup script once the worktree is
-        created, and a settle script when the thread settles. Each runs in a terminal under the
-        thread.
-      </PageTitle>
-      <div className="mb-6 flex flex-wrap items-center gap-4">
-        <HostPicker hosts={hosts} value={hostId} onChange={setHostId} />
-        {repos.length > 0 && (
-          <span className="flex items-center gap-1.5 text-reading text-muted-foreground">
-            Repository
-            <Picker
-              label="Repository"
-              value={repo?.id}
-              onChange={setRepoId}
-              options={repos.map((r) => ({ value: r.id, label: r.name }))}
-              className="font-medium text-foreground"
-            />
-          </span>
-        )}
-      </div>
       <Section
         title="Scripts"
         action={

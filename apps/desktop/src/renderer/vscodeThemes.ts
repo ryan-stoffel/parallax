@@ -339,11 +339,25 @@ const block = (selector: string, tokens: Tokens) =>
     .map(([k, v]) => `  ${k}: ${v};`)
     .join("\n")}\n}`;
 
+/** `tokens` with a theme's added and removed colors on its diffs too, unless Custom is on. */
+function withDiffColors(tokens: Tokens): Tokens {
+  const added = tokens["--added"];
+  const removed = tokens["--danger"];
+  return {
+    ...tokens,
+    ...(added && { "--diff-added": `var(--diff-added-custom, ${added})` }),
+    ...(removed && { "--diff-removed": `var(--diff-removed-custom, ${removed})` }),
+  };
+}
+
 /** `tokens` for theme `id` in its `mode`, on <html> or in a preview. */
 const themeBlock = (id: string, mode: Mode, tokens: Tokens) =>
   mode === "light"
-    ? block(`:root:where(.theme-${id}:not(.dark)),\n.scheme-light.theme-${id}`, tokens)
-    : block(`:root.dark:where(.theme-${id}),\n.scheme-dark.theme-${id}`, tokens);
+    ? block(
+        `:root:where(.theme-${id}:not(.dark)),\n.scheme-light.theme-${id}`,
+        withDiffColors(tokens),
+      )
+    : block(`:root.dark:where(.theme-${id}),\n.scheme-dark.theme-${id}`, withDiffColors(tokens));
 
 /**
  * The CSS for added themes: each one mode's tokens over Parallax's, under `theme-<id>` on <html>
@@ -357,8 +371,8 @@ export function themeCss(extensions: AddedExtension[]) {
     .flatMap(({ id, mode, tokens, blueOrange }) => [
       themeBlock(id, mode, tokens),
       mode === "light"
-        ? block(`:root.diff-blue-orange:where(.theme-${id}:not(.dark))`, blueOrange)
-        : block(`:root.dark.diff-blue-orange:where(.theme-${id})`, blueOrange),
+        ? block(`:root.diff-blue-orange:where(.theme-${id}:not(.dark))`, withDiffColors(blueOrange))
+        : block(`:root.dark.diff-blue-orange:where(.theme-${id})`, withDiffColors(blueOrange)),
     ])
     .join("\n");
 }

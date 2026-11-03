@@ -15,7 +15,7 @@ import { imageCaps } from "./images";
 import { uploadBytes } from "./uploads";
 import type { RunOptions } from "./models";
 import { dismiss, notify, update } from "./notifications";
-import { newThreadPrefs } from "./prefs";
+import { newThreadPrefs, useRepoPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
 import { accountOptions, defaultBackend, type AccountOption } from "./settings/shared";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
@@ -28,7 +28,7 @@ import {
   type ThreadStart,
   type ThreadsView,
 } from "./threads";
-import { ariaKeyshortcut, bindingsOf, useShortcutLabel } from "./keybindings";
+import { ariaKeyshortcut, bindingOf, useShortcutLabel } from "./keybindings";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
@@ -136,9 +136,9 @@ export function NewThread({
   tray,
   aside,
 }: NewThreadProps) {
-  // The no-repo start's shortcut, as Settings > Keybinds has it.
+  // The no-repo start's shortcut, as Settings > Keybindings has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
-  const noRepoBinding = bindingsOf("noRepoThread")[0];
+  const noRepoBinding = bindingOf("noRepoThread");
   // ponytail: read as the screen opens and as Settings closes, since plxd has no event for a
   // changed default. One changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
   // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
@@ -201,8 +201,12 @@ export function NewThread({
         drafts.put({ ...box, ...where.current, id: draftId });
     };
   }, [draftId]);
-  // Starts as Settings > General says; picking one here is for this thread only.
-  const [workspace, setWorkspace] = useState<Workspace>(() => newThreadPrefs.get().workspace);
+  // The repository's own defaults (Settings > Projects), over the global ones.
+  const repoDefaults = useRepoPrefs(hostId, group.id);
+  const globalDefaults = newThreadPrefs.use();
+  // Starts as Settings says; picking one here is for this thread only.
+  const [pickedWorkspace, setWorkspace] = useState<Workspace>();
+  const workspace = pickedWorkspace ?? repoDefaults.workspace ?? globalDefaults.workspace;
   // Only a repository has a checkout, and only a plxd that takes `checkout` would use it: an
   // older one would make a worktree anyway.
   const checkoutUnavailable =
@@ -562,6 +566,7 @@ export function NewThread({
         )}
         <Composer
           newThread
+          repoDefaults={repoDefaults}
           initial={draft}
           contents={contents}
           // The box looks the same while a start is under way, or while another computer's backend
@@ -623,6 +628,8 @@ export function NewThread({
                         repo={group.id}
                         checkout={checkout}
                         value={gitRef}
+                        preferred={repoDefaults.base}
+                        fromCurrent={globalDefaults.worktreeBase === "current"}
                         onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
                       />
                     )}

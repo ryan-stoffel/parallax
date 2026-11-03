@@ -1262,6 +1262,7 @@ mod tests {
                 auto_resume: true,
                 continue_after_restart: Some(false),
                 clean_worktrees: None,
+                branch_prefix: None,
                 connect: None,
                 remote: None,
                 remote_web: None,

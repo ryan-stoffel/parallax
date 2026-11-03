@@ -30,7 +30,7 @@ import { SecuredByClerk } from "./Account";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts } from "./hosts";
-import { bindingsOf, formatKeybinding, type Command } from "./keybindings";
+import { bindingOf, formatKeybinding, type Command } from "./keybindings";
 import { ClaudeLogo, CursorLogo, OpenAILogo, OpenCodeLogo, ParallaxMark } from "./logos";
 import { dismiss, notify } from "./notifications";
 import { agents, finishOnboarding, infoOf, ready, setUpAgents, type Agent } from "./firstRun";
@@ -716,14 +716,15 @@ function Review() {
           <p className="flex items-center justify-between border-b border-border px-3 py-2 font-sans text-meta font-medium">
             src/session.ts
             <span className="font-mono text-caption">
-              <span className="text-added">+3</span> <span className="text-danger">−1</span>
+              <span className="text-diff-added">+3</span>{" "}
+              <span className="text-diff-removed">−1</span>
             </span>
           </p>
           {lines.map(([mark, text], i) => (
             <p
               key={i}
               style={after(250 + i * 140)}
-              className={`onboard-rise truncate px-3 py-[3px] ${mark === "+" ? "bg-added/10 text-added" : mark === "-" ? "bg-danger/10 text-danger" : "text-muted-foreground"}`}
+              className={`onboard-rise truncate px-3 py-[3px] ${mark === "+" ? "diff-row-added" : mark === "-" ? "diff-row-removed" : "text-muted-foreground"}`}
             >
               <span className="mr-2 opacity-60">{mark}</span>
               {text}
@@ -853,7 +854,7 @@ function Tour({
 
 /** A command's first binding, as a key cap. */
 function Keys({ command, name }: { command: Command; name: string }) {
-  const binding = bindingsOf(command)[0];
+  const binding = bindingOf(command);
   if (!binding) return null;
   return (
     <span className="flex items-center gap-2 text-body text-muted-foreground">

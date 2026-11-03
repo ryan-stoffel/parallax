@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { bindingsOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
+import { bindingOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
 import {
   clampRatio,
   evenRatio,
@@ -355,7 +355,7 @@ function TileHeader({
           const item = items[i]!;
           const shown = i === active;
           const isFocused = i === focused;
-          const keys = bindingsOf(tileCommands[i]!)[0];
+          const keys = bindingOf(tileCommands[i]!);
           return (
             <div
               key={item.key}

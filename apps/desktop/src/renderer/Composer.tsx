@@ -95,7 +95,7 @@ import { uploadFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { ScrollThumb } from "./ScrollThumb";
 import { dismiss, notify } from "./notifications";
-import { behaviorPrefs, newThreadPrefs } from "./prefs";
+import { behaviorPrefs, newThreadPrefs, type RepoPrefs } from "./prefs";
 import { accessLevels } from "./catalog";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { RepoIcon } from "./Sidebar";
@@ -755,6 +755,8 @@ export interface ComposerProps {
   voiceFocused?: boolean;
   /** Whether it starts a new thread, which only changes its hint. */
   newThread?: boolean;
+  /** The repository's own defaults for a new thread, over Settings > Threads'. */
+  repoDefaults?: RepoPrefs;
   /**
    * Sends the text, images, and attached threads' run ids, with the chosen run options (empty
    * without `backend`). Resolves to an error message, which puts them back and shows in a
@@ -914,6 +916,7 @@ const lineWidth = 480;
  */
 export function Composer({
   newThread,
+  repoDefaults,
   voiceFocused = true,
   onSend,
   onSendInBackground,
@@ -999,7 +1002,7 @@ export function Composer({
   const [pickedFast, setFast] = useState<boolean>();
   // A new thread's composer starts from Settings > General's defaults. An orchestrator
   // chat keeps its orchestrator's backend, so it doesn't.
-  const defaults = newThreadPrefs.use();
+  const defaults = { ...newThreadPrefs.use(), ...repoDefaults };
   const fresh = !started && !!newThread;
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
   const catalog = useCatalog(host);

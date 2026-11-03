@@ -14,7 +14,7 @@ import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
 import { models, useCatalog, type Provider } from "../models";
 import { newThreadPrefs, setNewThreadPrefs } from "../prefs";
-import { RunTargetMenu, workspaces } from "../RunTargetMenu";
+import { RunTargetMenu } from "../RunTargetMenu";
 import { Picker } from "../ui";
 import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
 
@@ -78,7 +78,6 @@ function NewThreads() {
   const context =
     prefs.context !== undefined && contexts.includes(prefs.context) ? prefs.context : contexts[0];
   const hasFast = !!model?.fast;
-  const workspace = workspaces.find((w) => w.value === prefs.workspace) ?? workspaces[0]!;
   const namers = catalog.instances.filter((i) => i.kind === "claude" || i.kind === "codex");
   const namerCatalog = {
     ...catalog,
@@ -162,21 +161,6 @@ function NewThreads() {
           label="Legacy Plan mode"
           checked={legacyPlan}
           onChange={(next) => accessPrefs.set({ legacyPlan: next })}
-        />
-      </Row>
-      <Row
-        title="Workspace"
-        description="Where a thread in a repository works. Each thread's menu can pick another."
-      >
-        <Picker
-          field
-          label="Workspace"
-          value={workspace.value}
-          onChange={(value) => setNewThreadPrefs({ workspace: value as typeof prefs.workspace })}
-          options={workspaces}
-          align="end"
-          className="w-56"
-          panelClassName="w-[24rem]"
         />
       </Row>
       <Row

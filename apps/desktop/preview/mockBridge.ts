@@ -1,6 +1,7 @@
 // A `window.parallax` for the browser preview: every ParallaxBridge member, answering plxd methods
 // from fixtures.ts held in memory. Writes that are cheap to fake change that state and emit the
 // events plxd would, so a sent message or an answered question shows up as it does in the app.
+
 import { pullRequestHandlers } from "./pullRequests";
 import {
   iconFor,
@@ -28,6 +29,7 @@ import {
   type AgentOutputItem,
   type AgentRun,
   type Capabilities,
+  type DeviceStateResult,
   type EventsEventParams,
   type ImportableSession,
   type JsonValue,
@@ -52,6 +54,26 @@ import { createFixtures, HOME, ids, PARALLAX_PATH, uploadSeeds, type RunEvent } 
 const LOCAL = "local";
 const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
 
+/** Worktree settings, as `host/settings` holds them. */
+const worktrees = { clean: true, prefix: "parallax/" };
+
+/** This Mac's simulators and emulators, as `device/state` says them. */
+const devices: DeviceStateResult = {
+  platforms: [
+    { platform: "ios", canCreate: true },
+    {
+      platform: "android",
+      unavailable: "The Android SDK isn't installed.",
+    },
+  ],
+  hub: { installed: false, installing: false },
+  devices: [
+    { id: "ios-17", platform: "ios", name: "iPhone 17 Pro", version: "iOS 26.5", booted: true },
+    { id: "ios-air", platform: "ios", name: "iPad Air", version: "iOS 26.5", booted: false },
+  ],
+  open: [],
+};
+
 /** What plxd's `capabilities_advertised` lists (daemon/src/methods/host.rs), with the same caps. */
 const capabilities: Capabilities = Object.fromEntries(
   [
@@ -60,6 +82,9 @@ const capabilities: Capabilities = Object.fromEntries(
     "agentClis",
     "agentReview",
     "agentWait",
+    "worktreeCleanup",
+    "devices",
+    "branchPrefix",
     "agents",
     "approvals",
     "autoResume",
@@ -721,8 +746,24 @@ const handlers: { [M in Method]?: Handler<M> } = {
     schedules = schedules.filter((t) => t.id !== p.id);
     return { deleted: true };
   },
+  "device/state": () => devices,
+  "device/setup": () => {
+    devices.hub = { installed: true, installing: false };
+    return {};
+  },
+  "device/boot": (p) => {
+    const device = devices.devices.find((d) => d.id === p.deviceId)!;
+    device.booted = true;
+    return { device };
+  },
+  "device/shutdown": (p) => {
+    devices.devices.find((d) => d.id === p.deviceId)!.booted = false;
+    return {};
+  },
   "host/settings/get": () => ({
     autoResume: true,
+    cleanWorktrees: worktrees.clean,
+    branchPrefix: worktrees.prefix,
     connect: !!connect.on,
     remote: lan.on,
     relay: lan.relay,
@@ -731,8 +772,12 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "host/settings/set": (p) => {
     lan.on = p.remote ?? lan.on;
     lan.relay = p.relay ?? lan.relay;
+    worktrees.clean = p.cleanWorktrees ?? worktrees.clean;
+    worktrees.prefix = p.branchPrefix ?? worktrees.prefix;
     return {
       autoResume: p.autoResume ?? true,
+      cleanWorktrees: worktrees.clean,
+      branchPrefix: worktrees.prefix,
       connect: p.connect ?? !!connect.on,
       remote: lan.on,
       relay: lan.relay,

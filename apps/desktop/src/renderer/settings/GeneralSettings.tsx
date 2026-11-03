@@ -296,40 +296,6 @@ function Behavior() {
             panelClassName="min-w-48"
           />
         </Row>
-        <Row
-          title="Open pull requests in"
-          description="Where Open on GitHub goes: your system browser, or the Browser in the side panel."
-        >
-          <Picker
-            field
-            label="Open pull requests in"
-            value={prefs.openPrsIn}
-            onChange={(v) => setBehaviorPrefs({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
-            options={[
-              { value: "external", label: "System browser" },
-              { value: "browser", label: "Side panel browser" },
-            ]}
-            className="w-48"
-            panelClassName="min-w-48"
-          />
-        </Row>
-        <Row
-          title="Click a pull request link to"
-          description={`A link to the thread's pull request. ${mac ? "⌘-click" : "Ctrl+click"} does the other.`}
-        >
-          <Picker
-            field
-            label="Click a pull request link to"
-            value={prefs.prLinkClick}
-            onChange={(v) => setBehaviorPrefs({ prLinkClick: v as BehaviorPrefs["prLinkClick"] })}
-            options={[
-              { value: "parallax", label: "Open in Parallax" },
-              { value: "github", label: "Open on GitHub" },
-            ]}
-            className="w-48"
-            panelClassName="min-w-48"
-          />
-        </Row>
       </Section>
     </>
   );

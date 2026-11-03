@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 
 import type { Host } from "../hosts";
 import { Picker } from "../ui";
@@ -7,7 +7,7 @@ import { anchorOf } from "./search";
 // What every Settings page is built from.
 
 export const settingRow =
-  "flex items-center justify-between gap-4 border-border px-4 py-3 not-last:border-b";
+  "flex min-h-14 items-center justify-between gap-6 border-border/70 px-4 py-3 not-last:border-b";
 export const quietButton =
   "rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground";
 export const primaryButton =
@@ -16,17 +16,31 @@ export const dangerButton =
   "rounded-md bg-red-600 px-2.5 py-1 text-body font-medium text-white enabled:hover:opacity-90 disabled:opacity-50";
 export const field =
   "mt-1 block w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-body placeholder:text-faint-foreground";
+/** A secondary action on a row: quiet, with a border so it reads as a button. */
+export const outlineButton =
+  "flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-body text-foreground enabled:hover:bg-hover disabled:opacity-50 [&_svg]:size-3.5";
 /** A field on a row's right, sized to sit beside its title. */
 export const rowField =
   "w-56 rounded-md border border-border bg-background px-2.5 py-1 text-body placeholder:text-faint-foreground";
 
-/** A page's title, and what the page is for under it. */
-export function PageTitle({ title, children }: { title: string; children?: ReactNode }) {
+/** A page's title, and what the page is for under it. `action` sits at the end of its line. */
+export function PageTitle({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: ReactNode;
+  children?: ReactNode;
+}) {
   return (
-    <>
-      <h1 className={`text-heading font-semibold ${children ? "mb-1.5" : "mb-6"}`}>{title}</h1>
-      {children && <p className="mb-6 text-body text-muted-foreground">{children}</p>}
-    </>
+    <header className="mb-8">
+      <div className="flex min-h-8 items-center justify-between gap-4">
+        <h1 className="text-heading font-semibold">{title}</h1>
+        {action}
+      </div>
+      {children && <p className="mt-1 max-w-2xl text-body text-muted-foreground">{children}</p>}
+    </header>
   );
 }
 
@@ -41,12 +55,12 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section aria-label={title} data-setting={anchorOf(title)} className="mb-8 scroll-mt-6">
-      <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
+    <section aria-label={title} data-setting={anchorOf(title)} className="mb-10 scroll-mt-6">
+      <div className="mb-3 flex min-h-7 items-center justify-between gap-4">
         <h2 className="text-reading font-semibold">{title}</h2>
         {action}
       </div>
-      <div className="rounded-xl border border-border bg-(--pane-card)">{children}</div>
+      <div className="rounded-xl border border-border/70 bg-(--pane-card)">{children}</div>
     </section>
   );
 }
@@ -72,12 +86,105 @@ export function Row({
       <div className="min-w-0">
         <span className="block text-body font-medium">{title}</span>
         {description && (
-          <span className="block text-meta text-muted-foreground">{description}</span>
+          <span className="mt-0.5 block text-meta text-muted-foreground">{description}</span>
         )}
       </div>
       {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
     </div>
   );
+}
+
+/**
+ * A page that fills Settings: `bar` across the top, `list` on the left, and the chosen item's
+ * `children` on the right. The list and the pane each scroll. Stacked until there's room beside it.
+ */
+export function ListPane({
+  bar,
+  list,
+  children,
+}: {
+  bar?: ReactNode;
+  list: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="@container flex h-full min-h-0 flex-col">
+      {bar && (
+        <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/70 px-5 py-2">
+          {bar}
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto @3xl:flex-row @3xl:overflow-hidden">
+        <div className="flex shrink-0 flex-col border-b border-border/70 @3xl:w-72 @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0">
+          {list}
+        </div>
+        <div className="min-w-0 flex-1 @3xl:overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** A list's heading in `ListPane`, with its `action` at the end of the line. */
+export function ListHeading({ children, action }: { children: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="flex min-h-7 items-center justify-between gap-2 px-4 pt-3 pb-1 text-meta font-medium text-faint-foreground">
+      {children}
+      {action}
+    </div>
+  );
+}
+
+/** One item of a `ListPane`'s list, as a button that chooses it. */
+export function ListItem({
+  chosen,
+  onClick,
+  id,
+  controls,
+  icon,
+  title,
+  detail,
+  off,
+}: {
+  chosen: boolean;
+  onClick: () => void;
+  id?: string;
+  /** The pane it shows, for a list whose panes stay mounted. */
+  controls?: string;
+  icon?: ReactNode;
+  title: ReactNode;
+  detail?: ReactNode;
+  off?: boolean;
+}) {
+  return (
+    <button
+      id={id}
+      type="button"
+      role="tab"
+      aria-selected={chosen}
+      aria-controls={controls}
+      tabIndex={chosen ? 0 : -1}
+      onClick={onClick}
+      className={`mx-2 flex w-[calc(100%-1rem)] items-start gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-hover aria-selected:bg-selected ${off ? "opacity-60" : ""}`}
+    >
+      {icon && <span className="mt-0.5 shrink-0 [&_svg]:size-4">{icon}</span>}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-body font-medium">{title}</span>
+        {detail && <span className="mt-0.5 block text-meta text-muted-foreground">{detail}</span>}
+      </span>
+    </button>
+  );
+}
+
+/** Up and Down move between a tablist's tabs, wrapping at the ends, and choose the one they reach. */
+export function moveTab(e: KeyboardEvent<HTMLElement>) {
+  const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+  const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+  const i = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+  if (!step || i === -1) return;
+  e.preventDefault();
+  const next = tabs[(i + step + tabs.length) % tabs.length]!;
+  next.click();
+  next.focus();
 }
 
 /** The app's switch, now in ui (0092); Settings' pages still import it from here. */

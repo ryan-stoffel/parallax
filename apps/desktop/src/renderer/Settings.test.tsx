@@ -10,6 +10,7 @@ import type {
   ProviderInstance,
   ProviderKind,
 } from "../protocol/generated/protocol";
+import { bindingOf, resetBindings, setWhen, whenOf } from "./keybindings";
 import type { SettingsSection } from "./App";
 import { Notifications } from "./notifications";
 import { Settings } from "./Settings";
@@ -220,6 +221,39 @@ test("removes a key only once it's confirmed", async () => {
   expect(rows("Anthropic API keys")).toEqual([]);
 });
 
+test("Add keybinding gives a command its keys and the When on the form, in place of its own", async () => {
+  setWhen("cycleAppearance", "!terminalFocus");
+  try {
+    await renderSettings("keybinds");
+    await click(button(document.body, "Add keybinding"));
+    await click(
+      [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+        (o) => o.textContent === "Appearance: Cycle",
+      )!,
+    );
+    const recorder = document.querySelector<HTMLElement>(
+      '[aria-label="Change the keys for the new keybinding"]',
+    )!;
+    await click(recorder);
+    await act(async () =>
+      document.querySelector('[aria-label="Press the keys for the new keybinding"]')!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "y",
+          code: "KeyY",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+        }),
+      ),
+    );
+    await click(button(document.body, "Save"));
+    expect(bindingOf("cycleAppearance")).toBe("Ctrl+Shift+KeyY");
+    expect(whenOf("cycleAppearance")).toBe("always");
+  } finally {
+    resetBindings();
+  }
+});
+
 test("Storage deletes only a host's archived threads, after asking", async () => {
   window.parallax.storage = async () => [];
   answers["thread/list"] = () => ({
@@ -342,6 +376,52 @@ describe("on a plxd with providers", () => {
     await act(async () => dialog().querySelector("form")!.requestSubmit());
     await settle();
   };
+
+  test("a signed-in provider re-authenticates in its terminal, and labels stay on it", async () => {
+    await renderSettings();
+    await click(visible('[aria-label="Re-authenticate Claude Code"]'));
+    expect(visible('[aria-label="Claude Code sign-in terminal"]')).toBeDefined();
+
+    const box = visible('[aria-label="Add a label"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, "Work");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    const row = () => document.querySelector('[role="tab"][aria-controls$="-claude-pane"]')!;
+    expect(row().textContent).toContain("Work");
+    await click(visible('[aria-label="Remove the label Work"]'));
+    expect(row().textContent).not.toContain("Work");
+  });
+
+  test("re-authenticating Cursor signs out, then waits on the new sign-in", async () => {
+    const cursor = {
+      ...listed[0]!,
+      instance: instance("cursor", "cursor", "Cursor"),
+      login: undefined,
+    };
+    listed = [cursor];
+    answers["cursor/signOut"] = () => {
+      listed = [{ ...cursor, signedIn: false }];
+      return { result: {} };
+    };
+    answers["cursor/signIn"] = () => ({ result: { url: "https://cursor.example/login" } });
+    answers["cursor/signInCancel"] = () => ({ result: {} });
+    const open = window.open;
+    window.open = vi.fn();
+    try {
+      await renderSettings();
+      await click(visible('[aria-label="Re-authenticate Cursor"]'));
+      await settle();
+      expect(calls("cursor/signOut")).toHaveLength(1);
+      expect(window.open).toHaveBeenCalledWith("https://cursor.example/login", "_blank");
+      expect(document.body.textContent).toContain("Approve the sign-in in your browser.");
+    } finally {
+      window.open = open;
+    }
+  });
 
   test("a second account of a provider is warned about, and the first isn't", async () => {
     await renderSettings();
@@ -478,8 +558,8 @@ describe("on a plxd with providers", () => {
       };
     });
 
-    // Hubs have their own section under the providers card: a row per hub, whose Manage opens
-    // its page under it.
+    // Hubs have their own entry under the provider list: a row per hub, whose Manage opens its
+    // page under it.
     const manage = () =>
       document.querySelector<HTMLElement>(
         '[aria-label="Manage Home hub"], [aria-label="Close Home hub"]',
@@ -488,6 +568,7 @@ describe("on a plxd with providers", () => {
 
     test("adds a hub to every computer with hubs at once, and shows its page", async () => {
       await renderSettings();
+      await click(tab("Hubs"));
       expect(manage()).toBeNull();
       await click(button(document.body, "Add hub"));
       expect(dialog().textContent).toContain("Theo's setup guide");
@@ -599,6 +680,7 @@ describe("on a plxd with providers", () => {
       };
       const addAccount = async (service: "Claude" | "Codex") => {
         await renderSettings();
+        await click(tab("Hubs"));
         await click(manage()!);
         await click(button(page(), "Add account"));
         expect(page().textContent).toContain("not a VPS");
@@ -706,6 +788,7 @@ describe("on a plxd with providers", () => {
           return { result: { hubs } };
         };
         await renderSettings();
+        await click(tab("Hubs"));
         await click(manage()!);
         expect(page().textContent).not.toContain("Off on the hub");
         const use = () => page().querySelector<HTMLElement>('[aria-label="Use ada@example.com"]')!;

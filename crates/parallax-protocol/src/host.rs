@@ -272,6 +272,12 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
+    /// The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
+    /// thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch
+    /// name with: letters, digits, `.`, `_`, `-`, and `/`, ending in `/` or `-`, at most 64 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_prefix: Option<String>,
     /// The new `connect`, behind the `connect` capability. Absent leaves it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -320,6 +326,11 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub clean_worktrees: Option<bool>,
+    /// What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
+    /// made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_prefix: Option<String>,
     /// Whether plxd listens for this user's other devices on its Tailscale address (decision
     /// 0056). Off by default. An older plxd, without the `connect` capability, leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]

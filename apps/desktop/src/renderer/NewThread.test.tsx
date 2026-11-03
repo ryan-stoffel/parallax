@@ -12,7 +12,8 @@ import { flushToasts } from "./undo";
 import { drafts, threadDrafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
-import { newThreadDefaults, newThreadPrefs } from "./prefs";
+import { localId } from "./hosts";
+import { newThreadDefaults, newThreadPrefs, setRepoPrefs } from "./prefs";
 import { sectionsStore } from "./Sidebar";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -495,6 +496,24 @@ describe("with plxd's run options", () => {
     });
     expect(retry).toEqual({ ...refused, runId: expect.any(String), effort: "xhigh" });
     expect(retry!["runId"]).not.toBe(refused!["runId"]);
+  });
+
+  test("New Thread starts on the repository's own defaults (Settings > Projects)", async () => {
+    answers["thread/start"] = (p) => started(p);
+    setRepoPrefs(localId, parallax.id, {
+      model: { provider: "claude", id: "claude-fable-5-1" },
+      effort: "low",
+    });
+    try {
+      await renderApp();
+      await send("Use the repository's defaults");
+    } finally {
+      setRepoPrefs(localId, parallax.id, { model: undefined, effort: undefined });
+    }
+    expect(calls("thread/start")[0]).toMatchObject({
+      model: "claude-fable-5-1",
+      effort: "low",
+    });
   });
 });
 

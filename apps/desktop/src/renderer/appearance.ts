@@ -33,8 +33,19 @@ export type Appearance = {
   wordWrap: boolean;
   /** "system" follows the OS's Reduce motion. Either way `.reduce-motion` on <html> says so. */
   motion: "system" | "reduce";
-  /** The pair that marks added and removed, done and failed. */
-  diffColors: "redGreen" | "blueOrange";
+  /**
+   * The pair that marks added and removed lines. Blue & orange also marks done and failed work, as
+   * GitHub's color-blind themes do. Custom uses `diffCustom`.
+   */
+  diffColors: "redGreen" | "blueOrange" | "tealPink" | "custom";
+  /** The colors Custom uses, any CSS color. */
+  diffCustom: { added: string; removed: string };
+  /** How strongly a changed line's background shows its color. */
+  diffIntensity: "subtle" | "standard" | "strong";
+  /** A thicker, offset outline on what has keyboard focus. */
+  focusRings: boolean;
+  /** Links stay underlined, so color isn't all that marks them. */
+  underlineLinks: boolean;
   /**
    * The window's background: opaque, clear (the desktop shows through), or blurred (macOS and
    * Windows 11 blur what shows through).
@@ -59,8 +70,19 @@ export const defaults: Appearance = {
   wordWrap: true,
   motion: "system",
   diffColors: "redGreen",
+  diffCustom: { added: "#3fb950", removed: "#f85149" },
+  diffIntensity: "standard",
+  focusRings: false,
+  underlineLinks: false,
   windowMaterial: "opaque",
   backgroundOpacity: 75,
+};
+
+/** How much of a diff color a changed line's background mixes in, by `diffIntensity`. */
+const diffTints: Record<Appearance["diffIntensity"], string> = {
+  subtle: "10%",
+  standard: "16%",
+  strong: "26%",
 };
 
 export const uiSizes = [11, 12, 13, 14, 15, 16, 17, 18, 20];
@@ -177,6 +199,9 @@ const appearance = stored("parallax.appearance", defaults, (raw, fallback) => {
 export const setAppearance = (change: Partial<Appearance>) =>
   appearance.set({ ...appearance.get(), ...change });
 
+/** The appearance now, for a key press to read. */
+export const currentAppearance = appearance.get;
+
 /** The appearance, kept current. */
 export const useAppearance = appearance.use;
 
@@ -244,6 +269,16 @@ export function applyAppearance(appearance: Appearance, onboarding = false) {
       (!onboarding && matchMedia("(prefers-reduced-motion: reduce)").matches),
   );
   root.classList.toggle("diff-blue-orange", appearance.diffColors === "blueOrange");
+  root.classList.toggle("diff-teal-pink", appearance.diffColors === "tealPink");
+  const custom = appearance.diffColors === "custom";
+  root.style.setProperty("--diff-added-custom", custom ? appearance.diffCustom.added : "initial");
+  root.style.setProperty(
+    "--diff-removed-custom",
+    custom ? appearance.diffCustom.removed : "initial",
+  );
+  root.style.setProperty("--diff-tint", diffTints[appearance.diffIntensity]);
+  root.classList.toggle("focus-strong", appearance.focusRings);
+  root.classList.toggle("underline-links", appearance.underlineLinks);
   // index.css mixes the panes' colors with transparent by --tint, over what shows through.
   const through = seesThrough(appearance.windowMaterial);
   root.classList.toggle("translucent", through);

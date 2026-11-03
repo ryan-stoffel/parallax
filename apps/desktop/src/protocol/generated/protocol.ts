@@ -8110,6 +8110,11 @@ export type HostSettings = {
 	 */
 	cleanWorktrees?: boolean,
 	/**
+	 * What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
+	 * made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
+	 */
+	branchPrefix?: string,
+	/**
 	 * Whether plxd listens for this user's other devices on its Tailscale address (decision
 	 * 0056). Off by default. An older plxd, without the `connect` capability, leaves it out.
 	 */
@@ -8159,6 +8164,12 @@ export type HostSettingsSetParams = {
 	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
 	 */
 	cleanWorktrees?: boolean,
+	/**
+	 * The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
+	 * thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch
+	 * name with: letters, digits, `.`, `_`, `-`, and `/`, ending in `/` or `-`, at most 64 bytes.
+	 */
+	branchPrefix?: string,
 	/**
 	 * The new `connect`, behind the `connect` capability. Absent leaves it.
 	 */

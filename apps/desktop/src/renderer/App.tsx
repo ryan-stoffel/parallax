@@ -95,7 +95,7 @@ import {
 import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
-import { useAppearanceEffects } from "./appearance";
+import { currentAppearance, setAppearance, uiSizes, useAppearanceEffects } from "./appearance";
 import { folderOf, runInDrawer, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
 import {
   asksOf,
@@ -167,11 +167,15 @@ export type SettingsSection =
   | "appearance"
   | "browser"
   | "keybinds"
+  | "accessibility"
   | "providers"
+  | "orchestrators"
+  | "devices"
+  | "projects"
   | "sourceControl"
+  | "worktrees"
   | "computerUse"
   | "schedules"
-  | "scripts"
   | "storage"
   | "connections"
   | "beta";
@@ -1179,7 +1183,18 @@ export function App() {
         if (dialog || settings) return;
         step(command === "back" ? -1 : 1);
       } else if (command === "settings") openSettings("general");
-      else if (command === "usage") openMainPage("usage");
+      else if (command === "settingsKeybinds") openSettings("keybinds");
+      else if (command === "settingsProviders") openSettings("providers");
+      else if (command === "settingsProjects") openSettings("projects");
+      else if (command === "cycleAppearance")
+        setTheme(theme === "system" ? "light" : theme === "light" ? "dark" : "system");
+      else if (command === "toggleWordWrap")
+        setAppearance({ wordWrap: !currentAppearance().wordWrap });
+      else if (command === "textLarger" || command === "textSmaller") {
+        const at = uiSizes.indexOf(currentAppearance().uiSize);
+        const size = uiSizes[at + (command === "textLarger" ? 1 : -1)];
+        if (size) setAppearance({ uiSize: size });
+      } else if (command === "usage") openMainPage("usage");
       else if (command === "openPr") {
         // The open thread's latest linked pull request.
         const latest = prs.urls.at(-1);
