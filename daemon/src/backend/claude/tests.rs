@@ -11,8 +11,8 @@ use tempfile::TempDir;
 
 use super::stream::{Ask, Step, Translator};
 use super::{
-    ClaudeBackend, LIVE_MODE_ARGS, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PROMPT_TOOL_ARGS,
-    WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, no_write_settings,
+    ASKING_WORKER_TOOL_LIST, ClaudeBackend, LIVE_MODE_ARGS, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST,
+    PROMPT_TOOL_ARGS, WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, no_write_settings,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{Environment, Launcher, SpawnError};
@@ -1543,8 +1543,8 @@ fn a_thread_is_full_claude_code_in_every_mode() {
             .contains(&"--restricted".into())
     );
     assert!(
-        !super::prompts(&worker),
-        "a sandboxed worker in Accept Edits never asks"
+        super::prompts(&worker),
+        "a sandboxed worker in Accept Edits asks, for its questions"
     );
 
     let loaded = init_line(r#"["Read","Bash","Skill","Task","mcp__linear__list_issues"]"#);
@@ -1697,7 +1697,7 @@ fn orchestrator(cwd: &Path) -> RunRequest {
 /// orchestrator alike, when the client answers. Without `approvals`, every mode runs as before, as
 /// do Accept Edits and Bypass Permissions, and a plain no-write run never asks.
 #[test]
-fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
+fn only_a_run_with_approvals_asks_plxd_over_stdio() {
     let cwd = Path::new("/Users/u/wt");
     let mut worker = request(cwd);
     worker.policy = ToolPolicy::WorkspaceWrite;
@@ -1708,15 +1708,15 @@ fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
         (worker, false),
         (orchestrator(cwd), false),
     ] {
-        for (permission, prompting) in [
-            (None, false),
-            (Some(AgentPermission::Edit), false),
-            (Some(AgentPermission::Bypass), false),
-            (Some(AgentPermission::Manual), true),
-            (Some(AgentPermission::Auto), true),
-            (Some(AgentPermission::Plan), true),
+        for permission in [
+            None,
+            Some(AgentPermission::Edit),
+            Some(AgentPermission::Bypass),
+            Some(AgentPermission::Manual),
+            Some(AgentPermission::Auto),
+            Some(AgentPermission::Plan),
         ] {
-            let expected = prompting && approvals;
+            let expected = approvals;
             let request = RunRequest {
                 permission,
                 approvals,
@@ -1736,8 +1736,8 @@ fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
             } else {
                 assert_eq!(prompt_tool, None, "{args:?}");
             }
-            // The prompt channel, and a plan worker's `ExitPlanMode` (PLX-243), are the only
-            // arguments `approvals` changes.
+            // The prompt channel, and a worker's `AskUserQuestion` and `ExitPlanMode` (PLX-243,
+            // PLX-1281), are the only arguments `approvals` changes.
             if !approvals {
                 let mut asking: Vec<String> = super::arguments(&RunRequest {
                     approvals: true,
@@ -1750,10 +1750,9 @@ fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
                 if let Some(at) = asking.iter().position(|arg| arg == PROMPT_TOOL_ARGS[0]) {
                     asking.drain(at..at + PROMPT_TOOL_ARGS.len());
                 }
-                if let Some(tools) = asking
-                    .iter_mut()
-                    .find(|arg| arg.as_str() == PLAN_WORKER_TOOL_LIST)
-                {
+                if let Some(tools) = asking.iter_mut().find(|arg| {
+                    [ASKING_WORKER_TOOL_LIST, PLAN_WORKER_TOOL_LIST].contains(&arg.as_str())
+                }) {
                     WORKER_TOOL_LIST.clone_into(tools);
                 }
                 assert_eq!(args, asking, "{permission:?}");
@@ -2066,12 +2065,19 @@ fn leaving_plan_mode_allows_only_modes_that_ask_as_much() {
                 "{mode}"
             );
         }
-        for extra in [
-            "AskUserQuestion",
-            "EnterPlanMode",
-            "Agent",
-            "mcp__plxd__spawn_agent",
-        ] {
+        // PLX-1281: a worker's init may list `AskUserQuestion` only when it asks plxd.
+        let questions = r#"["Bash","AskUserQuestion"]"#;
+        let mut translator = worker("default", false);
+        assert_eq!(
+            violation_kind(&translator.line(&worker_init("default", questions))),
+            None
+        );
+        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+        assert_eq!(
+            violation_kind(&translator.line(&worker_init("acceptEdits", questions))),
+            Some(FailureKind::PolicyViolation)
+        );
+        for extra in ["EnterPlanMode", "Agent", "mcp__plxd__spawn_agent"] {
             let tools = format!(r#"["Bash","ExitPlanMode","{extra}"]"#);
             let mut translator = worker("plan", true);
             assert_eq!(

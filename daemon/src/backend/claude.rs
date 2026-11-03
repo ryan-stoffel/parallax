@@ -44,12 +44,14 @@
 //!     paths, and no writes to git metadata. `failIfUnavailable` and
 //!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
 //!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
-//!     the unreadable paths are what keep secrets in. A worker in Plan that asks plxd also gets
-//!     `ExitPlanMode`, to hand its plan over ([`hands_over_plans`]).
+//!     the unreadable paths are what keep secrets in. A worker that asks plxd ([`prompts`]) also
+//!     gets `AskUserQuestion`, and in Plan `ExitPlanMode`, to hand its plan over
+//!     ([`hands_over_plans`]).
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
 //!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`]
-//!   (and `ExitPlanMode` for one that hands over plans), reports a Claude Code older than
+//!   (and `AskUserQuestion` for one that asks plxd and `ExitPlanMode` for one that hands over
+//!   plans), reports a Claude Code older than
 //!   [`WORKER_MIN_VERSION`], or reports a permission mode other than the one it asked for
 //!   ([`permission_mode`]), fails with [`FailureKind::PolicyViolation`].
 //!
@@ -141,9 +143,9 @@
 //!
 //! # Permission requests
 //!
-//! In Manual, Auto, and Plan, a worker's, a thread's, or an orchestrator's CLI, and a thread's in
-//! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool`
-//! (PLX-222, 0031), when its client answers permission requests ([`RunRequest::approvals`]).
+//! A worker's, a thread's, or an orchestrator's CLI gets [`PROMPT_TOOL_ARGS`], in every mode, as
+//! the Agent SDK passes them for its `canUseTool` (PLX-222, 0031, PLX-1281), when its client
+//! answers permission requests ([`RunRequest::approvals`]).
 //! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
 //! on stdout and waits. The sidecar passes it on, the driver reports it as
 //! [`Event::ApprovalRequested`], and the answer that [`Run::answer`](super::Run::answer) gives goes
@@ -284,7 +286,8 @@ pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"]
 /// The built-in tools a worker gets (0013): the file tools, `Bash`, which Claude Code's sandbox
 /// confines, the web tools (Ryan, #137), and the todo tools. No subagents, skills, or MCP tools.
 /// `EndConversation` may appear in `system/init` as well, as for a no-write run. A worker that
-/// [`hands_over_plans`] gets `ExitPlanMode` too ([`PLAN_WORKER_TOOL_LIST`]).
+/// asks plxd ([`prompts`]) gets `AskUserQuestion` too ([`ASKING_WORKER_TOOL_LIST`]), and one that
+/// [`hands_over_plans`] gets `ExitPlanMode` as well ([`PLAN_WORKER_TOOL_LIST`]).
 ///
 /// The todo tools are `TodoWrite` and the four task tools that replace it in Claude Code 2.1.283,
 /// which offers one set or the other, never both: the task tools unless `CLAUDE_CODE_ENABLE_TASKS`
@@ -327,9 +330,14 @@ pub const TODO_TOOLS: &[&str] = &[
 pub const WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
      TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate";
 
-/// [`WORKER_TOOL_LIST`] and `ExitPlanMode`, for a worker that [`hands_over_plans`] (PLX-243).
+/// [`WORKER_TOOL_LIST`] and `AskUserQuestion`, for a worker that asks plxd ([`prompts`], PLX-1281).
+pub const ASKING_WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,\
+     WebSearch,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate,AskUserQuestion";
+
+/// [`ASKING_WORKER_TOOL_LIST`] and `ExitPlanMode`, for a worker that [`hands_over_plans`]
+/// (PLX-243).
 pub const PLAN_WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,\
-     WebSearch,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate,ExitPlanMode";
+     WebSearch,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate,AskUserQuestion,ExitPlanMode";
 
 /// The names for this Mac that no worker command or `WebFetch` may reach, even with network
 /// access: this Mac's own services wait on #168. The sandbox's proxy canonicalizes other
@@ -361,6 +369,9 @@ pub const LIVE_MODE_ARGS: &[&str] = &["--allow-dangerously-skip-permissions"];
 /// The tool whose approval takes Claude Code out of plan mode.
 const EXIT_PLAN_MODE: &str = "ExitPlanMode";
 
+/// The tool that asks the user a question and gives the model the answer (0031).
+const ASK_USER_QUESTION: &str = "AskUserQuestion";
+
 /// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013), in every mode but
 /// [`AgentPermission::Bypass`]. [`arguments`] adds the run's `--permission-mode`
 /// ([`permission_mode`]), [`worker_settings`], and `--add-dir` folders after them.
@@ -368,6 +379,15 @@ pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     "--restricted",
     "--tools",
     WORKER_TOOL_LIST,
+    "--strict-mcp-config",
+];
+
+/// [`WORKSPACE_WRITE_ARGS`] with [`ASKING_WORKER_TOOL_LIST`] as `--tools`, for a worker that asks
+/// plxd ([`prompts`]). Nothing else differs.
+pub const ASKING_WORKSPACE_WRITE_ARGS: &[&str] = &[
+    "--restricted",
+    "--tools",
+    ASKING_WORKER_TOOL_LIST,
     "--strict-mcp-config",
 ];
 
@@ -816,6 +836,7 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite if unsandboxed => &[],
         ToolPolicy::WorkspaceWrite if hands_over_plans(request) => PLAN_WORKSPACE_WRITE_ARGS,
+        ToolPolicy::WorkspaceWrite if prompts(request) => ASKING_WORKSPACE_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
@@ -1008,25 +1029,18 @@ pub fn full_thread(request: &RunRequest) -> bool {
 }
 
 /// Whether `request`'s CLI asks plxd before a tool call that would prompt (PLX-222, 0031): a
-/// worker or an orchestrator in Manual, Auto, or Plan, and a thread in every mode, whose client
-/// answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands without
-/// asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034), and its mode can
-/// change while it runs ([`LIVE_MODE_ARGS`]), so in Bypass Permissions it keeps the channel for a
-/// later mode that asks. A sandboxed worker's Accept Edits calls don't prompt, and a worker in
-/// Bypass Permissions asks about nothing. A plain no-write run denies
-/// anything not allowed (`dontAsk`), and a run without `approvals` denies what would prompt, as
-/// headless Claude Code does.
+/// worker, a thread, or an orchestrator whose client answers ([`RunRequest::approvals`]), in every
+/// mode, since headless Claude Code offers `AskUserQuestion` only to a run that asks a host, and
+/// only the user can answer it (PLX-1281). In Accept Edits, a thread's Bash calls prompt, as in a
+/// terminal (0034), and a sandboxed worker's only touch what Claude Code protects. In Bypass
+/// Permissions, only questions ask, and a thread keeps the channel for a later mode
+/// ([`LIVE_MODE_ARGS`]). A plain no-write run denies anything not allowed (`dontAsk`), and a run
+/// without `approvals` denies what would prompt, as headless Claude Code does.
 #[must_use]
 pub fn prompts(request: &RunRequest) -> bool {
     let plain_no_write =
         request.policy == ToolPolicy::NoWrite && request.orchestrator_tools.is_none();
-    request.approvals
-        && !plain_no_write
-        && (full_thread(request)
-            || matches!(
-                request.permission,
-                Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
-            ))
+    request.approvals && !plain_no_write
 }
 
 /// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], PLX-243):
@@ -1036,8 +1050,7 @@ pub fn prompts(request: &RunRequest) -> bool {
 /// (0031). The tool runs nothing and writes nothing in the worktree. Allowing it only moves the
 /// CLI to `default` (Manual), a mode a worker can start in, under the same `--restricted`,
 /// `--tools`, and `--settings`, which no mode change drops. After it, the `system/init` check
-/// accepts only `default` and `acceptEdits` besides `plan`. Every other worker keeps
-/// [`WORKSPACE_WRITE_ARGS`].
+/// accepts only `default` and `acceptEdits` besides `plan`.
 #[must_use]
 pub fn hands_over_plans(request: &RunRequest) -> bool {
     request.policy == ToolPolicy::WorkspaceWrite

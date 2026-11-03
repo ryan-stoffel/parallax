@@ -10,8 +10,8 @@ use jiff::Timestamp;
 use serde_json::{Map, Value};
 
 use super::{
-    BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, EXIT_PLAN_MODE, NO_WRITE_TOOLS,
-    WORKER_MIN_VERSION, WORKER_TOOLS,
+    ASK_USER_QUESTION, BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, EXIT_PLAN_MODE,
+    NO_WRITE_TOOLS, WORKER_MIN_VERSION, WORKER_TOOLS,
 };
 use crate::backend::event::{
     ApprovalRequest, BackgroundKind, BackgroundTask, Event, Failure, FailureKind, LimitStatus,
@@ -682,9 +682,12 @@ impl Translator {
     }
 
     /// Whether `system/init` may list `tool` whatever the run's policy allows: `EndConversation`,
-    /// which `--tools` leaves in place, and `ExitPlanMode` when a worker's `--tools` named it.
+    /// which `--tools` leaves in place, and `AskUserQuestion` and `ExitPlanMode` when a worker's
+    /// `--tools` named them.
     fn also_allowed(&self, tool: &str) -> bool {
-        tool == END_CONVERSATION || (self.plan_exit && tool == EXIT_PLAN_MODE)
+        tool == END_CONVERSATION
+            || (self.prompts && tool == ASK_USER_QUESTION)
+            || (self.plan_exit && tool == EXIT_PLAN_MODE)
     }
 
     fn assistant(&mut self, message: &Map<String, Value>) -> Vec<Step> {

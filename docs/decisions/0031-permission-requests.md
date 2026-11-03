@@ -1,6 +1,6 @@
 # 0031: Claude Code's permission requests reach the app over stdio
 
-- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md); superseded in part by [0059](0059-orchestration-rewrite.md) (requests are runtime requests, and only a Project child's keep the 30-minute deny) and [0061](0061-claude-agent-sdk.md) (Claude's requests come through the Agent SDK's `canUseTool`); since PLX-726 no request has a timeout
+- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md); superseded in part by [0059](0059-orchestration-rewrite.md) (requests are runtime requests, and only a Project child's keep the 30-minute deny) and [0061](0061-claude-agent-sdk.md) (Claude's requests come through the Agent SDK's `canUseTool`); since PLX-726 no request has a timeout; since PLX-1281 a run with `approvals` uses the channel in every mode, and a sandboxed worker on it gets `AskUserQuestion`
 - Date: 2026-10-01
 - Issue: PLX-222; PLX-243 for a worker's `ExitPlanMode`
 
@@ -27,7 +27,7 @@ A run uses the channel only when the client that started it asks for it with `ap
 
 ### The channel: stdio
 
-A worker, a normal thread, or a coordinator in Manual, Auto, or Plan, started with `approvals`, starts with `--permission-prompt-tool stdio` right after its `--permission-mode`. Accept Edits and Bypass Permissions don't, and neither does a plain no-write run (`dontAsk`), so their CLIs run exactly as before.
+A worker, a normal thread, or a coordinator started with `approvals` starts with `--permission-prompt-tool stdio` right after its `--permission-mode`, in every mode, since headless Claude Code offers `AskUserQuestion` only to a run that asks a host (PLX-1281). A sandboxed worker in Accept Edits then asks only about a write Claude Code protects, which it would otherwise deny, and in Bypass Permissions only questions ask. A plain no-write run (`dontAsk`) doesn't get the flag, and neither does a run without `approvals`, so their CLIs run exactly as before.
 
 Why stdio rather than an MCP tool:
 
@@ -106,7 +106,7 @@ What plxd answers, as the SDK does:
 
 ### Plan mode and `ExitPlanMode`
 
-Without a prompt host, headless Claude Code doesn't offer `ExitPlanMode` at all, even when `--tools` names it. With one, a coordinator in Plan gets it, since it has no `--tools` list. A worker or a normal thread in Plan with `approvals` gets it too (PLX-243): its `--tools` is 0013's list with `ExitPlanMode` added, and only then may its `system/init` list the tool. A worker in any other mode, or in Plan without `approvals`, keeps 0013's list and check exactly.
+Without a prompt host, headless Claude Code doesn't offer `ExitPlanMode` at all, even when `--tools` names it. With one, a coordinator in Plan gets it, since it has no `--tools` list. A worker or a normal thread in Plan with `approvals` gets it too (PLX-243): its `--tools` is 0013's list with `AskUserQuestion` and `ExitPlanMode` added, and only then may its `system/init` list the tool. A worker without `approvals` keeps 0013's list and check exactly.
 
 The plan arrives as an `interactive` request. Claude Code 2.1.283 tells the model to write the plan to Claude Code's plan file, `plans/<name>.md` in its configuration folder, and to call `ExitPlanMode` without it. The CLI then fills the request's input with the file's text as `plan` and its path as `planFilePath`. The tool's schema still accepts a `plan`, though. With no plan file, the request carries the model's own `plan`, as in the real-CLI test below, and with neither, the request holds no plan at all. So a client must handle an `input` without `plan`. Allowing it is "approve the plan": Claude Code leaves plan mode for the mode it was in before, `default` (Manual) when it started in plan mode, and asks through the same channel from then on. A later turn of that CLI process reports `default` in its `system/init`, so once an `ExitPlanMode` is allowed, plxd accepts `default` there besides the requested mode, and `acceptEdits` should a newer CLI pick it. Any other mode, or none, still fails the run. A denial with a message is "keep planning": the model gets the message as the tool's result, and the CLI stays in plan mode. The run's stored permission stays `plan`, so a resumed CLI starts planning again.
 
@@ -122,7 +122,12 @@ The tool stays listed after the plan is approved, and a later call answers "You 
 
 ### Questions (PLX-245)
 
-`AskUserQuestion` arrives as an ordinary request, in every mode, Bypass included, since only the user can answer it. The answer is an allow whose edited `input` is the request's own with `answers` added, each by its question's text and several joined with commas, as the Agent SDK does it. The model reads them as the tool's result. Skipping is a denial with a message that says so. A sandboxed worker's `--tools` still leaves the tool out, so only threads and orchestrators ask.
+`AskUserQuestion` arrives as an ordinary request, in every mode, Bypass included, since only the user can answer it. The answer is an allow whose edited `input` is the request's own with `answers` added, each by its question's text and several joined with commas, as the Agent SDK does it. The model reads them as the tool's result. Skipping is a denial with a message that says so.
+
+A sandboxed worker with `approvals` asks the user too (PLX-1281), rather than going through a coordinator. It may have no coordinator, and an orchestrator's children, which do, are threads with `ask` as well (0043). Its `--tools` is 0013's list with the tool added, and only then may its `system/init` list it. A worker without `approvals` has nobody to answer, and keeps 0013's list and check. The sandbox holds, for these reasons:
+
+- The tool runs nothing and writes nothing in the worktree. It only hands the question to plxd and the answer to the model.
+- The question is text the worktree's contents may have shaped, so the app renders it only as text, and answering it only sends words to the model, as a user's message does.
 
 `agent/approve` also takes optional `answers`, one line per question, which `approvalResolved` logs so the transcript keeps what was answered. They are for reading only, and the client leaves out what must not be logged, such as a secret. An older plxd ignores the field (0007), and its transcript shows only that the question was answered.
 
