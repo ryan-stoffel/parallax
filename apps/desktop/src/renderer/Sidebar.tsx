@@ -1984,7 +1984,8 @@ export function ThreadList({
         quiet
         items={workingTops}
         row={(item) => rowOf(item)}
-        open={sections.working}
+        // A search shows what it finds here, as it does in a folded group.
+        open={sections.working || words.length > 0}
         onOpenChange={(o) => toggleSection("working", o)}
       />
       <Drawer
