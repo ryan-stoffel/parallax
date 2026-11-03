@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { PrMergeMethod, PrStatusResult, PullRequest } from "../../protocol/generated/protocol";
 import { icons } from "../icons";
 import { animate, duration, easing } from "../motion";
-import { Button, IconButton, Menu, MenuOption, separator, Spinner } from "../ui";
+import { Button, Menu, MenuOption, separator, Spinner } from "../ui";
 import { CheckGroup, Reveal, type CheckActions } from "./CheckGroup";
 import {
   commitPreview,
@@ -227,17 +227,6 @@ export function MergeBox({
               </ul>
             )}
           </div>
-          {pr.state === "merged" && actions && !branchDeleted && (
-            <IconButton
-              size="sm"
-              label="Delete branch"
-              disabled={busy}
-              className="-mt-0.5 -mr-[5px]"
-              onClick={() => void removeBranch()}
-            >
-              <icons.delete aria-hidden />
-            </IconButton>
-          )}
         </div>
       )}
       <div className="flex flex-col gap-2.5 px-3.5 pt-3 pb-3.5">
@@ -307,6 +296,12 @@ export function MergeBox({
             </Button>
           )}
         </div>
+        {pr.state === "merged" && actions && !branchDeleted && (
+          <Button variant="outline" disabled={busy} onClick={() => void removeBranch()}>
+            <icons.delete aria-hidden />
+            Delete branch
+          </Button>
+        )}
         {open && !pr.autoMerge && !gate.canMerge && gate.canAutoMerge && (
           <Button variant="outline" disabled={busy} onClick={() => onAct("autoMerge", extra())}>
             Merge when ready
