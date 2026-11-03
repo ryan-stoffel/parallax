@@ -2,7 +2,7 @@
 // file into what plxd takes, and fetched back for the transcript. Also an orchestrator's or repo's
 // icon image (PLX-341, decision 0038).
 import type { ConnectionState } from "../preload/bridge";
-import type { ImageMediaType, PromptImage } from "../protocol/generated/protocol";
+import type { ImageMediaType, PromptImage, RepoLogo } from "../protocol/generated/protocol";
 
 /** The `promptImages` capability's caps: how many images a message takes, and how long each image's base64 and all of theirs together may be. */
 export interface ImageCaps {
@@ -123,6 +123,47 @@ export async function readIcon(file: Blob, maxBytes: number): Promise<PromptImag
     return "That image couldn't be read.";
   } finally {
     bitmap?.close();
+  }
+}
+
+/**
+ * Where an image goes on an icon's square of `edge`, whole and centered, or undefined for one over
+ * twice as wide as tall or tall as wide, such as a wordmark, which would be unreadable as an icon.
+ * An SVG with no size of its own reports 0, and fills the square.
+ */
+export function logoPlacement(width: number, height: number, edge: number) {
+  if (!width || !height) return { x: 0, y: 0, width: edge, height: edge };
+  if (Math.max(width, height) > 2 * Math.min(width, height)) return undefined;
+  const scale = edge / Math.max(width, height);
+  const [w, h] = [width * scale, height * scale];
+  return { x: (edge - w) / 2, y: (edge - h) / 2, width: w, height: h };
+}
+
+/**
+ * A repository's own logo (`repo/logo`, PLX-1272) as an icon image: redrawn whole as a 128 px WebP,
+ * since an upload's center crop would cut a logo. An `<img>` decodes it, because
+ * `createImageBitmap` can't read an SVG, and it runs no script and loads nothing in one. Undefined
+ * when it can't be read, is shaped like a wordmark, or is over `maxBytes`.
+ */
+export async function readRepoLogo(
+  logo: RepoLogo,
+  maxBytes: number,
+): Promise<PromptImage | undefined> {
+  try {
+    const decoded = new Image();
+    decoded.src = `data:${logo.mediaType};base64,${logo.data}`;
+    await decoded.decode();
+    const place = logoPlacement(decoded.naturalWidth, decoded.naturalHeight, iconEdge);
+    if (!place) return undefined;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = iconEdge;
+    const context = canvas.getContext("2d")!;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(decoded, place.x, place.y, place.width, place.height);
+    const image = fromDataUrl(canvas.toDataURL("image/webp", 0.9));
+    return image.data.length <= maxBytes ? image : undefined;
+  } catch {
+    return undefined;
   }
 }
 

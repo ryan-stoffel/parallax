@@ -55,6 +55,7 @@ import { useOnboarding } from "./firstRun";
 import { localId, useHosts } from "./hosts";
 import { useProviderLink } from "./linkedProviders";
 import { iconImageBytes } from "./images";
+import { useRepoLogos } from "./repoLogos";
 import { ThreadDetails, ThreadDetailsButton, useThreadDetails } from "./ThreadDetails";
 import { AgentsPanel, useOrchestratorAgents } from "./OrchestratorAgents";
 import { useOrchestratorContext } from "./ContextPanel";
@@ -398,6 +399,7 @@ export function App() {
   }, [views]);
   // Each repository's icon by name, for its copies on other computers that have none.
   const repoIcons = useMemo(() => sharedRepoIcons(hosts, views), [hosts, views]);
+  useRepoLogos(hosts, views, repoIcons);
   // Every thread and orchestrator the open host has listed, so a selection is dropped only once
   // what it opened leaves the list: a just-started one reaches the list a render after it opens.
   const known = useRef(new Set<string>());

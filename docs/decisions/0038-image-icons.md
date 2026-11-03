@@ -18,6 +18,8 @@ Ryan wants to upload an image as a Project's icon and as a repo's icon, the init
 - **Store.** Migration 22 adds nullable `icon_image_type` and `icon_image_data` to `projects` and `repos`. A NULL type means no image, so existing icons keep their glyph. The image is part of a project's `project/create` idempotency check like the rest of the icon.
 - **Capability.** plxd advertises `iconImages { maxBytes: 65536 }` in `initialize`, since an older plxd would silently drop `image` (0007). The app sends no image to a host without it.
 
+Amended 2026-11-03 (PLX-1272): a repo with no icon, its own or a namesake's, takes the repository's own favicon or logo. `repo/logo`, behind the `repoLogo` capability, finds the file by name and folder among those git doesn't ignore and answers with its bytes, and the app redraws it whole as the same 128 px WebP and stores it with `repo/update`. So it is an ordinary icon: a user's pick replaces it, and the app never replaces an icon that's set, even when the repository's logo later changes.
+
 ## Consequences
 
 - Lists and `*.updated` events stay self-contained: a client draws an image icon with no extra request.

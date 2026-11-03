@@ -139,6 +139,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("repoRefs".to_owned(), serde_json::Map::new()),
             ("repoGitStatus".to_owned(), serde_json::Map::new()),
             ("repoGrep".to_owned(), serde_json::Map::new()),
+            ("repoLogo".to_owned(), serde_json::Map::new()),
             ("runOptions".to_owned(), serde_json::Map::new()),
             ("schedules".to_owned(), serde_json::Map::new()),
             ("secrets".to_owned(), serde_json::Map::new()),

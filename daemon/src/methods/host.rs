@@ -185,6 +185,7 @@ pub(crate) fn initialize(
 /// menus.
 /// `githubStatus` (PLX-336): `github/status`.
 /// `repoGrep` (PLX-993): `repo/grep`, for the command menu's Search project contents.
+/// `repoLogo` (PLX-1272): `repo/logo`, for a repo's icon when it has none.
 /// `threadContext` (PLX-372, 0047): `thread/search`, and `agent/start`, `thread/start`, and
 /// `agent/send` take `threads`, which an older plxd would silently drop, and `turnStarted` lists
 /// them. Its options are the caps: `maxThreads` per message, and `maxSummaryBytes` of each
@@ -402,6 +403,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "repoClone",
     "repoGitStatus",
     "repoGrep",
+    "repoLogo",
     "repoRefs",
     "runOptions",
     "schedules",
