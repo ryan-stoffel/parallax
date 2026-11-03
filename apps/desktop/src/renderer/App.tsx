@@ -1564,10 +1564,17 @@ export function App() {
                     openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
                   }}
                   onCompose={(e, text, send) => {
-                    setMainPage(undefined);
-                    openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
-                    // The chat is under an expanded panel.
-                    setPanelExpanded(false);
+                    // Its chat mounts first, since StrictMode's extra mount would repeat a compose
+                    // it mounts with.
+                    flushSync(() => {
+                      setMainPage(undefined);
+                      openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
+                    });
+                    // The chat is under its thread's expanded panel.
+                    setExpandedPanels((panels) => ({
+                      ...panels,
+                      [JSON.stringify([e.hostId, "thread", e.runId])]: false,
+                    }));
                     setCompose({ text, send });
                   }}
                   onSetUpGithub={(e) => openSettings("sourceControl", e.hostId)}
