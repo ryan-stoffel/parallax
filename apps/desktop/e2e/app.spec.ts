@@ -118,23 +118,37 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
 });
 
-test("the Usage page keeps the thread's panels shut, and the thread gets them back (PLX-1242)", async () => {
+test("the Usage, Pull requests, and Projects pages keep the thread's panels shut, and the thread gets them back (PLX-1242, PLX-1271)", async () => {
   const sidePanel = page.locator("#side-panel");
   await page.getByRole("button", { name: "Show side panel" }).click();
   await expect(sidePanel).toBeVisible();
 
-  await page.getByRole("button", { name: "Profile", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Usage", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible();
-  await expect(sidePanel).toBeHidden();
-  // The side panel, browser, and terminal shortcuts do nothing here.
-  for (const keys of ["ControlOrMeta+Alt+KeyB", "ControlOrMeta+Shift+KeyB", "ControlOrMeta+KeyJ"])
-    await page.keyboard.press(keys);
-  await expect(sidePanel).toBeHidden();
-  await expect(page.locator("#terminal-drawer")).toBeHidden();
+  const fromProfile = (name: string) => async () => {
+    await page.getByRole("button", { name: "Profile", exact: true }).click();
+    await page.getByRole("menuitem", { name, exact: true }).click();
+  };
+  const pages = [
+    { heading: "Usage", open: fromProfile("Usage") },
+    { heading: "Pull requests", open: fromProfile("Pull requests") },
+    {
+      heading: "Projects",
+      open: () => page.locator("#sidebar").getByRole("button", { name: "Projects" }).click(),
+    },
+  ];
+  for (const { heading, open } of pages) {
+    await open();
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toBeHidden();
+    await expect(sidePanel).toBeHidden();
+    // The side panel, browser, and terminal shortcuts do nothing here.
+    for (const keys of ["ControlOrMeta+Alt+KeyB", "ControlOrMeta+Shift+KeyB", "ControlOrMeta+KeyJ"])
+      await page.keyboard.press(keys);
+    await expect(sidePanel).toBeHidden();
+    await expect(page.locator("#terminal-drawer")).toBeHidden();
 
-  await openThread(page, /Tidy up the README/);
-  await expect(sidePanel).toBeVisible();
+    await openThread(page, /Tidy up the README/);
+    await expect(sidePanel).toBeVisible();
+  }
   await page.keyboard.press("ControlOrMeta+Alt+KeyB");
   await expect(sidePanel).toBeHidden();
 });

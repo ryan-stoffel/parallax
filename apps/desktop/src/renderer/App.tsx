@@ -222,9 +222,9 @@ export function App() {
   // The page shown in place of the chat, if any: Projects, Pull requests, or Usage. Opening a
   // thread closes it.
   const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "usage">();
-  // Usage takes the whole workspace: the thread's side panel, browser, and terminal drawer stay
-  // shut on it, and come back as they were with the thread (PLX-1242).
-  const panelsAllowed = mainPage !== "usage";
+  // A page takes the whole workspace: the thread's side panel, browser, and terminal drawer stay
+  // shut on it, and come back as they were with the thread (PLX-1242, PLX-1271).
+  const panelsAllowed = !mainPage;
   // The sidebar's orchestrator menus, which the orchestrators page's cards open (0090).
   const orchestratorMenu = useRef<ProjectMenuHandle>(null);
   const newChatOrchestrator = useRef<HTMLDialogElement>(null);
@@ -1433,8 +1433,8 @@ export function App() {
         // A document or media file opens as presented files do; any other, such as code, in the
         // Files view, which shows text.
         onOpenFile={(runId, path) => {
-          // It opens in the side panel, which Usage doesn't have.
-          if (mainPage === "usage") setMainPage(undefined);
+          // It opens in the side panel, which a page doesn't have.
+          setMainPage(undefined);
           const name = path.slice(path.lastIndexOf("/") + 1);
           const kind = kindOf(name);
           if (kind !== "file") return openDoc({ runId, path, name, kind });
@@ -1555,10 +1555,8 @@ export function App() {
               </>
             ) : mainPage === "pullRequests" ? (
               <>
-                <TopBar className={topBarInset}>
-                  {showSidebar}
-                  <Breadcrumb items={[{ label: "Pull Requests" }]} />
-                </TopBar>
+                {/* The page's own heading names it, so the bar doesn't. */}
+                <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <PullRequestsPage
                   entries={prEntries}
                   onOpenThread={(e) => {

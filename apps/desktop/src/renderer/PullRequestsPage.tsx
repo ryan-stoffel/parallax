@@ -12,7 +12,15 @@ import {
   type PrEntry,
   type PrSort,
 } from "./pullRequestSearch";
-import { EmptyState, menuItem, menuPanel, moveFocus } from "./ui";
+import {
+  buttonClass,
+  EmptyState,
+  IconButton,
+  menuItem,
+  menuPanel,
+  moveFocus,
+  searchField,
+} from "./ui";
 
 const sorts: { id: PrSort; label: string }[] = [
   { id: "updated", label: "Recently updated" },
@@ -24,15 +32,12 @@ const sorts: { id: PrSort; label: string }[] = [
 
 const key = (e: PrEntry) => `${e.hostId} ${e.url}`;
 
-/** A page's tool: Sort, Filters, Refresh, and the Projects page's New orchestrator or Project and Sort. */
-export const toolButton =
-  "flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground aria-expanded:text-foreground [&_svg]:size-4";
-
 /**
  * The Pull requests page, in place of the main pane: every pull request linked to a thread, on any
- * host, one row each, read with `pr/view` when the page opens and again with Refresh. A search box
- * over them (see `matches`), Sort, and Filters narrow the list. Each is a PrRow with its thread's
- * title: it opens its thread, and its arrow, on hover, opens GitHub.
+ * host, one row each, read with `pr/view` when the page opens and again with Refresh. The header
+ * stays put above the scrolling rows, with how many show, a search box over them (see `matches`),
+ * Sort, and Filters. Each is a PrRow with its thread's title: it opens its thread, and its arrow, on
+ * hover, opens GitHub.
  */
 export function PullRequestsPage({
   entries,
@@ -87,53 +92,61 @@ export function PullRequestsPage({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mx-auto flex w-full max-w-3xl items-center gap-2 px-6 pt-4">
-        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-surface px-3 focus-within:outline-2 focus-within:outline-ring">
-          <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-          <input
-            type="search"
-            aria-label="Search pull requests"
-            placeholder="Search pull requests, or label:bug"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
-          />
-        </label>
-        <Menu
-          label="Sort"
-          icon={<ArrowDownUp aria-hidden />}
-          items={sorts.map((s) => ({
-            id: s.id,
-            label: s.label,
-            checked: sort === s.id,
-            onPick: () => setSort(s.id),
-          }))}
-          closeOnPick
-        />
-        <Menu
-          label={chosen.size ? `Filters (${chosen.size})` : "Filters"}
-          icon={<ListFilter aria-hidden />}
-          items={facets.map((f) => ({
-            id: f.id,
-            group: f.group,
-            label: f.label,
-            checked: chosen.has(f.id),
-            onPick: () => toggle(f.id),
-          }))}
-        />
-        <button
-          type="button"
-          aria-label="Refresh"
-          title="Refresh"
-          disabled={loading}
-          onClick={() => void load(entries)}
-          className={`${toolButton} w-9 justify-center px-0 disabled:opacity-60`}
-        >
-          <icons.refresh aria-hidden className={loading ? "animate-spin" : ""} />
-        </button>
-      </div>
+    <>
+      <header className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-2 px-8 pt-6 pb-4">
+        <h1 className="text-heading font-semibold">Pull requests</h1>
+        {entries.length > 0 && (
+          <>
+            <span className="text-body text-faint-foreground tabular-nums">
+              {rows.length === entries.length
+                ? entries.length
+                : `${rows.length} of ${entries.length}`}
+            </span>
+            <label className={`ml-auto w-72 ${searchField}`}>
+              <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+              <input
+                type="search"
+                aria-label="Search pull requests"
+                placeholder="Search pull requests, or label:bug"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+                className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
+              />
+            </label>
+            <Menu
+              label="Sort"
+              icon={<ArrowDownUp aria-hidden />}
+              items={sorts.map((s) => ({
+                id: s.id,
+                label: s.label,
+                checked: sort === s.id,
+                onPick: () => setSort(s.id),
+              }))}
+              closeOnPick
+            />
+            <Menu
+              label={chosen.size ? `Filters (${chosen.size})` : "Filters"}
+              icon={<ListFilter aria-hidden />}
+              items={facets.map((f) => ({
+                id: f.id,
+                group: f.group,
+                label: f.label,
+                checked: chosen.has(f.id),
+                onPick: () => toggle(f.id),
+              }))}
+            />
+            <IconButton
+              label="Refresh"
+              aria-busy={loading}
+              disabled={loading}
+              onClick={() => void load(entries)}
+            >
+              <icons.refresh aria-hidden className={loading ? "motion-safe:animate-spin" : ""} />
+            </IconButton>
+          </>
+        )}
+      </header>
       {entries.length === 0 ? (
         <EmptyState
           icon={<icons.pullRequest aria-hidden />}
@@ -149,42 +162,36 @@ export function PullRequestsPage({
           className="flex-1 justify-center"
         />
       ) : (
-        <ul
-          aria-label="Pull requests"
-          className="mx-auto mt-3 w-full max-w-3xl min-h-0 flex-1 overflow-y-auto px-4 pb-4"
-        >
-          {rows.map(({ entry, read: r }) => (
-            <li key={key(entry)}>
-              <PrRow
-                url={entry.url}
-                pr={r?.pr}
-                error={r?.error}
-                context={entry.threadTitle}
-                labels
-                onOpen={() => onOpenThread(entry)}
-                action={
-                  <a
-                    href={entry.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label={`Open #${numberOf(entry.url)} on GitHub`}
-                    title="Open on GitHub"
-                    className="absolute top-2 right-2 grid size-6 place-items-center rounded-md text-faint-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-selected hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5"
-                  >
-                    <icons.external aria-hidden />
-                  </a>
-                }
-              />
-            </li>
-          ))}
-        </ul>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ul aria-label="Pull requests" className="mx-auto max-w-5xl px-6 pb-16">
+            {rows.map(({ entry, read: r }) => (
+              <li key={key(entry)}>
+                <PrRow
+                  url={entry.url}
+                  pr={r?.pr}
+                  error={r?.error}
+                  context={entry.threadTitle}
+                  labels
+                  onOpen={() => onOpenThread(entry)}
+                  action={
+                    <a
+                      href={entry.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`Open #${numberOf(entry.url)} on GitHub`}
+                      title="Open on GitHub"
+                      className="absolute top-2 right-2 grid size-6 place-items-center rounded-md text-faint-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-selected hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5"
+                    >
+                      <icons.external aria-hidden />
+                    </a>
+                  }
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
-      <p className="border-t border-border px-4 py-2 text-center text-body text-faint-foreground">
-        {rows.length === entries.length
-          ? `${entries.length} linked`
-          : `${rows.length} of ${entries.length} linked`}
-      </p>
-    </div>
+    </>
   );
 }
 
@@ -204,7 +211,7 @@ function Menu({
   const menu = useRef<HTMLDivElement>(null);
   return (
     <>
-      <button type="button" popoverTarget={id} className={toolButton}>
+      <button type="button" popoverTarget={id} className={buttonClass("outline")}>
         {icon}
         {label}
       </button>
