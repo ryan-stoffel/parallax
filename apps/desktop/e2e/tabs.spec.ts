@@ -63,8 +63,9 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await expect(strips.nth(1).getByRole("tab")).toHaveText(["Second"]);
 
   // Dragged to the other pane's tabs, it joins them, and the pane it left closes.
-  const target = (await strips.nth(1).boundingBox())!;
-  await drag(tabs.nth(0), target.x + target.width - 2, target.y + target.height / 2);
+  // Over its plus, which is past its tabs however little room they have.
+  const target = (await page.getByRole("button", { name: "New tab" }).nth(1).boundingBox())!;
+  await drag(tabs.nth(0), target.x + target.width / 2, target.y + target.height / 2);
   await expect(panes).toHaveCount(0);
   await expect(strips).toHaveCount(1);
   await expect(tabs).toHaveText(["Second", "First"]);
