@@ -519,14 +519,16 @@ async function copyProject(view: ThreadsView, source: Repo): Promise<Repo | stri
 const copying = new Map<string, Promise<Repo | string>>();
 
 /**
- * `source`'s namesake on `view`'s computer, made if missing. A copy under way comes first: its entry
- * is listed before its instructions are set, and it goes again if they fail.
+ * `source`, or its namesake, on `view`'s computer, made if missing. A copy under way comes first: its
+ * entry is listed before its instructions are set, and it goes again if they fail.
  */
 function namesakeOf(view: ThreadsView, source: Repo): Promise<Repo | string> {
   const key = `${view.hostId}/${source.name}`;
   const under = copying.get(key);
   if (under) return under;
-  const found = view.state.repos.find((r) => r.project && r.name === source.name);
+  const { repos } = view.state;
+  const found =
+    repos.find((r) => r.id === source.id) ?? repos.find((r) => r.project && r.name === source.name);
   if (found) return Promise.resolve(found);
   const copy = copyProject(view, source).finally(() => copying.delete(key));
   copying.set(key, copy);
@@ -544,8 +546,7 @@ export async function addToProject(
   threads: Thread[],
   project: Repo,
 ): Promise<string | undefined> {
-  const here =
-    view.state.repos.find((r) => r.id === project.id) ?? (await namesakeOf(view, project));
+  const here = await namesakeOf(view, project);
   if (typeof here === "string") return here;
   const restored = await Promise.all(
     threads.filter((t) => t.archived).map((t) => view.archive(t.id, false)),

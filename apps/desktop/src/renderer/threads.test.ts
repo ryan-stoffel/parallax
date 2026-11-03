@@ -366,12 +366,15 @@ test("addToProject waits for a copy already listed but still setting its instruc
 
   const adding = addToProject(first, [thread("t-1")], source);
   await vi.waitFor(() => expect(failInstructions).toBeDefined());
-  // A later view lists the new entry, which goes if its instructions fail.
+  // A later view lists the new entry, which goes if its instructions fail, and a sidebar row can
+  // offer that entry itself.
   const later = { ...first, state: { ...emptyThreads, repos: [made] } } as ThreadsView;
-  const second = addToProject(later, [thread("t-2")], source);
+  const byName = addToProject(later, [thread("t-2")], source);
+  const byId = addToProject(later, [thread("t-3")], made);
   failInstructions!("too long");
 
   expect(await adding).toBe("too long");
-  expect(await second).toBe("too long");
+  expect(await byName).toBe("too long");
+  expect(await byId).toBe("too long");
   expect(setProject).not.toHaveBeenCalled();
 });
