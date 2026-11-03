@@ -8,12 +8,18 @@ export const PROMPTS_BEFORE_ASK = 5;
 // whatever anyone sent before. It's read each time so that every window adds to the same count.
 const KEY = "parallax.promptsBeforeSupportAsk";
 
-/** Call for each prompt sent. The count stops at the ask, so the ask shows once on a computer. */
-export function countSentPrompt() {
+/**
+ * Call for each prompt sent. localStorage can forget the count: a second running copy, such as
+ * Stable beside Nightly, gets an empty one it can't save, and a kill loses the last few seconds.
+ * So the count only says when, and the claim in main says whether, which shows the ask once on a
+ * computer (PLX-1243). Prompts past the ask claim too, for whoever saw it before the claim existed.
+ */
+export async function countSentPrompt() {
   const count = Number(localStorage.getItem(KEY)) || 0;
-  if (count >= PROMPTS_BEFORE_ASK) return;
-  localStorage.setItem(KEY, String(count + 1));
+  if (count < PROMPTS_BEFORE_ASK) localStorage.setItem(KEY, String(count + 1));
   if (count + 1 < PROMPTS_BEFORE_ASK) return;
+  const first = await window.parallax.claimSupportAsk();
+  if (!first || count + 1 > PROMPTS_BEFORE_ASK) return;
   notify({
     tone: "info",
     title: "Enjoying Parallax?",

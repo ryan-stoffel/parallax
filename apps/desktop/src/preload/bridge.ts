@@ -255,6 +255,8 @@ export interface ParallaxBridge {
   downloadAction(id: string | undefined, action: "open" | "show" | "cancel" | "clear"): void;
   /** Where downloads go, the OS's folder when empty, and whether to ask each time. */
   setDownloadPrefs(prefs: { dir: string; ask: boolean }): void;
+  /** True only the first time on this computer: whether to show the support ask (PLX-1243). */
+  claimSupportAsk(): Promise<boolean>;
   /** Clears the browser's site data, its cache, or both, keeping extensions' own (PLX-974). */
   clearBrowsingData(what: { siteData: boolean; cache: boolean }): Promise<void>;
   /** Tells extensions which browser tab is shown, by its webview's webContents id. */

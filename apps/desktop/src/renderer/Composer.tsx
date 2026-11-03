@@ -1507,7 +1507,7 @@ export function Composer({
     );
     if (failed === undefined) {
       setFiles((all) => all.filter((f) => !sentFiles.includes(f)));
-      countSentPrompt();
+      void countSentPrompt();
     } else if (!editor.isDestroyed) {
       // Put it back ahead of anything typed or added while it was in flight.
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);

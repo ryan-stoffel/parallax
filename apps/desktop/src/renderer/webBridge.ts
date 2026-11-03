@@ -610,6 +610,8 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     removeExtension: () => Promise.resolve(),
     onExtensionsChanged: () => () => {},
     selectBrowserTab: () => {},
+    // A browser has no userData: its own localStorage count is the only record.
+    claimSupportAsk: () => Promise.resolve(true),
     clearBrowsingData: () => Promise.resolve(),
     downloads: () => Promise.resolve([]),
     onDownloads: () => () => {},
