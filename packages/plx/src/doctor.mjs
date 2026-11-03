@@ -629,7 +629,7 @@ async function pickAgent(prompt, agents) {
 /**
  * The folder for this run's files: `doctor/<time>` in the data folder, beside `doctor/source`
  * where the agent clones Parallax, or in the temp folder when there's no data folder. The doctor
- * never creates the data folder: a new `~/.parallax` would hide a legacy one from plxd.
+ * never creates the data folder.
  * @param {Facts} facts
  * @param {Date} now
  */

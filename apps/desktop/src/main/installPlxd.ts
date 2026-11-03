@@ -7,8 +7,7 @@ const RELEASES = "https://github.com/ryan-stoffel/parallax/releases/download";
 
 /**
  * Installs plxd `$1`, a release's version, in `~/.parallax-plxd` on a macOS or Linux host, where
- * `LOCATE_PLXD` looks first. Not in plxd's data folder: creating `~/.parallax` would move plxd off
- * an older host's data in the OS folder. Like T3 Code's remote install
+ * `LOCATE_PLXD` looks first. Like T3 Code's remote install
  * (packages/ssh/src/tunnel.ts): downloads with curl or wget over HTTPS only, checks the SHA256
  * against the release's `<asset>.sha256`, and proves it runs before replacing anything. Then the
  * old plxd stops, which ends its agents' runs: a host with plxd's login service (a Mac with
