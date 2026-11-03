@@ -206,6 +206,9 @@ export function App() {
   // The page shown in place of the chat, if any: Projects, Pull requests, or Usage. Opening a
   // thread closes it.
   const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "usage">();
+  // Usage takes the whole workspace: the thread's side panel, browser, and terminal drawer stay
+  // shut on it, and come back as they were with the thread (PLX-1242).
+  const panelsAllowed = mainPage !== "usage";
   // The sidebar's orchestrator menus, which the orchestrators page's cards open (0090).
   const orchestratorMenu = useRef<ProjectMenuHandle>(null);
   const newChatOrchestrator = useRef<HTMLDialogElement>(null);
@@ -1087,7 +1090,7 @@ export function App() {
           selection.kind === "thread" ? { threadId: selection.threadId } : { repoId: group.id },
         );
   const deleted = useDeleted(views);
-  const drawerOpen = !!folder && drawers.has(folder.key);
+  const drawerOpen = panelsAllowed && !!folder && drawers.has(folder.key);
   const toggleDrawer = () => {
     if (!folder) return;
     const next = new Set(drawers);
@@ -1119,11 +1122,14 @@ export function App() {
       } else if (command === "goToFile" || command === "searchContents") {
         if (menuOpen || !dialog)
           commandMenu.current?.open(command === "goToFile" ? "files" : "contents");
-      } else if (command === "panel") setPanelOpen(!panelOpen);
-      else if (command === "browser" && !settings) toggleBrowser();
-      else if (command === "sidebar") setSidebarOpen((open) => !open);
-      else if (command === "terminal" && folder) toggleDrawer();
-      else if (command === "newThread") {
+      } else if (command === "panel") {
+        if (panelsAllowed) setPanelOpen(!panelOpen);
+      } else if (command === "browser") {
+        if (panelsAllowed && !settings) toggleBrowser();
+      } else if (command === "sidebar") setSidebarOpen((open) => !open);
+      else if (command === "terminal") {
+        if (panelsAllowed && folder) toggleDrawer();
+      } else if (command === "newThread") {
         if (!dialog) picker.current?.showModal();
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
@@ -1196,7 +1202,7 @@ export function App() {
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
-  const sidePanelOpen = pane !== undefined;
+  const sidePanelOpen = panelsAllowed && pane !== undefined;
   const expanded = sidePanelOpen && panelExpanded;
   const [leftWidth, rightWidth] = panelWidths(
     viewportWidth,
@@ -1372,6 +1378,8 @@ export function App() {
         // A document or media file opens as presented files do; any other, such as code, in the
         // Files view, which shows text.
         onOpenFile={(runId, path) => {
+          // It opens in the side panel, which Usage doesn't have.
+          if (mainPage === "usage") setMainPage(undefined);
           const name = path.slice(path.lastIndexOf("/") + 1);
           const kind = kindOf(name);
           if (kind !== "file") return openDoc({ runId, path, name, kind });
@@ -1484,15 +1492,9 @@ export function App() {
               </>
             ) : mainPage === "usage" ? (
               <>
-                <TopBar className={topBarInset}>
-                  {showSidebar}
-                  <Breadcrumb items={[{ label: "Usage" }]} />
-                </TopBar>
-                <div className="min-h-0 flex-1 overflow-y-auto">
-                  <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
-                    <UsagePage hosts={hosts} />
-                  </div>
-                </div>
+                {/* The page's own heading names it, so the bar doesn't. */}
+                <TopBar className={topBarInset}>{showSidebar}</TopBar>
+                <UsagePage hosts={hosts} />
               </>
             ) : mainPage === "pullRequests" ? (
               <>

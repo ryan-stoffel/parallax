@@ -109,10 +109,10 @@ const heading = "mb-2.5 text-body font-medium text-muted-foreground";
 type Track = <T>(request: Promise<T>) => Promise<T>;
 
 /**
- * Settings > Usage, also opened by the sidebar's Usage button. The header always has the view, the
- * range (disabled on Limits, which is always now), and Refresh, which spins while any request is
- * in flight. Cost and Tokens sum `usage/daily` across every host; Limits shows each provider set
- * up in Settings > Providers once, with its windows from `usage/limits`.
+ * The Usage page, opened by the sidebar's Usage button. The header stays put above the scrolling
+ * figures, with the view, the range (disabled on Limits, which is always now), and Refresh, which
+ * spins while any request is in flight. Cost and Tokens sum `usage/daily` across every host; Limits
+ * shows each provider set up in Settings > Providers once, with its windows from `usage/limits`.
  */
 export function UsagePage({ hosts }: { hosts: Host[] }) {
   const [view, setView] = useState<View>("cost");
@@ -126,7 +126,7 @@ export function UsagePage({ hosts }: { hosts: Host[] }) {
   }, []);
   return (
     <>
-      <div className="mb-6 flex flex-wrap items-center gap-2">
+      <header className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-2 px-8 pt-6 pb-4">
         <h1 className="mr-auto text-heading font-semibold">Usage</h1>
         <Segmented label="Usage view" options={views} value={view} onChange={setView} />
         <Segmented
@@ -142,14 +142,16 @@ export function UsagePage({ hosts }: { hosts: Host[] }) {
         <IconButton label="Refresh" aria-busy={inFlight > 0} onClick={() => setNow(Date.now())}>
           <RefreshCw className={inFlight > 0 ? "motion-safe:animate-spin" : ""} />
         </IconButton>
-      </div>
-      {/* A container, so the layout follows the pane's width rather than the window's. */}
-      <div className="@container">
-        {view === "limits" ? (
-          <Limits hosts={hosts} refresh={now} track={track} />
-        ) : (
-          <History hosts={hosts} view={view} range={range} now={now} track={track} />
-        )}
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* A container, so the layout follows the pane's width rather than the window's. */}
+        <div className="@container mx-auto max-w-5xl px-8 pb-16">
+          {view === "limits" ? (
+            <Limits hosts={hosts} refresh={now} track={track} />
+          ) : (
+            <History hosts={hosts} view={view} range={range} now={now} track={track} />
+          )}
+        </div>
       </div>
     </>
   );
@@ -172,7 +174,7 @@ interface Frame {
   sessions?: UsageSessions[];
   answered: number;
   loading: boolean;
-  /** Goes up with each answer, so the chart rises again with new numbers. */
+  /** Goes up with each answer. */
   version: number;
 }
 
@@ -516,8 +518,8 @@ function Dashboard({
         </figure>
       ) : (
         <Bars
-          // Its own per answer, so new numbers rise together.
-          key={frame.version}
+          // Rises once per range. New numbers for the same range ease to their heights.
+          key={range}
           title={chartTitle}
           parts={parts}
           picked={picked}
@@ -747,9 +749,10 @@ function Bars({
           ))}
         </div>
         <div ref={plot} role="group" aria-label={title} className="relative flex h-48">
-          {ticks.map((t) => (
+          {/* By place, so a new axis top moves the lines rather than drawing them again. */}
+          {ticks.map((t, i) => (
             <div
-              key={t}
+              key={i}
               aria-hidden
               className="usage-grid absolute inset-x-0 border-t border-border"
               style={{ top: `${100 - (t / top) * 100}%` }}

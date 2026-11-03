@@ -118,6 +118,26 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
 });
 
+test("the Usage page keeps the thread's panels shut, and the thread gets them back (PLX-1242)", async () => {
+  const sidePanel = page.locator("#side-panel");
+  await page.getByRole("button", { name: "Show side panel" }).click();
+  await expect(sidePanel).toBeVisible();
+
+  await page.getByRole("button", { name: "Usage", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible();
+  await expect(sidePanel).toBeHidden();
+  // The side panel, browser, and terminal shortcuts do nothing here.
+  for (const keys of ["ControlOrMeta+Alt+KeyB", "ControlOrMeta+Shift+KeyB", "ControlOrMeta+KeyJ"])
+    await page.keyboard.press(keys);
+  await expect(sidePanel).toBeHidden();
+  await expect(page.locator("#terminal-drawer")).toBeHidden();
+
+  await openThread(page, /Tidy up the README/);
+  await expect(sidePanel).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Alt+KeyB");
+  await expect(sidePanel).toBeHidden();
+});
+
 // Runs the Edit menu's Paste as its Cmd/Ctrl+V does, which a synthetic keypress can't.
 const paste = () =>
   app.evaluate(({ BrowserWindow }) => {
