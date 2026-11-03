@@ -2568,7 +2568,7 @@ impl Actor {
     }
 
     /// Drops every waiting message, which never reached a CLI, as a stopped run's follow-ups are.
-    /// Hidden messages stay, held until the user's next message, since their news was told only
+    /// Hidden messages stay, held until the next visible message, since their news was told only
     /// once.
     async fn drop_queued(&mut self) {
         if self.queued.is_empty() {
