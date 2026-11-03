@@ -52,11 +52,20 @@ const unanswered: Choice = { picked: [], typed: "" };
 const overlayOpen = () =>
   !!document.querySelector('dialog[open], [popover]:not([popover="manual"]):popover-open');
 
-/** Whether focus is free to take: on nothing, or in a composer with nothing typed in it. */
-function focusIsFree() {
+/**
+ * Whether `panel` may take focus: from nothing, or from its own composer with nothing in it. Another
+ * pane's composer isn't free, since focus moving would change which thread the user is in.
+ */
+export function focusIsFree(panel: HTMLElement) {
   const active = document.activeElement;
   if (!active || active === document.body) return true;
-  return active instanceof HTMLElement && active.isContentEditable && !active.textContent?.trim();
+  if (!(active instanceof HTMLElement) || !active.isContentEditable) return false;
+  const composer = active.closest(".composer-shell");
+  return (
+    !!composer?.parentElement?.contains(panel) &&
+    !composer.querySelector(".composer-attachments") &&
+    !active.textContent?.trim()
+  );
 }
 
 /** `choice` with an option turned on or off: a single choice has one, and no typed answer. */
@@ -492,7 +501,7 @@ export function QuestionQueue({
     returning?.();
   });
   useLayoutEffect(() => {
-    if (panel.current && (hadFocus.current || focusIsFree()))
+    if (panel.current && (hadFocus.current || focusIsFree(panel.current)))
       panel.current.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [key]);
