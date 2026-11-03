@@ -258,11 +258,8 @@ const openNewOrchestrator = async () => {
     ),
   );
   const picker = document.querySelector('dialog[aria-label="New thread in"]')!;
-  await click(
-    [...picker.querySelectorAll('[role="option"]')].find((o) =>
-      o.textContent?.startsWith("New orchestrator thread"),
-    ),
-  );
+  await click(picker.querySelector('input[type="radio"][value="orchestrator"]'));
+  await click(picker.querySelector('[role="option"]'));
 };
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");

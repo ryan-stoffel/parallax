@@ -240,10 +240,9 @@ test("creates an orchestrator on a repository it adds, and opens it (PLX-166)", 
   await page.getByRole("button", { name: "Close settings" }).click();
   // An orchestrator thread starts from New thread's picker.
   await page.locator("#sidebar").getByRole("button", { name: "New thread", exact: true }).click();
-  await page
-    .getByRole("dialog", { name: "New thread in" })
-    .getByRole("option", { name: /^New orchestrator thread/ })
-    .click();
+  const picker = page.getByRole("dialog", { name: "New thread in" });
+  await picker.locator("fieldset label", { hasText: "Orchestrator" }).click();
+  await picker.getByRole("option", { name: /^New orchestrator thread/ }).click();
   const dialog = page.getByRole("dialog", { name: "New project" });
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Choose folder…" }).click();

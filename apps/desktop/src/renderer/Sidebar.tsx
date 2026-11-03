@@ -517,7 +517,9 @@ export function ThreadList({
   onClosePane,
 }: ThreadListProps) {
   const addDialog = useRef<AddDialogHandle>(null);
-  useImperativeHandle(addDialogRef, () => ({ open: (start) => addDialog.current?.open(start) }));
+  useImperativeHandle(addDialogRef, () => ({
+    open: (start, workspace) => addDialog.current?.open(start, workspace),
+  }));
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const entryDialogs = useRef<EntryDialogsHandle>(null);

@@ -42,6 +42,25 @@ export const newThreadPrefs = stored("parallax.newThreads", newThreadDefaults, m
 export const setNewThreadPrefs = (change: Partial<NewThreadPrefs>) =>
   newThreadPrefs.set({ ...newThreadPrefs.get(), ...change });
 
+/** How New thread's picker lists its rows, kept on this computer (PLX-1252). */
+export type PickerPrefs = {
+  /** The order of its repositories. No repo stays last. */
+  order: "recent" | "name" | "added";
+  /** One line per row, rather than two. */
+  compact: boolean;
+  /** Whether Thread lists the orchestrator threads to continue, as Orchestrator always does. */
+  orchestrators: boolean;
+};
+
+export const pickerPrefs = stored<PickerPrefs>(
+  "parallax.newThreadPicker",
+  { order: "recent", compact: false, orchestrators: true },
+  merged,
+);
+
+export const setPickerPrefs = (change: Partial<PickerPrefs>) =>
+  pickerPrefs.set({ ...pickerPrefs.get(), ...change });
+
 /** How the app behaves, kept on this computer (PLX-538). */
 export type BehaviorPrefs = {
   /** OS notifications for a thread that finishes or needs you, while the window isn't focused. */
