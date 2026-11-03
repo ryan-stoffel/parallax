@@ -456,51 +456,69 @@ async fn a_thread_commits_in_its_worktree_once_plxd_allows_it() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A thread's `AskUserQuestion` asks plxd (PLX-245), in Bypass too, since only the user can answer
-/// it, and an allow's edited input carries the answers the model then reads.
-#[tokio::test]
-async fn a_thread_asks_plxd_its_questions_and_the_model_reads_the_answers() {
+/// Runs `request`, whose model asks a question, and checks that the question reaches plxd and that
+/// the model reads the answer an allow's edited input carries.
+async fn asks_and_reads_the_answer(
+    claude: &OsStr,
+    folders: &Folders,
+    request: RunRequest,
+    run: &str,
+) {
     const QUESTION: &str = "Which database should we use?";
+    let questions = json!([{
+        "question": QUESTION,
+        "header": "Database",
+        "multiSelect": false,
+        "options": [
+            {"label": "SQLite (Recommended)", "description": "One writer, no server"},
+            {"label": "Postgres", "description": "Runs as a server"},
+        ],
+    }]);
+    let api = fake_api(vec![ToolCall {
+        name: "AskUserQuestion",
+        input: json!({"questions": questions}),
+    }])
+    .await;
+    let backend = claude_backend(claude, &api, &folders.root, &folders.home, &folders.data);
+
+    let events = drive(&backend, request, |asked| Decision::Allow {
+        input: Some(json!({
+            "questions": asked.input["questions"],
+            "answers": {QUESTION: "A plain file"},
+        })),
+        always: false,
+    })
+    .await;
+    let asked = requests(&events);
+    assert_eq!(asked.len(), 1, "{run}: {events:#?}");
+    assert_eq!(asked[0].tool_name, "AskUserQuestion");
+    assert_eq!(asked[0].input["questions"], questions);
+    let results = results(&events);
+    assert_eq!(results.len(), 1, "{run}: {events:#?}");
+    assert_eq!(results[0].1, ToolStatus::Ok, "{run}: {events:#?}");
+    assert!(results[0].2.contains("A plain file"), "{run}: {events:#?}");
+    assert_eq!(outcome(&events), &done(), "{run}: {events:#?}");
+}
+
+/// A worker's `AskUserQuestion` asks plxd (PLX-245, PLX-1281). plxd starts a worker as a thread, and
+/// it asks in every mode, Bypass too, since only the user can answer it.
+#[tokio::test]
+async fn a_worker_asks_plxd_its_questions_in_every_mode_and_the_model_reads_the_answers() {
     let Some(claude) = claude_under_test() else {
         return;
     };
-    for permission in [AgentPermission::Manual, AgentPermission::Bypass] {
+    for permission in [
+        AgentPermission::Edit,
+        AgentPermission::Manual,
+        AgentPermission::Auto,
+        AgentPermission::Plan,
+        AgentPermission::Bypass,
+    ] {
         let folders = Folders::new();
-        let questions = json!([{
-            "question": QUESTION,
-            "header": "Database",
-            "multiSelect": false,
-            "options": [
-                {"label": "SQLite (Recommended)", "description": "One writer, no server"},
-                {"label": "Postgres", "description": "Runs as a server"},
-            ],
-        }]);
-        let api = fake_api(vec![ToolCall {
-            name: "AskUserQuestion",
-            input: json!({"questions": questions}),
-        }])
-        .await;
-        let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
         let (_worktree, mut request, _temp) = worker(&folders, permission);
         request.thread = true;
-
-        let events = drive(&backend, request, |asked| Decision::Allow {
-            input: Some(json!({
-                "questions": asked.input["questions"],
-                "answers": {QUESTION: "A plain file"},
-            })),
-            always: false,
-        })
-        .await;
-        let asked = requests(&events);
-        assert_eq!(asked.len(), 1, "{permission:?}: {events:#?}");
-        assert_eq!(asked[0].tool_name, "AskUserQuestion");
-        assert_eq!(asked[0].input["questions"], questions);
-        let results = results(&events);
-        assert_eq!(results.len(), 1, "{events:#?}");
-        assert_eq!(results[0].1, ToolStatus::Ok, "{events:#?}");
-        assert!(results[0].2.contains("A plain file"), "{events:#?}");
-        assert_eq!(outcome(&events), &done(), "{events:#?}");
+        let run = format!("{permission:?}");
+        asks_and_reads_the_answer(&claude, &folders, request, &run).await;
     }
 }
 

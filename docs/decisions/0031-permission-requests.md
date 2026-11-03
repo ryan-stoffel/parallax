@@ -1,6 +1,6 @@
 # 0031: Claude Code's permission requests reach the app over stdio
 
-- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md); superseded in part by [0059](0059-orchestration-rewrite.md) (requests are runtime requests, and only a Project child's keep the 30-minute deny) and [0061](0061-claude-agent-sdk.md) (Claude's requests come through the Agent SDK's `canUseTool`); since PLX-726 no request has a timeout
+- Status: accepted; supersedes in part [0027](0027-claude-permission-modes.md) (headless Manual denies every request that would prompt), for runs whose client asks for the channel, and [0013](0013-worker-sandbox.md) (a worker's tools), for a worker in Plan that asks ([Plan mode and `ExitPlanMode`](#plan-mode-and-exitplanmode), PLX-243); a normal thread asks in Accept Edits too since [0034](0034-threads-are-full-claude-code.md); superseded in part by [0059](0059-orchestration-rewrite.md) (requests are runtime requests, and only a Project child's keep the 30-minute deny) and [0061](0061-claude-agent-sdk.md) (Claude's requests come through the Agent SDK's `canUseTool`); since PLX-726 no request has a timeout; plxd now starts every run that isn't an orchestrator as a thread, so where this record describes a sandboxed worker with `approvals`, no production run reaches that path ([Questions](#questions-plx-245))
 - Date: 2026-10-01
 - Issue: PLX-222; PLX-243 for a worker's `ExitPlanMode`
 
@@ -122,7 +122,9 @@ The tool stays listed after the plan is approved, and a later call answers "You 
 
 ### Questions (PLX-245)
 
-`AskUserQuestion` arrives as an ordinary request, in every mode, Bypass included, since only the user can answer it. The answer is an allow whose edited `input` is the request's own with `answers` added, each by its question's text and several joined with commas, as the Agent SDK does it. The model reads them as the tool's result. Skipping is a denial with a message that says so. A sandboxed worker's `--tools` still leaves the tool out, so only threads and orchestrators ask.
+`AskUserQuestion` arrives as an ordinary request, in every mode, Bypass included, since only the user can answer it. The answer is an allow whose edited `input` is the request's own with `answers` added, each by its question's text and several joined with commas, as the Agent SDK does it. The model reads them as the tool's result. Skipping is a denial with a message that says so.
+
+A worker asks the user directly, not through a coordinator (PLX-1281). plxd starts every run that isn't an orchestrator as a thread (`worker_setup`), so a run with `approvals` is full Claude Code with this tool, in every mode. An orchestrator's child also has `ask` for what its orchestrator can answer (0043). A run without `approvals` has no channel to ask on, since nobody could answer it: it keeps 0013's `--tools` list, which leaves the tool out, or in Bypass Permissions has no list and no channel. An orchestrator in Bypass Permissions has no channel to ask on either (0042).
 
 `agent/approve` also takes optional `answers`, one line per question, which `approvalResolved` logs so the transcript keeps what was answered. They are for reading only, and the client leaves out what must not be logged, such as a secret. An older plxd ignores the field (0007), and its transcript shows only that the question was answered.
 
