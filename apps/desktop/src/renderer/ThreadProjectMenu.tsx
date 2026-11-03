@@ -114,6 +114,8 @@ export function ProjectPicker({
       id={id}
       label="Projects"
       align="end"
+      // Its Projects are checkboxes, and it must not open on Remove from Project.
+      focus='[role^="menuitem"]'
       className="max-h-80 min-w-52 overflow-y-auto p-1.5"
     >
       {projects.map((s) => (

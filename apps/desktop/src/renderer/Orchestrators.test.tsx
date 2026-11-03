@@ -1481,9 +1481,13 @@ test("a sidebar row's actions offer another computer's Project on a computer wit
   expect([...row.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toContain(
     "Add to Project…",
   );
-  expect(row.querySelector('[role="menu"][aria-label="Projects"] button')?.textContent).toBe(
-    "Essays",
+  const projects = row.querySelector('[role="menu"][aria-label="Projects"]')!;
+  expect(projects.querySelector("button")?.textContent).toBe("Essays");
+  // Opening it lands on its first Project, not Remove from Project.
+  await act(async () =>
+    projects.dispatchEvent(Object.assign(new Event("toggle"), { newState: "open" })),
   );
+  expect(document.activeElement?.textContent).toBe("Essays");
 });
 
 test("a row counts unpushed commits for a repo's thread, and none for a thread with no repo", async () => {

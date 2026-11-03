@@ -340,3 +340,38 @@ test("addToProject says so when a made Project can't be taken back, or an archiv
   expect(await addToProject(archived, [thread], source)).toBe("offline");
   expect(setProject).not.toHaveBeenCalled();
 });
+
+test("addToProject waits for a copy already listed but still setting its instructions", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const made = { ...source, id: "s-here" };
+  let failInstructions: ((error: string) => void) | undefined;
+  const setProject = vi.fn(async () => undefined);
+  const first = {
+    hostId: "slow-mini",
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => made,
+    updateRepo: () => new Promise<string>((resolve) => (failInstructions = resolve)),
+    removeProject: async () => undefined,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = (id: string) => ({ id, repo: "r-1", createdAt: source.createdAt });
+
+  const adding = addToProject(first, [thread("t-1")], source);
+  await vi.waitFor(() => expect(failInstructions).toBeDefined());
+  // A later view lists the new entry, which goes if its instructions fail.
+  const later = { ...first, state: { ...emptyThreads, repos: [made] } } as ThreadsView;
+  const second = addToProject(later, [thread("t-2")], source);
+  failInstructions!("too long");
+
+  expect(await adding).toBe("too long");
+  expect(await second).toBe("too long");
+  expect(setProject).not.toHaveBeenCalled();
+});
