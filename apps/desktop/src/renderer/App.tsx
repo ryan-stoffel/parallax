@@ -1563,6 +1563,12 @@ export function App() {
                     setMainPage(undefined);
                     openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
                   }}
+                  onCompose={(e, text, send) => {
+                    setMainPage(undefined);
+                    openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
+                    setCompose({ text, send });
+                  }}
+                  onSetUpGithub={(e) => openSettings("sourceControl", e.hostId)}
                 />
               </>
             ) : (

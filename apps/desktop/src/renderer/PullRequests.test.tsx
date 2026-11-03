@@ -19,6 +19,7 @@ import {
   PullRequestView,
   usePullRequests,
 } from "./PullRequests";
+import { PullRequestsPage } from "./PullRequestsPage";
 import { parseDiff } from "./parseDiff";
 import "./markdownTest";
 import { Notifications } from "./notifications";
@@ -550,4 +551,58 @@ test("guideModel falls back to the naming model when the default's instance can'
     effort: "high",
   });
   expect(guideModel({ ...prefs, model: undefined }, listed("claude")).effort).toBe("low");
+});
+
+test("the Pull requests page opens a row's PR view in place, and goes back to the list as it was (PLX-1283)", async () => {
+  read = { [url(1)]: prOf(1), [url(2)]: prOf(2) };
+  const entry = (n: number) => ({
+    hostId: "h",
+    runId: "r",
+    threadTitle: `Thread ${n}`,
+    url: url(n),
+  });
+  const onOpenThread = vi.fn();
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  await act(async () =>
+    root.render(
+      <PullRequestsPage
+        entries={[entry(1), entry(2)]}
+        onOpenThread={onOpenThread}
+        onCompose={vi.fn()}
+        onSetUpGithub={vi.fn()}
+      />,
+    ),
+  );
+  const search = () => document.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const rows = () => [...document.querySelectorAll<HTMLElement>("li[data-pr] > div > button")];
+  const press = (key: string, target: EventTarget = window) =>
+    act(async () => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  const nav = () => document.querySelector('nav[aria-label="Pull request"]');
+
+  // J and K move between rows, and leave the search box's typing alone.
+  await press("j");
+  expect(document.activeElement).toBe(rows()[0]);
+  await press("j");
+  expect(document.activeElement).toBe(rows()[1]);
+  await press("k");
+  expect(document.activeElement).toBe(rows()[0]);
+  search().focus();
+  await press("j", search());
+  expect(document.activeElement).toBe(search());
+
+  const row = rows().find((b) => b.textContent?.includes("Change 2"))!;
+  await act(async () => row.click());
+  expect(document.querySelector("h2")?.textContent).toContain("Change 2");
+  expect(onOpenThread).not.toHaveBeenCalled();
+  await act(async () => [...nav()!.querySelectorAll("button")].at(-1)!.click());
+  expect(onOpenThread).toHaveBeenCalledWith(entry(2));
+
+  // Escape comes back to the same list, mounted all along.
+  const list = document.querySelector('ul[aria-label="Pull requests"]');
+  await press("Escape");
+  expect(nav()).toBeNull();
+  expect(document.querySelector('ul[aria-label="Pull requests"]')).toBe(list);
+  act(() => root.unmount());
 });
