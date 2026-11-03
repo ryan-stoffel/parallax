@@ -1976,7 +1976,7 @@ export function App() {
                                 />
                               </section>
                             ) : focused ? (
-                              mainView
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col">{mainView}</div>
                             ) : (
                               // New thread and an orchestrator's chat read the open selection, so
                               // only the focused pane shows one.
