@@ -5,7 +5,6 @@ import {
   ArrowUp,
   Bot,
   CalendarClock,
-  ChartNoAxesColumn,
   Check,
   ChevronDown,
   ChevronRight,
@@ -26,7 +25,6 @@ import {
   GitBranch,
   GitFork,
   GitMerge,
-  GitPullRequest,
   Globe,
   HardDrive,
   Keyboard,
@@ -2539,8 +2537,8 @@ function ScopeMenu({
 
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * with Settings (ProfileMenu.tsx), then the places that open in the main pane, Pull requests and
- * Usage, and at the far end Update when `updatable` (Update.tsx), where it has always been.
+ * (ProfileMenu.tsx), and at the far end Update when `updatable` (Update.tsx), where it has always
+ * been.
  */
 function Footer({
   listed,
@@ -2548,22 +2546,12 @@ function Footer({
   onOpenPage,
 }: Pick<ThreadListProps, "onOpenSettings"> & {
   listed: HostThreads[];
-  /** Inbox's Pull requests and Usage buttons, which Traditional lists in its head. */
+  /** Inbox's Pull requests and Usage, in the Profile menu. Traditional lists them in its head. */
   onOpenPage?: (page: NavRow) => void;
 }) {
   return (
     <div className="flex items-center gap-1">
-      <ProfileButton listed={listed} onOpenSettings={onOpenSettings} />
-      {onOpenPage && (
-        <>
-          <IconButton label="Pull requests" onClick={() => onOpenPage("pullRequests")}>
-            <GitPullRequest />
-          </IconButton>
-          <IconButton label="Usage" onClick={() => onOpenPage("usage")}>
-            <ChartNoAxesColumn />
-          </IconButton>
-        </>
-      )}
+      <ProfileButton listed={listed} onOpenSettings={onOpenSettings} onOpenPage={onOpenPage} />
       <span className="flex-1" />
       {window.parallax.updatable && <UpdateButton />}
     </div>

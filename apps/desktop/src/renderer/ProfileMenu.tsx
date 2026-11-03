@@ -1,5 +1,7 @@
 import {
+  ChartNoAxesColumn,
   CircleUser,
+  GitPullRequest,
   LogIn,
   LogOut,
   Settings,
@@ -15,20 +17,25 @@ import { ParallaxMark } from "./logos";
 import { Avatar, useProfile } from "./profile";
 import type { SettingsSection } from "./App";
 import type { HostThreads } from "./Sidebar";
+import type { NavRow } from "./sidebarPrefs";
 import { IconButton, Menu, menuItem } from "./ui";
 
 /**
  * The sidebar footer's Profile button (0067): the account's picture or initials, which opens a
- * menu above it. The menu always offers Settings. Signed in, it shows the account with Manage
- * account, which opens the Account dialog, and Sign out. Signed out, it offers Sign in and Create
- * an account, which open Clerk's pages in the browser.
+ * menu above it. The menu always offers Settings, and in the Inbox sidebar Pull requests and Usage
+ * first. Signed in, it shows the account with Manage account, which opens the Account dialog, and
+ * Sign out. Signed out, it offers Sign in and Create an account, which open Clerk's pages in the
+ * browser.
  */
 export function ProfileButton({
   listed,
   onOpenSettings,
+  onOpenPage,
 }: {
   listed: HostThreads[];
   onOpenSettings: (section: SettingsSection) => void;
+  /** Inbox's Pull requests and Usage rows, which Traditional lists in its head. */
+  onOpenPage?: (page: NavRow) => void;
 }) {
   const id = useId();
   const settingsKeys = useShortcutLabel("settings");
@@ -86,6 +93,20 @@ export function ProfileButton({
               </div>
             </div>
             <div role="separator" className="my-1 h-px bg-border" />
+          </>
+        )}
+        {onOpenPage && (
+          <>
+            {item(
+              GitPullRequest,
+              "Pull requests",
+              closing(() => onOpenPage("pullRequests")),
+            )}
+            {item(
+              ChartNoAxesColumn,
+              "Usage",
+              closing(() => onOpenPage("usage")),
+            )}
           </>
         )}
         <button

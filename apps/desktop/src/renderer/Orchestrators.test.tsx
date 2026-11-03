@@ -1569,13 +1569,20 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
     );
   expect(rows()).toEqual(["parallax3hphotonmain", "No repo3dembermain"]);
   expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
-  expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
+  // Pull requests and Usage are in the Profile menu, not the footer, until Traditional's head.
+  const menuPages = () =>
+    [...sidebar.querySelectorAll('[role="menu"][aria-label="Account"] [role="menuitem"]')]
+      .map((b) => b.textContent)
+      .filter((text) => text === "Pull requests" || text === "Usage");
+  expect(menuPages()).toEqual(["Pull requests", "Usage"]);
+  expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
+  expect(sidebar.querySelector('button[aria-label="Usage"]')).toBeNull();
   const projectsButton = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Projects"]')!;
   await click(projectsButton);
   expect(projectsButton.getAttribute("aria-pressed")).toBe("true");
 
   await act(async () => sidebarMode.set("traditional"));
-  expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
+  expect(menuPages()).toEqual([]);
   // Under its repo's folder, it's the folder's thread row: no first line.
   expect(rows()).toEqual(["photon3hmain", "ember3dmain"]);
   expect(sidebarButton("Projects")).toBeDefined();
