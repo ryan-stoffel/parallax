@@ -500,62 +500,25 @@ async fn asks_and_reads_the_answer(
     assert_eq!(outcome(&events), &done(), "{run}: {events:#?}");
 }
 
-/// A run's `AskUserQuestion` asks plxd (PLX-245), a thread's, a sandboxed worker's (PLX-1281), and
-/// an orchestrator's, in every mode, Bypass too, since only the user can answer it.
+/// A worker's `AskUserQuestion` asks plxd (PLX-245, PLX-1281). plxd starts a worker as a thread, and
+/// it asks in every mode, Bypass too, since only the user can answer it.
 #[tokio::test]
-async fn a_run_asks_plxd_its_questions_and_the_model_reads_the_answers() {
+async fn a_worker_asks_plxd_its_questions_in_every_mode_and_the_model_reads_the_answers() {
     let Some(claude) = claude_under_test() else {
         return;
     };
-    for (thread, permission) in [
-        (true, AgentPermission::Manual),
-        (true, AgentPermission::Bypass),
-        (false, AgentPermission::Edit),
-        (false, AgentPermission::Manual),
-        (false, AgentPermission::Auto),
-        (false, AgentPermission::Plan),
-        (false, AgentPermission::Bypass),
+    for permission in [
+        AgentPermission::Edit,
+        AgentPermission::Manual,
+        AgentPermission::Auto,
+        AgentPermission::Plan,
+        AgentPermission::Bypass,
     ] {
         let folders = Folders::new();
         let (_worktree, mut request, _temp) = worker(&folders, permission);
-        request.thread = thread;
-        let run = format!("thread {thread}, {permission:?}");
+        request.thread = true;
+        let run = format!("{permission:?}");
         asks_and_reads_the_answer(&claude, &folders, request, &run).await;
-    }
-    let folders = Folders::new();
-    let request = RunRequest {
-        permission: Some(AgentPermission::Bypass),
-        ..orchestrator(&folders.project, &folders.data)
-    };
-    asks_and_reads_the_answer(&claude, &folders, request, "orchestrator in Bypass").await;
-}
-
-/// The prompt channel a worker has for its questions (PLX-1281) asks about nothing new: in Accept
-/// Edits and in Bypass, its Bash and its `Write` in the worktree run without asking.
-#[tokio::test]
-async fn a_worker_in_accept_edits_or_bypass_asks_about_no_ordinary_tool_call() {
-    let Some(claude) = claude_under_test() else {
-        return;
-    };
-    for permission in [AgentPermission::Edit, AgentPermission::Bypass] {
-        let folders = Folders::new();
-        let (worktree, request, _temp) = worker(&folders, permission);
-        let file = worktree.join("written.txt");
-        let write = ToolCall {
-            name: "Write",
-            input: json!({"file_path": file.to_str().unwrap(), "content": "written\n"}),
-        };
-        let api = fake_api(vec![ToolCall::bash("sh probe.sh"), write]).await;
-        let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
-
-        let events = drive(&backend, request, |asked| {
-            panic!("{permission:?} asked: {asked:?}")
-        })
-        .await;
-        assert!(requests(&events).is_empty(), "{permission:?}: {events:#?}");
-        assert!(results(&events)[0].2.contains("probe-ran"), "{events:#?}");
-        assert_eq!(fs::read_to_string(&file).unwrap(), "written\n");
-        assert_eq!(outcome(&events), &done(), "{permission:?}: {events:#?}");
     }
 }
 
