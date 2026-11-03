@@ -1433,7 +1433,11 @@ body {
 :root.translucent {
   --composer-glass: color-mix(in srgb, var(--raised) 50%, transparent);
   --composer-blur: blur(28px) saturate(1.6) brightness(1.25);
-  --composer-edge: light-dark(var(--border), rgb(255 255 255 / 14%));
+  /* The theme's border, a little stronger in dark, where it would be lost against the wallpaper. */
+  --composer-edge: light-dark(
+    var(--border),
+    color-mix(in srgb, var(--border) 70%, rgb(255 255 255 / 30%))
+  );
 }
 /* What's behind eases toward the text's opposite, so a bright or dark wallpaper doesn't wash it out.
    Only the page's own pixels change: its copy of the wallpaper in full screen (main.tsx). */
