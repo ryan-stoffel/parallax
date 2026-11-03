@@ -7,8 +7,7 @@ const RELEASES = "https://github.com/ryan-stoffel/parallax/releases/download";
 
 /**
  * Installs plxd `$1`, a release's version, in `~/.parallax-plxd` on a macOS or Linux host, where
- * `LOCATE_PLXD` looks first. Not in plxd's data folder: creating `~/.parallax` would move plxd off
- * an older host's data in the OS folder. Like T3 Code's remote install
+ * `LOCATE_PLXD` looks first. Like T3 Code's remote install
  * (packages/ssh/src/tunnel.ts): downloads with curl or wget over HTTPS only, checks the SHA256
  * against the release's `<asset>.sha256`, and proves it runs before replacing anything. Then the
  * old plxd stops, which ends its agents' runs: a host with plxd's login service (a Mac with
@@ -63,8 +62,8 @@ if "$dir/plxd" service status 2>/dev/null | grep -qx 'installed: true' &&
   "$dir/plxd" service install --replace >/dev/null 2>&1; then
   exit 0
 fi
-# plxd's data folder, as plxd picks it: ~/.parallax, unless only the OS folder exists.
-[ ! -d "$HOME/.parallax" ] && [ -d "$data" ] || data=$HOME/.parallax
+# plxd's data folder, as plxd picks it: ~/.parallax, unless only the OS folder has a store.
+[ ! -e "$HOME/.parallax/plxd.sqlite3" ] && [ -e "$data/plxd.sqlite3" ] || data=$HOME/.parallax
 pid=$(cat "\${PLXD_DATA_DIR:-$data}/plxd.lock" 2>/dev/null || true)
 # This user's serve only: a stale pid may be another user's process by now.
 if [ -n "$pid" ] && [ "$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$(id -u)" ] &&

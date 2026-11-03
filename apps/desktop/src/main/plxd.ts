@@ -53,7 +53,7 @@ function legacyDataDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: 
 
 /**
  * plxd's data folder, as `DataDir::default_location` finds it (daemon/src/paths.rs):
- * `PLXD_DATA_DIR`, else `~/.parallax`, unless that doesn't exist and the older OS folder does
+ * `PLXD_DATA_DIR`, else `~/.parallax`, unless only the older OS folder has a store
  * (`~/Library/Application Support/parallax`, `%LOCALAPPDATA%\parallax`, or
  * `$XDG_DATA_HOME/parallax`), which keeps working because the store holds absolute worktree paths.
  */
@@ -67,7 +67,8 @@ export function dataDir(
   if (override) return override;
   const current = path.join(home, ".parallax");
   const legacy = legacyDataDir(env, platform, home);
-  return !exists(current) && exists(legacy) ? legacy : current;
+  const hasStore = (dir: string) => exists(path.join(dir, "plxd.sqlite3"));
+  return !hasStore(current) && hasStore(legacy) ? legacy : current;
 }
 
 /**
