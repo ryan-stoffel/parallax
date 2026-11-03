@@ -626,8 +626,8 @@ pub(super) struct Actor {
     /// The messages plxd sent as its own ([`Queued::parallax`]), by turn id, until they're
     /// recorded as sent.
     parallax_turns: HashSet<TurnId>,
-    /// The messages clients draw nothing for ([`Queued::hidden`]), by turn id, until their
-    /// `TurnStarted` says so.
+    /// The messages clients draw nothing for ([`Queued::hidden`]), by turn id. Kept as
+    /// [`Self::turns`] keeps its text, since an account fallback starts the same turn again.
     hidden_turns: HashSet<TurnId>,
     /// Whether an orchestrator's provider compacted its session since its last turn began, so the
     /// next one carries the orchestrator's state again (PLX-937). Lost on a restart.
@@ -1357,8 +1357,12 @@ impl Actor {
         }
         // Stop means stop: what waited for this turn to end doesn't start another, nor does what
         // the CLI took and drops as it stops, and a run waiting for its usage limit doesn't
-        // resume.
-        self.handed.clear();
+        // resume. Hidden messages aren't the user's to take back, so they wait with the queue.
+        for queued in self.handed.drain(..).rev() {
+            if queued.hidden {
+                self.queued.push_front(queued);
+            }
+        }
         self.drop_queued().await;
         self.cancel_waiting().await;
         // An idle session has no turn to stop, and stays for the next one.
@@ -2559,23 +2563,33 @@ impl Actor {
         })
         .await;
         self.senders.remove(&turn_id);
-        self.push(AgentOutputItem::FollowUpDropped { turn_id })
-            .await;
+        // Clients show this as a message of theirs that wasn't sent, and a hidden one isn't theirs.
+        if !self.hidden_turns.contains(&turn_id) {
+            self.push(AgentOutputItem::FollowUpDropped { turn_id })
+                .await;
+        }
         self.flush().await;
     }
 
     /// Drops every waiting message, which never reached a CLI, as a stopped run's follow-ups are.
+    /// Hidden messages stay, held until the user's next message, since their news was told only
+    /// once.
     async fn drop_queued(&mut self) {
         if self.queued.is_empty() {
             return;
         }
-        while let Some(queued) = self.queued.pop_front() {
+        let (kept, dropped): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.queued)
+            .into_iter()
+            .partition(|queued| queued.hidden);
+        for queued in dropped {
             info!(run = %self.id, turn = %queued.turn_id, "dropping a waiting message");
             let turn_id = queued.turn_id;
             self.senders.remove(&turn_id);
             self.push(AgentOutputItem::FollowUpDropped { turn_id })
                 .await;
         }
+        self.queue_held = !kept.is_empty();
+        self.queued = kept;
         self.save_queue().await;
     }
 
@@ -3781,7 +3795,7 @@ impl Actor {
         *images = self.images.remove(turn_id).unwrap_or_default();
         *threads = self.attached.remove(turn_id).unwrap_or_default();
         if let Some(turn_id) = turn_id {
-            *hidden = self.hidden_turns.remove(turn_id);
+            *hidden = self.hidden_turns.contains(turn_id);
             // An orchestrator's wake-up, a usage limit's resume, or a hidden message: plxd's own
             // turn.
             *wake = *hidden || self.wakes.was_sent(*turn_id) || self.resumes.was_sent(*turn_id);
@@ -4907,7 +4921,7 @@ mod tests {
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
         let turn_id = TurnId::generate();
         actor.hidden_turns.insert(turn_id);
-        let mut item = AgentOutputItem::TurnStarted {
+        let item = AgentOutputItem::TurnStarted {
             turn_id: Some(turn_id),
             text: None,
             wake: false,
@@ -4916,12 +4930,64 @@ mod tests {
             images: Vec::new(),
             threads: Vec::new(),
         };
-        actor.fill_turn_started(&mut item);
-        let AgentOutputItem::TurnStarted { wake, hidden, .. } = item else {
-            unreachable!();
-        };
-        assert!(wake && hidden);
-        assert!(actor.hidden_turns.is_empty());
+        // An account fallback starts the same turn again, which stays hidden.
+        for _ in 0..2 {
+            let mut filled = item.clone();
+            actor.fill_turn_started(&mut filled);
+            let AgentOutputItem::TurnStarted { wake, hidden, .. } = filled else {
+                unreachable!();
+            };
+            assert!(wake && hidden);
+        }
+    }
+
+    /// PLX-1247: a cancel drops the user's messages, and keeps a hidden one held, waiting or
+    /// handed to the CLI, with no notice of a message the user never saw.
+    #[tokio::test]
+    async fn a_cancel_keeps_hidden_messages_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let queued = vec![message("mine", false), message("update", true)];
+        let (mine, waiting) = (queued[0].turn_id, queued[1].turn_id);
+        let mut actor = waiting_actor(&daemon, queued).await;
+        let handed = message("handed update", true);
+        let handed_id = handed.turn_id;
+        actor.handed.push(handed);
+        actor.handed.push(message("handed, mine", false));
+        for queued in actor.queued.iter().chain(&actor.handed) {
+            if queued.hidden {
+                actor.hidden_turns.insert(queued.turn_id);
+            }
+        }
+
+        actor.cancel(None).await;
+
+        let order: Vec<TurnId> = actor.queued.iter().map(|q| q.turn_id).collect();
+        assert_eq!(order, [handed_id, waiting]);
+        assert!(actor.queue_held);
+        actor.flush().await;
+        assert_eq!(logged_drops(&daemon, actor.id).await, [mine]);
+    }
+
+    /// The turns run `id`'s log says were dropped.
+    async fn logged_drops(daemon: &Arc<Daemon>, id: RunId) -> Vec<TurnId> {
+        let (page, _) = crate::agents::store(daemon, move |db| {
+            db.run_events(id.into(), 0, 1000, 4 * 1024 * 1024)
+                .map_err(|error| crate::store::store_error(&error))
+        })
+        .await
+        .unwrap();
+        page.iter()
+            .filter_map(|stored| match serde_json::from_str(&stored.payload).ok()? {
+                ParallaxEvent::AgentOutput { items, .. } => Some(items),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|item| match item {
+                AgentOutputItem::FollowUpDropped { turn_id } => Some(turn_id),
+                _ => None,
+            })
+            .collect()
     }
 
     /// `agent/setPermission`: a live run that can switch takes the mode at once, and the run
