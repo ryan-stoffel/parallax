@@ -9,6 +9,10 @@ export type Command =
   | "newThread"
   | "noRepoThread"
   | "newOrchestrator"
+  | "newTab"
+  | "closeTab"
+  | "nextTab"
+  | "previousTab"
   | "sidebar"
   | "panel"
   | "browser"
@@ -129,6 +133,11 @@ export const commands: {
     category: "Threads",
     default: "Mod+Alt+ArrowLeft",
   },
+  // The top bar's tabs (PLX-1289).
+  { id: "newTab", name: "Tab: New", category: "Threads", default: "Mod+KeyT" },
+  { id: "closeTab", name: "Tab: Close", category: "Threads", default: "Mod+KeyW" },
+  { id: "nextTab", name: "Tab: Next", category: "Threads", default: "Ctrl+Tab" },
+  { id: "previousTab", name: "Tab: Previous", category: "Threads", default: "Ctrl+Shift+Tab" },
   // The split's threads (PLX-587, PLX-1082), each by its place. The first two keep their old ids so
   // a saved rebinding still applies. Off macOS, Ctrl+1 to Ctrl+4 open sidebar rows.
   {

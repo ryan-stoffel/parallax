@@ -144,7 +144,10 @@ test("every connected host's threads are one list, newest prompt first, each ope
 
   await click(rows()[0]!);
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Mac mini", "api", "Add the endpoint"]);
+  expect(crumbs.map((li) => li.textContent)).toEqual(["Mac mini", "api"]);
+  expect(
+    document.querySelector('[aria-label="Open tabs"] [aria-selected="true"]')?.textContent,
+  ).toBe("Add the endpoint");
   expect(rows()[0]!.getAttribute("aria-current")).toBe("page");
 });
 

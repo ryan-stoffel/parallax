@@ -14,6 +14,7 @@ import {
   SquarePen,
   SunMoon,
   TextSearch,
+  MessageCircleQuestion,
   PanelBottom,
   PanelLeftOpen,
   PanelRight,
@@ -76,6 +77,7 @@ import { browserSettingsAsked } from "./browserSettings";
 import { anchorOf } from "./settings/search";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
+import { WorkingMark } from "./AttentionMark";
 import {
   useAccountAlarms,
   useConnectionAlarms,
@@ -125,8 +127,25 @@ import { keptRemoteControl, MoveRemoteControl } from "./MoveRemoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
-import { evenRatio, maxTiles, ratiosWithout } from "./splitLayout";
-import { SplitTiles } from "./SplitTiles";
+import { SplitTiles, TileGlyph } from "./SplitTiles";
+import { ThreadTabs, type TabItem } from "./ThreadTabs";
+import {
+  activeTab,
+  closeHostTabs,
+  closeTab,
+  dropInStrip,
+  moveTab,
+  navigate,
+  openBeside,
+  openInTab,
+  removeThread,
+  startTabs,
+  stepTab,
+  swapTiles,
+  threadIdsOf,
+  withSplit,
+  type ThreadTab,
+} from "./tabState";
 import { draggedThread, threadDragType } from "./threadDrag";
 
 /**
@@ -149,19 +168,6 @@ export type Selection =
     }
   | { kind: "new"; groupId?: string; draft?: string };
 
-/**
- * Two to four threads on one host tiled side by side (PLX-587, PLX-1082), in their Fibonacci
- * layout's order, with each cut's share (splitLayout.ts): one fewer ratio than threads.
- * Opening another unmaximizes it.
- */
-export interface Split {
-  hostId: string;
-  threadIds: string[];
-  ratios: number[];
-  /** All of them in one tile, the focused one shown, as tabs. */
-  maximized?: boolean;
-}
-
 export type SettingsSection =
   | "general"
   | "threads"
@@ -182,6 +188,54 @@ export type SettingsSection =
   | "beta"
   | "about";
 
+/** What the strip shows for `tab`: for several tiled threads, the focused one's and a map of them. */
+function tabItem(tab: ThreadTab, view: ThreadsView): TabItem {
+  const { selection, split } = tab;
+  const { state } = view;
+  if (selection.kind === "orchestrator") {
+    const orchestrator = state.orchestrators.find((o) => o.id === selection.orchestratorId);
+    return {
+      id: tab.id,
+      title: orchestrator?.name ?? "Orchestrator",
+      icon: <ProjectIcon icon={orchestrator?.icon} />,
+    };
+  }
+  if (selection.kind === "new") {
+    const repo = state.repos.find((r) => r.id === selection.groupId);
+    return {
+      id: tab.id,
+      title: repo?.project ? repo.name : "New thread",
+      icon: <RepoIcon repo={repo} />,
+    };
+  }
+  const { threadId } = selection;
+  const thread = state.threads.find((t) => t.id === threadId);
+  // Any of the tab's threads waiting on the user or working shows in its icon.
+  const attentions = threadIdsOf(tab).map((id) => {
+    const t = state.threads.find((other) => other.id === id);
+    return t && attentionOf(t, state.runs[id], asksOf(state, id));
+  });
+  const icon = attentions.includes("needsYou") ? (
+    <MessageCircleQuestion aria-label="Needs you" className="text-warning" />
+  ) : attentions.includes("working") ? (
+    <span className="text-working">
+      <WorkingMark />
+    </span>
+  ) : split ? (
+    <span className="text-muted-foreground">
+      <TileGlyph count={split.threadIds.length} index={split.threadIds.indexOf(threadId)} />
+    </span>
+  ) : (
+    <RepoIcon repo={state.repos.find((r) => r.id === thread?.repo)} />
+  );
+  return {
+    id: tab.id,
+    title: state.titles[threadId] ?? "Thread",
+    icon,
+    thread: split ? undefined : { hostId: tab.hostId, runId: threadId },
+  };
+}
+
 /**
  * The app frame: sidebar, then the chat or a page, then the side panel, with Settings floating
  * over them.
@@ -193,17 +247,20 @@ export function App() {
   useAppearanceEffects(onboarding);
   const hosts = useHosts();
   useProviderLink(hosts);
-  const [hostId, setHostId] = useState(localId);
-  // The open host, or this computer once the open one is removed.
+  // The window's tabs (PLX-1289). The active one holds the open host, selection, and split.
+  const [tabs, setTabs] = useState(() => startTabs(localId));
+  const { hostId, selection, split } = activeTab(tabs);
+  // The open host, or this computer until a removed one's tabs close, below.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
-  const [selection, setSelection] = useState<Selection>({ kind: "new" });
+  const setSelection = useCallback(
+    (next: Selection) => setTabs((state) => navigate(state, activeTab(state).hostId, next)),
+    [],
+  );
   // The threads opened in this window, oldest first, and where Back and Forward stand (PLX-789).
   const [history, setHistory] = useState<{
     list: { hostId: string; threadId: string }[];
     at: number;
   }>({ list: [], at: -1 });
-  // Shown while the selection is one of its threads, which is the focused one.
-  const [split, setSplit] = useState<Split>();
   // An orchestrator just created on another host, opened once that host is open and lists it: the
   // check below drops an orchestrator selection the open host's list doesn't have.
   const [opening, setOpening] = useState<{ hostId: string; orchestratorId: string }>();
@@ -405,43 +462,26 @@ export function App() {
   const known = useRef(new Set<string>());
   for (const t of threads.state.threads) known.current.add(t.id);
   for (const p of threads.state.orchestrators) known.current.add(p.id);
-  // Closes a thread's tile. The rest stay tiled, or the last one stays open alone, and a closed
-  // focused tile hands focus to the one before it.
-  const closePane = (threadId: string) => {
-    if (!split) return;
-    const at = split.threadIds.indexOf(threadId);
-    if (at === -1) return;
-    const rest = split.threadIds.filter((id) => id !== threadId);
-    setSplit(
-      rest.length > 1
-        ? { ...split, threadIds: rest, ratios: ratiosWithout(split.ratios, rest.length + 1, at) }
-        : undefined,
-    );
-    if (split.hostId === host.id && selection.kind === "thread" && selection.threadId === threadId)
-      setSelection({ kind: "thread", threadId: rest[Math.max(0, at - 1)]! });
-  };
-  // A split whose computer is removed goes with it.
-  if (split && !hosts.some((h) => h.id === split.hostId)) setSplit(undefined);
-  // A thread in the split that's deleted, maybe by another client, closes its tile.
-  const splitGone =
-    split?.hostId === host.id
-      ? split.threadIds.find(
-          (id) => known.current.has(id) && !threads.state.threads.some((t) => t.id === id),
-        )
-      : undefined;
-  if (splitGone) closePane(splitGone);
-  // The threads the main pane shows: the split's while one of them is open.
-  const tiled =
-    selection.kind === "thread" &&
-    split?.hostId === host.id &&
-    split.threadIds.includes(selection.threadId);
-  const panes = selection.kind !== "thread" ? [] : tiled ? split.threadIds : [selection.threadId];
+  // Closes a thread's tile. The rest stay tiled, or the last one stays open alone.
+  const closePane = (threadId: string) =>
+    setTabs((state) => removeThread(state, host.id, threadId));
+  // A removed computer's tabs go with it.
+  const removedHost = tabs.tabs.find((t) => !hosts.some((h) => h.id === t.hostId))?.hostId;
+  if (removedHost) setTabs(closeHostTabs(tabs, removedHost, hosts[0]!.id));
+  // A thread in a tab that's deleted, maybe by another client, leaves it rather than show a stale
+  // transcript.
+  const gone = tabs.tabs
+    .filter((t) => t.hostId === host.id)
+    .flatMap(threadIdsOf)
+    .find((id) => known.current.has(id) && !threads.state.threads.some((t) => t.id === id));
+  if (gone) setTabs(removeThread(tabs, host.id, gone));
+  // The threads the main pane shows: its tab's split, or its one thread.
+  const tiled = selection.kind === "thread" && !!split;
+  const panes = threadIdsOf(activeTab(tabs));
   // The open thread's group (Chat's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);
-    // Deleted, maybe by another client: leave it rather than show a stale transcript.
-    if (!open && known.current.has(selection.threadId) && !splitGone) setSelection({ kind: "new" });
     const id = open ? groupOf(threads.state, open) : noRepo;
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
@@ -480,7 +520,7 @@ export function App() {
     !orchestrator &&
     known.current.has(selection.orchestratorId)
   )
-    setSelection({ kind: "new" });
+    setTabs(closeTab(tabs, tabs.active));
   // With the threads in the orchestrator, as its sidebar row counts them.
   const inOrchestrator = useMemo(() => threadOrchestrators(threads.state), [threads.state]);
   const agents = useOrchestratorAgents(
@@ -642,8 +682,7 @@ export function App() {
 
   const openOnHost = (hostId: string, next: Selection) => {
     setSettings(null);
-    setHostId(hostId);
-    setSelection(next);
+    setTabs((state) => navigate(state, hostId, next));
     setOpening(undefined);
   };
   const openHostThread = (hostId: string, threadId: string) =>
@@ -822,8 +861,7 @@ export function App() {
   // that host is open.
   const openOrchestrator = (hostId: string, orchestratorId: string) => {
     if (hostId === host.id) return setSelection({ kind: "orchestrator", orchestratorId });
-    setHostId(hostId);
-    setSelection({ kind: "new" });
+    setTabs((state) => navigate(state, hostId, { kind: "new" }));
     setOpening({ hostId, orchestratorId });
   };
 
@@ -880,9 +918,8 @@ export function App() {
       groupId = added.id;
       moved = added;
     }
-    setHostId(id);
+    setTabs((state) => navigate(state, id, { kind: "new", groupId, draft }));
     setOpening(undefined);
-    setSelection({ kind: "new", groupId, draft });
     return moved;
   };
 
@@ -1087,37 +1124,40 @@ export function App() {
     const view = views[hostId] ?? idleThreads;
     const error = await view.remove(thread);
     if (error) return error;
-    if (split?.hostId === hostId && split.threadIds.includes(thread.id)) closePane(thread.id);
-    else if (selection.kind === "thread" && selection.threadId === thread.id)
-      setSelection({ kind: "new", groupId: groupOf(view.state, thread) });
+    // The last tab leaves New thread in the thread's group.
+    setTabs((state) =>
+      removeThread(state, hostId, thread.id, {
+        kind: "new",
+        groupId: groupOf(view.state, thread),
+      }),
+    );
     return undefined;
   };
-  // Opens `threadId` in the split beside the open thread, at tile `at`: by default a new last tile
-  // while there's room, else the last tile that isn't focused, which it replaces. A thread already
-  // tiled is focused instead.
-  const openBeside = (threadId: string, at?: number) => {
-    if (selection.kind !== "thread" || selection.threadId === threadId) return;
-    const ids = tiled ? [...split.threadIds] : [selection.threadId];
-    const ratios = tiled ? [...split.ratios] : [];
-    if (!ids.includes(threadId)) {
-      const tile =
-        at ??
-        (ids.length < maxTiles ? ids.length : ids.findLastIndex((id) => id !== selection.threadId));
-      if (tile === ids.length) ratios.push(evenRatio);
-      ids[tile] = threadId;
-      setSplit({ hostId: host.id, threadIds: ids, ratios });
-    }
-    setSelection({ kind: "thread", threadId });
-  };
+  const openBesideOpen = (threadId: string, at?: number) =>
+    setTabs((state) => openBeside(state, threadId, at));
   // Focuses a tile of the split, reopening it if another view is open, and its composer.
   const focusPane = (tile: number) => {
     const threadId = split?.threadIds[tile];
     if (!threadId) return;
-    openOnHost(split.hostId, { kind: "thread", threadId });
+    openOnHost(host.id, { kind: "thread", threadId });
     requestAnimationFrame(() =>
       document.querySelector<HTMLElement>(`[data-pane="${tile}"] .composer-input`)?.focus(),
     );
   };
+
+  // The tab the strip is dragging, which a drag over the pane can't read from its data.
+  const draggingTab = useRef<string>(undefined);
+  const tabItems = tabs.tabs.map((tab) => tabItem(tab, views[tab.hostId] ?? idleThreads));
+  // The only tab, on New thread, closes to itself.
+  const closableTab = tabs.tabs.length > 1 || selection.kind !== "new";
+  // The crumbs but the last, when the active tab says the same, as it does for the page.
+  const lastCrumb = crumbs.at(-1);
+  const trail =
+    lastCrumb &&
+    !lastCrumb.onClick &&
+    lastCrumb.label === tabItems[tabs.tabs.indexOf(activeTab(tabs))]!.title
+      ? crumbs.slice(0, -1)
+      : crumbs;
 
   const offline = offlineReason(connection);
 
@@ -1177,6 +1217,17 @@ export function App() {
         if (!dialog) picker.current?.open();
       } else if (command === "newOrchestrator") {
         if (!dialog) picker.current?.open("orchestrator");
+      } else if (command === "newTab") {
+        if (dialog || settings) return;
+        setMainPage(undefined);
+        newThread();
+      } else if (command === "closeTab") {
+        // With nothing to close, Close Window keeps its keys.
+        if (dialog || settings || !closableTab) return;
+        setTabs(closeTab(tabs, tabs.active));
+      } else if (command === "nextTab" || command === "previousTab") {
+        if (dialog || settings) return;
+        setTabs(stepTab(tabs, command === "nextTab" ? 1 : -1));
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command && (tileCommands as readonly string[]).includes(command)) {
@@ -1520,9 +1571,12 @@ export function App() {
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.open()}
-          split={split}
-          onOpenBeside={openBeside}
-          onClosePane={closePane}
+          onOpenBeside={openBesideOpen}
+          onOpenInTab={(hostId, threadId) => {
+            setMainPage(undefined);
+            setSettings(null);
+            setTabs((state) => openInTab(state, hostId, threadId));
+          }}
         />
       </Sidebar>
 
@@ -1606,8 +1660,26 @@ export function App() {
                       <ChevronRight />
                     </IconButton>
                   </div>
-                  <Breadcrumb items={crumbs} />
-                  <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <ThreadTabs
+                    tabs={tabItems}
+                    active={tabs.active}
+                    onSelect={(id) => setTabs((state) => ({ ...state, active: id }))}
+                    onClose={(id) => setTabs((state) => closeTab(state, id))}
+                    onNew={() => newThread()}
+                    onDrop={(drop, before) =>
+                      setTabs((state) =>
+                        drop.kind === "tab"
+                          ? { ...moveTab(state, drop.id, before), active: drop.id }
+                          : drop.kind === "tile"
+                            ? dropInStrip(state, hostId, drop.threadId, before)
+                            : dropInStrip(state, drop.hostId, drop.runId, before),
+                      )
+                    }
+                    closable={closableTab}
+                    dragging={draggingTab}
+                  />
+                  <div className="ml-auto flex min-w-0 items-center gap-2">
+                    <Breadcrumb items={trail} tight />
                     {!group.project && !tiled && (
                       <ThreadDetailsButton
                         open={details.mode !== "hidden"}
@@ -1646,10 +1718,15 @@ export function App() {
                         <SplitTiles
                           tiled={tiled}
                           focused={panes.indexOf(selection.threadId)}
-                          ratios={tiled ? split.ratios : []}
-                          onResize={(ratios) => split && setSplit({ ...split, ratios })}
-                          maximized={tiled && !!split.maximized}
-                          onMaximize={(maximized) => split && setSplit({ ...split, maximized })}
+                          ratios={split?.ratios ?? []}
+                          onResize={(ratios) =>
+                            split && setTabs((state) => withSplit(state, { ...split, ratios }))
+                          }
+                          maximized={!!split?.maximized}
+                          onMaximize={(maximized) =>
+                            split && setTabs((state) => withSplit(state, { ...split, maximized }))
+                          }
+                          onSwap={(from, to) => setTabs((state) => swapTiles(state, from, to))}
                           onFocus={(index) => openThreadId(panes[index]!)}
                           onClose={(index) => closePane(panes[index]!)}
                           details={
@@ -1667,11 +1744,14 @@ export function App() {
                           // which takes it to attach (PLX-378).
                           drop={{
                             accepts: (e) =>
-                              !e.defaultPrevented && e.dataTransfer.types.includes(threadDragType),
+                              !e.defaultPrevented &&
+                              e.dataTransfer.types.includes(threadDragType) &&
+                              // A tab dragged over its own thread stays put.
+                              draggingTab.current !== tabs.active,
                             onDrop: (at, e) => {
                               const thread = draggedThread(e.dataTransfer);
                               // A split's threads are one computer's.
-                              if (thread?.hostId === host.id) openBeside(thread.runId, at);
+                              if (thread?.hostId === host.id) openBesideOpen(thread.runId, at);
                             },
                           }}
                           items={panes.map((threadId, side) => {
@@ -1685,6 +1765,7 @@ export function App() {
                             // Keyed, so another run starts from an empty transcript.
                             return {
                               key: `${host.id}/${threadId}`,
+                              threadId,
                               title: title ?? "Thread",
                               icon: (
                                 <RepoIcon

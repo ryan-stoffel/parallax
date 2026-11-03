@@ -1021,6 +1021,7 @@ body {
     fieldset,
     [role="tab"],
     [role="listbox"],
+    .tab-strip,
     [popover],
     browser-action-list
   ) {

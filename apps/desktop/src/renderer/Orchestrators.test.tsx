@@ -207,7 +207,15 @@ const orchestratorRows = () =>
     (t) => t.textContent,
   );
 const crumbs = () =>
-  [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
+  // The trail, then the tab, on a page that has one, where it names the page instead of a crumb.
+  [
+    ...new Set(
+      [
+        ...document.querySelectorAll('[aria-label="Breadcrumb"] li'),
+        ...document.querySelectorAll('[aria-label="Open tabs"] [aria-selected="true"]'),
+      ].map((el) => el.textContent),
+    ),
+  ];
 const dialog = () => document.querySelector<HTMLDialogElement>('dialog[aria-label="New project"]')!;
 const inDialog = (name: string) =>
   [...dialog().querySelectorAll("button")].find(

@@ -38,6 +38,7 @@ import {
   Network,
   Palette,
   PanelLeftClose,
+  PanelTop,
   PencilLine,
   PersonStanding,
   Pin,
@@ -89,7 +90,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import type { RpcError } from "../preload/bridge";
-import type { Selection, SettingsSection, Split } from "./App";
+import type { Selection, SettingsSection } from "./App";
 import { clock } from "./Approval";
 import { drafts, threadDrafts, type Draft } from "./drafts";
 import { AddDialog, type AddDialogHandle } from "./AddDialog";
@@ -187,8 +188,6 @@ import { lookOf, usePullRequests, type PullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
-import { bindingOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
-import { TileGlyph } from "./SplitTiles";
 import { flushToasts, toast, undo, useToasts } from "./undo";
 
 import {
@@ -218,8 +217,6 @@ import { isRemoteControl } from "./remoteControl";
 const row =
   "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body hover:bg-hover";
 const current = "bg-selected text-foreground";
-const sectionHeading =
-  "flex h-7 items-center gap-1 px-2 text-meta font-medium text-faint-foreground";
 const emptyNote = "px-2 py-1 text-body text-faint-foreground";
 
 interface SidebarProps {
@@ -314,12 +311,10 @@ interface ThreadListProps {
   addDialog?: Ref<AddDialogHandle>;
   /** New thread, which opens Mod+N's picker of the repository it goes in. */
   onNewThread: () => void;
-  /** The two threads open side by side (PLX-587), shown together above the list. */
-  split?: Split;
-  /** Opens a thread of the open host beside the open thread. */
+  /** Tiles a thread beside the open one. */
   onOpenBeside: (threadId: string) => void;
-  /** Closes a thread's side of the split. */
-  onClosePane: (threadId: string) => void;
+  /** Opens a thread in a new tab, or the tab it's already in. */
+  onOpenInTab: (hostId: string, threadId: string) => void;
 }
 
 /**
@@ -519,9 +514,8 @@ export function ThreadList({
   onDelete,
   addDialog: addDialogRef,
   onNewThread,
-  split,
   onOpenBeside,
-  onClosePane,
+  onOpenInTab,
 }: ThreadListProps) {
   const addDialog = useRef<AddDialogHandle>(null);
   useImperativeHandle(addDialogRef, () => ({
@@ -1238,6 +1232,7 @@ export function ThreadList({
         onRename={(title) => void rename(item, title)}
         onStartRename={() => setRenaming(item.key)}
         onDelete={() => askDelete(item)}
+        onOpenInTab={item.orchestration ? undefined : () => onOpenInTab(item.host.id, t.id)}
         onOpenBeside={
           !item.orchestration &&
           item.host.id === host.id &&
@@ -1353,6 +1348,11 @@ export function ThreadList({
   const moving = movingKey === undefined ? undefined : byRun.get(movingKey);
   // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
   const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
+    {
+      label: "Open in new tab",
+      icon: <PanelTop aria-hidden />,
+      run: () => onOpenInTab(i.host.id, i.thread.id),
+    },
     ...(!i.orchestration &&
     i.host.id === host.id &&
     selection.kind === "thread" &&
@@ -1964,16 +1964,6 @@ export function ThreadList({
             {e}
           </p>
         ))}
-        {split && (
-          <SplitGroup
-            split={split}
-            hosts={hosts}
-            selection={selection}
-            hostId={host.id}
-            onOpen={(threadId) => onSelect(split.hostId, { kind: "thread", threadId })}
-            onClose={onClosePane}
-          />
-        )}
         {words.length > 0 && nothingShown && !searching ? (
           <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
             Nothing matches “{query.trim()}”.
@@ -3308,6 +3298,7 @@ function ThreadRow({
   onStartRename,
   onDelete,
   onOpenBeside,
+  onOpenInTab,
   onFork,
   projectPicker,
   onAutoResume,
@@ -3378,6 +3369,7 @@ function ThreadRow({
   onDelete: () => void;
   /** Opens it beside the open thread (PLX-587), while another thread of its host is open. */
   onOpenBeside?: () => void;
+  onOpenInTab?: () => void;
   /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
   onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
   /** The Projects it can be added to (ThreadProjectMenu.tsx), for Add to Project. */
@@ -3564,6 +3556,12 @@ function ThreadRow({
       main={{
         "aria-description": picked ? "Selected" : undefined,
         onClick: renaming ? undefined : onOpen,
+        // A middle click opens it in a new tab, as in a browser.
+        onAuxClick: (e) => {
+          if (e.button !== 1 || !onOpenInTab) return;
+          e.preventDefault();
+          onOpenInTab();
+        },
         onKeyDown: renaming ? undefined : onKeys,
         onContextMenu: (e) => {
           onLeave();
@@ -3713,6 +3711,13 @@ function ThreadRow({
       >
         {menuOpen && (
           <>
+            {onOpenInTab && (
+              <ToolbarMenuRow
+                icon={<PanelTop aria-hidden />}
+                label="Open in new tab"
+                onClick={choose(onOpenInTab)}
+              />
+            )}
             {onOpenBeside && (
               <ToolbarMenuRow
                 icon={<Columns2 aria-hidden />}
@@ -3885,81 +3890,6 @@ export function MenuKey({ children }: { children: string }) {
       data-key={children}
       className="ml-auto pl-3 font-sans text-caption text-faint-foreground before:content-[attr(data-key)]"
     />
-  );
-}
-
-/**
- * The threads tiled side by side (PLX-587, PLX-1082), joined in one box above the list: each with
- * a map of its tile, its Focus thread key, and a button that closes its tile. Choosing one
- * focuses it.
- */
-function SplitGroup({
-  split,
-  hosts,
-  selection,
-  hostId,
-  onOpen,
-  onClose,
-}: {
-  split: Split;
-  hosts: HostThreads[];
-  selection: Selection;
-  hostId: string;
-  onOpen: (threadId: string) => void;
-  onClose: (threadId: string) => void;
-}) {
-  useKeybindings();
-  const keys = tileCommands.map((c) => {
-    const binding = bindingOf(c);
-    return binding && formatKeybinding(binding);
-  });
-  const titles = hosts.find((h) => h.host.id === split.hostId)?.view.state.titles ?? {};
-  return (
-    <div className="mb-2">
-      <div className={sectionHeading}>
-        <Columns2 aria-hidden className="size-3.5" />
-        Side by side
-      </div>
-      <ul
-        aria-label="Side by side"
-        className="flex flex-col gap-0.5 rounded-lg border border-border p-0.5"
-      >
-        {split.threadIds.map((id, side) => {
-          const title = titles[id] ?? "Thread";
-          const focused =
-            hostId === split.hostId && selection.kind === "thread" && selection.threadId === id;
-          return (
-            <li key={id} className="group/pane relative">
-              <button
-                type="button"
-                aria-current={focused ? "page" : undefined}
-                onClick={() => onOpen(id)}
-                className={`${row} pr-8 ${focused ? current : ""}`}
-              >
-                <span className={focused ? "text-accent" : "text-muted-foreground"}>
-                  <TileGlyph count={split.threadIds.length} index={side} />
-                </span>
-                <span className="min-w-0 flex-1 truncate">{title}</span>
-                {keys[side] && (
-                  <kbd className="shrink-0 font-sans text-caption text-faint-foreground tabular-nums">
-                    {keys[side]}
-                  </kbd>
-                )}
-              </button>
-              <button
-                type="button"
-                aria-label={`Close ${title}`}
-                title="Close this tile"
-                onClick={() => onClose(id)}
-                className="absolute top-1/2 right-1 grid size-5.5 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-              >
-                <X />
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
   );
 }
 

@@ -623,9 +623,10 @@ export interface Crumb {
 /**
  * Where the user is: host, workspace, then the current page, split by slashes. The host and the
  * workspace keep their names. Crumbs after them, such as a parent thread and the page, shrink down
- * to a few letters. In a narrow `@container`, a trail of three or more drops its host.
+ * to a few letters. In a narrow `@container`, a trail of three or more drops its host, and with
+ * `tight`, a wider one drops its host and workspace too, for the tabs beside it.
  */
-export function Breadcrumb({ items }: { items: Crumb[] }) {
+export function Breadcrumb({ items, tight }: { items: Crumb[]; tight?: boolean }) {
   return (
     <nav aria-label="Breadcrumb" className="-ml-1.5 min-w-0 overflow-x-clip">
       <ol className="flex min-w-0 items-center gap-0.5 text-body">
@@ -636,7 +637,7 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
           return (
             <li
               key={i}
-              className={`flex items-center gap-0.5 ${kept ? "max-w-48 shrink-0" : `min-w-16 ${i < items.length - 1 ? "max-w-48" : ""}`} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
+              className={`flex items-center gap-0.5 ${kept ? "max-w-48 shrink-0" : `min-w-16 ${i < items.length - 1 ? "max-w-48" : ""}`} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${tight ? (i < 2 ? "@max-3xl:hidden" : i === 2 ? "@max-3xl:before:hidden" : "") : items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
             >
               <Tag
                 {...(onClick && { type: "button", onClick })}

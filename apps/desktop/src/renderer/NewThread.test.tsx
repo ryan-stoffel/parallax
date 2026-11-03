@@ -166,7 +166,15 @@ const notice = () => {
   return toast && [toast.querySelector("span")?.textContent, toast.querySelector("p")?.textContent];
 };
 const crumbs = () =>
-  [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
+  // The trail, then the tab, on a page that has one, where it names the page instead of a crumb.
+  [
+    ...new Set(
+      [
+        ...document.querySelectorAll('[aria-label="Breadcrumb"] li'),
+        ...document.querySelectorAll('[aria-label="Open tabs"] [aria-selected="true"]'),
+      ].map((el) => el.textContent),
+    ),
+  ];
 
 // A main pane menu's option. The sidebar's Create orchestrator dialog has a Repository menu too.
 async function choose(label: string, option: string) {

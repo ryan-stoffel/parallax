@@ -1,4 +1,13 @@
-import { ClipboardList, Columns2, Maximize2, Minimize2, PanelTop, Rows2, X } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ClipboardList,
+  Columns2,
+  Maximize2,
+  Minimize2,
+  PanelTop,
+  Rows2,
+  X,
+} from "lucide-react";
 import {
   useLayoutEffect,
   useRef,
@@ -10,6 +19,7 @@ import {
 } from "react";
 
 import { bindingOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
+import { tileDragType } from "./threadDrag";
 import {
   clampRatio,
   evenRatio,
@@ -38,6 +48,7 @@ const placed = (r: Rect, inset = 0, top = 0): CSSProperties => ({
 /** One thread in the split: its header's title and icon, and its chat. */
 export interface TileItem {
   key: string;
+  threadId: string;
   title: string;
   icon: ReactNode;
   node: ReactNode;
@@ -47,7 +58,7 @@ export interface TileItem {
 interface DropTarget {
   at: number;
   rect: Rect;
-  label: "beside" | "tab" | "replace";
+  label: "beside" | "tab" | "replace" | "swap";
 }
 
 /**
@@ -61,7 +72,7 @@ interface DropTarget {
  * its ratios here and hands them up once it ends, so App doesn't render on every move. `details`
  * floats over the focused thread's tile. A thread `drop` accepts, dragged over, previews where it
  * would open: a new tile while there's room, as a tab once one won't fit, or in place of the tile
- * under the pointer when the split is full.
+ * under the pointer when the split is full. A tile's header drags onto another tile to swap them.
  */
 export function SplitTiles({
   items,
@@ -73,6 +84,7 @@ export function SplitTiles({
   onMaximize,
   onFocus,
   onClose,
+  onSwap,
   details,
   drop,
 }: {
@@ -85,6 +97,7 @@ export function SplitTiles({
   onMaximize: (maximized: boolean) => void;
   onFocus: (index: number) => void;
   onClose: (index: number) => void;
+  onSwap: (from: number, to: number) => void;
   details?: {
     node: ReactNode;
     open: (index: number) => boolean;
@@ -138,7 +151,18 @@ export function SplitTiles({
   };
 
   const [target, setTarget] = useState<DropTarget>();
+  // The thread whose tile header is dragging, which a drag can't read before its drop.
+  const dragged = useRef<number>(undefined);
+  const tileUnder = (e: DragEvent<HTMLElement>) => {
+    const r = box.current!.getBoundingClientRect();
+    return tileAt(tiles, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+  };
   const targetOf = (e: DragEvent<HTMLElement>): DropTarget | undefined => {
+    if (e.dataTransfer.types.includes(tileDragType)) {
+      const tile = tileUnder(e);
+      if (dragged.current === undefined || tile === tileOf(dragged.current)) return undefined;
+      return { at: activeIn(tile), rect: tiles[tile]!, label: "swap" };
+    }
     if (!drop?.accepts(e)) return undefined;
     if (n < maxTiles) {
       // A new thread unmaximizes the split, as Open side by side asks for.
@@ -148,9 +172,15 @@ export function SplitTiles({
         ? { at: n, rect: tileLayout(n + 1, next).tiles[n]!, label: "beside" }
         : { at: n, rect: tileLayout(fits, next).tiles[fits - 1]!, label: "tab" };
     }
-    const r = box.current!.getBoundingClientRect();
-    const tile = tileAt(tiles, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+    const tile = tileUnder(e);
     return { at: activeIn(tile), rect: tiles[tile]!, label: "replace" };
+  };
+  const over = (e: DragEvent<HTMLElement>) => {
+    const next = targetOf(e);
+    setTarget(next);
+    if (!next) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
   };
   // The cut a new tile makes: side by side after an odd count, top and bottom after an even one.
   const NewCut = n % 2 === 1 ? Columns2 : Rows2;
@@ -160,13 +190,8 @@ export function SplitTiles({
       ref={box}
       data-resizing={live ? "" : undefined}
       className="group/tiles relative min-h-0 min-w-0 flex-1"
-      onDragOver={(e) => {
-        const next = targetOf(e);
-        setTarget(next);
-        if (!next) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-      }}
+      onDragEnter={over}
+      onDragOver={over}
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setTarget(undefined);
       }}
@@ -175,7 +200,8 @@ export function SplitTiles({
         setTarget(undefined);
         if (!next) return;
         e.preventDefault();
-        drop!.onDrop(next.at, e);
+        if (next.label === "swap") onSwap(dragged.current!, next.at);
+        else drop!.onDrop(next.at, e);
       }}
     >
       {items.map(({ key, node }, i) => {
@@ -209,6 +235,7 @@ export function SplitTiles({
               detailsOpen={!!details && group.includes(focused) && details.open(focused)}
               onFocus={onFocus}
               onClose={onClose}
+              onDragTile={(index) => (dragged.current = index)}
               onDetails={details && (() => details.onToggle(activeIn(tile)))}
               onMaximize={() => {
                 if (!group.includes(focused)) onFocus(activeIn(tile));
@@ -295,12 +322,20 @@ export function SplitTiles({
           className="pointer-events-none absolute z-20 grid place-items-center rounded-xl border-2 border-dashed border-accent bg-background/85 backdrop-blur-sm transition-[left,top,width,height] duration-150 ease-out motion-reduce:transition-none"
         >
           <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-body font-medium text-accent-foreground [&_svg]:size-4">
-            {target.label === "tab" ? <PanelTop /> : <NewCut />}
+            {target.label === "tab" ? (
+              <PanelTop />
+            ) : target.label === "swap" ? (
+              <ArrowLeftRight />
+            ) : (
+              <NewCut />
+            )}
             {target.label === "beside"
               ? "Open side by side"
               : target.label === "tab"
                 ? "Open as a tab"
-                : "Open here"}
+                : target.label === "swap"
+                  ? "Swap"
+                  : "Open here"}
           </span>
         </div>
       )}
@@ -314,7 +349,8 @@ const headerButton =
 /**
  * A tile's header: a tab for each thread it holds, each with its repository's icon, title, Focus
  * thread key, and a close button, then Thread details and Maximize or Restore. The tab it shows
- * reads in full; the focused thread's is underlined in the accent. Double-clicking it maximizes.
+ * reads in full; the focused thread's is underlined in the accent. Double-clicking it maximizes,
+ * and each tab drags onto another tile or the top bar's tabs.
  */
 function TileHeader({
   rect,
@@ -326,6 +362,7 @@ function TileHeader({
   detailsOpen,
   onFocus,
   onClose,
+  onDragTile,
   onDetails,
   onMaximize,
 }: {
@@ -338,6 +375,7 @@ function TileHeader({
   detailsOpen: boolean;
   onFocus: (index: number) => void;
   onClose: (index: number) => void;
+  onDragTile: (index: number | undefined) => void;
   onDetails?: () => void;
   onMaximize: () => void;
 }) {
@@ -359,6 +397,13 @@ function TileHeader({
           return (
             <div
               key={item.key}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(tileDragType, item.threadId);
+                e.dataTransfer.effectAllowed = "copyMove";
+                onDragTile(i);
+              }}
+              onDragEnd={() => onDragTile(undefined)}
               // In a stack, the shown tab takes the most room, and the others' close buttons show over
               // them on hover, taking none.
               className={`group/tab relative flex min-w-0 items-center ${stacked ? `max-w-64 border-r border-border last:border-r-0 ${shown ? "flex-[3]" : "flex-1"}` : "flex-1"} ${shown ? "" : "hover:bg-hover"}`}
