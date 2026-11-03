@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { UpdateState, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
+import { resetBindings, setWhen } from "./keybindings";
 import { terminalAppShortcut } from "./ui";
 import { updatePrefs, updateRun } from "./updateEverything";
 
@@ -127,6 +128,15 @@ test("in a terminal off macOS, plain Ctrl+letter shortcuts stay the shell's", ()
     terminalAppShortcut(new KeyboardEvent("keydown", init));
   expect(press({ code: "KeyN", ctrlKey: true })).toBe(false);
   expect(press({ code: "KeyS", ctrlKey: true })).toBe(false);
+  // Unless its When asks for the terminal by name.
+  setWhen("newThread", "terminalFocus");
+  const xterm = document.body.appendChild(document.createElement("div"));
+  xterm.className = "xterm";
+  const box = xterm.appendChild(document.createElement("textarea"));
+  box.focus();
+  expect(press({ code: "KeyN", ctrlKey: true })).toBe(true);
+  xterm.remove();
+  resetBindings();
   expect(press({ code: "KeyN", ctrlKey: true, shiftKey: true })).toBe(true);
   expect(press({ code: "KeyJ", ctrlKey: true })).toBe(true);
   expect(press({ code: "Digit2", ctrlKey: true })).toBe(true);

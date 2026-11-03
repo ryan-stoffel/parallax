@@ -192,12 +192,12 @@ pub(super) enum Place {
 }
 
 impl Agents {
-    /// A runner that starts workers on `backends`, in worktrees `worktrees` makes.
     /// Sets what a new thread's branch starts with (`host/settings`' `branchPrefix`).
     pub fn set_branch_prefix(&self, prefix: &str) {
         self.worktrees.set_branch_prefix(prefix);
     }
 
+    /// A runner that starts workers on `backends`, in worktrees `worktrees` makes.
     pub fn new(backends: BackendRegistry, worktrees: WorktreeManager) -> Self {
         Self {
             backends,

@@ -27,8 +27,8 @@
 //!
 //! A worktree lives at `<data dir>/worktrees/<repo slug>/<run id>`, where `<repo slug>` is the
 //! repo's directory name plus a short hash of its canonical path (so two repos named the same
-//! thing never collide, and the folder stays readable). Its branch is `parallax/<short run id>`
-//! (or `parallax/<slug>` for a named one, which [`WorktreeManager::rename_branch`] can rename to
+//! thing never collide, and the folder stays readable). Its branch is the host's prefix, `parallax/` by default, then `<short run id>`
+//! (or then `<slug>` for a named one, which [`WorktreeManager::rename_branch`] can rename to
 //! once a thread is named), `<short run id>` being the first 8 hex digits of the SHA-256 of the
 //! run id — the same short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and
 //! collision-free in the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not
@@ -372,7 +372,7 @@ impl From<SpawnError> for WorktreeError {
 pub struct CreatedWorktree {
     /// Its absolute path, under the parallax-owned worktrees folder.
     pub path: PathBuf,
-    /// Its branch, `parallax/<short run id>`.
+    /// Its branch: the host's prefix, then its short run id or slug.
     pub branch: String,
     /// The concrete commit it was created from, resolved once so it never moves under it.
     pub base: String,
@@ -600,8 +600,15 @@ impl WorktreeManager {
         slug: Option<&str>,
     ) -> Result<String, WorktreeError> {
         let short = short_hash(&run_id.to_string());
-        let prefix = self.branch_prefix();
-        let Some(slug) = slug.filter(|slug| valid_branch_slug(slug)) else {
+        let slug = slug.filter(|slug| valid_branch_slug(slug));
+        let mut prefix = self.branch_prefix();
+        // Git can't have both `ryan` and `ryan/x`. A clash with the host's prefix must not stop the
+        // thread from starting, so that branch takes the default instead.
+        let name = format!("{prefix}{}", slug.unwrap_or(&short));
+        if self.folder_clash(repo_root, &name).await? {
+            DEFAULT_BRANCH_PREFIX.clone_into(&mut prefix);
+        }
+        let Some(slug) = slug else {
             return Ok(format!("{prefix}{short}"));
         };
         let named = format!("{prefix}{slug}");
@@ -622,6 +629,27 @@ impl WorktreeManager {
         } else {
             named
         })
+    }
+
+    /// Whether a branch can't be named `name`: a branch has the name of a folder on its path, or
+    /// other branches sit in a folder of that name.
+    async fn folder_clash(&self, repo_root: &Path, name: &str) -> Result<bool, WorktreeError> {
+        for (at, _) in name.match_indices('/') {
+            let parent = format!("refs/heads/{}", &name[..at]);
+            let found = self
+                .run_git(repo_root, &["rev-parse", "--verify", "--quiet", &parent])
+                .await?;
+            if found.success() {
+                return Ok(true);
+            }
+        }
+        let inside = self
+            .run_git_ok(
+                repo_root,
+                &["for-each-ref", "--count=1", &format!("refs/heads/{name}/")],
+            )
+            .await?;
+        Ok(!inside.trim().is_empty())
     }
 
     /// Renames run `run_id`'s branch `branch` in `repo_path` to the name [`Self::create_named`]

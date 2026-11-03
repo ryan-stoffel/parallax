@@ -10,6 +10,7 @@ import { orchestratorPrefs } from "../prefs";
 import type { ThreadsView } from "../threads";
 import { Picker } from "../ui";
 import {
+  dangerButton,
   field,
   HostPicker,
   ListHeading,
@@ -18,6 +19,7 @@ import {
   moveTab,
   outlineButton,
   PageTitle,
+  quietButton,
   Row,
   rowField,
   Section,
@@ -25,6 +27,9 @@ import {
 } from "./parts";
 
 const newOnes = "new";
+
+/** What search can pick on New orchestrators' pane, rather than an orchestrator's. */
+const defaultAnchors = ["full-access", "autonomy", "defaults"];
 
 /** The autonomy levels as a Picker's options. */
 const autonomyOptions = autonomyLevels.map((a) => ({
@@ -37,13 +42,24 @@ const autonomyOptions = autonomyLevels.map((a) => ({
  * Settings > Orchestrators: on the left, what a new orchestrator starts with and each of a host's
  * orchestrators, and on the right the chosen one's settings, which save as they change.
  */
-export function OrchestratorSettings({ listed }: { listed: { host: Host; view: ThreadsView }[] }) {
+export function OrchestratorSettings({
+  listed,
+  focus,
+}: {
+  listed: { host: Host; view: ThreadsView }[];
+  /** The setting search picked, which may be one only an orchestrator's pane has. */
+  focus?: { anchor: string };
+}) {
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   const [chosen, setChosen] = useState(newOnes);
   const view = listed.find((l) => l.host.id === hostId)?.view;
   const orchestrators = view?.state.orchestrators ?? [];
   const current = orchestrators.find((o) => o.id === chosen);
+  const first = orchestrators[0]?.id;
+  useEffect(() => {
+    if (focus && first) setChosen(defaultAnchors.includes(focus.anchor) ? newOnes : first);
+  }, [focus]);
 
   return (
     <ListPane
@@ -167,6 +183,8 @@ function OrchestratorPane({
       notify({ tone: "error", title: `Couldn't save ${orchestrator.name}`, body: failed });
   };
   const [name, setName] = useState(orchestrator.name);
+  // Asking before the one-way move to Bypass (0042), as the sidebar's Full access does.
+  const [confirming, setConfirming] = useState(false);
   const [checks, setChecks] = useState(orchestrator.checks ?? "");
   const base = orchestrator.baseBranch;
 
@@ -199,19 +217,43 @@ function OrchestratorPane({
             description={
               orchestrator.permission === "bypass"
                 ? "Full access: it and its children run without asking. This can't be turned back."
-                : "Auto: it and its children ask before risky commands."
+                : confirming
+                  ? "It and its children will run without asking. This can't be turned back."
+                  : "Auto: it and its children ask before risky commands."
             }
           >
             {orchestrator.permission === "bypass" ? (
               <span className="text-body text-muted-foreground">Full access</span>
             ) : (
-              <button
-                type="button"
-                className={outlineButton}
-                onClick={() => void save({ permission: "bypass" })}
-              >
-                Give full access
-              </button>
+              <>
+                {confirming ? (
+                  <>
+                    <button
+                      type="button"
+                      className={dangerButton}
+                      onClick={() => void save({ permission: "bypass" })}
+                    >
+                      Give full access
+                    </button>
+                    <button
+                      type="button"
+                      autoFocus
+                      className={quietButton}
+                      onClick={() => setConfirming(false)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className={outlineButton}
+                    onClick={() => setConfirming(true)}
+                  >
+                    Give full access
+                  </button>
+                )}
+              </>
             )}
           </Row>
         )}

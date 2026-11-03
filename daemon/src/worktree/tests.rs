@@ -569,6 +569,22 @@ async fn a_new_branch_starts_with_the_hosts_prefix() {
         .await
         .unwrap();
     assert_eq!(bare.branch, "no-prefix");
+
+    // A clash with a branch takes the default rather than stopping the thread.
+    git(&repo, &["branch", "solo"]);
+    mgr.set_branch_prefix("solo/");
+    let clashed = mgr
+        .create_named(&repo, RunId::generate(), None, Some("clashes"))
+        .await
+        .unwrap();
+    assert_eq!(clashed.branch, "parallax/clashes");
+    git(&repo, &["branch", "folder/inside"]);
+    mgr.set_branch_prefix("");
+    let inside = mgr
+        .create_named(&repo, RunId::generate(), None, Some("folder"))
+        .await
+        .unwrap();
+    assert_eq!(inside.branch, "parallax/folder");
 }
 
 #[test]

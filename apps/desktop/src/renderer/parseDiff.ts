@@ -72,6 +72,9 @@ export function parseDiff(diff: string): DiffFile[] {
   return files;
 }
 
+/** Whether a UTF-16 unit is the first half of a surrogate pair. */
+const isHighSurrogate = (unit: number) => unit >= 0xd800 && unit <= 0xdbff;
+
 /**
  * Marks the part that changed in each removed line paired with an added one, as a run's first with
  * its first, and so on: all but the two lines' shared start and end. A pair with little in common
@@ -98,6 +101,10 @@ function markChanges(lines: DiffLine[]) {
         before.text[before.text.length - 1 - tail] === after.text[after.text.length - 1 - tail]
       )
         tail++;
+      // Not inside an emoji, whose two halves the shared parts may split.
+      if (start > 0 && isHighSurrogate(before.text.charCodeAt(start - 1))) start--;
+      if (tail > 0 && isHighSurrogate(before.text.charCodeAt(before.text.length - tail - 1)))
+        tail--;
       // At least a third of the longer line in common.
       if ((start + tail) * 3 < Math.max(before.text.length, after.text.length)) continue;
       before.mark = [start, before.text.length - tail];

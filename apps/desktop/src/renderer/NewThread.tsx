@@ -217,6 +217,13 @@ export function NewThread({
   // The picked ref, kept with its repository and workspace, so picking another drops it: a new
   // worktree's base never becomes a checkout's switch.
   const [pickedRef, setPickedRef] = useState<{ groupId: string; checkout: boolean; ref: string }>();
+  // A changed default (Settings floats over this screen) picks its base again.
+  const baseDefaults = `${repoDefaults.base ?? ""}/${globalDefaults.worktreeBase}`;
+  const [seenDefaults, setSeenDefaults] = useState(baseDefaults);
+  if (seenDefaults !== baseDefaults) {
+    setSeenDefaults(baseDefaults);
+    setPickedRef(undefined);
+  }
   const gitRef =
     refsAvailable && pickedRef?.groupId === group.id && pickedRef.checkout === checkout
       ? pickedRef.ref

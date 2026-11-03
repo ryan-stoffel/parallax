@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
+import type { Host } from "./hosts";
+import type { ThreadsView } from "./threads";
 import type {
   Hub,
   ProviderInfo,
@@ -110,6 +112,7 @@ async function renderSettings(
   name: SettingsSection = "providers",
   listed: ComponentProps<typeof Settings>["listed"] = [],
   openHost = "local",
+  focus?: { anchor: string },
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
@@ -121,6 +124,7 @@ async function renderSettings(
           theme="system"
           onThemeChange={() => {}}
           openHost={openHost}
+          focus={focus}
         />
         <Notifications />
       </>,
@@ -252,6 +256,36 @@ test("Add keybinding gives a command its keys and the When on the form, in place
   } finally {
     resetBindings();
   }
+});
+
+test("search opens an orchestrator's pane for what only it has", async () => {
+  const orchestrator = { id: "o1", name: "Ember", repoPath: "/src/ember" };
+  const view = {
+    state: { orchestrators: [orchestrator], repos: [] },
+    updateOrchestrator: vi.fn(),
+  } as unknown as ThreadsView;
+  const listed = [{ host: { id: "local", name: "This Mac" } as Host, view }];
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const show = (focus?: { anchor: string }) =>
+    act(() =>
+      root.render(
+        <Settings
+          section="orchestrators"
+          listed={listed}
+          theme="system"
+          onThemeChange={() => {}}
+          openHost="local"
+          focus={focus}
+        />,
+      ),
+    );
+  show();
+  expect(document.body.textContent).toContain("New orchestrators");
+  expect(document.querySelector('[aria-label="Name"]')).toBeNull();
+  show({ anchor: "base-branch" });
+  await settle();
+  expect(document.querySelector('[aria-label="Name"]')).not.toBeNull();
+  act(() => root.unmount());
 });
 
 test("Storage deletes only a host's archived threads, after asking", async () => {
@@ -565,6 +599,12 @@ describe("on a plxd with providers", () => {
         '[aria-label="Manage Home hub"], [aria-label="Close Home hub"]',
       );
     const hubPage = () => visible('[role="region"][aria-label="Home hub"]');
+
+    test("search for Hubs opens its entry, which is otherwise hidden", async () => {
+      await renderSettings("providers", [], "local", { anchor: "hubs" });
+      expect(tab("Hubs").getAttribute("aria-selected")).toBe("true");
+      expect(visible('[data-setting="hubs"]')).toBeDefined();
+    });
 
     test("adds a hub to every computer with hubs at once, and shows its page", async () => {
       await renderSettings();

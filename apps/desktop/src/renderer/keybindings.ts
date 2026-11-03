@@ -271,7 +271,11 @@ const overrides = stored<Overrides>("parallax.keybindings", {}, (raw) => parseOv
 /** The binding `command` runs on, this OS's, if any: the user's, or else its default. */
 export function bindingOf(command: Command): string | undefined {
   const saved = overrides.get()[command]?.key;
-  if (saved !== undefined) return saved ?? undefined;
+  return saved !== undefined ? (saved ?? undefined) : defaultKey(command);
+}
+
+/** `command`'s default binding on this OS, if any. */
+function defaultKey(command: Command): string | undefined {
   const c = commands.find((c) => c.id === command)!;
   const fallback = window.parallax.platform !== "darwin" && c.elsewhere ? c.elsewhere : c.default;
   return fallback && resolve(fallback);
@@ -336,8 +340,9 @@ export function bindingsJson(): string {
   return JSON.stringify(all, null, 2);
 }
 
-/** A key, as `keybindingOf` writes one or a default ("Mod") does. */
-const keyShape = /^((Ctrl|Alt|Shift|Meta|Mod)\+)+[A-Za-z0-9]+$/;
+/** A key, as `keybindingOf` writes one or a default ("Mod") does, its last part a key's code. */
+const keyShape =
+  /^((Ctrl|Alt|Shift|Meta|Mod)\+)+(Key[A-Z]|Digit[0-9]|F[0-9]{1,2}|Numpad\w+|Arrow(Up|Down|Left|Right)|Comma|Period|Slash|Backslash|Semicolon|Quote|Backquote|Bracket(Left|Right)|Minus|Equal|Space|Tab|Backspace|Delete|Home|End|Page(Up|Down))$/;
 
 /** Why a resolved `key` can't be a command's, as recording it would say: it'd never run. */
 function refusal(key: string): string | undefined {
@@ -379,11 +384,12 @@ export function applyBindingsJson(text: string): string[] {
       continue;
     }
     const { key, when } = (value ?? {}) as { key?: unknown; when?: unknown };
-    if (key !== null && !(typeof key === "string" && keyShape.test(key))) {
+    if (key !== undefined && key !== null && !(typeof key === "string" && keyShape.test(key))) {
       errors.push(`${id}: a key like "Mod+KeyK", or null for none`);
       continue;
     }
-    const problem = typeof key === "string" ? refusal(resolve(key)) : undefined;
+    const resolved = typeof key === "string" ? resolve(key) : key;
+    const problem = typeof resolved === "string" ? refusal(resolved) : undefined;
     if (problem) {
       errors.push(`${id}: ${problem}`);
       continue;
@@ -392,10 +398,18 @@ export function applyBindingsJson(text: string): string[] {
       errors.push(`${id}: unknown when ${JSON.stringify(when)}`);
       continue;
     }
-    next[id] = {
-      key: key === null ? null : resolve(key as string),
-      ...(when !== undefined && when !== "always" && { when: when as When }),
-    };
+    // Only what differs from the default is saved, and what's left out stays as it is.
+    const override: Override = { ...next[id] };
+    if (resolved !== undefined) {
+      if (resolved === (defaultKey(id) ?? null)) delete override.key;
+      else override.key = resolved;
+    }
+    if (when !== undefined) {
+      if (when === "always") delete override.when;
+      else override.when = when;
+    }
+    if (Object.keys(override).length) next[id] = override;
+    else delete next[id];
   }
   if (errors.length) return errors;
   const before = overrides.get();

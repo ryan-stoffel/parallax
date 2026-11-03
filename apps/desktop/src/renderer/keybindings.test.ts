@@ -6,11 +6,14 @@ const {
   activeCommand,
   applyBindingsJson,
   bindingOf,
+  bindingsJson,
   commandOf,
+  isDefault,
   parseOverrides,
   resetBindings,
   setBinding,
   setWhen,
+  whenOf,
 } = await import("./keybindings");
 
 beforeEach(() => resetBindings());
@@ -42,6 +45,17 @@ test("a press runs its command only while its When holds", () => {
   expect(commandOf("Meta+KeyF")).toBe("find");
 });
 
+test("Applying the JSON as it opens changes nothing, and a left-out When stays", () => {
+  setWhen("find", "!terminalFocus");
+  expect(applyBindingsJson(bindingsJson())).toEqual([]);
+  expect(whenOf("find")).toBe("!terminalFocus");
+  expect(isDefault("find")).toBe(false);
+  expect(isDefault("sidebar")).toBe(true);
+
+  expect(applyBindingsJson('{"find":{"key":"Mod+KeyG"}}')).toEqual([]);
+  expect(whenOf("find")).toBe("!terminalFocus");
+});
+
 test("the JSON editor applies all of it, or nothing and says why", () => {
   expect(applyBindingsJson('{"sidebar":{"key":"Mod+KeyB","when":"!terminalFocus"}}')).toEqual([]);
   expect(bindingOf("sidebar")).toBe("Meta+KeyB");
@@ -52,7 +66,7 @@ test("the JSON editor applies all of it, or nothing and says why", () => {
   expect(bindingOf("find")).toBe("Meta+KeyF");
 
   // What recording would refuse, since it'd never run.
-  for (const key of ["Alt+KeyK", "Mod+KeyC", "Mod+Digit1", "Ctrl+Meta+Digit1"]) {
+  for (const key of ["Alt+KeyK", "Mod+K", "Mod+KeyC", "Mod+Digit1", "Ctrl+Meta+Digit1"]) {
     expect(applyBindingsJson(JSON.stringify({ find: { key } }))).toHaveLength(1);
     expect(bindingOf("find")).toBe("Meta+KeyF");
   }

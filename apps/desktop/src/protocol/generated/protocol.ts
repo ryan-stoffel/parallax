@@ -6404,9 +6404,9 @@ export type ThreadStartParams = {
 	 */
 	fast?: boolean,
 	/**
-	 * Names the worktree's branch `parallax/<branchSlug>`: lowercase letters, digits, and hyphens,
+	 * Names the worktree's branch the host's `branchPrefix`, `parallax/` by default, then this: lowercase letters, digits, and hyphens,
 	 * no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
-	 * the run's short id after it. Absent names it `parallax/<short run id>`. Not part of what makes
+	 * the run's short id after it. Absent names it the prefix then the short run id. Not part of what makes
 	 * a retry with the same run id conflict.
 	 */
 	branchSlug?: string,

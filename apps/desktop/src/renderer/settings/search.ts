@@ -404,11 +404,19 @@ export const settingsIndex: SettingEntry[] = [
     ["Checks", "The command run after each landing", "test ci verify"],
   ]),
   ...entries("devices", undefined, [
-    ["iOS Simulators", "Whether this host can run them", "xcode iphone simctl"],
-    ["Android Emulators", "Whether this host can run them", "android studio sdk adb avd"],
     ["Device hub", "What streams a device to the Device panel", "install setup"],
     ["Devices", "The simulators and emulators on this host", "boot start stop power"],
   ]),
+  // Rows under Platforms, which is what search scrolls to.
+  ...["iOS Simulators|xcode iphone simctl", "Android Emulators|android studio sdk adb avd"].map(
+    (row): SettingEntry => ({
+      section: "devices",
+      title: row.split("|")[0]!,
+      description: "Whether this host can run them",
+      keywords: row.split("|")[1]!,
+      anchor: "platforms",
+    }),
+  ),
   ...entries("accessibility", "Vision", [
     ["Contrast", "Stronger text and borders", "high contrast"],
     ["Interface text size", "How large the app's text is", "font zoom big small"],

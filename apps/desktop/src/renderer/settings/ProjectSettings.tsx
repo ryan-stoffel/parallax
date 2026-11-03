@@ -36,7 +36,14 @@ const pickerBox = "rounded-lg border border-border bg-background";
  * settings on the right. A repository has its own new thread defaults and scripts, and a Project
  * its name and instructions.
  */
-export function ProjectSettings({ listed }: { listed: { host: Host; view: ThreadsView }[] }) {
+export function ProjectSettings({
+  listed,
+  focus,
+}: {
+  listed: { host: Host; view: ThreadsView }[];
+  /** The setting search picked: Instructions is only a Project's. */
+  focus?: { anchor: string };
+}) {
   const hosts = useHosts();
   const [hostId, setHostId] = useState(localId);
   const view = listed.find((l) => l.host.id === hostId)?.view;
@@ -45,6 +52,10 @@ export function ProjectSettings({ listed }: { listed: { host: Host; view: Thread
   const chats = entries.filter((r) => r.project);
   const [chosen, setChosen] = useState<string>();
   const current = [...repos, ...chats].find((r) => r.id === chosen) ?? repos[0] ?? chats[0];
+  const firstChat = chats[0]?.id;
+  useEffect(() => {
+    if (focus?.anchor === "instructions" && firstChat) setChosen(firstChat);
+  }, [focus]);
 
   return (
     <ListPane

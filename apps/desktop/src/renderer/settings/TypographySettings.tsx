@@ -114,10 +114,10 @@ const str = "text-project-green";
 /** A one-line change to a file, in the monospace font, wrapped as Word wrap says. */
 function DiffPreview() {
   const line = (n: number, op: " " | "-" | "+", code: ReactNode) => (
-    <div className={`flex ${op === "-" ? "bg-danger/15" : op === "+" ? "bg-added/15" : ""}`}>
+    <div className={`flex ${op === "-" ? "diff-row-removed" : op === "+" ? "diff-row-added" : ""}`}>
       <span
         aria-hidden
-        className={`w-1 shrink-0 ${op === "-" ? "bg-danger" : op === "+" ? "bg-added" : ""}`}
+        className={`w-1 shrink-0 ${op === "-" ? "bg-diff-removed" : op === "+" ? "bg-diff-added" : ""}`}
       />
       <span aria-hidden className="w-9 shrink-0 pr-3 text-right text-faint-foreground select-none">
         {n}

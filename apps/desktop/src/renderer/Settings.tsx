@@ -221,11 +221,11 @@ export function Settings({
     return (
       <div key={section} className="min-h-0 flex-1 overflow-hidden">
         {section === "providers" ? (
-          <ProvidersSettings openHost={openHost} />
+          <ProvidersSettings openHost={openHost} focus={focus} />
         ) : section === "projects" ? (
-          <ProjectSettings listed={listed} />
+          <ProjectSettings listed={listed} focus={focus} />
         ) : (
-          <OrchestratorSettings listed={listed} />
+          <OrchestratorSettings listed={listed} focus={focus} />
         )}
       </div>
     );
@@ -291,22 +291,37 @@ function checkedLabel(checkedAt: string): string {
  * API keys, and models. It opens on the host the window has open, whose providers the model picker
  * lists, and with more than one host, a picker chooses which.
  */
-function ProvidersSettings({ openHost }: { openHost: string }) {
+function ProvidersSettings({
+  openHost,
+  focus,
+}: {
+  openHost: string;
+  /** The setting search picked: Hubs has its own entry to open. */
+  focus?: { anchor: string };
+}) {
   const hosts = useHosts();
   const [hostId, setHostId] = useState(openHost);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} always />;
-  return <HostProviders key={host.id} host={host} picker={picker} />;
+  return <HostProviders key={host.id} host={host} picker={picker} focus={focus} />;
 }
 
 /**
  * One host's providers: its provider instances on a plxd with `providers`, else the CLIs an older
  * one detects.
  */
-function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
+function HostProviders({
+  host,
+  picker,
+  focus,
+}: {
+  host: Host;
+  picker: ReactNode;
+  focus?: { anchor: string };
+}) {
   const connection = useConnection(host.id);
   return connection?.status === "connected" && "providers" in connection.capabilities ? (
-    <HostInstances host={host} picker={picker} />
+    <HostInstances host={host} picker={picker} focus={focus} />
   ) : (
     <HostClis host={host} picker={picker} />
   );
@@ -707,7 +722,15 @@ const hubsTab = "#hubs";
  * plxd with `hubs`, its hubs (0089) have their own entry under the list (HubsSection), and their
  * own instances stay out of it, since only the hub edits them.
  */
-function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
+function HostInstances({
+  host,
+  picker,
+  focus,
+}: {
+  host: Host;
+  picker: ReactNode;
+  focus?: { anchor: string };
+}) {
   const providers = useProviders(host.id);
   const linkOn = useProvidersLinked();
   const connection = useConnection(host.id);
@@ -766,6 +789,9 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     setHubsError(errors[2]);
   };
 
+  useEffect(() => {
+    if (focus?.anchor === "hubs") setSelected(hubsTab);
+  }, [focus]);
   const list = providers?.providers.filter((p) => !p.hub);
   const showingHubs = selected === hubsTab;
   const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];

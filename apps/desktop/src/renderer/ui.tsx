@@ -14,7 +14,7 @@ import {
   type ToggleEvent,
 } from "react";
 
-import { activeCommand, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
+import { activeCommand, keybindingOf, useShortcutLabel, whenOf, type Command } from "./keybindings";
 import { Check as CheckSymbol } from "./symbols";
 import { Kbd } from "./ui/marks";
 
@@ -52,13 +52,21 @@ export function appShortcut(e: KeyPress): Command | "row" | undefined {
 /**
  * Whether a press in a terminal is the app's alone. On macOS every app shortcut is. Elsewhere,
  * where they're Ctrl, a plain Ctrl+letter one (Ctrl+N, Ctrl+S) stays the shell's, which readline
- * and editors use; the terminal's toggle, Ctrl+1 to Ctrl+9, and any with Shift or Alt are the app's.
+ * and editors use; the terminal's toggle, Ctrl+1 to Ctrl+9, any with Shift or Alt, and any whose When is terminalFocus, are the app's.
  */
 export function terminalAppShortcut(e: KeyPress): boolean {
   const command = appShortcut(e);
   if (command === undefined) return false;
   const mac = window.parallax.platform === "darwin";
-  return mac || command === "terminal" || command === "row" || e.shiftKey || e.altKey;
+  return (
+    mac ||
+    command === "terminal" ||
+    command === "row" ||
+    e.shiftKey ||
+    e.altKey ||
+    // Asked for here by name, so it's not the shell's.
+    whenOf(command) === "terminalFocus"
+  );
 }
 
 /** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
