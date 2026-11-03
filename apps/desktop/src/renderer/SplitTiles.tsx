@@ -222,9 +222,9 @@ export function SplitTiles({
                 onClose={onCloseTab}
                 onNew={() => onNewTab(shownPane.paneId)}
                 onDrop={(tabDrop, before) => {
-                  // Among stacked panes, the one holding the tab it lands before.
+                  // Among stacked panes, the one holding the tab it lands before, or the last.
                   const holder = group.find((i) => items[i]!.tabs.some((t) => t.id === before));
-                  onDropOnTabs(tabDrop, items[holder ?? activeIn(tile)]!.paneId, before);
+                  onDropOnTabs(tabDrop, items[holder ?? group.at(-1)!]!.paneId, before);
                 }}
                 closable={closable}
               />
