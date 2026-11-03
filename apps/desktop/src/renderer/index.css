@@ -1035,8 +1035,9 @@ body {
   margin-top: 3.5rem;
   height: calc(100vh - 6.5rem);
 }
-/* Room for the traffic lights, where a row starts at the window's left edge. */
-[data-platform="darwin"] .traffic-light-inset {
+/* Room for the traffic lights, where a row starts at the window's left edge. Full screen hides
+   them. */
+[data-platform="darwin"]:not([data-full-screen]) .traffic-light-inset {
   padding-left: 80px;
 }
 /* Room for Windows' window buttons, where a row ends at the window's right
