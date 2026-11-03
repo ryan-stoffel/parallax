@@ -1,8 +1,8 @@
 //! Where plxd keeps its files.
 //!
 //! Everything lives in one data folder (0009, 0023), which the editor shares:
-//! `~/.parallax` (`%USERPROFILE%\.parallax` on Windows), or the older OS folder where one exists
-//! (see [`DataDir::default_location`]). plxd's own entries are:
+//! `~/.parallax` (`%USERPROFILE%\.parallax` on Windows), or the older OS folder where the store is
+//! still there (see [`DataDir::default_location`]). plxd's own entries are:
 //!
 //! - `plxd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
 //!   listens on a named pipe instead, so there it isn't in the folder.
@@ -61,10 +61,16 @@ pub const UPLOADS_DIR: &str = "uploads";
 /// Claude Code's worker sandbox (PLX-895, `linux_sandbox::bundled_dir`).
 pub const SANDBOX_TOOLS_DIR: &str = "tools/sandbox";
 
-/// `default`, unless it doesn't exist and the `legacy` folder does.
+/// The store's name in the data folder.
+const STORE_FILE: &str = "plxd.sqlite3";
+
+/// `default`, unless only the `legacy` folder has a store. Other things create `default`, such as
+/// New Repository's `projects/`, so the folder existing doesn't make it the data folder (PLX-1262).
 fn pick_default(default: PathBuf, legacy: Option<PathBuf>) -> PathBuf {
     match legacy {
-        Some(legacy) if !default.exists() && legacy.is_dir() => legacy,
+        Some(legacy) if !default.join(STORE_FILE).exists() && legacy.join(STORE_FILE).exists() => {
+            legacy
+        }
         _ => default,
     }
 }
@@ -129,8 +135,7 @@ impl DataDir {
     }
 
     /// The data folder for Parallax (0023): `~/.parallax`, with `%USERPROFILE%\.parallax` on Windows.
-    /// A computer that has no `~/.parallax` yet and has the folder older versions used keeps using
-    /// that one, since the store holds absolute worktree paths that a move would break: see
+    /// A computer whose store is only in the folder older versions used keeps using that one, since the store holds absolute worktree paths that a move would break: see
     /// [`legacy_location`].
     ///
     /// # Errors
@@ -173,7 +178,7 @@ impl DataDir {
     /// `plxd.sqlite3`, the project store.
     #[must_use]
     pub fn store_file(&self) -> PathBuf {
-        self.root.join("plxd.sqlite3")
+        self.root.join(STORE_FILE)
     }
 
     /// `logs/plxd.log`.
@@ -486,17 +491,23 @@ fn proc_exe(pid: u32) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::pick_default;
+    use super::{STORE_FILE, pick_default};
 
     #[test]
-    fn the_default_folder_gives_way_only_to_an_existing_legacy_one() {
+    fn the_default_folder_gives_way_only_to_a_legacy_store() {
         let root = tempfile::tempdir().unwrap();
         let default = root.path().join(".parallax");
         let legacy = root.path().join("legacy");
         assert_eq!(pick_default(default.clone(), Some(legacy.clone())), default);
+        // A legacy folder without a store, like Linux's, which also holds the `parallax` command.
         std::fs::create_dir(&legacy).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), default);
+        std::fs::write(legacy.join(STORE_FILE), "").unwrap();
         assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
-        std::fs::create_dir(&default).unwrap();
+        // New Repository created the default folder: the store still decides (PLX-1262).
+        std::fs::create_dir_all(default.join("projects")).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
+        std::fs::write(default.join(STORE_FILE), "").unwrap();
         assert_eq!(pick_default(default.clone(), Some(legacy)), default);
     }
 

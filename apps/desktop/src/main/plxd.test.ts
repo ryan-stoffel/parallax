@@ -48,23 +48,28 @@ test("the bundled or Cargo-built plxd comes before PATH", () => {
   expect(find([])).toBeUndefined();
 });
 
-test("the data folder is PLXD_DATA_DIR, else ~/.parallax, else an older folder that exists", () => {
-  const only =
+test("the data folder is PLXD_DATA_DIR, else ~/.parallax, unless only an older folder has a store", () => {
+  const stores =
     (...dirs: string[]) =>
-    (dir: string) =>
-      dirs.includes(dir);
+    (file: string) =>
+      dirs.some((dir) => file === path.join(dir, "plxd.sqlite3"));
   const old = path.join("/h", "Library/Application Support/parallax");
   const home = path.join("/h", ".parallax");
-  expect(dataDir({ PLXD_DATA_DIR: "/d" }, "darwin", "/h", only())).toBe("/d");
-  expect(dataDir({}, "darwin", "/h", only())).toBe(home);
-  expect(dataDir({}, "darwin", "/h", only(old))).toBe(old);
-  expect(dataDir({}, "darwin", "/h", only(old, home))).toBe(home);
-  expect(dataDir({ XDG_DATA_HOME: "/x" }, "linux", "/h", only(path.join("/x", "parallax")))).toBe(
+  expect(dataDir({ PLXD_DATA_DIR: "/d" }, "darwin", "/h", stores())).toBe("/d");
+  expect(dataDir({}, "darwin", "/h", stores())).toBe(home);
+  expect(dataDir({}, "darwin", "/h", stores(old))).toBe(old);
+  expect(dataDir({}, "darwin", "/h", stores(old, home))).toBe(home);
+  expect(dataDir({ XDG_DATA_HOME: "/x" }, "linux", "/h", stores(path.join("/x", "parallax")))).toBe(
     path.join("/x", "parallax"),
   );
   // A relative XDG_DATA_HOME is ignored, as the XDG spec says.
   expect(
-    dataDir({ XDG_DATA_HOME: "x" }, "linux", "/h", only(path.join("/h", ".local/share/parallax"))),
+    dataDir(
+      { XDG_DATA_HOME: "x" },
+      "linux",
+      "/h",
+      stores(path.join("/h", ".local/share/parallax")),
+    ),
   ).toBe(path.join("/h", ".local/share/parallax"));
 });
 

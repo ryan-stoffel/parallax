@@ -63,8 +63,8 @@ if "$dir/plxd" service status 2>/dev/null | grep -qx 'installed: true' &&
   "$dir/plxd" service install --replace >/dev/null 2>&1; then
   exit 0
 fi
-# plxd's data folder, as plxd picks it: ~/.parallax, unless only the OS folder exists.
-[ ! -d "$HOME/.parallax" ] && [ -d "$data" ] || data=$HOME/.parallax
+# plxd's data folder, as plxd picks it: ~/.parallax, unless only the OS folder has a store.
+[ ! -e "$HOME/.parallax/plxd.sqlite3" ] && [ -e "$data/plxd.sqlite3" ] || data=$HOME/.parallax
 pid=$(cat "\${PLXD_DATA_DIR:-$data}/plxd.lock" 2>/dev/null || true)
 # This user's serve only: a stale pid may be another user's process by now.
 if [ -n "$pid" ] && [ "$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$(id -u)" ] &&

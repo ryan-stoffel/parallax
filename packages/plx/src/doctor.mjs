@@ -199,7 +199,7 @@ const isDir = (dir) => {
 
 /**
  * plxd's data folder, as `DataDir::default_location` picks it: `PLXD_DATA_DIR`, else
- * `~/.parallax`, unless that doesn't exist and the folder older versions used does.
+ * `~/.parallax`, unless only the folder older versions used has a store.
  * @param {NodeJS.Platform} platform
  * @param {string} home
  * @param {NodeJS.ProcessEnv} env
@@ -215,7 +215,8 @@ export function resolveDataDir(platform, home, env) {
     const data = env.XDG_DATA_HOME && path.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : path.join(home, ".local", "share");
     legacy = path.join(data, "parallax");
   }
-  return !existsSync(fallback) && legacy && isDir(legacy) ? legacy : fallback;
+  const hasStore = (/** @type {string} */ dir) => existsSync(path.join(dir, "plxd.sqlite3"));
+  return !hasStore(fallback) && legacy && hasStore(legacy) ? legacy : fallback;
 }
 
 /**
