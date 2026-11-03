@@ -148,6 +148,7 @@ export function SecretCard({
     if (file.size > maxSecretBytes) return refuse("A secret can be up to 64 KB.");
     let text;
     try {
+      // This drops a leading BOM, which would otherwise break the first variable for shells and dotenv.
       text = await file.text();
     } catch {
       return refuse("It couldn't be read.");
