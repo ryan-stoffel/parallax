@@ -288,6 +288,33 @@ test("search opens an orchestrator's pane for what only it has", async () => {
   act(() => root.unmount());
 });
 
+test("Projects lists each with its icon, and an icon picked there goes to every copy", async () => {
+  const repo = { id: "r1", name: "ember", path: "/src/ember", icon: { name: "rocket" } };
+  const updates: [string, unknown][] = [];
+  const viewOf = (host: string, id: string) =>
+    ({
+      state: { orchestrators: [], repos: [{ ...repo, id }] },
+      capabilities: { threadAttention: {} },
+      updateRepo: async (r: string, change: unknown) => void updates.push([`${host}/${r}`, change]),
+    }) as unknown as ThreadsView;
+  await renderSettings("projects", [
+    { host: { id: "local", name: "This Mac" } as Host, view: viewOf("local", "r1") },
+    { host: { id: mini.id, name: mini.name } as Host, view: viewOf(mini.id, "r9") },
+  ]);
+  const row = button(document.body, "ember/src/ember");
+  expect(row.querySelector("svg")).not.toBeNull();
+  expect(document.querySelector('[data-setting="project-icon"]')).toBeNull();
+
+  await click(row);
+  expect(document.querySelector('[data-setting="project-icon"]')!.textContent).toContain("rocket");
+  const picker = document.querySelector<HTMLElement>('[role="dialog"][aria-label$="icon"]')!;
+  await act(async () =>
+    picker.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" })),
+  );
+  await click(picker.querySelector<HTMLElement>('[role="option"]')!);
+  expect(updates.map(([where]) => where)).toEqual(["local/r1", `${mini.id}/r9`]);
+});
+
 test("Storage deletes only a host's archived threads, after asking", async () => {
   window.parallax.storage = async () => [];
   answers["thread/list"] = () => ({

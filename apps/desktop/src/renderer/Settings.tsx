@@ -217,13 +217,11 @@ export function Settings({
 }: SettingsProps & { onSection?: (section: SettingsSection) => void }) {
   useScrollTo(focus);
   // A list and its pane fill the page; everything else reads as one column.
-  if (section === "providers" || section === "projects" || section === "orchestrators")
+  if (section === "providers" || section === "orchestrators")
     return (
       <div key={section} className="min-h-0 flex-1 overflow-hidden">
         {section === "providers" ? (
           <ProvidersSettings openHost={openHost} focus={focus} />
-        ) : section === "projects" ? (
-          <ProjectSettings listed={listed} focus={focus} />
         ) : (
           <OrchestratorSettings listed={listed} focus={focus} />
         )}
@@ -247,6 +245,8 @@ export function Settings({
           <KeybindSettings />
         ) : section === "devices" ? (
           <DeviceSettings />
+        ) : section === "projects" ? (
+          <ProjectSettings listed={listed} focus={focus} />
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
         ) : section === "worktrees" ? (

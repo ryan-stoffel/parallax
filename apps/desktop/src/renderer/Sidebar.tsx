@@ -374,9 +374,8 @@ function repoColor(repo: Repo, icon: ChosenIcon | undefined) {
  * another computer, or else its initials on a tile in a color picked from its name. No repo is a
  * dashed square, and a Project with no icon of its own two speech bubbles (0090).
  */
-export function RepoIcon({ repo }: { repo?: Repo }) {
+export function RepoIcon({ repo, size = "size-4" }: { repo?: Repo; size?: string }) {
   const shared = useContext(SharedRepoIcons);
-  const size = "size-4";
   if (!repo || repo.scratch)
     return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);

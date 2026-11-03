@@ -1,50 +1,46 @@
-import { Check, Copy, FolderGit2, MessagesSquare, RotateCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, ChevronRight, Copy, RotateCcw } from "lucide-react";
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import type { AgentPermission, Repo, RepoRef } from "../../protocol/generated/protocol";
+import type { AgentPermission, ChosenIcon, Repo, RepoRef } from "../../protocol/generated/protocol";
 import { accessPrefs } from "../accessPrefs";
 import { useCopy } from "../AgentChat";
 import { accessOptions } from "../Composer";
 import { EffortMenu } from "../EffortMenu";
 import { localId, useHosts, type Host } from "../hosts";
+import { IconPicker } from "../IconPicker";
+import { readIcon } from "../images";
 import { ModelMenu } from "../ModelMenu";
 import { useCatalog, type Provider } from "../models";
 import { notify } from "../notifications";
 import { newThreadPrefs, setRepoPrefs, useRepoPrefs, type RepoPrefs } from "../prefs";
+import { defaultIcon } from "../projectIcons";
 import { workspaces } from "../RunTargetMenu";
-import { isRepository, type ThreadsView } from "../threads";
+import { RepoIcon, SharedRepoIcons } from "../Sidebar";
+import { isRepository, repoIconOf, setRepoIcons, type ThreadsView } from "../threads";
 import { IconButton, Picker } from "../ui";
-import {
-  field,
-  HostPicker,
-  ListHeading,
-  ListItem,
-  ListPane,
-  moveTab,
-  PageTitle,
-  Row,
-  rowField,
-  Section,
-} from "./parts";
+import { field, HostPicker, outlineButton, PageTitle, Row, rowField, Section } from "./parts";
 import { RepoScripts } from "./ScriptSettings";
 
-/** What search can pick on a repository's pane. */
+/** The menu's choice for the list of them all, which no entry's id can be. */
+const allProjects = "#all";
+
+/** What search can pick on a repository's page. */
 const repoAnchors = ["new-thread-defaults", "scripts", "from-parallax-json", "git"];
 
 /** The composer's own menus are borderless; on a settings row they get a field's outline. */
 const pickerBox = "rounded-lg border border-border bg-background";
 
 /**
- * Settings > Projects: a host's repositories and Projects on the left, and the chosen one's own
- * settings on the right. A repository has its own new thread defaults and scripts, and a Project
- * its name and instructions.
+ * Settings > Projects: a menu of the host's repositories and Projects, opening on the list of them.
+ * Choosing one shows its icon and its own settings. A repository has its own new thread defaults
+ * and scripts, and a Project its name and instructions.
  */
 export function ProjectSettings({
   listed,
   focus,
 }: {
   listed: { host: Host; view: ThreadsView }[];
-  /** The setting search picked: Instructions is only a Project's. */
+  /** The setting search picked, which only a chosen repository or Project has. */
   focus?: { anchor: string };
 }) {
   const hosts = useHosts();
@@ -53,68 +49,217 @@ export function ProjectSettings({
   const entries = view?.state.repos ?? [];
   const repos = entries.filter(isRepository);
   const chats = entries.filter((r) => r.project);
+  const all = [...repos, ...chats];
   const [chosen, setChosen] = useState<string>();
-  const current = [...repos, ...chats].find((r) => r.id === chosen) ?? repos[0] ?? chats[0];
-  const firstChat = chats[0]?.id;
+  const current = all.find((r) => r.id === chosen);
   useEffect(() => {
     if (!focus) return;
-    if (focus.anchor === "instructions") setChosen(firstChat);
-    // Anything else search picks is only a repository's.
-    else if (repoAnchors.includes(focus.anchor)) setChosen(undefined);
+    const among = (rows: Repo[]) => (was?: string) =>
+      rows.some((r) => r.id === was) ? was : rows[0]?.id;
+    if (focus.anchor === "instructions") setChosen(among(chats));
+    else if (focus.anchor === "project-icon") setChosen(among(all));
+    else if (repoAnchors.includes(focus.anchor)) setChosen(among(repos));
   }, [focus]);
 
   return (
-    <ListPane
-      bar={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} always />}
-      list={
-        <div role="tablist" aria-label="Projects" aria-orientation="vertical" onKeyDown={moveTab}>
-          <ListHeading>Repositories</ListHeading>
-          {repos.map((r) => (
-            <ListItem
-              key={r.id}
-              chosen={r === current}
-              onClick={() => setChosen(r.id)}
-              icon={<FolderGit2 aria-hidden className="text-faint-foreground" />}
-              title={r.name}
-              detail={<RepoOverrides hostId={hostId} repo={r.id} />}
+    <>
+      <div className="mb-8">
+        <HostPicker
+          hosts={hosts}
+          value={hostId}
+          onChange={setHostId}
+          always
+          scope={
+            <Picker
+              field
+              label="Project"
+              value={current?.id ?? allProjects}
+              onChange={(id) => setChosen(id === allProjects ? undefined : id)}
+              options={[
+                { value: allProjects, label: "All projects" },
+                ...all.map((r) => ({
+                  value: r.id,
+                  label: r.name,
+                  icon: <RepoIcon repo={r} />,
+                })),
+              ]}
+              search={all.length > 8 ? "Search projects" : undefined}
+              className="max-w-56"
+              panelClassName="min-w-56"
             />
-          ))}
-          {repos.length === 0 && (
-            <p className="px-4 py-2 text-meta text-faint-foreground">None on this host yet.</p>
-          )}
-          {chats.length > 0 && <ListHeading>Projects</ListHeading>}
-          {chats.map((r) => (
-            <ListItem
-              key={r.id}
-              chosen={r === current}
-              onClick={() => setChosen(r.id)}
-              icon={<MessagesSquare aria-hidden className="text-faint-foreground" />}
-              title={r.name}
-            />
-          ))}
-        </div>
-      }
-    >
-      <div className="mx-auto max-w-3xl px-8 pt-6 pb-16">
-        {!current || !view ? (
-          <PageTitle title="Projects">
-            Add a repository from the sidebar, and its settings show here.
-          </PageTitle>
-        ) : current.project ? (
-          <ChatProject key={current.id} repo={current} view={view} />
-        ) : (
-          <Repository key={`${hostId}/${current.id}`} hostId={hostId} repo={current} />
-        )}
+          }
+        />
       </div>
-    </ListPane>
+      {!view ? (
+        <PageTitle title="Projects">This host isn&apos;t connected.</PageTitle>
+      ) : current?.project ? (
+        <ChatProject key={current.id} repo={current} view={view} listed={listed} />
+      ) : current ? (
+        <Repository
+          key={`${hostId}/${current.id}`}
+          hostId={hostId}
+          repo={current}
+          view={view}
+          listed={listed}
+        />
+      ) : (
+        <>
+          <p className="mb-4 text-reading text-muted-foreground">
+            {all.length
+              ? "Choose a project to manage its icon and its own settings."
+              : "Add a repository from the sidebar, and its settings show here."}
+          </p>
+          {repos.length > 0 && (
+            <ProjectList
+              title="Repositories"
+              rows={repos}
+              detail={(r) => <RepoDetail hostId={hostId} repo={r} />}
+              onChoose={setChosen}
+            />
+          )}
+          {chats.length > 0 && (
+            <ProjectList
+              title="Projects"
+              rows={chats}
+              detail={() => "Chats with their own instructions"}
+              onChoose={setChosen}
+            />
+          )}
+        </>
+      )}
+    </>
   );
 }
 
-/** How many defaults a repository sets of its own, for its row. */
-function RepoOverrides({ hostId, repo }: { hostId: string; repo: string }) {
-  const count = Object.keys(useRepoPrefs(hostId, repo)).length;
+/** A section of repositories or Projects, each with its icon, opening its own settings. */
+function ProjectList({
+  title,
+  rows,
+  detail,
+  onChoose,
+}: {
+  title: string;
+  rows: Repo[];
+  detail: (repo: Repo) => ReactNode;
+  onChoose: (id: string) => void;
+}) {
   return (
-    <>{count ? `${count} ${count === 1 ? "default" : "defaults"} changed` : "Using defaults"}</>
+    <Section title={title}>
+      {rows.map((r) => (
+        <button
+          key={r.id}
+          type="button"
+          onClick={() => onChoose(r.id)}
+          className="flex w-full items-center gap-3 border-b border-border/70 px-4 py-2.5 text-left first:rounded-t-xl last:rounded-b-xl last:border-b-0 hover:bg-hover"
+        >
+          <RepoIcon repo={r} size="size-5" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-body font-medium">{r.name}</span>
+            <span className="block truncate text-meta text-muted-foreground">{detail(r)}</span>
+          </span>
+          <ChevronRight aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+        </button>
+      ))}
+    </Section>
+  );
+}
+
+/** A repository's path, and how many defaults it sets of its own. */
+function RepoDetail({ hostId, repo }: { hostId: string; repo: Repo }) {
+  const count = Object.keys(useRepoPrefs(hostId, repo.id)).length;
+  return (
+    <>
+      {repo.path}
+      {count > 0 && ` · ${count} ${count === 1 ? "default" : "defaults"} changed`}
+    </>
+  );
+}
+
+/**
+ * A repository's or Project's icon, with what's on it now, Choose icon, and Choose file where the
+ * host keeps images. A repository's goes to its copies on every computer, as the sidebar's does
+ * (0033). Each pick saves at once.
+ */
+function IconRow({
+  repo,
+  view,
+  listed,
+}: {
+  repo: Repo;
+  view: ThreadsView;
+  listed: { view: ThreadsView }[];
+}) {
+  const picker = useRef<HTMLDivElement>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const pickerId = useId();
+  const icon = repoIconOf(repo, useContext(SharedRepoIcons));
+  const maxBytes = view.iconImageBytes;
+  const save = (next: ChosenIcon) => {
+    if (repo.project)
+      void view.updateRepo(repo.id, { icon: next }).then((failed) => {
+        if (failed)
+          notify({ tone: "error", title: `Couldn't save ${repo.name}'s icon`, body: failed });
+      });
+    else
+      setRepoIcons(
+        listed.map((l) => l.view),
+        repo.name,
+        next,
+      );
+  };
+  // An image keeps the glyph and color under it, for an app that doesn't draw images (0038).
+  const upload = async (chosen: File) => {
+    const image = await readIcon(chosen, maxBytes!);
+    if (typeof image === "string")
+      notify({ tone: "error", title: "Couldn't use that image", body: image });
+    else {
+      const { name, color } = icon ?? defaultIcon;
+      save({ name, ...(color && { color }), image });
+    }
+  };
+  return (
+    <Row
+      title="Project icon"
+      description={
+        !icon
+          ? repo.project
+            ? "The Project glyph"
+            : "Its initials"
+          : icon.image
+            ? "An uploaded image"
+            : [icon.name, icon.color].filter(Boolean).join(" · ")
+      }
+    >
+      <RepoIcon repo={repo} size="size-6" />
+      <button
+        type="button"
+        className={outlineButton}
+        onClick={(e) => picker.current?.showPopover({ source: e.currentTarget })}
+      >
+        Choose icon
+      </button>
+      {maxBytes !== undefined && (
+        <>
+          <button type="button" className={outlineButton} onClick={() => file.current?.click()}>
+            Choose file
+          </button>
+          <input
+            ref={file}
+            type="file"
+            hidden
+            aria-label={`Image for ${repo.name}'s icon`}
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            onChange={(e) => {
+              const chosen = e.currentTarget.files?.[0];
+              // Cleared, so picking the same file again reads it again.
+              e.currentTarget.value = "";
+              if (chosen) void upload(chosen);
+            }}
+          />
+        </>
+      )}
+      <IconPicker ref={picker} id={pickerId} value={icon} onPick={save} maxImageBytes={maxBytes} />
+    </Row>
   );
 }
 
@@ -140,8 +285,18 @@ function GitValue({ text, missing }: { text?: string; missing: string }) {
   );
 }
 
-/** A repository's path, its own new thread defaults, its scripts, and its git. */
-function Repository({ hostId, repo }: { hostId: string; repo: Repo }) {
+/** A repository's path, its icon, its own new thread defaults, its scripts, and its git. */
+function Repository({
+  hostId,
+  repo,
+  view,
+  listed,
+}: {
+  hostId: string;
+  repo: Repo;
+  view: ThreadsView;
+  listed: { view: ThreadsView }[];
+}) {
   const prefs = useRepoPrefs(hostId, repo.id);
   const global = newThreadPrefs.use();
   const legacyPlan = accessPrefs.use().legacyPlan;
@@ -193,6 +348,11 @@ function Repository({ hostId, repo }: { hostId: string; repo: Repo }) {
           </IconButton>
         </span>
       </PageTitle>
+      {"threadAttention" in view.capabilities && (
+        <Section title="General">
+          <IconRow repo={repo} view={view} listed={listed} />
+        </Section>
+      )}
       <Section title="New thread defaults">
         <Row title="Model" description="The model a new thread here starts on.">
           <ResetDefault
@@ -317,8 +477,16 @@ function Repository({ hostId, repo }: { hostId: string; repo: Repo }) {
   );
 }
 
-/** A Project's name and instructions, which every thread in it gets (0090). */
-function ChatProject({ repo, view }: { repo: Repo; view: ThreadsView }) {
+/** A Project's name, its icon, and its instructions, which every thread in it gets (0090). */
+function ChatProject({
+  repo,
+  view,
+  listed,
+}: {
+  repo: Repo;
+  view: ThreadsView;
+  listed: { view: ThreadsView }[];
+}) {
   const [name, setName] = useState(repo.name);
   const [instructions, setInstructions] = useState(repo.instructions ?? "");
   const save = async (change: { name?: string; instructions?: string }) => {
@@ -346,6 +514,7 @@ function ChatProject({ repo, view }: { repo: Repo; view: ThreadsView }) {
             className={rowField}
           />
         </Row>
+        <IconRow repo={repo} view={view} listed={listed} />
       </Section>
       <Section title="Instructions">
         <div className="px-4 py-3">

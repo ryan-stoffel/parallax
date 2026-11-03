@@ -210,21 +210,25 @@ export function HostPicker({
   value,
   onChange,
   always,
+  scope,
 }: {
   hosts: Host[];
   value: string;
   onChange: (id: string) => void;
   always?: boolean;
+  /** What on the host the settings are for, as a menu, read before the host. */
+  scope?: ReactNode;
 }) {
+  const lead = scope ? <>Applying settings for {scope} on</> : "Applying settings on";
   if (hosts.length < 2)
     return always ? (
-      <p className="text-reading text-muted-foreground">
-        Applying settings on <span className="font-medium text-foreground">{hosts[0]?.name}</span>
-      </p>
+      <div className="flex flex-wrap items-center gap-1.5 text-reading text-muted-foreground">
+        {lead} <span className="font-medium text-foreground">{hosts[0]?.name}</span>
+      </div>
     ) : null;
   return (
-    <span className="flex items-center gap-1.5 text-reading text-muted-foreground">
-      Applying settings on
+    <span className="flex flex-wrap items-center gap-1.5 text-reading text-muted-foreground">
+      {lead}
       <Picker
         label="Host"
         value={value}

@@ -356,6 +356,7 @@ export const settingsIndex: SettingEntry[] = [
     ["Always allowed", "Apps every thread may use without asking", "apps allow remove"],
   ]),
   ...entries("projects", undefined, [
+    ["Project icon", "The icon the sidebar shows", "image logo glyph color picture upload"],
     [
       "New thread defaults",
       "A repository's own model, reasoning, permissions, workspace, and base branch",
