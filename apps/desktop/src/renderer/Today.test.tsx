@@ -3,8 +3,15 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
+import samples from "../../../../crates/parallax-protocol/samples/v1/pull-requests.json";
 import type { RpcResponse, ParallaxBridge } from "../preload/bridge";
-import type { AgentRun, Capabilities, Repo, Thread } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  Capabilities,
+  PullRequest,
+  Repo,
+  Thread,
+} from "../protocol/generated/protocol";
 import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
 import { autoClear } from "./pins";
@@ -16,6 +23,9 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.showPopover = () => {};
 HTMLElement.prototype.hidePopover = () => {};
 
+const samplePr = (samples as { id?: number; result?: PullRequest }[]).find(
+  (m) => m.id === 2 && m.result,
+)!.result!;
 const parallax: Repo = {
   id: "r-parallax",
   name: "parallax",
@@ -242,4 +252,38 @@ test("a row dragged onto another section moves there: Archived archives, Snoozed
     archived: false,
   });
   expect(request).toHaveBeenCalledWith("local", "thread/update", { runId: "keep", pinned: true });
+});
+
+test("a row's +N opens its thread's Pull requests list, and a lone #n opens that pull request (PLX-1241)", async () => {
+  capabilities = { pullRequests: {} } as Capabilities;
+  const url = (n: number) => `https://github.com/me/app/pull/${n}`;
+  threads = [thread("t-many", 1), thread("t-one", 2)];
+  runs = [
+    { ...run("t-many", "completed", 1), pullRequests: [url(1), url(2), url(3)] },
+    { ...run("t-one", "completed", 2), pullRequests: [url(4)] },
+  ];
+  answers["pr/view"] = (p) => ({
+    result: { ...samplePr, url: p["url"], number: Number(String(p["url"]).split("/").at(-1)) },
+  });
+  await renderApp();
+  const chip = (text: string) =>
+    [...document.querySelectorAll<HTMLElement>('[title*="linked pull request"] span')].find(
+      (s) => s.textContent === text,
+    );
+  const tab = () =>
+    document.querySelector('#side-panel [aria-label="Open views"] button[aria-current="true"]')
+      ?.textContent;
+
+  await act(async () => chip("+2")!.click());
+  await settle();
+  expect(chip("+2")!.closest("button")?.getAttribute("aria-current")).toBe("page");
+  expect(tab()).toBe("Pull requests");
+  expect(
+    document.querySelector('#side-panel ul[aria-label="Pull requests"]')?.children,
+  ).toHaveLength(3);
+
+  await act(async () => chip("#4")!.click());
+  await settle();
+  expect(chip("#4")!.closest("button")?.getAttribute("aria-current")).toBe("page");
+  expect(tab()).toBe("#4");
 });
