@@ -1,9 +1,11 @@
 import { app } from "electron";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { UsageHistoryResult, UsageHour } from "../protocol/generated/protocol";
+import type { Account } from "./account";
+import { tokenSubject } from "./accountHosts";
 import { isNightly } from "./updater";
 
 // PostHog's public project key, which only writes events, as the Clerk publishable key in
@@ -15,7 +17,14 @@ const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-type Install = { id: string; version: string; platform: string; arch: string };
+type Install = {
+  id: string;
+  version: string;
+  platform: string;
+  arch: string;
+  /** The signed-in account's hash (`accountHash`). Absent signed out. */
+  account?: string;
+};
 
 /** Whether to send at all: there is a key and DO_NOT_TRACK is unset or 0. */
 export function enabled(key: string, env: NodeJS.ProcessEnv) {
@@ -23,21 +32,31 @@ export function enabled(key: string, env: NodeJS.ProcessEnv) {
   return key !== "" && (!dnt || dnt === "0");
 }
 
-// An event of this install. It names no person: the id is a random one per install, PostHog keeps
-// no profile for it, and it adds no location from the request's IP.
+/**
+ * How usage data knows an account: a one-way hash of its Clerk user id, the same on every device,
+ * so one person's devices count as one user.
+ */
+export function accountHash(userId: string) {
+  return createHash("sha256").update(userId).digest("hex");
+}
+
+// An event of this install, under its account's hash when signed in and a random id per install
+// when not. `signed_in` lets the dashboards count only accounts. Neither names a person: PostHog
+// keeps no profile for the id, and it adds no location from the request's IP.
 function installEvent(
   key: string,
   install: Install,
   event: string,
-  properties: Record<string, string | number> = {},
+  properties: Record<string, string | number | boolean> = {},
 ) {
   return {
     api_key: key,
     event,
-    distinct_id: install.id,
+    distinct_id: install.account ?? install.id,
     properties: {
       $process_person_profile: false,
       $geoip_disable: true,
+      signed_in: install.account !== undefined,
       version: install.version,
       channel: isNightly(install.version) ? "nightly" : "stable",
       os: install.platform,
@@ -164,13 +183,16 @@ export function requestAccepted(method: string, params: Record<string, unknown>)
 }
 
 /**
- * Sends `app_active` at launch and once a day while the app runs, so PostHog's unique users
- * per day, week, and month count the installs in use, `prompt_sent` for each prompt, and
- * `tokens_used` hourly from the local plxd's `usage`. A packaged app only. Telemetry never keeps
+ * Sends `app_active` at launch, at each sign-in, and once a day while the app runs, so PostHog's
+ * unique users per day, week, and month count the accounts in use, `prompt_sent` for each prompt,
+ * and `tokens_used` hourly from the local plxd's `usage`. A packaged app only. Telemetry never keeps
  * the app from starting: without an id it sends nothing. Every send is best effort: a failed one
  * is a count missing, not an error to show.
  */
-export function startTelemetry(usage: (since: string) => Promise<UsageHistoryResult | undefined>) {
+export function startTelemetry(
+  account: Account,
+  usage: (since: string) => Promise<UsageHistoryResult | undefined>,
+) {
   if (!app.isPackaged || !enabled(KEY, process.env)) return;
   let id: string;
   try {
@@ -178,26 +200,40 @@ export function startTelemetry(usage: (since: string) => Promise<UsageHistoryRes
   } catch {
     return;
   }
-  const install = {
+  const device = {
     id,
     version: app.getVersion(),
     platform: process.platform,
     arch: process.arch,
   };
-  const body = JSON.stringify(activeEvent(KEY, install));
+  // Asked at each send, since the account can change while the app runs.
+  const install = async (): Promise<Install> => {
+    const token = await account.accessToken();
+    const user = token && tokenSubject(token);
+    return user ? { ...device, account: accountHash(user) } : device;
+  };
   // Checked hourly against the wall clock, which counts time asleep where timers don't, so a
   // laptop left open for days still sends each day.
   let sentAt = 0;
   const tick = () => {
     if (Date.now() - sentAt < DAY) return;
     sentAt = Date.now();
-    void post(CAPTURE_URL, body).catch(() => {});
+    void install()
+      .then((each) => post(CAPTURE_URL, JSON.stringify(activeEvent(KEY, each))))
+      .catch(() => {});
   };
   tick();
   setInterval(tick, HOUR);
+  // Counted now, not at the next launch or a day from now.
+  account.onSignIn(() => {
+    sentAt = 0;
+    tick();
+  });
 
   promptSent = (kind) =>
-    void post(CAPTURE_URL, JSON.stringify(promptEvent(KEY, install, kind))).catch(() => {});
+    void install()
+      .then((each) => post(CAPTURE_URL, JSON.stringify(promptEvent(KEY, each, kind))))
+      .catch(() => {});
 
   const sinceFile = path.join(app.getPath("userData"), "telemetry-tokens-since");
   let since = tokensSince(sinceFile, Date.now());
@@ -210,7 +246,7 @@ export function startTelemetry(usage: (since: string) => Promise<UsageHistoryRes
   saveSince();
   const reportHours = async () => {
     since = await reportTokens(since, Date.now(), usage, async (hours) => {
-      const batch = tokenEvents(KEY, install, hours);
+      const batch = tokenEvents(KEY, await install(), hours);
       const sent = await post(BATCH_URL, JSON.stringify({ api_key: KEY, batch })).catch(() => {});
       return sent?.ok ?? false;
     });
