@@ -2,20 +2,19 @@
 // composer while it waits, and the line it leaves in the transcript. The value goes from the
 // field to plxd's `secret/answer`, which keeps it in the host's keystore, or with `delivery: file`
 // in a private file the agent's commands can read (0098). It is never kept in the window's state,
-// the transcript, or the log. A pasted or dropped file's value waits in the field, and the state
-// holds only what the card shows of it: a name, a line count, and any variable names.
+// the transcript, or the log. A file's value waits in the editor's field, and `paintSecret` draws
+// it into the DOM beside the field, masked until the user shows it, without going through state.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
-import { FileText, KeyRound, Paperclip, X } from "lucide-react";
+import { Eye, EyeOff, FileText, KeyRound, Paperclip } from "lucide-react";
 import {
   useId,
+  useLayoutEffect,
   useRef,
   useState,
-  type ClipboardEvent,
   type DragEvent,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { flushSync } from "react-dom";
 
 import { quietButton } from "./Approval";
 import { describeError } from "./errors";
@@ -34,36 +33,64 @@ const saveButton =
 /** plxd's limit on an answer (`MAX_SECRET_BYTES`). */
 const maxSecretBytes = 64 * 1024;
 
-/** A file or a multi-line paste waiting in the field, as the card shows it. */
-interface Loaded {
-  title: string;
-  detail: string;
-  variables: string[];
-}
-
 // A name, then an empty value, a value quoted whole, or an unquoted one with no quotes in it.
-const envLine = /^(?:export )?([A-Za-z_]\w*)=(|"[^"]*"|'[^']*'|[^\s"'=][^"']*)$/;
+const envLine = /^((?:export )?[A-Za-z_]\w*)=(|"[^"]*"|'[^']*'|[^\s"'=][^"']*)$/;
 
 /**
- * The names of the variables with values in `value`, when the whole of it reads as an env file:
- * two or more of them, and otherwise only empty variables, blank lines, and comments. Otherwise
- * none, so a password, a token with `=` padding, or a quoted value spanning lines shows nothing.
+ * Whether the whole of `value` reads as an env file: two or more variables with values, and
+ * otherwise only empty variables, blank lines, and comments. Only then does a masked value show
+ * its names, so a password, a token with `=` padding, or a quoted value spanning lines shows none.
  */
-export function envNames(value: string): string[] {
+export function isEnvFile(value: string): boolean {
   const lines = value.split(/\r?\n/);
   const matches = lines.map((line) => envLine.exec(line));
-  const names = matches.flatMap((match) => (match?.[2] && match[1] ? [match[1]] : []));
-  const isEnv =
-    names.length >= 2 &&
-    lines.every((line, index) => !line.trim() || line.startsWith("#") || matches[index]);
-  return isEnv ? names : [];
+  return (
+    matches.filter((match) => match?.[2]).length >= 2 &&
+    lines.every((line, index) => !line.trim() || line.startsWith("#") || matches[index])
+  );
+}
+
+function painted(className: string, text: string) {
+  const span = document.createElement("span");
+  span.className = className;
+  span.textContent = text;
+  return span;
+}
+
+const masked = (text: string) => "•".repeat(Array.from(text).length);
+
+/** Draws one line of a value, colored as an env file's, with a dot per character it hides. */
+function paintLine(line: string, env: boolean, shown: boolean): Node[] {
+  const dots = "text-faint-foreground";
+  if (line.startsWith("#"))
+    return [painted(shown ? "text-[var(--syntax-comment)]" : dots, shown ? line : masked(line))];
+  const assignment = envLine.exec(line);
+  const [, name = "", value = ""] = assignment ?? [];
+  if (assignment && (shown || (env && value)))
+    return [
+      painted("text-[var(--syntax-title)]", name),
+      painted("text-muted-foreground", "="),
+      painted(shown ? "text-[var(--syntax-string)]" : dots, shown ? value : masked(value)),
+    ];
+  return [painted(shown ? "" : dots, shown ? line : masked(line))];
+}
+
+/**
+ * Draws `value` into `target` under the editor's invisible text, character for character so the
+ * caret stays in place: all dots, or for an env file its names and dots, until it's `shown`.
+ */
+export function paintSecret(target: HTMLElement, value: string, shown: boolean) {
+  const env = isEnvFile(value);
+  const lines = value
+    .split("\n")
+    .flatMap((line, index) => [...(index ? ["\n"] : []), ...paintLine(line, env, shown)]);
+  target.replaceChildren(...lines, "\n");
 }
 
 /**
  * The oldest secret request of run `runId` still waiting, as a card with a password field, or for
- * a file a masked field that keeps the newlines of a pasted `.env`, which a password field drops.
- * A file, picked or dropped, or a multi-line paste shows as a summary, listing an env file's
- * variables with their values hidden.
+ * a file a small editor to paste into, pick a file for, or drop one on, which keeps the newlines
+ * a password field drops. Its values stay masked until the user shows them.
  */
 export function SecretCard({
   hostId,
@@ -82,11 +109,20 @@ export function SecretCard({
   const [busy, setBusy] = useState<"save" | "decline">();
   const off = !!disabledReason || !!busy;
   const toFile = request.delivery === "file";
-  const [loaded, setLoaded] = useState<Loaded>();
+  const [fileName, setFileName] = useState<string>();
+  const [lineCount, setLineCount] = useState(1);
+  const [shown, setShown] = useState(false);
   const [dropOver, setDropOver] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);
+  const paint = useRef<HTMLDivElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
-  const saveControl = useRef<HTMLButtonElement>(null);
+
+  function repaint() {
+    const value = field.current?.value ?? "";
+    if (paint.current) paintSecret(paint.current, value, shown);
+    setLineCount(value.split("\n").length);
+  }
+  useLayoutEffect(repaint, [shown]);
 
   async function send(answer: { type: "save"; secret: string } | { type: "decline" }) {
     setBusy(answer.type);
@@ -116,30 +152,11 @@ export function SecretCard({
     void send({ type: "save", secret: value });
   }
 
-  function enterSaves(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+  // Enter makes a new line, as in any editor.
+  function commandEnterSaves(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
-  }
-
-  /** Puts `text` in the field and shows its summary, with Save focused so Enter still saves. */
-  function load(text: string, fileName?: string) {
-    if (field.current) field.current.value = text;
-    const variables = envNames(text);
-    const count = variables.length || text.trimEnd().split("\n").length;
-    const noun = variables.length ? "variable" : "line";
-    setLoaded({
-      title: fileName ?? (variables.length ? "Pasted env file" : "Pasted text"),
-      detail: `${count} ${noun}${count === 1 ? "" : "s"}`,
-      variables,
-    });
-    saveControl.current?.focus();
-  }
-
-  function unload() {
-    if (field.current) field.current.value = "";
-    flushSync(() => setLoaded(undefined));
-    field.current?.focus();
   }
 
   async function loadFile(file: File) {
@@ -156,14 +173,10 @@ export function SecretCard({
     // A binary file wouldn't survive being read as text.
     if (!text.trim() || text.includes("\0") || text.includes("\uFFFD"))
       return refuse("Use a text file with something in it.");
-    load(text, file.name);
-  }
-
-  function pasteLines(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const text = event.clipboardData.getData("text");
-    if (!text.trimEnd().includes("\n")) return;
-    event.preventDefault();
-    load(text);
+    if (field.current) field.current.value = text;
+    setFileName(file.name);
+    repaint();
+    field.current?.focus();
   }
 
   function dragOver(event: DragEvent<HTMLFormElement>) {
@@ -209,67 +222,27 @@ export function SecretCard({
             {request.label}
           </label>
           {toFile ? (
-            <>
-              {loaded && (
-                <div
-                  className={`rounded-md border bg-background ${dropOver ? "border-ring" : "border-border"}`}
+            <div
+              className={`overflow-hidden rounded-md border bg-code focus-within:border-ring ${dropOver ? "border-ring" : "border-border"}`}
+            >
+              <div className="flex h-7 items-center gap-1.5 border-b border-border pr-1 pl-2.5">
+                <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+                <span className="mr-auto min-w-0 truncate text-meta text-muted-foreground">
+                  {fileName ?? "Untitled"}
+                </span>
+                <IconButton
+                  label={shown ? "Hide values" : "Show values"}
+                  size="sm"
+                  aria-pressed={shown}
+                  onClick={() => setShown(!shown)}
                 >
-                  <div className="flex h-8 items-center gap-2 pr-1 pl-2.5 text-body">
-                    <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-                    <span className="min-w-0 truncate">{loaded.title}</span>
-                    <span className="shrink-0 text-meta text-muted-foreground">
-                      {loaded.detail}
-                    </span>
-                    <IconButton
-                      label="Remove"
-                      size="sm"
-                      disabled={off}
-                      onClick={unload}
-                      className="ml-auto"
-                    >
-                      <X />
-                    </IconButton>
-                  </div>
-                  {loaded.variables.length > 0 && (
-                    <ul
-                      aria-label="Variables"
-                      className="max-h-40 overflow-y-auto border-t border-border py-1 font-mono text-body"
-                    >
-                      {loaded.variables.map((name, index) => (
-                        <li
-                          key={index}
-                          className="flex items-center justify-between gap-4 px-2.5 py-0.5"
-                        >
-                          <span className="min-w-0 truncate">{name}</span>
-                          <span aria-hidden className="shrink-0 text-faint-foreground">
-                            ••••••••
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-              <div className={`relative ${loaded ? "hidden" : ""}`}>
-                <textarea
-                  ref={field}
-                  id={inputId}
-                  name="secret"
-                  rows={1}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={off}
-                  onKeyDown={enterSaves}
-                  onPaste={pasteLines}
-                  placeholder={request.placeholder ?? "Paste the secret, or drop a file"}
-                  className={`${fieldClass} ${dropOver ? "border-ring" : ""} block field-sizing-content max-h-40 min-h-8 resize-none py-1.5 pr-9 [-webkit-text-security:disc]`}
-                />
+                  {shown ? <EyeOff /> : <Eye />}
+                </IconButton>
                 <IconButton
                   label="Attach a file"
                   size="sm"
                   disabled={off}
                   onClick={() => filePicker.current?.click()}
-                  className="absolute top-1 right-1"
                 >
                   <Paperclip />
                 </IconButton>
@@ -284,7 +257,38 @@ export function SecretCard({
                   }}
                 />
               </div>
-            </>
+              <div className="flex max-h-64 min-h-28 overflow-auto font-mono text-body">
+                <div
+                  aria-hidden
+                  className="sticky left-0 z-10 shrink-0 bg-code py-1.5 pr-3 pl-2.5 text-right text-faint-foreground select-none"
+                >
+                  {Array.from({ length: lineCount }, (_, index) => (
+                    <div key={index}>{index + 1}</div>
+                  ))}
+                </div>
+                <div className="grid min-w-fit flex-1">
+                  <div
+                    ref={paint}
+                    aria-hidden
+                    data-testid="secret-paint"
+                    className="[grid-area:1/1] py-1.5 pr-2.5 whitespace-pre"
+                  />
+                  <textarea
+                    ref={field}
+                    id={inputId}
+                    name="secret"
+                    wrap="off"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={off}
+                    onInput={repaint}
+                    onKeyDown={commandEnterSaves}
+                    placeholder={request.placeholder ?? "Paste the secret, or drop a file"}
+                    className={`relative block field-sizing-content min-w-full resize-none overflow-hidden bg-transparent py-1.5 pr-2.5 whitespace-pre text-transparent caret-foreground [grid-area:1/1] placeholder:font-sans placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-50 ${shown ? "" : "[-webkit-text-security:disc]"}`}
+                  />
+                </div>
+              </div>
+            </div>
           ) : (
             <input
               id={inputId}
@@ -313,13 +317,7 @@ export function SecretCard({
           >
             {busy === "decline" ? "Declining…" : "Decline"}
           </button>
-          <button
-            ref={saveControl}
-            type="submit"
-            disabled={off}
-            title={disabledReason}
-            className={saveButton}
-          >
+          <button type="submit" disabled={off} title={disabledReason} className={saveButton}>
             {busy === "save" ? "Saving…" : "Save"}
           </button>
         </div>

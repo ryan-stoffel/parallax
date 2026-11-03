@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import { notify } from "./notifications";
-import { envNames, SecretCard } from "./Secret";
+import { isEnvFile, SecretCard } from "./Secret";
 
 vi.mock("./notifications", () => ({ notify: vi.fn() }));
 
@@ -69,17 +69,17 @@ test("Save sends the value to secret/answer from a password field, and Decline s
   });
 });
 
-test("A file request says commands can read it, keeps newlines, and saves on Enter", async () => {
+test("A file request says commands can read it, and Enter is a new line until Command-Enter saves", async () => {
   const el = card("file");
   expect(el.textContent).toContain("this agent's commands can read for 24 hours");
   expect(el.textContent).not.toContain("never the value");
   const field = el.querySelector("textarea")!;
   field.value = "A=1\nB=2\n";
-  const newline = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true });
-  await act(async () => field.dispatchEvent(newline));
-  expect(request).not.toHaveBeenCalled();
   const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
   await act(async () => field.dispatchEvent(enter));
+  expect(request).not.toHaveBeenCalled();
+  const save = new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true });
+  await act(async () => field.dispatchEvent(save));
   expect(request).toHaveBeenCalledWith("h1", "secret/answer", {
     runId: "r1",
     requestId: "s1",
@@ -89,44 +89,39 @@ test("A file request says commands can read it, keeps newlines, and saves on Ent
 
 const env = '# old-value\nAPI_KEY=abc\n\nEMPTY=\nexport DB_URL="postgres://x"\n';
 
-function savedSecret() {
-  return (request.mock.lastCall as unknown as [string, string, { answer: { secret: string } }])[2]
-    .answer.secret;
+function painted(el: HTMLElement) {
+  return el.querySelector("[data-testid=secret-paint]")!.textContent;
 }
 
-test("A pasted env file lists its names, hides its values, and still saves all of it", async () => {
-  const el = card("file");
-  const field = el.querySelector("textarea")!;
-  const paste = Object.assign(new Event("paste", { bubbles: true, cancelable: true }), {
-    clipboardData: { getData: () => env },
-  });
-  await act(async () => field.dispatchEvent(paste));
-  expect(paste.defaultPrevented).toBe(true);
-  const names = [...el.querySelectorAll("li span:first-child")].map((name) => name.textContent);
-  expect(names).toEqual(["API_KEY", "DB_URL"]);
-  expect(el.textContent).toContain("2 variables");
-  expect(el.textContent).not.toContain("abc");
-  expect(el.textContent).not.toContain("postgres");
-  await act(async () => el.querySelector("form")!.requestSubmit());
-  expect(savedSecret()).toBe(env);
-});
-
-test("A picked file shows by name, and Remove goes back to an empty field", async () => {
-  const el = card("file");
+async function pick(el: HTMLElement, file: File) {
   const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
-  const file = new File(["-----BEGIN KEY-----\nabc\n-----END KEY-----\n"], "deploy.pem");
   Object.defineProperty(picker, "files", { value: [file], configurable: true });
   await act(async () => {
     picker.dispatchEvent(new Event("change", { bubbles: true }));
     await file.text();
   });
+}
+
+test("An env file shows its names masked, and its values only once asked", async () => {
+  const el = card("file");
+  const field = el.querySelector("textarea")!;
+  field.value = env;
+  await act(async () => field.dispatchEvent(new Event("input", { bubbles: true })));
+  expect(painted(el)).toBe("•••••••••••\nAPI_KEY=•••\n\n••••••\nexport DB_URL=••••••••••••••\n\n");
+  const show = el.querySelector<HTMLButtonElement>('button[aria-label="Show values"]')!;
+  await act(async () => show.click());
+  expect(painted(el)).toBe(`${env}\n`);
+  await act(async () => show.click());
+  expect(painted(el)).not.toContain("abc");
+});
+
+test("A picked file loads into the editor by name, fully masked if it isn't an env file", async () => {
+  const el = card("file");
+  const text = "-----BEGIN KEY-----\nabc\n-----END KEY-----\n";
+  await pick(el, new File([text], "deploy.pem"));
   await vi.waitFor(() => expect(el.textContent).toContain("deploy.pem"));
-  expect(el.textContent).toContain("3 lines");
-  expect(el.querySelector("ul")).toBeNull();
-  const remove = el.querySelector<HTMLButtonElement>('button[aria-label="Remove"]')!;
-  await act(async () => remove.click());
-  expect(el.textContent).not.toContain("deploy.pem");
-  expect(el.querySelector("textarea")!.value).toBe("");
+  expect(el.querySelector("textarea")!.value).toBe(text);
+  expect(painted(el)).not.toMatch(/[A-Za-z]/);
 });
 
 test.each([
@@ -134,12 +129,7 @@ test.each([
   ["binary", new File(["a\0b"], "key.p12"), "text file"],
 ])("A %s file is refused", async (_, file, body) => {
   const el = card("file");
-  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
-  Object.defineProperty(picker, "files", { value: [file], configurable: true });
-  await act(async () => {
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-    await file.text();
-  });
+  await pick(el, file);
   await vi.waitFor(() =>
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.stringContaining(body) }),
@@ -148,9 +138,9 @@ test.each([
   expect(el.textContent).not.toContain(file.name);
 });
 
-test("envNames takes an env file's variables with values", () => {
-  expect(envNames(env)).toEqual(["API_KEY", "DB_URL"]);
-  expect(envNames("A=1\r\nB='two words'\r\n")).toEqual(["A", "B"]);
+test("isEnvFile takes an env file with variables that have values", () => {
+  expect(isEnvFile(env)).toBe(true);
+  expect(isEnvFile("A=1\r\nB='two words'\r\n")).toBe(true);
 });
 
 test.each([
@@ -161,6 +151,6 @@ test.each([
   ["a quoted value spanning lines", 'CONFIG="user=a\npass=b"'],
   ["a private key", "-----BEGIN KEY-----\nabc=\nDEF=x\n-----END KEY-----"],
   ["assignments among other text", "A=1\nB=2\nnot an assignment"],
-])("envNames shows no names for %s", (_, value) => {
-  expect(envNames(value)).toEqual([]);
+])("isEnvFile refuses %s", (_, value) => {
+  expect(isEnvFile(value)).toBe(false);
 });
