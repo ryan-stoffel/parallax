@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import { SecretCard } from "./Secret";
+import { maskedLines, SecretCard } from "./Secret";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -82,4 +82,23 @@ test("A file request says commands can read it, keeps newlines, and saves on Ent
     requestId: "s1",
     answer: { type: "save", secret: "A=1\nB=2\n" },
   });
+});
+
+test("A pasted env file shows its names and hides its values, in the DOM as well as to the eye", async () => {
+  const el = card("file");
+  const field = el.querySelector("textarea")!;
+  field.value = "# old-value\nAPI_KEY=abc\n\nexport DB_URL=postgres://x\n";
+  await act(async () => field.dispatchEvent(new Event("input", { bubbles: true })));
+  const shown = el.querySelector("[data-testid=secret-mask]")!.textContent;
+  expect(shown).toBe("•••••••••••\nAPI_KEY=•••\n\nexport DB_URL=••••••••••••\n\n");
+});
+
+test.each([
+  ["a password with an equals sign", "ABC=def"],
+  ["a single variable, which could be a password copied with its newline", "ABC=def\n"],
+  ["base32 tokens with padding", "ABCDEF==\nGHIJKL=="],
+  ["a private key", "-----BEGIN KEY-----\nabc=\nDEF=x\n-----END KEY-----"],
+  ["assignments among other text", "A=1\nB=2\nnot an assignment"],
+])("Shows no names for %s", (_, value) => {
+  expect(maskedLines(value).every((line) => !line.name)).toBe(true);
 });

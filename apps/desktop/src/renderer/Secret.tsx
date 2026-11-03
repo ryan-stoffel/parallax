@@ -2,10 +2,18 @@
 // composer while it waits, and the line it leaves in the transcript. The value goes from the
 // field to plxd's `secret/answer`, which keeps it in the host's keystore, or with `delivery: file`
 // in a private file the agent's commands can read (0098). It is never kept in the window's state,
-// the transcript, or the log.
+// the transcript, or the log: the state holds only `maskedLines`, its dots and any variable names.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import { KeyRound } from "lucide-react";
-import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  Fragment,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type UIEvent,
+} from "react";
 
 import { quietButton } from "./Approval";
 import { describeError } from "./errors";
@@ -17,12 +25,43 @@ type SecretItem = Extract<Item, { kind: "secret" }>;
 const fieldClass =
   "w-full rounded-md border border-border bg-background px-2.5 font-mono text-body placeholder:font-sans placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
+/** What the file field and the mask over it share, so each masked character sits on its own. */
+const fileFieldText =
+  "whitespace-pre-wrap break-all border px-2.5 py-1.5 font-mono text-body [scrollbar-gutter:stable]";
+
 const saveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
+
+/** A line of a masked value: the part safe to show, then a dot for each other character. */
+interface MaskedLine {
+  name: string;
+  dots: string;
+}
+
+const envAssignment = /^(?:export )?[A-Za-z_][A-Za-z0-9_]*=(?!=)/;
+
+/**
+ * Masks `value` a line at a time, keeping each `NAME=` only when the whole value reads as an env
+ * file: two or more assignments, and otherwise only blank lines and comments. A password, a token
+ * with `=` padding, or a private key then stays fully masked. Comments are masked, since they can
+ * hold an old value.
+ */
+export function maskedLines(value: string): MaskedLine[] {
+  const lines = value.split("\n").map((line) => line.replace(/\r$/, ""));
+  const assignments = lines.filter((line) => envAssignment.test(line)).length;
+  const isEnv =
+    assignments >= 2 &&
+    lines.every((line) => !line.trim() || line.startsWith("#") || envAssignment.test(line));
+  return lines.map((line) => {
+    const name = (isEnv && envAssignment.exec(line)?.[0]) || "";
+    return { name, dots: "•".repeat(Array.from(line.slice(name.length)).length) };
+  });
+}
 
 /**
  * The oldest secret request of run `runId` still waiting, as a card with a password field, or for
  * a file a masked field that keeps the newlines of a pasted `.env`, which a password field drops.
+ * The file field's own text is invisible, and `maskedLines` draws over it character for character.
  */
 export function SecretCard({
   hostId,
@@ -41,6 +80,8 @@ export function SecretCard({
   const [busy, setBusy] = useState<"save" | "decline">();
   const off = !!disabledReason || !!busy;
   const toFile = request.delivery === "file";
+  const [masked, setMasked] = useState<MaskedLine[]>([]);
+  const mask = useRef<HTMLDivElement>(null);
 
   async function send(answer: { type: "save"; secret: string } | { type: "decline" }) {
     setBusy(answer.type);
@@ -76,6 +117,10 @@ export function SecretCard({
     event.currentTarget.form?.requestSubmit();
   }
 
+  function scrollMask(event: UIEvent<HTMLTextAreaElement>) {
+    if (mask.current) mask.current.scrollTop = event.currentTarget.scrollTop;
+  }
+
   return (
     <section aria-labelledby={titleId} className="mb-3">
       <form
@@ -100,17 +145,36 @@ export function SecretCard({
             {request.label}
           </label>
           {toFile ? (
-            <textarea
-              id={inputId}
-              name="secret"
-              rows={1}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={off}
-              onKeyDown={enterSaves}
-              placeholder={request.placeholder ?? "Paste the secret"}
-              className={`${fieldClass} field-sizing-content max-h-40 min-h-8 resize-none py-1.5 [-webkit-text-security:disc]`}
-            />
+            <div className="relative">
+              <div
+                ref={mask}
+                aria-hidden
+                data-testid="secret-mask"
+                className={`${fileFieldText} absolute inset-0 overflow-hidden rounded-md border-transparent bg-background text-muted-foreground`}
+              >
+                {masked.map((line, index) => (
+                  <Fragment key={index}>
+                    {index > 0 && "\n"}
+                    <span className="text-foreground">{line.name}</span>
+                    {line.dots}
+                  </Fragment>
+                ))}
+                {"\n"}
+              </div>
+              <textarea
+                id={inputId}
+                name="secret"
+                rows={1}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={off}
+                onInput={(event) => setMasked(maskedLines(event.currentTarget.value))}
+                onKeyDown={enterSaves}
+                onScroll={scrollMask}
+                placeholder={request.placeholder ?? "Paste the secret"}
+                className={`${fieldClass} ${fileFieldText} relative block field-sizing-content max-h-48 min-h-8 resize-none bg-transparent text-transparent caret-foreground [-webkit-text-security:disc]`}
+              />
+            </div>
           ) : (
             <input
               id={inputId}
