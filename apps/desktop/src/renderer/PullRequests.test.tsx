@@ -295,6 +295,51 @@ test("the merge box keeps Merge off while GitHub blocks it, says why, and merges
   expect(box().querySelector('[role="status"]')!.textContent).toBe("Merged");
 });
 
+test("the merge box adds no text while the rows say it, and the header marks a conflict", async () => {
+  read = { [url(42)]: prOf(42) };
+  status = { mergeState: "BLOCKED", reasons: ["pending: e2e (macos-26), rust (windows-2025)"] };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  const box = document.querySelector('[aria-label="Merge"]')!;
+  expect(box.querySelector('[role="status"]')!.className).toContain("sr-only");
+  expect(box.textContent).not.toContain("pending:");
+
+  read = { [url(42)]: prOf(42, { mergeState: "dirty" }) };
+  status = { mergeState: "DIRTY", mergeable: "CONFLICTING" };
+  await act(async () => button("Refresh (synced just now)")!.click());
+  await settle();
+  expect(document.querySelector('header [aria-label="Conflicts with main"]')).not.toBeNull();
+});
+
+test("merging deletes the branch as the method menu says, and Delete branch then goes away", async () => {
+  capabilities = { ...capabilities, prActions: {} };
+  read = { [url(42)]: prOf(42, { mergeState: "clean", checks: [sample.checks[0]!] }) };
+  status = { mergeState: "CLEAN" };
+  actions = {
+    squash: () => ({ result: prOf(42, { state: "merged", mergedBy: "me" }) }),
+    deleteBranch: () => ({ result: prOf(42, { state: "merged", mergedBy: "me" }) }),
+  };
+  await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
+  const setting = document.querySelector<HTMLButtonElement>('[role="menuitemcheckbox"]')!;
+  expect(setting.textContent).toContain("Delete branch after merging");
+  expect(setting.getAttribute("aria-checked")).toBe("true");
+  act(() => setting.click());
+  expect(setting.getAttribute("aria-checked")).toBe("false");
+
+  await act(async () => button("Squash and merge")!.click());
+  await settle();
+  expect(sent("pr/act")[0]).toMatchObject({ action: "squash", deleteBranch: false });
+  await act(async () => button("Delete branch")!.click());
+  await settle();
+  expect(sent("pr/act")[1]).toMatchObject({ action: "deleteBranch" });
+  expect(button("Delete branch")).toBeUndefined();
+  // Coming back to the Summary tab doesn't offer it again.
+  act(() => tab("Code").click());
+  await settle();
+  act(() => tab("Summary").click());
+  await settle();
+  expect(button("Delete branch")).toBeUndefined();
+});
+
 test("a failed check opens its log from pr/failureLog, marked required, and Fix asks for ci_failure_log", async () => {
   const failed = { name: "test", state: "failed", conclusion: "failure", workflow: "CI" } as const;
   read = { [url(42)]: prOf(42, { checks: [sample.checks[0]!, failed], checksState: "failed" }) };

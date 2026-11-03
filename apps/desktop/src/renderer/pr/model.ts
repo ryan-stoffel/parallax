@@ -175,6 +175,7 @@ export type GateTone = "ready" | "warning" | "blocked" | "pending" | "merged" | 
 export interface Gate {
   tone: GateTone;
   title: string;
+  /** What the status rows don't already say. With none, the merge box adds no text of its own. */
   reasons: string[];
   canMerge: boolean;
   /** Auto-merge waits for what's blocking it: checks, reviews, or an update. */
@@ -197,6 +198,16 @@ const gate = (tone: GateTone, title: string, reasons: string[] = [], more: Parti
 });
 
 /**
+ * plxd's reasons shown elsewhere: its lists of checks and changes requested in the status rows, and
+ * how far behind its base the branch is on the header's base chip.
+ */
+const shownElsewhere = (reason: string) =>
+  reason.startsWith("pending: ") ||
+  reason.startsWith("failing: ") ||
+  reason === "changes requested" ||
+  /^\d+ commits? behind /.test(reason);
+
+/**
  * Whether `pr` can merge, from GitHub's merge state and, when read, matching `pr/status` (or
  * PLX-1151's on the pull request). Merge is offered only when GitHub would take it: clean, with
  * hooks, or unstable (a check that isn't required failed). Auto-merge is offered while it waits on
@@ -205,10 +216,6 @@ const gate = (tone: GateTone, title: string, reasons: string[] = [], more: Parti
 export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
   if (pr.state === "merged") return gate("merged", "Merged");
   if (pr.state === "closed") return gate("closed", "Closed without merging");
-  if (pr.draft)
-    return gate("blocked", "This pull request is a draft", ["Mark it ready for review to merge."], {
-      draft: true,
-    });
   const extra = more(pr);
   const matchingStatus =
     status?.url === pr.url &&
@@ -216,39 +223,27 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
       ? status
       : undefined;
   const reasons = matchingStatus?.reasons ?? extra.reasons ?? [];
+  const notes = reasons.filter((r) => !shownElsewhere(r));
   const mergeable = matchingStatus?.mergeable ?? extra.mergeable;
   const mergeState =
     matchingStatus?.mergeState?.replaceAll("_", "").toLowerCase() ?? pr.mergeState?.toLowerCase();
-  if (mergeable === "CONFLICTING" || mergeState === "dirty")
-    return gate(
-      "blocked",
-      "This branch has conflicts",
-      [`Resolve its conflicts with ${pr.baseBranch} to merge.`],
-      { conflicts: true },
-    );
+  const conflicts = mergeable === "CONFLICTING" || mergeState === "dirty";
+  if (pr.draft)
+    return gate("blocked", "This pull request is a draft", [], { draft: true, conflicts });
+  if (conflicts) return gate("blocked", "This branch has conflicts", [], { conflicts });
   const checks = checkRollup(pr.checks);
-  if (mergeState === "behind") {
-    const by = matchingStatus?.behindBy ?? extra.behindBy;
-    const commits = by ? `${by} ${by === 1 ? "commit" : "commits"}` : "Commits";
-    return gate(
-      "blocked",
-      `This branch is behind ${pr.baseBranch}`,
-      [`${commits} on ${pr.baseBranch} must be merged in first.`],
-      { behind: true, canAutoMerge: true },
-    );
-  }
+  if (mergeState === "behind")
+    return gate("blocked", `This branch is behind ${pr.baseBranch}`, [], {
+      behind: true,
+      canAutoMerge: true,
+    });
   if (mergeState === undefined)
     return gate("pending", "Checking whether it can merge", [], { canAutoMerge: true });
   if (mergeState === "blocked") {
-    const why = reasons.length
-      ? reasons
-      : [
-          checks.failed
-            ? `${checks.failed} ${checks.failed === 1 ? "check" : "checks"} failed.`
-            : checks.pending
-              ? `${checks.pending} ${checks.pending === 1 ? "check is" : "checks are"} still running.`
-              : "Branch protection needs a review or a check first.",
-        ];
+    const why =
+      reasons.length || checks.failed || checks.pending
+        ? notes
+        : ["Branch protection needs a review or a check first."];
     return checks.pending && !checks.failed
       ? gate("pending", "Waiting for checks", why, { canAutoMerge: true })
       : gate("blocked", checks.failed ? "Checks failed" : "Merging is blocked", why, {
@@ -256,13 +251,31 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
         });
   }
   if (mergeState === "unstable")
-    return gate("warning", "Some checks didn't pass", reasons, { canMerge: true });
+    return gate("warning", "Some checks didn't pass", notes, { canMerge: true });
   if (mergeState === "clean" || mergeState === "hashooks")
     return reasons.length
-      ? gate("warning", "Can merge", reasons, { canMerge: true })
+      ? gate("warning", "Can merge", notes, { canMerge: true })
       : gate("ready", "Ready to merge", [], { canMerge: true });
   // A merge state this version doesn't know: GitHub decides when asked.
   return gate("pending", "Checking whether it can merge");
+}
+
+/** What's wrong between a branch and its base, for the header's base chip. */
+export interface BaseIssue {
+  kind: "conflicts" | "behind";
+  label: string;
+}
+
+/** Whether an open pull request's branch conflicts with its base or is behind it. */
+export function baseIssue(pr: PullRequest, status?: PrStatusResult): BaseIssue | undefined {
+  if (pr.state !== "open") return undefined;
+  const gate = mergeGate(pr, status);
+  const base = pr.baseBranch;
+  if (gate.conflicts) return { kind: "conflicts", label: `Conflicts with ${base}` };
+  // A repository that doesn't require an up-to-date branch still reports how far behind it is.
+  const by = status?.behindBy ?? more(pr).behindBy;
+  if (by) return { kind: "behind", label: `${plural(by, "commit")} behind ${base}` };
+  return gate.behind ? { kind: "behind", label: `Behind ${base}` } : undefined;
 }
 
 /** The ways a pull request can merge: the repository's, once plxd says them, else today's two. */
@@ -384,7 +397,7 @@ export function statusRows(
   else if (gate.behind)
     merge("waiting", `Behind ${base}`, behindBy ? plural(behindBy, "commit") : undefined);
   else if (pr.mergeState === undefined) merge("running", "Checking for conflicts");
-  else if (pr.mergeState === "blocked") merge("waiting", "Merging is blocked");
+  // GitHub reports a conflict before anything that blocks, so blocked means no conflict.
   else
     merge("passed", `No conflicts with ${base}`, commits ? plural(commits, "commit") : undefined);
   return rows;

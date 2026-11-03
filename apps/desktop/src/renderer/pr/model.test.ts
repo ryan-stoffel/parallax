@@ -6,6 +6,7 @@ import {
   commitPreview,
   groupChecks,
   guideView,
+  baseIssue,
   mergeGate,
   mergeTone,
   methodHint,
@@ -99,7 +100,7 @@ test("mergeGate offers Merge only when GitHub would take it, and says why not", 
   });
   expect(mergeGate(pr({ mergeState: "blocked", checks: [check("t", "failed")] }))).toMatchObject({
     title: "Checks failed",
-    reasons: ["1 check failed."],
+    reasons: [],
     canAutoMerge: true,
   });
   expect(mergeGate(pr({ mergeState: undefined }))).toMatchObject({
@@ -157,6 +158,37 @@ test("mergeGate normalizes status states and falls back when status is absent or
     statusOf({ headSha: "old-head" }),
   ])
     expect(mergeGate(current, status).canMerge).toBe(true);
+});
+
+test("mergeGate's reasons leave out what the status rows already say", () => {
+  const gate = (reasons: string[]) =>
+    mergeGate(pr({ mergeState: "blocked" }), statusOf({ mergeState: "BLOCKED", reasons })).reasons;
+  expect(gate(["pending: e2e (macos-26), rust (windows-2025)"])).toEqual([]);
+  expect(gate(["failing: test", "changes requested"])).toEqual([]);
+  expect(gate(["pending: e2e", "1 unresolved review thread"])).toEqual([
+    "1 unresolved review thread",
+  ]);
+  expect(gate(["2 commits behind main"])).toEqual([]);
+  expect(gate([])).toEqual(["Branch protection needs a review or a check first."]);
+});
+
+test("baseIssue says when an open branch conflicts with its base or is behind it", () => {
+  expect(baseIssue(pr({ mergeState: "dirty" }))).toEqual({
+    kind: "conflicts",
+    label: "Conflicts with main",
+  });
+  expect(baseIssue(pr({ mergeState: "behind" }))).toEqual({
+    kind: "behind",
+    label: "Behind main",
+  });
+  // Behind but not blocked by it, in a repository that doesn't require an up-to-date branch.
+  expect(baseIssue(pr({ mergeState: "clean" }), statusOf({ behindBy: 1 }))).toEqual({
+    kind: "behind",
+    label: "1 commit behind main",
+  });
+  expect(baseIssue(pr({ draft: true, mergeState: "dirty" }))?.kind).toBe("conflicts");
+  expect(baseIssue(pr({ mergeState: "clean" }))).toBeUndefined();
+  expect(baseIssue(pr({ state: "merged" }), statusOf({ behindBy: 3 }))).toBeUndefined();
 });
 
 test("threadsOf takes PLX-1151's full threads when sent, else pr/status's unresolved ones", () => {

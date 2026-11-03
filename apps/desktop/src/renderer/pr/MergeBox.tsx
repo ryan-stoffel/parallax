@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { PrMergeMethod, PrStatusResult, PullRequest } from "../../protocol/generated/protocol";
 import { icons } from "../icons";
 import { animate, duration, easing } from "../motion";
-import { Button, Checkbox, Menu, MenuOption, Spinner } from "../ui";
+import { Button, Menu, MenuOption, separator, Spinner } from "../ui";
 import { CheckGroup, Reveal, type CheckActions } from "./CheckGroup";
 import {
   commitPreview,
@@ -66,11 +66,11 @@ const JUST_NOW_MS = 60_000;
 /**
  * The Summary's status box and the one place a pull request merges, as GitHub's: a row each for
  * its checks, reviews, and whether it merges cleanly (statusRows), the checks row folding open to
- * every check by workflow; then, when it can't merge, why (mergeGate); then GitHub's split merge
- * button, its main part the chosen method and its chevron a menu of the methods the repository
- * allows. Auto-merge, Ready for review for a draft, and with PLX-1151's `actions`, update branch
- * and delete branch, as plxd allows. Once merged it says who and when, and a merge made just now
- * lands with a small spring.
+ * every check by workflow; then anything else that stops it merging (mergeGate); then GitHub's
+ * split merge button, its main part the chosen method and its chevron a menu of the methods the
+ * repository allows and, with PLX-1151's `actions`, whether merging deletes the branch. Auto-merge,
+ * Ready for review for a draft, and with `actions`, update branch and delete branch, as plxd
+ * allows. Once merged it says who and when, and a merge made just now lands with a small spring.
  */
 export function MergeBox({
   pr,
@@ -78,8 +78,10 @@ export function MergeBox({
   checks,
   checkActions,
   actions,
+  branchDeleted,
   busy,
   onAct,
+  onBranchDeleted,
   onReviews,
   onCommits,
 }: {
@@ -89,8 +91,12 @@ export function MergeBox({
   checkActions: CheckActions;
   /** plxd takes PLX-1151's actions: a merge's method, update and delete branch. */
   actions: boolean;
+  /** This view deleted the head branch, as plxd doesn't report whether a merged one still exists. */
+  branchDeleted: boolean;
   busy: boolean;
-  onAct: (action: PrActionMore, extra?: PrActExtra) => void;
+  /** Resolves to whether it worked. */
+  onAct: (action: PrActionMore, extra?: PrActExtra) => Promise<boolean>;
+  onBranchDeleted: () => void;
   /** Opens the reviews, from the reviews row. */
   onReviews: () => void;
   /** Opens the commits, from the merge row. */
@@ -144,6 +150,12 @@ export function MergeBox({
         ? `Closed ${ago(pr.closedAt)}.`
         : undefined;
   const open = pr.state === "open";
+  const merge = async () => {
+    if ((await onAct(chosen, extra())) && actions && deleteBranch) onBranchDeleted();
+  };
+  const removeBranch = async () => {
+    if (await onAct("deleteBranch")) onBranchDeleted();
+  };
   const onRow: Record<StatusRow["key"], () => void> = {
     checks: () => setChecksOpen(!checksOpen),
     reviews: onReviews,
@@ -192,7 +204,7 @@ export function MergeBox({
           </div>
         );
       })}
-      {gate.tone === "ready" ? (
+      {open && gate.reasons.length === 0 ? (
         // The rows say it; a screen reader hears it.
         <p role="status" className="sr-only">
           {title}
@@ -215,6 +227,16 @@ export function MergeBox({
               </ul>
             )}
           </div>
+          {pr.state === "merged" && actions && !branchDeleted && (
+            <Button
+              size="sm"
+              disabled={busy}
+              title={`Delete ${pr.headBranch}`}
+              onClick={() => void removeBranch()}
+            >
+              Delete branch
+            </Button>
+          )}
         </div>
       )}
       <div className="flex flex-col gap-2.5 px-3.5 pt-3 pb-3.5">
@@ -238,7 +260,7 @@ export function MergeBox({
               type="button"
               disabled={busy || !gate.canMerge}
               title={gate.canMerge ? undefined : gate.title}
-              onClick={() => onAct(chosen, extra())}
+              onClick={() => void merge()}
               className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 px-3 transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed [&_svg]:size-4 [&_svg]:shrink-0 ${look} ${open ? "rounded-l-md" : "rounded-md"}`}
             >
               {busy ? (
@@ -264,7 +286,7 @@ export function MergeBox({
                   aria-label="Merge method"
                   aria-haspopup="menu"
                   popoverTarget={`${id}-method`}
-                  disabled={busy || methods.length < 2}
+                  disabled={busy || (methods.length < 2 && !actions)}
                   className={`grid w-8 shrink-0 place-items-center rounded-r-md border-l border-current/25 transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed [&_svg]:size-4 ${look}`}
                 >
                   <icons.expand aria-hidden />
@@ -284,29 +306,12 @@ export function MergeBox({
             </Button>
           )}
         </div>
-        {open && <CommitMessage preview={commitPreview(pr, chosen)} base={pr.baseBranch} />}
         {open && !pr.autoMerge && !gate.canMerge && gate.canAutoMerge && (
           <Button variant="outline" disabled={busy} onClick={() => onAct("autoMerge", extra())}>
             Merge when ready
           </Button>
         )}
-        {open && actions && !gate.draft && (
-          <Checkbox checked={deleteBranch} onChange={setDeleteBranch}>
-            <span className="text-meta text-muted-foreground">Delete branch after merging</span>
-          </Checkbox>
-        )}
-        {pr.state === "merged" && actions && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() => onAct("deleteBranch")}
-            className="self-start"
-          >
-            <icons.delete aria-hidden />
-            Delete {pr.headBranch}
-          </Button>
-        )}
+        {open && <CommitMessage preview={commitPreview(pr, chosen)} base={pr.baseBranch} />}
       </div>
       <Menu
         ref={menu}
@@ -327,6 +332,17 @@ export function MergeBox({
             }}
           />
         ))}
+        {actions && (
+          <>
+            {separator}
+            <MenuOption
+              role="menuitemcheckbox"
+              option={{ value: "deleteBranch", label: "Delete branch after merging" }}
+              checked={deleteBranch}
+              onClick={() => setDeleteBranch(!deleteBranch)}
+            />
+          </>
+        )}
       </Menu>
     </section>
   );
