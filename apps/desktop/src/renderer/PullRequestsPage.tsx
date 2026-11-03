@@ -35,8 +35,8 @@ const key = (e: PrEntry) => `${e.hostId} ${e.url}`;
 /**
  * The Pull requests page, in place of the main pane: every pull request linked to a thread, on any
  * host, one row each, read with `pr/view` when the page opens and again with Refresh. The header
- * stays put above the scrolling rows, with how many show, a search box over them (see `matches`),
- * Sort, and Filters. Each is a PrRow with its thread's title: it opens its thread, and its arrow, on
+ * stays put above the scrolling rows, with a search box over them (see `matches`), Sort, and
+ * Filters. Each is a PrRow with its thread's title: it opens its thread, and its arrow, on
  * hover, opens GitHub.
  */
 export function PullRequestsPage({
@@ -97,12 +97,6 @@ export function PullRequestsPage({
         <h1 className="text-heading font-semibold">Pull requests</h1>
         {entries.length > 0 && (
           <>
-            <span className="text-body text-faint-foreground tabular-nums">
-              {rows.length === entries.length
-                ? entries.length
-                : `${rows.length} of ${entries.length}`}
-              <span className="sr-only"> linked</span>
-            </span>
             <label className={`ml-auto w-72 ${searchField}`}>
               <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
               <input
