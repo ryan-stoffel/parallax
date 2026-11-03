@@ -64,6 +64,15 @@ test("answers an agent's questions from the composer's top bar, and keeps them a
   await tab.locator("button[popovertarget]").click();
   await expect(panel).toBeVisible();
 
+  // With focus still in the composer, Esc closes the panel and doesn't stop the run.
+  await page.getByRole("textbox", { name: "Message" }).focus();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await expect(tab).toContainText("Which database should the app use?");
+  await tab.locator("button[popovertarget]").click();
+  await expect(panel).toBeVisible();
+
   // Picking an option moves on to the next question.
   await panel.getByRole("radio", { name: /SQLite/ }).click();
   await expect(panel.getByText("Which platforms should ship first?")).toBeVisible();
@@ -81,7 +90,10 @@ test("answers an agent's questions from the composer's top bar, and keeps them a
   await page.keyboard.press("1");
   await expect(panel.getByRole("checkbox", { name: /macOS/ })).not.toBeChecked();
   await panel.getByRole("checkbox", { name: /macOS/ }).click();
-  await panel.getByRole("checkbox", { name: /Linux/ }).click();
+  // Enter on an unchecked option picks it, rather than sending without it.
+  await panel.getByRole("checkbox", { name: /Linux/ }).focus();
+  await page.keyboard.press("Enter");
+  await expect(panel.getByRole("checkbox", { name: /Linux/ })).toBeChecked();
   await panel.getByRole("textbox", { name: "Your own answer" }).fill("FreeBSD");
   await settle();
   await shot("question-multiple");

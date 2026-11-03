@@ -13,6 +13,7 @@ import {
   Workflow,
 } from "lucide-react";
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -233,8 +234,9 @@ function QuestionPanel({
       e.preventDefault();
       const by = e.key === "ArrowDown" ? 1 : -1;
       rows[at < 0 ? 0 : Math.min(Math.max(at + by, 0), rows.length - 1)]?.focus();
-    } else if (e.key === "Enter" && target instanceof HTMLInputElement && target.type === "radio") {
-      if (target.checked) return;
+    } else if (e.key === "Enter" && at >= 0 && !typing) {
+      // An option already on lets the Enter through to the form, which moves on or sends.
+      if ((target as HTMLInputElement).checked) return;
       e.preventDefault();
       pick(at);
     } else if (e.key === "Enter" && target === e.currentTarget) {
@@ -388,6 +390,19 @@ function QuestionTab(props: AskProps & { form: Form }) {
   useLayoutEffect(() => {
     panel.current?.showPopover();
   }, []);
+  // Esc closes the panel before the page sees it: focus may still be in the composer, where Esc
+  // stops the run.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      panel.current?.hidePopover();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
   const question = form.questions[form.step]!;
   return (
     <section aria-label="Question" className="plan-strip">
