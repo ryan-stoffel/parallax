@@ -32,36 +32,6 @@ export interface RunOptions {
   access?: ReactNode;
 }
 
-// Where the text's baseline and capitals fall in a 16px icon beside it, once the icon is nudged up
-// to center on them (`onCapitals`). The bars stand on the one and rise to the other.
-const baseline = 12.75;
-const capHeight = 9.5;
-/** Centers its icons on the text's capitals, which sit half a pixel above the line's center. */
-const onCapitals = "[&>*]:-translate-y-[0.5px]";
-
-/** A reasoning level as a bar chart: one rising bar per level, lit up to `value`. */
-function ReasoningBars({ value }: { value: AgentEffort }) {
-  const level = effortLevels.findIndex((l) => l.value === value);
-  return (
-    <svg aria-hidden viewBox="0 0 16 16" fill="currentColor" className="reasoning-bars">
-      {effortLevels.map((l, i) => {
-        const height = capHeight * ((i + 1.25) / (effortLevels.length + 0.25));
-        return (
-          <rect
-            key={l.value}
-            x={1 + i * 3}
-            y={baseline - height}
-            width={2}
-            height={height}
-            rx={0.5}
-            opacity={i <= level ? 1 : 0.25}
-          />
-        );
-      })}
-    </svg>
-  );
-}
-
 /** Who an instance signs in as: its own account, or a hub's enabled accounts of its kind. */
 interface Account {
   email?: string;
@@ -107,8 +77,8 @@ const railButton =
  * above the button when there's no room below. The models of instances in `unavailable` aren't
  * listed, and the rail and the control show those instances disabled, saying why on hover.
  * Opening it asks the host again, so it follows Settings > Providers. Favorites are kept on this
- * device, per host. With `options`, the composer's, the button also shows the reasoning level as
- * bars and a bolt in fast mode, and the panel adds a Reasoning column and a footer with the speed,
+ * device, per host. With `options`, the composer's, the button also names the reasoning level and
+ * shows a bolt in fast mode, and the panel adds a Reasoning column and a footer with the speed,
  * context window, and access. Choosing those leaves it open, and choosing a model closes it.
  */
 export function ModelMenu({
@@ -211,11 +181,11 @@ export function ModelMenu({
         popoverTarget={id}
         aria-haspopup="menu"
         aria-label={`Model: ${chosen.name}${effortName ? `, reasoning ${effortName}` : ""}${options?.fast ? ", fast" : ""}`}
-        className={`${menuButton} min-w-0 [&>:not(.model-name)]:-translate-y-[0.5px]`}
+        className={`${menuButton} min-w-0 [&>svg]:-translate-y-[0.5px]`}
       >
         <Logo />
-        <span className="model-name min-w-0 truncate">{shortName}</span>
-        {options?.effort && <ReasoningBars value={options.effort} />}
+        <span className={`min-w-0 truncate ${options ? "text-foreground" : ""}`}>{shortName}</span>
+        {effortName && <span className="composer-effort shrink-0">{effortName}</span>}
         {options?.fast && <Zap aria-hidden className="composer-pop fill-current" />}
         {!options && <ChevronDown aria-hidden className="opacity-70" />}
       </button>
@@ -470,9 +440,8 @@ export function ModelMenu({
                         aria-checked={current}
                         title={l.blurb}
                         onClick={() => options.onEffort(l.value)}
-                        className={`flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body hover:bg-hover [&_svg]:size-4 [&_svg]:shrink-0 ${onCapitals} ${current ? "bg-selected font-medium" : ""}`}
+                        className={`flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body hover:bg-hover [&_svg]:size-4 [&_svg]:shrink-0 ${current ? "bg-selected font-medium" : ""}`}
                       >
-                        <ReasoningBars value={l.value} />
                         <span className="min-w-0 flex-1 truncate">{l.name}</span>
                         {current && <Check aria-hidden className="text-accent" />}
                       </button>

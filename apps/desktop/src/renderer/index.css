@@ -1166,10 +1166,7 @@ body {
 .composer-shell,
 .composer-bar,
 .composer-tabs {
-  background-color: light-dark(
-    var(--surface),
-    color-mix(in oklab, var(--foreground) 4%, var(--surface))
-  );
+  background-color: light-dark(var(--surface), #0e0e0e);
 }
 .composer-shell {
   anchor-name: --composer;
@@ -1349,22 +1346,6 @@ body {
     scale: 0.7;
     opacity: 0;
   }
-}
-/* The reasoning bars fill or empty one after another as the level changes. */
-.reasoning-bars rect {
-  transition: opacity var(--transition-duration-fast) var(--ease-out);
-}
-.reasoning-bars rect:nth-child(2) {
-  transition-delay: 25ms;
-}
-.reasoning-bars rect:nth-child(3) {
-  transition-delay: 50ms;
-}
-.reasoning-bars rect:nth-child(4) {
-  transition-delay: 75ms;
-}
-.reasoning-bars rect:nth-child(5) {
-  transition-delay: 100ms;
 }
 [data-back] > .composer-controls {
   margin-top: -2.625rem;
