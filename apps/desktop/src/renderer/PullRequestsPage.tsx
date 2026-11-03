@@ -101,6 +101,7 @@ export function PullRequestsPage({
               {rows.length === entries.length
                 ? entries.length
                 : `${rows.length} of ${entries.length}`}
+              <span className="sr-only"> linked</span>
             </span>
             <label className={`ml-auto w-72 ${searchField}`}>
               <icons.search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
