@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { PrMergeMethod, PrStatusResult, PullRequest } from "../../protocol/generated/protocol";
 import { icons } from "../icons";
 import { animate, duration, easing } from "../motion";
-import { Button, Menu, MenuOption, separator, Spinner } from "../ui";
+import { Button, IconButton, Menu, MenuOption, separator, Spinner } from "../ui";
 import { CheckGroup, Reveal, type CheckActions } from "./CheckGroup";
 import {
   commitPreview,
@@ -228,14 +228,15 @@ export function MergeBox({
             )}
           </div>
           {pr.state === "merged" && actions && !branchDeleted && (
-            <Button
+            <IconButton
               size="sm"
+              label="Delete branch"
               disabled={busy}
-              title={`Delete ${pr.headBranch}`}
+              className="-mt-0.5 -mr-[5px]"
               onClick={() => void removeBranch()}
             >
-              Delete branch
-            </Button>
+              <icons.delete aria-hidden />
+            </IconButton>
           )}
         </div>
       )}
