@@ -1,20 +1,22 @@
 import { Check, ImageUp, Search } from "lucide-react";
-import { useId, useRef, useState, type KeyboardEvent, type Ref, type ToggleEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type Ref,
+  type ToggleEvent,
+} from "react";
 
 import type { ChosenIcon } from "../protocol/generated/protocol";
 import { imageUrl, readIcon } from "./images";
 import { notify } from "./notifications";
 import { defaultIcon, iconColors, iconLook, projectIcons } from "./projectIcons";
-import { menuPanel } from "./ui";
+import { menuPanel, searchField } from "./ui";
 
-// The grid's columns, which Up and Down step across.
+// The popover grid's columns, which Up and Down step across.
 const columns = 9;
-const steps: Partial<Record<string, number>> = {
-  ArrowLeft: -1,
-  ArrowRight: 1,
-  ArrowUp: -columns,
-  ArrowDown: columns,
-};
 
 /**
  * An orchestrator's icon picker, a native popover like the menus: a search box, the colors (the
@@ -25,7 +27,9 @@ const steps: Partial<Record<string, number>> = {
  * stays open so both can be set. Arrow keys move in the grid, Enter picks, and Escape closes. With
  * `maxImageBytes`, where the host keeps icon images (0038), Upload image beside the search box
  * picks an image file instead, shown selected on that button. A glyph or color picked after it
- * replaces it, and a file that can't be used says why in the picker.
+ * replaces it, and a file that can't be used says why in the picker. With `onClose`, it's a panel
+ * in the page instead of a popover, always open, with its grid as wide as there's room for, and
+ * Escape calls `onClose`.
  */
 export function IconPicker({
   ref,
@@ -34,9 +38,10 @@ export function IconPicker({
   onPick,
   align = "start",
   maxImageBytes,
+  onClose,
 }: {
   ref?: Ref<HTMLDivElement>;
-  id: string;
+  id?: string;
   /** Where it starts: the orchestrator's icon, or none for the default. */
   value?: ChosenIcon;
   onPick: (icon: ChosenIcon) => void;
@@ -44,12 +49,16 @@ export function IconPicker({
   align?: "start" | "center";
   /** The host's `iconImages` cap, or none where its plxd keeps no icon images. */
   maxImageBytes?: number;
+  /** A panel in the page, closed by Escape, rather than a popover. */
+  onClose?: () => void;
 }) {
+  const inline = !!onClose;
   const colorGroup = useId();
   const searchBox = useRef<HTMLInputElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   // Its content is drawn only while it's open, so a sidebar of orchestrators holds no hidden grids.
-  const [open, setOpen] = useState(false);
+  const [opened, setOpen] = useState(false);
+  const open = inline || opened;
   const [pick, setPick] = useState(value ?? defaultIcon);
   const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -81,8 +90,20 @@ export function IconPicker({
     else choose({ ...withColor(pick.color), image });
   };
 
+  // A panel stays open while Choose file changes the icon beside it.
+  useEffect(() => {
+    if (inline && value) setPick(value);
+  }, [inline, value]);
+  // A panel opens by being drawn, so it takes focus then.
+  useEffect(() => {
+    if (inline) searchBox.current?.focus();
+  }, [inline]);
+
   const moveInGrid = (e: KeyboardEvent<HTMLElement>) => {
-    const step = steps[e.key];
+    const across = inline
+      ? getComputedStyle(e.currentTarget).gridTemplateColumns.split(" ").length
+      : columns;
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -across, ArrowDown: across }[e.key];
     if (!step) return;
     e.preventDefault();
     const options = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="option"]')];
@@ -91,6 +112,142 @@ export function IconPicker({
     if (next < 0 && e.key === "ArrowUp") searchBox.current?.focus();
     else options[next]?.focus();
   };
+
+  const searchInput = (
+    <>
+      <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+      <input
+        ref={searchBox}
+        type="search"
+        aria-label="Search icons"
+        placeholder="Search icons"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter belongs to an input method while it composes.
+          if (e.nativeEvent.isComposing) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            grid.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus();
+          } else if (e.key === "Enter") {
+            // Picks the first match, and never submits a form around it. With nothing typed
+            // it picks nothing, since the box has focus as the picker opens.
+            e.preventDefault();
+            if (q && shown[0]) choose(withGlyph(shown[0].name));
+          } else if (e.key === "Escape" && inline && query) {
+            // Clears the search first; the panel closes on the next.
+            e.preventDefault();
+            e.stopPropagation();
+            setQuery("");
+          }
+        }}
+        className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden"
+      />
+    </>
+  );
+  const colors = (
+    <fieldset
+      aria-label="Color"
+      className={inline ? "flex shrink-0 gap-2" : "flex justify-between px-3 pt-3 pb-1"}
+    >
+      {iconColors.map((c) => {
+        // An image has no color of its own.
+        const checked = !pick.image && pick.color === c.key;
+        return (
+          <label
+            key={c.label}
+            title={c.label}
+            className={`grid size-5 cursor-pointer place-items-center rounded-full ${c.fill} has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring`}
+          >
+            <input
+              type="radio"
+              name={colorGroup}
+              aria-label={c.label}
+              checked={checked}
+              onChange={() => choose(withColor(c.key))}
+              className="sr-only"
+            />
+            {/* The palette is dark on the light theme and light on the dark one, so the
+                page's background reads on it; the accent has its own foreground. */}
+            {checked && (
+              <Check
+                aria-hidden
+                strokeWidth={3}
+                className={`size-3 ${c.key ? "text-background" : "text-accent-foreground"}`}
+              />
+            )}
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+  const glyphs =
+    shown.length > 0 ? (
+      <div
+        ref={grid}
+        role="listbox"
+        aria-label="Icons"
+        onKeyDown={moveInGrid}
+        className={
+          inline
+            ? "grid max-h-56 grid-cols-[repeat(auto-fill,minmax(2.25rem,1fr))] gap-1 overflow-y-auto"
+            : "grid max-h-64 grid-cols-9 gap-0.5 overflow-y-auto p-2"
+        }
+      >
+        {shown.map((i) => {
+          const chosen = !pick.image && i.name === pick.name;
+          return (
+            <button
+              key={i.name}
+              type="button"
+              role="option"
+              aria-selected={chosen}
+              aria-label={i.label}
+              title={i.label}
+              tabIndex={i === tabStop ? 0 : -1}
+              onClick={() => choose(withGlyph(i.name))}
+              // Only the chosen one wears the color, so it stands out from the grid.
+              className={`grid h-8 place-items-center rounded-md hover:bg-hover hover:text-foreground [&_svg]:size-4 ${inline ? "w-full" : "w-8"} ${chosen ? `bg-selected ${iconLook(pick).color}` : "text-muted-foreground"}`}
+            >
+              <i.Icon aria-hidden />
+            </button>
+          );
+        })}
+      </div>
+    ) : (
+      <p
+        className={
+          inline
+            ? "py-2 text-body text-faint-foreground"
+            : "px-3 pt-2 pb-3 text-body text-faint-foreground"
+        }
+      >
+        No icons match
+      </p>
+    );
+
+  if (inline)
+    return (
+      <div
+        ref={ref}
+        role="group"
+        aria-label="Choose an icon"
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          // Not Settings' too.
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }}
+        className="flex flex-col gap-3 px-4 pt-1 pb-4"
+      >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <label className={`${searchField} min-w-48 flex-1`}>{searchInput}</label>
+          {colors}
+        </div>
+        {glyphs}
+      </div>
+    );
 
   return (
     <div
@@ -114,29 +271,7 @@ export function IconPicker({
       {open && (
         <>
           <label className="flex items-center gap-2 border-b border-border px-3 py-2.5 focus-within:border-ring">
-            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-            <input
-              ref={searchBox}
-              type="search"
-              aria-label="Search icons"
-              placeholder="Search icons"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                // Enter belongs to an input method while it composes.
-                if (e.nativeEvent.isComposing) return;
-                if (e.key === "ArrowDown") {
-                  e.preventDefault();
-                  grid.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus();
-                } else if (e.key === "Enter") {
-                  // Picks the first match, and never submits a form around it. With nothing typed
-                  // it picks nothing, since the box has focus as the picker opens.
-                  e.preventDefault();
-                  if (q && shown[0]) choose(withGlyph(shown[0].name));
-                }
-              }}
-              className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
-            />
+            {searchInput}
             {maxImageBytes !== undefined && (
               <>
                 <button
@@ -172,64 +307,8 @@ export function IconPicker({
               </>
             )}
           </label>
-          <fieldset aria-label="Color" className="flex justify-between px-3 pt-3 pb-1">
-            {iconColors.map((c) => {
-              // An image has no color of its own.
-              const checked = !pick.image && pick.color === c.key;
-              return (
-                <label
-                  key={c.label}
-                  title={c.label}
-                  className={`grid size-5 place-items-center rounded-full ${c.fill} has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring`}
-                >
-                  <input
-                    type="radio"
-                    name={colorGroup}
-                    aria-label={c.label}
-                    checked={checked}
-                    onChange={() => choose(withColor(c.key))}
-                    className="sr-only"
-                  />
-                  {/* The palette is dark on the light theme and light on the dark one, so the
-                      page's background reads on it; the accent has its own foreground. */}
-                  {checked && (
-                    <Check
-                      aria-hidden
-                      strokeWidth={3}
-                      className={`size-3 ${c.key ? "text-background" : "text-accent-foreground"}`}
-                    />
-                  )}
-                </label>
-              );
-            })}
-          </fieldset>
-          {shown.length > 0 ? (
-            <div
-              ref={grid}
-              role="listbox"
-              aria-label="Icons"
-              onKeyDown={moveInGrid}
-              className={`grid max-h-64 grid-cols-9 gap-0.5 overflow-y-auto p-2 ${iconLook(pick).color}`}
-            >
-              {shown.map((i) => (
-                <button
-                  key={i.name}
-                  type="button"
-                  role="option"
-                  aria-selected={!pick.image && i.name === pick.name}
-                  aria-label={i.label}
-                  title={i.label}
-                  tabIndex={i === tabStop ? 0 : -1}
-                  onClick={() => choose(withGlyph(i.name))}
-                  className="grid size-8 place-items-center rounded-md hover:bg-hover aria-selected:bg-selected [&_svg]:size-4"
-                >
-                  <i.Icon aria-hidden />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="px-3 pt-2 pb-3 text-body text-faint-foreground">No icons match</p>
-          )}
+          {colors}
+          {glyphs}
         </>
       )}
     </div>

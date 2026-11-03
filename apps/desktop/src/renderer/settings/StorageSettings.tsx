@@ -3,12 +3,14 @@ import { useCallback, useEffect, useState } from "react";
 import type { StorageItem } from "../../preload/bridge";
 import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
-import { localId, useHosts } from "../hosts";
+import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
 import {
+  allHosts,
   dangerButton,
   formatBytes,
   HostPicker,
+  hostsOf,
   PageTitle,
   quietButton,
   Row,
@@ -92,11 +94,25 @@ export function StorageSettings() {
   );
 }
 
-/** A host's archived threads: how many, and Delete all, which asks first, in place. */
+/** Every computer's archived threads, or the one picked's. */
 function ArchivedThreads() {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
-  const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
+  const [scope, setScope] = useState(allHosts);
+  const targets = hostsOf(hosts, scope);
+  return (
+    <Section
+      title="Archived threads"
+      action={<HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
+    >
+      {targets.map((host) => (
+        <HostArchived key={host.id} host={host} named={targets.length > 1} />
+      ))}
+    </Section>
+  );
+}
+
+/** A computer's archived threads: how many, and Delete all, which asks first, in place. */
+function HostArchived({ host, named }: { host: Host; named: boolean }) {
   const connected = useConnection(host.id)?.status === "connected";
   const [archived, setArchived] = useState<string[]>();
   const [confirming, setConfirming] = useState(false);
@@ -137,71 +153,56 @@ function ArchivedThreads() {
 
   const count = archived?.length ?? 0;
   return (
-    <Section
-      title="Archived threads"
-      action={
-        <HostPicker
-          hosts={hosts}
-          value={host.id}
-          onChange={(id) => {
-            setHostId(id);
-            setConfirming(false);
-            setError(undefined);
-          }}
-        />
+    <Row
+      title={`${named ? `${host.name}: ` : ""}${
+        !connected
+          ? "Not connected"
+          : archived === undefined
+            ? "Counting…"
+            : `${count} archived ${count === 1 ? "thread" : "threads"}`
+      }`}
+      description={
+        error ? (
+          <span role="alert" className="text-danger">
+            {error}
+          </span>
+        ) : confirming ? (
+          "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."
+        ) : (
+          "Deleting removes each one's transcript and worktree from the host."
+        )
       }
     >
-      <Row
-        title={
-          !connected
-            ? "Not connected"
-            : archived === undefined
-              ? "Counting…"
-              : `${count} archived ${count === 1 ? "thread" : "threads"}`
-        }
-        description={
-          error ? (
-            <span role="alert" className="text-danger">
-              {error}
-            </span>
-          ) : confirming ? (
-            "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."
-          ) : (
-            "Deleting removes each one's transcript and worktree from the host."
-          )
-        }
-      >
-        {confirming ? (
-          <>
-            <button
-              type="button"
-              disabled={deleting}
-              className={dangerButton}
-              onClick={() => void deleteAll()}
-            >
-              {deleting ? "Deleting…" : "Delete all"}
-            </button>
-            <button
-              type="button"
-              autoFocus
-              className={quietButton}
-              disabled={deleting}
-              onClick={() => setConfirming(false)}
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
+      {confirming ? (
+        <>
           <button
             type="button"
-            className={quietButton}
-            disabled={!count}
-            onClick={() => setConfirming(true)}
+            disabled={deleting}
+            className={dangerButton}
+            onClick={() => void deleteAll()}
           >
-            Delete all
+            {deleting ? "Deleting…" : "Delete all"}
           </button>
-        )}
-      </Row>
-    </Section>
+          <button
+            type="button"
+            autoFocus
+            className={quietButton}
+            disabled={deleting}
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className={quietButton}
+          disabled={!count}
+          onClick={() => setConfirming(true)}
+        >
+          Delete all
+        </button>
+      )}
+    </Row>
   );
 }

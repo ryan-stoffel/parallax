@@ -131,7 +131,7 @@ export function AccessibilitySettings() {
           data-setting="diff-colors"
           role="radiogroup"
           aria-label="Diff colors"
-          className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2 border-b border-border/70 p-3"
+          className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2 border-b border-border/40 p-3"
         >
           {palettes.map((p) => (
             <label
@@ -151,7 +151,7 @@ export function AccessibilitySettings() {
           ))}
         </div>
         {appearance.diffColors === "custom" && (
-          <div className="flex flex-wrap items-center gap-6 border-b border-border/70 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-6 border-b border-border/40 px-4 py-3">
             <ColorPick
               label="Added"
               value={appearance.diffCustom.added}

@@ -288,6 +288,42 @@ test("search opens an orchestrator's pane for what only it has", async () => {
   act(() => root.unmount());
 });
 
+test("Worktrees starts on All computers, says where they differ, and sets them all", async () => {
+  const failed = states[mini.id]!;
+  const capabilities = { branchPrefix: {}, worktreeCleanup: {} };
+  states["local"] = { ...states["local"]!, capabilities } as ConnectionState;
+  states[mini.id] = { ...states["local"]! } as ConnectionState;
+  answers["host/settings/get"] = () => ({
+    result: { autoResume: false, cleanWorktrees: true, branchPrefix: "parallax/" },
+  });
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (host, method, params) =>
+    host === mini.id && method === "host/settings/get"
+      ? ({
+          result: { autoResume: false, cleanWorktrees: false, branchPrefix: "ryan/" },
+          logId: "l",
+        } as never)
+      : original(host, method, params),
+  );
+  answers["host/settings/set"] = (p) => ({
+    result: { autoResume: false, cleanWorktrees: true, branchPrefix: "parallax/", ...p },
+  });
+  await renderSettings("worktrees");
+
+  const row = () => document.querySelector('[data-setting="clean-up-merged-worktrees"]')!;
+  expect(row().textContent).toContain("Differs across computers");
+  await click(row().querySelector<HTMLElement>('[role="switch"]')!);
+  expect(
+    calls("host/settings/set")
+      .map((c) => c.host)
+      .sort(),
+  ).toEqual([mini.id, "local"].sort());
+
+  request.mockImplementation(original);
+  states[mini.id] = failed;
+  delete answers["host/settings/set"];
+});
+
 test("Projects lists each with its icon, and an icon picked there goes to every copy", async () => {
   const repo = { id: "r1", name: "ember", path: "/src/ember", icon: { name: "rocket" } };
   const updates: [string, unknown][] = [];
@@ -301,16 +337,16 @@ test("Projects lists each with its icon, and an icon picked there goes to every 
     { host: { id: "local", name: "This Mac" } as Host, view: viewOf("local", "r1") },
     { host: { id: mini.id, name: mini.name } as Host, view: viewOf(mini.id, "r9") },
   ]);
-  const row = button(document.body, "ember/src/ember");
+  const row = [...document.querySelectorAll("button")].find((b) =>
+    b.textContent?.startsWith("emberThis Mac · /src/ember"),
+  )!;
   expect(row.querySelector("svg")).not.toBeNull();
   expect(document.querySelector('[data-setting="project-icon"]')).toBeNull();
 
   await click(row);
-  expect(document.querySelector('[data-setting="project-icon"]')!.textContent).toContain("rocket");
-  const picker = document.querySelector<HTMLElement>('[role="dialog"][aria-label$="icon"]')!;
-  await act(async () =>
-    picker.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" })),
-  );
+  expect(document.querySelector('[data-setting="project-icon"]')!.textContent).toContain("Rocket");
+  await click(button(document.body, "Choose icon"));
+  const picker = document.querySelector('[role="group"][aria-label="Choose an icon"]')!;
   await click(picker.querySelector<HTMLElement>('[role="option"]')!);
   expect(updates.map(([where]) => where)).toEqual(["local/r1", `${mini.id}/r9`]);
 });

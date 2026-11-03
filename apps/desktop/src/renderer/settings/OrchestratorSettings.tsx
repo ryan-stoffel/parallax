@@ -1,15 +1,16 @@
-import { Network } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { Orchestrator, RepoRef } from "../../protocol/generated/protocol";
 import { useConnection } from "../ConnectionStatus";
-import { localId, useHosts, type Host } from "../hosts";
+import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
 import { autonomyLevels } from "../OrchestratorPermission";
 import { orchestratorPrefs } from "../prefs";
+import { ProjectIcon } from "../Sidebar";
 import type { ThreadsView } from "../threads";
 import { Picker } from "../ui";
 import {
+  allHosts,
   dangerButton,
   field,
   HostPicker,
@@ -39,8 +40,8 @@ const autonomyOptions = autonomyLevels.map((a) => ({
 }));
 
 /**
- * Settings > Orchestrators: on the left, what a new orchestrator starts with and each of a host's
- * orchestrators, and on the right the chosen one's settings, which save as they change.
+ * Settings > Orchestrators: on the left, what a new orchestrator starts with and the orchestrators of
+ * every computer, or the one picked, and on the right the chosen one's settings, which save as they change.
  */
 export function OrchestratorSettings({
   listed,
@@ -51,19 +52,24 @@ export function OrchestratorSettings({
   focus?: { anchor: string };
 }) {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
+  const [scope, setScope] = useState(allHosts);
   const [chosen, setChosen] = useState(newOnes);
-  const view = listed.find((l) => l.host.id === hostId)?.view;
-  const orchestrators = view?.state.orchestrators ?? [];
-  const current = orchestrators.find((o) => o.id === chosen);
-  const first = orchestrators[0]?.id;
+  const entries = listed
+    .filter((l) => scope === allHosts || l.host.id === scope)
+    .flatMap(({ host, view }) =>
+      view.state.orchestrators.map((orchestrator) => ({ host, view, orchestrator })),
+    );
+  const keyOf = (e: (typeof entries)[number]) => `${e.host.id}/${e.orchestrator.id}`;
+  const named = new Set(entries.map((e) => e.host.id)).size > 1;
+  const current = entries.find((e) => keyOf(e) === chosen);
+  const first = entries[0] && keyOf(entries[0]);
   useEffect(() => {
     if (focus && first) setChosen(defaultAnchors.includes(focus.anchor) ? newOnes : first);
   }, [focus]);
 
   return (
     <ListPane
-      bar={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} always />}
+      bar={<HostPicker hosts={hosts} value={scope} onChange={setScope} always all />}
       list={
         <div
           role="tablist"
@@ -79,28 +85,37 @@ export function OrchestratorSettings({
               detail="What each one starts with"
             />
           </div>
-          <ListHeading>On this host</ListHeading>
-          {orchestrators.map((o) => (
-            <ListItem
-              key={o.id}
-              chosen={o === current}
-              onClick={() => setChosen(o.id)}
-              icon={<Network aria-hidden className="text-faint-foreground" />}
-              title={o.name}
-              detail={
-                o.repoPath ? o.repoPath.slice(o.repoPath.lastIndexOf("/") + 1) : "No repository"
-              }
-            />
-          ))}
-          {orchestrators.length === 0 && (
+          <ListHeading>Orchestrators</ListHeading>
+          {entries.map((e) => {
+            const { orchestrator: o } = e;
+            const place = o.repoPath
+              ? o.repoPath.slice(o.repoPath.lastIndexOf("/") + 1)
+              : "No repository";
+            return (
+              <ListItem
+                key={keyOf(e)}
+                chosen={e === current}
+                onClick={() => setChosen(keyOf(e))}
+                icon={<ProjectIcon icon={o.icon} />}
+                title={o.name}
+                detail={named ? `${e.host.name} · ${place}` : place}
+              />
+            );
+          })}
+          {entries.length === 0 && (
             <p className="px-4 py-2 text-meta text-faint-foreground">None yet.</p>
           )}
         </div>
       }
     >
       <div className="mx-auto max-w-3xl px-8 pt-6 pb-16">
-        {current && view ? (
-          <OrchestratorPane key={current.id} hostId={hostId} orchestrator={current} view={view} />
+        {current ? (
+          <OrchestratorPane
+            key={keyOf(current)}
+            hostId={current.host.id}
+            orchestrator={current.orchestrator}
+            view={current.view}
+          />
         ) : (
           <NewOrchestrators />
         )}
@@ -190,9 +205,16 @@ function OrchestratorPane({
 
   return (
     <>
-      <PageTitle title={orchestrator.name}>
-        {orchestrator.repoPath || "An orchestrator with no repository."}
-      </PageTitle>
+      <div className="flex items-start gap-3">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-hover">
+          <ProjectIcon icon={orchestrator.icon} className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <PageTitle title={orchestrator.name}>
+            {orchestrator.repoPath || "An orchestrator with no repository."}
+          </PageTitle>
+        </div>
+      </div>
       <Section title="General">
         <Row title="Name" description="How the sidebar names it.">
           <input

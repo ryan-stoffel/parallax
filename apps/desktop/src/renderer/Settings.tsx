@@ -185,12 +185,12 @@ export function SettingsDialog({
     >
       <nav
         aria-label="Settings sections"
-        className="flex w-64 shrink-0 flex-col border-r border-border bg-surface pt-3"
+        className="flex w-64 shrink-0 flex-col border-r border-border/50 bg-surface pt-3"
       >
         <SettingsNav section={props.section} onSection={onSection} />
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-13 shrink-0 items-center gap-2 border-b border-border pr-3 pl-6">
+        <div className="flex h-13 shrink-0 items-center gap-2 border-b border-border/50 pr-3 pl-6">
           <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[props.section] }]} />
           <div className="ml-auto">
             <IconButton label="Close settings" onClick={onClose}>
@@ -858,7 +858,7 @@ function HostInstances({
       </button>
       {/* Linked, it stays until it's turned off, even with one computer left. */}
       {(hosts.length > 1 || linkOn) && (
-        <div className="-mx-1 basis-full overflow-hidden rounded-xl border border-border/70">
+        <div className="-mx-1 basis-full overflow-hidden rounded-xl border border-border/40">
           <Row
             title="Link providers across computers"
             description={
@@ -902,7 +902,7 @@ function HostInstances({
     </>
   );
   const hubsList = hubsOn && (
-    <div className="mt-auto border-t border-border/70 py-2">
+    <div className="mt-auto border-t border-border/40 py-2">
       <ListItem
         chosen={showingHubs}
         onClick={() => setSelected(hubsTab)}
@@ -966,7 +966,7 @@ function HostInstances({
                   type="button"
                   aria-pressed={labelFilter === label}
                   onClick={() => setLabelFilter(labelFilter === label ? undefined : label)}
-                  className="rounded-full border border-border/70 px-2 py-0.5 text-caption text-muted-foreground hover:bg-hover aria-pressed:border-accent aria-pressed:text-foreground"
+                  className="rounded-full border border-border/40 px-2 py-0.5 text-caption text-muted-foreground hover:bg-hover aria-pressed:border-accent aria-pressed:text-foreground"
                 >
                   {label}
                 </button>
@@ -1217,7 +1217,7 @@ function ProviderLabels({ hostId, instance }: { hostId: string; instance: string
             setText("");
           }
         }}
-        className="w-24 rounded-full border border-transparent bg-transparent hover:border-border/70 focus:border-border px-2 py-0.5 text-meta placeholder:text-faint-foreground focus:w-32"
+        className="w-24 rounded-full border border-transparent bg-transparent hover:border-border/40 focus:border-border px-2 py-0.5 text-meta placeholder:text-faint-foreground focus:w-32"
       />
       <datalist id={suggestions}>
         {allProviderLabels(all)
@@ -1417,7 +1417,7 @@ function InstancePane({
       className="mx-auto max-w-3xl min-w-0 px-8 pt-8 pb-16"
     >
       <div className="mb-8 flex items-start gap-3.5">
-        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border/70 bg-(--pane-card)">
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border/40 bg-(--pane-card)">
           <KindLogo className="size-5" />
         </span>
         <div data-setting="display-name" className="min-w-0 flex-1">

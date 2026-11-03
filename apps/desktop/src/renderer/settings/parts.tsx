@@ -6,8 +6,11 @@ import { anchorOf } from "./search";
 
 // What every Settings page is built from.
 
+/** The host picker's choice for every computer at once, which no host's id can be. */
+export const allHosts = "#all";
+
 export const settingRow =
-  "flex min-h-14 items-center justify-between gap-6 border-border/70 px-4 py-3 not-last:border-b";
+  "flex min-h-14 items-center justify-between gap-6 border-border/40 px-4 py-3 not-last:border-b";
 export const quietButton =
   "rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground";
 export const primaryButton =
@@ -60,7 +63,7 @@ export function Section({
         <h2 className="text-reading font-semibold">{title}</h2>
         {action}
       </div>
-      <div className="rounded-xl border border-border/70 bg-(--pane-card)">{children}</div>
+      <div className="rounded-xl border border-border/50 bg-(--pane-card)">{children}</div>
     </section>
   );
 }
@@ -110,12 +113,12 @@ export function ListPane({
   return (
     <div className="@container flex h-full min-h-0 flex-col">
       {bar && (
-        <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/70 px-5 py-2">
+        <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-5 pt-3 pb-2">
           {bar}
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto @3xl:flex-row @3xl:overflow-hidden">
-        <div className="flex shrink-0 flex-col border-b border-border/70 @3xl:w-72 @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0">
+        <div className="flex shrink-0 flex-col border-b border-border/50 @3xl:w-72 @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0">
           {list}
         </div>
         <div className="min-w-0 flex-1 @3xl:overflow-y-auto">{children}</div>
@@ -210,12 +213,15 @@ export function HostPicker({
   value,
   onChange,
   always,
+  all,
   scope,
 }: {
   hosts: Host[];
   value: string;
   onChange: (id: string) => void;
   always?: boolean;
+  /** Offers `allHosts`, All computers, first. */
+  all?: boolean;
   /** What on the host the settings are for, as a menu, read before the host. */
   scope?: ReactNode;
 }) {
@@ -230,15 +236,24 @@ export function HostPicker({
     <span className="flex flex-wrap items-center gap-1.5 text-reading text-muted-foreground">
       {lead}
       <Picker
-        label="Host"
+        field
+        label="Computer"
         value={value}
         onChange={onChange}
-        options={hosts.map((h) => ({ value: h.id, label: h.name }))}
-        className="font-medium text-foreground"
+        options={[
+          ...(all ? [{ value: allHosts, label: "All computers" }] : []),
+          ...hosts.map((h) => ({ value: h.id, label: h.name })),
+        ]}
+        className="max-w-56"
+        panelClassName="min-w-48"
       />
     </span>
   );
 }
+
+/** Which of `hosts` a picker's `value` means: all of them for `allHosts`. */
+export const hostsOf = (hosts: Host[], value: string) =>
+  value === allHosts ? hosts : hosts.filter((h) => h.id === value);
 
 /**
  * Remove and Cancel, for a removal that asks first in place. Cancel takes focus, so a double click

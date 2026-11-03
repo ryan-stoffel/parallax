@@ -6,13 +6,15 @@ import type { GithubStatus, PrMergeMethod } from "../../protocol/generated/proto
 import { useCopy } from "../AgentChat";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
-import { localId, useHosts, type Host } from "../hosts";
+import { useHosts, type Host } from "../hosts";
 import { locale } from "../locale";
 import { GitHubLogo } from "../logos";
 import { notify } from "../notifications";
 import { IconButton, Picker } from "../ui";
 import {
+  allHosts,
   HostPicker,
+  hostsOf,
   PageTitle,
   primaryButton,
   quietButton,
@@ -32,19 +34,26 @@ const POLL_MS = 2000;
  * Settings > Source control: GitHub on a host, through the `gh` CLI plxd runs there for pull
  * requests: whether it's installed, its version, and the account it's signed in to. On a plxd with
  * `githubSetup` (PLX-423), the row installs `gh` and signs it in. `hostId` picks the host it opens
- * on, as Set up GitHub does; this computer otherwise.
+ * on, as Set up GitHub does; every computer otherwise.
  */
 export function SourceControlSettings({ hostId: opened }: { hostId?: string }) {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(opened ?? localId);
-  const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
+  const [scope, setScope] = useState(opened ?? allHosts);
+  const targets = hostsOf(hosts, scope);
   return (
     <>
       <PageTitle title="Source control">
         Parallax opens and follows pull requests with the GitHub CLI on each host. How worktrees and
         branches work is in Worktrees.
       </PageTitle>
-      <GitHub key={host.id} host={host} hosts={hosts} onHost={setHostId} />
+      {targets.map((host, i) => (
+        <GitHub
+          key={host.id}
+          host={host}
+          title={targets.length > 1 ? `Hosting on ${host.name}` : "Hosting"}
+          picker={i === 0 && <HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
+        />
+      ))}
       <PullRequests />
     </>
   );
@@ -133,12 +142,13 @@ function PullRequests() {
 
 function GitHub({
   host,
-  hosts,
-  onHost,
+  title,
+  picker,
 }: {
   host: Host;
-  hosts: Host[];
-  onHost: (id: string) => void;
+  title: string;
+  /** Which computer's it shows, beside the first's title. */
+  picker: ReactNode;
 }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
@@ -292,10 +302,10 @@ function GitHub({
   const note = setup ? status?.setupNote : undefined;
   return (
     <Section
-      title="Hosting"
+      title={title}
       action={
         <div className="flex items-center gap-2">
-          <HostPicker hosts={hosts} value={host.id} onChange={onHost} />
+          {picker}
           <IconButton label="Refresh" disabled={!supported || checking} onClick={() => void load()}>
             <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
           </IconButton>

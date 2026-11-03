@@ -1,13 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import type {
-  AgentPermission,
-  HostSettings,
-  HostSettingsSetParams,
-} from "../../protocol/generated/protocol";
+import type { AgentPermission } from "../../protocol/generated/protocol";
 import { accessPrefs } from "../accessPrefs";
 import { accessOptions } from "../Composer";
-import { useConnection } from "../ConnectionStatus";
 import { EffortMenu } from "../EffortMenu";
 import { ImportButton } from "../ImportSessions";
 import { localId, useHosts } from "../hosts";
@@ -16,7 +11,8 @@ import { models, useCatalog, type Provider } from "../models";
 import { newThreadPrefs, setNewThreadPrefs } from "../prefs";
 import { RunTargetMenu } from "../RunTargetMenu";
 import { Picker } from "../ui";
-import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
+import { useHostSettings } from "./hostSettings";
+import { allHosts, HostPicker, hostsOf, PageTitle, Row, Section, Switch } from "./parts";
 
 /** The composer's own menus are borderless; on a settings row they get a field's outline. */
 const pickerBox = "rounded-lg border border-border bg-background";
@@ -189,76 +185,49 @@ function NewThreads() {
 }
 
 /**
- * Whether a host's runs wait out a usage limit and resume when it resets (`host/settings`, 0049),
- * and whether a plain thread's turn a plxd restart cut off continues once plxd is up (0060). Both
- * are off by default. A thread's own toggle, in its menu, overrides the first.
+ * Whether runs wait out a usage limit and resume when it resets (`host/settings`, 0049), and
+ * whether a plain thread's turn a plxd restart cut off continues once plxd is up (0060), on every
+ * computer or the one picked. Both are off by default. A thread's own toggle, in its menu, overrides the first.
  */
 function Resuming() {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
-  const connection = useConnection(hostId);
-  const supported = connection?.status === "connected" && "autoResume" in connection.capabilities;
-  const [settings, setSettings] = useState<HostSettings>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    setSettings(undefined);
-    setError(undefined);
-    if (!supported) return;
-    let stale = false;
-    void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
-      if (stale) return;
-      if ("error" in answer) setError(answer.error.message);
-      else setSettings(answer.result);
-    });
-    return () => {
-      stale = true;
-    };
-  }, [hostId, supported]);
-  const set = async (
-    change: Pick<HostSettingsSetParams, "autoResume" | "continueAfterRestart">,
-  ) => {
-    const before = settings;
-    setSettings((prev) => prev && { ...prev, ...change });
-    const answer = await window.parallax.request(hostId, "host/settings/set", change);
-    if ("error" in answer) {
-      setSettings(before);
-      setError(answer.error.message);
-    } else {
-      setSettings(answer.result);
-      setError(undefined);
-    }
-  };
+  const [scope, setScope] = useState(allHosts);
+  const { able, connected, error, shared, set } = useHostSettings(hostsOf(hosts, scope));
+  const resume = shared("autoResume", (s) => s.autoResume);
+  const carryOn = shared("autoResume", (s) => s.continueAfterRestart);
+  const differs = "Differs across computers, so a change here sets them all. ";
+  const failed = "Couldn't save the setting";
 
   return (
     <Section
       title="Resuming threads"
-      action={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} />}
+      action={<HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
     >
       <Row
         title="Resume after a usage limit"
         description={
           error ??
-          (connection?.status === "connected" && !supported
-            ? "This host's plxd can't resume threads after a usage limit."
-            : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do.")
+          (connected && !able("autoResume").length
+            ? "This plxd can't resume threads after a usage limit."
+            : `${resume.mixed ? differs : ""}A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do.`)
         }
       >
         <Switch
           label="Resume after a usage limit"
-          checked={settings?.autoResume ?? false}
-          disabled={settings === undefined}
-          onChange={(next) => void set({ autoResume: next })}
+          checked={!resume.mixed && (resume.value ?? false)}
+          disabled={!resume.loaded}
+          onChange={(next) => void set("autoResume", { autoResume: next }, failed)}
         />
       </Row>
-      {settings?.continueAfterRestart !== undefined && (
+      {carryOn.value !== undefined && (
         <Row
           title="Continue threads after restarts"
-          description="A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume."
+          description={`${carryOn.mixed ? differs : ""}A thread that was working when plxd restarted, as after an update, is told to continue where it left off. Either way, its queued messages wait for Resume.`}
         >
           <Switch
             label="Continue threads after restarts"
-            checked={settings.continueAfterRestart}
-            onChange={(next) => void set({ continueAfterRestart: next })}
+            checked={!carryOn.mixed && !!carryOn.value}
+            onChange={(next) => void set("autoResume", { continueAfterRestart: next }, failed)}
           />
         </Row>
       )}

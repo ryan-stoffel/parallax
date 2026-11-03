@@ -568,6 +568,14 @@ const relayStatus = () => ({
 });
 const hostsListeners = new Set<(hosts: LanHost[]) => void>();
 const isLanHost = (hostId: string) => lan.hosts.some((h) => h.id === hostId);
+/** What a LAN computer answers as this one does, so All computers has something to show. */
+const lanSettings = new Set<string>([
+  "device/state",
+  "host/settings/get",
+  "host/settings/set",
+  "github/status",
+  "schedule/list",
+]);
 
 // Scheduled tasks (0063), as agents create them with `schedule_task`.
 const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
@@ -2034,13 +2042,13 @@ export const mockBridge: ParallaxBridge = {
     method: M,
     params: ParallaxRequests[M]["params"],
   ): Promise<HostResponse<ParallaxRequests[M]["result"]>> {
-    // A LAN computer runs nothing in the preview.
-    if (isLanHost(hostId))
+    // A LAN computer runs nothing in the preview, but shows this one's settings and devices.
+    if (isLanHost(hostId) && !lanSettings.has(method))
       return delay({
         result: { repos: [], threads: [], runs: [], orchestrators: [], seq },
         logId: LOG_ID,
       } as unknown as HostResponse<Result<M>>);
-    if (hostId !== LOCAL && !deviceOf(hostId)?.parallax)
+    if (hostId !== LOCAL && !isLanHost(hostId) && !deviceOf(hostId)?.parallax)
       return delay({ error: fail(`no host has id ${hostId}`) } as HostResponse<Result<M>>);
     const clone = cloneRequest(hostId, method, params as Record<string, unknown>);
     if (clone)
@@ -2050,7 +2058,7 @@ export const mockBridge: ParallaxBridge = {
           : { result: structuredClone(clone.result), logId: LOG_ID }) as HostResponse<Result<M>>,
         "ms" in clone ? clone.ms : 40,
       );
-    if (hostId !== LOCAL) {
+    if (hostId !== LOCAL && !isLanHost(hostId)) {
       const own = deviceRequest(hostId, method, params as Record<string, unknown>);
       if (own)
         return delay({ result: structuredClone(own), logId: LOG_ID } as HostResponse<Result<M>>);

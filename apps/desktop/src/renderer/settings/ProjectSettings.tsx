@@ -1,24 +1,33 @@
 import { Check, ChevronRight, Copy, RotateCcw } from "lucide-react";
-import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { AgentPermission, ChosenIcon, Repo, RepoRef } from "../../protocol/generated/protocol";
 import { accessPrefs } from "../accessPrefs";
 import { useCopy } from "../AgentChat";
 import { accessOptions } from "../Composer";
 import { EffortMenu } from "../EffortMenu";
-import { localId, useHosts, type Host } from "../hosts";
+import { useHosts, type Host } from "../hosts";
 import { IconPicker } from "../IconPicker";
 import { readIcon } from "../images";
 import { ModelMenu } from "../ModelMenu";
 import { useCatalog, type Provider } from "../models";
 import { notify } from "../notifications";
 import { newThreadPrefs, setRepoPrefs, useRepoPrefs, type RepoPrefs } from "../prefs";
-import { defaultIcon } from "../projectIcons";
+import { defaultIcon, iconColors, projectIcons } from "../projectIcons";
 import { workspaces } from "../RunTargetMenu";
 import { RepoIcon, SharedRepoIcons } from "../Sidebar";
 import { isRepository, repoIconOf, setRepoIcons, type ThreadsView } from "../threads";
 import { IconButton, Picker } from "../ui";
-import { field, HostPicker, outlineButton, PageTitle, Row, rowField, Section } from "./parts";
+import {
+  allHosts,
+  field,
+  HostPicker,
+  outlineButton,
+  PageTitle,
+  Row,
+  rowField,
+  Section,
+} from "./parts";
 import { RepoScripts } from "./ScriptSettings";
 
 /** The menu's choice for the list of them all, which no entry's id can be. */
@@ -30,10 +39,16 @@ const repoAnchors = ["new-thread-defaults", "scripts", "from-parallax-json", "gi
 /** The composer's own menus are borderless; on a settings row they get a field's outline. */
 const pickerBox = "rounded-lg border border-border bg-background";
 
+/** A repository or Project on a computer, with that computer's view of it. */
+type Entry = { host: Host; view: ThreadsView; repo: Repo };
+
+const keyOf = (e: Entry) => `${e.host.id}/${e.repo.id}`;
+
 /**
- * Settings > Projects: a menu of the host's repositories and Projects, opening on the list of them.
- * Choosing one shows its icon and its own settings. A repository has its own new thread defaults
- * and scripts, and a Project its name and instructions.
+ * Settings > Projects: the repositories and Projects of every computer, or the one picked, opening
+ * on the list of them. Choosing one shows its icon and its own settings. A repository has its own
+ * new thread defaults and scripts, and a Project its name and instructions. On All computers, a
+ * repository's defaults go to its copies on each.
  */
 export function ProjectSettings({
   listed,
@@ -44,18 +59,20 @@ export function ProjectSettings({
   focus?: { anchor: string };
 }) {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
-  const view = listed.find((l) => l.host.id === hostId)?.view;
-  const entries = view?.state.repos ?? [];
-  const repos = entries.filter(isRepository);
-  const chats = entries.filter((r) => r.project);
+  const [scope, setScope] = useState(allHosts);
+  const entries = listed
+    .filter((l) => scope === allHosts || l.host.id === scope)
+    .flatMap(({ host, view }) => view.state.repos.map((repo) => ({ host, view, repo })));
+  const repos = entries.filter((e) => isRepository(e.repo));
+  const chats = entries.filter((e) => e.repo.project);
   const all = [...repos, ...chats];
+  const named = new Set(all.map((e) => e.host.id)).size > 1;
   const [chosen, setChosen] = useState<string>();
-  const current = all.find((r) => r.id === chosen);
+  const current = all.find((e) => keyOf(e) === chosen);
   useEffect(() => {
     if (!focus) return;
-    const among = (rows: Repo[]) => (was?: string) =>
-      rows.some((r) => r.id === was) ? was : rows[0]?.id;
+    const among = (rows: Entry[]) => (was?: string) =>
+      rows.some((e) => keyOf(e) === was) ? was : rows[0] && keyOf(rows[0]);
     if (focus.anchor === "instructions") setChosen(among(chats));
     else if (focus.anchor === "project-icon") setChosen(among(all));
     else if (repoAnchors.includes(focus.anchor)) setChosen(among(repos));
@@ -66,21 +83,23 @@ export function ProjectSettings({
       <div className="mb-8">
         <HostPicker
           hosts={hosts}
-          value={hostId}
-          onChange={setHostId}
+          value={scope}
+          onChange={setScope}
           always
+          all
           scope={
             <Picker
               field
               label="Project"
-              value={current?.id ?? allProjects}
-              onChange={(id) => setChosen(id === allProjects ? undefined : id)}
+              value={current ? keyOf(current) : allProjects}
+              onChange={(key) => setChosen(key === allProjects ? undefined : key)}
               options={[
                 { value: allProjects, label: "All projects" },
-                ...all.map((r) => ({
-                  value: r.id,
-                  label: r.name,
-                  icon: <RepoIcon repo={r} />,
+                ...all.map((e) => ({
+                  value: keyOf(e),
+                  label: e.repo.name,
+                  icon: <RepoIcon repo={e.repo} />,
+                  hint: named ? e.host.name : undefined,
                 })),
               ]}
               search={all.length > 8 ? "Search projects" : undefined}
@@ -90,17 +109,17 @@ export function ProjectSettings({
           }
         />
       </div>
-      {!view ? (
-        <PageTitle title="Projects">This host isn&apos;t connected.</PageTitle>
-      ) : current?.project ? (
-        <ChatProject key={current.id} repo={current} view={view} listed={listed} />
+      {current?.repo.project ? (
+        <ChatProject key={keyOf(current)} repo={current.repo} view={current.view} listed={listed} />
       ) : current ? (
         <Repository
-          key={`${hostId}/${current.id}`}
-          hostId={hostId}
-          repo={current}
-          view={view}
+          key={keyOf(current)}
+          entry={current}
+          named={named}
           listed={listed}
+          copies={
+            scope === allHosts ? repos.filter((e) => e.repo.name === current.repo.name) : [current]
+          }
         />
       ) : (
         <>
@@ -113,7 +132,7 @@ export function ProjectSettings({
             <ProjectList
               title="Repositories"
               rows={repos}
-              detail={(r) => <RepoDetail hostId={hostId} repo={r} />}
+              detail={(e) => <RepoDetail entry={e} named={named} />}
               onChoose={setChosen}
             />
           )}
@@ -121,7 +140,7 @@ export function ProjectSettings({
             <ProjectList
               title="Projects"
               rows={chats}
-              detail={() => "Chats with their own instructions"}
+              detail={(e) => `${named ? `${e.host.name} · ` : ""}Chats with their own instructions`}
               onChoose={setChosen}
             />
           )}
@@ -139,23 +158,23 @@ function ProjectList({
   onChoose,
 }: {
   title: string;
-  rows: Repo[];
-  detail: (repo: Repo) => ReactNode;
-  onChoose: (id: string) => void;
+  rows: Entry[];
+  detail: (entry: Entry) => ReactNode;
+  onChoose: (key: string) => void;
 }) {
   return (
     <Section title={title}>
-      {rows.map((r) => (
+      {rows.map((e) => (
         <button
-          key={r.id}
+          key={keyOf(e)}
           type="button"
-          onClick={() => onChoose(r.id)}
-          className="flex w-full items-center gap-3 border-b border-border/70 px-4 py-2.5 text-left first:rounded-t-xl last:rounded-b-xl last:border-b-0 hover:bg-hover"
+          onClick={() => onChoose(keyOf(e))}
+          className="flex w-full items-center gap-3 border-b border-border/40 px-4 py-2.5 text-left first:rounded-t-xl last:rounded-b-xl last:border-b-0 hover:bg-hover"
         >
-          <RepoIcon repo={r} size="size-5" />
+          <RepoIcon repo={e.repo} size="size-5" />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-body font-medium">{r.name}</span>
-            <span className="block truncate text-meta text-muted-foreground">{detail(r)}</span>
+            <span className="block truncate text-body font-medium">{e.repo.name}</span>
+            <span className="block truncate text-meta text-muted-foreground">{detail(e)}</span>
           </span>
           <ChevronRight aria-hidden className="size-4 shrink-0 text-faint-foreground" />
         </button>
@@ -164,21 +183,22 @@ function ProjectList({
   );
 }
 
-/** A repository's path, and how many defaults it sets of its own. */
-function RepoDetail({ hostId, repo }: { hostId: string; repo: Repo }) {
-  const count = Object.keys(useRepoPrefs(hostId, repo.id)).length;
+/** A repository's computer, where there are several, path, and defaults it sets of its own. */
+function RepoDetail({ entry, named }: { entry: Entry; named: boolean }) {
+  const count = Object.keys(useRepoPrefs(entry.host.id, entry.repo.id)).length;
   return (
     <>
-      {repo.path}
+      {named && `${entry.host.name} · `}
+      {entry.repo.path}
       {count > 0 && ` · ${count} ${count === 1 ? "default" : "defaults"} changed`}
     </>
   );
 }
 
 /**
- * A repository's or Project's icon, with what's on it now, Choose icon, and Choose file where the
- * host keeps images. A repository's goes to its copies on every computer, as the sidebar's does
- * (0033). Each pick saves at once.
+ * A repository's or Project's icon: what's on it now, Choose icon, which opens the picker in the
+ * card under it, and Choose file where the host keeps images. A repository's goes to its copies on
+ * every computer, as the sidebar's does (0033). Each pick saves at once.
  */
 function IconRow({
   repo,
@@ -189,9 +209,8 @@ function IconRow({
   view: ThreadsView;
   listed: { view: ThreadsView }[];
 }) {
-  const picker = useRef<HTMLDivElement>(null);
+  const [choosing, setChoosing] = useState(false);
   const file = useRef<HTMLInputElement>(null);
-  const pickerId = useId();
   const icon = repoIconOf(repo, useContext(SharedRepoIcons));
   const maxBytes = view.iconImageBytes;
   const save = (next: ChosenIcon) => {
@@ -217,49 +236,56 @@ function IconRow({
       save({ name, ...(color && { color }), image });
     }
   };
+  const glyph = projectIcons.find((i) => i.name === icon?.name)?.label ?? icon?.name;
+  const color = iconColors.find((c) => c.key === icon?.color)?.label;
   return (
-    <Row
-      title="Project icon"
-      description={
-        !icon
-          ? repo.project
-            ? "The Project glyph"
-            : "Its initials"
-          : icon.image
-            ? "An uploaded image"
-            : [icon.name, icon.color].filter(Boolean).join(" · ")
-      }
-    >
-      <RepoIcon repo={repo} size="size-6" />
-      <button
-        type="button"
-        className={outlineButton}
-        onClick={(e) => picker.current?.showPopover({ source: e.currentTarget })}
+    <>
+      <Row
+        title="Project icon"
+        description={
+          !icon
+            ? repo.project
+              ? "The Project glyph"
+              : "Its initials"
+            : icon.image
+              ? "An uploaded image"
+              : [glyph, color].filter(Boolean).join(" · ")
+        }
       >
-        Choose icon
-      </button>
-      {maxBytes !== undefined && (
-        <>
-          <button type="button" className={outlineButton} onClick={() => file.current?.click()}>
-            Choose file
-          </button>
-          <input
-            ref={file}
-            type="file"
-            hidden
-            aria-label={`Image for ${repo.name}'s icon`}
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            onChange={(e) => {
-              const chosen = e.currentTarget.files?.[0];
-              // Cleared, so picking the same file again reads it again.
-              e.currentTarget.value = "";
-              if (chosen) void upload(chosen);
-            }}
-          />
-        </>
-      )}
-      <IconPicker ref={picker} id={pickerId} value={icon} onPick={save} maxImageBytes={maxBytes} />
-    </Row>
+        <span className="grid size-8 place-items-center rounded-lg bg-hover">
+          <RepoIcon repo={repo} size="size-5" />
+        </span>
+        <button
+          type="button"
+          aria-expanded={choosing}
+          className={outlineButton}
+          onClick={() => setChoosing(!choosing)}
+        >
+          {choosing ? "Done" : "Choose icon"}
+        </button>
+        {maxBytes !== undefined && (
+          <>
+            <button type="button" className={outlineButton} onClick={() => file.current?.click()}>
+              Choose file
+            </button>
+            <input
+              ref={file}
+              type="file"
+              hidden
+              aria-label={`Image for ${repo.name}'s icon`}
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              onChange={(e) => {
+                const chosen = e.currentTarget.files?.[0];
+                // Cleared, so picking the same file again reads it again.
+                e.currentTarget.value = "";
+                if (chosen) void upload(chosen);
+              }}
+            />
+          </>
+        )}
+      </Row>
+      {choosing && <IconPicker value={icon} onPick={save} onClose={() => setChoosing(false)} />}
+    </>
   );
 }
 
@@ -285,18 +311,23 @@ function GitValue({ text, missing }: { text?: string; missing: string }) {
   );
 }
 
-/** A repository's path, its icon, its own new thread defaults, its scripts, and its git. */
+/**
+ * A repository's path, its icon, its own new thread defaults, its scripts, and its git. A default
+ * changed here goes to each of `copies`, this one among them.
+ */
 function Repository({
-  hostId,
-  repo,
-  view,
+  entry,
+  named,
   listed,
+  copies,
 }: {
-  hostId: string;
-  repo: Repo;
-  view: ThreadsView;
+  entry: Entry;
+  named: boolean;
   listed: { view: ThreadsView }[];
+  copies: Entry[];
 }) {
+  const { host, view, repo } = entry;
+  const hostId = host.id;
   const prefs = useRepoPrefs(hostId, repo.id);
   const global = newThreadPrefs.use();
   const legacyPlan = accessPrefs.use().legacyPlan;
@@ -316,7 +347,9 @@ function Repository({
       stale = true;
     };
   }, [hostId, repo.id]);
-  const set = (change: RepoPrefs) => setRepoPrefs(hostId, repo.id, change);
+  const set = (change: RepoPrefs) => {
+    for (const copy of copies) setRepoPrefs(copy.host.id, copy.repo.id, change);
+  };
 
   const blocked: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
@@ -342,7 +375,10 @@ function Repository({
     <>
       <PageTitle title={repo.name}>
         <span className="flex items-center gap-1 font-mono text-meta">
-          <span className="truncate">{repo.path}</span>
+          <span className="truncate">
+            {named && `${host.name} · `}
+            {repo.path}
+          </span>
           <IconButton size="sm" label="Copy path" onClick={() => copy(repo.path)}>
             {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
           </IconButton>
@@ -353,7 +389,14 @@ function Repository({
           <IconRow repo={repo} view={view} listed={listed} />
         </Section>
       )}
-      <Section title="New thread defaults">
+      <Section
+        title="New thread defaults"
+        action={
+          copies.length > 1 && (
+            <span className="text-meta text-muted-foreground">On {copies.length} computers</span>
+          )
+        }
+      >
         <Row title="Model" description="The model a new thread here starts on.">
           <ResetDefault
             label="model"

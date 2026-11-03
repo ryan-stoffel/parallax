@@ -1,5 +1,4 @@
 import {
-  Accessibility,
   AlarmClock,
   Archive,
   ArchiveRestore,
@@ -39,6 +38,7 @@ import {
   Palette,
   PanelLeftClose,
   PencilLine,
+  PersonStanding,
   Pin,
   Plus,
   RotateCcw,
@@ -4102,7 +4102,7 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   appearance: Palette,
   browser: Globe,
   keybinds: Keyboard,
-  accessibility: Accessibility,
+  accessibility: PersonStanding,
   providers: Bot,
   orchestrators: Network,
   devices: Smartphone,

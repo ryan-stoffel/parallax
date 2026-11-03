@@ -179,7 +179,7 @@ function CommandRow({ command }: { command: Command }) {
   return (
     <div
       data-setting={anchorOf(name)}
-      className="group flex items-center justify-between gap-4 border-border/70 px-4 py-2.5 not-last:border-b"
+      className="group flex items-center justify-between gap-4 border-border/40 px-4 py-2.5 not-last:border-b"
     >
       <div className="min-w-0">
         <span className="block text-body font-medium">{name}</span>
@@ -277,7 +277,7 @@ function NewBinding({ onClose }: { onClose: () => void }) {
     <div
       role="group"
       aria-label="New keybinding"
-      className="mb-10 rounded-xl border border-border/70 bg-(--pane-card) px-4 py-3.5"
+      className="mb-10 rounded-xl border border-border/40 bg-(--pane-card) px-4 py-3.5"
     >
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
@@ -357,7 +357,7 @@ function JsonEditor({ onClose }: { onClose: () => void }) {
   const [text, setText] = useState(bindingsJson);
   const [errors, setErrors] = useState<string[]>([]);
   return (
-    <div className="mb-10 flex flex-col gap-2 rounded-xl border border-border/70 bg-(--pane-card) px-4 py-3.5">
+    <div className="mb-10 flex flex-col gap-2 rounded-xl border border-border/40 bg-(--pane-card) px-4 py-3.5">
       <p className="text-meta text-muted-foreground">
         Each command by id, with <code className="font-mono">key</code> as{" "}
         <code className="font-mono">Mod+KeyK</code>, or <code className="font-mono">null</code> for
@@ -412,7 +412,7 @@ function BuiltIn({
   return (
     <div
       data-setting={anchorOf(title)}
-      className="flex items-center justify-between gap-4 border-border/70 px-4 py-2.5 not-last:border-b"
+      className="flex items-center justify-between gap-4 border-border/40 px-4 py-2.5 not-last:border-b"
     >
       <div className="min-w-0">
         <span className="block text-body font-medium">{title}</span>
@@ -488,7 +488,7 @@ export function KeybindSettings() {
         Shortcuts for the whole app. Each command has one. Click its keys to change them, then
         Backspace to remove them. Repository actions keep their own.
       </PageTitle>
-      <div className="mb-10 flex items-center gap-2 rounded-xl border border-border/70 bg-(--pane-card) p-3">
+      <div className="mb-10 flex items-center gap-2 rounded-xl border border-border/40 bg-(--pane-card) p-3">
         <label className={`${searchField} flex min-w-0 flex-1 items-center gap-2`}>
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
