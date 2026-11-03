@@ -2,66 +2,68 @@
 // composer while it waits, and the line it leaves in the transcript. The value goes from the
 // field to plxd's `secret/answer`, which keeps it in the host's keystore, or with `delivery: file`
 // in a private file the agent's commands can read (0098). It is never kept in the window's state,
-// the transcript, or the log: the state holds only `maskedLines`, its dots and any variable names.
+// the transcript, or the log. A pasted or dropped file's value waits in the field, and the state
+// holds only what the card shows of it: a name, a line count, and any variable names.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
-import { KeyRound } from "lucide-react";
+import { FileText, KeyRound, Paperclip, X } from "lucide-react";
 import {
-  Fragment,
   useId,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
-  type UIEvent,
 } from "react";
+import { flushSync } from "react-dom";
 
 import { quietButton } from "./Approval";
 import { describeError } from "./errors";
 import { notify } from "./notifications";
 import type { Item } from "./transcript";
+import { IconButton } from "./ui";
 
 type SecretItem = Extract<Item, { kind: "secret" }>;
 
 const fieldClass =
   "w-full rounded-md border border-border bg-background px-2.5 font-mono text-body placeholder:font-sans placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
-/** What the file field and the mask over it share, so each masked character sits on its own. */
-const fileFieldText =
-  "whitespace-pre-wrap break-all border px-2.5 py-1.5 font-mono text-body [scrollbar-gutter:stable]";
-
 const saveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 
-/** A line of a masked value: the part safe to show, then a dot for each other character. */
-interface MaskedLine {
-  name: string;
-  dots: string;
+/** plxd's limit on an answer (`MAX_SECRET_BYTES`). */
+const maxSecretBytes = 64 * 1024;
+
+/** A file or a multi-line paste waiting in the field, as the card shows it. */
+interface Loaded {
+  title: string;
+  detail: string;
+  variables: string[];
 }
 
-const envAssignment = /^(?:export )?[A-Za-z_][A-Za-z0-9_]*=(?!=)/;
+// A name, then an empty value, a value quoted whole, or an unquoted one with no quotes in it.
+const envLine = /^(?:export )?([A-Za-z_]\w*)=(|"[^"]*"|'[^']*'|[^\s"'=][^"']*)$/;
 
 /**
- * Masks `value` a line at a time, keeping each `NAME=` only when the whole value reads as an env
- * file: two or more assignments, and otherwise only blank lines and comments. A password, a token
- * with `=` padding, or a private key then stays fully masked. Comments are masked, since they can
- * hold an old value.
+ * The names of the variables with values in `value`, when the whole of it reads as an env file:
+ * two or more of them, and otherwise only empty variables, blank lines, and comments. Otherwise
+ * none, so a password, a token with `=` padding, or a quoted value spanning lines shows nothing.
  */
-export function maskedLines(value: string): MaskedLine[] {
-  const lines = value.split("\n").map((line) => line.replace(/\r$/, ""));
-  const assignments = lines.filter((line) => envAssignment.test(line)).length;
+export function envNames(value: string): string[] {
+  const lines = value.split(/\r?\n/);
+  const matches = lines.map((line) => envLine.exec(line));
+  const names = matches.flatMap((match) => (match?.[2] && match[1] ? [match[1]] : []));
   const isEnv =
-    assignments >= 2 &&
-    lines.every((line) => !line.trim() || line.startsWith("#") || envAssignment.test(line));
-  return lines.map((line) => {
-    const name = (isEnv && envAssignment.exec(line)?.[0]) || "";
-    return { name, dots: "•".repeat(Array.from(line.slice(name.length)).length) };
-  });
+    names.length >= 2 &&
+    lines.every((line, index) => !line.trim() || line.startsWith("#") || matches[index]);
+  return isEnv ? names : [];
 }
 
 /**
  * The oldest secret request of run `runId` still waiting, as a card with a password field, or for
  * a file a masked field that keeps the newlines of a pasted `.env`, which a password field drops.
- * The file field's own text is invisible, and `maskedLines` draws over it character for character.
+ * A file, picked or dropped, or a multi-line paste shows as a summary, listing an env file's
+ * variables with their values hidden.
  */
 export function SecretCard({
   hostId,
@@ -80,8 +82,11 @@ export function SecretCard({
   const [busy, setBusy] = useState<"save" | "decline">();
   const off = !!disabledReason || !!busy;
   const toFile = request.delivery === "file";
-  const [masked, setMasked] = useState<MaskedLine[]>([]);
-  const mask = useRef<HTMLDivElement>(null);
+  const [loaded, setLoaded] = useState<Loaded>();
+  const [dropOver, setDropOver] = useState(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
+  const saveControl = useRef<HTMLButtonElement>(null);
 
   async function send(answer: { type: "save"; secret: string } | { type: "decline" }) {
     setBusy(answer.type);
@@ -117,14 +122,72 @@ export function SecretCard({
     event.currentTarget.form?.requestSubmit();
   }
 
-  function scrollMask(event: UIEvent<HTMLTextAreaElement>) {
-    if (mask.current) mask.current.scrollTop = event.currentTarget.scrollTop;
+  /** Puts `text` in the field and shows its summary, with Save focused so Enter still saves. */
+  function load(text: string, fileName?: string) {
+    if (field.current) field.current.value = text;
+    const variables = envNames(text);
+    const count = variables.length || text.trimEnd().split("\n").length;
+    const noun = variables.length ? "variable" : "line";
+    setLoaded({
+      title: fileName ?? (variables.length ? "Pasted env file" : "Pasted text"),
+      detail: `${count} ${noun}${count === 1 ? "" : "s"}`,
+      variables,
+    });
+    saveControl.current?.focus();
+  }
+
+  function unload() {
+    if (field.current) field.current.value = "";
+    flushSync(() => setLoaded(undefined));
+    field.current?.focus();
+  }
+
+  async function loadFile(file: File) {
+    const refuse = (body: string) =>
+      notify({ tone: "error", title: `Couldn't use ${file.name}`, body });
+    if (file.size > maxSecretBytes) return refuse("A secret can be up to 64 KB.");
+    let text;
+    try {
+      text = await file.text();
+    } catch {
+      return refuse("It couldn't be read.");
+    }
+    // A binary file wouldn't survive being read as text.
+    if (!text.trim() || text.includes("\0") || text.includes("\uFFFD"))
+      return refuse("Use a text file with something in it.");
+    load(text, file.name);
+  }
+
+  function pasteLines(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const text = event.clipboardData.getData("text");
+    if (!text.trimEnd().includes("\n")) return;
+    event.preventDefault();
+    load(text);
+  }
+
+  function dragOver(event: DragEvent<HTMLFormElement>) {
+    if (!toFile || off || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setDropOver(true);
+  }
+
+  function drop(event: DragEvent<HTMLFormElement>) {
+    setDropOver(false);
+    const file = event.dataTransfer.files[0];
+    if (!toFile || off || !file) return;
+    event.preventDefault();
+    void loadFile(file);
   }
 
   return (
     <section aria-labelledby={titleId} className="mb-3">
       <form
         onSubmit={save}
+        onDragOver={dragOver}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropOver(false);
+        }}
+        onDrop={drop}
         autoComplete="off"
         className="flex flex-col rounded-xl border border-border bg-surface"
       >
@@ -145,36 +208,82 @@ export function SecretCard({
             {request.label}
           </label>
           {toFile ? (
-            <div className="relative">
-              <div
-                ref={mask}
-                aria-hidden
-                data-testid="secret-mask"
-                className={`${fileFieldText} absolute inset-0 overflow-hidden rounded-md border-transparent bg-background text-muted-foreground`}
-              >
-                {masked.map((line, index) => (
-                  <Fragment key={index}>
-                    {index > 0 && "\n"}
-                    <span className="text-foreground">{line.name}</span>
-                    {line.dots}
-                  </Fragment>
-                ))}
-                {"\n"}
+            <>
+              {loaded && (
+                <div
+                  className={`rounded-md border bg-background ${dropOver ? "border-ring" : "border-border"}`}
+                >
+                  <div className="flex h-8 items-center gap-2 pr-1 pl-2.5 text-body">
+                    <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+                    <span className="min-w-0 truncate">{loaded.title}</span>
+                    <span className="shrink-0 text-meta text-muted-foreground">
+                      {loaded.detail}
+                    </span>
+                    <IconButton
+                      label="Remove"
+                      size="sm"
+                      disabled={off}
+                      onClick={unload}
+                      className="ml-auto"
+                    >
+                      <X />
+                    </IconButton>
+                  </div>
+                  {loaded.variables.length > 0 && (
+                    <ul
+                      aria-label="Variables"
+                      className="max-h-40 overflow-y-auto border-t border-border py-1 font-mono text-body"
+                    >
+                      {loaded.variables.map((name, index) => (
+                        <li
+                          key={index}
+                          className="flex items-center justify-between gap-4 px-2.5 py-0.5"
+                        >
+                          <span className="min-w-0 truncate">{name}</span>
+                          <span aria-hidden className="shrink-0 text-faint-foreground">
+                            ••••••••
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              <div className={`relative ${loaded ? "hidden" : ""}`}>
+                <textarea
+                  ref={field}
+                  id={inputId}
+                  name="secret"
+                  rows={1}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={off}
+                  onKeyDown={enterSaves}
+                  onPaste={pasteLines}
+                  placeholder={request.placeholder ?? "Paste the secret, or drop a file"}
+                  className={`${fieldClass} ${dropOver ? "border-ring" : ""} block field-sizing-content max-h-40 min-h-8 resize-none py-1.5 pr-9 [-webkit-text-security:disc]`}
+                />
+                <IconButton
+                  label="Attach a file"
+                  size="sm"
+                  disabled={off}
+                  onClick={() => filePicker.current?.click()}
+                  className="absolute top-1 right-1"
+                >
+                  <Paperclip />
+                </IconButton>
+                <input
+                  ref={filePicker}
+                  type="file"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void loadFile(file);
+                    event.target.value = "";
+                  }}
+                />
               </div>
-              <textarea
-                id={inputId}
-                name="secret"
-                rows={1}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={off}
-                onInput={(event) => setMasked(maskedLines(event.currentTarget.value))}
-                onKeyDown={enterSaves}
-                onScroll={scrollMask}
-                placeholder={request.placeholder ?? "Paste the secret"}
-                className={`${fieldClass} ${fileFieldText} relative block field-sizing-content max-h-48 min-h-8 resize-none bg-transparent text-transparent caret-foreground [-webkit-text-security:disc]`}
-              />
-            </div>
+            </>
           ) : (
             <input
               id={inputId}
@@ -203,7 +312,13 @@ export function SecretCard({
           >
             {busy === "decline" ? "Declining…" : "Decline"}
           </button>
-          <button type="submit" disabled={off} title={disabledReason} className={saveButton}>
+          <button
+            ref={saveControl}
+            type="submit"
+            disabled={off}
+            title={disabledReason}
+            className={saveButton}
+          >
             {busy === "save" ? "Saving…" : "Save"}
           </button>
         </div>

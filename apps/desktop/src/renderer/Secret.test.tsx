@@ -3,7 +3,10 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import { maskedLines, SecretCard } from "./Secret";
+import { notify } from "./notifications";
+import { envNames, SecretCard } from "./Secret";
+
+vi.mock("./notifications", () => ({ notify: vi.fn() }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -84,21 +87,80 @@ test("A file request says commands can read it, keeps newlines, and saves on Ent
   });
 });
 
-test("A pasted env file shows its names and hides its values, in the DOM as well as to the eye", async () => {
+const env = '# old-value\nAPI_KEY=abc\n\nEMPTY=\nexport DB_URL="postgres://x"\n';
+
+function savedSecret() {
+  return (request.mock.lastCall as unknown as [string, string, { answer: { secret: string } }])[2]
+    .answer.secret;
+}
+
+test("A pasted env file lists its names, hides its values, and still saves all of it", async () => {
   const el = card("file");
   const field = el.querySelector("textarea")!;
-  field.value = "# old-value\nAPI_KEY=abc\n\nexport DB_URL=postgres://x\n";
-  await act(async () => field.dispatchEvent(new Event("input", { bubbles: true })));
-  const shown = el.querySelector("[data-testid=secret-mask]")!.textContent;
-  expect(shown).toBe("•••••••••••\nAPI_KEY=•••\n\nexport DB_URL=••••••••••••\n\n");
+  const paste = Object.assign(new Event("paste", { bubbles: true, cancelable: true }), {
+    clipboardData: { getData: () => env },
+  });
+  await act(async () => field.dispatchEvent(paste));
+  expect(paste.defaultPrevented).toBe(true);
+  const names = [...el.querySelectorAll("li span:first-child")].map((name) => name.textContent);
+  expect(names).toEqual(["API_KEY", "DB_URL"]);
+  expect(el.textContent).toContain("2 variables");
+  expect(el.textContent).not.toContain("abc");
+  expect(el.textContent).not.toContain("postgres");
+  await act(async () => el.querySelector("form")!.requestSubmit());
+  expect(savedSecret()).toBe(env);
+});
+
+test("A picked file shows by name, and Remove goes back to an empty field", async () => {
+  const el = card("file");
+  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const file = new File(["-----BEGIN KEY-----\nabc\n-----END KEY-----\n"], "deploy.pem");
+  Object.defineProperty(picker, "files", { value: [file], configurable: true });
+  await act(async () => {
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+    await file.text();
+  });
+  await vi.waitFor(() => expect(el.textContent).toContain("deploy.pem"));
+  expect(el.textContent).toContain("3 lines");
+  expect(el.querySelector("ul")).toBeNull();
+  const remove = el.querySelector<HTMLButtonElement>('button[aria-label="Remove"]')!;
+  await act(async () => remove.click());
+  expect(el.textContent).not.toContain("deploy.pem");
+  expect(el.querySelector("textarea")!.value).toBe("");
+});
+
+test.each([
+  ["too large", new File(["x".repeat(64 * 1024 + 1)], "big.env"), "up to 64 KB"],
+  ["binary", new File(["a\0b"], "key.p12"), "text file"],
+])("A %s file is refused", async (_, file, body) => {
+  const el = card("file");
+  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(picker, "files", { value: [file], configurable: true });
+  await act(async () => {
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+    await file.text();
+  });
+  await vi.waitFor(() =>
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining(body) }),
+    ),
+  );
+  expect(el.textContent).not.toContain(file.name);
+});
+
+test("envNames takes an env file's variables with values", () => {
+  expect(envNames(env)).toEqual(["API_KEY", "DB_URL"]);
+  expect(envNames("A=1\r\nB='two words'\r\n")).toEqual(["A", "B"]);
 });
 
 test.each([
   ["a password with an equals sign", "ABC=def"],
   ["a single variable, which could be a password copied with its newline", "ABC=def\n"],
   ["base32 tokens with padding", "ABCDEF==\nGHIJKL=="],
+  ["base32 tokens with single padding", "ABCDEFG=\nHIJKLMN="],
+  ["a quoted value spanning lines", 'CONFIG="user=a\npass=b"'],
   ["a private key", "-----BEGIN KEY-----\nabc=\nDEF=x\n-----END KEY-----"],
   ["assignments among other text", "A=1\nB=2\nnot an assignment"],
-])("Shows no names for %s", (_, value) => {
-  expect(maskedLines(value).every((line) => !line.name)).toBe(true);
+])("envNames shows no names for %s", (_, value) => {
+  expect(envNames(value)).toEqual([]);
 });
