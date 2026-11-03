@@ -864,6 +864,52 @@ test("moving to the new Connect signs in, turns on relay and remote everywhere, 
   }
 });
 
+test("a computer that connects after a failed move, or after signing out, isn't changed", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const thinkpad = { id: "n1", hostName: "thinkpad", ip: "100.64.0.2", os: "linux" };
+    const mini = { id: "n2", hostName: "mini", ip: "100.64.0.3", os: "macOS" };
+    let token: string | undefined = relayToken;
+    const local = await start(
+      { devices: [thinkpad, mini] },
+      { ...signedIn().account, accessToken: async () => token },
+    );
+    fake.answers.set("host/settings/get", { result: { connect: true } });
+    fake.answers.set("connect/devices", { result: { devices: [] } });
+    fake.answers.set("relay/hosts", { result: { hosts: [] } });
+    fake.answers.set("relay/sign", { result: { signature: "s" } });
+    fake.answers.set("relay/register", { error: { code: 1, message: "the relay is down" } });
+    const changed: unknown[] = [];
+    fake.answers.set("host/settings/set", (_params: unknown, c: unknown) => {
+      changed.push(c);
+      return { result: {} };
+    });
+    local.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    const device = (name: string) => fake.made.find((c) => c.options.device === name)!;
+    const move = () => fake.handlers.get("parallax:moveConnect")!({});
+
+    expect(await move()).toMatch(/the relay is down/);
+    device("thinkpad").set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(changed).toEqual([]);
+
+    fake.answers.set("relay/register", { result: {} });
+    expect(await move()).toBeUndefined();
+    expect(changed).toEqual([local, device("thinkpad")]);
+
+    changed.length = 0;
+    token = undefined;
+    device("mini").set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(changed).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
 test("a registration that fails stops the move and says why, but a plxd too old to sign doesn't", async () => {
   vi.useFakeTimers();
   fake.answers.clear();

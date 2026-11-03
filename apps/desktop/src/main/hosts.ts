@@ -902,7 +902,11 @@ function addConnection(
       hostUpdater?.onState(hostId, state);
       followAccess(hostId, state);
       if (state.status !== "connected") return;
-      if (moveAsked && hostId.startsWith("tailnet:")) void moveDevice(hostId);
+      if (moveAsked && hostId.startsWith("tailnet:"))
+        // Its row keeps the button, and clicking it again says why.
+        void moveDevice(hostId).then((failed) => {
+          if (failed) console.warn(`parallax: ${failed}`);
+        });
       else void joinRelay(hostId);
       if (hostId === "local") {
         // A new local plxd, such as after `host/update` or a service uninstall, is checked again.
@@ -2179,7 +2183,8 @@ let moveAsked = false;
  */
 async function moveDevice(hostId: string): Promise<string | undefined> {
   const host = connections.get(hostId);
-  if (host?.state.status !== "connected") return undefined;
+  // Signed out since the move, it can't register, so it isn't changed.
+  if (host?.state.status !== "connected" || !(await account?.accessToken())) return undefined;
   const device = deviceOf(hostId);
   const name = device?.name || device?.hostName;
   const failed = await joinRelay(hostId);
@@ -2203,11 +2208,11 @@ async function moveConnect(): Promise<string | undefined> {
   const local = connections.get("local");
   if (local?.state.status !== "connected")
     return "Parallax isn't connected to this computer's plxd.";
-  moveAsked = true;
   const failed = await joinRelay("local");
   if (failed) return `Parallax couldn't add this computer to your account: ${failed}`;
   const here = await local.request("host/settings/set", { relay: true, remote: true });
   if ("error" in here) return `Parallax couldn't turn it on here: ${here.error.message}`;
+  moveAsked = true;
   void discoverAccounts();
   const tailnet = [...connections.keys()].filter((id) => id.startsWith("tailnet:"));
   return (await Promise.all(tailnet.map(moveDevice))).find(Boolean);
