@@ -1635,7 +1635,14 @@ export function Composer({
             .run();
           return true;
         }
-        if (event.key === "Escape" && showStop && !stopping && !event.isComposing) {
+        // A held Esc stops nothing: it may have just closed a popup.
+        if (
+          event.key === "Escape" &&
+          showStop &&
+          !stopping &&
+          !event.isComposing &&
+          !event.repeat
+        ) {
           void stop();
           return true;
         }
