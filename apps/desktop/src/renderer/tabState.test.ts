@@ -11,7 +11,7 @@ import {
   navigate,
   openBeside,
   openInTab,
-  placeThread,
+  placeView,
   removeThread,
   selectTab,
   startWorkspace,
@@ -48,7 +48,7 @@ test("a thread opens in the shown tab, and in the tab that already holds it", ()
 });
 
 test("a thread open in another pane focuses that pane", () => {
-  const state = navigate(openBeside(opened("a"), "h", "b"), "h", thread("a"));
+  const state = navigate(openBeside(opened("a"), "h", thread("b")), "h", thread("a"));
   expect(shape(state)).toEqual(["[a] *", "[b]"]);
 });
 
@@ -92,7 +92,7 @@ test("New thread keeps one tab in a pane, which the next thread opens in", () =>
 });
 
 test("each pane can have its own New thread tab", () => {
-  const state = openBeside(opened("a"), "h", "b");
+  const state = openBeside(opened("a"), "h", thread("b"));
   const both = navigate(navigate(state, "h", { kind: "new" }), "h", thread("a"));
   expect(shape(navigate(both, "h", { kind: "new" }))).toEqual([
     "[a] new *".replace("[a] new", "a [new]"),
@@ -101,17 +101,17 @@ test("each pane can have its own New thread tab", () => {
 });
 
 test("beside opens a new last pane with even ratios, moving a tab it already has", () => {
-  const state = openBeside(opened("a", "b"), "h", "a");
+  const state = openBeside(opened("a", "b"), "h", thread("a"));
   expect(shape(state)).toEqual(["[b]", "[a] *"]);
   expect(state.ratios).toEqual([0.5]);
-  expect(shape(openBeside(state, "h", "c"))).toEqual(["[b]", "[a]", "[c] *"]);
+  expect(shape(openBeside(state, "h", thread("c")))).toEqual(["[b]", "[a]", "[c] *"]);
 });
 
 test("a full window takes the next thread as a tab", () => {
   let state = opened("a");
-  for (const id of ["b", "c", "d"]) state = openBeside(state, "h", id);
-  expect(shape(openBeside(state, "h", "e"))).toEqual(["[a]", "[b]", "c [e] *", "[d]"]);
-  expect(shape(openBeside(state, "h", "e", paneAt(state, 0)))).toEqual([
+  for (const id of ["b", "c", "d"]) state = openBeside(state, "h", thread(id));
+  expect(shape(openBeside(state, "h", thread("e")))).toEqual(["[a]", "[b]", "c [e] *", "[d]"]);
+  expect(shape(openBeside(state, "h", thread("e"), paneAt(state, 0)))).toEqual([
     "a [e] *",
     "[b]",
     "[c]",
@@ -139,17 +139,43 @@ test("a tab dropped before itself stays, as does the only tab moving to a new pa
 });
 
 test("a first pane's only tab moved to a new pane goes last, swapping them", () => {
-  const state = openBeside(opened("a"), "h", "b");
+  const state = openBeside(opened("a"), "h", thread("b"));
   const moved = moveToNewPane(state, tabOf(state, "a"));
   expect(shape(moved)).toEqual(["[b]", "[a] *"]);
   expect(moved.ratios).toEqual([0.5]);
 });
 
+test("an orchestrator placed in a pane opens there, and beside opens a pane for it", () => {
+  const orchestrator: Selection = { kind: "orchestrator", orchestratorId: "o" };
+  const state = openBeside(opened("a"), "h", thread("b"));
+  const placed = placeView(state, "h", orchestrator, paneAt(state, 0));
+  expect(shape(placed)).toEqual(["a [orchestrator] *", "[b]"]);
+  expect(shape(openBeside(state, "h", orchestrator))).toEqual(["[a]", "[b]", "[orchestrator] *"]);
+  // The tab already showing it moves.
+  expect(shape(placeView(placed, "h", orchestrator, paneAt(placed, 1)))).toEqual([
+    "[a]",
+    "b [orchestrator] *",
+  ]);
+});
+
+test("dragging a background tab into view doesn't claim its start or reopen its pull request", () => {
+  const start: Selection = { kind: "thread", threadId: "a", started: true, pr: { url: "u" } };
+  let state = openInTab(navigate(startWorkspace("h"), "h", start), "h", "b");
+  state = openBeside(state, "h", thread("c"));
+  const a = tabOf(state, "a");
+  expect(activeTab(moveTab(state, a, paneAt(state, 1))).selection).toEqual(thread("a"));
+  expect(activeTab(moveToNewPane(state, a)).selection).toEqual(thread("a"));
+  // Moving the shown tab along its own pane keeps them.
+  const shown = selectTab(state, tabOf(state, "b"));
+  const started = navigate(shown, "h", start);
+  expect(activeTab(moveTab(started, a, started.focused)).selection).toEqual(start);
+});
+
 test("a sidebar thread placed in a pane opens there, or moves the tab it's in", () => {
   let state = opened("a", "b");
-  state = placeThread(state, "h", "c", state.focused, tabOf(state, "b"));
+  state = placeView(state, "h", thread("c"), state.focused, tabOf(state, "b"));
   expect(shape(state)).toEqual(["a [c] b *"]);
-  state = placeThread(state, "h", "b", state.focused, tabOf(state, "a"));
+  state = placeView(state, "h", thread("b"), state.focused, tabOf(state, "a"));
   expect(shape(state)).toEqual(["[b] a c *"]);
 });
 
@@ -161,7 +187,7 @@ test("closing shows the next tab or else the previous, then closes the pane, the
   expect(shape(state)).toEqual(["[b] *"]);
   const fallback: Selection = { kind: "new", groupId: "repo" };
   expect(activeTab(closeTab(state, tabOf(state, "b"), fallback)).selection).toEqual(fallback);
-  const split = openBeside(openBeside(opened("a"), "h", "b"), "h", "c");
+  const split = openBeside(openBeside(opened("a"), "h", thread("b")), "h", thread("c"));
   const closed = removeThread(split, "h", "c");
   expect(shape(closed)).toEqual(["[a]", "[b] *"]);
   expect(closed.ratios).toEqual([0.5]);
@@ -174,7 +200,7 @@ test("a removed host's tabs close", () => {
 });
 
 test("stepping goes through every pane's tabs, wrapping around", () => {
-  const state = openBeside(opened("a", "b"), "h", "c");
+  const state = openBeside(opened("a", "b"), "h", thread("c"));
   expect(shape(stepTab(state, 1))).toEqual(["[a] b *", "[c]"]);
   expect(shape(stepTab(state, -1))).toEqual(["a [b] *", "[c]"]);
 });

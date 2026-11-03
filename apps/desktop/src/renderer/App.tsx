@@ -141,7 +141,7 @@ import {
   navigate,
   openBeside,
   openInTab,
-  placeThread,
+  placeView,
   removeThread,
   selectTab,
   shownTab,
@@ -1402,15 +1402,13 @@ export function App() {
     />
   );
 
-  // An orchestrator's sidebar row drags as its root run. Dropped, it opens as the orchestrator, not
-  // a plain thread. Whether the run was one.
-  const openDroppedOrchestrator = ({ hostId, runId }: { hostId: string; runId: string }) => {
+  // What a sidebar row dragged as `runId` opens: an orchestrator's row drags as its root run.
+  const droppedView = (hostId: string, runId: string): Selection => {
     const { state } = views[hostId] ?? idleThreads;
     const dropped = state.orchestrators.find((o) => o.run === runId);
-    if (!dropped) return false;
-    openOnHost(hostId, { kind: "orchestrator", orchestratorId: dropped.id });
+    if (!dropped) return { kind: "thread", threadId: runId };
     setShowHome({});
-    return true;
+    return { kind: "orchestrator", orchestratorId: dropped.id };
   };
   const historyButtons = (
     <div className="flex shrink-0 items-center">
@@ -1740,7 +1738,9 @@ export function App() {
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.open()}
-          onOpenBeside={(threadId) => setWorkspace((state) => openBeside(state, host.id, threadId))}
+          onOpenBeside={(threadId) =>
+            setWorkspace((state) => openBeside(state, host.id, { kind: "thread", threadId }))
+          }
           onOpenInTab={(hostId, threadId) => {
             setMainPage(undefined);
             setSettings(null);
@@ -1843,11 +1843,11 @@ export function App() {
                           });
                         }}
                         onDropOnTabs={(drop, paneId, before) => {
-                          if (drop.kind === "thread" && openDroppedOrchestrator(drop)) return;
+                          if (drop.kind === "tab")
+                            return setWorkspace((state) => moveTab(state, drop.id, paneId, before));
+                          const view = droppedView(drop.hostId, drop.runId);
                           setWorkspace((state) =>
-                            drop.kind === "tab"
-                              ? moveTab(state, drop.id, paneId, before)
-                              : placeThread(state, drop.hostId, drop.runId, paneId, before),
+                            placeView(state, drop.hostId, view, paneId, before),
                           );
                         }}
                         details={
@@ -1866,16 +1866,16 @@ export function App() {
                           onDrop: (paneId, e) => {
                             const tabId = e.dataTransfer.getData(tabDragType);
                             const thread = draggedThread(e.dataTransfer);
-                            if (!tabId && thread && openDroppedOrchestrator(thread)) return;
+                            const view = thread && droppedView(thread.hostId, thread.runId);
                             setWorkspace((state) => {
                               if (tabId)
                                 return paneId
                                   ? moveTab(state, tabId, paneId)
                                   : moveToNewPane(state, tabId);
-                              if (!thread) return state;
+                              if (!thread || !view) return state;
                               return paneId
-                                ? placeThread(state, thread.hostId, thread.runId, paneId)
-                                : openBeside(state, thread.hostId, thread.runId);
+                                ? placeView(state, thread.hostId, view, paneId)
+                                : openBeside(state, thread.hostId, view);
                             });
                           },
                         }}

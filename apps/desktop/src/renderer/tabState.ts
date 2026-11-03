@@ -222,12 +222,14 @@ export function moveTab(
       tab,
       before,
     );
-    return { ...withPane(state, { ...from, tabs, active: tabId }), focused: paneId };
+    const next = { ...withPane(state, { ...from, tabs, active: tabId }), focused: paneId };
+    return arrived(next, activeTab(state));
   }
   const rest = closeTab(state, tabId);
   const pane = rest.panes.find((p) => p.id === paneId)!;
   const tabs = placed(pane.tabs, tab, before);
-  return { ...withPane(rest, { ...pane, tabs, active: tabId }), focused: paneId };
+  const next = { ...withPane(rest, { ...pane, tabs, active: tabId }), focused: paneId };
+  return arrived(next, activeTab(state));
 }
 
 /**
@@ -243,51 +245,54 @@ export function moveToNewPane(state: Workspace, tabId: string): Workspace {
   if (!alone && state.panes.length >= maxTiles) return state;
   const rest = closeTab(state, tabId);
   const pane = newPane(tab);
-  return {
-    ...rest,
-    panes: [...rest.panes, pane],
-    ratios: [...rest.ratios, evenRatio],
-    focused: pane.id,
-    maximized: false,
-  };
+  return arrived(
+    {
+      ...rest,
+      panes: [...rest.panes, pane],
+      ratios: [...rest.ratios, evenRatio],
+      focused: pane.id,
+      maximized: false,
+    },
+    activeTab(state),
+  );
 }
 
 /**
- * Thread `threadId` placed in pane `paneId`, before tab `before` or else last: its tab moves there,
- * or a new one opens.
+ * `selection`, a thread or an orchestrator, placed in pane `paneId`, before tab `before` or else last:
+ * the tab showing it moves there, or a new one opens.
  */
-export function placeThread(
+export function placeView(
   state: Workspace,
   hostId: string,
-  threadId: string,
+  selection: Selection,
   paneId: string,
   before?: string,
 ): Workspace {
-  const holder = holderOf(state, hostId, threadId);
+  const holder = showing(state, hostId, selection);
   if (holder) return moveTab(state, holder.id, paneId, before);
   const pane = state.panes.find((p) => p.id === paneId)!;
-  const tab = newTab(hostId, { kind: "thread", threadId });
+  const tab = newTab(hostId, selection);
   const tabs = placed(pane.tabs, tab, before);
   return { ...withPane(state, { ...pane, tabs, active: tab.id }), focused: paneId };
 }
 
 /**
- * Thread `threadId` beside the focused pane, in a new last pane. Once the window has all its panes,
- * it's a tab in pane `paneId`, by default the last pane that isn't focused.
+ * `selection`, a thread or an orchestrator, beside the focused pane, in a new last pane. Once the
+ * window has all its panes, it's a tab in pane `paneId`, by default the last pane that isn't focused.
  */
 export function openBeside(
   state: Workspace,
   hostId: string,
-  threadId: string,
+  selection: Selection,
   paneId?: string,
 ): Workspace {
   if (paneId || state.panes.length >= maxTiles) {
     const target = paneId ?? state.panes.findLast((p) => p.id !== state.focused)!.id;
-    return placeThread(state, hostId, threadId, target);
+    return placeView(state, hostId, selection, target);
   }
-  const holder = holderOf(state, hostId, threadId);
+  const holder = showing(state, hostId, selection);
   if (holder) return moveToNewPane(state, holder.id);
-  const pane = newPane(newTab(hostId, { kind: "thread", threadId }));
+  const pane = newPane(newTab(hostId, selection));
   return {
     ...state,
     panes: [...state.panes, pane],
