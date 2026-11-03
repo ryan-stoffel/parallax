@@ -892,9 +892,10 @@ void app.whenReady().then(async () => {
   startExtensions(browserSession, tellTab);
   startDownloads(browserSession);
   await loadExtensions(browserSession);
-  startHosts(startAccount(), () => updateState.available?.version ?? app.getVersion());
+  const account = startAccount();
+  startHosts(account, () => updateState.available?.version ?? app.getVersion());
   startStorage();
-  startTelemetry(localUsage);
+  startTelemetry(account, localUsage);
   // Under `pnpm dev`, Update follows main (scripts/channels.mjs). Nightly and stable are tags on it.
   if (!updater) process.send?.({ channel: "nightly" });
   const win = createWindow();

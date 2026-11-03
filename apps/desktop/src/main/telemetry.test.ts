@@ -2,7 +2,7 @@ import { expect, test, vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({ app: {} }));
 
-const { activeEvent, enabled, promptEvent, promptKind, reportTokens, tokenEvents } =
+const { accountHash, activeEvent, enabled, promptEvent, promptKind, reportTokens, tokenEvents } =
   await import("./telemetry");
 
 const install = {
@@ -20,6 +20,7 @@ test("app_active names the install, its build, and its OS, and keeps no person p
     properties: {
       $process_person_profile: false,
       $geoip_disable: true,
+      signed_in: false,
       version: "2610.10205.13230-nightly",
       channel: "nightly",
       os: "darwin",
@@ -29,6 +30,17 @@ test("app_active names the install, its build, and its OS, and keeps no person p
   expect(
     activeEvent("phc_key", { ...install, version: "2610.10205.13230" })?.properties.channel,
   ).toBe("stable");
+});
+
+test("a signed-in install's events go under its account's hash, the same on every device", () => {
+  const account = accountHash("user_2abc");
+  expect(account).toMatch(/^[0-9a-f]{64}$/);
+  const laptop = activeEvent("phc_key", { ...install, account });
+  const desktop = promptEvent("phc_key", { ...install, id: "id-2", account }, "follow_up");
+  expect(laptop.distinct_id).toBe(account);
+  expect(desktop.distinct_id).toBe(account);
+  expect(laptop.properties.signed_in).toBe(true);
+  expect(JSON.stringify([laptop, desktop])).not.toContain("user_2abc");
 });
 
 test("nothing is sent without a key or with DO_NOT_TRACK set", () => {
