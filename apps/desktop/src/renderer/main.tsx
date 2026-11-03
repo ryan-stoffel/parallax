@@ -21,7 +21,8 @@ if (window.parallax.platform === "win32") {
     window.parallax.zoomed();
   });
 }
-// Full screen hides Windows' window buttons, and with them the room the top row keeps for them.
+// Full screen hides the window buttons on Windows and the traffic lights on macOS, and with them
+// the room the top row keeps for them.
 // On macOS it leaves a see-through window nothing to show, so it shows the wallpaper (index.css).
 let fullScreen = false;
 let wallpaper: string | undefined;
