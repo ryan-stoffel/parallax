@@ -24,6 +24,7 @@ import { flushSync } from "react-dom";
 import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
 import { type RepoAction } from "./Actions";
 import type { AddDialogHandle } from "./AddDialog";
+import type { Workspace } from "./WorkspaceMenu";
 import { CommandMenu, type CommandMenuHandle, type MenuItem } from "./CommandMenu";
 import { AgentChat } from "./AgentChat";
 import { AccountPrompts } from "./AccountPrompts";
@@ -42,7 +43,11 @@ import type { DocRef } from "./documents";
 import { freshDraftId } from "./drafts";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
-import { NewThreadPicker, type PickerOrchestrator } from "./NewThreadPicker";
+import {
+  NewThreadPicker,
+  type NewThreadPickerHandle,
+  type PickerOrchestrator,
+} from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { Onboarding } from "./Onboarding";
 import { Splash } from "./Splash";
@@ -375,6 +380,17 @@ export function App() {
     () => otherRepos(hosts, views, start.id),
     [hosts, views, start.id],
   );
+  // When each repository last had a thread, for the picker's Recently used order.
+  const repoLastUsed = useMemo(() => {
+    const last = new Map<string, number>();
+    for (const [hostId, view] of Object.entries(views))
+      for (const t of view.state.threads) {
+        const key = `${hostId}/${t.repo}`;
+        const at = Date.parse(t.lastPromptAt ?? t.createdAt);
+        if (at > (last.get(key) ?? 0)) last.set(key, at);
+      }
+    return last;
+  }, [views]);
   // Each repository's icon by name, for its copies on other computers that have none.
   const repoIcons = useMemo(() => sharedRepoIcons(hosts, views), [hosts, views]);
   // Every thread and orchestrator the open host has listed, so a selection is dropped only once
@@ -883,19 +899,19 @@ export function App() {
     setSelection({ kind: "new", groupId });
   };
   // Mod+N's picker of the repository a new thread goes in.
-  const picker = useRef<HTMLDialogElement>(null);
+  const picker = useRef<NewThreadPickerHandle>(null);
   // Mod+K's command menu (PLX-993), and the sidebar's add palette, which its New orchestrator and
   // Add repository open. The palette shows with the thread list, so Settings closes first.
   const commandMenu = useRef<CommandMenuHandle>(null);
   const addDialog = useRef<AddDialogHandle>(null);
-  const openAdd = (start?: "orchestrator") => {
+  const openAdd = (start?: "orchestrator", workspace?: Workspace) => {
     // Inside a hidden sidebar, the palette would open with no size.
     flushSync(() => {
       setSettings(null);
       setMainPage(undefined);
       setSidebarOpen(true);
     });
-    addDialog.current?.open(start);
+    addDialog.current?.open(start, workspace);
   };
   // Create Project (0090), from the orchestrators page or the add palette, where the open host makes
   // them.
@@ -1006,7 +1022,8 @@ export function App() {
       text: "New orchestrator thread",
       keywords: "create orchestrator",
       icon: <FolderPlus />,
-      run: () => openAdd("orchestrator"),
+      command: "newOrchestrator",
+      run: () => picker.current?.open("orchestrator"),
     },
     {
       id: "addRepo",
@@ -1150,7 +1167,9 @@ export function App() {
       else if (command === "terminal") {
         if (panelsAllowed && folder) toggleDrawer();
       } else if (command === "newThread") {
-        if (!dialog) picker.current?.showModal();
+        if (!dialog) picker.current?.open();
+      } else if (command === "newOrchestrator") {
+        if (!dialog) picker.current?.open("orchestrator");
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command && (tileCommands as readonly string[]).includes(command)) {
@@ -1349,7 +1368,7 @@ export function App() {
       ))}
       <Notifications />
       {!onboarding && <AccountPrompts />}
-      {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
+      {onboarding && <Onboarding onStart={() => picker.current?.open()} />}
       {moveDialog && (
         <MoveRemoteControl
           key={`${moveDialog.hostId}:${moveDialog.runId}`}
@@ -1421,14 +1440,16 @@ export function App() {
         ref={picker}
         groups={startGroups.filter((g) => !g.project)}
         repos={startState.repos}
-        hostName={start.name}
+        hostId={start.id}
+        hostName={listed.length > 1 ? start.name : undefined}
         elsewhere={startElsewhere}
+        lastUsed={repoLastUsed}
         onPick={(groupId) =>
           start.id === host.id ? newThread(groupId) : pickRepoOn(start.id, groupId)
         }
         onPickElsewhere={pickRepoOn}
         orchestrators={pickerOrchestrators}
-        onNewOrchestrator={() => openAdd("orchestrator")}
+        onNewOrchestrator={(workspace) => openAdd("orchestrator", workspace)}
       />
       {settings && (
         <SettingsDialog
@@ -1480,7 +1501,7 @@ export function App() {
           onNewProject={newProject}
           onDelete={deleteThread}
           addDialog={addDialog}
-          onNewThread={() => picker.current?.showModal()}
+          onNewThread={() => picker.current?.open()}
           split={split}
           onOpenBeside={openBeside}
           onClosePane={closePane}

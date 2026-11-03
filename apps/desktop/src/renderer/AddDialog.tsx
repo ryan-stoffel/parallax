@@ -50,8 +50,8 @@ type Step =
  */
 type Cloning = { url: string; name: string; slug?: string };
 
-/** Opens the palette, at its menu or straight at Create orchestrator. */
-export type AddDialogHandle = { open: (start?: "orchestrator") => void };
+/** Opens the palette, at its menu or straight at Create orchestrator, in `workspace` if given. */
+export type AddDialogHandle = { open: (start?: "orchestrator", workspace?: Workspace) => void };
 
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
@@ -94,9 +94,12 @@ export function AddDialog({
   const step = stack.at(-1)!;
 
   useImperativeHandle(ref, () => ({
-    open: (start) => {
+    open: (start, chosen) => {
       // Rendered before showModal, which focuses the step's autofocus field.
-      flushSync(() => setStack([{ kind: start ?? "menu" }]));
+      flushSync(() => {
+        setStack([{ kind: start ?? "menu" }]);
+        setWorkspace(chosen);
+      });
       dialog.current?.showModal();
     },
   }));

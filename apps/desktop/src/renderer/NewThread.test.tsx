@@ -578,7 +578,9 @@ describe("a host with no usable default account for threads", () => {
     answers["accounts/keys/list"] = () => ({ result: { accounts: keys } });
   };
   const chooserLabels = () =>
-    [...document.querySelectorAll("fieldset label")].map((l) => l.textContent);
+    [...document.querySelector("legend")!.closest("fieldset")!.querySelectorAll("label")].map(
+      (l) => l.textContent,
+    );
   // `thread/start` fails with `failure` until a default is set.
   let failure: ErrorKind;
   beforeEach(() => {
@@ -608,7 +610,7 @@ describe("a host with no usable default account for threads", () => {
     await renderApp();
     await send("Tidy the README");
 
-    const chooser = document.querySelector("fieldset")!;
+    const chooser = document.querySelector("legend")!.closest("fieldset")!;
     expect(chooser.querySelector("legend")?.textContent).toContain(
       "Choose an account to run this thread",
     );

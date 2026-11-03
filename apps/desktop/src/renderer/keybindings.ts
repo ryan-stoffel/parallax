@@ -8,6 +8,7 @@ export type Command =
   | "searchContents"
   | "newThread"
   | "noRepoThread"
+  | "newOrchestrator"
   | "sidebar"
   | "panel"
   | "browser"
@@ -39,6 +40,7 @@ export const commands: { id: Command; name: string; defaults: string[]; elsewher
   { id: "searchContents", name: "Search project contents", defaults: ["Mod+Shift+KeyF"] },
   { id: "newThread", name: "New thread", defaults: ["Mod+KeyN"] },
   { id: "noRepoThread", name: "New thread without a repo", defaults: ["Mod+Shift+KeyN"] },
+  { id: "newOrchestrator", name: "New orchestrator thread", defaults: ["Mod+Shift+KeyO"] },
   { id: "sidebar", name: "Toggle sidebar", defaults: ["Mod+KeyS"] },
   { id: "panel", name: "Toggle side panel", defaults: ["Mod+Alt+KeyB"] },
   { id: "browser", name: "Open browser", defaults: ["Mod+Shift+KeyB"] },
