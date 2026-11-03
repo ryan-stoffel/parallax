@@ -128,13 +128,20 @@ import { draggedThread, threadDragType } from "./threadDrag";
  * The main pane: an orchestrator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
  * selected; `subagent` when one of its agent's own subagents is open, by its call's id; `pr` when
- * its sidebar row's PR number opened it, which shows that pull request in the side panel), a new
+ * its sidebar row's PR chip opened it, which shows that pull request in the side panel, or without
+ * a `url` the thread's Pull requests list), a new
  * thread in a sidebar group (`threads.ts`; with no group, it's the first repository's; `draft` when
  * it reopens one, by id, PLX-788).
  */
 export type Selection =
   | { kind: "orchestrator"; orchestratorId: string; agentId?: string }
-  | { kind: "thread"; threadId: string; started?: boolean; subagent?: string; pr?: string }
+  | {
+      kind: "thread";
+      threadId: string;
+      started?: boolean;
+      subagent?: string;
+      pr?: { url?: string };
+    }
   | { kind: "new"; groupId?: string; draft?: string };
 
 /**
@@ -555,7 +562,7 @@ export function App() {
   // Runs once the selection's own panel state is current, which `openPr` sets.
   const selectedPr = selection.kind === "thread" ? selection.pr : undefined;
   useEffect(() => {
-    if (selectedPr) openPr(selectedPr);
+    if (selectedPr) openPr(selectedPr.url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection]);
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.

@@ -1202,11 +1202,11 @@ export function ThreadList({
           anchor.current = item.key;
           openItem(item);
         }}
-        onOpenPr={(pr) => {
+        onOpenPr={(url) => {
           setPicked(new Set());
           anchor.current = item.key;
           if (item.orchestration) openItem(item);
-          else onSelect(item.host.id, { kind: "thread", threadId: t.id, pr });
+          else onSelect(item.host.id, { kind: "thread", threadId: t.id, pr: { url } });
         }}
         onKeys={(e) => rowKeys(e, item)}
         onArchive={() => void archive(item)}
@@ -2989,8 +2989,11 @@ function useRowDetails({
   selected: boolean;
   compact: boolean;
   words: readonly string[];
-  /** Opens the row with the pull request `url` in its side panel; without it, the number opens the row. */
-  onOpenPr?: (url: string) => void;
+  /**
+   * Opens the row with the pull request `url` in its side panel, or with no `url` its Pull requests
+   * list. Without it, the chip's number opens the row.
+   */
+  onOpenPr?: (url?: string) => void;
   /** A thread with no repo, whose git status isn't read. */
   noRepo?: boolean;
 }): { aside?: ReactNode; line?: ReactNode } {
@@ -3079,24 +3082,24 @@ function useRowDetails({
             className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
           >
             <prLook.Icon aria-hidden className="size-3.5" />
-            {prs.urls.length > 1 ? (
-              <span>+{prs.urls.length - 1}</span>
-            ) : (
-              // Inside the row's button, so a span: clicking it opens the row with the PR in its
-              // side panel, not GitHub.
-              <span
-                className={onOpenPr ? "hover:underline" : undefined}
-                onClick={
-                  onOpenPr &&
-                  ((e) => {
-                    e.stopPropagation();
-                    onOpenPr(first);
-                  })
-                }
-              >
+            {/* Inside the row's button, so a span: clicking it opens the row with the PR, or several
+                PRs' list, in its side panel, not GitHub. */}
+            <span
+              className={onOpenPr ? "hover:underline" : undefined}
+              onClick={
+                onOpenPr &&
+                ((e) => {
+                  e.stopPropagation();
+                  onOpenPr(prs.urls.length > 1 ? undefined : first);
+                })
+              }
+            >
+              {prs.urls.length > 1 ? (
+                `+${prs.urls.length - 1}`
+              ) : (
                 <Marked text={`#${numberOf(first)}`} words={words} />
-              </span>
-            )}
+              )}
+            </span>
             {checksState && <ChecksMark state={checksState} />}
           </span>
         )}
@@ -3337,8 +3340,8 @@ function ThreadRow({
   autoResumable: boolean;
   /** A click: opens it, or with Mod or Shift, picks it. */
   onOpen: (e: MouseEvent<HTMLElement>) => void;
-  /** Opens it with the pull request `url` in its side panel. */
-  onOpenPr: (url: string) => void;
+  /** Opens it with the pull request `url` in its side panel, or with no `url` its Pull requests list. */
+  onOpenPr: (url?: string) => void;
   /** Keyboard triage on the focused row (PLX-789). */
   onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
   onArchive: () => void;
