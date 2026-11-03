@@ -26,8 +26,9 @@ export async function wallpaperJpeg(
   displayId: number,
   longestSide: number,
 ): Promise<Buffer | null> {
-  const folder = await mkdtemp(path.join(tmpdir(), "parallax-wallpaper-"));
+  let folder: string | undefined;
   try {
+    folder = await mkdtemp(path.join(tmpdir(), "parallax-wallpaper-"));
     const { stdout } = await run("/usr/bin/osascript", [
       "-l",
       "JavaScript",
@@ -53,6 +54,6 @@ export async function wallpaperJpeg(
   } catch {
     return null;
   } finally {
-    await rm(folder, { recursive: true, force: true });
+    if (folder) await rm(folder, { recursive: true, force: true });
   }
 }
