@@ -43,7 +43,8 @@ const keyTaken = (e: KeyboardEvent) => {
     e.ctrlKey ||
     e.altKey ||
     !!target?.closest("input, textarea, select, [contenteditable]") ||
-    !!document.querySelector("dialog[open], [popover]:popover-open")
+    // A notification is a manual popover, and doesn't take the keys under it.
+    !!document.querySelector('dialog[open], [popover]:not([popover="manual"]):popover-open')
   );
 };
 

@@ -1566,6 +1566,8 @@ export function App() {
                   onCompose={(e, text, send) => {
                     setMainPage(undefined);
                     openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
+                    // The chat is under an expanded panel.
+                    setPanelExpanded(false);
                     setCompose({ text, send });
                   }}
                   onSetUpGithub={(e) => openSettings("sourceControl", e.hostId)}

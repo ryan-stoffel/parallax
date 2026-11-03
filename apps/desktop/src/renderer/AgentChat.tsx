@@ -398,8 +398,12 @@ export function AgentChat({
     },
     [send, sendFailed],
   );
+  // A chat can mount with a compose waiting, from the Pull requests page, and StrictMode's extra
+  // mount runs this twice with it: the ref keeps it to one send.
+  const composeTaken = useRef<typeof compose>(undefined);
   useEffect(() => {
-    if (!compose) return;
+    if (!compose || composeTaken.current === compose) return;
+    composeTaken.current = compose;
     if (compose.send) void send(compose.text).then((failed) => sendFailed(failed?.message));
     onComposed?.();
   }, [compose, send, sendFailed, onComposed]);
