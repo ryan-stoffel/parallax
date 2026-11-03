@@ -233,7 +233,7 @@
      under white, so it doesn't glare on the black. */
   --background: #000000;
   --sidebar: #000000;
-  --surface: #0f0f0f;
+  --surface: #0e0e0e;
   --foreground: #e8e8e8;
   --muted-foreground: #a3a3a3;
   --faint-foreground: #8a8a8a;
@@ -1166,7 +1166,7 @@ body {
 .composer-shell,
 .composer-bar,
 .composer-tabs {
-  background-color: light-dark(var(--surface), #0e0e0e);
+  background-color: var(--surface);
 }
 .composer-shell {
   anchor-name: --composer;
@@ -1448,6 +1448,12 @@ body {
 }
 @container composer (width < 22rem) {
   .composer-effort {
+    display: none;
+  }
+}
+/* The model button's reasoning level goes only when the name beside it runs out of room. */
+@container composer (width < 16.25rem) {
+  .composer-model-effort {
     display: none;
   }
 }

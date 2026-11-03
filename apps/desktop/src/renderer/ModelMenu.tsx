@@ -185,7 +185,7 @@ export function ModelMenu({
       >
         <Logo />
         <span className={`min-w-0 truncate ${options ? "text-foreground" : ""}`}>{shortName}</span>
-        {effortName && <span className="composer-effort shrink-0">{effortName}</span>}
+        {effortName && <span className="composer-model-effort shrink-0">{effortName}</span>}
         {options?.fast && <Zap aria-hidden className="composer-pop fill-current" />}
         {!options && <ChevronDown aria-hidden className="opacity-70" />}
       </button>
