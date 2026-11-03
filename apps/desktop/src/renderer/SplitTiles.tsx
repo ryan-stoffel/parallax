@@ -59,7 +59,8 @@ interface DropTarget {
  * The window's panes, as cards in their Fibonacci layout (splitLayout.ts) on the window's background.
  * Each card's tabs sit in a notch cut from its top left, as the fill beside them rises to meet the
  * top of the window. `leading` starts the first card's notch, and `controls` get a notch of their own
- * at the top right of the top right card. As many panes tile as keep `minTile`: the rest stack in the
+ * at the top right of the top right card, giving up their room to its tabs when it's narrow. As many
+ * panes tile as keep `minTile`: the rest stack in the
  * last tile, which shows the focused one, or the last one shown, and lists all their tabs. `maximized`
  * stacks them all in one tile. Views are siblings keyed by `key`, so a tile coming, going, or stacking
  * never remounts the others, and they glide to their places.
@@ -211,7 +212,7 @@ export function SplitTiles({
             className={`titlebar @container absolute flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
           >
             <div
-              className={`-ml-1.5 flex min-w-0 shrink items-center gap-1 pr-2 pl-3 ${tile === 0 ? leadingClass : ""}`}
+              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-2 pl-3 ${tile === 0 ? leadingClass : ""}`}
             >
               {tile === 0 && leading}
               <ThreadTabs
@@ -230,11 +231,11 @@ export function SplitTiles({
               />
             </div>
             <div
-              className={`card-rise relative min-w-4 flex-1 rounded-tl-xl bg-pane ${corner && controls ? "card-rise-end rounded-tr-xl" : "rounded-tr-xl"}`}
+              className={`card-rise relative min-w-3 flex-1 rounded-tl-xl bg-pane ${corner && controls ? "card-rise-end rounded-tr-xl" : "rounded-tr-xl"}`}
             />
             {corner && controls && (
               <div
-                className={`flex min-w-0 shrink-0 items-center gap-2 pr-1.5 pl-3 ${controlsClass}`}
+                className={`flex min-w-0 shrink items-center justify-end gap-2 overflow-clip pr-1.5 pl-3 ${controlsClass}`}
               >
                 {controls}
               </div>
