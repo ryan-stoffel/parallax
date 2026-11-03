@@ -158,7 +158,7 @@ const activated = (panel: Scoped, s: Surface, thread: string | undefined): Parti
   recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
 });
 
-/** `s` in front of `panel` because the user asked, which takes focus to its page if it has one. */
+/** `s` in front of `panel` because the user asked, which takes focus to its page once it's loaded. */
 const revealed = (panel: Scoped, s: Surface, thread: string | undefined): Partial<Scoped> => ({
   ...activated(panel, s, thread),
   pages: panel.pages.map((p) => (p.id === s.page ? { ...p, focusAsked: {} } : p)),
@@ -407,8 +407,11 @@ export function SidePanel({
       if (s && key === scope) closeView(s);
       // An extension can close a tab in a scope that isn't open.
       else if (s) updateIn(key, (latest) => withoutTab(latest, s));
-    } else if (action.kind === "select") show(own[at]);
-    else if (action.kind === "nextTab") show(own[(at + 1) % own.length]);
+    } else if (action.kind === "select") {
+      // An extension's choice, which leaves focus where it is.
+      const s = own[at];
+      if (s) updateIn(key, (latest) => activated(latest, s, threadIn(key, latest)));
+    } else if (action.kind === "nextTab") show(own[(at + 1) % own.length]);
     else if (action.kind === "previousTab") show(own[(at - 1 + own.length) % own.length]);
     else if (action.kind === "tab") show(own[action.index]);
     else if (action.kind === "lastTab") show(own.at(-1));
@@ -626,7 +629,7 @@ export function SidePanel({
       {Object.entries(scopes)
         .filter(([, panel]) => panel.browsed)
         .map(([key, panel]) => {
-          // Another scope's stays as it left it, so coming back doesn't take focus to its page.
+          // Another scope's stays as it left it.
           const front = key === scope ? current : panel.recent.at(-1)?.[0];
           return (
             <div
