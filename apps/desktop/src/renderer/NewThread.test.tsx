@@ -457,7 +457,7 @@ describe("with plxd's run options", () => {
         : started(p);
     await renderApp();
     // No worker default yet, so Claude's choices, as the account chooser only offers Claude.
-    expect(control("Model: Claude Opus 5.5")).not.toBeNull();
+    expect(document.querySelector('main [aria-label^="Model: Claude Opus 5.5"]')).not.toBeNull();
     expect(control("Access: Auto-accept edits")).not.toBeNull();
 
     // Plan is a legacy level, so the picker lists it only once Settings turns it on.
@@ -472,18 +472,15 @@ describe("with plxd's run options", () => {
     await pick("Claude Fable 5.1");
     await pick("Plan");
     const effort = (level: string) =>
-      act(() => {
-        const slider = document.querySelector<HTMLInputElement>('main input[type="range"]')!;
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-          slider,
-          level,
-        );
-        slider.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-    effort("4");
+      act(() =>
+        [...document.querySelectorAll<HTMLElement>('main [aria-label="Reasoning"] button')]
+          .find((b) => b.textContent === level)!
+          .click(),
+      );
+    effort("Max");
     await send("Plan the settings split");
     expect(notice()?.[1]).toBe("the claude backend can't run with effort max");
-    effort("3");
+    effort("Extra high");
     await send("Plan the settings split");
 
     const [refused, retry] = calls("thread/start");

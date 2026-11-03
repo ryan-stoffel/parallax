@@ -154,6 +154,62 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("scrolling up steps back with the caret in an empty box, until the text is pressed", () => {
+  const { box, rerender } = render(async () => undefined, caps);
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  act(() => box.focus());
+  rerender({ away: true });
+  expect(shell.dataset["back"]).toBe("true");
+  // A shortcut's keys don't bring it back, only pressing or typing in the text does.
+  act(() => void box.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
+  act(() => void box.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  expect(shell.dataset["back"]).toBeUndefined();
+});
+
+test("pressing a tab over the box doesn't fold it out from under the click", () => {
+  const { box } = render(async () => undefined, caps, {
+    away: true,
+    top: <button aria-label="Plan" />,
+  });
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  act(() => box.focus());
+  const tab = document.querySelector('[aria-label="Plan"]')!;
+  act(
+    () => void box.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: tab })),
+  );
+  expect(shell.dataset["back"]).toBeUndefined();
+  // Leaving it folds the box.
+  act(() => void tab.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
+});
+
+test("coming back to the window doesn't bring a stepped-back box back", () => {
+  const { box } = render(async () => undefined, caps, { away: true });
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  act(() => box.focus());
+  expect(shell.dataset["back"]).toBeUndefined();
+  // Leaving the window leaves the element active, unlike a blur to something else.
+  act(() => void box.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
+  act(() => void box.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  expect(shell.dataset["back"]).toBe("true");
+});
+
+test("dragging files over the box marks it, until they leave", () => {
+  const { box } = render(async () => undefined, caps);
+  const shell = box.closest<HTMLElement>(".composer-shell")!;
+  const drag = (type: string) =>
+    Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+      dataTransfer: { types: ["Files"] },
+      relatedTarget: null,
+    });
+  act(() => void shell.dispatchEvent(drag("dragover")));
+  expect(shell.className).toContain("border-ring");
+  act(() => void shell.dispatchEvent(drag("dragleave")));
+  expect(shell.className).not.toContain("border-ring");
+});
+
 test("focus moving to the bar under the box keeps it from stepping back, and leaving both does", () => {
   const { box } = render(async () => undefined, caps, {
     away: true,
@@ -164,7 +220,10 @@ test("focus moving to the bar under the box keeps it from stepping back, and lea
   act(() => box.focus());
   expect(shell.dataset["back"]).toBeUndefined();
   const leaving = (from: Element, to: Element | null) =>
-    act(() => from.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: to })));
+    act(
+      () =>
+        void from.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: to })),
+    );
   leaving(box, picker);
   expect(shell.dataset["back"]).toBeUndefined();
   leaving(picker, null);
