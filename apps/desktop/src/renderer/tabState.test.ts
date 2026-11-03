@@ -78,6 +78,13 @@ test("a full split replaces its last unfocused tile, or the tile a drop names", 
   expect(threadIdsOf(activeTab(openBeside(state, "e", 0)))).toEqual(["e", "b", "c", "d"]);
 });
 
+test("opening a thread already tiled focuses it in its split", () => {
+  const state = openBeside(opened("a"), "b");
+  const again = openInTab(state, "h", "a");
+  expect(shape(again)).toEqual(["[a+b]"]);
+  expect(activeTab(again).selection).toEqual(thread("a"));
+});
+
 test("a tile dropped on the strip leaves the split for its own tab", () => {
   let state = openBeside(openBeside(opened("a"), "b"), "c");
   state = dropInStrip(state, "h", "b");

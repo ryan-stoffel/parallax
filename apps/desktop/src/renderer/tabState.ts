@@ -100,7 +100,7 @@ export function navigate(state: Tabs, hostId: string, selection: Selection): Tab
 /** Thread `threadId` in a tab of its own before tab `before`, or last, or the tab it's in already. */
 export function openInTab(state: Tabs, hostId: string, threadId: string, before?: string): Tabs {
   const holder = holderOf(state, hostId, threadId);
-  if (holder) return { ...state, active: holder.id };
+  if (holder) return navigate(state, hostId, { kind: "thread", threadId });
   const tab = newTab(hostId, { kind: "thread", threadId });
   const next = before ?? state.tabs[state.tabs.indexOf(activeTab(state)) + 1]?.id;
   return { tabs: inserted(state.tabs, tab, next), active: tab.id };

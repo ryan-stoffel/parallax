@@ -1348,11 +1348,15 @@ export function ThreadList({
   const moving = movingKey === undefined ? undefined : byRun.get(movingKey);
   // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
   const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
-    {
-      label: "Open in new tab",
-      icon: <PanelTop aria-hidden />,
-      run: () => onOpenInTab(i.host.id, i.thread.id),
-    },
+    ...(!i.orchestration
+      ? [
+          {
+            label: "Open in new tab",
+            icon: <PanelTop aria-hidden />,
+            run: () => onOpenInTab(i.host.id, i.thread.id),
+          },
+        ]
+      : []),
     ...(!i.orchestration &&
     i.host.id === host.id &&
     selection.kind === "thread" &&
