@@ -913,6 +913,73 @@ async fn a_secret_reaches_only_the_keystore_and_the_agent_gets_a_one_time_ref() 
     assert_no_secret_files(host.dir.path(), SECRET, false);
 }
 
+/// 0098: with `delivery: file`, the answer goes, exactly, to a file in the thread's own folder, and
+/// the agent gets its path and no ref. The value reaches no keystore entry, event, or tool result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_secret_reaches_only_the_thread_s_own_file() {
+    const SECRET: &str = "API_KEY=plx1282-test-value\nOTHER=two\n";
+    let keys = Arc::new(Keys::default());
+    let host = Host::start_with_keys(temp_dir(), fake(steered()), keys.clone());
+    let mut client = host.client().await;
+    let repos = temp_dir();
+    let (me, _) = caller(&mut client, &repos).await;
+    working(&mut client, me).await;
+    let mut mcp = tools(&host, me).await;
+
+    let mut other = host.client().await;
+    let (saved, ()) = tokio::join!(
+        mcp.ok(
+            "request_secret",
+            json!({"label": "Staging .env", "reason": "To run the tests.", "delivery": "file"}),
+        ),
+        async {
+            let deadline = Instant::now() + PATIENCE;
+            let request_id = loop {
+                if let Some((id, _)) = secret_requests(&mut other, me).await.pop() {
+                    break id;
+                }
+                assert!(Instant::now() < deadline, "no secret card");
+                sleep(Duration::from_millis(50)).await;
+            };
+            other
+                .call::<parallax_protocol::methods::SecretAnswer>(
+                    parallax_protocol::SecretAnswerParams {
+                        run_id: me,
+                        request_id,
+                        answer: parallax_protocol::SecretChoice::Save {
+                            secret: SECRET.to_owned(),
+                        },
+                    },
+                )
+                .await
+                .unwrap();
+        },
+    );
+    assert_eq!(saved["status"], "saved", "{saved}");
+    assert!(saved.get("secretRef").is_none(), "{saved}");
+    let file = Path::new(saved["file"].as_str().unwrap());
+    assert_eq!(
+        file.parent().unwrap(),
+        plxd::paths::secret_files_dir(host.dir.path(), me)
+    );
+    assert_eq!(std::fs::read_to_string(file).unwrap(), SECRET);
+    assert!(keys.0.lock().unwrap().is_empty(), "not in the keystore");
+
+    let events = client
+        .call::<AgentEvents>(AgentEventsParams {
+            before: None,
+            run_id: me,
+            after: 0,
+            limit: Some(1000),
+        })
+        .await
+        .unwrap();
+    let events = serde_json::to_string(&events).unwrap();
+    assert!(events.contains(r#""delivery":"file""#), "the card knows");
+    assert!(!events.contains("plx1282-test-value"));
+    host.server.stop().await;
+}
+
 /// Waits until plxd's shutdown stops removing files under `dir`: its tasks drop a little after
 /// it stops, and the last store connection to close deletes the WAL.
 async fn settle(dir: &Path) {

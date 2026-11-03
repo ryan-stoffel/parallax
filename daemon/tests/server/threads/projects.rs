@@ -93,22 +93,25 @@ async fn a_thread_added_to_a_project_gets_its_instructions_and_leaves_when_it_go
     let listed = listed.threads.iter().find(|t| t.id == chat.id).unwrap();
     assert_eq!(listed.project, Some(project.id));
 
-    // Its next CLI process gets the Project's instructions; its first had none.
+    // Its next CLI process gets the Project's instructions; its first had none. Both are told to
+    // ask for secrets through the card, in the channel every CLI shows its model (0098).
     client
         .call::<AgentSend>(message(chat.id, "And a packing list"))
         .await
         .unwrap();
     runs.until(updated_to(AgentStatus::Completed)).await;
     let seen = seen.lock().unwrap().clone();
-    assert_eq!(seen[0], None);
-    assert!(
-        seen.last()
-            .unwrap()
-            .as_deref()
-            .unwrap()
-            .contains("Answer in French."),
-        "{seen:?}"
+    let (first, last) = (
+        seen[0].as_deref().unwrap_or_default(),
+        seen.last().unwrap().as_deref().unwrap_or_default(),
     );
+    assert!(!first.contains("Answer in French."), "{seen:?}");
+    assert!(last.contains("Answer in French."), "{seen:?}");
+    #[cfg(not(windows))]
+    for told in [first, last] {
+        assert!(told.contains("request_secret"), "{seen:?}");
+        assert!(told.contains("Permission denied"), "{seen:?}");
+    }
 
     // A thread started in the Project lives there, and no thread or no Project is refused.
     let inside = client

@@ -25,6 +25,9 @@
 //! - `ci-logs/`: failed CI jobs' log excerpts, one file per head commit and job (PLX-1019). See
 //!   [`DataDir::ci_logs_dir`].
 //!
+//! - `secrets/`: secrets the user gave an agent's commands, `<run>/<id>`, each deleted after 24
+//!   hours (0098). See [`secret_files_dir`].
+//!
 //! One folder is outside it: `/tmp/parallax-<hash>/`, which holds each worker run's own temp folder
 //! (PLX-130). See [`DataDir::run_temp_roots`].
 //!
@@ -38,7 +41,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use parallax_protocol::ScopeId;
+use parallax_protocol::{RunId, ScopeId};
 
 /// The environment variable that sets the data folder when `--data-dir` is not given.
 pub const DATA_DIR_ENV: &str = "PLXD_DATA_DIR";
@@ -54,6 +57,19 @@ pub const MAX_SOCKET_PATH_BYTES: usize = 107;
 
 /// The data folder under the home folder.
 const DEFAULT_DATA_DIR: &str = ".parallax";
+
+/// `secrets/` in data folder `data_dir`: what `request_secret` wrote for shell commands (0098).
+#[must_use]
+pub fn secrets_root(data_dir: &Path) -> PathBuf {
+    data_dir.join("secrets")
+}
+
+/// The folder of run `run`'s secret files in data folder `data_dir`, the only one of them its
+/// sandbox can read.
+#[must_use]
+pub fn secret_files_dir(data_dir: &Path, run: RunId) -> PathBuf {
+    secrets_root(data_dir).join(run.to_string())
+}
 
 /// The data folder's [`DataDir::uploads_dir`], by name.
 pub const UPLOADS_DIR: &str = "uploads";

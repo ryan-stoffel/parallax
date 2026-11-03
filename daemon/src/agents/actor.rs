@@ -3558,7 +3558,11 @@ impl Actor {
         // so the shared context folder isn't an allowed directory for it, and stays as unreadable
         // as the rest of plxd's data folder in the sandbox (0044, PLX-468).
         sandbox.writable.clear();
-        let instructions = self.project_instructions().await?;
+        // What the user gave this thread's commands through `request_secret` (0098).
+        sandbox
+            .read_only
+            .push(crate::paths::secret_files_dir(data_dir, self.id));
+        let instructions = self.standing_instructions().await?;
         Ok(Setup {
             cwd,
             sandbox: Some(sandbox),
@@ -3574,11 +3578,14 @@ impl Actor {
     /// and cut with the branch if either is missing (0042, 0045), with a thread's Parallax tools
     /// bound to its own run (0041, PLX-380), and its instructions with the orchestrator's autonomy
     /// as it is now, pinned to this CLI's system prompt (0078).
-    /// A thread in a Project, started there or added to it, gets its instructions and files, read
-    /// as they are now (0090), and so does an orchestrator thread added to one (0093).
-    async fn project_instructions(&self) -> Result<Option<String>, String> {
+    /// What every thread is told in the channel its CLI always shows the model. Secrets come first
+    /// (0098), since Codex reads a tool's description and MCP's `instructions` only after searching
+    /// for the tool, and a failed `ssh` gives it no reason to search. Then a thread in a Project,
+    /// started there or added to it, gets its instructions and files, read as they are now (0090),
+    /// and so does an orchestrator thread added to one (0093).
+    async fn standing_instructions(&self) -> Result<Option<String>, String> {
         let (scope, run) = (Uuid::from(self.project), Uuid::from(self.id));
-        store(&self.daemon, move |db| {
+        let project = store(&self.daemon, move |db| {
             let error = |error| store_error(&error);
             let added = db
                 .get_thread(run)
@@ -3590,7 +3597,16 @@ impl Actor {
                 .and_then(|repo| crate::projects::thread_instructions(&repo)))
         })
         .await
-        .map_err(|error| error.message)
+        .map_err(|error| error.message)?;
+        // Windows refuses `request_secret` until PLX-23.
+        if cfg!(windows) {
+            return Ok(project);
+        }
+        let secrets = crate::mcp::delegation::INSTRUCTIONS;
+        Ok(Some(project.map_or_else(
+            || secrets.to_owned(),
+            |project| format!("{secrets}\n\n{project}"),
+        )))
     }
 
     async fn orchestrator_setup(&mut self, repo: Option<&Path>) -> Result<Setup, String> {
@@ -3630,7 +3646,7 @@ impl Actor {
             instructions: Some(super::orchestrator::instructions(
                 repo.map(|repo| repo.to_string_lossy()).as_deref(),
                 autonomy,
-                self.project_instructions().await?.as_deref(),
+                self.standing_instructions().await?.as_deref(),
             )),
         })
     }
