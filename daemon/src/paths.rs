@@ -109,8 +109,9 @@ const ASIDE_NAME: &str = ".parallax.pre-move";
 const COLLISIONS_DIR: &str = "pre-move";
 
 /// The data folder to use: `data_dir`, unless it is the older OS folder with the only store, which
-/// this moves to `~/.parallax`. A symlink takes its place, so the absolute paths in the store, in
-/// git's worktree links, and in agents' sessions still work, and nothing is rewritten (PLX-1264).
+/// this moves to `~/.parallax`. A symlink takes its place, so the absolute paths in events, in
+/// git's worktree links, and in agents' sessions still work. Only the store's worktree and repo
+/// paths, which running code compares with real paths, change (PLX-1264).
 /// The service's plist names that link until its next `service install --replace`, and
 /// [`DataDir::resolve`] follows it. It holds the folder's instance lock during the move, and leaves a folder
 /// another `serve` runs in where it is.
@@ -131,14 +132,44 @@ pub fn move_to_default(data_dir: &DataDir) -> io::Result<DataDir> {
     if data_dir.root().is_symlink() {
         return Ok(data_dir.clone());
     }
-    if !data_dir.store_file().exists() || default.join(STORE_FILE).exists() {
-        return Ok(data_dir.clone());
-    }
     let Some(_held) = crate::server::lock_for_move(data_dir) else {
         return Ok(data_dir.clone());
     };
+    // Another `serve` may have moved it before the lock was free.
+    if data_dir.root().is_symlink() {
+        return DataDir::resolve(Some(data_dir.root()));
+    }
+    if !data_dir.store_file().exists() || default.join(STORE_FILE).exists() {
+        return Ok(data_dir.clone());
+    }
+    // Read before the folder is only a link.
+    let real_legacy = std::fs::canonicalize(data_dir.root())?;
     move_folder(data_dir.root(), &default)?;
-    DataDir::new(default)
+    let moved = DataDir::new(default)?;
+    if let Err(error) = move_stored_paths(data_dir.root(), &real_legacy, &moved) {
+        // Those paths still resolve through the link.
+        eprintln!("plxd: couldn't update the store's paths after the move: {error}");
+    }
+    Ok(moved)
+}
+
+/// Points the store's paths under the older folder at `to`. With a link in the home folder's path,
+/// the store has both spellings: worktrees under the data folder as given, and repositories' real
+/// paths.
+#[cfg(unix)]
+fn move_stored_paths(
+    legacy: &Path,
+    real_legacy: &Path,
+    to: &DataDir,
+) -> Result<(), parallax_store::StoreError> {
+    let real_to = std::fs::canonicalize(to.root())?;
+    let mut store = parallax_store::Store::open(to.store_file())?;
+    for (from, to) in [(legacy, to.root()), (real_legacy, real_to.as_path())] {
+        if let (Some(from), Some(to)) = (from.to_str(), to.to_str()) {
+            store.move_paths(from, to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Renames `legacy` to `default` and leaves a symlink at `legacy`, with what `default` held kept
@@ -268,6 +299,17 @@ impl DataDir {
             links_to_default(given.root(), &legacy_location(&home)?, &default).then_some(default)
         });
         moved.map_or(Ok(given), Self::new)
+    }
+
+    /// `path`, which an old message may name, under this folder if it is under the link
+    /// [`move_to_default`] left, for checks that compare paths without following links.
+    #[must_use]
+    pub fn current_path(&self, path: &str) -> PathBuf {
+        let inside = std::env::home_dir()
+            .and_then(|home| legacy_location(&home))
+            .filter(|legacy| links_to_default(legacy, legacy, &self.root))
+            .and_then(|legacy| Some(self.root.join(Path::new(path).strip_prefix(legacy).ok()?)));
+        inside.unwrap_or_else(|| path.into())
     }
 
     /// The folder itself.

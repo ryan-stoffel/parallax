@@ -415,7 +415,8 @@ pub(crate) async fn add_repo(
         .root()
         .canonicalize()
         .unwrap_or_else(|_| daemon.data_dir.root().to_owned());
-    if canonical.starts_with(&data_dir) {
+    // New Repository makes them in `projects/`, whether that is in the data folder or beside it.
+    if canonical.starts_with(&data_dir) && !canonical.starts_with(data_dir.join("projects")) {
         return Err(not_a_repository(format!(
             "{path} is inside plxd's data folder, which holds Parallax's own worktrees, scratch \
              repositories, and notes"

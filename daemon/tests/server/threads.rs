@@ -473,6 +473,17 @@ async fn repo_entries_and_threads_refuse_what_they_cant_run() {
         .await
         .unwrap_err();
     assert_eq!(kind(&inside), ErrorKind::NotARepository, "{inside:?}");
+    // Except where New Repository makes them.
+    let projects = host.data().join("projects");
+    std::fs::create_dir(&projects).unwrap();
+    let made = real_repo(&projects, "made");
+    client
+        .call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: made.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap();
     let link = host.work.path().join("link");
     std::os::unix::fs::symlink(&notes, &link).unwrap();
     let linked = client

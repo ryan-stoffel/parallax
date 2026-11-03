@@ -711,7 +711,9 @@ pub(crate) async fn read_upload(
 ) -> Result<HostReadUploadResult, ErrorObject> {
     let root = context.daemon.data_dir.uploads_dir();
     let slice = slice(params.offset, params.length)?;
-    super::context::run_blocking(move || read_upload_at(&root, &params.path, slice)).await
+    let path = context.daemon.data_dir.current_path(&params.path);
+    super::context::run_blocking(move || read_upload_at(&root, &path.to_string_lossy(), slice))
+        .await
 }
 
 /// The file at `path`, as base64, if it's inside `root` once links are followed. A slice, `(offset,
