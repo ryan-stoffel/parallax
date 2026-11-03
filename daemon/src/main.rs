@@ -733,6 +733,10 @@ fn serve(args: &ServeArgs) -> ExitCode {
             Ok(data_dir) => data_dir,
             Err(error) => return fail(&format!("could not find the data folder: {error}")),
         };
+        #[cfg(unix)]
+        let (older, moved) = (data_dir.clone(), plxd::paths::move_to_default(&data_dir));
+        #[cfg(unix)]
+        let data_dir = moved.as_ref().map_or(data_dir, Clone::clone);
         if let Err(error) = server::prepare_data_dir(data_dir.root()) {
             return fail(&error.to_string());
         }
@@ -743,6 +747,16 @@ fn serve(args: &ServeArgs) -> ExitCode {
             ));
         }
         info!(log_level = %args.log_level, "starting");
+        #[cfg(unix)]
+        match &moved {
+            Ok(to) if *to != older => info!(
+                from = %older.root().display(),
+                to = %to.root().display(),
+                "the data folder moved"
+            ),
+            Ok(_) => {}
+            Err(error) => warn!(%error, "couldn't move the older data folder, so it stays in use"),
+        }
         stop_with_app(shutdown.clone());
         // Every path plxd uses is absolute by now. Leaving the directory it was started in
         // keeps a folder, or the volume it is on, from staying busy for as long as plxd runs.
