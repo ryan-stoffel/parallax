@@ -738,11 +738,13 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                 )}
               </View>
             }
-            renderItem={({ item, index }) => (
-              <View style={{ marginTop: item.kind === "user" ? 22 : 12 }}>
-                <RowView row={item} live={working && index < 3} />
-              </View>
-            )}
+            renderItem={({ item, index }) =>
+              item.kind === "user" && item.hidden ? null : (
+                <View style={{ marginTop: item.kind === "user" ? 22 : 12 }}>
+                  <RowView row={item} live={working && index < 3} />
+                </View>
+              )
+            }
           />
         )}
         {trace && (

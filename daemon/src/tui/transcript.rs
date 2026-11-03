@@ -171,6 +171,7 @@ impl Transcript {
     fn fold_item(&mut self, item: &AgentOutputItem) {
         let entries = &mut self.entries;
         match item {
+            AgentOutputItem::TurnStarted { hidden: true, .. } => {}
             // The first turn has no id: its text is the prompt, already shown.
             AgentOutputItem::TurnStarted {
                 turn_id: Some(_),

@@ -152,6 +152,7 @@ async fn a_fire_commits_once_per_due_time_even_when_tried_again() {
     let sent = wakes(dir.path(), id);
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains(r#""kind":"thread.wake""#), "{}", sent[0]);
+    assert!(!sent[0].contains("hidden"), "{}", sent[0]);
     assert!(sent[0].contains(r#""type":"new""#), "{}", sent[0]);
     assert!(sent[0].contains("Triage today's issues."), "{}", sent[0]);
 

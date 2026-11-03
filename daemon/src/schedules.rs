@@ -141,6 +141,9 @@ pub(crate) struct Wake {
     pub task: Option<String>,
     pub to: To,
     pub text: String,
+    /// Clients draw nothing for it, as for a pull request watch's update (PLX-1247).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// Where a [`Wake`] goes, with the ids that make sending it again a no-op.
@@ -585,6 +588,7 @@ fn fire_job(db: &mut Tx, id: Uuid, trigger: Trigger, now: Timestamp) -> Result<F
         task: Some(id.to_string()),
         to,
         text,
+        hidden: false,
     };
     crate::dispatcher::enqueue_wake(db, &command_id, id, wake)?;
     Ok(Fired::Sent(Box::new(stored)))
@@ -593,9 +597,14 @@ fn fire_job(db: &mut Tx, id: Uuid, trigger: Trigger, now: Timestamp) -> Result<F
 /// Sends `wake`, the `thread.wake` effect, and records how it went on its task. A failure isn't
 /// retried, as T3's isn't: the task's last run says why.
 pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
-    let Wake { task, to, text } = wake;
+    let Wake {
+        task,
+        to,
+        text,
+        hidden,
+    } = wake;
     let sent = match to {
-        To::Thread { run_id, turn_id } => send(daemon, run_id, turn_id, text).await,
+        To::Thread { run_id, turn_id } => send(daemon, run_id, turn_id, text, hidden).await,
         To::Orchestrator {
             orchestrator: project,
             turn_id,
@@ -605,7 +614,7 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
             })
             .await;
             match orchestrator {
-                Ok(Some(run_id)) => send(daemon, run_id, turn_id, text).await,
+                Ok(Some(run_id)) => send(daemon, run_id, turn_id, text, hidden).await,
                 Ok(None) => Err(ErrorObject::invalid_params(format!(
                     "orchestrator {project} has no run"
                 ))),
@@ -676,32 +685,35 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
 }
 
 /// `agent/send` of `text` to run `run_id`, queued behind its running turn, as plxd's own
-/// message rather than the user's (PLX-937).
+/// message rather than the user's (PLX-937), which clients draw nothing for when `hidden`.
 async fn send(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     turn_id: TurnId,
     text: String,
+    hidden: bool,
 ) -> Result<(), ErrorObject> {
-    crate::agents::send_from_parallax(
-        Arc::clone(daemon),
-        AgentSendParams {
-            run_id,
-            turn_id,
-            text,
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            from: None,
-            delivery: None,
-        },
-    )
-    .await
+    let params = AgentSendParams {
+        run_id,
+        turn_id,
+        text,
+        model: None,
+        effort: None,
+        permission: None,
+        context_window: None,
+        fast: None,
+        account: None,
+        images: Vec::new(),
+        threads: Vec::new(),
+        from: None,
+        delivery: None,
+    };
+    let daemon = Arc::clone(daemon);
+    if hidden {
+        crate::agents::send_hidden(daemon, params).await
+    } else {
+        crate::agents::send_from_parallax(daemon, params).await
+    }
     .map(drop)
 }
 

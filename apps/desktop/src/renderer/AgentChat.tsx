@@ -1328,7 +1328,9 @@ export function TranscriptView({
     () =>
       view.map((row) => {
         if (row.kind === "user")
-          return searchText(row.text ?? (row.turnId && sent.get(row.turnId)?.text) ?? "");
+          return row.hidden
+            ? ""
+            : searchText(row.text ?? (row.turnId && sent.get(row.turnId)?.text) ?? "");
         if (row.kind === "pending" || row.kind === "assistant") return searchText(row.text);
         return row.kind === "proposedPlan" ? searchText(row.plan) : "";
       }),
@@ -1397,28 +1399,30 @@ export function TranscriptView({
                   className="absolute top-0 left-0 w-full"
                   style={{ transform: `translateY(${v.start}px)` }}
                 >
-                  <div
-                    data-copied={muted || undefined}
-                    className={`mx-auto max-w-3xl px-10 @max-lg:px-5 ${listKinds.has(row.kind) ? "py-1" : "py-2"} ${muted ? "opacity-60" : ""}`}
-                  >
-                    <RowView
-                      row={row}
-                      sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
-                      live={going}
-                      open={open.has(row.key)}
-                      openKeys={row.kind === "work" ? open : undefined}
-                      active={v.index === activeIndex}
-                      onToggle={toggle}
-                      onResend={onResend}
-                      loadImage={loadImage}
-                      sender={"from" in row && row.from ? titles?.[row.from] : undefined}
-                      copied={muted}
-                      forkable={!muted && !(live && v.index >= latest)}
-                      reply={replies.has(v.index)}
-                      replyTurn={replies.get(v.index)}
-                      onEdit={onEdit?.key === row.key ? onEdit.edit : undefined}
-                    />
-                  </div>
+                  {!(row.kind === "user" && row.hidden) && (
+                    <div
+                      data-copied={muted || undefined}
+                      className={`mx-auto max-w-3xl px-10 @max-lg:px-5 ${listKinds.has(row.kind) ? "py-1" : "py-2"} ${muted ? "opacity-60" : ""}`}
+                    >
+                      <RowView
+                        row={row}
+                        sent={"turnId" in row && row.turnId ? sent.get(row.turnId) : undefined}
+                        live={going}
+                        open={open.has(row.key)}
+                        openKeys={row.kind === "work" ? open : undefined}
+                        active={v.index === activeIndex}
+                        onToggle={toggle}
+                        onResend={onResend}
+                        loadImage={loadImage}
+                        sender={"from" in row && row.from ? titles?.[row.from] : undefined}
+                        copied={muted}
+                        forkable={!muted && !(live && v.index >= latest)}
+                        reply={replies.has(v.index)}
+                        replyTurn={replies.get(v.index)}
+                        onEdit={onEdit?.key === row.key ? onEdit.edit : undefined}
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}

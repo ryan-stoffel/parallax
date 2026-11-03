@@ -677,6 +677,7 @@ fn transcript(
         turn_id,
         text,
         wake: false,
+        hidden: false,
         from: None,
         images: Vec::new(),
         threads: Vec::new(),
