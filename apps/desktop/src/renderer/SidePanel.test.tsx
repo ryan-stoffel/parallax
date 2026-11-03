@@ -159,3 +159,67 @@ test("saved tabs come back into the strip, and open their page only once shown i
   };
   expect(saved.thread.tabs.map((t) => t.url)).toEqual(["https://one.test/"]);
 });
+
+test("a request for an agent's tab whose thread is no longer open opens nothing", async () => {
+  const { draw } = await panel();
+  draw({});
+  draw({ browse: { agentTab: "a" } });
+  expect(strip()).toEqual([]);
+  expect(document.querySelector('input[aria-label="Address"]')).toBeNull();
+});
+
+test("a link's new tab saves in the strip's order, right after the tab it came from", async () => {
+  localStorage.setItem(
+    "parallax.browserTabs",
+    JSON.stringify({
+      thread: {
+        tabs: [
+          { url: "https://one.test/", title: "One" },
+          { url: "https://two.test/", title: "Two" },
+        ],
+        current: 0,
+      },
+    }),
+  );
+  const { draw } = await panel();
+  draw({});
+  await act(async () => {});
+  // A second browse opens after the tab in front, as a link's new tab opens after its own.
+  draw({ browse: { url: "https://three.test/" } });
+  await act(async () => {});
+  expect(strip()).toEqual(["One", "three.test", "Two"]);
+  const saved = JSON.parse(localStorage.getItem("parallax.browserTabs")!) as {
+    thread: { tabs: { url: string }[] };
+  };
+  expect(saved.thread.tabs.map((t) => t.url)).toEqual([
+    "https://one.test/",
+    "https://three.test/",
+    "https://two.test/",
+  ]);
+});
+
+test("a page takes focus when the user shows it, not when it falls to the front", async () => {
+  const { draw } = await panel();
+  const close = vi.fn();
+  const agentTabs: AgentTabs = { hostId: "local", runId: "run", tabs: [tab("a", "Agent")], close };
+  draw({});
+  draw({ browse: { url: "https://mine.test/" }, agentTabs });
+  draw({ browse: { agentTab: "a" }, agentTabs });
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  const frame = () => act(async () => void (await new Promise(requestAnimationFrame)));
+  await act(async () => {});
+  await frame();
+  const onPage = () => focus.mock.contexts.filter((el) => (el as Element).tagName === "WEBVIEW");
+  focus.mockClear();
+
+  // The thread's agent tabs aren't listed yet on coming back, so its page falls to the front.
+  draw({});
+  await frame();
+  expect(document.querySelector('[aria-current="true"] span')?.textContent).toBe("mine.test");
+  expect(onPage()).toEqual([]);
+
+  click("mine.test");
+  await frame();
+  expect(onPage()).toHaveLength(1);
+  focus.mockRestore();
+});

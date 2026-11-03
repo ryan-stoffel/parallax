@@ -158,6 +158,27 @@ const activated = (panel: Scoped, s: Surface, thread: string | undefined): Parti
   recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
 });
 
+/** `s` in front of `panel` because the user asked, which takes focus to its page if it has one. */
+const revealed = (panel: Scoped, s: Surface, thread: string | undefined): Partial<Scoped> => ({
+  ...activated(panel, s, thread),
+  pages: panel.pages.map((p) => (p.id === s.page ? { ...p, focusAsked: {} } : p)),
+});
+
+/** `panel` without its tab `s`, keeping a closed page for Cmd/Ctrl+Shift+T. */
+function withoutTab(panel: Scoped, s: Surface): Partial<Scoped> {
+  const url = panel.pages.find((p) => p.id === s.page)?.url;
+  return {
+    tabs: panel.tabs.filter((t) => t !== s),
+    recent: panel.recent.filter(([t]) => t !== s),
+    ...(s.page !== undefined && {
+      pages: panel.pages.filter((p) => p.id !== s.page),
+      closed: url ? [...panel.closed.slice(-24), url] : panel.closed,
+      // The browser saves its tabs, even one closed before any of them showed.
+      browsed: true,
+    }),
+  };
+}
+
 /** A scope's panel the first time it's seen: its saved browser tabs, the last shown in front. */
 function firstPanel(scope: string, orchestrated: boolean): Scoped {
   const { tabs: pages, current } = restored(scope);
@@ -270,6 +291,11 @@ export function SidePanel({
   const update = (next: (panel: Scoped) => Partial<Scoped>) => updateIn(scope, next);
   const thread = documents?.runId;
   const setActive = (s: Surface) => update((panel) => activated(panel, s, thread));
+  const reveal = (s: Surface) => update((panel) => revealed(panel, s, thread));
+  // The thread a tab shown in `key`'s panel counts as shown in: the open one, or for another scope,
+  // the one that scope last showed a tab in.
+  const threadIn = (key: string, panel: Scoped) =>
+    key === scope ? thread : panel.recent.at(-1)?.[1];
 
   const browserStyle = useBrowserTheme();
   const agentFace = useAgentFace(agentTabs, remoteHost);
@@ -336,14 +362,16 @@ export function SidePanel({
     updateIn(key, (panel) => {
       const blank = !url && panel.pages.find((p) => !p.url && !p.load);
       const reused = blank && panel.tabs.find((t) => t.page === blank.id);
-      if (reused) return activated(panel, reused, thread);
+      if (reused) return revealed(panel, reused, threadIn(key, panel));
       const page = { ...ownTab(url), focus };
       const surface = pageSurface(page.id);
-      const at = panel.tabs.findIndex((t) => t.page === after);
+      // `pages` keeps the strip's order, which is the order they're saved in.
+      const pageAt = panel.pages.findIndex((p) => p.id === after);
+      const tabAt = panel.tabs.findIndex((t) => t.page === after);
       return {
-        pages: [...panel.pages, page],
-        tabs: panel.tabs.toSpliced(at < 0 ? panel.tabs.length : at + 1, 0, surface),
-        ...activated(panel, surface, thread),
+        pages: panel.pages.toSpliced(pageAt < 0 ? panel.pages.length : pageAt + 1, 0, page),
+        tabs: panel.tabs.toSpliced(tabAt < 0 ? panel.tabs.length : tabAt + 1, 0, surface),
+        ...activated(panel, surface, threadIn(key, panel)),
       };
     });
   const changePage = (key: string, id: number, patch: Partial<OwnTab>) =>
@@ -358,21 +386,9 @@ export function SidePanel({
     const i = shown.indexOf(s);
     const rest = shown.toSpliced(i, 1);
     const next = s === current ? rest[Math.min(i, rest.length - 1)] : current;
-    update((panel) => {
-      const url = panel.pages.find((p) => p.id === s.page)?.url;
-      return {
-        tabs: panel.tabs.filter((t) => t !== s),
-        recent: panel.recent.filter(([t]) => t !== s),
-        ...(s.page !== undefined && {
-          pages: panel.pages.filter((p) => p.id !== s.page),
-          closed: url ? [...panel.closed.slice(-24), url] : panel.closed,
-          // The browser saves its tabs, even one closed before any of them showed.
-          browsed: true,
-        }),
-      };
-    });
+    update((panel) => withoutTab(panel, s));
     if (s.agent) agentTabs?.close(s.agent.tabId);
-    if (next && s === current) setActive(next);
+    if (next && s === current) reveal(next);
     if (!rest.length) return onClose();
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
   };
@@ -383,11 +399,14 @@ export function SidePanel({
     const own = panel.tabs.filter((t) => t.page !== undefined);
     const at = own.findIndex((t) => t.page === from);
     const show = (to: Surface | undefined) =>
-      to && updateIn(key, (latest) => activated(latest, to, thread));
+      to && updateIn(key, (latest) => revealed(latest, to, threadIn(key, latest)));
     if (action.kind === "open") openPage(key, action.url, { after: from });
     else if (action.kind === "newTab") openPage(key);
     else if (action.kind === "closeTab") {
-      if (key === scope && own[at]) closeView(own[at]);
+      const s = own[at];
+      if (s && key === scope) closeView(s);
+      // An extension can close a tab in a scope that isn't open.
+      else if (s) updateIn(key, (latest) => withoutTab(latest, s));
     } else if (action.kind === "select") show(own[at]);
     else if (action.kind === "nextTab") show(own[(at + 1) % own.length]);
     else if (action.kind === "previousTab") show(own[(at - 1 + own.length) % own.length]);
@@ -408,8 +427,9 @@ export function SidePanel({
   const [browsed, setBrowsed] = useState(browse);
   if (browse !== browsed) {
     setBrowsed(browse);
-    if (browse?.agentTab && agentTabs) {
-      openView(agentSurface(agentTabs.runId, browse.agentTab));
+    if (browse?.agentTab) {
+      // Its thread is no longer the open one if the user moved on while plxd listed its tabs.
+      if (agentTabs) openView(agentSurface(agentTabs.runId, browse.agentTab));
     } else if (browse?.url) {
       // It opens in the tab in front while that's blank, and doesn't take focus from the composer.
       const blank = pages.find((p) => p.id === current?.page && !p.url && !p.load);
@@ -418,7 +438,7 @@ export function SidePanel({
     } else if (browse) {
       const last =
         lastShown(recent.filter(([s]) => isBrowserTab(s))) ?? shown.findLast(isBrowserTab);
-      if (last) setActive(last);
+      if (last) reveal(last);
       else openPage(scope);
     }
   }
@@ -532,7 +552,7 @@ export function SidePanel({
                   id={`side-panel-tab-${s.key}`}
                   aria-current={s === current ? "true" : undefined}
                   title={face?.url}
-                  onClick={() => setActive(s)}
+                  onClick={() => reveal(s)}
                   // A middle click closes a browser tab, as in Chrome.
                   onAuxClick={(e) => browserTab && e.button === 1 && closeView(s)}
                   className={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left text-body ${pinned.includes(s) ? "pr-2" : ""}`}

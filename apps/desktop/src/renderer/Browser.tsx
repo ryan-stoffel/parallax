@@ -165,6 +165,8 @@ export interface OwnTab {
   // Opened by the user, by a shortcut, a link, or a bookmark, so its page takes focus once it
   // loads; an agent's preview doesn't take it from the composer.
   focus?: boolean;
+  // A new one takes focus to its page: the user asked to show it, by a click or a shortcut.
+  focusAsked?: object;
   url?: string;
   title?: string;
   icon?: string;
@@ -344,6 +346,7 @@ export function Browser({
           page={t.url ? { url: t.url, title: t.title, icon: t.icon } : undefined}
           load={t.load}
           focusOnLoad={!!t.focus}
+          focusAsked={t.focusAsked}
           remoteHost={remoteHost}
           onChange={(patch) => onChange(t.id, patch)}
           onAsk={(action) =>
@@ -416,6 +419,7 @@ export function useAgentFace(agent: AgentTabs | undefined, remoteHost: string | 
 function Tab({
   shown,
   focusOnLoad,
+  focusAsked,
   page,
   load,
   remoteHost,
@@ -424,6 +428,7 @@ function Tab({
 }: {
   shown: boolean;
   focusOnLoad?: boolean;
+  focusAsked?: object;
   /** The page it shows, for its bookmark star (Bookmarks.tsx). */
   page?: { url: string; title?: string; icon?: string };
   load?: { url: string };
@@ -528,13 +533,14 @@ function Tab({
   // the user opens from the toolbar (`open`), as in Chrome.
   const focused = useRef(false);
 
-  // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
-  // shortcuts keep working from it. A blank tab's address bar takes it instead.
+  // A tab the user asks to show takes focus to its page, as in Chrome, so the page's shortcuts keep
+  // working from it. A blank tab's address bar takes it instead. A tab that comes to the front
+  // otherwise, such as on going back to a thread, leaves focus where it is.
   useEffect(() => {
-    if (!shown) return;
+    if (!focusAsked) return;
     if (src) requestAnimationFrame(() => view.current?.focus());
     else if (!page && !load) requestAnimationFrame(() => addressBar.current?.focus());
-  }, [shown]);
+  }, [focusAsked]);
 
   // Extensions see the shown tab as the active one.
   useEffect(() => {
