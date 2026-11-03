@@ -98,6 +98,7 @@ import { isNightly, startUpdater } from "./updater";
 import { broadcast } from "./windows";
 import { startVoice } from "./voice";
 import { readWindowState, writeWindowState } from "./windowState";
+import { wallpaperJpeg } from "./wallpaper";
 
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
 // one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in plxd's
@@ -172,13 +173,6 @@ function createWindow() {
     show: false,
     transparent: clearAtLaunch,
     backgroundColor: clearAtLaunch ? "#00000000" : windowBackground(dark),
-    // macOS's full screen gives a window its own Space, with no wallpaper behind it to show or blur.
-    // A see-through window instead takes simple full screen from the View menu and its shortcut,
-    // covering the display on the Space it's on. Its green button zooms, since that button would
-    // still open the Space.
-    ...(clearAtLaunch && process.platform === "darwin"
-      ? { simpleFullscreen: true, fullscreenable: false }
-      : {}),
     // macOS keeps a blurred window's blur when it isn't focused, rather than going flat gray.
     visualEffectState: "active",
     ...frameOptions(process.platform, dark),
@@ -218,7 +212,7 @@ function createWindow() {
   let bounds = win.getBounds();
   let maximized = saved?.maximized ?? false;
   const track = () => {
-    if (win.isMinimized() || win.isFullScreen() || win.isSimpleFullScreen()) return;
+    if (win.isMinimized() || win.isFullScreen()) return;
     maximized = win.isMaximized();
     if (!maximized) bounds = win.getBounds();
   };
@@ -230,12 +224,7 @@ function createWindow() {
     if (saved?.maximized) win.maximize();
     win.show();
   });
-  win.on("close", () => {
-    writeWindowState(windowStateFile, { bounds, maximized });
-    // Simple full screen hides the Dock and menu bar for the whole app, and closing the window
-    // doesn't bring them back.
-    if (process.platform === "darwin" && win.isSimpleFullScreen()) win.setSimpleFullScreen(false);
-  });
+  win.on("close", () => writeWindowState(windowStateFile, { bounds, maximized }));
   // Full screen hides Windows' window buttons, so the top row needs no room for them (main.tsx).
   win.on("enter-full-screen", () => win.webContents.send("parallax:fullScreen", true));
   win.on("leave-full-screen", () => win.webContents.send("parallax:fullScreen", false));
@@ -854,6 +843,13 @@ nativeTheme.on("updated", () => {
     const overlay = titleBarOverlay(process.platform, dark, win.webContents.getZoomFactor());
     if (overlay) win.setTitleBarOverlay(overlay);
   }
+});
+// macOS shows black behind a full screen window, so a see-through one shows a copy of this.
+ipcMain.handle("parallax:wallpaper", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || process.platform !== "darwin") return null;
+  const { id, size, scaleFactor } = screen.getDisplayMatching(win.getBounds());
+  return wallpaperJpeg(id, Math.max(size.width, size.height) * scaleFactor);
 });
 ipcMain.handle(
   "parallax:fullScreen",

@@ -84,6 +84,7 @@ const bridge: ParallaxBridge = {
   setWindowLook: (look) => ipcRenderer.send("parallax:windowLook", look),
   canBlur: blurSupported(process.platform, process.getSystemVersion()),
   transparent: process.argv.includes("--parallax-transparent"),
+  wallpaper: () => ipcRenderer.invoke("parallax:wallpaper") as Promise<Uint8Array | null>,
   relaunch: () => ipcRenderer.send("parallax:relaunch"),
   pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
   listFolders: (path) => ipcRenderer.invoke("parallax:listFolders", path),

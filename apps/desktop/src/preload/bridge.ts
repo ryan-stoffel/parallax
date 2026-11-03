@@ -208,6 +208,11 @@ export interface ParallaxBridge {
    * Windows, shows the desktop.
    */
   transparent?: boolean;
+  /**
+   * This window's display's macOS wallpaper as a JPEG, or null off macOS or if it can't be read.
+   * Not on the web.
+   */
+  wallpaper?(): Promise<Uint8Array | null>;
   /** Restarts Parallax. Not on the web. */
   relaunch?(): void;
   /** Opens the OS folder picker over this window. Resolves to the folder's path, or null if cancelled. */

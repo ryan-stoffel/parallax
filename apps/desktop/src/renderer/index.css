@@ -833,6 +833,24 @@ body {
   :is([popover], dialog):is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--raised) 92%, transparent);
 }
+/* macOS shows black behind a full screen window, so the page paints a copy of the wallpaper under
+   the glass (main.tsx). The root's own fill keeps body's tint on body, above the copy, rather than
+   on the canvas below it. */
+:root.translucent[style*="--wallpaper"] {
+  background-color: #000;
+}
+:root.translucent[style*="--wallpaper"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--wallpaper) center / cover;
+}
+/* Past the window's edges, so the blur doesn't fade out at them. */
+:root.blurred[style*="--wallpaper"]::before {
+  inset: -80px;
+  filter: blur(40px) saturate(1.6);
+}
 /* Over a see-through window, a modal's backdrop-filter leaves the app's text legible through the
    modal and around it, so the app itself blurs. Modals and menus are in the top layer, which an
    ancestor's filter doesn't reach. */

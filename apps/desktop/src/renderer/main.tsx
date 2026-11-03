@@ -22,9 +22,28 @@ if (window.parallax.platform === "win32") {
   });
 }
 // Full screen hides Windows' window buttons, and with them the room the top row keeps for them.
-window.parallax.onFullScreen((full) =>
-  document.documentElement.toggleAttribute("data-full-screen", full),
-);
+// On macOS it leaves a see-through window nothing to show, so it shows the wallpaper (index.css).
+let fullScreen = false;
+let wallpaper: string | undefined;
+window.parallax.onFullScreen((full) => {
+  fullScreen = full;
+  const root = document.documentElement;
+  root.toggleAttribute("data-full-screen", full);
+  if (!full) {
+    root.style.removeProperty("--wallpaper");
+    if (wallpaper) URL.revokeObjectURL(wallpaper);
+    wallpaper = undefined;
+  } else if (window.parallax.transparent && !wallpaper) {
+    void window.parallax.wallpaper?.().then((jpeg) => {
+      if (!jpeg || !fullScreen || wallpaper) return;
+      // A blob's URL, since a data URL this long is more than a CSS variable can hold.
+      wallpaper = URL.createObjectURL(
+        new Blob([jpeg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }),
+      );
+      root.style.setProperty("--wallpaper", `url("${wallpaper}")`);
+    });
+  }
+});
 // The saved theme, before React renders anything.
 applyTheme();
 // Enriched Markdown's parser, so a message draws in its first frame once it's loaded

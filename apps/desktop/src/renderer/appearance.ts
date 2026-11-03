@@ -247,6 +247,7 @@ export function applyAppearance(appearance: Appearance, onboarding = false) {
   // index.css mixes the panes' colors with transparent by --tint, over what shows through.
   const through = seesThrough(appearance.windowMaterial);
   root.classList.toggle("translucent", through);
+  root.classList.toggle("blurred", through && appearance.windowMaterial === "blur");
   const covered = through
     ? tint(appearance.windowMaterial, appearance.backgroundOpacity, window.parallax.platform)
     : 100;
