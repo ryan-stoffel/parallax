@@ -334,6 +334,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             turn_id: *turn_id,
             text: None,
             wake: false,
+            hidden: false,
             from: None,
             images: Vec::new(),
             threads: Vec::new(),

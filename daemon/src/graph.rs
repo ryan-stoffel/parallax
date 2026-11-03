@@ -210,6 +210,7 @@ impl<'a> Fold<'a> {
                 turn_id,
                 text,
                 wake,
+                hidden: _,
                 from,
                 images,
                 threads,

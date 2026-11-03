@@ -623,6 +623,35 @@ test("a revert drops the turns it undid, from their first message on (0062)", ()
   expect(build(turn(kept, "one"), reverted(0, [kept])).items).toEqual([]);
 });
 
+test("a hidden turn keeps its row, so a revert still finds it (PLX-1247)", () => {
+  const turn = (turnId: string, hidden: boolean) =>
+    output({
+      kind: "turnStarted",
+      turnId,
+      text: turnId,
+      wake: true,
+      hidden,
+      images: [],
+      threads: [],
+    });
+  const shown = turn("shown", false);
+  const update = turn("update", true);
+  expect(build(shown).items[0]).not.toHaveProperty("hidden");
+  expect(build(update).items).toMatchObject([
+    { kind: "user", turnId: "update", wake: true, hidden: true },
+  ]);
+  const reverted = at({
+    kind: "thread.reverted",
+    runId,
+    ordinal: 1,
+    turns: ["update"],
+    restoreFiles: false,
+  });
+  expect(build(shown, update, reverted).items.map((i) => i.kind === "user" && i.turnId)).toEqual([
+    "shown",
+  ]);
+});
+
 test("a revert clears a 500-event undone tail even if only a later undone prompt is loaded", () => {
   const turn = (turnId: string) =>
     output({ kind: "turnStarted", turnId, text: turnId, wake: false, images: [], threads: [] });

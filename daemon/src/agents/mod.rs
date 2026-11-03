@@ -1533,7 +1533,16 @@ pub(crate) async fn send_from_parallax(
     params: AgentSendParams,
 ) -> Result<AgentRun, ErrorObject> {
     let delivery = delivery_of(&params)?;
-    deliver(daemon, params, delivery, true).await
+    deliver(daemon, params, delivery, true, false).await
+}
+
+/// [`send_from_parallax`] of a message clients draw nothing for ([`Queued::hidden`]).
+pub(crate) async fn send_hidden(
+    daemon: Arc<Daemon>,
+    params: AgentSendParams,
+) -> Result<AgentRun, ErrorObject> {
+    let delivery = delivery_of(&params)?;
+    deliver(daemon, params, delivery, true, true).await
 }
 
 /// How `params` asks to be delivered.
@@ -1553,15 +1562,17 @@ pub(crate) async fn send_with(
     params: AgentSendParams,
     delivery: Delivery,
 ) -> Result<AgentRun, ErrorObject> {
-    deliver(daemon, params, delivery, false).await
+    deliver(daemon, params, delivery, false, false).await
 }
 
-/// [`send_with`], saying whether the message is plxd's own ([`Queued::parallax`]).
+/// [`send_with`], saying whether the message is plxd's own ([`Queued::parallax`]) and whether
+/// clients draw it ([`Queued::hidden`]).
 async fn deliver(
     daemon: Arc<Daemon>,
     params: AgentSendParams,
     delivery: Delivery,
     parallax: bool,
+    hidden: bool,
 ) -> Result<AgentRun, ErrorObject> {
     let AgentSendParams {
         run_id,
@@ -1596,6 +1607,7 @@ async fn deliver(
         account,
         from,
         parallax,
+        hidden,
     };
     ask(&daemon, run_id, |reply| Command::Send {
         message,
@@ -1739,7 +1751,7 @@ async fn continue_cut(daemon: &Arc<Daemon>, id: RunId) {
     };
     // As a steer, which starts its own turn with none running, so it goes ahead of the held
     // queue rather than waiting at its end (0060).
-    if let Err(error) = deliver(Arc::clone(daemon), params, Delivery::Steer, true).await {
+    if let Err(error) = deliver(Arc::clone(daemon), params, Delivery::Steer, true, false).await {
         warn!(run = %id, error = %error.message, "could not continue a run after a restart");
     }
 }
@@ -1780,7 +1792,8 @@ async fn hold_queues(daemon: &Arc<Daemon>) {
 }
 
 /// Holds run `id`'s stored queue when it is a plain thread's, and reports it held. Whether it
-/// did: an orchestrator's run, or one gone since, is left as it is.
+/// did: an orchestrator's run, one gone since, or one with only hidden messages waiting, which
+/// nothing could show as held or resume, is left as it is.
 fn hold_queue(db: &mut crate::store::Tx, id: RunId) -> Result<bool, ErrorObject> {
     let Some(row) = db.get_run(id.into()).map_err(|e| store_error(&e))? else {
         return Ok(false);
@@ -1795,6 +1808,9 @@ fn hold_queue(db: &mut crate::store::Tx, id: RunId) -> Result<bool, ErrorObject>
     }
     let queue = db.queue(id.into()).map_err(|e| store_error(&e))?;
     let (rows, messages) = actor::held(queue);
+    if messages.is_empty() {
+        return Ok(false);
+    }
     db.set_queue(id.into(), &rows)
         .map_err(|e| store_error(&e))?;
     let project = ScopeId::try_from(project)

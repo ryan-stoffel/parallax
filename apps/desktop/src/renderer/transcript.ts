@@ -25,8 +25,9 @@ export type Item = ItemBody & { at?: string };
 type ItemBody =
   /**
    * `text` is null for a follow-up logged by a plxd from before it recorded the text. `wake` marks
-   * a turn plxd sent an orchestrator itself, when runs it started finished (0025). `from` is the
-   * run id of the thread that sent it with its Parallax tools, not the user (0041). `images` are
+   * a turn plxd sent an orchestrator itself, when runs it started finished (0025). `hidden` marks
+   * one of plxd's that draws nothing, such as a pull request watch's update (PLX-1247), kept as a
+   * row so what refers to its turn still finds it. `from` is the run id of the thread that sent it with its Parallax tools, not the user (0041). `images` are
    * the ids of the images sent with it, for `agent/image` (PLX-193), and `threads` the run ids of
    * the threads attached to it as context (PLX-378).
    */
@@ -36,6 +37,7 @@ type ItemBody =
       text: string | null;
       turnId?: string;
       wake?: boolean;
+      hidden?: boolean;
       from?: string;
       images?: ImageId[];
       threads?: RunId[];
@@ -681,6 +683,7 @@ function applyOutput(
           text: item.text ?? null,
           turnId: item.turnId,
           ...(item.wake && { wake: true }),
+          ...(item.hidden && { hidden: true }),
           ...(item.from && { from: item.from }),
           ...attached,
         });

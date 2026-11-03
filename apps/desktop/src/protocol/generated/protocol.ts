@@ -4203,6 +4203,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 */
 	wake?: boolean,
 	/**
+	 * True for a turn plxd sent that clients draw nothing for, such as a pull request watch's
+	 * update (PLX-1247). `wake` is true too. Its row stays in the transcript, so what refers
+	 * to its turn still finds it.
+	 */
+	hidden?: boolean,
+	/**
 	 * The thread that sent a follow-up through its Parallax tools (0041), as `agent/send`'s
 	 * `from` named it. Absent for the user's own message and for the prompt's turn, whose
 	 * sender is the thread's `parent`.
@@ -8724,7 +8730,7 @@ export type QueueListParams = {
  */
 export type QueueResult = {
 	/**
-	 * The waiting messages.
+	 * The waiting messages, without the hidden ones plxd sends itself (PLX-1247).
 	 */
 	messages: Array<QueuedMessage>,
 	/**

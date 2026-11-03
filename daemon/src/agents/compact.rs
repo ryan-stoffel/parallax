@@ -273,6 +273,7 @@ mod tests {
                         turn_id: None,
                         text: None,
                         wake: false,
+                        hidden: false,
                         from: None,
                         images: Vec::new(),
                         threads: Vec::new(),

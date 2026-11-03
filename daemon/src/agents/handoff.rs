@@ -279,6 +279,7 @@ mod tests {
             turn_id: Some(TurnId::generate()),
             text: Some(text.to_owned()),
             wake,
+            hidden: false,
             from: None,
             images: Vec::new(),
             threads: Vec::new(),

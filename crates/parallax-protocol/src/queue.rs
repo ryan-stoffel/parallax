@@ -95,7 +95,7 @@ pub struct QueueSteerParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueResult {
-    /// The waiting messages.
+    /// The waiting messages, without the hidden ones plxd sends itself (PLX-1247).
     pub messages: Vec<QueuedMessage>,
     /// True while a Stop holds them until `queue.resume` (PLX-644). Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

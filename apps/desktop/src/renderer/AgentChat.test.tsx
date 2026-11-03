@@ -748,6 +748,38 @@ test("in a fork, only a turn that ended past the copied history offers Fork, at 
   await act(async () => keep.click());
   expect(onFork).toHaveBeenCalledWith("turn-2", {});
 });
+test("a hidden update draws nothing, while the agent's reply to it shows and keeps its turn (PLX-1247)", () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const rows: Item[] = [
+    { kind: "user", key: "p", text: "Open the PR", turnId: "turn-1" },
+    { kind: "assistant", key: "a1", text: "Opened" },
+    { kind: "end", key: "e1", outcome: { status: "completed" } },
+    { kind: "user", key: "u", text: "A check failed", turnId: "turn-2", wake: true, hidden: true },
+    { kind: "assistant", key: "a2", text: "Fixed the check" },
+    { kind: "end", key: "e2", outcome: { status: "completed" } },
+  ];
+  const onFork = vi.fn(async () => undefined);
+  const run = { id: "run", status: "completed", backend: "claude" } as AgentRun;
+  render(
+    <ForkContext value={{ hostId: "local", run, onFork }}>
+      <TranscriptView rows={rows} sent={new Map()} live={false} />
+    </ForkContext>,
+  );
+  expect(document.body.textContent).not.toContain("A check failed");
+  expect(document.body.textContent).not.toContain("From Parallax");
+  expect(document.body.textContent).toContain("Fixed the check");
+  // The update's turn is still there for its reply's Fork.
+  const forks = [...document.querySelectorAll('button[aria-label="Fork from here"]')];
+  expect(forks.map((b) => b.closest(".group\\/prompt")!.textContent)).toEqual([
+    expect.stringContaining("Open the PR"),
+    expect.stringContaining("Opened"),
+    expect.stringContaining("Fixed the check"),
+  ]);
+});
+
 test("scrolling up from the end, however little, stops following until it scrolls back down (PLX-1031)", () => {
   window.parallax = {
     connectionState: async () => ({ status: "connecting" as const }),

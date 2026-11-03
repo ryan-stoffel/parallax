@@ -41,6 +41,7 @@ fn started(turn_id: Option<TurnId>, text: &str) -> AgentOutputItem {
         turn_id,
         text: Some(text.to_owned()),
         wake: false,
+        hidden: false,
         from: None,
         images: Vec::new(),
         threads: Vec::new(),

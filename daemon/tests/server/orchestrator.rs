@@ -553,6 +553,7 @@ async fn runs_finishing_during_a_orchestrator_turn_wake_it_once_with_no_client_c
         turn_id: wake.turn_id,
         text: Some(wake.prompt.clone()),
         wake: true,
+        hidden: false,
         from: None,
         images: Vec::new(),
         threads: Vec::new(),

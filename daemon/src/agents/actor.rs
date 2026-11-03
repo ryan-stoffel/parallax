@@ -374,6 +374,9 @@ pub(super) struct Queued {
     /// plxd's own message, not the user's, such as a scheduled task's or a pull request watch's,
     /// which an orchestrator's packet leaves out of the user's messages (PLX-937).
     pub parallax: bool,
+    /// plxd's own message that clients draw nothing for, such as a pull request watch's
+    /// (PLX-1247). No queue list has it, and it never shows as held.
+    pub hidden: bool,
 }
 
 /// What a stored [`Queued`] keeps beside its text, as its row's JSON. `held` is the queue's:
@@ -387,6 +390,7 @@ struct QueuedExtra {
     account: Option<AccountChoice>,
     from: Option<RunId>,
     parallax: bool,
+    hidden: bool,
     held: bool,
 }
 
@@ -399,6 +403,7 @@ impl Queued {
             account: self.account.clone(),
             from: self.from,
             parallax: self.parallax,
+            hidden: self.hidden,
             held,
         };
         QueuedRow {
@@ -423,6 +428,7 @@ impl Queued {
                 account: extra.account,
                 from: extra.from,
                 parallax: extra.parallax,
+                hidden: extra.hidden,
             },
             extra.held,
         ))
@@ -459,13 +465,25 @@ impl Queued {
     }
 }
 
+/// The messages of `queued` that clients list: all but the hidden ones.
+fn listed<'a>(queued: impl IntoIterator<Item = &'a Queued>) -> Vec<QueuedMessage> {
+    queued
+        .into_iter()
+        .filter(|queued| !queued.hidden)
+        .map(Queued::message)
+        .collect()
+}
+
 /// A stored queue's `rows`, held (0060), and the messages its `queue.updated` lists. A corrupt
 /// row is left out, as [`Actor::load_queue`] leaves it out.
 pub(super) fn held(rows: Vec<QueuedRow>) -> (Vec<QueuedRow>, Vec<QueuedMessage>) {
-    rows.into_iter()
+    let queued: Vec<Queued> = rows
+        .into_iter()
         .filter_map(Queued::from_row)
-        .map(|(queued, _)| (queued.row(true), queued.message()))
-        .unzip()
+        .map(|(queued, _)| queued)
+        .collect();
+    let rows = queued.iter().map(|queued| queued.row(true)).collect();
+    (rows, listed(&queued))
 }
 
 /// Where a request's answer goes.
@@ -608,6 +626,9 @@ pub(super) struct Actor {
     /// The messages plxd sent as its own ([`Queued::parallax`]), by turn id, until they're
     /// recorded as sent.
     parallax_turns: HashSet<TurnId>,
+    /// The messages clients draw nothing for ([`Queued::hidden`]), by turn id. Kept as
+    /// [`Self::turns`] keeps its text, since an account fallback starts the same turn again.
+    hidden_turns: HashSet<TurnId>,
     /// Whether an orchestrator's provider compacted its session since its last turn began, so the
     /// next one carries the orchestrator's state again (PLX-937). Lost on a restart.
     compacted: bool,
@@ -662,6 +683,7 @@ impl Actor {
             senders: HashMap::new(),
             cursor: None,
             parallax_turns: HashSet::new(),
+            hidden_turns: HashSet::new(),
             compacted: false,
         }
     }
@@ -1138,6 +1160,9 @@ impl Actor {
         if message.parallax {
             self.parallax_turns.insert(turn_id);
         }
+        if message.hidden {
+            self.hidden_turns.insert(turn_id);
+        }
         let answer = self.send(message, delivery).await;
         if answer.is_err() && from.is_some() {
             self.senders.remove(&turn_id);
@@ -1332,8 +1357,12 @@ impl Actor {
         }
         // Stop means stop: what waited for this turn to end doesn't start another, nor does what
         // the CLI took and drops as it stops, and a run waiting for its usage limit doesn't
-        // resume.
-        self.handed.clear();
+        // resume. Hidden messages aren't the user's to take back, so they wait with the queue.
+        for queued in self.handed.drain(..).rev() {
+            if queued.hidden {
+                self.queued.push_front(queued);
+            }
+        }
         self.drop_queued().await;
         self.cancel_waiting().await;
         // An idle session has no turn to stop, and stays for the next one.
@@ -2107,6 +2136,11 @@ impl Actor {
                 Err(id_conflict(turn_id))
             };
         }
+        // Only hidden messages under a hold: nothing shows it or can resume it, so the next message
+        // anyone can see ends it, as the user's ends a Stop's pause of wake-ups (0025).
+        if self.queue_held && !queued.hidden && self.queued.iter().all(|waiting| waiting.hidden) {
+            self.queue_held = false;
+        }
         // No CLI starts while a push or Open PR runs (PLX-458). A steer waits too: no turn runs
         // for it to go into.
         if self.effect.is_some() {
@@ -2160,6 +2194,7 @@ impl Actor {
             account,
             from: _,
             parallax: _,
+            hidden: _,
         } = queued;
         let changes = self.changes(options);
         self.resume(turn_id, text, images, threads, changes, account)
@@ -2492,6 +2527,7 @@ impl Actor {
                 account,
                 from: _,
                 parallax: _,
+                hidden: _,
             } = next;
             let changes = self.changes(options);
             let why = match self
@@ -2523,23 +2559,33 @@ impl Actor {
         })
         .await;
         self.senders.remove(&turn_id);
-        self.push(AgentOutputItem::FollowUpDropped { turn_id })
-            .await;
+        // Clients show this as a message of theirs that wasn't sent, and a hidden one isn't theirs.
+        if !self.hidden_turns.contains(&turn_id) {
+            self.push(AgentOutputItem::FollowUpDropped { turn_id })
+                .await;
+        }
         self.flush().await;
     }
 
     /// Drops every waiting message, which never reached a CLI, as a stopped run's follow-ups are.
+    /// Hidden messages stay, held until the next visible message, since their news was told only
+    /// once.
     async fn drop_queued(&mut self) {
         if self.queued.is_empty() {
             return;
         }
-        while let Some(queued) = self.queued.pop_front() {
+        let (kept, dropped): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.queued)
+            .into_iter()
+            .partition(|queued| queued.hidden);
+        for queued in dropped {
             info!(run = %self.id, turn = %queued.turn_id, "dropping a waiting message");
             let turn_id = queued.turn_id;
             self.senders.remove(&turn_id);
             self.push(AgentOutputItem::FollowUpDropped { turn_id })
                 .await;
         }
+        self.queue_held = !kept.is_empty();
+        self.queued = kept;
         self.save_queue().await;
     }
 
@@ -2563,8 +2609,12 @@ impl Actor {
                 self.queued = edited;
             }
             QueueOp::Reorder { ids } => {
-                let mut rest = self.queued.clone();
-                let mut reordered = VecDeque::with_capacity(rest.len());
+                // `ids` can't name the hidden messages, which keep their order, first.
+                let (mut reordered, mut rest): (VecDeque<_>, VecDeque<_>) = self
+                    .queued
+                    .iter()
+                    .cloned()
+                    .partition(|queued| queued.hidden);
                 for id in ids {
                     let at = rest.iter().position(|queued| queued.turn_id == id);
                     let Some(queued) = at.and_then(|at| rest.remove(at)) else {
@@ -2639,9 +2689,10 @@ impl Actor {
                 }
             }
         }
+        let messages = listed(&self.queued);
         Ok(QueueResult {
-            messages: self.messages(),
-            held: self.queue_held,
+            held: self.queue_held && !messages.is_empty(),
+            messages,
         })
     }
 
@@ -2656,10 +2707,6 @@ impl Actor {
                     format!("run {} has no waiting message {id}", self.id),
                 )
             })
-    }
-
-    fn messages(&self) -> Vec<QueuedMessage> {
-        self.queued.iter().map(Queued::message).collect()
     }
 
     /// Takes up the waiting messages the store has for the run, which a plxd before this one
@@ -2680,6 +2727,9 @@ impl Actor {
                             }
                             if queued.parallax {
                                 self.parallax_turns.insert(queued.turn_id);
+                            }
+                            if queued.hidden {
+                                self.hidden_turns.insert(queued.turn_id);
                             }
                             self.queue_held |= held;
                             self.queued.push_back(queued);
@@ -2715,7 +2765,9 @@ impl Actor {
         let (run_id, project) = (self.id, self.project);
         let held = self.queue_held && !queued.is_empty();
         let rows: Vec<QueuedRow> = queued.iter().map(|queued| queued.row(held)).collect();
-        let messages: Vec<QueuedMessage> = queued.iter().map(Queued::message).collect();
+        let messages = listed(queued);
+        // Hidden messages alone stay held, but clients have nothing to show as paused.
+        let shown_held = held && !messages.is_empty();
         self.write(move |db, now| {
             db.set_queue(id, &rows)
                 .map_err(|error| store_error(&error))?;
@@ -2724,7 +2776,7 @@ impl Actor {
                 command_id,
                 &QueueResult {
                     messages: messages.clone(),
-                    held,
+                    held: shown_held,
                 },
             )?;
             db.stage(
@@ -2733,7 +2785,7 @@ impl Actor {
                 ParallaxEvent::QueueUpdated {
                     run_id,
                     messages,
-                    held,
+                    held: shown_held,
                 },
             );
             Ok(())
@@ -2940,6 +2992,7 @@ impl Actor {
             account: None,
             from: None,
             parallax: false,
+            hidden: false,
         };
         if self.live_open() && !changing {
             match self.hand_over(&queued).await? {
@@ -3727,6 +3780,7 @@ impl Actor {
             turn_id,
             text,
             wake,
+            hidden,
             from,
             images,
             threads,
@@ -3737,8 +3791,10 @@ impl Actor {
         *images = self.images.remove(turn_id).unwrap_or_default();
         *threads = self.attached.remove(turn_id).unwrap_or_default();
         if let Some(turn_id) = turn_id {
-            // An orchestrator's wake-up or a usage limit's resume: plxd's own turn.
-            *wake = self.wakes.was_sent(*turn_id) || self.resumes.was_sent(*turn_id);
+            *hidden = self.hidden_turns.contains(turn_id);
+            // An orchestrator's wake-up, a usage limit's resume, or a hidden message: plxd's own
+            // turn.
+            *wake = *hidden || self.wakes.was_sent(*turn_id) || self.resumes.was_sent(*turn_id);
             *from = self.senders.remove(turn_id);
             *text = self
                 .turns
@@ -3888,8 +3944,11 @@ impl Actor {
         self.withdraw_approvals().await;
         if settled {
             info!(run = %self.id, "an agent run's session ended");
-            // A message it took as it ended, and lost, had shown it running.
-            if self.queued.is_empty() && self.row.state.status == convert::RUNNING {
+            // A message it took as it ended, and lost, had shown it running. A held queue won't
+            // start another turn either.
+            if (self.queued.is_empty() || self.queue_held)
+                && self.row.state.status == convert::RUNNING
+            {
                 convert::COMPLETED.clone_into(&mut self.row.state.status);
                 self.save().await;
             }
@@ -4730,6 +4789,232 @@ mod tests {
         let (sink, events) = EventSink::channel(4, Vec::new());
         actor.live = Some(Live::new(run.clone(), events, None));
         (run, sink)
+    }
+
+    /// A stored run's actor, with `queued` waiting behind a turn in progress.
+    async fn waiting_actor(daemon: &Arc<Daemon>, queued: Vec<super::Queued>) -> Actor {
+        let (row, worktree) = fake_row_and_worktree();
+        let stored = row.clone();
+        crate::agents::store(daemon, move |db| {
+            db.create_run(stored.id, &stored.fields, &stored.state)
+                .unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let mut actor = Actor::new(Arc::clone(daemon), row, Some(worktree), HashMap::new());
+        hold_session(&mut actor);
+        actor.in_flight = 1;
+        actor.queued = queued.into();
+        actor
+    }
+
+    fn message(text: &str, hidden: bool) -> super::Queued {
+        super::Queued {
+            turn_id: TurnId::generate(),
+            text: text.to_owned(),
+            images: Vec::new(),
+            threads: Vec::new(),
+            options: super::RunOptions::default(),
+            account: None,
+            from: None,
+            parallax: hidden,
+            hidden,
+        }
+    }
+
+    /// PLX-1247: clients can't see a hidden message, so reordering takes only the others, and it
+    /// can't make a queue show as paused.
+    #[tokio::test]
+    async fn hidden_messages_stay_out_of_the_queue_clients_see() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let queued = vec![
+            message("a", false),
+            message("update", true),
+            message("b", false),
+        ];
+        let [a, hidden, b] = [0, 1, 2].map(|at: usize| queued[at].turn_id);
+        let mut actor = waiting_actor(&daemon, queued).await;
+
+        let ids = |result: &parallax_protocol::QueueResult| -> Vec<TurnId> {
+            result.messages.iter().map(|m| m.id).collect()
+        };
+        let reordered = actor
+            .queue_op(super::QueueOp::Reorder { ids: vec![b, a] }, None)
+            .await
+            .unwrap();
+        assert_eq!(ids(&reordered), [b, a]);
+        let order: Vec<TurnId> = actor.queued.iter().map(|q| q.turn_id).collect();
+        assert_eq!(order, [hidden, b, a]);
+        actor
+            .queue_op(
+                super::QueueOp::Reorder {
+                    ids: vec![hidden, b, a],
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        actor.queue_held = true;
+        actor
+            .queue_op(super::QueueOp::Cancel { id: a }, None)
+            .await
+            .unwrap();
+        let left = actor
+            .queue_op(super::QueueOp::Cancel { id: b }, None)
+            .await
+            .unwrap();
+        assert!(left.messages.is_empty());
+        assert!(!left.held, "nothing is left to show as paused");
+        assert!(actor.queue_held, "a Stop still parks the hidden message");
+    }
+
+    /// PLX-1247: a hold over only hidden messages ends with the next message a client can show,
+    /// from the user, another thread, or plxd, so nothing waits behind a Resume that wasn't there.
+    /// Another hidden message leaves it held.
+    #[tokio::test]
+    async fn a_visible_message_ends_a_hold_over_hidden_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let from_thread = super::Queued {
+            from: Some(RunId::generate()),
+            ..message("from a thread", false)
+        };
+        let scheduled = super::Queued {
+            parallax: true,
+            ..message("a scheduled task", false)
+        };
+        for visible in [message("mine", false), from_thread, scheduled] {
+            let mut actor = waiting_actor(&daemon, vec![message("update", true)]).await;
+            actor.queue_held = true;
+
+            let another = message("another update", true);
+            actor.send(another, super::Delivery::Queue).await.unwrap();
+            assert!(actor.queue_held);
+
+            actor.send(visible, super::Delivery::Queue).await.unwrap();
+            assert!(!actor.queue_held);
+        }
+    }
+
+    /// PLX-1247: a settled session's CLI that took a message and exits leaves a parked queue, which
+    /// starts no turn, so the run can't stay running with no CLI.
+    #[tokio::test]
+    async fn a_held_queue_doesnt_leave_a_settled_run_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let mut actor = waiting_actor(&daemon, vec![message("update", true)]).await;
+        actor.queue_held = true;
+        actor.live.as_mut().unwrap().settled = Some(tokio::time::Instant::now());
+        let outcome = crate::backend::Outcome::Completed { result: None };
+        let finished = Event::Finished {
+            outcome: outcome.clone(),
+            usage_totals: Vec::new(),
+        };
+        actor.exited(finished, &outcome).await;
+        assert_eq!(actor.row.state.status, super::convert::COMPLETED);
+    }
+
+    /// PLX-1247: a daemon restart holds a queue only when a client can show its Resume.
+    #[tokio::test]
+    async fn a_restart_holds_no_queue_of_only_hidden_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let actor = waiting_actor(&daemon, Vec::new()).await;
+        let (id, run) = (actor.row.id, actor.id);
+        for (visible, holds) in [(false, false), (true, true)] {
+            let mut rows = vec![message("update", true).row(false)];
+            if visible {
+                rows.push(message("mine", false).row(false));
+            }
+            let held = crate::agents::store(&daemon, move |db| {
+                db.set_queue(id, &rows).unwrap();
+                crate::agents::hold_queue(db, run)
+            })
+            .await
+            .unwrap();
+            assert_eq!(held, holds);
+        }
+    }
+
+    /// PLX-1247: a hidden message's turn says so, and counts as plxd's own.
+    #[tokio::test]
+    async fn a_hidden_messages_turn_is_a_hidden_wake() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+        let turn_id = TurnId::generate();
+        actor.hidden_turns.insert(turn_id);
+        let item = AgentOutputItem::TurnStarted {
+            turn_id: Some(turn_id),
+            text: None,
+            wake: false,
+            hidden: false,
+            from: None,
+            images: Vec::new(),
+            threads: Vec::new(),
+        };
+        // An account fallback starts the same turn again, which stays hidden.
+        for _ in 0..2 {
+            let mut filled = item.clone();
+            actor.fill_turn_started(&mut filled);
+            let AgentOutputItem::TurnStarted { wake, hidden, .. } = filled else {
+                unreachable!();
+            };
+            assert!(wake && hidden);
+        }
+    }
+
+    /// PLX-1247: a cancel drops the user's messages, and keeps a hidden one held, waiting or
+    /// handed to the CLI, with no notice of a message the user never saw.
+    #[tokio::test]
+    async fn a_cancel_keeps_hidden_messages_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let queued = vec![message("mine", false), message("update", true)];
+        let (mine, waiting) = (queued[0].turn_id, queued[1].turn_id);
+        let mut actor = waiting_actor(&daemon, queued).await;
+        let handed = message("handed update", true);
+        let handed_id = handed.turn_id;
+        actor.handed.push(handed);
+        actor.handed.push(message("handed, mine", false));
+        for queued in actor.queued.iter().chain(&actor.handed) {
+            if queued.hidden {
+                actor.hidden_turns.insert(queued.turn_id);
+            }
+        }
+
+        actor.cancel(None).await;
+
+        let order: Vec<TurnId> = actor.queued.iter().map(|q| q.turn_id).collect();
+        assert_eq!(order, [handed_id, waiting]);
+        assert!(actor.queue_held);
+        actor.flush().await;
+        assert_eq!(logged_drops(&daemon, actor.id).await, [mine]);
+    }
+
+    /// The turns run `id`'s log says were dropped.
+    async fn logged_drops(daemon: &Arc<Daemon>, id: RunId) -> Vec<TurnId> {
+        let (page, _) = crate::agents::store(daemon, move |db| {
+            db.run_events(id.into(), 0, 1000, 4 * 1024 * 1024)
+                .map_err(|error| crate::store::store_error(&error))
+        })
+        .await
+        .unwrap();
+        page.iter()
+            .filter_map(|stored| match serde_json::from_str(&stored.payload).ok()? {
+                ParallaxEvent::AgentOutput { items, .. } => Some(items),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|item| match item {
+                AgentOutputItem::FollowUpDropped { turn_id } => Some(turn_id),
+                _ => None,
+            })
+            .collect()
     }
 
     /// `agent/setPermission`: a live run that can switch takes the mode at once, and the run

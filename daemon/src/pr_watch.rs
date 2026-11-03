@@ -9,7 +9,8 @@
 //! pull request once, with one `gh api graphql` call, for every run that watches it. A run's new
 //! watch state and its wake commit together, in its lane and only while the same watch is on, so
 //! an unwatch during the read wins. The wake is a `thread.wake` effect, sent with `agent/send`
-//! queued behind the run's turn ([`crate::schedules::deliver`]).
+//! queued behind the run's turn ([`crate::schedules::deliver`]), and clients draw nothing for it
+//! (PLX-1247).
 //!
 //! [`status`], `pr/status` (PLX-837), reads a pull request the same way, plus how far its head is
 //! behind its base, and says whether it is ready to merge, so agents never read it with `gh`
@@ -1117,6 +1118,7 @@ fn record_job(
                 turn_id: TurnId::generate(),
             },
             text,
+            hidden: true,
         };
         crate::dispatcher::enqueue_wake(db, &command_id, run, wake)?;
     }

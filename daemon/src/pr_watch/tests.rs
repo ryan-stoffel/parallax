@@ -1007,6 +1007,37 @@ async fn a_watch_wakes_an_archived_orchestrator_thread() {
     );
 }
 
+/// PLX-1247: a watch's update is hidden from the thread it wakes.
+#[tokio::test]
+async fn a_watchs_wake_is_hidden() {
+    use crate::agents::orchestrator::tests::orchestrator;
+
+    let dir = tempfile::tempdir().unwrap();
+    let daemon =
+        crate::server::Daemon::for_tests(dir.path(), 10, std::time::Duration::from_secs(90));
+    let (_, run) = orchestrator(&daemon, Some("/src/app")).await;
+    let url = "https://github.com/o/r/pull/1";
+    let payload = serde_json::to_string(&Watch::new(start())).unwrap();
+    crate::threads::store(&daemon, move |db| {
+        db.put_pr_watch(run.into(), url, &payload)
+            .map_err(|e| crate::store::store_error(&e))?;
+        let next = Some(Watch::new(start()));
+        let text = Some("A check failed.".to_owned());
+        super::record_job(db, run.into(), url, (start(), None), next, text)
+    })
+    .await
+    .unwrap();
+    let effect: String = rusqlite::Connection::open(dir.path().join("plxd.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT payload FROM effects ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(effect.contains(r#""hidden":true"#), "{effect}");
+}
+
 /// 0093: a watch held by a run that Start over replaced still brings the orchestrator's thread
 /// back, since the watch stays with the run that made it.
 #[tokio::test]

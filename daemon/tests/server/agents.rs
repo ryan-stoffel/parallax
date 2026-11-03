@@ -651,6 +651,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
             wake: false,
+            hidden: false,
             from: None,
             images: Vec::new(),
             threads: Vec::new(),
