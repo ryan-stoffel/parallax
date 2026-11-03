@@ -749,9 +749,10 @@ function Bars({
           ))}
         </div>
         <div ref={plot} role="group" aria-label={title} className="relative flex h-48">
-          {ticks.map((t) => (
+          {/* By place, so a new axis top moves the lines rather than drawing them again. */}
+          {ticks.map((t, i) => (
             <div
-              key={t}
+              key={i}
               aria-hidden
               className="usage-grid absolute inset-x-0 border-t border-border"
               style={{ top: `${100 - (t / top) * 100}%` }}
