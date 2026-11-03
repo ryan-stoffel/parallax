@@ -201,15 +201,20 @@ export function startTelemetry(usage: (since: string) => Promise<UsageHistoryRes
 
   const sinceFile = path.join(app.getPath("userData"), "telemetry-tokens-since");
   let since = tokensSince(sinceFile, Date.now());
+  const saveSince = () => {
+    try {
+      writeFileSync(sinceFile, since);
+    } catch {}
+  };
+  // Now, not at the first report, so a first session under a minute keeps its place.
+  saveSince();
   const reportHours = async () => {
     since = await reportTokens(since, Date.now(), usage, async (hours) => {
       const batch = tokenEvents(KEY, install, hours);
       const sent = await post(BATCH_URL, JSON.stringify({ api_key: KEY, batch })).catch(() => {});
       return sent?.ok ?? false;
     });
-    try {
-      writeFileSync(sinceFile, since);
-    } catch {}
+    saveSince();
   };
   // A minute in, since the local plxd isn't connected at launch.
   setTimeout(() => {
