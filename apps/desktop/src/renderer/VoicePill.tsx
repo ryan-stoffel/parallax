@@ -155,7 +155,7 @@ export function VoicePill({
       <div
         ref={pill}
         aria-label="Voice input"
-        className="pointer-events-auto flex h-11 items-center justify-center overflow-hidden rounded-[22px] border border-border bg-surface text-foreground shadow-composer"
+        className="composer-pill pointer-events-auto flex h-11 items-center justify-center overflow-hidden rounded-[22px] border border-border bg-surface text-foreground shadow-composer"
       >
         <div ref={contents} className="flex items-center gap-2.5 px-1.5">
           <button

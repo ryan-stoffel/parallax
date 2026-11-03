@@ -98,6 +98,7 @@ import { isNightly, startUpdater } from "./updater";
 import { broadcast } from "./windows";
 import { startVoice } from "./voice";
 import { readWindowState, writeWindowState } from "./windowState";
+import { wallpaperJpeg } from "./wallpaper";
 
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
 // one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in plxd's
@@ -842,6 +843,13 @@ nativeTheme.on("updated", () => {
     const overlay = titleBarOverlay(process.platform, dark, win.webContents.getZoomFactor());
     if (overlay) win.setTitleBarOverlay(overlay);
   }
+});
+// macOS shows black behind a full screen window, so a see-through one shows a copy of this.
+ipcMain.handle("parallax:wallpaper", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || process.platform !== "darwin") return null;
+  const { id, size, scaleFactor } = screen.getDisplayMatching(win.getBounds());
+  return wallpaperJpeg(id, Math.max(size.width, size.height) * scaleFactor);
 });
 ipcMain.handle(
   "parallax:fullScreen",

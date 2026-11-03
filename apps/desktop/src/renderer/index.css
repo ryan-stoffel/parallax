@@ -833,6 +833,36 @@ body {
   :is([popover], dialog):is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--raised) 92%, transparent);
 }
+/* macOS shows black behind a full screen window, so the page paints a copy of the wallpaper under
+   the glass (main.tsx). The root's own fill keeps body's tint on body, above the copy, rather than
+   on the canvas below it. */
+:root.translucent[style*="--wallpaper"] {
+  background-color: #000;
+}
+:root.translucent[style*="--wallpaper"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--wallpaper) center / cover;
+}
+/* Past the window's edges, so the blur doesn't fade out at them. */
+:root.blurred[style*="--wallpaper"]::before {
+  inset: -80px;
+  filter: blur(40px) saturate(1.6);
+}
+/* Over a see-through window, a modal's backdrop-filter leaves the app's text legible through the
+   modal and around it, so the app itself blurs. Modals and menus are in the top layer, which an
+   ancestor's filter doesn't reach. */
+:root.translucent:has(dialog:modal) #root {
+  filter: blur(28px);
+}
+/* Settings is a pane of the glass, as large as the window, rather than a slab over it. */
+:root.translucent
+  dialog.settings-dialog:is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--background) 70%, transparent);
+  backdrop-filter: none;
+}
 /* xterm.js paints its viewport black under the rows, which are clear over glass (Terminal.tsx). */
 :root.translucent .xterm .xterm-viewport {
   background-color: transparent;
@@ -842,9 +872,10 @@ body {
   background-color: color-mix(in srgb, var(--background) 25%, transparent);
 }
 /* A tray tucked 1rem under a prompt box (.tucked, -mt-4) would show its top through the box's
-   glass: its side borders and a second layer of fill. Through glass it starts where the box ends. */
+   glass: its side borders and a second layer of fill. Through glass it starts where the box ends,
+   by a clip, as with .composer-tabs. */
 :root.translucent .tucked {
-  mask-image: linear-gradient(transparent 1rem, #000 1rem);
+  clip-path: inset(1rem 0 0);
 }
 :root.nightly.translucent .night-sky-host .sky-search {
   background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
@@ -1396,6 +1427,55 @@ body {
     display: none;
   }
 }
+/* Over glass, the box, its bars, and the voice pill are one thin pane that lets the wallpaper's color
+   through, rather than the denser fill of what holds rows of text. Clear is denser than Blurred,
+   since a page's backdrop-filter can't reach the desktop: what's behind the window stays sharp. */
+:root.translucent {
+  --composer-glass: color-mix(in srgb, var(--raised) 50%, transparent);
+  --composer-blur: blur(28px) saturate(1.6) brightness(1.25);
+  /* The theme's border, a little stronger in dark, where it would be lost against the wallpaper. */
+  --composer-edge: light-dark(
+    var(--border),
+    color-mix(in srgb, var(--border) 70%, rgb(255 255 255 / 30%))
+  );
+}
+/* What's behind eases toward the text's opposite, so a bright or dark wallpaper doesn't wash it out.
+   Only the page's own pixels change: its copy of the wallpaper in full screen (main.tsx). */
+:root.dark.translucent {
+  --composer-blur: blur(28px) saturate(1.6) brightness(0.5);
+}
+:root.translucent:not(.blurred) {
+  --composer-glass: color-mix(in srgb, var(--raised) 64%, transparent);
+}
+:root.translucent :is(.composer-shell, .composer-pill).bg-surface,
+:root.translucent .composer-bar,
+:root.translucent .composer-tabs {
+  background-color: var(--composer-glass);
+  backdrop-filter: var(--composer-blur);
+}
+:root.translucent .composer-shell:not(:focus-within, :hover, .border-ring),
+:root.translucent .composer-pill,
+:root.translucent .composer-bar,
+:root.translucent .composer-tabs {
+  border-color: var(--composer-edge);
+}
+/* The box's own menu is solid: inside the box's backdrop-filter, its own can't reach the page, so
+   the transcript would stay sharp through it. */
+:root.translucent .composer-shell > .shadow-composer.bg-surface {
+  background-color: var(--raised);
+  backdrop-filter: none;
+}
+/* The heavy box stays heavy, as a dark pane of the glass rather than a black hole in it. */
+:root.translucent .composer-actions {
+  border-color: light-dark(
+    color-mix(in oklab, var(--foreground) 12%, transparent),
+    rgb(255 255 255 / 12%)
+  );
+  background-color: light-dark(
+    color-mix(in oklab, var(--foreground) 7%, transparent),
+    rgb(0 0 0 / 50%)
+  );
+}
 /* The tabs, on a bar tucked behind the box's top edge, the mirror of the bar under it. */
 .composer-tabs {
   interpolate-size: allow-keywords;
@@ -1405,11 +1485,10 @@ body {
   border-bottom: 0;
   border-radius: 14px 14px 0 0;
 }
-/* Over glass, the same glass as the box, ending where the box starts. */
+/* Over glass, it ends where the box starts. A clip, since a mask over a backdrop-filter leaves a
+   band of the fill under the box. */
 :root.translucent .composer-tabs {
-  background-color: color-mix(in srgb, var(--raised) 78%, transparent);
-  backdrop-filter: var(--glass);
-  mask-image: linear-gradient(#000 calc(100% - 1rem), transparent calc(100% - 1rem));
+  clip-path: inset(0 0 1rem);
 }
 /* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
    its corners following the box's. */
@@ -1430,11 +1509,6 @@ body {
     margin-top var(--transition-duration-base) var(--ease-out),
     opacity var(--transition-duration-base) var(--ease-out),
     visibility var(--transition-duration-base);
-}
-/* Over glass, the same glass as the box. */
-:root.translucent .composer-bar {
-  background-color: color-mix(in srgb, var(--raised) 78%, transparent);
-  backdrop-filter: var(--glass);
 }
 /* It slides up behind the box while the box steps back, unless one of its menus is open. */
 .composer-bar[data-back]:not(:has(:popover-open)) {
