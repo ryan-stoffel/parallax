@@ -46,6 +46,7 @@ import {
   type Layout,
 } from "./command";
 import { registerAppScheme, rendererUrl, serveAppScheme } from "./appScheme";
+import { claimOnce } from "./claimOnce";
 import {
   appBundle,
   detectEditors,
@@ -824,6 +825,10 @@ ipcMain.on("parallax:windowLook", (event, look: unknown) => {
   else if (process.platform === "win32") win.setBackgroundMaterial(blur ? "acrylic" : "none");
   win.setBackgroundColor(through ? "#00000000" : windowBackground(nativeTheme.shouldUseDarkColors));
 });
+// Whether this is the one time this computer shows the ask to star and support Parallax.
+ipcMain.handle("parallax:claimSupportAsk", () =>
+  claimOnce(path.join(app.getPath("userData"), "support-asked")),
+);
 // Restarts Parallax, for a window background that applies at launch.
 ipcMain.on("parallax:relaunch", () => {
   app.relaunch();

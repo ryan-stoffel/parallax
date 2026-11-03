@@ -100,6 +100,7 @@ const bridge: ParallaxBridge = {
   removeExtension: (id) => ipcRenderer.invoke("parallax:removeExtension", id),
   onExtensionsChanged: (listener) => follow("parallax:extensionsChanged", listener, false),
   selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
+  claimSupportAsk: () => ipcRenderer.invoke("parallax:claimSupportAsk"),
   clearBrowsingData: (what) => ipcRenderer.invoke("parallax:clearBrowsingData", what),
   downloads: () => ipcRenderer.invoke("parallax:downloads"),
   googleAccount: () => ipcRenderer.invoke("parallax:googleAccount"),

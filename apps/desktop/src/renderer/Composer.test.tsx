@@ -49,6 +49,8 @@ afterEach(() => {
   for (const close of notices.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]'))
     act(() => close.click());
   act(() => unmount());
+  // Each test's sends count from 0, so none reaches the support ask's bridge call.
+  localStorage.removeItem("parallax.promptsBeforeSupportAsk");
   newThreadPrefs.set(newThreadDefaults);
   setBehaviorPrefs(behaviorDefaults);
   vi.useRealTimers();

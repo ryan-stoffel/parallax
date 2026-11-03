@@ -1945,6 +1945,7 @@ export const mockBridge: ParallaxBridge = {
   removeExtension: () => delay(undefined),
   onExtensionsChanged: () => () => {},
   selectBrowserTab: () => {},
+  claimSupportAsk: async () => true,
   clearBrowsingData: () => delay(undefined),
   downloads: () => delay([]),
   onDownloads: () => () => {},
