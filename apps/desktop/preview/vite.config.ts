@@ -3,6 +3,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
+import { prepareVoice } from "../scripts/voice-assets.mjs";
 import { defineConfig, type Plugin } from "vite-plus";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -30,7 +31,12 @@ function tailwindFromDesktop(): Plugin[] {
 export default defineConfig({
   root,
   base: "./",
-  plugins: [react(), tailwindFromDesktop()],
+  plugins: [
+    { name: "parallax-voice-assets", buildStart: prepareVoice },
+    react(),
+    tailwindFromDesktop(),
+  ],
+  optimizeDeps: { exclude: ["cactus-needle"] },
   server: { port: 5199, fs: { allow: [desktop] } },
   build: {
     outDir: "dist",
