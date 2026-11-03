@@ -56,8 +56,9 @@ pub struct Repo {
     /// `path` is the repository plxd made for it. Behind the `projects` capability.
     #[serde(default, alias = "space", skip_serializing_if = "std::ops::Not::not")]
     pub project: bool,
-    /// The icon the user chose, in a project's shape (0032), behind the `threadAttention`
-    /// capability (0033). Absent means the app's default: the name's initials.
+    /// The icon the user chose or the app took from the repository (PLX-1272), in a project's
+    /// shape (0032), behind the `threadAttention` capability (0033). Absent means the app's
+    /// default: the name's initials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub icon: Option<ChosenIcon>,
@@ -251,6 +252,10 @@ pub struct RepoUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub icon: Option<ChosenIcon>,
+    /// True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
+    /// replace one the user picked meanwhile. Behind the `repoLogo` capability.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub icon_if_unset: bool,
     /// A Project's new name, trimmed, 1 to 128 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -450,6 +455,40 @@ pub struct RepoRemoteResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,
+}
+
+/// Params of `repo/logo` (PLX-1272), behind the `repoLogo` capability: finds the repository's own
+/// favicon or logo among the files git doesn't ignore in its checkout, by name and folder, and
+/// reads it. It changes nothing: the app encodes the image and sets it with `repo/update`. Fails
+/// with `repoNotFound` for an unknown entry and `worktreeFailed` when git fails there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLogoParams {
+    /// The entry's id.
+    pub repo: RepoId,
+}
+
+/// Result of `repo/logo`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLogoResult {
+    /// The best match. Absent when the repository has none, and always for a Project or the
+    /// scratch entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub logo: Option<RepoLogo>,
+}
+
+/// An image file from a repository, as it is on disk.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLogo {
+    /// Relative to the checkout, with `/` separators.
+    pub path: String,
+    /// From its extension: unlike an icon's image, it can be `image/svg+xml` or `image/x-icon`.
+    pub media_type: String,
+    /// Its bytes, in base64.
+    pub data: String,
 }
 
 /// Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at

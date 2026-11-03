@@ -371,8 +371,9 @@ function repoColor(repo: Repo, icon: ChosenIcon | undefined) {
 }
 
 /**
- * A repo's icon: the one the user chose, in an orchestrator's shape (0033), or its namesake's on
- * another computer, or else its initials on a tile in a color picked from its name. No repo is a
+ * A repo's icon: the one the user chose or the app took from the repository (`useRepoLogos`), in an
+ * orchestrator's shape (0033), or its namesake's on another computer, or else its initials on a
+ * tile in a color picked from its name. No repo is a
  * dashed square, and a Project with no icon of its own two speech bubbles (0090).
  */
 export function RepoIcon({ repo, size = "size-4" }: { repo?: Repo; size?: string }) {

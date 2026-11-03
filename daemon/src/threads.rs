@@ -1349,6 +1349,7 @@ pub(crate) async fn update_repo(
     let RepoUpdateParams {
         repo,
         icon,
+        icon_if_unset,
         name,
         instructions,
         files,
@@ -1402,7 +1403,14 @@ pub(crate) async fn update_repo(
                 .1;
         }
         if let Some(icon) = &stored {
-            changed |= db.set_repo_icon(repo.into(), icon).map_err(not_found)?.1;
+            let keep = icon_if_unset
+                && db
+                    .get_repo(repo.into())
+                    .map_err(|e| store_error(&e))?
+                    .is_some_and(|current| current.icon.is_some());
+            if !keep {
+                changed |= db.set_repo_icon(repo.into(), icon).map_err(not_found)?.1;
+            }
         }
         let row = db
             .get_repo(repo.into())

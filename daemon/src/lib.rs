@@ -93,6 +93,7 @@ pub mod remote;
 mod remote_control;
 mod repo;
 mod repo_clone;
+mod repo_logo;
 pub mod routing;
 mod schedules;
 mod secrets;

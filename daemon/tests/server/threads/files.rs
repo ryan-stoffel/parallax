@@ -3,11 +3,12 @@
 //! changing it.
 
 use parallax_protocol::methods::{
-    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles,
+    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles, RepoLogo, RepoUpdate,
 };
 use parallax_protocol::{
     AgentEntry, AgentEntryKind, AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams, ChosenIcon,
+    RepoLogoParams, RepoUpdateParams,
 };
 
 use super::*;
@@ -279,4 +280,48 @@ async fn files_and_folders_are_created_renamed_and_deleted_inside_the_threads_fo
         assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
     }
     assert!(worktree.join(".git").exists());
+}
+
+/// `repo/logo` (PLX-1272): nothing for a repository with no logo, then its own favicon as it is on
+/// disk, past an ignored file and a symlink that would each rank first.
+#[tokio::test]
+async fn repo_logo_reads_the_best_regular_file_git_does_not_ignore() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await.id;
+    let found = client.call::<RepoLogo>(RepoLogoParams { repo }).await;
+    assert_eq!(found.unwrap().logo, None);
+
+    std::fs::write(path.join(".gitignore"), "ignored/\n").unwrap();
+    std::fs::create_dir(path.join("ignored")).unwrap();
+    std::fs::write(path.join("ignored/favicon.svg"), "<svg/>").unwrap();
+    std::fs::create_dir(path.join("public")).unwrap();
+    std::fs::write(path.join("public/favicon.png"), b"png").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/etc/hosts", path.join("favicon.svg")).unwrap();
+
+    let found = client.call::<RepoLogo>(RepoLogoParams { repo }).await;
+    let logo = found.unwrap().logo.unwrap();
+    assert_eq!(logo.path, "public/favicon.png");
+    assert_eq!(logo.media_type, "image/png");
+    assert_eq!(decode_base64(&logo.data), b"png");
+
+    // Setting it only if unset takes it on a bare entry, and leaves one the user picked.
+    let set = |name: &str| RepoUpdateParams {
+        repo,
+        icon: Some(ChosenIcon {
+            name: name.to_owned(),
+            color: None,
+            image: None,
+        }),
+        icon_if_unset: true,
+        name: None,
+        instructions: None,
+        files: None,
+    };
+    let first = client.call::<RepoUpdate>(set("rocket")).await.unwrap();
+    assert_eq!(first.repo.icon.unwrap().name, "rocket");
+    let second = client.call::<RepoUpdate>(set("folder")).await.unwrap();
+    assert_eq!(second.repo.icon.unwrap().name, "rocket");
 }

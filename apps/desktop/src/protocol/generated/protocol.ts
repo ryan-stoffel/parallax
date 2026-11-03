@@ -431,6 +431,11 @@ export type ParallaxRequests = {
 	 */
 	"repo/remote": { params: RepoRemoteParams, result: RepoRemoteResult },
 	/**
+	 * `repo/logo`: the repository's own favicon or logo, for its icon when it has none
+	 * (PLX-1272). Gated on the `repoLogo` capability.
+	 */
+	"repo/logo": { params: RepoLogoParams, result: RepoLogoResult },
+	/**
 	 * `repo/match`: the repo entry whose `origin` names the same repository as another
 	 * plxd's (0057). Not behind a capability of its own: a plxd without it answers
 	 * `methodNotFound`.
@@ -1157,6 +1162,7 @@ export const REQUEST_METHODS = [
 	"repo/clone",
 	"repo/cloneProgress",
 	"repo/remote",
+	"repo/logo",
 	"repo/match",
 	"thread/start",
 	"thread/fork",
@@ -4782,8 +4788,9 @@ export type Repo = {
 	 */
 	project?: boolean,
 	/**
-	 * The icon the user chose, in a project's shape (0032), behind the `threadAttention`
-	 * capability (0033). Absent means the app's default: the name's initials.
+	 * The icon the user chose or the app took from the repository (PLX-1272), in a project's
+	 * shape (0032), behind the `threadAttention` capability (0033). Absent means the app's
+	 * default: the name's initials.
 	 */
 	icon?: ChosenIcon,
 	/**
@@ -6324,6 +6331,48 @@ export type RepoRemoteResult = {
 };
 
 /**
+ * Params of `repo/logo` (PLX-1272), behind the `repoLogo` capability: finds the repository's own
+ * favicon or logo among the files git doesn't ignore in its checkout, by name and folder, and
+ * reads it. It changes nothing: the app encodes the image and sets it with `repo/update`. Fails
+ * with `repoNotFound` for an unknown entry and `worktreeFailed` when git fails there.
+ */
+export type RepoLogoParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/logo`.
+ */
+export type RepoLogoResult = {
+	/**
+	 * The best match. Absent when the repository has none, and always for a Project or the
+	 * scratch entry.
+	 */
+	logo?: RepoLogo,
+};
+
+/**
+ * An image file from a repository, as it is on disk.
+ */
+export type RepoLogo = {
+	/**
+	 * Relative to the checkout, with `/` separators.
+	 */
+	path: string,
+	/**
+	 * From its extension: unlike an icon's image, it can be `image/svg+xml` or `image/x-icon`.
+	 */
+	mediaType: string,
+	/**
+	 * Its bytes, in base64.
+	 */
+	data: string,
+};
+
+/**
  * Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
  * `origin`, for an orchestrator on another plxd whose children run here. Each entry's `origin` and
  * this one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing
@@ -6923,6 +6972,11 @@ export type RepoUpdateParams = {
 	 * Its new icon, checked as `orchestrator/update` checks a project's.
 	 */
 	icon?: ChosenIcon,
+	/**
+	 * True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
+	 * replace one the user picked meanwhile. Behind the `repoLogo` capability.
+	 */
+	iconIfUnset?: boolean,
 	/**
 	 * A Project's new name, trimmed, 1 to 128 bytes.
 	 */

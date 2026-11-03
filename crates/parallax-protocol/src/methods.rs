@@ -88,24 +88,24 @@ use crate::{
     RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
     RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
     RepoCloneProgressResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
-    RepoGrepResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
-    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
-    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
-    ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
-    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
-    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
-    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
-    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
-    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
-    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
-    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
-    ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
-    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
-    TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult, VoiceCleanParams,
-    VoiceCleanResult,
+    RepoGrepResult, RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult,
+    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams,
+    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
+    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
+    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
+    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
+    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
+    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
+    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
+    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
+    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
+    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
+    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams,
+    ThreadSetProjectResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
+    UsageLimitsResult, VoiceCleanParams, VoiceCleanResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -431,6 +431,9 @@ method_table! {
         RepoCloneProgress = "repo/cloneProgress": RepoCloneProgressParams => RepoCloneProgressResult;
         /// `repo/remote`: the URL of a repo entry's `origin` remote, for cloning it elsewhere.
         RepoRemote = "repo/remote": RepoRemoteParams => RepoRemoteResult;
+        /// `repo/logo`: the repository's own favicon or logo, for its icon when it has none
+        /// (PLX-1272). Gated on the `repoLogo` capability.
+        RepoLogo = "repo/logo": RepoLogoParams => RepoLogoResult;
         /// `repo/match`: the repo entry whose `origin` names the same repository as another
         /// plxd's (0057). Not behind a capability of its own: a plxd without it answers
         /// `methodNotFound`.

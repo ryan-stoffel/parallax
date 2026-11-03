@@ -355,6 +355,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RepoClone => |p| thread::clone(context, p),
         RepoCloneProgress => crate::repo_clone::progress,
         RepoRemote => |p| crate::repo_clone::remote(daemon, p),
+        RepoLogo => |p| crate::repo_logo::logo(daemon, p),
         RepoMatch => |p| crate::repo_clone::matching(daemon, p),
         RepoUpdate => |p| threads::update_repo(daemon, p),
         ProjectCreate => |p| crate::projects::create(daemon, p),
