@@ -262,6 +262,8 @@ export interface ParallaxBridge {
   setDownloadPrefs(prefs: { dir: string; ask: boolean }): void;
   /** True only the first time on this computer: whether to show the support ask (PLX-1243). */
   claimSupportAsk(): Promise<boolean>;
+  /** True only the first time on this computer: whether to show the move off Tailscale notice. */
+  claimConnectMove(): Promise<boolean>;
   /** Clears the browser's site data, its cache, or both, keeping extensions' own (PLX-974). */
   clearBrowsingData(what: { siteData: boolean; cache: boolean }): Promise<void>;
   /** Tells extensions which browser tab is shown, by its webview's webContents id. */
@@ -472,11 +474,11 @@ export interface ParallaxBridge {
    */
   revokeDevice(id: string): Promise<RemoteSessionsResult | string>;
   /**
-   * Turns on Reach from anywhere on `tailnet:` device `hostId` the user kept on Tailscale only,
-   * registered under the signed-in account, so it's reached through the account before the
-   * Tailscale-only path goes (0091). Resolves to an error for people, or undefined.
+   * Moves this computer and every `tailnet:` device from Tailscale to the account (0091), signing
+   * in through the browser first when needed. Each device's `tailnet:` entry leaves `onDevices` once
+   * it answers through the account. Resolves to an error for people, or undefined.
    */
-  turnOnReach(hostId: string): Promise<string | undefined>;
+  moveConnect(): Promise<string | undefined>;
 
   /**
    * The agents in the ACP Registry, fetched once while the app runs. Resolves to an error for

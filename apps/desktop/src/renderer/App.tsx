@@ -85,6 +85,7 @@ import {
   useSnoozeAlarms,
   useThreadAlarms,
 } from "./alarms";
+import { useConnectMoveAlarm } from "./connectMove";
 import {
   ProjectIcon,
   RepoIcon,
@@ -692,6 +693,7 @@ export function App() {
   useOutdatedAlarms(listed);
   useHostUpdateAlarms(hosts);
   useAccountAlarms();
+  useConnectMoveAlarm();
   useUpdateAlarms();
   const needsYou = useNeedsYouAlarm(listed, (hostId, orchestratorId) =>
     openOnHost(hostId, { kind: "orchestrator", orchestratorId }),

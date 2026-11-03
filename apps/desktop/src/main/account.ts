@@ -101,6 +101,8 @@ export type Account = {
   freshToken(): Promise<string | undefined>;
   /** Calls `listener` each time someone signs in here. */
   onSignIn(listener: () => void): void;
+  /** Signs in through the browser, as Sign in does. Resolves to an error for people, or undefined. */
+  signIn(create: boolean): Promise<string | undefined>;
 };
 
 /**
@@ -272,7 +274,7 @@ export function startAccount(): Account {
 
   ipcMain.handle("parallax:profile", () => profile);
 
-  ipcMain.handle("parallax:signIn", async (_event, create: boolean) => {
+  const signIn = async (create: boolean): Promise<string | undefined> => {
     // One sign-in at a time, so a late one can't switch accounts.
     page?.close();
     const verifier = randomBytes(32).toString("base64url");
@@ -321,7 +323,8 @@ export function startAccount(): Account {
     if (page === current) page = undefined;
     if (!error) bringForward();
     return error;
-  });
+  };
+  ipcMain.handle("parallax:signIn", (_event, create: boolean) => signIn(create));
 
   // The Account dialog's name and picture, and its Security tab's password, passkeys, devices,
   // and Delete account, are on Clerk's account pages, since an OAuth token can't change the user.
@@ -348,6 +351,7 @@ export function startAccount(): Account {
 
   return {
     accessToken,
+    signIn,
     /** The access token while it's fresh, for a call that can't wait; else starts a refresh. */
     currentToken(): string | undefined {
       if (access && access.expiresAt - 60_000 > Date.now()) return access.token;

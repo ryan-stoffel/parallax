@@ -148,10 +148,11 @@ function signedIn() {
   const listeners: (() => void)[] = [];
   return {
     account: {
-      accessToken: async () => relayToken,
+      accessToken: async (): Promise<string | undefined> => relayToken,
       currentToken: () => relayToken,
       freshToken: async () => freshToken,
       onSignIn: (listener: () => void) => void listeners.push(listener),
+      signIn: async (): Promise<string | undefined> => undefined,
     },
     signIn: () => listeners.forEach((listener) => listener()),
   };
@@ -792,7 +793,78 @@ test("a tailnet device matched to its account computer by relay/id is approved o
   }
 });
 
-test("Reach from anywhere on a tailnet device registers it under the account and turns on relay and remote there", async () => {
+test("moving to the new Connect signs in, turns on relay and remote everywhere, and moves a computer that connects later", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const thinkpad = { id: "n1", hostName: "thinkpad", ip: "100.64.0.2", os: "linux" };
+    const mini = { id: "n2", hostName: "mini", ip: "100.64.0.3", os: "macOS" };
+    let token: string | undefined;
+    const signIn = vi.fn(async () => {
+      token = relayToken;
+      return undefined;
+    });
+    const local = await start(
+      { devices: [thinkpad, mini] },
+      { ...signedIn().account, accessToken: async () => token, signIn },
+    );
+    fake.answers.set("host/settings/get", { result: { connect: true } });
+    fake.answers.set("connect/devices", { result: { devices: [] } });
+    local.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    const device = (name: string) => fake.made.find((c) => c.options.device === name)!;
+    device("thinkpad").set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+
+    const calls: [string, string, unknown][] = [];
+    const nameOf = (c: unknown) =>
+      c === local ? "local" : c === device("thinkpad") ? "thinkpad" : "mini";
+    for (const method of ["relay/sign", "relay/register", "host/settings/set", "relay/hosts"])
+      fake.answers.set(method, (params: unknown, c: unknown) => {
+        calls.push([method, nameOf(c), params]);
+        return {
+          result:
+            method === "relay/sign"
+              ? { signature: "s" }
+              : method === "relay/hosts"
+                ? { hosts: [] }
+                : {},
+        };
+      });
+    const move = () => fake.handlers.get("parallax:moveConnect")!({});
+    const on = { relay: true, remote: true };
+
+    expect(await move()).toBeUndefined();
+    expect(signIn).toHaveBeenCalledOnce();
+    expect(calls.filter(([method]) => method === "host/settings/set")).toEqual([
+      ["host/settings/set", "local", on],
+      ["host/settings/set", "thinkpad", on],
+    ]);
+    expect(calls.find(([method, name]) => method === "relay/sign" && name === "thinkpad")).toEqual([
+      "relay/sign",
+      "thinkpad",
+      { tokenHash: hashOf(relayToken), userId: "user_1" },
+    ]);
+    expect(calls.some(([method]) => method === "relay/hosts")).toBe(true);
+
+    // The computer that was offline moves once it connects, asking the account again.
+    calls.length = 0;
+    device("mini").set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.map(([method, name]) => [method, name])).toEqual([
+      ["relay/sign", "mini"],
+      ["relay/register", "local"],
+      ["host/settings/set", "mini"],
+      ["relay/hosts", "local"],
+    ]);
+    expect(signIn).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a registration that fails stops the move and says why, but a plxd too old to sign doesn't", async () => {
   vi.useFakeTimers();
   fake.answers.clear();
   try {
@@ -800,28 +872,53 @@ test("Reach from anywhere on a tailnet device registers it under the account and
     const local = await start({ devices: [device] }, signedIn().account);
     fake.answers.set("host/settings/get", { result: { connect: true } });
     fake.answers.set("connect/devices", { result: { devices: [] } });
+    fake.answers.set("relay/hosts", { result: { hosts: [] } });
+    fake.answers.set("relay/register", { error: { code: 1, message: "the relay is down" } });
+    const set = vi.fn(() => ({ result: {} }));
+    fake.answers.set("host/settings/set", set);
     local.set(connected());
     await vi.advanceTimersByTimeAsync(0);
-    const tailnet = fake.made.find((c) => c.options.device === "thinkpad")!;
-    tailnet.set(connected());
-    await vi.advanceTimersByTimeAsync(0);
+    const move = () => fake.handlers.get("parallax:moveConnect")!({});
 
-    const calls: [string, unknown, unknown][] = [];
-    for (const method of ["relay/sign", "relay/register", "host/settings/set"])
-      fake.answers.set(method, (params: unknown, c: unknown) => {
-        calls.push([method, c, params]);
-        return { result: method === "relay/sign" ? { signature: "s" } : {} };
-      });
-    const turn = (id: string) => fake.handlers.get("parallax:turnOnReach")!({}, id);
-    expect(await turn("local")).toMatch(/can't reach/);
-    expect(await turn(`tailnet:${device.id}`)).toBeUndefined();
-    expect(calls.map(([method, c]) => [method, c === tailnet ? "thinkpad" : "local"])).toEqual([
-      ["relay/sign", "thinkpad"],
-      ["relay/register", "local"],
-      ["host/settings/set", "thinkpad"],
-    ]);
-    expect(calls[0]?.[2]).toEqual({ tokenHash: hashOf(relayToken), userId: "user_1" });
-    expect(calls.at(-1)?.[2]).toEqual({ relay: true, remote: true });
+    // This computer's registration failing means nothing moved, so no success is reported.
+    expect(await move()).toMatch(/add this computer to your account: the relay is down/);
+    expect(set).not.toHaveBeenCalled();
+
+    fake.answers.set("relay/register", { result: {} });
+    fake.made.find((c) => c.options.device === "thinkpad")!.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    set.mockClear();
+
+    fake.answers.set("relay/sign", { error: { code: 1, message: "no key" } });
+    expect(await move()).toMatch(/add thinkpad to your account: no key/);
+
+    // Its update brings `relay/sign`, and reconnecting moves it, so this isn't a failure.
+    fake.answers.set("relay/sign", { error: { code: -32601, message: "Method not found" } });
+    expect(await move()).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a sign-in that fails stops the move and says why", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const local = await start(
+      {},
+      {
+        ...signedIn().account,
+        accessToken: async () => undefined,
+        signIn: async () => "Sign-in was cancelled.",
+      },
+    );
+    local.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    const set = vi.fn(() => ({ result: {} }));
+    fake.answers.set("host/settings/set", set);
+    expect(await fake.handlers.get("parallax:moveConnect")!({})).toBe("Sign-in was cancelled.");
+    expect(set).not.toHaveBeenCalled();
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });

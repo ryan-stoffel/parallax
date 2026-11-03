@@ -261,7 +261,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   });
   ipcMain.handle("parallax:accessRequests", () => accessRequests());
   ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
-  ipcMain.handle("parallax:turnOnReach", (_event, hostId: unknown) => turnOnReach(hostId));
+  ipcMain.handle("parallax:moveConnect", () => moveConnect());
   ipcMain.handle("parallax:answerAccess", (_event, id: unknown, allow: unknown) =>
     typeof id === "string" && typeof allow === "boolean"
       ? answerAccess(id, allow)
@@ -902,7 +902,8 @@ function addConnection(
       hostUpdater?.onState(hostId, state);
       followAccess(hostId, state);
       if (state.status !== "connected") return;
-      void joinRelay(hostId);
+      if (moveAsked && hostId.startsWith("tailnet:")) void moveDevice(hostId);
+      else void joinRelay(hostId);
       if (hostId === "local") {
         // A new local plxd, such as after `host/update` or a service uninstall, is checked again.
         if (serviceState === "done") serviceState = "check";
@@ -1110,30 +1111,35 @@ async function registerRelay(): Promise<string | undefined> {
       : undefined;
 }
 
+/** JSON-RPC's code for a method a plxd doesn't have, as one too old for `relay/sign` answers. */
+const METHOD_NOT_FOUND = -32601;
+
 /**
  * Registers computer `hostId` with Parallax Relay under the signed-in account, so its threads
  * notify the phone with no switch to turn on (PLX-1146): this computer's plxd and each Parallax
  * Connect computer's. Another computer's plxd signs the registration over the token's hash and
  * this one's posts it, so the token never leaves this computer. With it goes the token's Clerk
  * user id, which that plxd records as its account (0091): without one, it refuses every account
- * sign-in. Quiet when signed out, for any other kind of host, and for a plxd too old to sign.
+ * sign-in. Resolves to why registering failed, for people, which background callers ignore. Quiet
+ * when signed out, for any other kind of host, and for a plxd too old to sign.
  */
-async function joinRelay(hostId: string): Promise<void> {
-  if (hostId !== "local" && !hostId.startsWith("tailnet:")) return;
+async function joinRelay(hostId: string): Promise<string | undefined> {
+  if (hostId !== "local" && !hostId.startsWith("tailnet:")) return undefined;
   const token = await account?.accessToken();
   const local = connections.get("local");
-  if (!token || local?.state.status !== "connected") return;
-  if (hostId === "local") {
-    await local.request("relay/register", { token });
-    return;
-  }
+  if (!token || local?.state.status !== "connected") return undefined;
+  const failure = (answer: { error: { message: string } } | object) =>
+    "error" in answer ? answer.error.message : undefined;
+  if (hostId === "local") return failure(await local.request("relay/register", { token }));
   const tokenHash = createHash("sha256").update(token).digest("base64url");
   const userId = tokenSubject(token);
   const signed = await connections
     .get(hostId)
     ?.request("relay/sign", { tokenHash, ...(userId && { userId }) });
-  if (signed && "result" in signed)
-    await local.request("relay/register", { token, signed: signed.result });
+  if (!signed) return undefined;
+  if ("error" in signed)
+    return signed.error.code === METHOD_NOT_FOUND ? undefined : signed.error.message;
+  return failure(await local.request("relay/register", { token, signed: signed.result }));
 }
 
 /** The hosts the last `discoverLan` found, by the id the renderer picks one with. */
@@ -2162,25 +2168,49 @@ const syncAccess = coalesced(async () => {
   );
 });
 
+/** The user asked to move to the account this run, so a computer that connects later moves too. */
+let moveAsked = false;
+
 /**
- * `window.parallax.turnOnReach`: for a `tailnet:` device the user kept on Tailscale only, registers
- * it with the relay under the signed-in account (`joinRelay`), turns on its `relay` and `remote`,
- * and asks the account for its computers, so it moves to an `account:` connection before the
- * Tailscale-only path goes (0091). Resolves to an error for people.
+ * Moves connected `tailnet:` device `hostId` to the account (0091): registers it (`joinRelay`),
+ * turns on its `relay` and `remote`, and asks the account for its computers. `matchTailnet` and
+ * `allowOverTailnet` then get it an `account:` connection with no code, and `finishMigration` drops
+ * this one. Resolves to an error for people.
  */
-async function turnOnReach(hostId: unknown): Promise<string | undefined> {
-  const host =
-    typeof hostId === "string" && hostId.startsWith("tailnet:")
-      ? connections.get(hostId)
-      : undefined;
-  if (host?.state.status !== "connected") return "Parallax can't reach that computer right now.";
-  if (!(await account?.accessToken()))
-    return "Sign in to Parallax from Profile in the sidebar first.";
-  await joinRelay(hostId as string);
+async function moveDevice(hostId: string): Promise<string | undefined> {
+  const host = connections.get(hostId);
+  if (host?.state.status !== "connected") return undefined;
+  const device = deviceOf(hostId);
+  const name = device?.name || device?.hostName;
+  const failed = await joinRelay(hostId);
+  if (failed) return `Parallax couldn't add ${name} to your account: ${failed}`;
   const answer = await host.request("host/settings/set", { relay: true, remote: true });
-  if ("error" in answer) return `Parallax couldn't turn it on there: ${answer.error.message}`;
+  if ("error" in answer) return `Parallax couldn't turn it on for ${name}: ${answer.error.message}`;
   void discoverAccounts();
   return undefined;
+}
+
+/**
+ * `window.parallax.moveConnect`: moves this computer and every `tailnet:` device from Tailscale to
+ * the account (0091), signing in through the browser first when needed. One that isn't connected
+ * now moves when it connects. Resolves to an error for people.
+ */
+async function moveConnect(): Promise<string | undefined> {
+  if (!(await account?.accessToken())) {
+    const failed = await account?.signIn(false);
+    if (failed) return failed;
+  }
+  const local = connections.get("local");
+  if (local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  moveAsked = true;
+  const failed = await joinRelay("local");
+  if (failed) return `Parallax couldn't add this computer to your account: ${failed}`;
+  const here = await local.request("host/settings/set", { relay: true, remote: true });
+  if ("error" in here) return `Parallax couldn't turn it on here: ${here.error.message}`;
+  void discoverAccounts();
+  const tailnet = [...connections.keys()].filter((id) => id.startsWith("tailnet:"));
+  return (await Promise.all(tailnet.map(moveDevice))).find(Boolean);
 }
 
 /** The key thumbprints host `host` keeps as removed; none when it can't say. */
