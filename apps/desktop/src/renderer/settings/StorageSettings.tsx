@@ -1,19 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { StorageItem } from "../../preload/bridge";
 import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
-import { localId, useHosts } from "../hosts";
+import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
 import {
+  allHosts,
   dangerButton,
   formatBytes,
   HostPicker,
+  hostsOf,
   PageTitle,
   quietButton,
   Row,
   Section,
-  Switch,
 } from "./parts";
 
 /**
@@ -88,91 +89,30 @@ export function StorageSettings() {
           </Row>
         ))}
       </Section>
-      <WorktreeCleanup />
       <ArchivedThreads />
     </>
   );
 }
 
-/**
- * Whether a host removes a settled or archived thread's worktree once its pull request merges
- * (`host/settings`, `cleanWorktrees`, PLX-555).
- */
-function WorktreeCleanup() {
+/** Every computer's archived threads, or the one picked's. */
+function ArchivedThreads() {
   const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
-  const connection = useConnection(hostId);
-  const supported =
-    connection?.status === "connected" && "worktreeCleanup" in connection.capabilities;
-  const [on, setOn] = useState<boolean>();
-  const [error, setError] = useState<string>();
-  // The host on screen, so a reply for one the picker has left is dropped.
-  const shown = useRef(hostId);
-  useEffect(() => {
-    shown.current = hostId;
-    setOn(undefined);
-    setError(undefined);
-    if (!supported) return;
-    let stale = false;
-    void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
-      if (stale) return;
-      if ("error" in answer) setError(describeError(answer.error));
-      else setOn(answer.result.cleanWorktrees ?? true);
-    });
-    return () => {
-      stale = true;
-    };
-  }, [hostId, supported]);
-  const set = async (cleanWorktrees: boolean) => {
-    setOn(cleanWorktrees);
-    const host = hostId;
-    const answer = await window.parallax.request(host, "host/settings/set", { cleanWorktrees });
-    if (shown.current !== host) return;
-    if ("error" in answer) {
-      setOn(!cleanWorktrees);
-      notify({
-        tone: "error",
-        title: `Couldn't turn worktree cleanup ${cleanWorktrees ? "on" : "off"}`,
-        body: describeError(answer.error),
-      });
-    } else setOn(answer.result.cleanWorktrees ?? cleanWorktrees);
-  };
-
+  const [scope, setScope] = useState(allHosts);
+  const targets = hostsOf(hosts, scope);
   return (
     <Section
-      title="Worktrees"
-      action={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} />}
+      title="Archived threads"
+      action={<HostPicker hosts={hosts} value={scope} onChange={setScope} all />}
     >
-      <Row
-        title="Clean up merged worktrees"
-        description={
-          error ? (
-            <span role="alert" className="text-danger">
-              {error}
-            </span>
-          ) : connection?.status === "connected" && !supported ? (
-            "This host's plxd can't clean up worktrees."
-          ) : (
-            "When a settled or archived thread's pull request merges, Parallax deletes its worktree and branch. The thread stays."
-          )
-        }
-      >
-        <Switch
-          label="Clean up merged worktrees"
-          checked={on ?? false}
-          disabled={on === undefined}
-          onChange={(next) => void set(next)}
-        />
-      </Row>
+      {targets.map((host) => (
+        <HostArchived key={host.id} host={host} named={targets.length > 1} />
+      ))}
     </Section>
   );
 }
 
-/** A host's archived threads: how many, and Delete all, which asks first, in place. */
-function ArchivedThreads() {
-  const hosts = useHosts();
-  const [hostId, setHostId] = useState(localId);
-  const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
+/** A computer's archived threads: how many, and Delete all, which asks first, in place. */
+function HostArchived({ host, named }: { host: Host; named: boolean }) {
   const connected = useConnection(host.id)?.status === "connected";
   const [archived, setArchived] = useState<string[]>();
   const [confirming, setConfirming] = useState(false);
@@ -213,71 +153,56 @@ function ArchivedThreads() {
 
   const count = archived?.length ?? 0;
   return (
-    <Section
-      title="Archived threads"
-      action={
-        <HostPicker
-          hosts={hosts}
-          value={host.id}
-          onChange={(id) => {
-            setHostId(id);
-            setConfirming(false);
-            setError(undefined);
-          }}
-        />
+    <Row
+      title={`${named ? `${host.name}: ` : ""}${
+        !connected
+          ? "Not connected"
+          : archived === undefined
+            ? "Counting…"
+            : `${count} archived ${count === 1 ? "thread" : "threads"}`
+      }`}
+      description={
+        error ? (
+          <span role="alert" className="text-danger">
+            {error}
+          </span>
+        ) : confirming ? (
+          "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."
+        ) : (
+          "Deleting removes each one's transcript and worktree from the host."
+        )
       }
     >
-      <Row
-        title={
-          !connected
-            ? "Not connected"
-            : archived === undefined
-              ? "Counting…"
-              : `${count} archived ${count === 1 ? "thread" : "threads"}`
-        }
-        description={
-          error ? (
-            <span role="alert" className="text-danger">
-              {error}
-            </span>
-          ) : confirming ? (
-            "Delete them? Their transcripts, worktrees, and branches go too. This can't be undone."
-          ) : (
-            "Deleting removes each one's transcript and worktree from the host."
-          )
-        }
-      >
-        {confirming ? (
-          <>
-            <button
-              type="button"
-              disabled={deleting}
-              className={dangerButton}
-              onClick={() => void deleteAll()}
-            >
-              {deleting ? "Deleting…" : "Delete all"}
-            </button>
-            <button
-              type="button"
-              autoFocus
-              className={quietButton}
-              disabled={deleting}
-              onClick={() => setConfirming(false)}
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
+      {confirming ? (
+        <>
           <button
             type="button"
-            className={quietButton}
-            disabled={!count}
-            onClick={() => setConfirming(true)}
+            disabled={deleting}
+            className={dangerButton}
+            onClick={() => void deleteAll()}
           >
-            Delete all
+            {deleting ? "Deleting…" : "Delete all"}
           </button>
-        )}
-      </Row>
-    </Section>
+          <button
+            type="button"
+            autoFocus
+            className={quietButton}
+            disabled={deleting}
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className={quietButton}
+          disabled={!count}
+          onClick={() => setConfirming(true)}
+        >
+          Delete all
+        </button>
+      )}
+    </Row>
   );
 }

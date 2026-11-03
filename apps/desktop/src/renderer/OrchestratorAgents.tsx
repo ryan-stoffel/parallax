@@ -174,8 +174,8 @@ function AgentRow({
           )}
           {run.diff && (
             <span className="shrink-0 tabular-nums">
-              <span className="text-emerald-500">+{run.diff.insertions}</span>{" "}
-              <span className="text-danger">−{run.diff.deletions}</span>
+              <span className="text-diff-added">+{run.diff.insertions}</span>{" "}
+              <span className="text-diff-removed">−{run.diff.deletions}</span>
             </span>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1">

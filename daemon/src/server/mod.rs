@@ -597,6 +597,17 @@ impl Server {
         } = self;
         // Kept alive to the end of `run`, so the watch lasts exactly as long as the server does.
         let _context_watcher = context_watcher;
+        // New threads' branches start with the saved prefix. Unreadable, the default stands.
+        if let Ok(Some(prefix)) = daemon
+            .reader
+            .run(&CancellationToken::new(), |db| {
+                db.branch_prefix()
+                    .map_err(|e| crate::agents::store_error(&e))
+            })
+            .await
+        {
+            daemon.agents.set_branch_prefix(&prefix);
+        }
         #[cfg(windows)]
         let mut listener = socket;
         #[cfg(unix)]

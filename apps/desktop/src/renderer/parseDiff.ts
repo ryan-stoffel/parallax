@@ -7,6 +7,8 @@ export interface DiffLine {
   text: string;
   old?: number;
   new?: number;
+  /** The part of `text` that changed, from and to, when its pair on the other side is similar. */
+  mark?: [number, number];
 }
 
 /** One file of a unified diff. */
@@ -66,5 +68,48 @@ export function parseDiff(diff: string): DiffFile[] {
       file.lines.push({ op: " ", text: line.slice(1), old: old++, new: now++ });
     }
   }
+  for (const each of files) markChanges(each.lines);
   return files;
+}
+
+/** Whether a UTF-16 unit is the first half of a surrogate pair. */
+const isHighSurrogate = (unit: number) => unit >= 0xd800 && unit <= 0xdbff;
+
+/**
+ * Marks the part that changed in each removed line paired with an added one, as a run's first with
+ * its first, and so on: all but the two lines' shared start and end. A pair with little in common
+ * stays whole, since marking all of it says nothing.
+ */
+function markChanges(lines: DiffLine[]) {
+  for (let i = 0; i < lines.length;) {
+    if (lines[i]!.op !== "-") {
+      i++;
+      continue;
+    }
+    let plus = i;
+    while (lines[plus]?.op === "-") plus++;
+    let end = plus;
+    while (lines[end]?.op === "+") end++;
+    for (let n = 0; n < Math.min(plus - i, end - plus); n++) {
+      const [before, after] = [lines[i + n]!, lines[plus + n]!];
+      let start = 0;
+      const shortest = Math.min(before.text.length, after.text.length);
+      while (start < shortest && before.text[start] === after.text[start]) start++;
+      let tail = 0;
+      while (
+        tail < shortest - start &&
+        before.text[before.text.length - 1 - tail] === after.text[after.text.length - 1 - tail]
+      )
+        tail++;
+      // Not inside an emoji, whose two halves the shared parts may split.
+      if (start > 0 && isHighSurrogate(before.text.charCodeAt(start - 1))) start--;
+      if (tail > 0 && isHighSurrogate(before.text.charCodeAt(before.text.length - tail - 1)))
+        tail--;
+      // At least a third of the longer line in common.
+      if ((start + tail) * 3 < Math.max(before.text.length, after.text.length)) continue;
+      before.mark = [start, before.text.length - tail];
+      after.mark = [start, after.text.length - tail];
+    }
+    i = end;
+  }
 }

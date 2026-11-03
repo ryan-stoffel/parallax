@@ -4,12 +4,15 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
+import type { Host } from "./hosts";
+import type { ThreadsView } from "./threads";
 import type {
   Hub,
   ProviderInfo,
   ProviderInstance,
   ProviderKind,
 } from "../protocol/generated/protocol";
+import { bindingOf, resetBindings, setWhen, whenOf } from "./keybindings";
 import type { SettingsSection } from "./App";
 import { Notifications } from "./notifications";
 import { Settings } from "./Settings";
@@ -109,6 +112,7 @@ async function renderSettings(
   name: SettingsSection = "providers",
   listed: ComponentProps<typeof Settings>["listed"] = [],
   openHost = "local",
+  focus?: { anchor: string },
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
@@ -120,6 +124,7 @@ async function renderSettings(
           theme="system"
           onThemeChange={() => {}}
           openHost={openHost}
+          focus={focus}
         />
         <Notifications />
       </>,
@@ -218,6 +223,145 @@ test("removes a key only once it's confirmed", async () => {
   await click(button(work(), "Remove"));
   expect(calls("accounts/keys/remove")).toEqual([{ host: "local", params: { id: "k-work" } }]);
   expect(rows("Anthropic API keys")).toEqual([]);
+});
+
+test("Add keybinding gives a command its keys and the When on the form, in place of its own", async () => {
+  setWhen("cycleAppearance", "!terminalFocus");
+  try {
+    await renderSettings("keybinds");
+    await click(button(document.body, "Add keybinding"));
+    await click(
+      [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+        (o) => o.textContent === "Appearance: Cycle",
+      )!,
+    );
+    const recorder = document.querySelector<HTMLElement>(
+      '[aria-label="Change the keys for the new keybinding"]',
+    )!;
+    await click(recorder);
+    await act(async () =>
+      document.querySelector('[aria-label="Press the keys for the new keybinding"]')!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "y",
+          code: "KeyY",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+        }),
+      ),
+    );
+    await click(button(document.body, "Save"));
+    expect(bindingOf("cycleAppearance")).toBe("Ctrl+Shift+KeyY");
+    expect(whenOf("cycleAppearance")).toBe("always");
+  } finally {
+    resetBindings();
+  }
+});
+
+test("search opens an orchestrator's pane for what only it has", async () => {
+  const orchestrator = { id: "o1", name: "Ember", repoPath: "/src/ember" };
+  const view = {
+    state: { orchestrators: [orchestrator], repos: [] },
+    updateOrchestrator: vi.fn(),
+  } as unknown as ThreadsView;
+  const listed = [{ host: { id: "local", name: "This Mac" } as Host, view }];
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const show = (focus?: { anchor: string }) =>
+    act(() =>
+      root.render(
+        <Settings
+          section="orchestrators"
+          listed={listed}
+          theme="system"
+          onThemeChange={() => {}}
+          openHost="local"
+          focus={focus}
+        />,
+      ),
+    );
+  show();
+  expect(document.body.textContent).toContain("New orchestrators");
+  expect(document.querySelector('[aria-label="Name"]')).toBeNull();
+  show({ anchor: "base-branch" });
+  await settle();
+  expect(document.querySelector('[aria-label="Name"]')).not.toBeNull();
+  act(() => root.unmount());
+});
+
+test("Worktrees starts on All computers, says where they differ, and sets them all", async () => {
+  const failed = states[mini.id]!;
+  const capabilities = { branchPrefix: {}, worktreeCleanup: {} };
+  states["local"] = { ...states["local"]!, capabilities } as ConnectionState;
+  states[mini.id] = { ...states["local"]! } as ConnectionState;
+  answers["host/settings/get"] = () => ({
+    result: { autoResume: false, cleanWorktrees: true, branchPrefix: "parallax/" },
+  });
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (host, method, params) =>
+    host === mini.id && method === "host/settings/get"
+      ? ({
+          result: { autoResume: false, cleanWorktrees: false, branchPrefix: "ryan/" },
+          logId: "l",
+        } as never)
+      : original(host, method, params),
+  );
+  answers["host/settings/set"] = (p) => ({
+    result: { autoResume: false, cleanWorktrees: true, branchPrefix: "parallax/", ...p },
+  });
+  await renderSettings("worktrees");
+
+  const row = () => document.querySelector('[data-setting="clean-up-merged-worktrees"]')!;
+  expect(row().textContent).toContain("Differs across computers");
+  await click(row().querySelector<HTMLElement>('[role="switch"]')!);
+  expect(
+    calls("host/settings/set")
+      .map((c) => c.host)
+      .sort(),
+  ).toEqual([mini.id, "local"].sort());
+
+  request.mockImplementation(original);
+  states[mini.id] = failed;
+  delete answers["host/settings/set"];
+});
+
+test("About copies its version, and its bug report link fills the version in", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  await renderSettings("about");
+  await click(document.querySelector<HTMLElement>('[aria-label="Copy version 0.0.0-local"]')!);
+  expect(writeText).toHaveBeenCalledWith("0.0.0-local");
+  const bug = [...document.querySelectorAll("a")].find((a) =>
+    a.textContent?.startsWith("Report a bug"),
+  )!;
+  expect(new URL(bug.href).searchParams.get("template")).toBe("bug-report.yml");
+  expect(new URL(bug.href).searchParams.get("version")).toBe("0.0.0-local");
+});
+
+test("Projects lists each with its icon, and an icon picked there goes to every copy", async () => {
+  const repo = { id: "r1", name: "ember", path: "/src/ember", icon: { name: "rocket" } };
+  const updates: [string, unknown][] = [];
+  const viewOf = (host: string, id: string) =>
+    ({
+      state: { orchestrators: [], repos: [{ ...repo, id }] },
+      capabilities: { threadAttention: {} },
+      updateRepo: async (r: string, change: unknown) => void updates.push([`${host}/${r}`, change]),
+    }) as unknown as ThreadsView;
+  await renderSettings("projects", [
+    { host: { id: "local", name: "This Mac" } as Host, view: viewOf("local", "r1") },
+    { host: { id: mini.id, name: mini.name } as Host, view: viewOf(mini.id, "r9") },
+  ]);
+  const row = [...document.querySelectorAll("button")].find((b) =>
+    b.textContent?.startsWith("emberThis Mac · /src/ember"),
+  )!;
+  expect(row.querySelector("svg")).not.toBeNull();
+  expect(document.querySelector('[data-setting="project-icon"]')).toBeNull();
+
+  await click(row);
+  expect(document.querySelector('[data-setting="project-icon"]')!.textContent).toContain("Rocket");
+  await click(button(document.body, "Choose icon"));
+  const picker = document.querySelector('[role="group"][aria-label="Choose an icon"]')!;
+  await click(picker.querySelector<HTMLElement>('[role="option"]')!);
+  expect(updates.map(([where]) => where)).toEqual(["local/r1", `${mini.id}/r9`]);
 });
 
 test("Storage deletes only a host's archived threads, after asking", async () => {
@@ -342,6 +486,52 @@ describe("on a plxd with providers", () => {
     await act(async () => dialog().querySelector("form")!.requestSubmit());
     await settle();
   };
+
+  test("a signed-in provider re-authenticates in its terminal, and labels stay on it", async () => {
+    await renderSettings();
+    await click(visible('[aria-label="Re-authenticate Claude Code"]'));
+    expect(visible('[aria-label="Claude Code sign-in terminal"]')).toBeDefined();
+
+    const box = visible('[aria-label="Add a label"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, "Work");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    const row = () => document.querySelector('[role="tab"][aria-controls$="-claude-pane"]')!;
+    expect(row().textContent).toContain("Work");
+    await click(visible('[aria-label="Remove the label Work"]'));
+    expect(row().textContent).not.toContain("Work");
+  });
+
+  test("re-authenticating Cursor signs out, then waits on the new sign-in", async () => {
+    const cursor = {
+      ...listed[0]!,
+      instance: instance("cursor", "cursor", "Cursor"),
+      login: undefined,
+    };
+    listed = [cursor];
+    answers["cursor/signOut"] = () => {
+      listed = [{ ...cursor, signedIn: false }];
+      return { result: {} };
+    };
+    answers["cursor/signIn"] = () => ({ result: { url: "https://cursor.example/login" } });
+    answers["cursor/signInCancel"] = () => ({ result: {} });
+    const open = window.open;
+    window.open = vi.fn();
+    try {
+      await renderSettings();
+      await click(visible('[aria-label="Re-authenticate Cursor"]'));
+      await settle();
+      expect(calls("cursor/signOut")).toHaveLength(1);
+      expect(window.open).toHaveBeenCalledWith("https://cursor.example/login", "_blank");
+      expect(document.body.textContent).toContain("Approve the sign-in in your browser.");
+    } finally {
+      window.open = open;
+    }
+  });
 
   test("a second account of a provider is warned about, and the first isn't", async () => {
     await renderSettings();
@@ -478,16 +668,23 @@ describe("on a plxd with providers", () => {
       };
     });
 
-    // Hubs have their own section under the providers card: a row per hub, whose Manage opens
-    // its page under it.
+    // Hubs have their own entry under the provider list: a row per hub, whose Manage opens its
+    // page under it.
     const manage = () =>
       document.querySelector<HTMLElement>(
         '[aria-label="Manage Home hub"], [aria-label="Close Home hub"]',
       );
     const hubPage = () => visible('[role="region"][aria-label="Home hub"]');
 
+    test("search for Hubs opens its entry, which is otherwise hidden", async () => {
+      await renderSettings("providers", [], "local", { anchor: "hubs" });
+      expect(tab("Hubs").getAttribute("aria-selected")).toBe("true");
+      expect(visible('[data-setting="hubs"]')).toBeDefined();
+    });
+
     test("adds a hub to every computer with hubs at once, and shows its page", async () => {
       await renderSettings();
+      await click(tab("Hubs"));
       expect(manage()).toBeNull();
       await click(button(document.body, "Add hub"));
       expect(dialog().textContent).toContain("Theo's setup guide");
@@ -599,6 +796,7 @@ describe("on a plxd with providers", () => {
       };
       const addAccount = async (service: "Claude" | "Codex") => {
         await renderSettings();
+        await click(tab("Hubs"));
         await click(manage()!);
         await click(button(page(), "Add account"));
         expect(page().textContent).toContain("not a VPS");
@@ -706,6 +904,7 @@ describe("on a plxd with providers", () => {
           return { result: { hubs } };
         };
         await renderSettings();
+        await click(tab("Hubs"));
         await click(manage()!);
         expect(page().textContent).not.toContain("Off on the hub");
         const use = () => page().querySelector<HTMLElement>('[aria-label="Use ada@example.com"]')!;

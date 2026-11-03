@@ -217,6 +217,28 @@ test("https images in the description and comments load wherever they're hosted,
   expect(images()).toEqual([["Shot", "https://github.com/user-attachments/assets/1"]]);
 });
 
+test("parseDiff marks the part of a line that changed, unless little is shared", () => {
+  const [file] = parseDiff(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "@@ -1,2 +1,2 @@",
+      "-const total = sum + price;",
+      "+const total = sum + price * qty;",
+      "-abc",
+      "+xyz",
+    ].join("\n"),
+  );
+  const marked = file!.lines.filter((l) => l.mark).map((l) => l.text.slice(...l.mark!));
+  expect(marked).toEqual(["", " * qty"]);
+  expect(file!.lines.at(-1)!.mark).toBeUndefined();
+
+  // One emoji for another shares its first half, which a mark must not split.
+  const [emoji] = parseDiff(
+    ["diff --git a/a b/a", "@@ -1 +1 @@", "-status: 😀 ok", "+status: 😁 ok"].join("\n"),
+  );
+  expect(emoji!.lines.slice(1).map((l) => l.text.slice(...l.mark!))).toEqual(["😀", "😁"]);
+});
+
 test("parseDiff numbers each side, and keeps renames and binary files", () => {
   const files = parseDiff(
     [

@@ -6404,9 +6404,9 @@ export type ThreadStartParams = {
 	 */
 	fast?: boolean,
 	/**
-	 * Names the worktree's branch `parallax/<branchSlug>`: lowercase letters, digits, and hyphens,
+	 * Names the worktree's branch the host's `branchPrefix`, `parallax/` by default, then this: lowercase letters, digits, and hyphens,
 	 * no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
-	 * the run's short id after it. Absent names it `parallax/<short run id>`. Not part of what makes
+	 * the run's short id after it. Absent names it the prefix then the short run id. Not part of what makes
 	 * a retry with the same run id conflict.
 	 */
 	branchSlug?: string,
@@ -8110,6 +8110,11 @@ export type HostSettings = {
 	 */
 	cleanWorktrees?: boolean,
 	/**
+	 * What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
+	 * made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
+	 */
+	branchPrefix?: string,
+	/**
 	 * Whether plxd listens for this user's other devices on its Tailscale address (decision
 	 * 0056). Off by default. An older plxd, without the `connect` capability, leaves it out.
 	 */
@@ -8159,6 +8164,12 @@ export type HostSettingsSetParams = {
 	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
 	 */
 	cleanWorktrees?: boolean,
+	/**
+	 * The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
+	 * thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch
+	 * name with: letters, digits, `.`, `_`, `-`, and `/`, ending in `/` or `-`, at most 64 bytes.
+	 */
+	branchPrefix?: string,
 	/**
 	 * The new `connect`, behind the `connect` capability. Absent leaves it.
 	 */

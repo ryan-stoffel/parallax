@@ -7,7 +7,7 @@ use std::process::Command;
 
 use parallax_protocol::{RunId, ScopeId};
 
-use super::{WorktreeManager, short_hash};
+use super::{WorktreeManager, short_hash, valid_branch_prefix};
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
 
@@ -533,4 +533,89 @@ async fn stage_all_does_not_run_a_gitattributes_filter_from_a_fake_global_config
         .unwrap();
 
     assert!(!sentinel.exists(), "the filter driver must not have run");
+}
+
+#[tokio::test]
+async fn a_new_branch_starts_with_the_hosts_prefix() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    mgr.set_branch_prefix("ryan/");
+    let id = RunId::generate();
+
+    let created = mgr
+        .create_named(&repo, id, None, Some("fix-login"))
+        .await
+        .unwrap();
+    assert_eq!(created.branch, "ryan/fix-login");
+
+    // Naming it later keeps to the prefix, and one already named so stays as it is.
+    let renamed = mgr
+        .rename_branch(&repo, id, &created.branch, "login-crash")
+        .await
+        .unwrap();
+    assert_eq!(renamed.as_deref(), Some("ryan/login-crash"));
+    assert_eq!(
+        mgr.rename_branch(&repo, id, "ryan/login-crash", "login-crash")
+            .await
+            .unwrap(),
+        None
+    );
+
+    mgr.set_branch_prefix("");
+    let bare = mgr
+        .create_named(&repo, RunId::generate(), None, Some("no-prefix"))
+        .await
+        .unwrap();
+    assert_eq!(bare.branch, "no-prefix");
+
+    // A clash with a branch takes the default rather than stopping the thread.
+    git(&repo, &["branch", "solo"]);
+    mgr.set_branch_prefix("solo/");
+    let clashed = mgr
+        .create_named(&repo, RunId::generate(), None, Some("clashes"))
+        .await
+        .unwrap();
+    assert_eq!(clashed.branch, "parallax/clashes");
+    git(&repo, &["branch", "folder/inside"]);
+    mgr.set_branch_prefix("");
+    let inside = mgr
+        .create_named(&repo, RunId::generate(), None, Some("folder"))
+        .await
+        .unwrap();
+    assert_eq!(inside.branch, "parallax/folder");
+}
+
+#[test]
+fn a_branch_prefix_is_one_git_can_start_a_name_with() {
+    for good in [
+        "",
+        "parallax/",
+        "ryan/",
+        "feat-",
+        "team/ryan/",
+        "v1.2/",
+        "a_b-",
+    ] {
+        assert!(valid_branch_prefix(good), "{good}");
+    }
+    for bad in [
+        "ryan",
+        "/ryan/",
+        "-ryan/",
+        ".ryan/",
+        "a//b/",
+        "a..b/",
+        "a/.b/",
+        "a/-b/",
+        "a.lock/",
+        "has space/",
+        "a~b/",
+        "a^b/",
+        "a:b/",
+    ] {
+        assert!(!valid_branch_prefix(bad), "{bad}");
+    }
+    assert!(!valid_branch_prefix(&format!("{}/", "a".repeat(64))));
 }

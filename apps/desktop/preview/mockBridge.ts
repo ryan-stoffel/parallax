@@ -1,6 +1,7 @@
 // A `window.parallax` for the browser preview: every ParallaxBridge member, answering plxd methods
 // from fixtures.ts held in memory. Writes that are cheap to fake change that state and emit the
 // events plxd would, so a sent message or an answered question shows up as it does in the app.
+
 import { pullRequestHandlers } from "./pullRequests";
 import {
   iconFor,
@@ -28,6 +29,7 @@ import {
   type AgentOutputItem,
   type AgentRun,
   type Capabilities,
+  type DeviceStateResult,
   type EventsEventParams,
   type ImportableSession,
   type JsonValue,
@@ -52,6 +54,26 @@ import { createFixtures, HOME, ids, PARALLAX_PATH, uploadSeeds, type RunEvent } 
 const LOCAL = "local";
 const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
 
+/** Worktree settings, as `host/settings` holds them. */
+const worktrees = { clean: true, prefix: "parallax/" };
+
+/** This Mac's simulators and emulators, as `device/state` says them. */
+const devices: DeviceStateResult = {
+  platforms: [
+    { platform: "ios", canCreate: true },
+    {
+      platform: "android",
+      unavailable: "The Android SDK isn't installed.",
+    },
+  ],
+  hub: { installed: false, installing: false },
+  devices: [
+    { id: "ios-17", platform: "ios", name: "iPhone 17 Pro", version: "iOS 26.5", booted: true },
+    { id: "ios-air", platform: "ios", name: "iPad Air", version: "iOS 26.5", booted: false },
+  ],
+  open: [],
+};
+
 /** What plxd's `capabilities_advertised` lists (daemon/src/methods/host.rs), with the same caps. */
 const capabilities: Capabilities = Object.fromEntries(
   [
@@ -60,6 +82,9 @@ const capabilities: Capabilities = Object.fromEntries(
     "agentClis",
     "agentReview",
     "agentWait",
+    "worktreeCleanup",
+    "devices",
+    "branchPrefix",
     "agents",
     "approvals",
     "autoResume",
@@ -543,6 +568,14 @@ const relayStatus = () => ({
 });
 const hostsListeners = new Set<(hosts: LanHost[]) => void>();
 const isLanHost = (hostId: string) => lan.hosts.some((h) => h.id === hostId);
+/** What a LAN computer answers as this one does, so All computers has something to show. */
+const lanSettings = new Set<string>([
+  "device/state",
+  "host/settings/get",
+  "host/settings/set",
+  "github/status",
+  "schedule/list",
+]);
 
 // Scheduled tasks (0063), as agents create them with `schedule_task`.
 const minutesFromNow = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
@@ -721,8 +754,24 @@ const handlers: { [M in Method]?: Handler<M> } = {
     schedules = schedules.filter((t) => t.id !== p.id);
     return { deleted: true };
   },
+  "device/state": () => devices,
+  "device/setup": () => {
+    devices.hub = { installed: true, installing: false };
+    return {};
+  },
+  "device/boot": (p) => {
+    const device = devices.devices.find((d) => d.id === p.deviceId)!;
+    device.booted = true;
+    return { device };
+  },
+  "device/shutdown": (p) => {
+    devices.devices.find((d) => d.id === p.deviceId)!.booted = false;
+    return {};
+  },
   "host/settings/get": () => ({
     autoResume: true,
+    cleanWorktrees: worktrees.clean,
+    branchPrefix: worktrees.prefix,
     connect: !!connect.on,
     remote: lan.on,
     relay: lan.relay,
@@ -731,8 +780,12 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "host/settings/set": (p) => {
     lan.on = p.remote ?? lan.on;
     lan.relay = p.relay ?? lan.relay;
+    worktrees.clean = p.cleanWorktrees ?? worktrees.clean;
+    worktrees.prefix = p.branchPrefix ?? worktrees.prefix;
     return {
       autoResume: p.autoResume ?? true,
+      cleanWorktrees: worktrees.clean,
+      branchPrefix: worktrees.prefix,
       connect: p.connect ?? !!connect.on,
       remote: lan.on,
       relay: lan.relay,
@@ -1989,13 +2042,13 @@ export const mockBridge: ParallaxBridge = {
     method: M,
     params: ParallaxRequests[M]["params"],
   ): Promise<HostResponse<ParallaxRequests[M]["result"]>> {
-    // A LAN computer runs nothing in the preview.
-    if (isLanHost(hostId))
+    // A LAN computer runs nothing in the preview, but shows this one's settings and devices.
+    if (isLanHost(hostId) && !lanSettings.has(method))
       return delay({
         result: { repos: [], threads: [], runs: [], orchestrators: [], seq },
         logId: LOG_ID,
       } as unknown as HostResponse<Result<M>>);
-    if (hostId !== LOCAL && !deviceOf(hostId)?.parallax)
+    if (hostId !== LOCAL && !isLanHost(hostId) && !deviceOf(hostId)?.parallax)
       return delay({ error: fail(`no host has id ${hostId}`) } as HostResponse<Result<M>>);
     const clone = cloneRequest(hostId, method, params as Record<string, unknown>);
     if (clone)
@@ -2005,7 +2058,7 @@ export const mockBridge: ParallaxBridge = {
           : { result: structuredClone(clone.result), logId: LOG_ID }) as HostResponse<Result<M>>,
         "ms" in clone ? clone.ms : 40,
       );
-    if (hostId !== LOCAL) {
+    if (hostId !== LOCAL && !isLanHost(hostId)) {
       const own = deviceRequest(hostId, method, params as Record<string, unknown>);
       if (own)
         return delay({ result: structuredClone(own), logId: LOG_ID } as HostResponse<Result<M>>);

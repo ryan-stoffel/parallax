@@ -17,6 +17,9 @@ const CONTINUE_AFTER_RESTART: &str = "continue_after_restart";
 /// request merges (PLX-555).
 const CLEAN_WORKTREES: &str = "clean_worktrees";
 
+/// The `host_settings` key for what a new thread's branch starts with (PLX-1249).
+const BRANCH_PREFIX: &str = "branch_prefix";
+
 /// The `host_settings` key for whether plxd listens on its Tailscale address (decision 0056).
 const CONNECT: &str = "connect";
 
@@ -157,6 +160,24 @@ impl Store {
     /// A database error.
     pub fn set_clean_worktrees(&self, on: bool) -> Result<(), StoreError> {
         self.set_flag(CLEAN_WORKTREES, on)
+    }
+
+    /// What a new thread's branch starts with, if it was ever set. An empty one means none.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn branch_prefix(&self) -> Result<Option<String>, StoreError> {
+        self.text(BRANCH_PREFIX)
+    }
+
+    /// Sets what a new thread's branch starts with. The caller checks it.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_branch_prefix(&self, prefix: &str) -> Result<(), StoreError> {
+        self.set_text(BRANCH_PREFIX, Some(prefix))
     }
 
     /// Whether plxd listens for this user's other devices on its Tailscale address (decision
@@ -508,6 +529,10 @@ mod tests {
         assert!(!store.connect().unwrap());
         assert!(!store.continue_after_restart().unwrap());
         assert!(store.clean_worktrees().unwrap());
+        assert_eq!(store.branch_prefix().unwrap(), None);
+
+        store.set_branch_prefix("").unwrap();
+        assert_eq!(store.branch_prefix().unwrap().as_deref(), Some(""));
 
         store.set_clean_worktrees(false).unwrap();
         store.set_connect(true).unwrap();

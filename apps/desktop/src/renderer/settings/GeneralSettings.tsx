@@ -6,7 +6,6 @@ import { appIcon, OPEN_TARGET_KEY, TERMINAL_CHOSEN, terminalIcon } from "../Open
 import { behaviorPrefs, setBehaviorPrefs, type BehaviorPrefs } from "../prefs";
 import { Picker } from "../ui";
 import { updatePrefs, type UpdatePrefs } from "../updateEverything";
-import { notices } from "./licenses";
 import { PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
 /**
@@ -104,24 +103,21 @@ function Updates() {
 }
 
 /**
- * Settings > General: where Open sends a folder, notifications, the clock and send key, how the
- * app updates, and its version and bundled-font notices.
+ * Settings > General: where Open sends a folder, notifications, the clock and send key, and how the
+ * app updates.
  */
 export function GeneralSettings() {
-  const [showNotices, setShowNotices] = useState(false);
   // Undefined until main answers, so the row doesn't flash "No apps found".
   const [targets, setTargets] = useState<OpenApp[]>();
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
   const [terminal, setTerminal] = useState<string | null>(null);
   const [terminals, setTerminals] = useState<TerminalApp[]>([]);
-  const [version, setVersion] = useState<string>();
   useEffect(() => {
     void window.parallax
       .openTargets(localId)
       .then((found) => setTargets(found.filter((t) => t.target !== "terminal")));
     void window.parallax.terminalApps().then(setTerminals);
     void window.parallax.terminalApp().then(setTerminal);
-    void window.parallax.version().then(setVersion);
   }, []);
   const chooseTerminal = async (path: string) => {
     const name = await window.parallax.selectTerminalApp(path);
@@ -185,38 +181,6 @@ export function GeneralSettings() {
       </Section>
       <Behavior />
       <Updates />
-      <Section title="About">
-        <Row title="Version">
-          <span className="font-mono text-meta text-muted-foreground">{version ?? "…"}</span>
-        </Row>
-        <Row
-          title="Open source licenses"
-          description="Notices for the fonts bundled with Parallax."
-        >
-          <button
-            type="button"
-            aria-expanded={showNotices}
-            onClick={() => setShowNotices(!showNotices)}
-            className={quietButton}
-          >
-            {showNotices ? "Hide licenses" : "View licenses"}
-          </button>
-        </Row>
-        {showNotices &&
-          notices.map((n) => (
-            <details key={n.name} className="border-t border-border px-4 py-3">
-              <summary className="cursor-pointer text-body font-medium">
-                {n.name}{" "}
-                <span className="font-mono text-meta font-normal text-muted-foreground">
-                  {n.license}
-                </span>
-              </summary>
-              <pre className="mt-2 max-h-64 overflow-auto font-mono text-meta whitespace-pre-wrap text-muted-foreground">
-                {n.text}
-              </pre>
-            </details>
-          ))}
-      </Section>
     </>
   );
 }
@@ -291,40 +255,6 @@ function Behavior() {
             options={[
               { value: "enter", label: "Enter" },
               { value: "modEnter", label: mac ? "⌘ Enter" : "Ctrl+Enter" },
-            ]}
-            className="w-48"
-            panelClassName="min-w-48"
-          />
-        </Row>
-        <Row
-          title="Open pull requests in"
-          description="Where Open on GitHub goes: your system browser, or the Browser in the side panel."
-        >
-          <Picker
-            field
-            label="Open pull requests in"
-            value={prefs.openPrsIn}
-            onChange={(v) => setBehaviorPrefs({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
-            options={[
-              { value: "external", label: "System browser" },
-              { value: "browser", label: "Side panel browser" },
-            ]}
-            className="w-48"
-            panelClassName="min-w-48"
-          />
-        </Row>
-        <Row
-          title="Click a pull request link to"
-          description={`A link to the thread's pull request. ${mac ? "⌘-click" : "Ctrl+click"} does the other.`}
-        >
-          <Picker
-            field
-            label="Click a pull request link to"
-            value={prefs.prLinkClick}
-            onChange={(v) => setBehaviorPrefs({ prLinkClick: v as BehaviorPrefs["prLinkClick"] })}
-            options={[
-              { value: "parallax", label: "Open in Parallax" },
-              { value: "github", label: "Open on GitHub" },
             ]}
             className="w-48"
             panelClassName="min-w-48"

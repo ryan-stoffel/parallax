@@ -27,6 +27,7 @@ import {
   GitMerge,
   Globe,
   HardDrive,
+  Info,
   Keyboard,
   Layers,
   LayoutGrid,
@@ -34,9 +35,11 @@ import {
   LoaderCircle,
   MessageSquare,
   MousePointerClick,
+  Network,
   Palette,
   PanelLeftClose,
   PencilLine,
+  PersonStanding,
   Pin,
   Plus,
   RotateCcw,
@@ -47,7 +50,7 @@ import {
   MessagesSquare,
   SquareDashed,
   SquarePen,
-  SquareTerminal,
+  Smartphone,
   Trash2,
   X,
   type LucideIcon,
@@ -184,7 +187,7 @@ import { lookOf, usePullRequests, type PullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
-import { bindingsOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
+import { bindingOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
 import { TileGlyph } from "./SplitTiles";
 import { flushToasts, toast, undo, useToasts } from "./undo";
 
@@ -372,9 +375,8 @@ function repoColor(repo: Repo, icon: ChosenIcon | undefined) {
  * another computer, or else its initials on a tile in a color picked from its name. No repo is a
  * dashed square, and a Project with no icon of its own two speech bubbles (0090).
  */
-export function RepoIcon({ repo }: { repo?: Repo }) {
+export function RepoIcon({ repo, size = "size-4" }: { repo?: Repo; size?: string }) {
   const shared = useContext(SharedRepoIcons);
-  const size = "size-4";
   if (!repo || repo.scratch)
     return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
@@ -3820,8 +3822,8 @@ function GitCounts({ git }: { git: GitStatus }) {
           title={`${plural(git.changes, "file")} uncommitted`}
           className="shrink-0 tabular-nums"
         >
-          <span className="text-added">+{git.insertions ?? 0}</span>{" "}
-          <span className="text-danger">−{git.deletions ?? 0}</span>
+          <span className="text-diff-added">+{git.insertions ?? 0}</span>{" "}
+          <span className="text-diff-removed">−{git.deletions ?? 0}</span>
         </span>
       )}
     </>
@@ -3873,7 +3875,10 @@ function SplitGroup({
   onClose: (threadId: string) => void;
 }) {
   useKeybindings();
-  const keys = tileCommands.map((c) => bindingsOf(c)[0] && formatKeybinding(bindingsOf(c)[0]!));
+  const keys = tileCommands.map((c) => {
+    const binding = bindingOf(c);
+    return binding && formatKeybinding(binding);
+  });
   const titles = hosts.find((h) => h.host.id === split.hostId)?.view.state.titles ?? {};
   return (
     <div className="mb-2">
@@ -4052,8 +4057,8 @@ function ThreadCard({
             <FileDiff />
             <span className="tabular-nums">
               {run.diff.files} {run.diff.files === 1 ? "file" : "files"}{" "}
-              <span className="text-added">+{run.diff.insertions}</span>{" "}
-              <span className="text-danger">−{run.diff.deletions}</span>
+              <span className="text-diff-added">+{run.diff.insertions}</span>{" "}
+              <span className="text-diff-removed">−{run.diff.deletions}</span>
             </span>
           </li>
         )}
@@ -4098,14 +4103,19 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   appearance: Palette,
   browser: Globe,
   keybinds: Keyboard,
+  accessibility: PersonStanding,
   providers: Bot,
+  orchestrators: Network,
+  devices: Smartphone,
+  projects: FolderGit2,
   schedules: CalendarClock,
   sourceControl: GitBranch,
+  worktrees: GitFork,
   computerUse: MousePointerClick,
-  scripts: SquareTerminal,
   connections: Server,
   storage: HardDrive,
   beta: FlaskConical,
+  about: Info,
 };
 export const settingsNames = Object.fromEntries(
   settingsSections.map((s) => [s.id, s.name]),
@@ -4156,7 +4166,7 @@ export function SettingsNav({
             aria-expanded={results.length > 0}
             aria-controls={list}
             aria-activedescendant={chosen ? `${list}-${results.indexOf(chosen)}` : undefined}
-            placeholder="Search"
+            placeholder="Search settings"
             value={query}
             spellCheck={false}
             autoComplete="off"
@@ -4246,22 +4256,31 @@ export function SettingsNav({
             )}
           </div>
         ) : (
-          <div className="flex flex-col gap-px">
-            {settingsSections.map((s) => {
-              const Icon = sectionIcons[s.id];
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  aria-current={s.id === section ? "page" : undefined}
-                  onClick={() => onSection(s.id)}
-                  className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
-                >
-                  <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-                  {s.name}
-                </button>
-              );
-            })}
+          <div className="flex flex-col gap-4 pb-4">
+            {[...new Set(settingsSections.map((s) => s.group))].map((group) => (
+              <div key={group} role="group" aria-label={group} className="flex flex-col gap-px">
+                <span className="px-2 pb-1 text-meta font-medium text-faint-foreground">
+                  {group}
+                </span>
+                {settingsSections
+                  .filter((s) => s.group === group)
+                  .map((s) => {
+                    const Icon = sectionIcons[s.id];
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        aria-current={s.id === section ? "page" : undefined}
+                        onClick={() => onSection(s.id)}
+                        className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
+                      >
+                        <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                        {s.name}
+                      </button>
+                    );
+                  })}
+              </div>
+            ))}
           </div>
         )}
       </div>

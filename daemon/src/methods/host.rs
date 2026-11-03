@@ -29,6 +29,7 @@ use crate::agents::store_error;
 use crate::images;
 use crate::logging::untrusted;
 use crate::server::Daemon;
+use crate::worktree::{DEFAULT_BRANCH_PREFIX, valid_branch_prefix};
 
 const SYSTEM_VERSION: &str = "/System/Library/CoreServices/SystemVersion.plist";
 
@@ -219,7 +220,9 @@ pub(crate) fn initialize(
 /// an older plxd would page from the start. `commandIds` (PLX-482, 0052): every request may carry
 /// `commandId` in its params. Listed methods keep a receipt so a retry returns the first result.
 /// `worktreeCleanup` (PLX-555): `cleanWorktrees` in `host/settings`, which an older plxd would
-/// silently ignore, and the sweep that removes a settled thread's merged worktree. `connect`
+/// silently ignore, and the sweep that removes a settled thread's merged worktree. `branchPrefix`
+/// (PLX-1249): `branchPrefix` in `host/settings`, which an older plxd would silently ignore.
+/// `connect`
 /// (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which an older
 /// plxd would silently ignore, `connect/devices`, and the tailnet listener. `terminals` (PLX-637):
 /// `terminal/*`, the terminals plxd runs for its clients. `orchestration` (PLX-644, 0059):
@@ -338,6 +341,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "approvals",
     "autoResume",
     "board",
+    "branchPrefix",
     "chatImport",
     "checkout",
     "checkpoints",
@@ -821,6 +825,7 @@ pub(crate) async fn set_settings(
         auto_resume,
         continue_after_restart,
         clean_worktrees,
+        branch_prefix,
         connect,
         remote,
         remote_web,
@@ -832,6 +837,14 @@ pub(crate) async fn set_settings(
     let device_icon = device_icon
         .map(|icon| check_device_icon(&icon))
         .transpose()?;
+    if let Some(prefix) = &branch_prefix
+        && !valid_branch_prefix(prefix)
+    {
+        return Err(ErrorObject::invalid_params(
+            "branchPrefix: use letters, digits, `.`, `_`, `-`, and `/`, ending in `/` or `-`",
+        ));
+    }
+    let stored_prefix = branch_prefix.clone();
     let settings = context
         .daemon
         .store
@@ -854,6 +867,10 @@ pub(crate) async fn set_settings(
                     clean_worktrees = on,
                     "changed the host's worktree cleanup setting"
                 );
+            }
+            if let Some(prefix) = &stored_prefix {
+                db.set_branch_prefix(prefix).map_err(|e| store_error(&e))?;
+                info!(branch_prefix = %prefix, "changed the host's branch prefix");
             }
             if let Some(on) = connect {
                 db.set_connect(on).map_err(|e| store_error(&e))?;
@@ -894,6 +911,9 @@ pub(crate) async fn set_settings(
     if remote_web == Some(false) {
         crate::server::remote::close_browsers(&context.daemon).await;
     }
+    if let Some(prefix) = &branch_prefix {
+        context.daemon.agents.set_branch_prefix(prefix);
+    }
     Ok(settings)
 }
 
@@ -924,6 +944,11 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         auto_resume: db.auto_resume().map_err(|e| store_error(&e))?,
         continue_after_restart: Some(db.continue_after_restart().map_err(|e| store_error(&e))?),
         clean_worktrees: Some(db.clean_worktrees().map_err(|e| store_error(&e))?),
+        branch_prefix: Some(
+            db.branch_prefix()
+                .map_err(|e| store_error(&e))?
+                .unwrap_or_else(|| DEFAULT_BRANCH_PREFIX.to_owned()),
+        ),
         connect: Some(db.connect().map_err(|e| store_error(&e))?),
         remote: Some(db.remote().map_err(|e| store_error(&e))?),
         remote_web: Some(db.remote_web().map_err(|e| store_error(&e))?),

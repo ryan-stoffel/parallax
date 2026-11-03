@@ -265,16 +265,10 @@ export function DiffLineView({ line }: { line: DiffLine }) {
     <div className={`${diffBand} code-lines break-all whitespace-pre-wrap`}>{line.text}</div>
   ) : (
     <div className={`flex ${diffLook[line.op].row}`}>
-      <span
-        aria-hidden
-        className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
-      >
+      <span aria-hidden className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none">
         {line.old}
       </span>
-      <span
-        aria-hidden
-        className="w-10 shrink-0 pr-2 text-right text-faint-foreground/70 select-none"
-      >
+      <span aria-hidden className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none">
         {line.new}
       </span>
       <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[line.op].sign}`}>
@@ -284,7 +278,17 @@ export function DiffLineView({ line }: { line: DiffLine }) {
         <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
       )}
       <span className="code-lines min-w-0 pr-3 break-all whitespace-pre-wrap">
-        {line.text || " "}
+        {line.mark ? (
+          <>
+            {line.text.slice(0, line.mark[0])}
+            <span className={line.op === "+" ? "diff-word-added" : "diff-word-removed"}>
+              {line.text.slice(line.mark[0], line.mark[1])}
+            </span>
+            {line.text.slice(line.mark[1])}
+          </>
+        ) : (
+          line.text || " "
+        )}
       </span>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 
+import { behaviorPrefs } from "../prefs";
 import type { PrMergeMethod, PrStatusResult, PullRequest } from "../../protocol/generated/protocol";
 import { icons } from "../icons";
 import { animate, duration, easing } from "../motion";
@@ -104,8 +105,12 @@ export function MergeBox({
 }) {
   const gate = mergeGate(pr, status);
   const methods = methodsOf(pr);
-  const [method, setMethod] = useState<PrMergeMethod>(methods[0]!);
-  const [deleteBranch, setDeleteBranch] = useState(true);
+  // Settings > Source control's defaults, where the repository allows the method.
+  const [method, setMethod] = useState<PrMergeMethod>(() => {
+    const preferred = behaviorPrefs.get().mergeMethod;
+    return preferred && methods.includes(preferred) ? preferred : methods[0]!;
+  });
+  const [deleteBranch, setDeleteBranch] = useState(() => behaviorPrefs.get().deleteBranchOnMerge);
   const [checksOpen, setChecksOpen] = useState(false);
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);

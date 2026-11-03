@@ -192,6 +192,11 @@ pub(super) enum Place {
 }
 
 impl Agents {
+    /// Sets what a new thread's branch starts with (`host/settings`' `branchPrefix`).
+    pub fn set_branch_prefix(&self, prefix: &str) {
+        self.worktrees.set_branch_prefix(prefix);
+    }
+
     /// A runner that starts workers on `backends`, in worktrees `worktrees` makes.
     pub fn new(backends: BackendRegistry, worktrees: WorktreeManager) -> Self {
         Self {
@@ -1027,7 +1032,7 @@ pub(crate) struct NewThread {
     /// A thread with no repo's own scratch repository, which the caller made. Its worktree is
     /// cut from this instead of from the scope's path.
     pub scratch: Option<PathBuf>,
-    /// The name after `parallax/` for the worktree's branch, already checked.
+    /// The name after the host's branch prefix for the worktree's branch, already checked.
     pub branch_slug: Option<String>,
     /// Work in the repo entry's own checkout instead of a worktree. Never set with `scratch`.
     pub checkout: bool,

@@ -328,8 +328,8 @@ function Cut({ text, prose = false }: { text: string; prose?: boolean }) {
  * sign in its color. The PR Code tab and Markdown's diff blocks share it.
  */
 export const diffLook = {
-  "+": { row: "bg-added/10 shadow-[inset_2px_0_0_var(--added)]", sign: "text-added" },
-  "-": { row: "bg-danger/10 shadow-[inset_2px_0_0_var(--danger)]", sign: "text-danger" },
+  "+": { row: "diff-row-added", sign: "font-semibold text-diff-added" },
+  "-": { row: "diff-row-removed", sign: "font-semibold text-diff-removed" },
   " ": { row: "", sign: "text-faint-foreground" },
 };
 

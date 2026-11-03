@@ -14,7 +14,7 @@ import {
   type ToggleEvent,
 } from "react";
 
-import { commandOf, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
+import { activeCommand, keybindingOf, useShortcutLabel, whenOf, type Command } from "./keybindings";
 import { Check as CheckSymbol } from "./symbols";
 import { Kbd } from "./ui/marks";
 
@@ -46,19 +46,27 @@ export type KeyPress = Pick<
 export function appShortcut(e: KeyPress): Command | "row" | undefined {
   if (rowShortcut(e) !== undefined) return "row";
   const keybinding = keybindingOf(e);
-  return keybinding ? commandOf(keybinding) : undefined;
+  return keybinding ? activeCommand(keybinding) : undefined;
 }
 
 /**
  * Whether a press in a terminal is the app's alone. On macOS every app shortcut is. Elsewhere,
  * where they're Ctrl, a plain Ctrl+letter one (Ctrl+N, Ctrl+S) stays the shell's, which readline
- * and editors use; the terminal's toggle, Ctrl+1 to Ctrl+9, and any with Shift or Alt are the app's.
+ * and editors use; the terminal's toggle, Ctrl+1 to Ctrl+9, any with Shift or Alt, and any whose When is terminalFocus, are the app's.
  */
 export function terminalAppShortcut(e: KeyPress): boolean {
   const command = appShortcut(e);
   if (command === undefined) return false;
   const mac = window.parallax.platform === "darwin";
-  return mac || command === "terminal" || command === "row" || e.shiftKey || e.altKey;
+  return (
+    mac ||
+    command === "terminal" ||
+    command === "row" ||
+    e.shiftKey ||
+    e.altKey ||
+    // Asked for here by name, so it's not the shell's.
+    whenOf(command) === "terminalFocus"
+  );
 }
 
 /** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
@@ -472,10 +480,13 @@ export function Picker({
   search,
   custom,
   footer,
+  placeholder,
 }: {
   id?: string;
   button?: boolean;
   label: string;
+  /** What the trigger reads with no option chosen, as when `value` is "". */
+  placeholder?: string;
   options: PickerOption[];
   value?: string;
   onChange?: (value: string) => void;
@@ -525,8 +536,11 @@ export function Picker({
           className={field ? `${fieldControl} ${className}` : `${menuButton} min-w-0 ${className}`}
         >
           {current?.icon}
-          <span className={`truncate ${field ? "flex-1 text-left" : ""}`} style={current?.style}>
-            {current?.label}
+          <span
+            className={`truncate ${field ? "flex-1 text-left" : ""} ${current ? "" : "text-faint-foreground"}`}
+            style={current?.style}
+          >
+            {current?.label ?? placeholder}
           </span>
           <ChevronDown aria-hidden className={field ? "text-faint-foreground" : "opacity-70"} />
         </button>

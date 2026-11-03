@@ -1,4 +1,4 @@
-import { ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Layers, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
   type InputHTMLAttributes,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
 
@@ -39,6 +38,7 @@ import {
   useProvidersLinked,
 } from "./linkedProviders";
 import { models, setCliEnabled, useDisabledClis } from "./models";
+import { allProviderLabels, setProviderLabels, useProviderLabels } from "./prefs";
 import { dismiss, notify } from "./notifications";
 import { PlanLabel } from "./PlanLabel";
 import {
@@ -53,16 +53,24 @@ import {
 } from "./providers";
 import { extraAccounts, SeveralAccountsMark } from "./SeveralAccounts";
 import { age, backendLogos, SettingsNav, settingsNames } from "./Sidebar";
+import { AboutSettings } from "./settings/AboutSettings";
+import { AccessibilitySettings } from "./settings/AccessibilitySettings";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { BetaSettings } from "./settings/BetaSettings";
 import { ConnectionSettings } from "./settings/ConnectionSettings";
+import { DeviceSettings } from "./settings/DeviceSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
 import { KeybindSettings } from "./settings/KeybindSettings";
 import {
   ConfirmRemove,
   field,
   HostPicker,
+  ListHeading,
+  ListItem,
+  ListPane,
+  moveTab,
+  outlineButton,
   PageTitle,
   primaryButton,
   quietButton,
@@ -82,14 +90,16 @@ import {
   providerNames,
 } from "./settings/shared";
 import { AddHubDialog, HubsSection } from "./settings/HubSettings";
+import { OrchestratorSettings } from "./settings/OrchestratorSettings";
+import { ProjectSettings } from "./settings/ProjectSettings";
 import { ProviderModels } from "./settings/ProviderModels";
 import { ScheduleSettings } from "./settings/ScheduleSettings";
-import { ScriptSettings } from "./settings/ScriptSettings";
 import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
 import { ThreadSettings } from "./settings/ThreadSettings";
+import { WorktreeSettings } from "./settings/WorktreeSettings";
 import type { ThreadsView } from "./threads";
-import { Breadcrumb, IconButton, Segmented } from "./ui";
+import { Breadcrumb, IconButton, searchField, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
 
@@ -100,7 +110,7 @@ const SignInTerminal = lazy(() =>
 
 interface SettingsProps {
   section: SettingsSection;
-  /** Every host's threads and orchestrators, as App loads them for the sidebar: Scripts' repositories. */
+  /** Every host's threads and orchestrators, as App loads them for the sidebar: Projects' and Orchestrators' lists. */
   listed: { host: Host; view: ThreadsView }[];
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
@@ -176,12 +186,12 @@ export function SettingsDialog({
     >
       <nav
         aria-label="Settings sections"
-        className="flex w-64 shrink-0 flex-col border-r border-border bg-surface pt-3"
+        className="flex w-64 shrink-0 flex-col border-r border-border/50 bg-surface pt-3"
       >
         <SettingsNav section={props.section} onSection={onSection} />
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-13 shrink-0 items-center gap-2 border-b border-border pr-3 pl-6">
+        <div className="flex h-13 shrink-0 items-center gap-2 border-b border-border/50 pr-3 pl-6">
           <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[props.section] }]} />
           <div className="ml-auto">
             <IconButton label="Close settings" onClick={onClose}>
@@ -189,7 +199,7 @@ export function SettingsDialog({
             </IconButton>
           </div>
         </div>
-        <Settings {...props} />
+        <Settings {...props} onSection={onSection} />
       </div>
     </dialog>
   );
@@ -198,42 +208,58 @@ export function SettingsDialog({
 /** The Settings page body. SettingsNav picks the section, or its search a setting. */
 export function Settings({
   section,
+  onSection,
   listed,
   theme,
   onThemeChange,
   sourceControlHost,
   openHost,
   focus,
-}: SettingsProps) {
+}: SettingsProps & { onSection?: (section: SettingsSection) => void }) {
   useScrollTo(focus);
+  // A list and its pane fill the page; everything else reads as one column.
+  if (section === "providers" || section === "orchestrators")
+    return (
+      <div key={section} className="min-h-0 flex-1 overflow-hidden">
+        {section === "providers" ? (
+          <ProvidersSettings openHost={openHost} focus={focus} />
+        ) : (
+          <OrchestratorSettings listed={listed} focus={focus} />
+        )}
+      </div>
+    );
   return (
     // Keyed by section, so each opens at its top.
     <div key={section} className="min-h-0 flex-1 overflow-y-auto">
-      <div
-        className={`mx-auto px-8 pt-6 pb-16 ${section === "providers" ? "max-w-5xl" : "max-w-3xl"}`}
-      >
+      <div className="mx-auto max-w-3xl px-8 pt-8 pb-16">
         {section === "general" ? (
           <GeneralSettings />
         ) : section === "threads" ? (
           <ThreadSettings />
         ) : section === "appearance" ? (
           <AppearanceSettings theme={theme} onThemeChange={onThemeChange} />
+        ) : section === "accessibility" ? (
+          <AccessibilitySettings />
         ) : section === "browser" ? (
           <BrowserSettings />
         ) : section === "keybinds" ? (
           <KeybindSettings />
-        ) : section === "providers" ? (
-          <ProvidersSettings openHost={openHost} />
+        ) : section === "devices" ? (
+          <DeviceSettings />
+        ) : section === "projects" ? (
+          <ProjectSettings listed={listed} focus={focus} />
         ) : section === "sourceControl" ? (
           <SourceControlSettings key={sourceControlHost} hostId={sourceControlHost} />
+        ) : section === "worktrees" ? (
+          <WorktreeSettings onProjects={() => onSection?.("projects")} />
         ) : section === "computerUse" ? (
           <ComputerSettings />
         ) : section === "schedules" ? (
           <ScheduleSettings />
-        ) : section === "scripts" ? (
-          <ScriptSettings listed={listed} />
         ) : section === "storage" ? (
           <StorageSettings />
+        ) : section === "about" ? (
+          <AboutSettings />
         ) : section === "beta" ? (
           <BetaSettings />
         ) : (
@@ -268,37 +294,40 @@ function checkedLabel(checkedAt: string): string {
  * API keys, and models. It opens on the host the window has open, whose providers the model picker
  * lists, and with more than one host, a picker chooses which.
  */
-function ProvidersSettings({ openHost }: { openHost: string }) {
+function ProvidersSettings({
+  openHost,
+  focus,
+}: {
+  openHost: string;
+  /** The setting search picked: Hubs has its own entry to open. */
+  focus?: { anchor: string };
+}) {
   const hosts = useHosts();
   const [hostId, setHostId] = useState(openHost);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} always />;
-  return <HostProviders key={host.id} host={host} picker={picker} />;
+  return <HostProviders key={host.id} host={host} picker={picker} focus={focus} />;
 }
 
 /**
  * One host's providers: its provider instances on a plxd with `providers`, else the CLIs an older
  * one detects.
  */
-function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
+function HostProviders({
+  host,
+  picker,
+  focus,
+}: {
+  host: Host;
+  picker: ReactNode;
+  focus?: { anchor: string };
+}) {
   const connection = useConnection(host.id);
   return connection?.status === "connected" && "providers" in connection.capabilities ? (
-    <HostInstances host={host} picker={picker} />
+    <HostInstances host={host} picker={picker} focus={focus} />
   ) : (
     <HostClis host={host} picker={picker} />
   );
-}
-
-/** Up and Down move between a tablist's tabs, wrapping at the ends, and choose the one they reach. */
-function moveTab(e: KeyboardEvent<HTMLDivElement>) {
-  const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
-  const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
-  const i = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
-  if (!step || i === -1) return;
-  e.preventDefault();
-  const next = tabs[(i + step + tabs.length) % tabs.length]!;
-  next.click();
-  next.focus();
 }
 
 /**
@@ -355,7 +384,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
   const current = detected?.find((c) => c.cli === selected) ?? detected?.[0];
 
   return (
-    <>
+    <div className="mx-auto h-full max-w-5xl overflow-y-auto px-8 pt-8 pb-16">
       <PageTitle title="Providers">
         The AI subscriptions your agents run on. Sign in to each vendor's CLI on the host, or add an
         API key as a fallback. Turn one off to hide its models.
@@ -483,7 +512,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -686,15 +715,25 @@ const installable = new Set([
 const instanceTone = (info: ProviderInfo) =>
   !info.installed || info.signedIn === false ? "error" : undefined;
 
+/** The Hubs entry's id in the provider list, which no instance's can be: its ids are lowercase. */
+const hubsTab = "#hubs";
+
 /**
- * One host's provider instances (`providers/list`), as T3 Code lays them out: under the host and a
- * Providers line with Refresh, +, and Remove for the chosen one (which asks first, in place), one
- * card with the instances on the left, each with a switch that turns it on or off on the host, and
- * the chosen one's pane on the right. Without instances, it offers Add provider. On a plxd with
- * `hubs`, its hubs (0089) have their own section under the card (HubsSection), and their own
- * instances stay out of the list, since only the hub edits them.
+ * One host's provider instances (`providers/list`), filling the page: the host and Refresh across
+ * the top, the instances on the left, by what they need, with a search, a filter by label, and Add
+ * provider, and the chosen one's pane on the right. Without instances, it offers Add provider. On a
+ * plxd with `hubs`, its hubs (0089) have their own entry under the list (HubsSection), and their
+ * own instances stay out of it, since only the hub edits them.
  */
-function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
+function HostInstances({
+  host,
+  picker,
+  focus,
+}: {
+  host: Host;
+  picker: ReactNode;
+  focus?: { anchor: string };
+}) {
   const providers = useProviders(host.id);
   const linkOn = useProvidersLinked();
   const connection = useConnection(host.id);
@@ -752,12 +791,15 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     setError(errors.find(Boolean));
     setHubsError(errors[2]);
   };
-  const save = async (instance: ProviderInstance) => {
-    const failed = await saveEverywhere(host.id, instance);
-    if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
-  };
 
+  useEffect(() => {
+    if (!focus) return;
+    if (focus.anchor === "hubs") setSelected(hubsTab);
+    // Anything else search picks is in a provider's pane.
+    else setSelected((was) => (was === hubsTab ? "claude" : was));
+  }, [focus]);
   const list = providers?.providers.filter((p) => !p.hub);
+  const showingHubs = hubsOn && selected === hubsTab;
   const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];
   const chosenTab = current?.instance.id;
   const chosenName = current?.instance.name;
@@ -768,7 +810,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     ? () => {
         if (!hubs?.[0]) return setAddingHub(true);
         setOpenHub(hubs[0].id);
-        document.getElementById(hubsSection)?.scrollIntoView({ block: "start" });
+        setSelected(hubsTab);
       }
     : undefined;
   const asking = confirming !== undefined && confirming === chosenTab;
@@ -782,13 +824,44 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     if (failed) notify({ tone: "error", title: `Couldn't remove ${name}`, body: failed });
   };
   const on = list?.filter((p) => p.instance.enabled) ?? [];
+  const labels = useProviderLabels();
+  const labelsOf = (id: string) => labels[`${host.id}/${id}`] ?? [];
+  const known = allProviderLabels(labels);
+  const [query, setQuery] = useState("");
+  const [labelFilter, setLabelFilter] = useState<string>();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const found = list?.filter((info) => {
+    const { instance } = info;
+    const own = labelsOf(instance.id);
+    const text =
+      `${instance.name} ${kindOf(instance.kind).name} ${info.account ?? ""} ${own.join(" ")}`.toLowerCase();
+    return (
+      words.every((word) => text.includes(word)) && (!labelFilter || own.includes(labelFilter))
+    );
+  });
+  // Whose attention each needs: what's on and can't run, then what's on, then what's off.
+  const groups: [string, ProviderInfo[]][] = [
+    ["Needs attention", found?.filter((p) => p.instance.enabled && instanceTone(p)) ?? []],
+    ["Ready", found?.filter((p) => p.instance.enabled && !instanceTone(p)) ?? []],
+    ["Off", found?.filter((p) => !p.instance.enabled) ?? []],
+  ];
 
-  return (
+  const bar = (
     <>
-      <div className="mb-8 text-reading">{picker}</div>
+      <div className="text-reading">{picker}</div>
+      <button
+        type="button"
+        aria-label="Refresh"
+        disabled={checking}
+        onClick={() => void refresh()}
+        className="ml-auto flex items-center gap-1.5 rounded-md px-1.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+      >
+        <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
+        {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
+      </button>
       {/* Linked, it stays until it's turned off, even with one computer left. */}
       {(hosts.length > 1 || linkOn) && (
-        <div className="mb-8 overflow-hidden rounded-xl border border-border">
+        <div className="-mx-1 basis-full overflow-hidden rounded-xl border border-border/40">
           <Row
             title="Link providers across computers"
             description={
@@ -806,29 +879,15 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           </Row>
         </div>
       )}
-      <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
-        <div className="flex items-center gap-1">
-          <h1 className="text-reading font-semibold">Providers</h1>
-          <IconButton label="Add provider" onClick={() => setAdding(true)}>
-            <Plus aria-hidden />
-          </IconButton>
-        </div>
-        <button
-          type="button"
-          aria-label="Refresh"
-          disabled={checking}
-          onClick={() => void refresh()}
-          className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-        >
-          <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
-          {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
-        </button>
-      </div>
       {error && (
-        <p role="alert" className="mb-3 px-1 text-body text-danger">
+        <p role="alert" className="basis-full text-body text-danger">
           {error}
         </p>
       )}
+    </>
+  );
+  const dialogs = (
+    <>
       {adding && list && (
         <AddProviderDialog
           hostId={host.id}
@@ -843,8 +902,157 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
       {addingHub && (
         <AddHubDialog hosts={hosts} onAdded={setOpenHub} onClose={() => setAddingHub(false)} />
       )}
+    </>
+  );
+  const hubsList = hubsOn && (
+    <div className="mt-auto border-t border-border/40 py-2">
+      <ListItem
+        chosen={showingHubs}
+        onClick={() => setSelected(hubsTab)}
+        icon={<Layers aria-hidden className="text-faint-foreground" />}
+        title="Hubs"
+        detail={hubs?.length ? `${hubs.length} on this host` : "Run agents through a proxy"}
+      />
+    </div>
+  );
+  const hubsPane = hubsOn && (
+    <div hidden={!showingHubs} className="mx-auto max-w-3xl px-8 pt-8 pb-16">
+      <HubsSection
+        id={hubsSection}
+        hostId={host.id}
+        hubs={hubs}
+        error={hubsError}
+        open={openHub}
+        onOpen={setOpenHub}
+        onAdd={() => setAddingHub(true)}
+      />
+    </div>
+  );
+
+  return (
+    <ListPane
+      bar={bar}
+      list={
+        <>
+          <div className="flex items-center gap-1 px-3 pt-3 pb-1">
+            <label className={`${searchField} min-w-0 flex-1`}>
+              <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+              <input
+                type="search"
+                aria-label="Search providers"
+                placeholder="Search"
+                value={query}
+                spellCheck={false}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Escape" || !query) return;
+                  // Clearing it leaves Settings open; Escape again closes it.
+                  e.preventDefault();
+                  setQuery("");
+                }}
+                className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden"
+              />
+            </label>
+            <IconButton label="Add provider" onClick={() => setAdding(true)}>
+              <Plus aria-hidden />
+            </IconButton>
+          </div>
+          {known.length > 0 && (
+            <div
+              className="flex flex-wrap gap-1 px-4 py-1"
+              role="group"
+              aria-label="Filter by label"
+            >
+              {known.map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  aria-pressed={labelFilter === label}
+                  onClick={() => setLabelFilter(labelFilter === label ? undefined : label)}
+                  className="rounded-full border border-border/40 px-2 py-0.5 text-caption text-muted-foreground hover:bg-hover aria-pressed:border-accent aria-pressed:text-foreground"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div
+            role="tablist"
+            aria-label="Providers"
+            aria-orientation="vertical"
+            onKeyDown={moveTab}
+          >
+            {groups.map(
+              ([group, rows]) =>
+                rows.length > 0 && (
+                  <div key={group}>
+                    <ListHeading>{group}</ListHeading>
+                    {rows.map((info) => {
+                      const { instance } = info;
+                      const Logo = logoOf(instance);
+                      const tone = instanceTone(info);
+                      const own = labelsOf(instance.id);
+                      return (
+                        <div key={instance.id} className="relative">
+                          <ListItem
+                            id={`${tabs}-${instance.id}`}
+                            controls={`${tabs}-${instance.id}-pane`}
+                            chosen={info === current && !showingHubs}
+                            onClick={() => setSelected(instance.id)}
+                            off={!instance.enabled}
+                            icon={<Logo />}
+                            title={accountLabel(info)}
+                            detail={
+                              <>
+                                <span className="flex min-h-5 items-center gap-1.5">
+                                  {instance.enabled && tone && <StatusDot tone={tone} />}
+                                  <span className="line-clamp-2 min-w-0">
+                                    {instance.enabled ? instanceStatus(info) : "Off"}
+                                  </span>
+                                  {instance.enabled && <InstancePlan info={info} />}
+                                </span>
+                                {own.length > 0 && (
+                                  <span className="mt-1 flex flex-wrap gap-1">
+                                    {own.map((label) => (
+                                      <span
+                                        key={label}
+                                        className="rounded-full bg-hover px-1.5 text-caption text-muted-foreground"
+                                      >
+                                        {label}
+                                      </span>
+                                    ))}
+                                  </span>
+                                )}
+                              </>
+                            }
+                          />
+                          {extra.has(instance.id) && (
+                            <span className="absolute top-2 right-4">
+                              <SeveralAccountsMark onHubs={openHubs} />
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ),
+            )}
+            {list && found?.length === 0 && (
+              <p className="px-4 py-3 text-meta text-faint-foreground">
+                {list.length ? "No providers match." : "None on this host yet."}
+              </p>
+            )}
+          </div>
+          {hubsList}
+        </>
+      }
+    >
+      {dialogs}
       {!list || !current ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-border px-4 py-10 text-center text-body text-muted-foreground">
+        <div
+          className="flex flex-col items-center gap-3 px-8 py-16 text-center text-body text-muted-foreground"
+          hidden={showingHubs}
+        >
           {!list ? (
             error ? (
               "Couldn't list this host's providers."
@@ -865,136 +1073,48 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           )}
         </div>
       ) : (
-        // Stacked until there's room for the list beside the pane; then one box the height of
-        // Settings, in which the list and the pane each scroll.
-        <div className="@container overflow-hidden rounded-xl border border-border">
-          <div className="grid @3xl:h-[calc(100vh-15rem)] @3xl:min-h-[28rem] @3xl:grid-cols-[19rem_minmax(0,1fr)]">
-            <div className="flex flex-col border-b border-border @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0">
-              <div
-                role="tablist"
-                aria-label="Providers"
-                aria-orientation="vertical"
-                onKeyDown={moveTab}
-                className="flex flex-col"
-              >
-                {list.map((info) => {
-                  const { instance } = info;
-                  const Logo = logoOf(instance);
-                  const chosen = info === current;
-                  const tone = instanceTone(info);
-                  // One instance stays on, so a new thread always has one to start on.
-                  const last = instance.enabled && on.length === 1;
-                  return (
-                    <div
-                      key={instance.id}
-                      className="flex items-center gap-2 border-b border-border pr-4 first:rounded-tl-xl hover:bg-hover has-[[aria-selected=true]]:bg-selected"
-                    >
-                      <button
-                        id={`${tabs}-${instance.id}`}
-                        type="button"
-                        role="tab"
-                        aria-selected={chosen}
-                        aria-controls={`${tabs}-${instance.id}-pane`}
-                        tabIndex={chosen ? 0 : -1}
-                        onClick={() => setSelected(instance.id)}
-                        className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4 text-left ${instance.enabled ? "" : "opacity-60"}`}
-                      >
-                        <Logo className="mt-0.5 size-4 shrink-0" />
-                        <span className="min-w-0">
-                          <span className="flex items-baseline gap-2">
-                            <span className="truncate text-body font-medium">
-                              {accountLabel(info)}
-                            </span>
-                            {info.version && (
-                              <span className="truncate font-mono text-meta text-faint-foreground">
-                                {info.version}
-                              </span>
-                            )}
-                          </span>
-                          <span className="mt-0.5 flex min-h-5 items-center gap-1.5 text-meta text-muted-foreground">
-                            {instance.enabled && tone && <StatusDot tone={tone} />}
-                            <span className="line-clamp-2 min-w-0">
-                              {instance.enabled ? instanceStatus(info) : "Off"}
-                            </span>
-                            {instance.enabled && <InstancePlan info={info} />}
-                          </span>
-                        </span>
-                      </button>
-                      {extra.has(instance.id) && <SeveralAccountsMark onHubs={openHubs} />}
-                      <span title={last ? "One provider stays on, for new threads." : undefined}>
-                        <Switch
-                          label={`Use ${instance.name}`}
-                          checked={instance.enabled}
-                          disabled={last}
-                          onChange={(next) => void save({ ...instance, enabled: next })}
-                        />
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={() => setAdding(true)}
-                className="flex shrink-0 items-center gap-3 px-4 py-3.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-              >
-                <Plus aria-hidden />
-                Add provider
-              </button>
-            </div>
-            {/* Every pane stays mounted, so a sign-in outlives a switch to another tab. */}
-            {list.map((info) => (
-              <InstancePane
-                key={info.instance.id}
-                id={`${tabs}-${info.instance.id}-pane`}
-                tabId={`${tabs}-${info.instance.id}`}
-                hidden={info !== current}
-                signingIn={signingIn === info.instance.id}
-                onSignIn={(open) => setSigningIn(open ? info.instance.id : undefined)}
-                hostId={host.id}
-                info={info}
-                usage={usage}
-                period={period}
-                onPeriod={setPeriod}
-                keys={keys}
-                onKeys={setKeys}
-                onSignedIn={() => void loadProviders(host.id, true)}
-                onRemove={() => setConfirming(info.instance.id)}
-                removal={
-                  asking &&
-                  info === current && (
-                    <div className="mx-4 mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
-                      <span className="min-w-0 flex-1">
-                        Remove <span className="font-medium text-foreground">{chosenName}</span>?
-                        Its settings and secrets leave{" "}
-                        {isListed(chosenTab) ? "every connected computer" : "this host"}; its
-                        threads keep their transcripts.
-                      </span>
-                      <ConfirmRemove
-                        disabled={removing}
-                        onRemove={() => void remove(chosenTab!)}
-                        onCancel={() => setConfirming(undefined)}
-                      />
-                    </div>
-                  )
-                }
-              />
-            ))}
-          </div>
-        </div>
+        // Every pane stays mounted, so a sign-in outlives a switch to another tab.
+        list.map((info) => (
+          <InstancePane
+            key={info.instance.id}
+            id={`${tabs}-${info.instance.id}-pane`}
+            tabId={`${tabs}-${info.instance.id}`}
+            hidden={info !== current || showingHubs}
+            signingIn={signingIn === info.instance.id}
+            onSignIn={(open) => setSigningIn(open ? info.instance.id : undefined)}
+            hostId={host.id}
+            info={info}
+            usage={usage}
+            period={period}
+            onPeriod={setPeriod}
+            keys={keys}
+            onKeys={setKeys}
+            onSignedIn={() => void loadProviders(host.id, true)}
+            onRemove={() => setConfirming(info.instance.id)}
+            lastOn={info.instance.enabled && on.length === 1}
+            removal={
+              asking &&
+              info === current && (
+                <div className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
+                  <span className="min-w-0 flex-1">
+                    Remove <span className="font-medium text-foreground">{chosenName}</span>? Its
+                    settings and secrets leave{" "}
+                    {isListed(chosenTab) ? "every connected computer" : "this host"}; its threads
+                    keep their transcripts.
+                  </span>
+                  <ConfirmRemove
+                    disabled={removing}
+                    onRemove={() => void remove(chosenTab!)}
+                    onCancel={() => setConfirming(undefined)}
+                  />
+                </div>
+              )
+            }
+          />
+        ))
       )}
-      {hubsOn && (
-        <HubsSection
-          id={hubsSection}
-          hostId={host.id}
-          hubs={hubs}
-          error={hubsError}
-          open={openHub}
-          onOpen={setOpenHub}
-          onAdd={() => setAddingHub(true)}
-        />
-      )}
-    </>
+      {hubsPane}
+    </ListPane>
   );
 }
 
@@ -1035,15 +1155,81 @@ function SavedField({
 /** A field's words as arguments, split on spaces. ponytail: no quoting, so no argument has a space. */
 const argsOf = (text: string) => text.split(/\s+/).filter(Boolean);
 
-/** A secondary action on a row: quiet, with a border so it reads as a button. */
-const outlineButton = `${quietButton} border border-border`;
-
 /** A card of rows with no title over it, named `label`. */
 function Card({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section aria-label={label} className="mb-8">
       <div className="rounded-xl border border-border bg-surface">{children}</div>
     </section>
+  );
+}
+
+/**
+ * An instance's labels, kept on this computer to tell providers apart: each with Remove, and a field
+ * that adds one on Enter, offering those other instances have.
+ */
+function ProviderLabels({ hostId, instance }: { hostId: string; instance: string }) {
+  const all = useProviderLabels();
+  const own = all[`${hostId}/${instance}`] ?? [];
+  const suggestions = useId();
+  const [text, setText] = useState("");
+  const add = () => {
+    const label = text.trim();
+    if (label && !own.includes(label)) setProviderLabels(hostId, instance, [...own, label]);
+    setText("");
+  };
+  return (
+    <div data-setting="labels" className="-ml-2 mt-2 flex flex-wrap items-center gap-1.5">
+      {own.map((label) => (
+        <span
+          key={label}
+          className="flex items-center gap-1 rounded-full bg-hover py-0.5 pr-1 pl-2.5 text-meta text-foreground"
+        >
+          {label}
+          <button
+            type="button"
+            aria-label={`Remove the label ${label}`}
+            onClick={() =>
+              setProviderLabels(
+                hostId,
+                instance,
+                own.filter((each) => each !== label),
+              )
+            }
+            className="grid size-4 place-items-center rounded-full text-faint-foreground hover:bg-selected hover:text-foreground [&_svg]:size-3"
+          >
+            <X aria-hidden />
+          </button>
+        </span>
+      ))}
+      <input
+        aria-label="Add a label"
+        placeholder="+ Add label"
+        list={suggestions}
+        value={text}
+        maxLength={24}
+        spellCheck={false}
+        autoComplete="off"
+        onChange={(e) => setText(e.target.value)}
+        onBlur={add}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") add();
+          if (e.key === "Escape" && text) {
+            // Not Settings' too.
+            e.preventDefault();
+            setText("");
+          }
+        }}
+        className="w-24 rounded-full border border-transparent bg-transparent hover:border-border/40 focus:border-border px-2 py-0.5 text-meta placeholder:text-faint-foreground focus:w-32"
+      />
+      <datalist id={suggestions}>
+        {allProviderLabels(all)
+          .filter((label) => !own.includes(label))
+          .map((label) => (
+            <option key={label} value={label} />
+          ))}
+      </datalist>
+    </div>
   );
 }
 
@@ -1054,9 +1240,10 @@ function InstancePlan({ info }: { info: ProviderInfo }) {
 }
 
 /**
- * A provider instance's pane, `hidden` unless its tab is chosen: its name, version, and Remove,
- * with `removal` under them while Remove asks; its account and plan, and Sign in (in a terminal under it, after which the instances are probed again with
- * `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
+ * A provider instance's pane, `hidden` unless its tab is chosen: its name, edited in place, its
+ * labels, its switch, and Remove, with `removal` under them while Remove asks; its account and plan,
+ * and Sign in, or Re-authenticate once signed in (in a terminal under it, after which the instances
+ * are probed again with `onSignedIn`); how it runs, with its version for a kind that has more than one; its variables;
  * its models; and Claude's and Codex's usage and API keys. An agent Parallax knows how to install
  * (Cursor, Claude Code, Codex, Pi, OpenCode, Grok Build, Hermes, Antigravity) offers Install in
  * place of its account while it isn't installed: Cursor's SDK through plxd and Pi and OpenCode
@@ -1078,8 +1265,15 @@ function InstancePane({
   onKeys,
   onSignedIn,
   onRemove,
+  lastOn,
   removal,
-}: PaneProps & { info: ProviderInfo; onRemove: () => void; removal: ReactNode }) {
+}: PaneProps & {
+  info: ProviderInfo;
+  onRemove: () => void;
+  /** Whether it's the host's one enabled instance, which stays on for new threads. */
+  lastOn: boolean;
+  removal: ReactNode;
+}) {
   const { instance } = info;
   const kind = kindOf(instance.kind);
   const KindLogo = logoOf(instance);
@@ -1189,6 +1383,17 @@ function InstancePane({
     window.open(answer.result.url, "_blank");
     setCursorWaiting(true);
   };
+  // Signed out first, so its waiting ends on the new sign-in rather than on the one it replaces.
+  const reauthenticateCursor = async () => {
+    retry();
+    const answer = await window.parallax.request(hostId, "cursor/signOut", {
+      instance: instance.id,
+    });
+    if ("error" in answer)
+      return failed(`Couldn't sign out of ${instance.name}`, describeError(answer.error));
+    await loadProviders(hostId, true);
+    await signInCursor();
+  };
   const signOutCursor = async () => {
     retry();
     const answer = await window.parallax.request(hostId, "cursor/signOut", {
@@ -1212,27 +1417,45 @@ function InstancePane({
       role="tabpanel"
       aria-labelledby={tabId}
       hidden={hidden}
-      className="provider-pane min-w-0 py-5 @3xl:overflow-y-auto"
+      className="mx-auto max-w-3xl min-w-0 px-8 pt-8 pb-16"
     >
-      <div className="mb-5 flex items-center gap-3 px-4">
-        <KindLogo className="size-5 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-reading font-semibold">{accountLabel(info)}</h2>
-          {/* What it is, unless its name says so. */}
-          {kind.name !== instance.name && (
-            <p className="truncate text-meta text-muted-foreground">{kind.name}</p>
-          )}
+      <div className="mb-8 flex items-start gap-3.5">
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border/40 bg-(--pane-card)">
+          <KindLogo className="size-5" />
+        </span>
+        <div data-setting="display-name" className="min-w-0 flex-1">
+          <SavedField
+            aria-label="Display name"
+            required
+            maxLength={64}
+            value={instance.name}
+            onSave={(name) => void save({ name: name.trim() })}
+            className="-mx-1.5 -my-0.5 w-full rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-heading font-semibold hover:border-border focus:border-border"
+          />
+          <p className="mt-0.5 truncate text-meta text-muted-foreground">
+            {[kind.name !== instance.name && kind.name, info.version].filter(Boolean).join(" · ")}
+          </p>
+          <ProviderLabels hostId={hostId} instance={instance.id} />
         </div>
-        {info.version && (
-          <span className="truncate font-mono text-meta text-faint-foreground">{info.version}</span>
-        )}
+        <label
+          className="flex shrink-0 items-center gap-2 pt-1 text-body text-muted-foreground"
+          title={lastOn ? "One provider stays on, for new threads." : undefined}
+        >
+          {instance.enabled ? "On" : "Off"}
+          <Switch
+            label={`Use ${instance.name}`}
+            checked={instance.enabled}
+            disabled={lastOn}
+            onChange={(next) => void save({ enabled: next })}
+          />
+        </label>
         <IconButton label={`Remove ${instance.name}`} onClick={onRemove}>
           <Trash2 aria-hidden />
         </IconButton>
       </div>
       {removal}
       {!instance.enabled && (
-        <p className="mx-4 mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
+        <p className="mb-6 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
           Off on this host: new threads and model menus leave out {instance.name}'s models.
         </p>
       )}
@@ -1290,32 +1513,32 @@ function InstancePane({
                 Sign out
               </button>
             )}
-            {((cursorAccount && info.installed && info.signedIn !== true && !cursorWaiting) ||
-              (info.login && info.installed && info.signedIn !== true && !signingIn)) && (
+            {((cursorAccount && info.installed && !cursorWaiting) ||
+              (info.login && info.installed && !signingIn)) && (
               <button
                 type="button"
-                aria-label={`Sign in to ${instance.name}`}
+                aria-label={
+                  info.signedIn === true
+                    ? `Re-authenticate ${instance.name}`
+                    : `Sign in to ${instance.name}`
+                }
                 onClick={() => {
-                  if (cursorAccount) return void signInCursor();
+                  if (cursorAccount)
+                    return void (info.signedIn === true ? reauthenticateCursor() : signInCursor());
                   setInstalling(false);
                   onSignIn(true);
                 }}
-                className={outlineButton}
+                className={info.signedIn === true ? outlineButton : primaryButton}
               >
-                {instance.kind === "pi" ? "Login" : "Sign in"}
+                {info.signedIn === true
+                  ? "Re-authenticate"
+                  : instance.kind === "pi"
+                    ? "Login"
+                    : "Sign in"}
               </button>
             )}
           </Row>
         )}
-        <Row title="Display name" description="How threads and model menus name it.">
-          <SavedField
-            aria-label="Display name"
-            required
-            maxLength={64}
-            value={instance.name}
-            onSave={(name) => void save({ name: name.trim() })}
-          />
-        </Row>
         {cursorWaiting && (
           <Row
             title="Sign-in"

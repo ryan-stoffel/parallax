@@ -1,21 +1,81 @@
 import type { SettingsSection } from "../App";
 import { commands } from "../keybindings";
 
-/** Settings' sections in the nav's order, with words a search for each might use. */
-export const settingsSections: { id: SettingsSection; name: string; keywords?: string }[] = [
-  { id: "general", name: "General", keywords: "preferences basics" },
-  { id: "threads", name: "Threads", keywords: "chats conversations defaults" },
-  { id: "appearance", name: "Appearance", keywords: "look theme style display" },
-  { id: "browser", name: "Browser", keywords: "web chrome helium tabs pages internet" },
-  { id: "keybinds", name: "Keybinds", keywords: "shortcuts hotkeys keyboard" },
-  { id: "providers", name: "Providers", keywords: "agents models accounts ai" },
-  { id: "schedules", name: "Schedules", keywords: "cron timers automation" },
-  { id: "sourceControl", name: "Source control", keywords: "git github" },
-  { id: "computerUse", name: "Computer use", keywords: "desktop apps mac control accessibility" },
-  { id: "scripts", name: "Scripts", keywords: "setup commands worktree" },
-  { id: "connections", name: "Connections", keywords: "hosts computers ssh" },
-  { id: "storage", name: "Storage", keywords: "disk space cleanup" },
-  { id: "beta", name: "Beta", keywords: "experimental preview labs early features flask" },
+/** Settings' sections in the nav's order, under their groups, with words a search for each might use. */
+export const settingsSections: {
+  id: SettingsSection;
+  name: string;
+  group: string;
+  keywords?: string;
+}[] = [
+  { id: "general", name: "General", group: "App", keywords: "preferences basics" },
+  { id: "appearance", name: "Appearance", group: "App", keywords: "look theme style display" },
+  {
+    id: "accessibility",
+    name: "Accessibility",
+    group: "App",
+    keywords: "a11y contrast color blind motion diff legibility vision",
+  },
+  {
+    id: "keybinds",
+    name: "Keybindings",
+    group: "App",
+    keywords: "shortcuts hotkeys keyboard keybinds",
+  },
+  { id: "providers", name: "Providers", group: "Agents", keywords: "agents models accounts ai" },
+  { id: "threads", name: "Threads", group: "Agents", keywords: "chats conversations defaults" },
+  {
+    id: "orchestrators",
+    name: "Orchestrators",
+    group: "Agents",
+    keywords: "autonomy children landing checks",
+  },
+  { id: "schedules", name: "Schedules", group: "Agents", keywords: "cron timers automation" },
+  {
+    id: "browser",
+    name: "Browser",
+    group: "Agents",
+    keywords: "web chrome helium tabs pages internet",
+  },
+  {
+    id: "devices",
+    name: "Devices",
+    group: "Agents",
+    keywords: "emulator simulator ios android xcode phone",
+  },
+  {
+    id: "computerUse",
+    name: "Computer use",
+    group: "Agents",
+    keywords: "desktop apps mac control accessibility",
+  },
+  {
+    id: "projects",
+    name: "Projects",
+    group: "Code",
+    keywords: "repositories repos per repo defaults scripts setup",
+  },
+  {
+    id: "sourceControl",
+    name: "Source control",
+    group: "Code",
+    keywords: "git github pull request",
+  },
+  { id: "worktrees", name: "Worktrees", group: "Code", keywords: "branch prefix base cleanup git" },
+  { id: "connections", name: "Connections", group: "System", keywords: "hosts computers ssh" },
+  { id: "storage", name: "Storage", group: "System", keywords: "disk space cleanup" },
+  {
+    id: "beta",
+    name: "Beta",
+    group: "System",
+    keywords: "experimental preview labs early features flask",
+  },
+  {
+    id: "about",
+    name: "About",
+    group: "System",
+    keywords: "version licenses credits bug report star support ko-fi discussion feedback",
+  },
 ];
 
 /**
@@ -40,8 +100,8 @@ export const anchorOf = (title: string) =>
 
 /**
  * Every setting, by page, in the nav's order, which breaks ties in search. Keep in step with the
- * pages: Settings.test.tsx checks those on General, Threads, Appearance, Browser, and Keybinds
- * render.
+ * pages: Settings.test.tsx checks those on General, Threads, Appearance, Accessibility, Browser,
+ * and Keybindings render.
  */
 export const settingsIndex: SettingEntry[] = [
   // General
@@ -77,11 +137,6 @@ export const settingsIndex: SettingEntry[] = [
       "What sends a message, and what starts a new line",
       "enter submit cmd ctrl newline keyboard",
     ],
-    [
-      "Open pull requests in",
-      "Your system browser, or the side panel's",
-      "browser github pr links",
-    ],
   ]),
   ...entries("general", "Updates", [
     [
@@ -100,10 +155,6 @@ export const settingsIndex: SettingEntry[] = [
       "auto upgrade claude codex",
     ],
   ]),
-  ...entries("general", "About", [
-    ["Version", "This copy of Parallax", "about build release number"],
-    ["Open source licenses", "Notices for bundled fonts", "fonts notices legal credits"],
-  ]),
   // Threads
   ...entries("threads", "New threads", [
     ["Computer", "The computer a new thread starts on", "host machine remote ssh device default"],
@@ -119,11 +170,6 @@ export const settingsIndex: SettingEntry[] = [
       "access approve ask sandbox edit yolo full",
     ],
     ["Legacy Plan mode", "List Plan in the Access picker", "plan access picker"],
-    [
-      "Workspace",
-      "Where a thread in a repository works",
-      "worktree branch local repository checkout",
-    ],
     ["Naming model", "Names a new thread and its branch", "title rename branch name auto"],
   ]),
   ...entries("threads", "Resuming threads", [
@@ -189,15 +235,6 @@ export const settingsIndex: SettingEntry[] = [
     ],
     ["Word wrap", "Wrap long lines in code by default", "wrap lines long"],
   ]),
-  ...entries("appearance", "Interface", [
-    ["Contrast", "Stronger text and borders", "accessibility high contrast"],
-    ["Reduce motion", "Stops animations", "animations accessibility"],
-    [
-      "Change colors",
-      "What marks added and removed lines",
-      "diff colors colorblind red green blue orange",
-    ],
-  ]),
   ...entries("appearance", "Sidebar", [
     [
       "Layout",
@@ -252,13 +289,13 @@ export const settingsIndex: SettingEntry[] = [
       "chrome web store add-ons plugins load unpacked",
     ],
   ]),
-  // Keybinds
+  // Keybindings
   ...entries("keybinds", undefined, [
     ["Shortcuts", "Shortcuts for the whole app", "hotkeys keyboard bindings rebind reset"],
   ]),
   ...commands.map((c): SettingEntry => ({
     section: "keybinds",
-    group: "Shortcuts",
+    group: c.category,
     title: c.name,
     keywords: "shortcut keybind hotkey",
   })),
@@ -273,10 +310,11 @@ export const settingsIndex: SettingEntry[] = [
   ...entries("providers", undefined, [
     [
       "Status",
-      "Sign in to a provider",
-      "account sign in login authenticate subscription plan install",
+      "Sign in to a provider, or re-authenticate",
+      "account sign in login authenticate reauthenticate subscription plan install",
     ],
     ["Display name", "How threads and model menus name a provider", "rename"],
+    ["Labels", "Tags to tell your providers apart", "tag filter group"],
     ["Binary path", "The binary a provider runs", "program executable path cli"],
     ["Launch arguments", "Arguments passed on session start", "args flags cli"],
     [
@@ -300,7 +338,7 @@ export const settingsIndex: SettingEntry[] = [
     // Claude Code's pane is the one shown first.
     anchor: "anthropic-api-keys",
   },
-  // Usage, Schedules, Source control, Scripts
+  // Usage, Schedules, Source control
   ...entries("schedules", undefined, [
     [
       "Scheduled tasks",
@@ -319,13 +357,100 @@ export const settingsIndex: SettingEntry[] = [
     ],
     ["Always allowed", "Apps every thread may use without asking", "apps allow remove"],
   ]),
-  ...entries("scripts", undefined, [
+  ...entries("projects", undefined, [
+    ["Project icon", "The icon the sidebar shows", "image logo glyph color picture upload"],
+    [
+      "New thread defaults",
+      "A repository's own model, reasoning, permissions, workspace, and base branch",
+      "per repo model effort permission workspace base branch override",
+    ],
     [
       "Scripts",
       "Setup and settle scripts in a thread's worktree",
       "setup settle worktree commands",
     ],
     ["From parallax.json", "Scripts a repository defines", "parallax json import config"],
+    ["Git", "A repository's remote, and its current and default branches", "origin url"],
+    ["Instructions", "What every thread in a Project is told", "project system prompt"],
+  ]),
+  ...entries("worktrees", "New worktrees", [
+    ["Workspace", "Where a thread in a repository works", "checkout current default"],
+    ["Start from", "The branch a new worktree starts from", "base default current origin"],
+    ["Branch prefix", "What a new thread's branch starts with", "name parallax namespace"],
+  ]),
+  ...entries("worktrees", "Cleanup", [
+    [
+      "Clean up merged worktrees",
+      "Delete a worktree and branch once its pull request merges",
+      "remove",
+    ],
+  ]),
+  ...entries("sourceControl", "Pull requests", [
+    [
+      "Open pull requests in",
+      "Your system browser, or the side panel's",
+      "browser github pr links",
+    ],
+    ["Click a pull request link to", "Open it in Parallax, or on GitHub", "pr link"],
+    ["Merge method", "What the merge box starts on", "squash rebase merge commit"],
+    ["Delete branch on merge", "Whether a merge deletes the branch", "cleanup"],
+  ]),
+  ...entries("orchestrators", "New orchestrators", [
+    ["Full access", "A new orchestrator starts with full access", "bypass permission"],
+    ["Autonomy", "Who answers a new orchestrator's questions", "ask routine full"],
+  ]),
+  ...entries("orchestrators", undefined, [
+    ["Base branch", "What its integration branch is cut from", "integration target"],
+    ["Land automatically", "Its children land without your approval", "auto land merge"],
+    ["Children at once", "How many of its children run together", "max parallel concurrency"],
+    ["Allow API keys", "Whether its children may run on an API key", "account"],
+    ["Checks", "The command run after each landing", "test ci verify"],
+  ]),
+  ...entries("devices", undefined, [
+    ["Device hub", "What streams a device to the Device panel", "install setup"],
+    ["Agents can use devices", "Agents open and drive these devices", "tools"],
+    [
+      "Local simulators",
+      "Whether this computer can run them",
+      "ios android xcode iphone simctl studio sdk adb avd emulators apple",
+    ],
+    ["Simulators and emulators", "The devices on this computer", "boot start stop power"],
+  ]),
+  ...entries("about", undefined, [
+    ["Version", "This copy of Parallax, to copy", "about build release number"],
+    [
+      "Get involved",
+      "Report a bug, share an idea, star the repo, or support on Ko-fi",
+      "feedback issue discussion github kofi donate",
+    ],
+    ["This computer", "The plxd, Electron, and Chromium this copy runs on", "operating system os"],
+    ["Open source", "Parallax's license and source code", "apache repository github"],
+    [
+      "Licenses and credits",
+      "The code, fonts, logos, and models Parallax uses",
+      "third party notices legal attribution dependencies",
+    ],
+  ]),
+  ...entries("accessibility", "Vision", [
+    ["Contrast", "Stronger text and borders", "high contrast"],
+    ["Interface text size", "How large the app's text is", "font zoom big small"],
+    ["Focus rings", "A thicker outline on what has keyboard focus", "keyboard navigation outline"],
+    ["Underline links", "Links stay underlined", "color"],
+  ]),
+  ...entries("accessibility", "Motion", [
+    ["Reduce motion", "Stops animations", "animation vestibular"],
+  ]),
+  ...entries("accessibility", "Diffs", [
+    [
+      "Diff colors",
+      "What marks added and removed lines",
+      "red green blue orange color blind custom",
+    ],
+    [
+      "Line tint",
+      "How strongly a changed line's background shows",
+      "intensity contrast legibility",
+    ],
   ]),
   // Connections
   ...entries("connections", "Parallax Connect", [
@@ -357,13 +482,6 @@ export const settingsIndex: SettingEntry[] = [
   // Storage
   ...entries("storage", undefined, [
     ["On this computer", "What Parallax keeps, and its size", "disk space size cache logs"],
-  ]),
-  ...entries("storage", "Worktrees", [
-    [
-      "Clean up merged worktrees",
-      "Delete a thread's worktree once its branch merges",
-      "delete prune merged branches",
-    ],
   ]),
   ...entries("storage", undefined, [
     ["Archived threads", "Delete a host's archived threads", "delete archived clear history"],

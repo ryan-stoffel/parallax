@@ -28,8 +28,8 @@ const hint = (r: RepoRef) =>
 
 /**
  * New Thread's ref picker, for a plxd with `repoRefs`. For a new worktree its button reads its ref,
- * titled `From <ref>`, and picks the first of `baseOrder` the repository has, else the checkout's
- * branch. For the current checkout it reads the picked ref, or `Select ref`. While another
+ * titled `From <ref>`, and picks `preferred` when the repository has it, then the checkout's branch
+ * with `fromCurrent`, else the first of `baseOrder` the repository has, else the checkout's branch. For the current checkout it reads the picked ref, or `Select ref`. While another
  * repository's refs load, it keeps the label it had. Its menu searches the repository's branches
  * from `repo/refs`, asked again each time it opens.
  */
@@ -38,12 +38,18 @@ export function RefMenu({
   repo,
   checkout,
   value,
+  preferred,
+  fromCurrent,
   onChange,
 }: {
   hostId: string;
   repo: string;
   checkout: boolean;
   value?: string;
+  /** The repository's own default base (Settings > Projects). */
+  preferred?: string;
+  /** New worktrees start from the checkout's branch (Settings > Worktrees). */
+  fromCurrent?: boolean;
   onChange: (ref: string) => void;
 }) {
   const id = useId();
@@ -69,7 +75,14 @@ export function RefMenu({
   const q = query.trim().toLowerCase();
   const matches = q ? list.filter((r) => r.name.toLowerCase().includes(q)) : list;
   const shown = matches.slice(0, maxRows);
-  const base = checkout ? undefined : baseOrder.find((name) => list.some((r) => r.name === name));
+  const has = (name?: string) => !!name && list.some((r) => r.name === name);
+  const base = checkout
+    ? undefined
+    : has(preferred)
+      ? preferred
+      : fromCurrent
+        ? list.find((r) => r.current)?.name
+        : baseOrder.find(has);
   useEffect(() => {
     if (value === undefined && base && fresh?.key === key) onChange(base);
   }, [value, base, fresh, key]);

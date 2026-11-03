@@ -1,4 +1,9 @@
-import type { AgentEffort, AgentPermission } from "../protocol/generated/protocol";
+import type {
+  AgentEffort,
+  AgentPermission,
+  OrchestratorAutonomy,
+  PrMergeMethod,
+} from "../protocol/generated/protocol";
 import { localId } from "./hosts";
 import { merged, stored } from "./stored";
 
@@ -19,6 +24,8 @@ export type NewThreadPrefs = {
   permission: AgentPermission;
   /** Where a thread in a repository works. */
   workspace: "worktree" | "checkout";
+  /** What a new worktree starts from: the repository's default branch, or its checkout's. */
+  worktreeBase: "default" | "current";
   /**
    * The model the host's plxd names a new thread and its branch with (0058), by instance and id.
    * A host without that instance uses the thread's own instance's default.
@@ -33,6 +40,7 @@ export const newThreadDefaults: NewThreadPrefs = {
   fast: false,
   permission: "edit",
   workspace: "worktree",
+  worktreeBase: "default",
   naming: { provider: "codex", id: "gpt-6-luna" },
   namingEffort: "low",
 };
@@ -79,6 +87,10 @@ export type BehaviorPrefs = {
   prLinkClick: "parallax" | "github";
   /** Whether dictated text is tidied by a small model, which then receives it (PLX-1232). */
   cleanDictation: boolean;
+  /** The merge method a pull request's merge box starts on, where the repository allows it. */
+  mergeMethod?: PrMergeMethod;
+  /** Whether a merge deletes the branch, as the merge box's checkbox starts. */
+  deleteBranchOnMerge: boolean;
 };
 
 export const behaviorDefaults: BehaviorPrefs = {
@@ -89,12 +101,71 @@ export const behaviorDefaults: BehaviorPrefs = {
   openPrsIn: "external",
   prLinkClick: "parallax",
   cleanDictation: true,
+  deleteBranchOnMerge: true,
 };
 
 export const behaviorPrefs = stored("parallax.behavior", behaviorDefaults, merged);
 
 export const setBehaviorPrefs = (change: Partial<BehaviorPrefs>) =>
   behaviorPrefs.set({ ...behaviorPrefs.get(), ...change });
+
+/** What a new orchestrator's form starts with, kept on this computer. */
+export type OrchestratorPrefs = {
+  fullAccess: boolean;
+  autonomy: OrchestratorAutonomy;
+};
+
+export const orchestratorPrefs = stored<OrchestratorPrefs>(
+  "parallax.newOrchestrators",
+  { fullAccess: true, autonomy: "routine" },
+  merged,
+);
+
+/**
+ * A repository's own defaults for a new thread, over `newThreadPrefs`, kept on this computer by
+ * host and repository. An unset one follows the global default. `base` names the ref a new worktree
+ * starts from.
+ */
+export type RepoPrefs = Partial<
+  Pick<NewThreadPrefs, "model" | "effort" | "context" | "fast" | "permission" | "workspace">
+> & { base?: string };
+
+const repoPrefStore = stored<Record<string, RepoPrefs>>("parallax.repoDefaults", {}, merged);
+
+const repoKey = (hostId: string, repo: string) => `${hostId}/${repo}`;
+
+/** `repo`'s own defaults on `hostId`, kept current, or none. */
+export const useRepoPrefs = (hostId: string, repo: string): RepoPrefs =>
+  repoPrefStore.use()[repoKey(hostId, repo)] ?? noRepoPrefs;
+const noRepoPrefs: RepoPrefs = {};
+
+/** Sets `repo`'s own defaults on `hostId`: a field given as undefined follows the global one again. */
+export function setRepoPrefs(hostId: string, repo: string, change: RepoPrefs) {
+  const key = repoKey(hostId, repo);
+  const all = repoPrefStore.get();
+  const next: RepoPrefs = { ...all[key], ...change };
+  for (const field of Object.keys(next) as (keyof RepoPrefs)[])
+    if (next[field] === undefined) delete next[field];
+  const { [key]: _, ...rest } = all;
+  repoPrefStore.set(Object.keys(next).length ? { ...rest, [key]: next } : rest);
+}
+
+/** Each provider instance's labels, by host and instance, kept on this computer. */
+const providerLabelStore = stored<Record<string, string[]>>("parallax.providerLabels", {}, merged);
+
+/** Every instance's labels, kept current. */
+export const useProviderLabels = providerLabelStore.use;
+
+/** Sets an instance's labels. */
+export function setProviderLabels(hostId: string, instance: string, labels: string[]) {
+  const key = `${hostId}/${instance}`;
+  const { [key]: _, ...rest } = providerLabelStore.get();
+  providerLabelStore.set(labels.length ? { ...rest, [key]: labels } : rest);
+}
+
+/** Every label in use, in order, to filter by and suggest. */
+export const allProviderLabels = (all: Record<string, string[]>) =>
+  [...new Set(Object.values(all).flat())].sort((a, b) => a.localeCompare(b));
 
 /**
  * A clock time's `Intl` options, in the chosen format. Time formatting calls this on every render,

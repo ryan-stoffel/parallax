@@ -3,11 +3,14 @@
 use std::collections::BTreeMap;
 
 use parallax_protocol::framing::MAX_FRAME_BYTES;
-use parallax_protocol::methods::{HostHealth, HostUpdate, HostVersion, OrchestratorList};
+use parallax_protocol::jsonrpc::INVALID_PARAMS;
+use parallax_protocol::methods::{
+    HostHealth, HostSettingsGet, HostSettingsSet, HostUpdate, HostVersion, OrchestratorList,
+};
 use parallax_protocol::{
-    Capabilities, ErrorKind, HostHealthParams, HostUpdateParams, HostUpdateRestart,
-    HostVersionParams, IncompatibleProtocolDetail, OrchestratorListParams, ProtocolRange,
-    StoreState,
+    Capabilities, ErrorKind, HostHealthParams, HostSettingsGetParams, HostSettingsSetParams,
+    HostUpdateParams, HostUpdateRestart, HostVersionParams, IncompatibleProtocolDetail,
+    OrchestratorListParams, ProtocolRange, StoreState,
 };
 use serde_json::json;
 
@@ -42,6 +45,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("approvals".to_owned(), serde_json::Map::new()),
             ("autoResume".to_owned(), serde_json::Map::new()),
             ("board".to_owned(), serde_json::Map::new()),
+            ("branchPrefix".to_owned(), serde_json::Map::new()),
             ("chatImport".to_owned(), serde_json::Map::new()),
             ("checkpoints".to_owned(), serde_json::Map::new()),
             ("checks".to_owned(), serde_json::Map::new()),
@@ -188,6 +192,36 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
     assert!(version.os.starts_with("macOS "), "{}", version.os);
     #[cfg(target_os = "linux")]
     assert_eq!(version.os, "linux");
+}
+
+/// PLX-1249: `branchPrefix` starts as `parallax/`, takes what git can start a branch name with,
+/// and refuses the rest.
+#[tokio::test]
+async fn the_branch_prefix_is_saved_and_a_bad_one_is_refused() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
+    client.initialize().await.unwrap();
+    let settings = client
+        .call::<HostSettingsGet>(HostSettingsGetParams::default())
+        .await
+        .unwrap();
+    assert_eq!(settings.branch_prefix.as_deref(), Some("parallax/"));
+
+    let mut set = async |prefix: &str| {
+        client
+            .call::<HostSettingsSet>(HostSettingsSetParams {
+                branch_prefix: Some(prefix.to_owned()),
+                ..HostSettingsSetParams::default()
+            })
+            .await
+    };
+    let saved = set("ryan/").await.unwrap();
+    assert_eq!(saved.branch_prefix.as_deref(), Some("ryan/"));
+    let refused = set("has space/").await.unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+    let cleared = set("").await.unwrap();
+    assert_eq!(cleared.branch_prefix.as_deref(), Some(""));
 }
 
 #[tokio::test]

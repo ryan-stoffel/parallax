@@ -118,7 +118,7 @@ export default defineConfig({
   // protocol types keep the generator's formatting, but are still linted and
   // type-checked.
   lint: { options: { typeAware: true, typeCheck: true } },
-  fmt: { ignorePatterns: ["src/protocol/generated/**"] },
+  fmt: { ignorePatterns: ["src/protocol/generated/**", "src/renderer/settings/*.generated.json"] },
   test: {
     root: ".",
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],

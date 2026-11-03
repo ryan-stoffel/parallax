@@ -100,7 +100,7 @@ const materials: { value: WindowMaterial; name: string }[] = [
 
 /**
  * Settings > Appearance: the theme for each mode and the colors changed over it, the window's
- * background, text, how the interface reads, and the sidebar.
+ * background, text, and the sidebar. Contrast, motion, and diff colors are Accessibility's.
  */
 export function AppearanceSettings({
   theme,
@@ -347,45 +347,6 @@ export function AppearanceSettings({
       )}
 
       <TypographySettings />
-
-      <Section title="Interface">
-        <Row title="Contrast" description="Stronger text and borders. System follows your OS.">
-          <Segmented
-            label="Contrast"
-            options={[
-              { value: "system", name: "System" },
-              { value: "standard", name: "Standard" },
-              { value: "more", name: "More" },
-            ]}
-            value={appearance.contrast}
-            onChange={(contrast) => setAppearance({ contrast })}
-          />
-        </Row>
-        <Row
-          title="Reduce motion"
-          description="Stops animations. Also on whenever your OS asks for less motion."
-        >
-          <Switch
-            label="Reduce motion"
-            checked={appearance.motion === "reduce"}
-            onChange={(on) => setAppearance({ motion: on ? "reduce" : "system" })}
-          />
-        </Row>
-        <Row
-          title="Change colors"
-          description="What marks added and removed lines, and done and failed work."
-        >
-          <Segmented
-            label="Change colors"
-            options={[
-              { value: "redGreen", name: "Red & green" },
-              { value: "blueOrange", name: "Blue & orange" },
-            ]}
-            value={appearance.diffColors}
-            onChange={(diffColors) => setAppearance({ diffColors })}
-          />
-        </Row>
-      </Section>
 
       <SidebarSettings />
     </>

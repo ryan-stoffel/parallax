@@ -82,8 +82,8 @@ export function DiffStat({
   const n = (v: number) => v.toLocaleString(locale());
   return (
     <span title={title} className={`shrink-0 font-mono text-meta tabular-nums ${className}`}>
-      <span className="text-added">+{n(added)}</span>{" "}
-      <span className="text-danger">−{n(removed)}</span>
+      <span className="text-diff-added">+{n(added)}</span>{" "}
+      <span className="text-diff-removed">−{n(removed)}</span>
     </span>
   );
 }
