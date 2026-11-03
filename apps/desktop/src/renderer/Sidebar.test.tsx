@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, test } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
-import { Sidebar } from "./Sidebar";
+import { parseSections, Sidebar } from "./Sidebar";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -38,4 +38,10 @@ test("closing keeps the last visible width when the parent releases the sidebar'
   render(false, 0);
   expect(sidebar().hidden).toBe(true);
   expect(sidebar().style.getPropertyValue("--sidebar-width")).toBe("320px");
+});
+
+test("Working starts collapsed whatever was saved, and the other drawers stay as saved", () => {
+  expect(
+    parseSections({ all: { working: true, archived: true }, "repo:a": { working: true } }, {}),
+  ).toEqual({ all: { working: false, archived: true }, "repo:a": { working: false } });
 });

@@ -400,9 +400,7 @@ export function RepoIcon({ repo, size = "size-4" }: { repo?: Repo; size?: string
 // one shows switches at once.
 const cardDelay = 450;
 
-/**
- * A scope's drawers, by whether each is open. Working stays tucked away until asked for.
- */
+/** A scope's drawers, by whether each is open. */
 type Sections = Record<"working" | "snoozed" | "archived", boolean>;
 const sectionDefaults: Sections = {
   working: false,
@@ -411,11 +409,19 @@ const sectionDefaults: Sections = {
 };
 const record = <T,>(raw: unknown, fallback: Record<string, T>) =>
   raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, T>) : fallback;
+/** What's stored for `sectionsStore`, with Working collapsed: it starts so on every launch. */
+export const parseSections = (raw: unknown, fallback: Record<string, Partial<Sections>>) =>
+  Object.fromEntries(
+    Object.entries(record(raw, fallback)).map(([scope, kept]) => [
+      scope,
+      { ...kept, working: false },
+    ]),
+  );
 /** Which drawers each scope has open (PLX-789), kept on this computer. */
 export const sectionsStore = stored<Record<string, Partial<Sections>>>(
   "parallax:sections",
   {},
-  record,
+  parseSections,
 );
 /** Each scope's last open row, by key, so switching back reopens it. */
 const lastOpenStore = stored<Record<string, string>>("parallax:lastOpen", {}, record);
@@ -807,10 +813,12 @@ export function ThreadList({
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
   // pinned rows, unless Traditional's Pinned is folded, then Today's, then Working's, while it's open.
   const pinsShut = pinnedFolded.use() && folders;
+  // A search shows what it finds in Working, as it does in a folded group.
+  const workingOpen = sections.working || words.length > 0;
   const listed = [
     ...(pinsShut ? [] : [...pinnedOrchestrators, ...pinnedRows]),
     ...todayRows,
-    ...(sections.working ? workingTops : []),
+    ...(workingOpen ? workingTops : []),
   ];
   const modHeld = useModHeld();
   // Opening a row hides its card, which would cover what it opens.
@@ -1975,9 +1983,10 @@ export function ThreadList({
       </div>
       <Drawer
         label="Working"
+        quiet
         items={workingTops}
         row={(item) => rowOf(item)}
-        open={sections.working}
+        open={workingOpen}
         onOpenChange={(o) => toggleSection("working", o)}
       />
       <Drawer
@@ -2075,6 +2084,9 @@ const dropLook = "bg-hover outline-1 outline-border outline-dashed";
  */
 const fadeBottom =
   "pb-4 scroll-pb-4 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1rem),transparent)]";
+
+const quietRows =
+  "[&>li:not(:hover,:focus-within,:has([aria-current]))]:opacity-55 [&>li:not(:hover,:focus-within,:has([aria-current]))]:grayscale";
 
 const cardButton =
   "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-body font-medium text-foreground hover:bg-hover";
@@ -2211,10 +2223,12 @@ function useMinute() {
  * rows, which render only while it's open. Its rows scroll under a cap, below its summary, so
  * collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
  * that many more. Whether it's open is the scope's (PLX-789). With `onDrop`, a row it would take is
- * dragging: it shows even while empty, and a drop on it moves the row in (PLX-1095).
+ * dragging: it shows even while empty, and a drop on it moves the row in (PLX-1095). With `quiet`,
+ * its rows are gray unless hovered, focused, or open.
  */
 function Drawer<T>({
   label,
+  quiet = false,
   items,
   row,
   pageSize,
@@ -2223,6 +2237,7 @@ function Drawer<T>({
   onDrop,
 }: {
   label: string;
+  quiet?: boolean;
   items: T[];
   row: (item: T) => ReactNode;
   pageSize?: number;
@@ -2285,7 +2300,11 @@ function Drawer<T>({
       </summary>
       {/* Only the rows scroll, so none pass under the heading, which has no fill of its own. */}
       <div data-flip-scroll className={`min-h-0 overflow-y-auto ${open ? fadeBottom : ""}`}>
-        {open && <ul className={`${cardGap} ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>}
+        {open && (
+          <ul className={`${cardGap} ${opened ? "rise-in" : ""} ${quiet ? quietRows : ""}`}>
+            {visible.map(row)}
+          </ul>
+        )}
         {open && more > 0 && (
           <button
             type="button"
