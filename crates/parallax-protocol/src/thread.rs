@@ -252,6 +252,10 @@ pub struct RepoUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub icon: Option<ChosenIcon>,
+    /// True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
+    /// replace one the user picked meanwhile. Behind the `repoLogo` capability.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub icon_if_unset: bool,
     /// A Project's new name, trimmed, 1 to 128 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

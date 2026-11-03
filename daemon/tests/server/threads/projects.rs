@@ -75,6 +75,7 @@ async fn a_thread_added_to_a_project_gets_its_instructions_and_leaves_when_it_go
         .call::<RepoUpdate>(RepoUpdateParams {
             repo: project.id,
             icon: None,
+            icon_if_unset: false,
             name: None,
             instructions: Some("Answer in French.".to_owned()),
             files: None,

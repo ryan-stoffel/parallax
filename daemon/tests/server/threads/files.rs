@@ -3,11 +3,12 @@
 //! changing it.
 
 use parallax_protocol::methods::{
-    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles, RepoLogo,
+    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles, RepoLogo, RepoUpdate,
 };
 use parallax_protocol::{
     AgentEntry, AgentEntryKind, AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams, RepoLogoParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams, ChosenIcon,
+    RepoLogoParams, RepoUpdateParams,
 };
 
 use super::*;
@@ -305,4 +306,22 @@ async fn repo_logo_reads_the_best_regular_file_git_does_not_ignore() {
     assert_eq!(logo.path, "public/favicon.png");
     assert_eq!(logo.media_type, "image/png");
     assert_eq!(decode_base64(&logo.data), b"png");
+
+    // Setting it only if unset takes it on a bare entry, and leaves one the user picked.
+    let set = |name: &str| RepoUpdateParams {
+        repo,
+        icon: Some(ChosenIcon {
+            name: name.to_owned(),
+            color: None,
+            image: None,
+        }),
+        icon_if_unset: true,
+        name: None,
+        instructions: None,
+        files: None,
+    };
+    let first = client.call::<RepoUpdate>(set("rocket")).await.unwrap();
+    assert_eq!(first.repo.icon.unwrap().name, "rocket");
+    let second = client.call::<RepoUpdate>(set("folder")).await.unwrap();
+    assert_eq!(second.repo.icon.unwrap().name, "rocket");
 }

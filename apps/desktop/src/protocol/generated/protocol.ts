@@ -6958,6 +6958,11 @@ export type RepoUpdateParams = {
 	 */
 	icon?: ChosenIcon,
 	/**
+	 * True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
+	 * replace one the user picked meanwhile. Behind the `repoLogo` capability.
+	 */
+	iconIfUnset?: boolean,
+	/**
 	 * A Project's new name, trimmed, 1 to 128 bytes.
 	 */
 	name?: string,

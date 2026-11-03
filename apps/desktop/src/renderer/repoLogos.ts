@@ -41,11 +41,6 @@ export function useRepoLogos(
   shared: ReadonlyMap<string, ChosenIcon>,
 ) {
   const tried = useRef(new Set<string>());
-  // Read after the slow part, since the user may pick an icon meanwhile.
-  const latest = useRef(views);
-  useEffect(() => {
-    latest.current = views;
-  });
   useEffect(() => {
     for (const { hostId, repo, maxBytes } of reposWantingLogo(
       hosts,
@@ -54,13 +49,13 @@ export function useRepoLogos(
       tried.current,
     )) {
       tried.current.add(`${hostId}/${repo}`);
+      const update = views[hostId]!.updateRepo;
       void (async () => {
         const answer = await window.parallax.request(hostId, "repo/logo", { repo });
         const logo = "result" in answer ? answer.result.logo : undefined;
         const image = logo && (await readRepoLogo(logo, maxBytes));
-        const view = latest.current[hostId];
-        if (image && !view?.state.repos.find((r) => r.id === repo)?.icon)
-          await view?.updateRepo(repo, { icon: { name: glyph, image } });
+        // plxd keeps an icon the user picked meanwhile.
+        if (image) await update(repo, { icon: { name: glyph, image }, iconIfUnset: true });
       })();
     }
   }, [hosts, views, shared]);
