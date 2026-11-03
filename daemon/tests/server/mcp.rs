@@ -100,17 +100,12 @@ impl Mcp {
         assert_eq!(initialized["result"]["serverInfo"]["name"], "plxd");
         assert!(initialized["result"]["capabilities"]["tools"].is_object());
         // Every thread's agent is told to show the documents it makes (PLX-755), to read and wait
-        // on pull requests through plxd (PLX-837), to open devices only in Parallax (PLX-908), and
-        // to ask for secrets through the private card (0098).
+        // on pull requests through plxd (PLX-837), and to open devices only in Parallax (PLX-908).
         let instructions = initialized["result"]["instructions"].as_str().unwrap();
         assert!(instructions.contains("present_files"), "{instructions}");
         assert!(
             instructions.contains("pull_request_status")
                 && instructions.contains("watch_pull_request"),
-            "{instructions}"
-        );
-        assert!(
-            instructions.contains("request_secret") && instructions.contains("sudo -k -S"),
             "{instructions}"
         );
         assert!(

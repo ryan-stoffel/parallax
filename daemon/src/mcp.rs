@@ -210,13 +210,11 @@ async fn answer(binding: &impl Tools, request: &Request) -> Result<Value, ErrorO
                 "serverInfo": {"name": SERVER, "version": crate::version()},
             });
             // The CLI puts these in the model's instructions, so documents get shown unasked, pull
-            // requests are read and waited on through plxd, secrets go through the private card,
-            // and devices show only in Parallax.
+            // requests are read and waited on through plxd, and devices show only in Parallax.
             let names = binding.names();
             let instructions: Vec<&str> = [
                 ("present_files", files::INSTRUCTIONS),
                 ("pull_request_status", triggers::INSTRUCTIONS),
-                ("request_secret", delegation::INSTRUCTIONS),
                 ("device_open", device::INSTRUCTIONS),
                 #[cfg(target_os = "macos")]
                 ("computer_get_app_state", computer::INSTRUCTIONS),
