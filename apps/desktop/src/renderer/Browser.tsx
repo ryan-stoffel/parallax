@@ -5,8 +5,7 @@ import type {
   WebviewTag,
 } from "electron";
 import { TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
@@ -38,7 +37,7 @@ import { fitSize, MONITOR, PageFrame, type Fit, type Size } from "./PageFrame";
 import { backendLogo } from "./Sidebar";
 import { instanceName } from "./providers";
 import { askSiteIcon, siteIcons, siteOf } from "./siteIcons";
-import { memory, stored } from "./stored";
+import { stored } from "./stored";
 import {
   Add,
   ArrowBack,
@@ -103,11 +102,11 @@ export function browserUrl(address: string): string | undefined {
 }
 
 /**
- * The address bar's box, as Chrome and Helium draw it: a rounded field, as tall as Helium's, with
- * an icon before the text, ringed in the accent while focused. Its input takes `addressInput`.
+ * The address bar's box: a short rounded field, ringed in the accent while focused. An agent's tab
+ * puts its driver's logo before the text. Its input takes `addressInput`.
  */
 export const addressBox =
-  "flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-transparent bg-[var(--browser-omnibox,var(--selected))] px-3 text-body focus-within:border-ring focus-within:bg-background [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
+  "flex h-7 min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent bg-[var(--browser-omnibox,var(--selected))] px-2.5 text-body focus-within:border-ring focus-within:bg-background [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
 export const addressInput =
   "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground";
 
@@ -131,12 +130,6 @@ export function nextZoom(factor: number, direction: 1 | -1): number {
   return next ?? factor;
 }
 
-/** How a browser lays out its bar, as Helium does (PLX-966): all in one row, or tabs over a toolbar. */
-type BrowserLayout = "compact" | "classic";
-export const browserLayout = stored<BrowserLayout>("parallax.browserLayout", "compact", (raw, f) =>
-  raw === "compact" || raw === "classic" ? raw : f,
-);
-
 /**
  * How the user's own pages fit: the room they have, as in any browser, until they pick Desktop.
  * The agent's tabs keep `browserFit`, whose default is a monitor (PageFrame.tsx).
@@ -144,22 +137,6 @@ export const browserLayout = stored<BrowserLayout>("parallax.browserLayout", "co
 export const pageFit = stored<Fit>("parallax.pageFit", "panel", (raw, f) =>
   raw === "monitor" || raw === "panel" ? raw : f,
 );
-
-// The narrowest bar that holds the compact row: the address bar's 192 px, a tab and New tab, the
-// extensions and More, and room for a couple of extensions' buttons.
-const COMPACT_WIDTH = 460;
-
-// The compact layout's slots in each browser's top bar, by scope: before its tabs, for back,
-// forward, reload, and the address bar, and after them, for the extensions and More. The shown
-// tab draws its toolbar into them.
-const toolbarSlots = memory<Readonly<Record<string, { start?: HTMLElement; end?: HTMLElement }>>>(
-  {},
-);
-function setSlot(scope: string, side: "start" | "end", el: HTMLElement | undefined) {
-  const all = toolbarSlots.get();
-  if (all[scope]?.[side] === el) return;
-  toolbarSlots.set({ ...all, [scope]: { ...all[scope], [side]: el } });
-}
 
 // Each tab's handler for what its page asks (main.ts), by its webview's webContents id, behind one
 // listener however many tabs there are.
@@ -177,10 +154,11 @@ function onAsk(id: number, handler: (action: BrowserAction) => void) {
 }
 
 /**
- * One of the user's tabs, as the top bar shows it. `load` is a page for it to open. A tab
- * `restored` from before a restart has its saved `url` and no webview until it's first shown.
+ * One of the user's browser tabs, which the side panel keeps and shows in its tabs. `load` is a page
+ * for it to open. A tab `restored` from before a restart has its saved `url` and no webview until
+ * it's first shown.
  */
-interface OwnTab {
+export interface OwnTab {
   id: number;
   load?: { url: string };
   restored?: boolean;
@@ -193,7 +171,7 @@ interface OwnTab {
 }
 
 let lastTab = 0;
-const ownTab = (url?: string): OwnTab => ({ id: ++lastTab, ...(url && { load: { url } }) });
+export const ownTab = (url?: string): OwnTab => ({ id: ++lastTab, ...(url && { load: { url } }) });
 
 /** A browser's own tabs as saved for after a restart (PLX-964): each page, and the one in front. */
 export interface SavedTabs {
@@ -211,7 +189,7 @@ const SAVED_ICON = 16_384;
  * to 256 KB (main.ts), and a favicon is a few KB, so a larger one isn't kept. Undefined when none
  * has a page.
  */
-export function savedOf(tabs: readonly OwnTab[], current: number): SavedTabs | undefined {
+export function savedOf(tabs: readonly OwnTab[], current?: number): SavedTabs | undefined {
   const kept = tabs.filter((t) => t.url);
   if (!kept.length) return undefined;
   return {
@@ -251,202 +229,80 @@ const savedTabs = stored<Record<string, SavedTabs>>("parallax.browserTabs", {}, 
     : fallback,
 );
 
-/** The tabs `scope`'s browser opens with: its saved ones, or one blank tab. */
-function restored(scope: string | undefined): { tabs: OwnTab[]; current: number } {
-  // Unless the user would rather start on a new tab (Settings › Browser › On startup). Tabs keep
-  // being saved meanwhile, so turning it back on finds them.
-  const saved = scope && restoreTabs.get() ? savedTabs.get()[scope] : undefined;
+/** The tabs `scope`'s panel opens with, which may be none, and the one in front. */
+export function restored(scope: string): { tabs: OwnTab[]; current?: number } {
+  // Unless the user would rather start without them (Settings › Browser › On startup). They stay
+  // saved until this scope's tabs next change.
+  const saved = restoreTabs.get() ? savedTabs.get()[scope] : undefined;
   const pages = Array.isArray(saved?.tabs)
     ? saved.tabs.filter((t) => typeof t?.url === "string")
     : [];
-  const tabs = pages.length
-    ? pages.map((t) => ({ ...ownTab(), restored: true, ...t }))
-    : [ownTab()];
-  return { tabs, current: (tabs[saved?.current ?? 0] ?? tabs[0]!).id };
+  const tabs = pages.map((t) => ({ ...ownTab(), restored: true, ...t }));
+  return { tabs, current: (tabs[saved?.current ?? 0] ?? tabs[0])?.id };
+}
+
+/** The open thread's agent browser tabs (PLX-639), its backend, and how the user closes one. */
+export interface AgentTabs {
+  hostId: string;
+  runId: string;
+  tabs: PreviewTab[];
+  backend?: string;
+  close: (tabId: string) => void;
 }
 
 /**
- * A chat's browser in the side panel, laid out like Chrome (PLX-888). Its tabs, the agent's (PLX-639) then the user's own, show in the top bar
- * over it (`browserTabs`, `BrowserTabBar`), so it has one row of tabs. Each own tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
- * whose new windows open as tabs here. Each new `page` opens in the current tab while it's blank,
- * or else in a new one. Its own tabs are saved under `scope` and come back after a restart
- * (PLX-964). `remoteHost`, the open host's name when it's an SSH host, notes that localhost is
- * this computer (PLX-1013). Closing its last tab calls `onEmpty`.
+ * A panel scope's browser pages, in the side panel (PLX-888): a webview per own tab, which main keeps
+ * in its own session with no preload or Node (main.ts), and the agent's tab in front. The panel
+ * (SidePanel.tsx) owns the tabs and draws them in its top bar; `onChange` reports what a page learns
+ * and `onAsk` what it asks of the tab list. `frontPage` or `agentTab` is the tab in front, if one is.
+ * The first time a restored tab is in front while `visible`, it opens its page. Its own tabs are
+ * saved under `scope`, with `lastPage` as the one in front, and come back after a restart (PLX-964).
+ * `remoteHost`, the open host's name when it's an SSH host, notes that localhost is this computer
+ * (PLX-1013).
  */
 export function Browser({
-  page,
-  remoteHost,
   scope,
+  pages,
+  frontPage,
+  lastPage,
+  agentTab,
+  visible,
+  remoteHost,
   agent,
-  onEmpty,
+  onChange,
+  onAsk,
 }: {
-  page?: { url?: string; agentTab?: string };
+  scope: string;
+  pages: readonly OwnTab[];
+  frontPage?: number;
+  lastPage?: number;
+  agentTab?: string;
+  visible: boolean;
   remoteHost?: string;
-  /**
-   * The side panel scope it shows in, under which it publishes its tabs (`browserTabs`) and saves
-   * them.
-   */
-  scope?: string;
-  /** The open thread's agent tabs (PLX-639), which show before the user's own, and its backend. */
-  agent?: { hostId: string; runId: string; tabs: PreviewTab[]; backend?: string };
-  onEmpty?: () => void;
+  agent?: AgentTabs;
+  onChange: (id: number, patch: Partial<OwnTab>) => void;
+  /** `from` is the tab asking, or undefined for an agent's tab in front. */
+  onAsk: (from: number | undefined, action: BrowserAction) => void;
 }) {
   const driver = driverOf(agent?.backend);
-  // The agent's tabs show their sites' favicons, which plxd doesn't report.
-  const icons = siteIcons.use();
-  // An SSH host's localhost isn't this computer's, which main fetches from, so it gets none.
-  const iconSite = (url: string) =>
-    remoteHost && /^(localhost|127\.|\[::1\])/.test(URL.parse(url)?.hostname ?? "")
-      ? ""
-      : siteOf(url);
-  const agentUrls = (agent?.tabs ?? []).map((t) => t.url).join(" ");
-  useEffect(() => {
-    for (const url of agentUrls.split(" ")) askSiteIcon(iconSite(url));
-  }, [agentUrls]);
-  // The agent tab shown, by id, or undefined for the user's own tab `current`.
-  const [agentTab, setAgentTab] = useState<string>();
   const shownTab = agent?.tabs.find((t) => t.tabId === agentTab);
-  const [start] = useState(() => restored(scope));
-  const [tabs, setTabs] = useState(start.tabs);
-  const [current, setCurrent] = useState(start.current);
-
-  const update = (id: number, patch: Partial<OwnTab>) =>
-    setTabs((all) => all.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-  // A new tab after `after`, or at the end, which becomes the current one. An empty new tab
-  // reuses a blank one, so they don't pile up.
-  const newTab = (url?: string, after?: number, focus = true) => {
-    const blank = !url && tabs.find((t) => !t.url && !t.load);
-    if (blank) {
-      setCurrent(blank.id);
-      setAgentTab(undefined);
-      return;
-    }
-    const tab = { ...ownTab(url), focus };
-    setTabs((all) => {
-      const at = all.findIndex((t) => t.id === after);
-      return at < 0 ? [...all, tab] : all.toSpliced(at + 1, 0, tab);
-    });
-    setCurrent(tab.id);
-    setAgentTab(undefined);
-  };
-  // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
-  const closed = useRef<string[]>([]);
   // History (PLX-976), one for the browser, which any of its tabs opens.
   const history = useRef<HTMLDialogElement>(null);
-  const reopen = () => {
-    const page = closed.current.at(-1);
-    closed.current = closed.current.slice(0, -1);
-    if (page) newTab(page, current);
-  };
-  // Closing the last own tab shows the agent's tab before it, as Chrome shows a neighbor. With no
-  // agent tab either, it hides the browser, as Chrome closes its window, and leaves a blank tab for
-  // when it shows again.
-  const close = (id: number) => {
-    const at = tabs.findIndex((t) => t.id === id);
-    const page = tabs[at]?.url;
-    if (page) closed.current = [...closed.current.slice(-24), page];
-    const rest = tabs.filter((t) => t.id !== id);
-    const agentLast = agent?.tabs.at(-1);
-    if (!rest.length) {
-      // An agent's tab already shown stays.
-      if (agentLast) {
-        if (!shownTab) setAgentTab(agentLast.tabId);
-      } else {
-        rest.push(ownTab());
-        onEmpty?.();
-      }
-    }
-    setTabs(rest);
-    if (id === current && rest.length) setCurrent(rest[Math.min(at, rest.length - 1)]!.id);
-  };
-  // With no own tab left, once the agent's are gone too, a blank one shows.
-  const empty = !tabs.length && !shownTab;
-  useEffect(() => {
-    if (!empty) return;
-    const tab = ownTab();
-    setTabs([tab]);
-    setCurrent(tab.id);
-  }, [empty]);
 
   // A restored tab opens its page the first time it's shown.
-  const shownOwn = tabs.find((t) => t.id === current);
+  const shownOwn = pages.find((t) => t.id === frontPage);
   useEffect(() => {
-    if (shownOwn?.restored && shownOwn.url)
-      update(shownOwn.id, { restored: false, load: { url: shownOwn.url } });
-  }, [shownOwn]);
+    if (visible && shownOwn?.restored && shownOwn.url)
+      onChange(shownOwn.id, { restored: false, load: { url: shownOwn.url } });
+  }, [visible, shownOwn]);
 
   // Each change to the tabs' pages, or to the one in front, is saved for after a restart.
-  const saved = scope ? savedOf(tabs, current) : undefined;
+  const saved = savedOf(pages, lastPage);
   const savedJson = JSON.stringify(saved);
   useEffect(() => {
-    if (!scope || JSON.stringify(savedTabs.get()[scope]) === savedJson) return;
+    if (JSON.stringify(savedTabs.get()[scope]) === savedJson) return;
     savedTabs.set(withSaved(savedTabs.get(), scope, saved));
   }, [scope, savedJson]);
-
-  // Only a new `page` opens a page, or shows an agent's tab.
-  useEffect(() => {
-    if (page?.agentTab) setAgentTab(page.agentTab);
-    else if (page?.url !== undefined) {
-      const tab = tabs.find((t) => t.id === current);
-      if (tab && !tab.url && !tab.load) {
-        update(tab.id, { load: { url: page.url }, focus: false });
-        setAgentTab(undefined);
-      } else newTab(page.url, current, false);
-    }
-  }, [page]);
-
-  // The side panel's top bar draws these tabs while the Browser view is in front (SidePanel.tsx).
-  // Its buttons call the latest handlers, and the list is published only when what it shows
-  // changes, since publishing re-renders the panel.
-  const handlers = useRef({ setAgentTab, setCurrent, close, newTab });
-  handlers.current = { setAgentTab, setCurrent, close, newTab };
-  const faces: BrowserTabFace[] = [
-    ...(agent?.tabs ?? []).map((t) => ({
-      key: `a:${t.tabId}`,
-      title: t.title || shortUrl(t.url) || "Agent's tab",
-      url: t.url,
-      ...(icons[iconSite(t.url)] && { icon: icons[iconSite(t.url)] }),
-      agent: driver.name,
-    })),
-    ...tabs.map((t) => ({
-      key: `o:${t.id}`,
-      title: t.title || (t.url ? shortUrl(t.url) : "New Tab"),
-      ...(t.url && { url: t.url }),
-      ...(t.icon && { icon: t.icon }),
-    })),
-  ];
-  const selected = shownTab ? `a:${shownTab.tabId}` : `o:${current}`;
-  const published = JSON.stringify([
-    faces.map((f) => [f.key, f.title, f.url, f.icon, f.agent]),
-    selected,
-  ]);
-  useEffect(() => {
-    if (!scope) return;
-    browserTabs.set({
-      ...browserTabs.get(),
-      [scope]: {
-        tabs: faces,
-        selected,
-        select: (key) => {
-          if (key.startsWith("a:")) handlers.current.setAgentTab(key.slice(2));
-          else {
-            handlers.current.setCurrent(Number(key.slice(2)));
-            handlers.current.setAgentTab(undefined);
-          }
-        },
-        close: (key) => key.startsWith("o:") && handlers.current.close(Number(key.slice(2))),
-        newTab: () => handlers.current.newTab(),
-      },
-    });
-  }, [scope, published]);
-  useEffect(
-    () => () => {
-      if (!scope) return;
-      const { [scope]: _gone, ...rest } = browserTabs.get();
-      browserTabs.set(rest);
-    },
-    [scope],
-  );
 
   return (
     // Cmd/Ctrl+Shift+T and History anywhere in the browser's own UI too, such as a blank tab's
@@ -456,7 +312,7 @@ export function Browser({
         const key = e.key.toLowerCase();
         const mac = window.parallax.platform === "darwin";
         if (!modKey(e) || e.altKey) return;
-        if (e.shiftKey && key === "t") reopen();
+        if (e.shiftKey && key === "t") onAsk(frontPage, { kind: "reopenTab" });
         else if (!e.shiftKey && key === (mac ? "y" : "h")) history.current?.showModal();
         else return;
         e.preventDefault();
@@ -467,12 +323,8 @@ export function Browser({
       <HistoryDialog
         ref={history}
         onOpen={(url, inNewTab) => {
-          const tab = tabs.find((t) => t.id === current);
-          if (inNewTab || !tab) newTab(url, current);
-          else {
-            update(tab.id, { load: { url } });
-            setAgentTab(undefined);
-          }
+          if (inNewTab || !shownOwn) onAsk(frontPage, { kind: "open", url });
+          else onChange(shownOwn.id, { load: { url } });
         }}
       />
       {shownTab && agent && (
@@ -485,36 +337,18 @@ export function Browser({
         />
       )}
       {/* Every own tab stays mounted, so its page keeps its state behind the others. */}
-      {tabs.map((t) => (
+      {pages.map((t) => (
         <Tab
           key={t.id}
-          scope={scope}
-          shown={!shownTab && t.id === current}
+          shown={t.id === frontPage}
           page={t.url ? { url: t.url, title: t.title, icon: t.icon } : undefined}
           load={t.load}
           focusOnLoad={!!t.focus}
           remoteHost={remoteHost}
-          onChange={(patch) => update(t.id, patch)}
-          onAsk={(action) => {
-            // Another of the user's tabs, from this one's place: Chrome's tab shortcuts.
-            const at = tabs.indexOf(t);
-            const show = (to: OwnTab | undefined) => {
-              if (!to) return;
-              setCurrent(to.id);
-              setAgentTab(undefined);
-            };
-            if (action.kind === "open") newTab(action.url, t.id);
-            else if (action.kind === "newTab") newTab();
-            else if (action.kind === "closeTab") close(t.id);
-            else if (action.kind === "select") show(t);
-            else if (action.kind === "nextTab") show(tabs[(at + 1) % tabs.length]);
-            else if (action.kind === "previousTab")
-              show(tabs[(at - 1 + tabs.length) % tabs.length]);
-            else if (action.kind === "tab") show(tabs[action.index]);
-            else if (action.kind === "lastTab") show(tabs.at(-1));
-            else if (action.kind === "reopenTab") reopen();
-            else if (action.kind === "history") history.current?.showModal();
-          }}
+          onChange={(patch) => onChange(t.id, patch)}
+          onAsk={(action) =>
+            action.kind === "history" ? history.current?.showModal() : onAsk(t.id, action)
+          }
         />
       ))}
     </div>
@@ -537,27 +371,41 @@ const driverOf = (backend?: string): Driver =>
       }
     : { name: "The agent" };
 
-/** A browser tab as its top bar draws it: its key is `a:` and an agent tab's id, or `o:` and an own tab's. */
-interface BrowserTabFace {
-  key: string;
+/** A browser tab as the side panel's top bar draws it. */
+export interface BrowserTabFace {
   title: string;
   url?: string;
   icon?: string;
-  /** The agent driving it, for an agent's tab. */
-  agent?: string;
 }
 
-/** A scope's browser tabs, which tab is in front, and what its top bar's buttons do. */
-interface BrowserTabs {
-  tabs: BrowserTabFace[];
-  selected: string;
-  select: (key: string) => void;
-  close: (key: string) => void;
-  newTab: () => void;
-}
+/** One of the user's tabs as the panel draws it. */
+export const pageFace = (t: OwnTab): BrowserTabFace => ({
+  title: t.title || (t.url ? shortUrl(t.url) : "New Tab"),
+  ...(t.url && { url: t.url }),
+  ...(t.icon && { icon: t.icon }),
+});
 
-/** Each browser's tabs, by its side panel's scope. */
-const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
+/**
+ * How the panel draws an agent's tabs, which show their sites' favicons, which plxd doesn't report.
+ * An SSH host's localhost isn't this computer's, which main fetches from, so it gets none.
+ */
+export function useAgentFace(agent: AgentTabs | undefined, remoteHost: string | undefined) {
+  const icons = siteIcons.use();
+  const iconSite = (url: string) =>
+    remoteHost && /^(localhost|127\.|\[::1\])/.test(URL.parse(url)?.hostname ?? "")
+      ? ""
+      : siteOf(url);
+  const urls = (agent?.tabs ?? []).map((t) => t.url).join(" ");
+  useEffect(() => {
+    for (const url of urls.split(" ")) askSiteIcon(iconSite(url));
+  }, [urls]);
+  const name = driverOf(agent?.backend).name;
+  return (tab: PreviewTab): BrowserTabFace => ({
+    title: tab.title || shortUrl(tab.url) || "Agent's tab",
+    url: `${name}: ${tab.url}`,
+    ...(icons[iconSite(tab.url)] && { icon: icons[iconSite(tab.url)] }),
+  });
+}
 
 /**
  * One of the user's own tabs: back, forward, reload or stop, a loading bar, and an address bar
@@ -566,7 +414,6 @@ const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
  * asks of the tab list, such as opening a tab.
  */
 function Tab({
-  scope,
   shown,
   focusOnLoad,
   page,
@@ -575,7 +422,6 @@ function Tab({
   onChange,
   onAsk: ask,
 }: {
-  scope?: string;
   shown: boolean;
   focusOnLoad?: boolean;
   /** The page it shows, for its bookmark star (Bookmarks.tsx). */
@@ -603,7 +449,6 @@ function Tab({
   const [fixed, setFixed] = useState<Size>();
   const [area, setArea] = useState<Size>(MONITOR);
   const fit = pageFit.use();
-  const layout = browserLayout.use();
   const engine = searchEngine.use();
   const homePage = homeButton.use();
   // The address bar's suggestions while the user types in it (PLX-978), and the one picked.
@@ -629,7 +474,6 @@ function Tab({
         )
       : [];
   const showBookmarks = bookmarksBar.use();
-  const slots = toolbarSlots.use()[scope ?? ""];
   const pageSize = fixed ?? fitSize(area.width, area.height, fit);
   const refit = (next: Fit) => {
     pageFit.set(next);
@@ -818,16 +662,10 @@ function Tab({
 
   const navBar = (
     <>
-      <IconButton
-        size="lg"
-        label="Back"
-        disabled={!history.back}
-        onClick={() => view.current?.goBack()}
-      >
+      <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
         <ArrowBack />
       </IconButton>
       <IconButton
-        size="lg"
         label="Forward"
         disabled={!history.forward}
         onClick={() => view.current?.goForward()}
@@ -835,11 +673,11 @@ function Tab({
         <ArrowForward />
       </IconButton>
       {loading ? (
-        <IconButton size="lg" label="Stop" onClick={() => view.current?.stop()}>
+        <IconButton label="Stop" onClick={() => view.current?.stop()}>
           <Close />
         </IconButton>
       ) : (
-        <IconButton size="lg" label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
+        <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
           <Refresh />
         </IconButton>
       )}
@@ -847,7 +685,6 @@ function Tab({
       {homePage.show && (
         <IconButton
           label="Home"
-          size="lg"
           onClick={() => (homePage.url.trim() ? open(homePage.url) : ask({ kind: "newTab" }))}
         >
           <Home />
@@ -856,9 +693,7 @@ function Tab({
       {/* The address bar alone is the form, so Enter opens it whatever else the toolbar holds:
             a form with two text fields and no submit button doesn't submit on Enter. */}
       <form
-        // Classic's second row keeps as short as it can, since the top row's height is the
-        // window's title bar (frame.ts).
-        className={`relative mx-1 ${addressBox} ${layout === "classic" ? "h-8!" : ""}`}
+        className={`relative mx-1 ${addressBox}`}
         onSubmit={(e) => {
           e.preventDefault();
           open(suggestions[picked]?.url ?? address);
@@ -866,7 +701,6 @@ function Tab({
           addressBar.current?.blur();
         }}
       >
-        <Search aria-hidden />
         <input
           ref={addressBar}
           // A new tab's address bar takes focus, as in Chrome, but not a tab shown again or one
@@ -982,7 +816,7 @@ function Tab({
       <DownloadsButton />
       <Extensions tab={contentsId} onOpen={(url) => ask({ kind: "open", url })} />
       <ProfileButton onOpen={(url) => ask({ kind: "open", url })} />
-      <IconButton label="More" size="lg" popoverTarget={menuId} aria-haspopup="menu">
+      <IconButton label="More" popoverTarget={menuId} aria-haspopup="menu">
         <MoreVert />
       </IconButton>
       <Menu ref={menu} id={menuId} label="More" align="end" className="w-72 p-1.5">
@@ -1093,19 +927,10 @@ function Tab({
       </Menu>
     </>
   );
-  // Compact draws the shown tab's toolbar into its browser's top bar, around the tabs; each tab's
-  // stays mounted there, hidden behind the shown one's. Classic gives it a row under the tabs.
-  const into = (slot: HTMLElement | undefined, bar: ReactNode, className: string) =>
-    slot &&
-    createPortal(
-      <div className={shown ? `flex items-center ${className}` : "hidden"}>{bar}</div>,
-      slot,
-    );
-  const compact = layout === "compact" && !!slots?.start && !!slots.end;
 
   return (
     // Chrome's find, bookmark, and print keys in the tab's own UI too, its address bar and find bar
-    // (which its portal's events reach here), rather than the app's Find in thread.
+    // rather than the app's Find in thread.
     <div
       onKeyDown={(e) => {
         if (!modKey(e) || e.altKey) return;
@@ -1123,20 +948,13 @@ function Tab({
         e.preventDefault();
         e.stopPropagation();
       }}
-      // The theme's toolbar color under the tabs and around the page (browserTheme.ts).
+      // The theme's toolbar color around the page (browserTheme.ts).
       className={`min-h-0 flex-1 flex-col bg-[var(--browser-toolbar,transparent)] ${shown ? "flex" : "hidden"}`}
     >
-      {compact ? (
-        <>
-          {into(slots.start, navBar, "min-w-0 flex-1 gap-0.5")}
-          {into(slots.end, toolsBar, "shrink-0")}
-        </>
-      ) : (
-        <div className="flex h-10 shrink-0 items-center gap-0.5 px-2 pb-1">
-          {navBar}
-          {toolsBar}
-        </div>
-      )}
+      <div className="flex h-8 shrink-0 items-center gap-0.5 px-1">
+        {navBar}
+        {toolsBar}
+      </div>
       <BookmarksBar onOpen={(url, newTab) => (newTab ? ask({ kind: "open", url }) : open(url))} />
       {remoteHost && (
         <p className="border-b border-border px-3 py-1.5 text-meta text-muted-foreground">
@@ -1231,128 +1049,6 @@ function Tab({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-/**
- * A browser's top bar, as Helium draws it (PLX-966): its tabs with New tab after them, the tabs
- * the browser under `scope` publishes (`browserTabs`). In the compact layout the shown tab's back,
- * forward, reload, and address bar come before them, and its extensions and More after. The side
- * panel shows it.
- */
-export function BrowserTabBar({ scope }: { scope: string }) {
-  const browser = browserTabs.use()[scope];
-  // The bar's width, which its parent sets, so it doesn't change with what the bar holds.
-  const bar = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(Infinity);
-  useEffect(() => {
-    const el = bar.current;
-    if (!el) return;
-    const observer = new ResizeObserver(([entry]) => setWidth(entry!.contentRect.width));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [browser !== undefined]);
-  // Compact only while one row holds it all, so nothing slides under the buttons after the bar;
-  // a narrower bar, and an agent's tab, whose own toolbar is a row of its own, get the classic row.
-  const compact =
-    browserLayout.use() === "compact" &&
-    width >= COMPACT_WIDTH &&
-    !browser?.selected.startsWith("a:");
-  // Stable per scope, so React doesn't detach and reattach the slots on every render.
-  const start = useCallback(
-    (el: HTMLDivElement | null) => {
-      setSlot(scope, "start", el ?? undefined);
-      return () => setSlot(scope, "start", undefined);
-    },
-    [scope],
-  );
-  const end = useCallback(
-    (el: HTMLDivElement | null) => {
-      setSlot(scope, "end", el ?? undefined);
-      return () => setSlot(scope, "end", undefined);
-    },
-    [scope],
-  );
-  if (!browser) return null;
-  return (
-    <div ref={bar} className="flex min-w-0 flex-1 items-center gap-1">
-      {/* The address bar keeps room to read, and the tabs room for one. */}
-      {compact && <div ref={start} className="flex min-w-48 flex-[3] items-center" />}
-      <div className={`flex min-w-16 items-center gap-0.5 ${compact ? "flex-[2]" : "flex-1"}`}>
-        <div
-          role="tablist"
-          aria-label="Browser tabs"
-          className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
-        >
-          {browser.tabs.map((tab) => (
-            <BrowserTab
-              key={tab.key}
-              tab={tab}
-              selected={tab.key === browser.selected}
-              onSelect={() => browser.select(tab.key)}
-              onClose={() => browser.close(tab.key)}
-            />
-          ))}
-        </div>
-        <IconButton label="New tab" size="lg" onClick={browser.newTab}>
-          <Add />
-        </IconButton>
-      </div>
-      {compact && <div ref={end} className="flex shrink-0 items-center" />}
-    </div>
-  );
-}
-
-/**
- * One of the browser's tabs in the top bar, as Helium draws one: its icon, title, and close
- * button, every tab the same width, shrinking together as more open. The close button shows on
- * the one in front and on hover. An agent's tab has its site's favicon too, and no close button,
- * since the agent closes it.
- */
-function BrowserTab({
-  tab,
-  selected,
-  onSelect,
-  onClose,
-}: {
-  tab: BrowserTabFace;
-  selected: boolean;
-  onSelect: () => void;
-  onClose: () => void;
-}) {
-  const icon = tab.icon ? (
-    <img src={tab.icon} alt="" className="size-4 shrink-0" />
-  ) : (
-    <Public aria-hidden className="size-4 shrink-0" />
-  );
-  return (
-    <div
-      className={`group flex h-9 w-60 min-w-10 shrink items-center rounded-xl text-body ${selected ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
-    >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={selected}
-        title={tab.agent ? `${tab.agent}: ${tab.url ?? ""}` : tab.url}
-        onClick={onSelect}
-        // A middle click closes a tab, as in Chrome.
-        onAuxClick={(e) => e.button === 1 && !tab.agent && onClose()}
-        className="flex h-full min-w-0 flex-1 items-center gap-2.5 pl-3 text-left"
-      >
-        {icon}
-        <span className="truncate">{tab.title}</span>
-      </button>
-      {!tab.agent && (
-        <button
-          type="button"
-          aria-label={`Close ${tab.title}`}
-          onClick={onClose}
-          className={`mr-1 size-7 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
-        >
-          <Close aria-hidden className="size-4" />
-        </button>
-      )}
     </div>
   );
 }

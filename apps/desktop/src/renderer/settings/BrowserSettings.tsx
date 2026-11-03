@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-import { browserLayout, pageFit, ThemePicker } from "../Browser";
+import { pageFit, ThemePicker } from "../Browser";
 import { bookmarksBar } from "../Bookmarks";
 import {
   downloadPrefs,
@@ -21,7 +21,6 @@ import { PageTitle, quietButton, Row, rowField, Section, Switch } from "./parts"
  * searches with, how it starts, its home button, clearing its data, and its extensions.
  */
 export function BrowserSettings() {
-  const layout = browserLayout.use();
   const fit = pageFit.use();
   const showBookmarks = bookmarksBar.use();
   const engine = searchEngine.use();
@@ -38,7 +37,7 @@ export function BrowserSettings() {
   return (
     <>
       <PageTitle title="Browser">
-        The browser in the side panel and in the sidebar's globe. These apply to every one of them.
+        The browser tabs in the side panel. These apply to all of them.
       </PageTitle>
 
       <Section title="Appearance">
@@ -52,17 +51,6 @@ export function BrowserSettings() {
           </div>
           <ThemePicker />
         </div>
-        <Row title="Layout" description="Compact puts the tabs and the address bar in one row">
-          <Picker
-            label="Layout"
-            value={layout}
-            onChange={(v) => browserLayout.set(v as "compact" | "classic")}
-            options={[
-              { value: "compact", label: "Compact" },
-              { value: "classic", label: "Classic" },
-            ]}
-          />
-        </Row>
         <Row title="Show bookmarks bar" description="Under the toolbar, while there are bookmarks">
           <Switch
             label="Show bookmarks bar"
@@ -97,7 +85,7 @@ export function BrowserSettings() {
       <Section title="On startup">
         <Row
           title="Continue where you left off"
-          description="Each browser opens the tabs it had. Off, it opens a new tab."
+          description="Each side panel opens the browser tabs it had. Off, they don't come back."
         >
           <Switch
             label="Continue where you left off"

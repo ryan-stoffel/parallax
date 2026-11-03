@@ -122,7 +122,7 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
           class: "browser-action",
         }),
       )}
-      <IconButton label="Extensions" size="lg" popoverTarget={menuId} aria-haspopup="menu">
+      <IconButton label="Extensions" popoverTarget={menuId} aria-haspopup="menu">
         <Extension />
       </IconButton>
       <Menu

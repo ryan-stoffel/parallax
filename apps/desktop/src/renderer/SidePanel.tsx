@@ -7,6 +7,7 @@ import {
   FolderTree,
   GitCompare,
   GitPullRequest,
+  Globe,
   SquareKanban,
   Maximize2,
   Minimize2,
@@ -19,9 +20,18 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
-import { Browser, BrowserTabBar } from "./Browser";
+import type { BrowserAction } from "../preload/bridge";
+import {
+  Browser,
+  ownTab,
+  pageFace,
+  restored,
+  useAgentFace,
+  type AgentTabs,
+  type OwnTab,
+} from "./Browser";
 import { useBrowserTheme } from "./browserTheme";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
@@ -41,7 +51,25 @@ interface Surface {
   url?: string;
   /** A presented file's tab (PLX-755). */
   doc?: DocRef;
+  /** One of the user's browser tabs: its id in `Scoped.pages`. */
+  page?: number;
+  /** One of an agent's browser tabs (PLX-639). */
+  agent?: { runId: string; tabId: string };
 }
+
+const isBrowserTab = (s: Surface | undefined) => s?.page !== undefined || !!s?.agent;
+const pageSurface = (page: number): Surface => ({
+  name: "New Tab",
+  icon: Globe,
+  key: `page:${page}`,
+  page,
+});
+const agentSurface = (runId: string, tabId: string): Surface => ({
+  name: "Agent's tab",
+  icon: Globe,
+  key: `agent:${runId}:${tabId}`,
+  agent: { runId, tabId },
+});
 
 const docIcons = {
   docx: FileText,
@@ -100,6 +128,8 @@ const surfaces: Surface[] = [
     key: "P",
     empty: { title: "No pull requests", hint: "Pull requests this thread opens show up here." },
   },
+  // Picking it opens a browser tab, rather than a tab of its own.
+  { name: "Browser", icon: Globe, key: "B" },
 ];
 
 const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
@@ -107,41 +137,57 @@ const deviceSurface = surfaces.find((s) => s.name === "Device")!;
 const terminalSurface = surfaces.find((s) => s.name === "Terminal")!;
 
 /**
- * One `scope`'s panel: its open views in tab order, and each in the order it was last shown, with
- * the thread (`documents.runId`) it was shown in, as an orchestrator's subagents share its panel;
- * whether + is showing the list; whether its browser has opened; and the page its browser last
- * opened.
+ * One `scope`'s panel: its open tabs in order, and each in the order it was last shown, with the
+ * thread (`documents.runId`) it was shown in, as an orchestrator's subagents share its panel;
+ * whether + is showing the list; whether its browser has mounted; its browser tabs' pages, which
+ * `tabs` orders; and the pages of the tabs closed, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
  */
 interface Scoped {
   tabs: Surface[];
   recent: [Surface, string | undefined][];
   listing: boolean;
   browsed?: boolean;
-  page?: { url?: string; agentTab?: string };
+  pages: OwnTab[];
+  closed: string[];
 }
-const unopened: Scoped = { tabs: [], recent: [], listing: false };
+const unopened: Scoped = { tabs: [], recent: [], listing: false, pages: [], closed: [] };
+
+/** `s` in front of `panel`, shown in `thread`. */
+const activated = (panel: Scoped, s: Surface, thread: string | undefined): Partial<Scoped> => ({
+  listing: false,
+  recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
+});
+
+/** A scope's panel the first time it's seen: its saved browser tabs, the last shown in front. */
+function firstPanel(scope: string, orchestrated: boolean): Scoped {
+  const { tabs: pages, current } = restored(scope);
+  const tabs = pages.map((page) => pageSurface(page.id));
+  const front = tabs.find((s) => s.page === current);
+  // An orchestrator's panel rests on its home.
+  return { ...unopened, pages, tabs, recent: front && !orchestrated ? [[front, undefined]] : [] };
+}
 
 /**
  * The collapsible right column. Each `scope`, such as a thread or an orchestrator, keeps its own
- * tabs and browser, so a view opened in one thread doesn't open in another (PLX-872). While
- * `browsing`, the column is the browser alone, with its page tabs in the top bar, as Chrome's, and
- * no views; the browser is apart from the panel's views (PLX-962). Each view opens as a tab in its
- * top bar, VS Code style; the + after the tabs, or closing the last one, shows the list of views,
+ * tabs, so a view opened in one thread doesn't open in another (PLX-872). Each view and each browser
+ * tab, the user's and the agent's, opens as a tab in its top bar, VS Code style, in the order
+ * opened; the + after the tabs, or closing the shown one with none after, shows the list of views,
  * where each view's letter opens it while focus is in the panel. Open tabs stay mounted, so a view
- * keeps its state behind another. The top bar keeps the hide button where the main pane shows it
- * while the panel is closed. Expanded, it fills everything right of the sidebar, and `leading` and
- * `topBarClassName` stand in for the hidden main pane's top-left corner. `agents`, `knowledge`,
- * `files`, and `changesView` are those views, such as an orchestrator's, in place of their empty
- * states. `remoteHost` is the open host's name when it's an SSH host. `terminal` draws the Terminal
- * view, told whether it's shown and given its empty state. Each new `browse` opens its url in the
- * browser, or one of `agentTabs`. `pullRequests` are the open thread's linked pull requests
- * (PLX-319): its URLs, each one's read, the Pull requests view, and each one's view, shown in a
- * `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that
- * URL's tab, or without one the Pull requests view. Each new `documents.open` opens that presented
- * file's tab (PLX-755), shown only while its thread, `documents.runId`, is open, as a pull
- * request's is. `device` draws the Device view (PLX-886), told whether it's shown, and each new
- * `showDevice` opens it. Each new `showOrchestrator` shows an open orchestrator's Orchestrator tab,
- * and each new `showFiles` opens the Files view.
+ * keeps its state behind another, and closing the last one collapses the panel. The top bar keeps
+ * the hide button where the main pane shows it while the panel is closed. Expanded, it fills
+ * everything right of the sidebar, and `leading` and `topBarClassName` stand in for the hidden main
+ * pane's top-left corner. `agents`, `knowledge`, `files`, and `changesView` are those views, such as
+ * an orchestrator's, in place of their empty states. `remoteHost` is the open host's name when it's
+ * an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
+ * state. Each new `browse` shows one of `agentTabs`, opens its url in a browser tab, or with neither
+ * shows the last browser tab or a new one. `pullRequests` are the open thread's linked pull requests
+ * (PLX-319): its URLs, each one's read, the Pull requests view, and each one's view, shown in a `#n`
+ * tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that URL's
+ * tab, or without one the Pull requests view. Each new `documents.open` opens that presented file's
+ * tab (PLX-755), shown only while its thread, `documents.runId`, is open, as a pull request's is.
+ * `device` draws the Device view (PLX-886), told whether it's shown, and each new `showDevice` opens
+ * it. Each new `showOrchestrator` shows an open orchestrator's Orchestrator tab, and each new
+ * `showFiles` opens the Files view.
  */
 export function SidePanel({
   scope,
@@ -160,7 +206,6 @@ export function SidePanel({
   files,
   changesView,
   browse,
-  browsing = false,
   changes,
   agentTabs,
   pullRequests,
@@ -188,11 +233,9 @@ export function SidePanel({
   files?: ReactNode;
   changesView?: ReactNode;
   browse?: { url?: string; agentTab?: string };
-  browsing?: boolean;
   /** A new request opens the Changes view. */
   changes?: object;
-  /** The open thread's agent browser tabs (PLX-639), for the browser. */
-  agentTabs?: ComponentProps<typeof Browser>["agent"];
+  agentTabs?: AgentTabs;
   pullRequests?: {
     urls: readonly string[];
     get: PullRequests["get"];
@@ -214,28 +257,41 @@ export function SidePanel({
   // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
   // its scope showed, else the list.
   const [scopes, setScopes] = useState<Record<string, Scoped>>({});
-  const { tabs, recent, listing } = scopes[scope] ?? unopened;
-  const update = (next: (panel: Scoped) => Partial<Scoped>) =>
+  if (!scopes[scope]) {
+    const first = firstPanel(scope, !!orchestrator);
+    setScopes((all) => (all[scope] ? all : { ...all, [scope]: first }));
+  }
+  const { tabs, recent, listing, pages } = scopes[scope] ?? unopened;
+  const updateIn = (key: string, next: (panel: Scoped) => Partial<Scoped>) =>
     setScopes((all) => {
-      const panel = all[scope] ?? unopened;
-      return { ...all, [scope]: { ...panel, ...next(panel) } };
+      const panel = all[key] ?? unopened;
+      return { ...all, [key]: { ...panel, ...next(panel) } };
     });
+  const update = (next: (panel: Scoped) => Partial<Scoped>) => updateIn(scope, next);
   const thread = documents?.runId;
-  const setActive = (s: Surface) =>
-    update((panel) => ({
-      listing: false,
-      recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
-    }));
+  const setActive = (s: Surface) => update((panel) => activated(panel, s, thread));
 
   const browserStyle = useBrowserTheme();
+  const agentFace = useAgentFace(agentTabs, remoteHost);
+  const agentTabOf = (s: Surface) =>
+    s.agent?.runId === agentTabs?.runId
+      ? agentTabs?.tabs.find((t) => t.tabId === s.agent?.tabId)
+      : undefined;
+  // Each of the agent's tabs joins the panel's tabs as it opens, and shows only while the thread has
+  // it.
+  if (agentTabs) {
+    const { runId } = agentTabs;
+    const added = agentTabs.tabs
+      .map((t) => agentSurface(runId, t.tabId))
+      .filter((s) => !tabs.some((t) => t.key === s.key));
+    if (added.length) update((panel) => ({ tabs: [...panel.tabs, ...added] }));
+  }
   const available = orchestrator
     ? surfaces
-    : ["Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
+    : ["Browser", "Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
         surfaces.find((s) => s.name === name)!,
       );
   const nameOf = (s: Surface) => (!orchestrator && s.name === "Changes" ? "Diff" : s.name);
-  // The browser mounts the first time it shows, and stays.
-  if (browsing && !scopes[scope]?.browsed) update(() => ({ browsed: true }));
   // An orchestrator pins its Overview and Knowledge first, without close buttons.
   const pinned = orchestrator ? [overview, knowledgeSurface] : [];
   // A pull request tab the thread no longer links stays open, but hidden.
@@ -246,7 +302,8 @@ export function SidePanel({
         !pinned.includes(s) &&
         (orchestrator || (s.name !== "Knowledge" && s.name !== "Agents")) &&
         (!s.url || pullRequests?.urls.includes(s.url)) &&
-        (!s.doc || s.doc.runId === documents?.runId),
+        (!s.doc || s.doc.runId === documents?.runId) &&
+        (!s.agent || agentTabOf(s)),
     ),
   ];
   const lastShown = (entries: typeof recent) => entries.findLast(([s]) => shown.includes(s))?.[0];
@@ -255,13 +312,45 @@ export function SidePanel({
     : (lastShown(recent.filter(([, at]) => at === thread)) ??
       lastShown(recent) ??
       (orchestrator ? overview : undefined));
+  const browsing = isBrowserTab(current);
+  // The browser mounts the first time one of its tabs shows, and stays.
+  if (open && browsing && !scopes[scope]?.browsed) update(() => ({ browsed: true }));
 
   const openView = (s: Surface) => {
     if (pinned.includes(s)) return setActive(s);
-    const open = tabs.find((t) => t.key === s.key);
-    if (!open) update((panel) => ({ tabs: [...panel.tabs, s] }));
-    setActive(open ?? s);
+    update((panel) => {
+      const kept = panel.tabs.find((t) => t.key === s.key);
+      return {
+        tabs: kept ? panel.tabs : [...panel.tabs, s],
+        ...activated(panel, kept ?? s, thread),
+      };
+    });
   };
+  // A new browser tab in `key`'s panel, after the tab `after` or else last, which comes to the front.
+  // An empty one reuses a blank tab, so they don't pile up.
+  const openPage = (
+    key: string,
+    url?: string,
+    { after, focus = true }: { after?: number; focus?: boolean } = {},
+  ) =>
+    updateIn(key, (panel) => {
+      const blank = !url && panel.pages.find((p) => !p.url && !p.load);
+      const reused = blank && panel.tabs.find((t) => t.page === blank.id);
+      if (reused) return activated(panel, reused, thread);
+      const page = { ...ownTab(url), focus };
+      const surface = pageSurface(page.id);
+      const at = panel.tabs.findIndex((t) => t.page === after);
+      return {
+        pages: [...panel.pages, page],
+        tabs: panel.tabs.toSpliced(at < 0 ? panel.tabs.length : at + 1, 0, surface),
+        ...activated(panel, surface, thread),
+      };
+    });
+  const changePage = (key: string, id: number, patch: Partial<OwnTab>) =>
+    updateIn(key, (panel) => ({
+      pages: panel.pages.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+    }));
+  const pick = (s: Surface) => (s.name === "Browser" ? openPage(scope) : openView(s));
   // Closing the shown tab shows the one after it, or before it; closing the last collapses the
   // panel. Otherwise focus moves to the shown tab, or to + with none shown, so it stays in the
   // panel, where the list's letters work.
@@ -269,13 +358,47 @@ export function SidePanel({
     const i = shown.indexOf(s);
     const rest = shown.toSpliced(i, 1);
     const next = s === current ? rest[Math.min(i, rest.length - 1)] : current;
-    update((panel) => ({
-      tabs: panel.tabs.filter((t) => t !== s),
-      recent: panel.recent.filter(([t]) => t !== s),
-    }));
+    update((panel) => {
+      const url = panel.pages.find((p) => p.id === s.page)?.url;
+      return {
+        tabs: panel.tabs.filter((t) => t !== s),
+        recent: panel.recent.filter(([t]) => t !== s),
+        ...(s.page !== undefined && {
+          pages: panel.pages.filter((p) => p.id !== s.page),
+          closed: url ? [...panel.closed.slice(-24), url] : panel.closed,
+          // The browser saves its tabs, even one closed before any of them showed.
+          browsed: true,
+        }),
+      };
+    });
+    if (s.agent) agentTabs?.close(s.agent.tabId);
     if (next && s === current) setActive(next);
     if (!rest.length) return onClose();
     document.getElementById(next ? `side-panel-tab-${next.key}` : "side-panel-open-view")?.focus();
+  };
+  // What a page in `key`'s panel asks of its tabs: Chrome's tab shortcuts, among the user's own,
+  // from the place of the tab `from`.
+  const pageAsked = (key: string, from: number | undefined, action: BrowserAction) => {
+    const panel = scopes[key] ?? unopened;
+    const own = panel.tabs.filter((t) => t.page !== undefined);
+    const at = own.findIndex((t) => t.page === from);
+    const show = (to: Surface | undefined) =>
+      to && updateIn(key, (latest) => activated(latest, to, thread));
+    if (action.kind === "open") openPage(key, action.url, { after: from });
+    else if (action.kind === "newTab") openPage(key);
+    else if (action.kind === "closeTab") {
+      if (key === scope && own[at]) closeView(own[at]);
+    } else if (action.kind === "select") show(own[at]);
+    else if (action.kind === "nextTab") show(own[(at + 1) % own.length]);
+    else if (action.kind === "previousTab") show(own[(at - 1 + own.length) % own.length]);
+    else if (action.kind === "tab") show(own[action.index]);
+    else if (action.kind === "lastTab") show(own.at(-1));
+    else if (action.kind === "reopenTab") {
+      const url = panel.closed.at(-1);
+      if (!url) return;
+      updateIn(key, (latest) => ({ closed: latest.closed.slice(0, -1) }));
+      openPage(key, url, { after: from });
+    }
   };
   const [changesOpened, setChangesOpened] = useState(changes);
   if (changes !== changesOpened) {
@@ -285,7 +408,19 @@ export function SidePanel({
   const [browsed, setBrowsed] = useState(browse);
   if (browse !== browsed) {
     setBrowsed(browse);
-    if (browse) update(() => ({ page: browse }));
+    if (browse?.agentTab && agentTabs) {
+      openView(agentSurface(agentTabs.runId, browse.agentTab));
+    } else if (browse?.url) {
+      // It opens in the tab in front while that's blank, and doesn't take focus from the composer.
+      const blank = pages.find((p) => p.id === current?.page && !p.url && !p.load);
+      if (blank) changePage(scope, blank.id, { load: { url: browse.url }, focus: false });
+      else openPage(scope, browse.url, { after: current?.page, focus: false });
+    } else if (browse) {
+      const last =
+        lastShown(recent.filter(([s]) => isBrowserTab(s))) ?? shown.findLast(isBrowserTab);
+      if (last) setActive(last);
+      else openPage(scope);
+    }
   }
   const [deviceShown, setDeviceShown] = useState(showDevice);
   if (showDevice !== deviceShown) {
@@ -337,9 +472,9 @@ export function SidePanel({
         : s.name === "Knowledge" && knowledge
           ? knowledge
           : s.name === "Terminal" && terminal
-            ? terminal(open && !browsing && s === current, emptyOf(s))
+            ? terminal(open && s === current, emptyOf(s))
             : s.name === "Device" && device
-              ? device(open && !browsing && s === current)
+              ? device(open && s === current)
               : s.name === "Files" && files
                 ? files
                 : s.name === "Changes" && changesView
@@ -355,79 +490,87 @@ export function SidePanel({
   return (
     <aside
       id="side-panel"
-      aria-label={browsing ? "Browser" : "Side panel"}
+      aria-label="Side panel"
       hidden={!open}
       // From the list, a view's letter opens it while focus is in the panel.
       onKeyDown={(e) => {
-        if (browsing || current || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (current || e.metaKey || e.ctrlKey || e.altKey) return;
         const next = available.find((s) => s.key === e.key.toUpperCase());
         if (!next) return;
         e.preventDefault();
-        openView(next);
+        pick(next);
       }}
       style={expanded ? undefined : { width }}
       className={`relative flex min-w-0 flex-col bg-pane ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
     >
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
-      {/* While browsing, the browser's theme paints its top bar and the browser, and nothing else,
-          such as the terminals mounted behind it (browserTheme.ts). */}
+      {/* While a browser tab is in front, the browser's theme paints the top bar and the browser, and
+          nothing else, such as the terminals mounted behind it (browserTheme.ts). */}
       <TopBar
         style={browsing ? browserStyle : undefined}
         className={`window-controls-inset px-2 ${browsing && browserStyle ? "bg-pane" : ""} ${topBarClassName}`}
       >
         {leading}
-        {browsing ? (
-          <BrowserTabBar scope={scope} />
-        ) : (
-          <>
-            <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
-              {shown.map((s) => {
-                const look = s.url ? lookOf(pullRequests?.get(s.url)?.pr) : undefined;
-                const Icon = look?.Icon ?? s.icon;
-                return (
-                  <li
-                    key={s.key}
-                    className={`flex shrink-0 items-center rounded-lg ${s === current ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+        <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
+          {shown.map((s) => {
+            const agentTab = agentTabOf(s);
+            const page = pages.find((p) => p.id === s.page);
+            const face = agentTab ? agentFace(agentTab) : page && pageFace(page);
+            const look = s.url ? lookOf(pullRequests?.get(s.url)?.pr) : undefined;
+            const Icon = look?.Icon ?? s.icon;
+            const name = face?.title ?? nameOf(s);
+            // A browser tab shrinks with the others as more open, and shows its close button only
+            // in front and on hover, so its title keeps the room.
+            const browserTab = !!face;
+            return (
+              <li
+                key={s.key}
+                className={`group flex items-center rounded-lg ${browserTab ? "w-40 min-w-9 shrink" : "shrink-0"} ${s === current ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+              >
+                <button
+                  type="button"
+                  id={`side-panel-tab-${s.key}`}
+                  aria-current={s === current ? "true" : undefined}
+                  title={face?.url}
+                  onClick={() => setActive(s)}
+                  // A middle click closes a browser tab, as in Chrome.
+                  onAuxClick={(e) => browserTab && e.button === 1 && closeView(s)}
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left text-body ${pinned.includes(s) ? "pr-2" : ""}`}
+                >
+                  {face?.icon ? (
+                    <img src={face.icon} alt="" className="size-3.5 shrink-0" />
+                  ) : (
+                    <Icon aria-hidden className={`size-3.5 shrink-0 ${look?.color ?? ""}`} />
+                  )}
+                  <span className="truncate">{name}</span>
+                  {s === overview && !!orchestrator?.waiting && (
+                    <span className="font-mono text-caption text-warning tabular-nums">
+                      {orchestrator.waiting}
+                    </span>
+                  )}
+                </button>
+                {!pinned.includes(s) && (
+                  <button
+                    type="button"
+                    aria-label={`Close ${name}`}
+                    title={`Close ${name}`}
+                    onClick={() => closeView(s)}
+                    className={`mx-0.5 size-5 shrink-0 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5 ${browserTab && s !== current ? "hidden group-focus-within:grid group-hover:grid" : "grid"}`}
                   >
-                    <button
-                      type="button"
-                      id={`side-panel-tab-${s.key}`}
-                      aria-current={s === current ? "true" : undefined}
-                      onClick={() => setActive(s)}
-                      className={`flex items-center gap-1.5 py-1 pl-2 text-body ${pinned.includes(s) ? "pr-2" : ""}`}
-                    >
-                      <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
-                      {nameOf(s)}
-                      {s === overview && !!orchestrator?.waiting && (
-                        <span className="font-mono text-caption text-warning tabular-nums">
-                          {orchestrator.waiting}
-                        </span>
-                      )}
-                    </button>
-                    {!pinned.includes(s) && (
-                      <button
-                        type="button"
-                        aria-label={`Close ${nameOf(s)}`}
-                        title={`Close ${nameOf(s)}`}
-                        onClick={() => closeView(s)}
-                        className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
-                      >
-                        <X />
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-            <IconButton
-              id="side-panel-open-view"
-              label="Open a view"
-              onClick={() => update(() => ({ listing: true }))}
-            >
-              <Plus />
-            </IconButton>
-          </>
-        )}
+                    <X />
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <IconButton
+          id="side-panel-open-view"
+          label="Open a view"
+          onClick={() => update(() => ({ listing: true }))}
+        >
+          <Plus />
+        </IconButton>
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton
             label={expanded ? "Exit full screen" : "Full screen"}
@@ -435,63 +578,59 @@ export function SidePanel({
           >
             {expanded ? <Minimize2 /> : <Maximize2 />}
           </IconButton>
-          {browsing ? (
-            <IconButton label="Hide browser" command="browser" onClick={onClose}>
-              <PanelRight />
-            </IconButton>
-          ) : (
-            <IconButton
-              label="Hide side panel"
-              command="panel"
-              aria-expanded
-              aria-controls="side-panel"
-              onClick={onClose}
-            >
-              <PanelRight />
-            </IconButton>
-          )}
+          <IconButton
+            label="Hide side panel"
+            command="panel"
+            aria-expanded
+            aria-controls="side-panel"
+            onClick={onClose}
+          >
+            <PanelRight />
+          </IconButton>
         </div>
       </TopBar>
       {shown
-        .filter((s) => s !== terminalSurface)
+        .filter((s) => s !== terminalSurface && !isBrowserTab(s))
         .map((s) => (
-          <div
-            key={s.key}
-            hidden={browsing || s !== current}
-            className="flex min-h-0 flex-1 flex-col"
-          >
+          <div key={s.key} hidden={s !== current} className="flex min-h-0 flex-1 flex-col">
             {viewOf(s)}
           </div>
         ))}
       {/* The browser and Terminal stay mounted while any scope has them open, so a thread's page
           and shells are still there on coming back to it. The terminal pool shows the open thread's. */}
       {Object.values(scopes).some((panel) => panel.tabs.includes(terminalSurface)) && (
-        <div
-          hidden={browsing || current !== terminalSurface}
-          className="flex min-h-0 flex-1 flex-col"
-        >
+        <div hidden={current !== terminalSurface} className="flex min-h-0 flex-1 flex-col">
           {viewOf(terminalSurface)}
         </div>
       )}
       {Object.entries(scopes)
         .filter(([, panel]) => panel.browsed)
-        .map(([key, panel]) => (
-          <div
-            key={`${key}/B`}
-            hidden={key !== scope || !browsing}
-            style={browserStyle}
-            className="flex min-h-0 flex-1 flex-col bg-pane"
-          >
-            <Browser
-              scope={key}
-              page={panel.page}
-              remoteHost={remoteHost}
-              agent={key === scope ? agentTabs : undefined}
-              onEmpty={onClose}
-            />
-          </div>
-        ))}
-      {!browsing && !current && (
+        .map(([key, panel]) => {
+          // Another scope's stays as it left it, so coming back doesn't take focus to its page.
+          const front = key === scope ? current : panel.recent.at(-1)?.[0];
+          return (
+            <div
+              key={`${key}/B`}
+              hidden={key !== scope || !browsing}
+              style={browserStyle}
+              className="flex min-h-0 flex-1 flex-col bg-pane"
+            >
+              <Browser
+                scope={key}
+                pages={panel.pages}
+                frontPage={front?.page}
+                lastPage={panel.recent.findLast(([s]) => s.page !== undefined)?.[0].page}
+                agentTab={front?.agent?.tabId}
+                visible={key === scope && open}
+                remoteHost={remoteHost}
+                agent={key === scope ? agentTabs : undefined}
+                onChange={(id, patch) => changePage(key, id, patch)}
+                onAsk={(from, action) => pageAsked(key, from, action)}
+              />
+            </div>
+          );
+        })}
+      {!current && (
         <nav
           aria-labelledby="side-panel-views"
           className="flex flex-1 flex-col items-center justify-center px-8 pb-16"
@@ -505,7 +644,7 @@ export function SidePanel({
                 <button
                   type="button"
                   aria-keyshortcuts={s.key}
-                  onClick={() => openView(s)}
+                  onClick={() => pick(s)}
                   className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-body hover:bg-hover"
                 >
                   <s.icon aria-hidden className="size-4 shrink-0" />

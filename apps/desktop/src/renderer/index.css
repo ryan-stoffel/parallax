@@ -2265,17 +2265,17 @@ body {
 }
 
 /* The browser's pinned extension buttons (Extensions.tsx), electron-chrome-extensions'
-   `<button is="browser-action">`, drawn like the toolbar's buttons (an lg IconButton). The
+   `<button is="browser-action">`, drawn like the toolbar's buttons (an md IconButton). The
    library styles them only inside its own list. */
 .browser-action {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
   border-radius: var(--radius-md);
   background-position: center;
   background-repeat: no-repeat;
-  background-size: 20px;
+  background-size: 16px;
 }
 .browser-action:hover {
   background-color: var(--hover);
