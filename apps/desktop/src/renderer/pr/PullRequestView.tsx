@@ -114,8 +114,9 @@ export function PullRequestView({
   const [guideTick, setGuideTick] = useState(0);
   const regenerate = useRef(false);
   const [status, setStatus] = useState<PrStatusResult>();
-  // The branch deleted from here, kept above the Summary tab, which unmounts when another opens.
-  const [deletedBranch, setDeletedBranch] = useState<string>();
+  // The pull requests whose branch was deleted from here, by URL: this view outlives the Summary
+  // tab, which unmounts when another opens, and shows each of a thread's pull requests in turn.
+  const [branchDeleted, setBranchDeleted] = useState<ReadonlySet<string>>(new Set());
   // Bumped after a write or an action, so `pr/status` is read again.
   const [statusTick, setStatusTick] = useState(0);
   const linked = prs.get(url);
@@ -406,10 +407,10 @@ export function PullRequestView({
               checks={checks}
               checkActions={checkActions}
               actions={!!prs.actions}
-              branchDeleted={deletedBranch === pr.headBranch}
+              branchDeleted={branchDeleted.has(pr.url)}
               busy={busy}
               onAct={act}
-              onBranchDeleted={() => setDeletedBranch(pr.headBranch)}
+              onBranchDeleted={() => setBranchDeleted((done) => new Set(done).add(pr.url))}
               onReviews={() => setTab("timeline")}
               onCommits={() => setTab("code")}
             />

@@ -197,15 +197,21 @@ const gate = (tone: GateTone, title: string, reasons: string[] = [], more: Parti
   ...more,
 });
 
-/**
- * plxd's reasons shown elsewhere: its lists of checks and changes requested in the status rows, and
- * how far behind its base the branch is on the header's base chip.
- */
-const shownElsewhere = (reason: string) =>
+/** plxd's reason saying how far behind its base a branch is, which the base chip shows. */
+const behindReason = /^\d+ commits? behind /;
+
+/** plxd's reasons that the status rows already show: its lists of checks, and changes requested. */
+const shownByRows = (reason: string) =>
   reason.startsWith("pending: ") ||
   reason.startsWith("failing: ") ||
-  reason === "changes requested" ||
-  /^\d+ commits? behind /.test(reason);
+  reason === "changes requested";
+
+/** `status` when it's about `pr` as it is now, not another pull request or an older head. */
+const matching = (pr: PullRequest, status?: PrStatusResult) =>
+  status?.url === pr.url &&
+  (!status.headSha || !more(pr).headSha || status.headSha === more(pr).headSha)
+    ? status
+    : undefined;
 
 /**
  * Whether `pr` can merge, from GitHub's merge state and, when read, matching `pr/status` (or
@@ -217,13 +223,11 @@ export function mergeGate(pr: PullRequest, status?: PrStatusResult): Gate {
   if (pr.state === "merged") return gate("merged", "Merged");
   if (pr.state === "closed") return gate("closed", "Closed without merging");
   const extra = more(pr);
-  const matchingStatus =
-    status?.url === pr.url &&
-    (!status.headSha || !extra.headSha || status.headSha === extra.headSha)
-      ? status
-      : undefined;
-  const reasons = matchingStatus?.reasons ?? extra.reasons ?? [];
-  const notes = reasons.filter((r) => !shownElsewhere(r));
+  const matchingStatus = matching(pr, status);
+  const reasons = (matchingStatus?.reasons ?? extra.reasons ?? []).filter(
+    (r) => !behindReason.test(r),
+  );
+  const notes = reasons.filter((r) => !shownByRows(r));
   const mergeable = matchingStatus?.mergeable ?? extra.mergeable;
   const mergeState =
     matchingStatus?.mergeState?.replaceAll("_", "").toLowerCase() ?? pr.mergeState?.toLowerCase();
@@ -273,7 +277,7 @@ export function baseIssue(pr: PullRequest, status?: PrStatusResult): BaseIssue |
   const base = pr.baseBranch;
   if (gate.conflicts) return { kind: "conflicts", label: `Conflicts with ${base}` };
   // A repository that doesn't require an up-to-date branch still reports how far behind it is.
-  const by = status?.behindBy ?? more(pr).behindBy;
+  const by = matching(pr, status)?.behindBy ?? more(pr).behindBy;
   if (by) return { kind: "behind", label: `${plural(by, "commit")} behind ${base}` };
   return gate.behind ? { kind: "behind", label: `Behind ${base}` } : undefined;
 }

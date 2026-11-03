@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
@@ -336,6 +336,29 @@ test("merging deletes the branch as the method menu says, and Delete branch then
   act(() => tab("Code").click());
   await settle();
   act(() => tab("Summary").click());
+  await settle();
+  expect(button("Delete branch")).toBeUndefined();
+});
+
+test("deleting one pull request's branch leaves Delete branch on another of the thread's", async () => {
+  capabilities = { ...capabilities, prActions: {} };
+  const merged = { state: "merged", mergedBy: "me" } as const;
+  read = { [url(42)]: prOf(42, merged), [url(43)]: prOf(43, merged) };
+  actions = { deleteBranch: () => ({ result: prOf(42, merged) }) };
+  let open!: (n: number) => void;
+  function Switcher({ prs }: { prs: ReturnType<typeof usePullRequests> }) {
+    const [n, setN] = useState(42);
+    open = setN;
+    return <PullRequestView url={url(n)} prs={prs} onCompose={vi.fn()} />;
+  }
+  await render([url(42), url(43)], (prs) => <Switcher prs={prs} />);
+  await act(async () => button("Delete branch")!.click());
+  await settle();
+  expect(button("Delete branch")).toBeUndefined();
+  act(() => open(43));
+  await settle();
+  expect(button("Delete branch")).toBeDefined();
+  act(() => open(42));
   await settle();
   expect(button("Delete branch")).toBeUndefined();
 });

@@ -168,8 +168,10 @@ test("mergeGate's reasons leave out what the status rows already say", () => {
   expect(gate(["pending: e2e", "1 unresolved review thread"])).toEqual([
     "1 unresolved review thread",
   ]);
-  expect(gate(["2 commits behind main"])).toEqual([]);
-  expect(gate([])).toEqual(["Branch protection needs a review or a check first."]);
+  // The base chip says it's behind, which isn't why it's blocked.
+  const blockedWhy = ["Branch protection needs a review or a check first."];
+  expect(gate(["2 commits behind main"])).toEqual(blockedWhy);
+  expect(gate([])).toEqual(blockedWhy);
 });
 
 test("baseIssue says when an open branch conflicts with its base or is behind it", () => {
@@ -188,6 +190,13 @@ test("baseIssue says when an open branch conflicts with its base or is behind it
   });
   expect(baseIssue(pr({ draft: true, mergeState: "dirty" }))?.kind).toBe("conflicts");
   expect(baseIssue(pr({ mergeState: "clean" }))).toBeUndefined();
+  // Another pull request's status, still held while this one's is read.
+  expect(
+    baseIssue(
+      pr({ mergeState: "clean" }),
+      statusOf({ url: "https://github.com/me/app/pull/2", behindBy: 3 }),
+    ),
+  ).toBeUndefined();
   expect(baseIssue(pr({ state: "merged" }), statusOf({ behindBy: 3 }))).toBeUndefined();
 });
 
