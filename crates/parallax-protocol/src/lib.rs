@@ -95,7 +95,7 @@ pub use agent::{
     AgentStartParams, AgentStatus, AgentStopTaskParams, AgentStopTaskResult, AgentSubagentStatus,
     AgentTodoItem, AgentTodoStatus, AgentToolStatus, AgentWaitParams, AgentWaitResult,
     AgentWaitUntil, DiffSummary, ImageId, ImageMediaType, LoggedEvent, OrchestratorSessionEnd,
-    OrchestratorThreadId, PromptImage, RunId, SecretStatus, TurnId,
+    OrchestratorThreadId, PromptImage, RunId, SecretDelivery, SecretStatus, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,

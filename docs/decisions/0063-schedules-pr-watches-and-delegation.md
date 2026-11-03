@@ -1,6 +1,6 @@
 # 0063: Schedules, webhooks, PR watches, and delegation work as T3 Code's
 
-- Status: accepted; answers PLAN's open question on how triggers wake the coordinator (PLX-59), and supersedes in part [0025](0025-coordinator-wake-ups.md) (wake-ups as their own batched turn, never steered) and [0041](0041-thread-lineage-and-host-mcp.md) (the thread tool set)
+- Status: accepted, extended by [0098](0098-secret-files-for-commands.md) for `request_secret`; answers PLAN's open question on how triggers wake the coordinator (PLX-59), and supersedes in part [0025](0025-coordinator-wake-ups.md) (wake-ups as their own batched turn, never steered) and [0041](0041-thread-lineage-and-host-mcp.md) (the thread tool set)
 - Date: 2026-10-09
 - Issue: PLX-636, for PLX-648 and PLX-649
 

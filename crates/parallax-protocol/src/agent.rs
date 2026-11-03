@@ -824,6 +824,11 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         placeholder: Option<String>,
+        /// How the agent gets the answer. Absent means `secretRef`. With `file`, its commands can
+        /// read the value, so the card must say so.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        delivery: Option<SecretDelivery>,
     },
     /// How a secret request ended. Never carries the value.
     SecretResolved {
@@ -900,6 +905,22 @@ pub struct AgentSetPermissionParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStopTaskResult {}
+
+/// How an agent gets the answer to a secret request (0098).
+///
+/// A newer client may send a delivery this version does not know; plxd refuses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SecretDelivery {
+    /// A one-time `secret-ref:<id>` for a tool that takes one. The value stays in the keystore.
+    SecretRef,
+    /// An owner-only file for the agent's own shell commands, which can read the value.
+    File,
+    /// A delivery this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
 
 /// How a secret request stands (0063).
 ///

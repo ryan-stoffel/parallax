@@ -3558,6 +3558,10 @@ impl Actor {
         // so the shared context folder isn't an allowed directory for it, and stays as unreadable
         // as the rest of plxd's data folder in the sandbox (0044, PLX-468).
         sandbox.writable.clear();
+        // What the user gave this thread's commands through `request_secret` (0098).
+        sandbox
+            .read_only
+            .push(crate::paths::secret_files_dir(data_dir, self.id));
         let instructions = self.project_instructions().await?;
         Ok(Setup {
             cwd,

@@ -17,10 +17,11 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
 use common::{Worktree, claude_under_test, run_worker, tool_result, worker_request};
+use parallax_protocol::RunId;
 use plxd::backend::RunRequest;
 use plxd::backend::claude::{commands_temp, worker_temp};
 use plxd::backend::run_temp;
-use plxd::paths::DataDir;
+use plxd::paths::{DataDir, secret_files_dir};
 
 const SECRET: &str = "parallax-sandbox-test-secret";
 
@@ -80,6 +81,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
         note = path(&context.join("note")),
     );
     let (mut request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
+    let my_secret = probe_secret_files(&mut probe, &mut request, &data);
     if cfg!(target_os = "linux") {
         // The seccomp filter's job: no Unix sockets, such as the D-Bus session bus.
         writeln!(
@@ -115,6 +117,8 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     assert!(worktree.join("inside").exists());
     assert!(context.join("note").exists());
     assert!(!stdout.contains(SECRET), "a secret was read:\n{result}");
+    assert!(result.contains("my-thread-s-value"), "{transcript}");
+    assert_eq!(fs::read_to_string(my_secret).unwrap(), "my-thread-s-value");
     assert!(!home.join("outside").exists(), "{result}");
     assert!(!root.join("outside").exists(), "{result}");
     if cfg!(feature = "sandbox-tools") {
@@ -130,6 +134,27 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
             "a Unix socket connect got through"
         );
     }
+}
+
+/// Gives `request` a secret file of its thread's, as `request_secret` writes one (0098), and makes
+/// `probe` read it, write it, and read another thread's. Returns this thread's file.
+fn probe_secret_files(probe: &mut String, request: &mut RunRequest, data: &Path) -> PathBuf {
+    let (mine, other) = (RunId::generate(), RunId::generate());
+    let (my_folder, other_folder) = (secret_files_dir(data, mine), secret_files_dir(data, other));
+    let (my_file, other_file) = (my_folder.join("file"), other_folder.join("file"));
+    fs::create_dir_all(&my_folder).unwrap();
+    fs::create_dir_all(&other_folder).unwrap();
+    fs::write(&my_file, "my-thread-s-value").unwrap();
+    fs::write(&other_file, format!("{SECRET}-other-thread")).unwrap();
+    writeln!(
+        probe,
+        "cat '{mine}'\ncat '{other}'\necho x > '{mine}'",
+        mine = my_file.display(),
+        other = other_file.display(),
+    )
+    .unwrap();
+    request.sandbox.as_mut().unwrap().read_only.push(my_folder);
+    my_file
 }
 
 /// On Linux, runs the check plxd runs before a worker starts, which also writes out the bwrap and

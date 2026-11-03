@@ -187,7 +187,9 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
         style={[styles.input, { borderColor: c.border, backgroundColor: c.code, color: c.foreground }]}
       />
       <T faint style={{ fontSize: 12, lineHeight: 16 }}>
-        Kept in this computer's keychain. The agent gets a one-time reference, never the value.
+        {request.delivery === "file"
+          ? "Kept out of chat, in a private file this agent's commands can read for 24 hours."
+          : "Kept in this computer's keychain. The agent gets a one-time reference, never the value."}
       </T>
       <View style={{ flexDirection: "row", gap: 10 }}>
         <Button

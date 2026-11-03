@@ -1,10 +1,11 @@
 // An agent's request for a secret (`request_secret`, 0063): the private card pinned over the
 // composer while it waits, and the line it leaves in the transcript. The value goes from the
-// password field to plxd's `secret/answer`, which keeps it in the host's keystore. It is never
-// kept in the window's state, the transcript, or the log.
+// field to plxd's `secret/answer`, which keeps it in the host's keystore, or with `delivery: file`
+// in a private file the agent's commands can read (0098). It is never kept in the window's state,
+// the transcript, or the log.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import { KeyRound } from "lucide-react";
-import { useId, useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import { quietButton } from "./Approval";
 import { describeError } from "./errors";
@@ -13,10 +14,16 @@ import type { Item } from "./transcript";
 
 type SecretItem = Extract<Item, { kind: "secret" }>;
 
+const fieldClass =
+  "w-full rounded-md border border-border bg-background px-2.5 font-mono text-body placeholder:font-sans placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
+
 const saveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 
-/** The oldest secret request of run `runId` still waiting, as a card with a password field. */
+/**
+ * The oldest secret request of run `runId` still waiting, as a card with a password field, or for
+ * a file a masked field that keeps the newlines of a pasted `.env`, which a password field drops.
+ */
 export function SecretCard({
   hostId,
   runId,
@@ -33,6 +40,7 @@ export function SecretCard({
   const inputId = useId();
   const [busy, setBusy] = useState<"save" | "decline">();
   const off = !!disabledReason || !!busy;
+  const toFile = request.delivery === "file";
 
   async function send(answer: { type: "save"; secret: string } | { type: "decline" }) {
     setBusy(answer.type);
@@ -53,10 +61,19 @@ export function SecretCard({
   }
   function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const field = event.currentTarget.elements.namedItem("secret") as HTMLInputElement | null;
+    const field = event.currentTarget.elements.namedItem("secret") as
+      | HTMLInputElement
+      | HTMLTextAreaElement
+      | null;
     const value = field?.value ?? "";
     if (!value.trim()) return;
     void send({ type: "save", secret: value });
+  }
+
+  function enterSaves(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
   }
 
   return (
@@ -82,20 +99,36 @@ export function SecretCard({
           <label htmlFor={inputId} className="sr-only">
             {request.label}
           </label>
-          <input
-            id={inputId}
-            name="secret"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            disabled={off}
-            placeholder={request.placeholder ?? "Paste the secret"}
-            className="h-8 w-full rounded-md border border-border bg-background px-2.5 font-mono text-body placeholder:font-sans placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
-          />
+          {toFile ? (
+            <textarea
+              id={inputId}
+              name="secret"
+              rows={1}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={off}
+              onKeyDown={enterSaves}
+              placeholder={request.placeholder ?? "Paste the secret"}
+              className={`${fieldClass} field-sizing-content max-h-40 min-h-8 resize-none py-1.5 [-webkit-text-security:disc]`}
+            />
+          ) : (
+            <input
+              id={inputId}
+              name="secret"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={off}
+              placeholder={request.placeholder ?? "Paste the secret"}
+              className={`${fieldClass} h-8`}
+            />
+          )}
         </div>
         <div className="flex items-center justify-end gap-2 px-4 pt-3 pb-3">
           <p className="mr-auto text-meta text-faint-foreground">
-            Kept in this host's keychain. The agent gets a one-time reference, never the value.
+            {toFile
+              ? "Kept out of chat, in a private file this agent's commands can read for 24 hours."
+              : "Kept in this host's keychain. The agent gets a one-time reference, never the value."}
           </p>
           <button
             type="button"

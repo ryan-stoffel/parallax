@@ -21,8 +21,8 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentPermission, AgentRun, AgentStatus, CompletionWake,
     DelegatedTask, OrchestrationCommand, ProvidersListParams, RunId, SecretAnswerParams,
-    SecretChoice, SecretRequestParams, SecretStatus, TaskDelegateParams, TaskStatusParams,
-    ThreadMergeBackParams,
+    SecretChoice, SecretDelivery, SecretRequestParams, SecretRequestResult, SecretStatus,
+    TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -45,6 +45,13 @@ pub const TOOLS: &[&str] = &[
 /// How long `delegate_task`'s `wait` blocks without a `timeoutMs`, and the most it takes, as T3's.
 const DEFAULT_WAIT: Duration = Duration::from_mins(10);
 const MAX_WAIT: Duration = Duration::from_mins(60);
+
+/// What every thread's agent is told at startup, through MCP's `instructions` (0098): Claude Code
+/// defers this tool behind its tool search, and without this, agents ask in chat or hand a command
+/// back to the user. T3 Code measured 0 of 5 runs calling it. The sudo steps are T3's: `-n` proves
+/// the command needs a password, `-k` makes sudo read it even with cached credentials, and the
+/// file replaces the command's stdin.
+pub const INSTRUCTIONS: &str = "When a task needs a password, token, API key, or .env contents only the user has, call request_secret yourself: never ask in chat, invent one, or hand the command back to the user because of it. Pass its secretRef to a tool that takes one. For a shell command, use delivery 'file', then read the returned path only inside the command, such as TOKEN=\"$(cat \"$file\")\" tool, or copy it where the task needs it, such as a gitignored .env. Never print the value. When a command you were asked to run needs a sudo password: settle the full command first, with its own -y if it asks to confirm and a file argument for anything it would read from stdin, since the password takes stdin. Once `sudo -n <cmd>` fails for lack of a password, call request_secret with delivery 'file' and run that exact command as `sudo -k -S -p '' <cmd> < \"$file\"`. Don't suggest passwordless sudo instead.";
 
 /// How long `request_secret` waits for the user without a `timeoutMs`, and the most it takes, as
 /// T3's, and the longest one `secret/request` waits.
@@ -166,12 +173,13 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "request_secret",
-            "Ask the user for a secret (a token, API key, signing secret, or password) through a private card in this thread, and wait for the answer. The value is kept in the host's keystore and NEVER returned to you or shown in the transcript. When saved, the result carries a secretRef: pass it to a tool that takes one, such as schedule_task's signature.secretRef. It works once, for this thread, within 24 hours. Never ask for secrets in chat, and never invent one.",
+            "Ask the user for a secret (a token, API key, signing secret, password, or .env contents) through a private card in this thread, and wait for the answer. The value is NEVER returned to you or shown in the transcript. By default it is kept in the host's keystore, and the result carries a secretRef: pass it to a tool that takes one, such as schedule_task's signature.secretRef. It works once, for this thread, within 24 hours. With delivery 'file', the result instead carries file, the path of a private file for your own shell commands, which lasts 24 hours and which other threads can't read: read it only inside a command, and never print it. Never ask for secrets in chat, and never invent one.",
             object(
                 json!({
                     "label": {"type": "string", "description": "What you need, the card's title, such as 'GitHub webhook secret'."},
                     "reason": {"type": "string", "description": "One or two sentences on what it is for and where the user gets it."},
                     "placeholder": {"type": "string", "description": "A hint inside the input, such as 'Paste your GitHub token'."},
+                    "delivery": {"type": "string", "enum": ["secretRef", "file"], "description": "secretRef, the default, for a tool that takes one, or file for a shell command."},
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 3_600_000, "description": "How long to wait for the user. Default 600000 (10 minutes)."},
                     "clientRequestId": {"type": "string", "description": "Reuse it when retrying a call that lost its result, so the user sees one card. Use a new one to ask again after timed_out or cancelled."},
                 }),
@@ -290,6 +298,8 @@ struct SecretArgs {
     reason: String,
     #[serde(default)]
     placeholder: Option<String>,
+    #[serde(default)]
+    delivery: Option<SecretDelivery>,
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
@@ -539,6 +549,7 @@ async fn request_secret(
         label,
         reason,
         placeholder,
+        delivery,
         timeout_ms,
         ..
     } = args;
@@ -553,6 +564,7 @@ async fn request_secret(
         label: label.clone(),
         reason: reason.clone(),
         placeholder: placeholder.clone(),
+        delivery,
         wait_ms: u32::try_from(wait.as_millis()).unwrap_or(u32::MAX),
     };
     let mut answered = loop {
@@ -577,11 +589,21 @@ async fn request_secret(
         timed_out = closed.is_ok();
         answered = plxd.call::<SecretRequest>(ask(Duration::ZERO)).await?;
     }
-    Ok(pretty(&match (answered.status, answered.secret_ref) {
-        (SecretStatus::Saved, Some(secret_ref)) => {
-            json!({"status": "saved", "secretRef": secret_ref})
-        }
-        (SecretStatus::Declined, _) => json!({"status": "declined"}),
+    Ok(pretty(&match answered {
+        SecretRequestResult {
+            status: SecretStatus::Saved,
+            file: Some(file),
+            ..
+        } => json!({"status": "saved", "file": file}),
+        SecretRequestResult {
+            status: SecretStatus::Saved,
+            secret_ref: Some(secret_ref),
+            ..
+        } => json!({"status": "saved", "secretRef": secret_ref}),
+        SecretRequestResult {
+            status: SecretStatus::Declined,
+            ..
+        } => json!({"status": "declined"}),
         _ if timed_out => json!({"status": "timed_out"}),
         _ => json!({"status": "cancelled"}),
     }))

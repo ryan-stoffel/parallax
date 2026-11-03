@@ -17,7 +17,7 @@ afterEach(() => {
   request.mockClear();
 });
 
-function card() {
+function card(delivery?: "file") {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -29,7 +29,12 @@ function card() {
         secret={{
           kind: "secret",
           key: "k1",
-          request: { requestId: "s1", label: "Webhook secret", reason: "To check signatures." },
+          request: {
+            requestId: "s1",
+            label: "Webhook secret",
+            reason: "To check signatures.",
+            delivery,
+          },
         }}
       />,
     ),
@@ -58,5 +63,23 @@ test("Save sends the value to secret/answer from a password field, and Decline s
     runId: "r1",
     requestId: "s1",
     answer: { type: "decline" },
+  });
+});
+
+test("A file request says commands can read it, keeps newlines, and saves on Enter", async () => {
+  const el = card("file");
+  expect(el.textContent).toContain("this agent's commands can read for 24 hours");
+  expect(el.textContent).not.toContain("never the value");
+  const field = el.querySelector("textarea")!;
+  field.value = "A=1\nB=2\n";
+  const newline = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true });
+  await act(async () => field.dispatchEvent(newline));
+  expect(request).not.toHaveBeenCalled();
+  const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
+  await act(async () => field.dispatchEvent(enter));
+  expect(request).toHaveBeenCalledWith("h1", "secret/answer", {
+    runId: "r1",
+    requestId: "s1",
+    answer: { type: "save", secret: "A=1\nB=2\n" },
   });
 });

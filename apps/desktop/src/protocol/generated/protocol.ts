@@ -4483,7 +4483,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * A hint for the input.
 	 */
-	placeholder?: string, } | { "kind": "secretResolved",
+	placeholder?: string,
+	/**
+	 * How the agent gets the answer. Absent means `secretRef`. With `file`, its commands can
+	 * read the value, so the card must say so.
+	 */
+	delivery?: SecretDelivery, } | { "kind": "secretResolved",
 	/**
 	 * The request's id.
 	 */
@@ -4598,6 +4603,13 @@ export type ImageId = string;
  * A newer plxd may send a reason this version does not know; treat it as unknown.
  */
 export type OrchestratorSessionEnd = "compactedOut" | "notResumable" | "userFresh" | "backendChange";
+
+/**
+ * How an agent gets the answer to a secret request (0098).
+ *
+ * A newer client may send a delivery this version does not know; plxd refuses it.
+ */
+export type SecretDelivery = "secretRef" | "file";
 
 /**
  * How a secret request stands (0063).
@@ -10931,6 +10943,10 @@ export type SecretRequestParams = {
 	 */
 	placeholder?: string,
 	/**
+	 * How the agent gets the answer. Absent means `secretRef`.
+	 */
+	delivery?: SecretDelivery,
+	/**
 	 * How long to wait for an answer before answering `pending`, at most 50000.
 	 */
 	waitMs: number,
@@ -10949,6 +10965,11 @@ export type SecretRequestResult = {
 	 * 24 hours, for the thread that asked.
 	 */
 	secretRef?: string,
+	/**
+	 * With `saved` and `delivery: file`: the path of an owner-only file holding the value, which
+	 * the thread's commands can read for 24 hours.
+	 */
+	file?: string,
 };
 
 /**

@@ -10,7 +10,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId, SecretStatus};
+use crate::{
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId, SecretDelivery, SecretStatus,
+};
 
 /// When a delegated task's end wakes its parent, as T3 Code's `completionWake`.
 ///
@@ -157,6 +159,10 @@ pub struct SecretRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub placeholder: Option<String>,
+    /// How the agent gets the answer. Absent means `secretRef`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delivery: Option<SecretDelivery>,
     /// How long to wait for an answer before answering `pending`, at most 50000.
     pub wait_ms: u32,
 }
@@ -172,6 +178,11 @@ pub struct SecretRequestResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub secret_ref: Option<String>,
+    /// With `saved` and `delivery: file`: the path of an owner-only file holding the value, which
+    /// the thread's commands can read for 24 hours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub file: Option<String>,
 }
 
 /// An answer to a secret request.
@@ -180,7 +191,7 @@ pub struct SecretRequestResult {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SecretChoice {
-    /// The user's value, which plxd keeps in the host's keystore.
+    /// The user's value, which plxd keeps as the request's `delivery` says.
     Save {
         /// The secret.
         secret: String,
