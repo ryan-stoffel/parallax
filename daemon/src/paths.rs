@@ -65,6 +65,13 @@ pub const SANDBOX_TOOLS_DIR: &str = "tools/sandbox";
 /// The store's name in the data folder.
 const STORE_FILE: &str = "plxd.sqlite3";
 
+/// Whether `path` is the `legacy` folder's link to `default`.
+fn links_to_default(path: &Path, legacy: &Path, default: &Path) -> bool {
+    path == legacy
+        && path.is_symlink()
+        && std::fs::canonicalize(path).ok() == std::fs::canonicalize(default).ok()
+}
+
 /// `default`, unless only the `legacy` folder has a store. Other things create `default`, such as
 /// New Repository's `projects/`, so the folder existing doesn't make it the data folder (PLX-1262).
 fn pick_default(default: PathBuf, legacy: Option<PathBuf>) -> PathBuf {
@@ -104,8 +111,8 @@ const COLLISIONS_DIR: &str = "pre-move";
 /// The data folder to use: `data_dir`, unless it is the older OS folder with the only store, which
 /// this moves to `~/.parallax`. A symlink takes its place, so the absolute paths in the store, in
 /// git's worktree links, and in agents' sessions still work, and nothing is rewritten (PLX-1264).
-/// The service's plist names that link until its next `service install --replace`, which also
-/// answers `~/.parallax`. It holds the folder's instance lock during the move, and leaves a folder
+/// The service's plist names that link until its next `service install --replace`, and
+/// [`DataDir::resolve`] follows it. It holds the folder's instance lock during the move, and leaves a folder
 /// another `serve` runs in where it is.
 ///
 /// # Errors
@@ -122,13 +129,7 @@ pub fn move_to_default(data_dir: &DataDir) -> io::Result<DataDir> {
         return Ok(data_dir.clone());
     }
     if data_dir.root().is_symlink() {
-        // Only the link this leaves: `prepare_data_dir` refuses any other.
-        let ours = std::fs::canonicalize(data_dir.root())? == std::fs::canonicalize(&default)?;
-        return if ours {
-            DataDir::new(default)
-        } else {
-            Ok(data_dir.clone())
-        };
+        return Ok(data_dir.clone());
     }
     if !data_dir.store_file().exists() || default.join(STORE_FILE).exists() {
         return Ok(data_dir.clone());
@@ -250,16 +251,23 @@ impl DataDir {
         ))
     }
 
-    /// `path` if given, which is `--data-dir` or [`DATA_DIR_ENV`], else the default location.
+    /// `path` if given, which is `--data-dir` or [`DATA_DIR_ENV`], else the default location. A
+    /// `path` that is the link [`move_to_default`] left, as the service's plist names until its
+    /// next `service install --replace`, means `~/.parallax`.
     ///
     /// # Errors
     ///
     /// See [`DataDir::new`] and [`DataDir::default_location`].
     pub fn resolve(path: Option<&Path>) -> io::Result<Self> {
-        match path {
-            Some(path) => Self::new(path),
-            None => Self::default_location(),
-        }
+        let Some(path) = path else {
+            return Self::default_location();
+        };
+        let given = Self::new(path)?;
+        let moved = std::env::home_dir().and_then(|home| {
+            let default = home.join(DEFAULT_DATA_DIR);
+            links_to_default(given.root(), &legacy_location(&home)?, &default).then_some(default)
+        });
+        moved.map_or(Ok(given), Self::new)
     }
 
     /// The folder itself.
@@ -591,7 +599,24 @@ fn proc_exe(pid: u32) -> PathBuf {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use super::{COLLISIONS_DIR, move_folder};
+    use super::{COLLISIONS_DIR, links_to_default, move_folder};
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_moved_folders_link_means_the_default_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let (legacy, default) = (root.path().join("legacy"), root.path().join(".parallax"));
+        let other = root.path().join("other");
+        std::fs::create_dir(&default).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&default, &legacy).unwrap();
+        assert!(links_to_default(&legacy, &legacy, &default));
+        assert!(!links_to_default(&other, &legacy, &default));
+
+        std::fs::remove_file(&legacy).unwrap();
+        std::os::unix::fs::symlink(&other, &legacy).unwrap();
+        assert!(!links_to_default(&legacy, &legacy, &default));
+    }
     use super::{STORE_FILE, pick_default};
 
     #[cfg(unix)]
