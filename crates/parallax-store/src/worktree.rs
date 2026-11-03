@@ -163,11 +163,9 @@ impl Store {
     }
 }
 
-/// Inserts a new worktree row for run `id`, failing with [`StoreError::IdConflict`] if one
-/// exists. For a caller that creates the row inside its own transaction.
 impl Store {
     /// Points the paths running code reads at `to` where they are under `from`, after the data
-    /// folder moved (PLX-1264): worktrees' and repo entries'. Events and transcripts keep what
+    /// folder moved (PLX-1264): worktrees', repo entries', and orchestrators'. Events and transcripts keep what
     /// they said, which resolves through the link the move leaves.
     ///
     /// # Errors
@@ -180,6 +178,7 @@ impl Store {
             ("worktrees", "repo_path"),
             ("worktrees", "git_dir"),
             ("repos", "path"),
+            ("orchestrators", "repo_path"),
         ] {
             tx.execute(
                 &format!(
@@ -194,6 +193,8 @@ impl Store {
     }
 }
 
+/// Inserts a new worktree row for run `id`, failing with [`StoreError::IdConflict`] if one
+/// exists. For a caller that creates the row inside its own transaction.
 pub(crate) fn insert_worktree(
     conn: &Connection,
     id: Uuid,

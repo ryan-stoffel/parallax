@@ -266,8 +266,8 @@ impl DataDir {
     }
 
     /// The data folder for Parallax (0023): `~/.parallax`, with `%USERPROFILE%\.parallax` on Windows.
-    /// A computer whose store is only in the folder older versions used keeps using that one, since the store holds absolute worktree paths that a move would break: see
-    /// [`legacy_location`].
+    /// A computer whose store is only in the folder older versions used keeps using that one until
+    /// `serve` moves it ([`move_to_default`]): see [`legacy_location`].
     ///
     /// # Errors
     ///
@@ -642,6 +642,7 @@ fn proc_exe(pid: u32) -> PathBuf {
 mod tests {
     #[cfg(unix)]
     use super::{COLLISIONS_DIR, links_to_default, move_folder};
+    use super::{STORE_FILE, pick_default};
 
     #[cfg(unix)]
     #[test]
@@ -659,7 +660,6 @@ mod tests {
         std::os::unix::fs::symlink(&other, &legacy).unwrap();
         assert!(!links_to_default(&legacy, &legacy, &default));
     }
-    use super::{STORE_FILE, pick_default};
 
     #[cfg(unix)]
     #[test]
