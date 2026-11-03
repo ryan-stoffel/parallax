@@ -270,7 +270,14 @@ export function ToolbarMenuRow({
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {keys && <span className="shrink-0 pl-3 text-meta text-faint-foreground">{keys}</span>}
+      {/* Drawn from the attribute, so the row's name stays its label. */}
+      {keys && (
+        <kbd
+          aria-hidden
+          data-key={keys}
+          className="shrink-0 pl-3 font-sans text-meta text-faint-foreground before:content-[attr(data-key)]"
+        />
+      )}
       {checked && <CheckSymbol aria-hidden className="text-accent" />}
     </button>
   );

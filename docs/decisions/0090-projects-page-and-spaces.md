@@ -1,6 +1,6 @@
 # 0090: A Projects page, nav rows in the sidebar, and Spaces with instructions and files
 
-- Status: accepted; amends [0087](0087-sidebar-rows-no-areas-or-folders.md)'s Projects drawer and [0069](0069-spaces.md)'s Spaces, and extends [0078](0078-coordinator-instructions-pinned.md)'s instructions to a Space's threads; amended by [0093](0093-orchestrator-threads-and-projects.md), where a Project is an orchestrator thread, a Space becomes a Project, and the Projects page lists Projects only
+- Status: accepted; amends [0087](0087-sidebar-rows-no-areas-or-folders.md)'s Projects drawer and [0069](0069-spaces.md)'s Spaces, and extends [0078](0078-coordinator-instructions-pinned.md)'s instructions to a Space's threads; amended by [0093](0093-orchestrator-threads-and-projects.md), where a Project is an orchestrator thread, a Space becomes a Project, and the Projects page lists Projects only, and by [0097](0097-same-named-projects-span-computers.md), where same-named Projects count as one across computers
 - Date: 2026-10-27
 - Issue: PLX-1108
 

@@ -9,6 +9,7 @@ import type {
   ParallaxEvent,
 } from "../protocol/generated/protocol";
 import {
+  addToProject,
   asksOf,
   emptyThreads,
   holdQuiet,
@@ -16,6 +17,7 @@ import {
   threadOrchestrators,
   threadsReducer,
   type ThreadsState,
+  type ThreadsView,
 } from "./threads";
 
 const messages = samples as { id?: number; method?: string; params?: unknown; result?: unknown }[];
@@ -248,4 +250,131 @@ test("a run's stop time is when it stopped, and a change after that, as a linked
   });
   expect(state.runs["r-1"]!.updatedAt).toBe("2026-10-01T11:00:00Z");
   expect(state.stoppedAt).toEqual({ "r-1": "2026-10-01T10:05:00Z" });
+});
+
+test("addToProject takes back a made Project whose instructions fail, so a retry copies them", async () => {
+  const removeProject = vi.fn(async () => undefined);
+  const setProject = vi.fn(async () => undefined);
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const view = {
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => ({ ...source, id: "s-here" }),
+    updateRepo: async () => "too long",
+    removeProject,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = { id: "t-1", repo: "r-1", createdAt: source.createdAt };
+
+  expect(await addToProject(view, [thread], source)).toBe("too long");
+  expect(removeProject).toHaveBeenCalledWith("s-here");
+  expect(setProject).not.toHaveBeenCalled();
+});
+
+test("addToProject makes one Project for threads added while it's being made", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const createProject = vi.fn(async () => ({ ...source, id: "s-here" }));
+  const setProject = vi.fn(async () => undefined);
+  const view = {
+    hostId: "mini",
+    state: emptyThreads,
+    capabilities: {},
+    createProject,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = (id: string) => ({ id, repo: "r-1", createdAt: source.createdAt });
+
+  await Promise.all([
+    addToProject(view, [thread("t-1")], source),
+    addToProject(view, [thread("t-2")], source),
+  ]);
+  expect(createProject).toHaveBeenCalledTimes(1);
+  expect(setProject).toHaveBeenCalledWith(["t-1"], "s-here");
+  expect(setProject).toHaveBeenCalledWith(["t-2"], "s-here");
+});
+
+test("addToProject says so when a made Project can't be taken back, or an archived thread stays", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const thread = { id: "t-1", repo: "r-1", createdAt: source.createdAt, archived: true };
+  const setProject = vi.fn(async () => undefined);
+  const stuck = {
+    hostId: "mini",
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => ({ ...source, id: "s-here" }),
+    updateRepo: async () => "offline",
+    removeProject: async () => "offline",
+    setProject,
+  } as unknown as ThreadsView;
+  expect(await addToProject(stuck, [thread], source)).toBe(
+    "Essays is there now, but without its instructions: offline",
+  );
+
+  const archived = {
+    hostId: "mini",
+    state: { ...emptyThreads, repos: [source] },
+    capabilities: {},
+    archive: async () => "offline",
+    setProject,
+  } as unknown as ThreadsView;
+  expect(await addToProject(archived, [thread], source)).toBe("offline");
+  expect(setProject).not.toHaveBeenCalled();
+});
+
+test("addToProject waits for a copy already listed but still setting its instructions", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const made = { ...source, id: "s-here" };
+  let failInstructions: ((error: string) => void) | undefined;
+  const setProject = vi.fn(async () => undefined);
+  const first = {
+    hostId: "slow-mini",
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => made,
+    updateRepo: () => new Promise<string>((resolve) => (failInstructions = resolve)),
+    removeProject: async () => undefined,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = (id: string) => ({ id, repo: "r-1", createdAt: source.createdAt });
+
+  const adding = addToProject(first, [thread("t-1")], source);
+  await vi.waitFor(() => expect(failInstructions).toBeDefined());
+  // A later view lists the new entry, which goes if its instructions fail, and a sidebar row can
+  // offer that entry itself.
+  const later = { ...first, state: { ...emptyThreads, repos: [made] } } as ThreadsView;
+  const byName = addToProject(later, [thread("t-2")], source);
+  const byId = addToProject(later, [thread("t-3")], made);
+  failInstructions!("too long");
+
+  expect(await adding).toBe("too long");
+  expect(await byName).toBe("too long");
+  expect(await byId).toBe("too long");
+  expect(setProject).not.toHaveBeenCalled();
 });

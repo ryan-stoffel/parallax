@@ -168,6 +168,8 @@ import {
   IconButton,
   Menu,
   menuItem,
+  ToolbarMenuRow,
+  toolbarMenuDivider,
   menuPanel,
   moveFocus,
   openOnContextMenu,
@@ -1157,7 +1159,7 @@ export function ThreadList({
     const selected = item.key === openKey;
     const { thread: t, view } = item;
     const pinnable = pinsOn(view) && !t.parent;
-    const projects = t.parent ? undefined : projectChoices(t, view);
+    const projects = t.parent ? undefined : projectChoices(t, view, hosts);
     return (
       <ThreadRow
         key={item.key}
@@ -3418,6 +3420,8 @@ function ThreadRow({
       {thread.archived ? "Unarchive" : "Archive"}
     </>
   );
+  // A rule between the actions menu's groups, gone where a group has no rows.
+  const menuRule = <hr className={`${toolbarMenuDivider} first:hidden [&+hr]:hidden`} />;
   // An unsent prompt left in its composer (PLX-887): outlined, and Draft in place of its age.
   const drafted = threadDrafts.use(`${hostId}/${thread.id}`);
   const status =
@@ -3671,7 +3675,7 @@ function ThreadRow({
         label={orchestration ? "Orchestrator actions" : "Thread actions"}
         align="end"
         focus='[role^="menuitem"]'
-        className="min-w-56 p-1"
+        className="min-w-60 p-1.5"
         onBeforeToggle={(e) => e.newState === "open" && setMenuOpen(true)}
         onClose={() => setMenuOpen(false)}
         onOpen={() => {
@@ -3684,124 +3688,101 @@ function ThreadRow({
         {menuOpen && (
           <>
             {onOpenBeside && (
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
+              <ToolbarMenuRow
+                icon={<Columns2 aria-hidden />}
+                label="Open side by side"
                 onClick={choose(onOpenBeside)}
-              >
-                <Columns2 aria-hidden />
-                Open side by side
-              </button>
+              />
             )}
-            {onOpenBeside && <div role="separator" className="my-1 h-px bg-border" />}
+            {menuRule}
             {onPin && (
-              <button type="button" role="menuitem" className={menuItem} onClick={choose(onPin)}>
-                <Pin aria-hidden />
-                {thread.pinned ? "Unpin" : "Pin to top"}
-                <MenuKey>P</MenuKey>
-              </button>
+              <ToolbarMenuRow
+                icon={<Pin aria-hidden />}
+                label={thread.pinned ? "Unpin" : "Pin to top"}
+                keys="P"
+                onClick={choose(onPin)}
+              />
             )}
             {onMarkUnread && (
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
+              <ToolbarMenuRow
+                icon={<CircleDot aria-hidden />}
+                label="Mark as unread"
+                keys="U"
                 onClick={choose(onMarkUnread)}
-              >
-                <CircleDot aria-hidden />
-                Mark as unread
-                <MenuKey>U</MenuKey>
-              </button>
+              />
             )}
             {renamable && (
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
+              <ToolbarMenuRow
+                icon={<PencilLine aria-hidden />}
+                label="Rename"
+                keys="R"
                 onClick={choose(onStartRename)}
-              >
-                <PencilLine aria-hidden />
-                Rename
-                <MenuKey>R</MenuKey>
-              </button>
+              />
             )}
-            <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
-              {mainLabel}
-              <MenuKey>E</MenuKey>
-            </button>
-            {onFork && run && (
-              // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
-              <button
-                type="button"
-                role="menuitem"
-                disabled={isRunning(run.status)}
-                title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
-                className={`${menuItem} disabled:opacity-50`}
-                onClick={choose(() =>
-                  forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
-                )}
-              >
-                <GitFork aria-hidden />
-                Fork…
-              </button>
-            )}
+            {menuRule}
             {projectPicker && (
               // The Projects' menu opens under the actions button, as Fork's does.
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
+              <ToolbarMenuRow
+                icon={<MessagesSquare aria-hidden />}
+                label={thread.project ? "Move to Project…" : "Add to Project…"}
                 onClick={choose(() =>
                   projectMenu.current?.showPopover({ source: actions.current ?? undefined }),
                 )}
-              >
-                <MessagesSquare aria-hidden />
-                {thread.project ? "Move to Project…" : "Add to Project…"}
-              </button>
+              />
+            )}
+            {onFork && run && (
+              // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
+              <ToolbarMenuRow
+                icon={<GitFork aria-hidden />}
+                label="Fork…"
+                disabled={isRunning(run.status)}
+                title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
+                onClick={choose(() =>
+                  forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
+                )}
+              />
             )}
             {autoResumable && run && (
               // Choosing the host's setting clears the override, so the thread follows the host again.
-              <button
-                type="button"
-                role="menuitemcheckbox"
-                aria-checked={resumes}
-                className={menuItem}
+              <ToolbarMenuRow
+                icon={<AlarmClock aria-hidden />}
+                label="Resume after usage limits"
+                checked={resumes}
                 onClick={choose(() =>
                   onAutoResume(!resumes === hostResumes ? undefined : !resumes),
                 )}
-              >
-                <AlarmClock aria-hidden />
-                Resume after usage limits
-                {resumes && <Check aria-hidden className="ml-auto size-3.5" />}
-              </button>
+              />
             )}
             {orchestration?.map((a) => (
-              <button
+              <ToolbarMenuRow
                 key={a.label}
-                type="button"
-                role="menuitem"
-                className={menuItem}
+                icon={a.icon}
+                label={a.label}
                 onClick={choose(() => {
                   const row = actions.current?.closest("li");
                   if (row) a.run(row);
                 })}
-              >
-                {a.icon}
-                {a.label}
-              </button>
+              />
             ))}
-            <div role="separator" className="my-1 h-px bg-border" />
-            <button
-              type="button"
-              role="menuitem"
-              className={`${menuItem} text-danger`}
+            {menuRule}
+            <ToolbarMenuRow
+              icon={thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+              label={thread.archived ? "Unarchive" : "Archive"}
+              keys="E"
+              onClick={choose(onArchive)}
+            />
+            <ToolbarMenuRow
+              // Wrapped, so the row doesn't mute it as it does a bare icon.
+              icon={
+                <span className="flex">
+                  <Trash2 aria-hidden />
+                </span>
+              }
+              label="Delete…"
+              keys="⌫"
+              className="text-danger"
               onClick={choose(onDelete)}
-            >
-              <Trash2 aria-hidden />
-              Delete…
-              <MenuKey>⌫</MenuKey>
-            </button>
+            />
           </>
         )}
       </Menu>

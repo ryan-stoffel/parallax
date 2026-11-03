@@ -1303,7 +1303,7 @@ export function App() {
       }
       project={
         selection.kind === "thread" && openThread && !openThread.parent
-          ? { thread: openThread, view: threads }
+          ? { thread: openThread, view: threads, computers: listed }
           : undefined
       }
       lineage={
@@ -1803,10 +1803,8 @@ export function App() {
                             <ProjectThreads
                               host={host}
                               project={projectRepo}
-                              view={threads}
-                              onOpenThread={(threadId) =>
-                                setSelection({ kind: "thread", threadId })
-                              }
+                              computers={listed}
+                              onOpenThread={openHostThread}
                             />
                           )
                         }
