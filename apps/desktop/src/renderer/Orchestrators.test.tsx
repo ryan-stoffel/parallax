@@ -1542,7 +1542,7 @@ test("an orchestrator row reads its git status only when its repo is listed", as
   expect(calls("agent/gitStatus").map((p) => p["runId"])).toEqual(["r-listed"]);
 });
 
-test("Inbox has a Projects button beside its search and Pull requests in the footer but no Projects drawer, and Traditional lists each orchestrator as a row in its folder with Projects in its head", async () => {
+test("Inbox has a Projects button beside its search and Pull requests in the Profile menu but no Projects drawer, and Traditional lists each orchestrator as a row in its folder with Projects in its head", async () => {
   sidebarMode.set("inbox");
   // photon works in parallax; ember's repo isn't listed.
   answers["orchestrator/list"] = () => ({
@@ -1569,7 +1569,7 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
     );
   expect(rows()).toEqual(["parallax3hphotonmain", "No repo3dembermain"]);
   expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
-  // Pull requests and Usage are in the Profile menu, not the footer, until Traditional's head.
+  // Inbox's Pull requests and Usage are in the Profile menu, not the footer.
   const menuPages = () =>
     [...sidebar.querySelectorAll('[role="menu"][aria-label="Account"] [role="menuitem"]')]
       .map((b) => b.textContent)
