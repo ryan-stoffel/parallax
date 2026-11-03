@@ -85,7 +85,7 @@ These stay as they are:
 
 Parallax Dark is true black with no tint, as T3 Code's is (PLX-1056):
 - the sidebar and the thread `#000000`, with a border between them
-- raised surfaces such as the composer, cards, and menus `#0f0f0f`
+- raised surfaces such as the composer, cards, and menus `#0e0e0e`
 - code blocks `#0a0a0a`
 - text `#e8e8e8`, a little under white so it doesn't glare on the black
 
