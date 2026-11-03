@@ -52,6 +52,31 @@ test("a thread open in another pane focuses that pane", () => {
   expect(shape(state)).toEqual(["[a] *", "[b]"]);
 });
 
+test("coming back to a tab doesn't claim its start or reopen a chip's pull request", () => {
+  let state = navigate(startWorkspace("h"), "h", {
+    kind: "thread",
+    threadId: "a",
+    started: true,
+    pr: { url: "u" },
+  });
+  state = openInTab(state, "h", "b");
+  expect(activeTab(selectTab(state, tabOf(state, "a"))).selection).toEqual(thread("a"));
+  // Closing the tab beside it comes back to it the same way.
+  const started = navigate(startWorkspace("h"), "h", {
+    kind: "thread",
+    threadId: "a",
+    started: true,
+  });
+  const both = openInTab(started, "h", "b");
+  expect(activeTab(closeTab(both, tabOf(both, "b"))).selection).toEqual(thread("a"));
+  // Staying on it keeps them.
+  expect(activeTab(selectTab(started, tabOf(started, "a"))).selection).toEqual({
+    kind: "thread",
+    threadId: "a",
+    started: true,
+  });
+});
+
 test("the same thread id on another host is another tab's thread", () => {
   const state = openInTab(navigate(startWorkspace("h"), "h", thread("a")), "other", "a");
   expect(focusedPane(state).tabs.map((t) => t.hostId)).toEqual(["h", "other"]);

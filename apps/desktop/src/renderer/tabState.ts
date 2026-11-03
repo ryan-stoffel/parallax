@@ -84,11 +84,33 @@ function openedNext(state: Workspace, tab: ThreadTab): Workspace {
   return withPane(state, { ...pane, tabs, active: tab.id });
 }
 
+/**
+ * `selection` without what only holds as it opens: a thread just started, and the pull request a
+ * chip opened, which coming back to its tab shouldn't claim or reopen.
+ */
+function settled(selection: Selection): Selection {
+  if (selection.kind !== "thread") return selection;
+  const { threadId, subagent } = selection;
+  return subagent ? { kind: "thread", threadId, subagent } : { kind: "thread", threadId };
+}
+
+/** `state` with its shown tab settled, when it isn't the one `before` showed. */
+function arrived(state: Workspace, before: ThreadTab): Workspace {
+  const shown = activeTab(state);
+  if (shown.id === before.id) return state;
+  const pane = focusedPane(state);
+  const tabs = pane.tabs.map((t) =>
+    t.id === shown.id ? { ...t, selection: settled(t.selection) } : t,
+  );
+  return withPane(state, { ...pane, tabs });
+}
+
 /** Tab `tabId` shown, and its pane focused. */
 export function selectTab(state: Workspace, tabId: string): Workspace {
   const pane = paneOf(state, tabId);
   if (!pane) return state;
-  return { ...withPane(state, { ...pane, active: tabId }), focused: pane.id };
+  const next = { ...withPane(state, { ...pane, active: tabId }), focused: pane.id };
+  return arrived(next, activeTab(state));
 }
 
 /** The tab already showing `selection`: its thread's or orchestrator's, or the pane's New thread. */
@@ -145,17 +167,20 @@ export function closeTab(
   const tabs = pane.tabs.filter((t) => t.id !== tabId);
   if (tabs.length) {
     const active = pane.active === tabId ? tabs[Math.min(at, tabs.length - 1)]!.id : pane.active;
-    return withPane(state, { ...pane, tabs, active });
+    return arrived(withPane(state, { ...pane, tabs, active }), activeTab(state));
   }
   if (state.panes.length === 1) return startWorkspace(pane.tabs[0]!.hostId, fallback);
   const side = state.panes.indexOf(pane);
   const panes = state.panes.filter((p) => p !== pane);
-  return {
-    ...state,
-    panes,
-    ratios: ratiosWithout(state.ratios, state.panes.length, side),
-    focused: state.focused === pane.id ? panes[Math.max(0, side - 1)]!.id : state.focused,
-  };
+  return arrived(
+    {
+      ...state,
+      panes,
+      ratios: ratiosWithout(state.ratios, state.panes.length, side),
+      focused: state.focused === pane.id ? panes[Math.max(0, side - 1)]!.id : state.focused,
+    },
+    activeTab(state),
+  );
 }
 
 /** Every tab on host `hostId` closed, once it's removed, leaving New thread on `fallbackHost`. */

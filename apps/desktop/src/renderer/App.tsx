@@ -1402,6 +1402,16 @@ export function App() {
     />
   );
 
+  // An orchestrator's sidebar row drags as its root run. Dropped, it opens as the orchestrator, not
+  // a plain thread. Whether the run was one.
+  const openDroppedOrchestrator = ({ hostId, runId }: { hostId: string; runId: string }) => {
+    const { state } = views[hostId] ?? idleThreads;
+    const dropped = state.orchestrators.find((o) => o.run === runId);
+    if (!dropped) return false;
+    openOnHost(hostId, { kind: "orchestrator", orchestratorId: dropped.id });
+    setShowHome({});
+    return true;
+  };
   const historyButtons = (
     <div className="flex shrink-0 items-center">
       <IconButton
@@ -1832,13 +1842,14 @@ export function App() {
                                 : undefined,
                           });
                         }}
-                        onDropOnTabs={(drop, paneId, before) =>
+                        onDropOnTabs={(drop, paneId, before) => {
+                          if (drop.kind === "thread" && openDroppedOrchestrator(drop)) return;
                           setWorkspace((state) =>
                             drop.kind === "tab"
                               ? moveTab(state, drop.id, paneId, before)
                               : placeThread(state, drop.hostId, drop.runId, paneId, before),
-                          )
-                        }
+                          );
+                        }}
                         details={
                           tiled && selection.kind === "thread" && !group.project
                             ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")
@@ -1855,6 +1866,7 @@ export function App() {
                           onDrop: (paneId, e) => {
                             const tabId = e.dataTransfer.getData(tabDragType);
                             const thread = draggedThread(e.dataTransfer);
+                            if (!tabId && thread && openDroppedOrchestrator(thread)) return;
                             setWorkspace((state) => {
                               if (tabId)
                                 return paneId
