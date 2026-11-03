@@ -233,7 +233,7 @@
      under white, so it doesn't glare on the black. */
   --background: #000000;
   --sidebar: #000000;
-  --surface: #0f0f0f;
+  --surface: #0e0e0e;
   --foreground: #e8e8e8;
   --muted-foreground: #a3a3a3;
   --faint-foreground: #8a8a8a;
@@ -1197,10 +1197,7 @@ body {
 .composer-shell,
 .composer-bar,
 .composer-tabs {
-  background-color: light-dark(
-    var(--surface),
-    color-mix(in oklab, var(--foreground) 4%, var(--surface))
-  );
+  background-color: var(--surface);
 }
 .composer-shell {
   anchor-name: --composer;
@@ -1381,22 +1378,6 @@ body {
     opacity: 0;
   }
 }
-/* The reasoning bars fill or empty one after another as the level changes. */
-.reasoning-bars rect {
-  transition: opacity var(--transition-duration-fast) var(--ease-out);
-}
-.reasoning-bars rect:nth-child(2) {
-  transition-delay: 25ms;
-}
-.reasoning-bars rect:nth-child(3) {
-  transition-delay: 50ms;
-}
-.reasoning-bars rect:nth-child(4) {
-  transition-delay: 75ms;
-}
-.reasoning-bars rect:nth-child(5) {
-  transition-delay: 100ms;
-}
 [data-back] > .composer-controls {
   margin-top: -2.625rem;
   padding-bottom: 4px;
@@ -1541,6 +1522,12 @@ body {
 }
 @container composer (width < 22rem) {
   .composer-effort {
+    display: none;
+  }
+}
+/* The model button's reasoning level goes only when the name beside it runs out of room. */
+@container composer (width < 16.25rem) {
+  .composer-model-effort {
     display: none;
   }
 }

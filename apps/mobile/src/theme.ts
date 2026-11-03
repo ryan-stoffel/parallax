@@ -33,7 +33,7 @@ export const light = {
 export const dark: typeof light = {
   ...light,
   background: "#000000",
-  surface: "#0f0f0f",
+  surface: "#0e0e0e",
   foreground: "#e8e8e8",
   mutedForeground: "#a3a3a3",
   faintForeground: "#8a8a8a",
