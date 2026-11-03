@@ -56,11 +56,10 @@ export function ProfileButton({ onOpen }: { onOpen: (url: string) => void }) {
     <>
       <IconButton
         label={signedIn ? "Google account" : "Profile"}
-        size="lg"
         popoverTarget={id}
         aria-haspopup="menu"
       >
-        {signedIn ? <Avatar of={signedIn} className="size-6 text-meta" /> : <AccountCircle />}
+        {signedIn ? <Avatar of={signedIn} className="size-5 text-meta" /> : <AccountCircle />}
       </IconButton>
       <Menu ref={menu} id={id} label="Profile" align="end" className="w-72 p-1.5">
         <div className="mb-1 flex flex-col items-center gap-1 rounded-lg bg-selected px-3 pt-5 pb-4 text-center">

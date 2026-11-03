@@ -154,7 +154,7 @@ export function AgentBrowser({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <form
-        className="flex items-center gap-1 border-b border-border px-2 pb-2"
+        className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-1"
         onSubmit={(e) => {
           e.preventDefault();
           if (address?.trim()) send({ kind: "navigate", url: address.trim() });
@@ -175,7 +175,7 @@ export function AgentBrowser({
         <button
           type="button"
           onClick={() => send({ kind: "control", take: !state.human })}
-          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-body text-foreground hover:bg-hover"
+          className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-body text-foreground hover:bg-hover"
         >
           {state.human ? (
             <MousePointer2 aria-hidden className="size-3.5" />
@@ -256,7 +256,7 @@ export function AgentBrowser({
         }
       </PageFrame>
       {(gone || !frame) && (
-        <p className="absolute inset-0 top-10 grid place-items-center text-body text-muted-foreground">
+        <p className="absolute inset-0 top-8 grid place-items-center text-body text-muted-foreground">
           {gone ? "This tab closed." : "Waiting for the page…"}
         </p>
       )}

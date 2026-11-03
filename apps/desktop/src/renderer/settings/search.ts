@@ -213,7 +213,6 @@ export const settingsIndex: SettingEntry[] = [
   // Browser (PLX-974)
   ...entries("browser", "Appearance", [
     ["Theme", "Parallax's own colors, or Helium's and Chrome's", "color colour palette dark light"],
-    ["Layout", "Compact puts the tabs and the address bar in one row", "compact classic toolbar"],
     ["Show bookmarks bar", "Under the toolbar, while there are bookmarks", "favorites"],
     ["Page size", "Desktop lays a page out as on a monitor", "zoom fit monitor"],
   ]),
@@ -221,7 +220,11 @@ export const settingsIndex: SettingEntry[] = [
     ["Search engine", "What the address bar searches with", "google duckduckgo bing brave kagi"],
   ]),
   ...entries("browser", "On startup", [
-    ["Continue where you left off", "Each browser opens the tabs it had", "restore session tabs"],
+    [
+      "Continue where you left off",
+      "Each side panel opens the browser tabs it had",
+      "restore session tabs",
+    ],
   ]),
   ...entries("browser", "Home button", [
     ["Show home button", "In the toolbar, beside Reload", "homepage"],
