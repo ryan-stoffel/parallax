@@ -25,7 +25,8 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
 
   const strip = page.getByRole("tablist", { name: "Open tabs" });
   const tabs = strip.getByRole("tab");
-  const tile = page.getByRole("tablist", { name: "Threads" }).getByRole("tab");
+  const groups = strip.locator("[data-tab]");
+  const tiles = page.locator("[data-pane]");
   const start = async (prompt: string) => {
     await page.getByRole("textbox", { name: "Message" }).fill(prompt);
     await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -53,19 +54,25 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await drag(tabs.nth(0), second.x + second.width - 2, second.y + second.height / 2);
   await expect(tabs).toHaveText(["Second", "First"]);
 
-  // Dragged into the open thread, a tab tiles beside it and leaves the strip.
+  // Dragged into the open thread, a tab tiles beside it, its title joining that tab's.
   await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true");
   const pane = page.getByRole("log", { name: "Transcript" }).first();
   const paneBox = (await pane.boundingBox())!;
   await drag(tabs.nth(0), paneBox.x + paneBox.width / 2, paneBox.y + paneBox.height / 2);
-  await expect(tile).toHaveText(["First", "Second"].map((t) => new RegExp(`^${t}`)));
-  await expect(tabs).toHaveCount(1);
+  await expect(tiles).toHaveCount(2);
+  await expect(groups).toHaveCount(1);
+  await expect(tabs).toHaveText(["First", "Second"]);
 
-  // A tile's header dragged back to the strip gets its tab again.
+  // Dragged onto the other tile, a part swaps them.
+  const right = (await tiles.nth(1).boundingBox())!;
+  await drag(tabs.nth(0), right.x + right.width / 2, right.y + 200);
+  await expect(tabs).toHaveText(["Second", "First"]);
+
+  // Dragged back along the strip, a part gets its own tab again.
   const end = (await strip.boundingBox())!;
-  await drag(tile.nth(0), end.x + end.width - 2, end.y + end.height / 2);
-  await expect(tabs).toHaveCount(2);
-  await expect(tile).toHaveCount(0);
+  await drag(tabs.nth(0), end.x + end.width - 2, end.y + end.height / 2);
+  await expect(groups).toHaveCount(2);
+  await expect(tiles).toHaveCount(0);
 
   await page.keyboard.press("ControlOrMeta+T");
   await expect(tabs).toHaveCount(3);

@@ -25,7 +25,8 @@ export function draggedThread(data: DataTransfer): { hostId: string; runId: stri
 export const tabDragType = "application/x-parallax-tab";
 
 /**
- * A tile's header dragged onto another tile, which swaps them, or the tab strip, which gives it a
- * tab. Its data is the thread's id. It isn't a thread drag, so a composer doesn't attach it.
+ * A part of the open tab, one of its tiled threads, dragged onto another tile, which swaps them, or
+ * along the strip, which gives it a tab. Its data is the thread's id. It isn't a thread drag, so a
+ * composer doesn't attach it.
  */
 export const tileDragType = "application/x-parallax-tile";

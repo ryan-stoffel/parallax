@@ -97,6 +97,19 @@ export function navigate(state: Tabs, hostId: string, selection: Selection): Tab
   return { ...state, tabs: updated(state.tabs, { ...active, hostId, selection }) };
 }
 
+/** Tab `id` opened, with its thread `threadId` focused when it tiles several. */
+export function focusTab(state: Tabs, id: string, threadId?: string): Tabs {
+  const tab = state.tabs.find((t) => t.id === id);
+  if (!tab) return state;
+  return {
+    tabs:
+      tab.split && threadId
+        ? updated(state.tabs, { ...tab, selection: { kind: "thread", threadId } })
+        : state.tabs,
+    active: id,
+  };
+}
+
 /** Thread `threadId` in a tab of its own before tab `before`, or last, or the tab it's in already. */
 export function openInTab(state: Tabs, hostId: string, threadId: string, before?: string): Tabs {
   const holder = holderOf(state, hostId, threadId);

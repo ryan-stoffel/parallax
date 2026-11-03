@@ -6,6 +6,7 @@ import {
   closeHostTabs,
   closeTab,
   dropInStrip,
+  focusTab,
   moveTab,
   navigate,
   openBeside,
@@ -83,6 +84,13 @@ test("opening a thread already tiled focuses it in its split", () => {
   const again = openInTab(state, "h", "a");
   expect(shape(again)).toEqual(["[a+b]"]);
   expect(activeTab(again).selection).toEqual(thread("a"));
+});
+
+test("choosing a part of a tab opens it and focuses that tile", () => {
+  const state = openInTab(openBeside(opened("a"), "b"), "h", "c");
+  const chosen = focusTab(state, idOf(state, "a"), "a");
+  expect(shape(chosen)).toEqual(["[a+b]", "c"]);
+  expect(activeTab(chosen).selection).toEqual(thread("a"));
 });
 
 test("a tile dropped on the strip leaves the split for its own tab", () => {

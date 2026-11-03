@@ -1,13 +1,4 @@
-import {
-  ArrowLeftRight,
-  ClipboardList,
-  Columns2,
-  Maximize2,
-  Minimize2,
-  PanelTop,
-  Rows2,
-  X,
-} from "lucide-react";
+import { ArrowLeftRight, Columns2, PanelTop, Rows2 } from "lucide-react";
 import {
   useLayoutEffect,
   useRef,
@@ -18,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { bindingOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
 import { tileDragType } from "./threadDrag";
 import {
   clampRatio,
@@ -31,26 +21,20 @@ import {
   type Rect,
 } from "./splitLayout";
 
-/** A tile's header height in pixels, `h-9`. */
-const headerHeight = 36;
-
 /** How far an arrow key moves a focused divider. */
 const keyStep = 0.05;
 
-/** A rect as CSS, inset by `inset` pixels on every side and `top` more from its top. */
-const placed = (r: Rect, inset = 0, top = 0): CSSProperties => ({
+/** A rect as CSS, inset by `inset` pixels on every side. */
+const placed = (r: Rect, inset = 0): CSSProperties => ({
   left: `calc(${r.left * 100}% + ${inset}px)`,
-  top: `calc(${r.top * 100}% + ${inset + top}px)`,
+  top: `calc(${r.top * 100}% + ${inset}px)`,
   width: `calc(${r.width * 100}% - ${inset * 2}px)`,
-  height: `calc(${r.height * 100}% - ${inset * 2 + top}px)`,
+  height: `calc(${r.height * 100}% - ${inset * 2}px)`,
 });
 
-/** One thread in the split: its header's title and icon, and its chat. */
+/** One thread in the split: its chat. */
 export interface TileItem {
   key: string;
-  threadId: string;
-  title: string;
-  icon: ReactNode;
   node: ReactNode;
 }
 
@@ -63,16 +47,18 @@ interface DropTarget {
 
 /**
  * The split's threads tiled in their Fibonacci layout (splitLayout.ts). With `tiled` off it holds
- * one thread, full size and headerless. Tiled, each tile has a header of tabs, and as many threads
- * tile as keep `minTile`: the rest stack as tabs in the last tile, which shows the focused one, or
- * the last one shown. `maximized` stacks them all in one tile. Chats are siblings keyed by `key`,
- * so a tile coming, going, or stacking never remounts the others, and they glide to their places.
+ * one thread, full size. Tiled, a line marks the focused one, and as many threads tile as keep
+ * `minTile`: the rest stack in the last tile, which shows the focused one, or the last one shown.
+ * `maximized` stacks them all in one tile. The top bar's tab names them all and picks among them.
+ * Chats are siblings keyed by `key`, so a tile coming, going, or stacking never remounts the
+ * others, and they glide to their places.
  *
  * A divider on each cut drags or arrow-keys to resize and double-clicks back to even. A drag shows
  * its ratios here and hands them up once it ends, so App doesn't render on every move. `details`
  * floats over the focused thread's tile. A thread `drop` accepts, dragged over, previews where it
  * would open: a new tile while there's room, as a tab once one won't fit, or in place of the tile
- * under the pointer when the split is full. A tile's header drags onto another tile to swap them.
+ * under the pointer when the split is full. A tile dragged from the top bar's tab, `draggedTile`,
+ * swaps with the one under the pointer.
  */
 export function SplitTiles({
   items,
@@ -81,10 +67,8 @@ export function SplitTiles({
   ratios,
   onResize,
   maximized,
-  onMaximize,
-  onFocus,
-  onClose,
   onSwap,
+  draggedTile,
   details,
   drop,
 }: {
@@ -94,18 +78,11 @@ export function SplitTiles({
   ratios: number[];
   onResize: (ratios: number[]) => void;
   maximized: boolean;
-  onMaximize: (maximized: boolean) => void;
-  onFocus: (index: number) => void;
-  onClose: (index: number) => void;
   onSwap: (from: number, to: number) => void;
-  details?: {
-    node: ReactNode;
-    open: (index: number) => boolean;
-    onToggle: (index: number) => void;
-  };
+  draggedTile: () => number | undefined;
+  details?: ReactNode;
   drop?: { accepts: (e: DragEvent) => boolean; onDrop: (at: number, e: DragEvent) => void };
 }) {
-  useKeybindings();
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
@@ -151,8 +128,6 @@ export function SplitTiles({
   };
 
   const [target, setTarget] = useState<DropTarget>();
-  // The thread whose tile header is dragging, which a drag can't read before its drop.
-  const dragged = useRef<number>(undefined);
   const tileUnder = (e: DragEvent<HTMLElement>) => {
     const r = box.current!.getBoundingClientRect();
     return tileAt(tiles, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
@@ -160,7 +135,8 @@ export function SplitTiles({
   const targetOf = (e: DragEvent<HTMLElement>): DropTarget | undefined => {
     if (e.dataTransfer.types.includes(tileDragType)) {
       const tile = tileUnder(e);
-      if (dragged.current === undefined || tile === tileOf(dragged.current)) return undefined;
+      const dragged = draggedTile();
+      if (dragged === undefined || tile === tileOf(dragged)) return undefined;
       return { at: activeIn(tile), rect: tiles[tile]!, label: "swap" };
     }
     if (!drop?.accepts(e)) return undefined;
@@ -200,7 +176,7 @@ export function SplitTiles({
         setTarget(undefined);
         if (!next) return;
         e.preventDefault();
-        if (next.label === "swap") onSwap(dragged.current!, next.at);
+        if (next.label === "swap") onSwap(draggedTile()!, next.at);
         else drop!.onDrop(next.at, e);
       }}
     >
@@ -212,38 +188,20 @@ export function SplitTiles({
             key={key}
             // A stacked thread behind its tile's tab stays mounted, out of sight and reach.
             inert={!active}
-            style={placed(tiles[tile]!, 0, tiled ? headerHeight : 0)}
-            className={`absolute flex min-h-0 min-w-0 transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"} ${tiles[tile]!.left > 0 ? "border-l border-border" : ""}`}
+            style={placed(tiles[tile]!)}
+            className={`absolute flex min-h-0 min-w-0 transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"} ${tiles[tile]!.left > 0 ? "border-l border-border" : ""} ${tiles[tile]!.top > 0 ? "border-t border-border" : ""}`}
           >
+            {tiled && i === focused && (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 top-0 z-[2] h-0.5 bg-accent"
+              />
+            )}
             {node}
-            {i === focused && details?.node}
+            {i === focused && details}
           </div>
         );
       })}
-      {tiled &&
-        tiles.map((rect, tile) => {
-          const group = tile === last ? items.map((_, i) => i).slice(last) : [tile];
-          return (
-            <TileHeader
-              key={`header-${tile}`}
-              rect={rect}
-              group={group}
-              items={items}
-              active={activeIn(tile)}
-              focused={focused}
-              maximized={maximized}
-              detailsOpen={!!details && group.includes(focused) && details.open(focused)}
-              onFocus={onFocus}
-              onClose={onClose}
-              onDragTile={(index) => (dragged.current = index)}
-              onDetails={details && (() => details.onToggle(activeIn(tile)))}
-              onMaximize={() => {
-                if (!group.includes(focused)) onFocus(activeIn(tile));
-                onMaximize(!maximized);
-              }}
-            />
-          );
-        })}
       {cuts.map((cut, i) => {
         const t = tiles[i]!;
         const { region, vertical } = cut;
@@ -340,171 +298,5 @@ export function SplitTiles({
         </div>
       )}
     </div>
-  );
-}
-
-const headerButton =
-  "grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-3.5";
-
-/**
- * A tile's header: a tab for each thread it holds, each with its repository's icon, title, Focus
- * thread key, and a close button, then Thread details and Maximize or Restore. The tab it shows
- * reads in full; the focused thread's is underlined in the accent. Double-clicking it maximizes,
- * and each tab drags onto another tile or the top bar's tabs.
- */
-function TileHeader({
-  rect,
-  group,
-  items,
-  active,
-  focused,
-  maximized,
-  detailsOpen,
-  onFocus,
-  onClose,
-  onDragTile,
-  onDetails,
-  onMaximize,
-}: {
-  rect: Rect;
-  group: number[];
-  items: TileItem[];
-  active: number;
-  focused: number;
-  maximized: boolean;
-  detailsOpen: boolean;
-  onFocus: (index: number) => void;
-  onClose: (index: number) => void;
-  onDragTile: (index: number | undefined) => void;
-  onDetails?: () => void;
-  onMaximize: () => void;
-}) {
-  const stacked = group.length > 1;
-  return (
-    <div
-      style={{ ...placed(rect), height: headerHeight }}
-      onDoubleClick={(e) => {
-        if (!(e.target as Element).closest("[data-tile-action]")) onMaximize();
-      }}
-      className={`absolute z-[2] flex items-stretch border-b border-border bg-pane transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${rect.left > 0 ? "border-l" : ""} ${rect.top > 0 ? "border-t" : ""}`}
-    >
-      <div role="tablist" aria-label="Threads" className="flex min-w-0 flex-1 items-stretch">
-        {group.map((i) => {
-          const item = items[i]!;
-          const shown = i === active;
-          const isFocused = i === focused;
-          const keys = bindingOf(tileCommands[i]!);
-          return (
-            <div
-              key={item.key}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData(tileDragType, item.threadId);
-                e.dataTransfer.effectAllowed = "copyMove";
-                onDragTile(i);
-              }}
-              onDragEnd={() => onDragTile(undefined)}
-              // In a stack, the shown tab takes the most room, and the others' close buttons show over
-              // them on hover, taking none.
-              className={`group/tab relative flex min-w-0 items-center ${stacked ? `max-w-64 border-r border-border last:border-r-0 ${shown ? "flex-[3]" : "flex-1"}` : "flex-1"} ${shown ? "" : "hover:bg-hover"}`}
-            >
-              {isFocused && (
-                <span aria-hidden className="absolute inset-x-0 -bottom-px z-[1] h-0.5 bg-accent" />
-              )}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={shown}
-                title={item.title}
-                onClick={() => onFocus(i)}
-                className={`@container/tab flex h-full min-w-0 flex-1 items-center gap-2 pl-3 text-left text-body transition-colors ${isFocused ? "text-foreground" : shown ? "text-muted-foreground" : "text-faint-foreground"}`}
-              >
-                <span className={`flex shrink-0 ${isFocused ? "" : "opacity-60"}`}>
-                  {item.icon}
-                </span>
-                <span className={`min-w-0 flex-1 truncate ${shown ? "font-medium" : ""}`}>
-                  {item.title}
-                </span>
-                {keys && (
-                  <kbd className="shrink-0 font-sans text-caption text-faint-foreground tabular-nums @max-[10rem]/tab:hidden">
-                    {formatKeybinding(keys)}
-                  </kbd>
-                )}
-              </button>
-              <button
-                type="button"
-                data-tile-action
-                aria-label={`Close ${item.title}`}
-                title="Close this tile"
-                onClick={() => onClose(i)}
-                className={`${headerButton} ${stacked && !shown ? "absolute right-1 bg-pane opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100" : "mx-1"}`}
-              >
-                <X />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <div
-        data-tile-action
-        className="flex shrink-0 items-center gap-0.5 border-l border-border px-1"
-      >
-        {onDetails && (
-          <button
-            type="button"
-            aria-label="Thread details"
-            title="Thread details"
-            aria-pressed={detailsOpen}
-            onClick={onDetails}
-            className={headerButton}
-          >
-            <ClipboardList />
-          </button>
-        )}
-        <button
-          type="button"
-          aria-label={maximized ? "Restore tiles" : "Maximize thread"}
-          title={maximized ? "Restore tiles" : "Maximize thread"}
-          onClick={onMaximize}
-          className={headerButton}
-        >
-          {maximized ? <Minimize2 /> : <Maximize2 />}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** A small map of a split of `count` threads at even sizes, tile `index` filled. */
-export function TileGlyph({ count, index }: { count: number; index: number }) {
-  const { tiles } = tileLayout(count, []);
-  // 16 by 12, its tiles 1px apart inside a 1px frame.
-  const w = 16;
-  const h = 12;
-  return (
-    <svg aria-hidden viewBox={`0 0 ${w} ${h}`} className="h-3 w-4 shrink-0">
-      <rect
-        x={0.5}
-        y={0.5}
-        width={w - 1}
-        height={h - 1}
-        rx={2}
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity={0.45}
-      />
-      {tiles.map((t, i) => (
-        <rect
-          key={i}
-          x={2 + t.left * (w - 4) + (t.left > 0 ? 0.5 : 0)}
-          y={2 + t.top * (h - 4) + (t.top > 0 ? 0.5 : 0)}
-          width={t.width * (w - 4) - (t.left > 0 ? 0.5 : 0) - (t.left + t.width < 1 ? 0.5 : 0)}
-          height={t.height * (h - 4) - (t.top > 0 ? 0.5 : 0) - (t.top + t.height < 1 ? 0.5 : 0)}
-          rx={0.75}
-          fill="currentColor"
-          fillOpacity={i === index ? 1 : 0.22}
-        />
-      ))}
-    </svg>
   );
 }

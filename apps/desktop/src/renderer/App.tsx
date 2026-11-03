@@ -14,7 +14,9 @@ import {
   SquarePen,
   SunMoon,
   TextSearch,
+  Maximize2,
   MessageCircleQuestion,
+  Minimize2,
   PanelBottom,
   PanelLeftOpen,
   PanelRight,
@@ -118,6 +120,7 @@ import {
   titleOf,
   useThreads,
   type ForkChoice,
+  type ThreadsState,
   type ThreadsView,
 } from "./threads";
 import { cloneOnto, type CloneAsk } from "./clone";
@@ -127,13 +130,14 @@ import { keptRemoteControl, MoveRemoteControl } from "./MoveRemoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
-import { SplitTiles, TileGlyph } from "./SplitTiles";
-import { ThreadTabs, type TabItem } from "./ThreadTabs";
+import { SplitTiles } from "./SplitTiles";
+import { ThreadTabs, type StripDrag, type TabItem, type TabPart } from "./ThreadTabs";
 import {
   activeTab,
   closeHostTabs,
   closeTab,
   dropInStrip,
+  focusTab,
   moveTab,
   navigate,
   openBeside,
@@ -188,52 +192,57 @@ export type SettingsSection =
   | "beta"
   | "about";
 
-/** What the strip shows for `tab`: for several tiled threads, the focused one's and a map of them. */
-function tabItem(tab: ThreadTab, view: ThreadsView): TabItem {
-  const { selection, split } = tab;
-  const { state } = view;
+/** What the strip shows for a thread: its title, and any waiting on the user or working in its icon. */
+function threadPart(tab: ThreadTab, state: ThreadsState, threadId: string): TabPart {
+  const thread = state.threads.find((t) => t.id === threadId);
+  const attention = thread && attentionOf(thread, state.runs[threadId], asksOf(state, threadId));
+  return {
+    title: state.titles[threadId] ?? "Thread",
+    icon:
+      attention === "needsYou" ? (
+        <MessageCircleQuestion aria-label="Needs you" className="text-warning" />
+      ) : attention === "working" ? (
+        <span className="text-working">
+          <WorkingMark />
+        </span>
+      ) : (
+        <RepoIcon repo={state.repos.find((r) => r.id === thread?.repo)} />
+      ),
+    thread: { hostId: tab.hostId, runId: threadId },
+    focused: tab.selection.kind === "thread" && tab.selection.threadId === threadId,
+  };
+}
+
+/** What the strip shows for `tab`: a part for each of its threads, or for its one other view. */
+function tabItem(tab: ThreadTab, { state }: ThreadsView): TabItem {
+  const { id, selection } = tab;
   if (selection.kind === "orchestrator") {
     const orchestrator = state.orchestrators.find((o) => o.id === selection.orchestratorId);
     return {
-      id: tab.id,
-      title: orchestrator?.name ?? "Orchestrator",
-      icon: <ProjectIcon icon={orchestrator?.icon} />,
+      id,
+      parts: [
+        {
+          title: orchestrator?.name ?? "Orchestrator",
+          icon: <ProjectIcon icon={orchestrator?.icon} />,
+          focused: true,
+        },
+      ],
     };
   }
   if (selection.kind === "new") {
     const repo = state.repos.find((r) => r.id === selection.groupId);
     return {
-      id: tab.id,
-      title: repo?.project ? repo.name : "New thread",
-      icon: <RepoIcon repo={repo} />,
+      id,
+      parts: [
+        {
+          title: repo?.project ? repo.name : "New thread",
+          icon: <RepoIcon repo={repo} />,
+          focused: true,
+        },
+      ],
     };
   }
-  const { threadId } = selection;
-  const thread = state.threads.find((t) => t.id === threadId);
-  // Any of the tab's threads waiting on the user or working shows in its icon.
-  const attentions = threadIdsOf(tab).map((id) => {
-    const t = state.threads.find((other) => other.id === id);
-    return t && attentionOf(t, state.runs[id], asksOf(state, id));
-  });
-  const icon = attentions.includes("needsYou") ? (
-    <MessageCircleQuestion aria-label="Needs you" className="text-warning" />
-  ) : attentions.includes("working") ? (
-    <span className="text-working">
-      <WorkingMark />
-    </span>
-  ) : split ? (
-    <span className="text-muted-foreground">
-      <TileGlyph count={split.threadIds.length} index={split.threadIds.indexOf(threadId)} />
-    </span>
-  ) : (
-    <RepoIcon repo={state.repos.find((r) => r.id === thread?.repo)} />
-  );
-  return {
-    id: tab.id,
-    title: state.titles[threadId] ?? "Thread",
-    icon,
-    thread: split ? undefined : { hostId: tab.hostId, runId: threadId },
-  };
+  return { id, parts: threadIdsOf(tab).map((threadId) => threadPart(tab, state, threadId)) };
 }
 
 /**
@@ -462,9 +471,6 @@ export function App() {
   const known = useRef(new Set<string>());
   for (const t of threads.state.threads) known.current.add(t.id);
   for (const p of threads.state.orchestrators) known.current.add(p.id);
-  // Closes a thread's tile. The rest stay tiled, or the last one stays open alone.
-  const closePane = (threadId: string) =>
-    setTabs((state) => removeThread(state, host.id, threadId));
   // A removed computer's tabs go with it.
   const removedHost = tabs.tabs.find((t) => !hosts.some((h) => h.id === t.hostId))?.hostId;
   if (removedHost) setTabs(closeHostTabs(tabs, removedHost, hosts[0]!.id));
@@ -1145,17 +1151,17 @@ export function App() {
     );
   };
 
-  // The tab the strip is dragging, which a drag over the pane can't read from its data.
-  const draggingTab = useRef<string>(undefined);
+  const stripDrag = useRef<StripDrag>(undefined);
   const tabItems = tabs.tabs.map((tab) => tabItem(tab, views[tab.hostId] ?? idleThreads));
   // The only tab, on New thread, closes to itself.
   const closableTab = tabs.tabs.length > 1 || selection.kind !== "new";
   // The crumbs but the last, when the active tab says the same, as it does for the page.
   const lastCrumb = crumbs.at(-1);
+  const activeTitle = tabItems[tabs.tabs.indexOf(activeTab(tabs))]!.parts.find(
+    (part) => part.focused,
+  )?.title;
   const trail =
-    lastCrumb &&
-    !lastCrumb.onClick &&
-    lastCrumb.label === tabItems[tabs.tabs.indexOf(activeTab(tabs))]!.title
+    lastCrumb && !lastCrumb.onClick && lastCrumb.label === activeTitle
       ? crumbs.slice(0, -1)
       : crumbs;
 
@@ -1224,7 +1230,11 @@ export function App() {
       } else if (command === "closeTab") {
         // With nothing to close, Close Window keeps its keys.
         if (dialog || settings || !closableTab) return;
-        setTabs(closeTab(tabs, tabs.active));
+        setTabs(
+          selection.kind === "thread"
+            ? removeThread(tabs, hostId, selection.threadId)
+            : closeTab(tabs, tabs.active),
+        );
       } else if (command === "nextTab" || command === "previousTab") {
         if (dialog || settings) return;
         setTabs(stepTab(tabs, command === "nextTab" ? 1 : -1));
@@ -1410,25 +1420,6 @@ export function App() {
       }
     />
   );
-  // Its key for thread `threadId`, which its children and parent share (useThreadDetails).
-  const detailsKeyOf = (threadId: string) => {
-    const thread = threads.state.threads.find((t) => t.id === threadId);
-    return JSON.stringify([
-      host.id,
-      "thread",
-      thread ? rootOf(threads.state, thread).id : threadId,
-    ]);
-  };
-  // Tile `index`'s Thread details button: shows or hides its thread's, focusing it to show it.
-  const toggleTileDetails = (index: number) => {
-    const threadId = panes[index]!;
-    const key = detailsKeyOf(threadId);
-    if (selection.kind === "thread" && selection.threadId !== threadId) {
-      openThreadId(threadId);
-      if (details.isOpen(key)) return;
-    }
-    details.toggle(key);
-  };
 
   const page = (
     <div className="flex h-full">
@@ -1663,8 +1654,14 @@ export function App() {
                   <ThreadTabs
                     tabs={tabItems}
                     active={tabs.active}
-                    onSelect={(id) => setTabs((state) => ({ ...state, active: id }))}
-                    onClose={(id) => setTabs((state) => closeTab(state, id))}
+                    onSelect={(id, threadId) => setTabs((state) => focusTab(state, id, threadId))}
+                    onClose={(id, thread) =>
+                      setTabs((state) =>
+                        thread
+                          ? removeThread(state, thread.hostId, thread.runId)
+                          : closeTab(state, id),
+                      )
+                    }
                     onNew={() => newThread()}
                     onDrop={(drop, before) =>
                       setTabs((state) =>
@@ -1676,11 +1673,23 @@ export function App() {
                       )
                     }
                     closable={closableTab}
-                    dragging={draggingTab}
+                    dragging={stripDrag}
                   />
                   <div className="ml-auto flex min-w-0 items-center gap-2">
                     <Breadcrumb items={trail} tight />
-                    {!group.project && !tiled && (
+                    {tiled && (
+                      <IconButton
+                        label={split.maximized ? "Restore tiles" : "Maximize thread"}
+                        onClick={() =>
+                          setTabs((state) =>
+                            withSplit(state, { ...split, maximized: !split.maximized }),
+                          )
+                        }
+                      >
+                        {split.maximized ? <Minimize2 /> : <Maximize2 />}
+                      </IconButton>
+                    )}
+                    {!group.project && (
                       <ThreadDetailsButton
                         open={details.mode !== "hidden"}
                         onToggle={() => details.toggle()}
@@ -1723,21 +1732,14 @@ export function App() {
                             split && setTabs((state) => withSplit(state, { ...split, ratios }))
                           }
                           maximized={!!split?.maximized}
-                          onMaximize={(maximized) =>
-                            split && setTabs((state) => withSplit(state, { ...split, maximized }))
-                          }
                           onSwap={(from, to) => setTabs((state) => swapTiles(state, from, to))}
-                          onFocus={(index) => openThreadId(panes[index]!)}
-                          onClose={(index) => closePane(panes[index]!)}
+                          draggedTile={() => {
+                            const at = panes.indexOf(stripDrag.current?.threadId ?? "");
+                            return at === -1 ? undefined : at;
+                          }}
                           details={
                             tiled && !group.project
-                              ? {
-                                  node: threadDetails(
-                                    details.mode === "hidden" ? "hidden" : "floating",
-                                  ),
-                                  open: (index) => details.isOpen(detailsKeyOf(panes[index]!)),
-                                  onToggle: toggleTileDetails,
-                                }
+                              ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")
                               : undefined
                           }
                           // A sidebar thread dragged over the open thread, not over a composer,
@@ -1747,7 +1749,7 @@ export function App() {
                               !e.defaultPrevented &&
                               e.dataTransfer.types.includes(threadDragType) &&
                               // A tab dragged over its own thread stays put.
-                              draggingTab.current !== tabs.active,
+                              stripDrag.current?.tab !== tabs.active,
                             onDrop: (at, e) => {
                               const thread = draggedThread(e.dataTransfer);
                               // A split's threads are one computer's.
@@ -1765,13 +1767,6 @@ export function App() {
                             // Keyed, so another run starts from an empty transcript.
                             return {
                               key: `${host.id}/${threadId}`,
-                              threadId,
-                              title: title ?? "Thread",
-                              icon: (
-                                <RepoIcon
-                                  repo={threads.state.repos.find((r) => r.id === paneThread?.repo)}
-                                />
-                              ),
                               node: (
                                 <section
                                   data-pane={tiled ? side : undefined}
