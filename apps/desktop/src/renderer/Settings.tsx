@@ -790,10 +790,13 @@ function HostInstances({
   };
 
   useEffect(() => {
-    if (focus?.anchor === "hubs") setSelected(hubsTab);
+    if (!focus) return;
+    if (focus.anchor === "hubs") setSelected(hubsTab);
+    // Anything else search picks is in a provider's pane.
+    else setSelected((was) => (was === hubsTab ? "claude" : was));
   }, [focus]);
   const list = providers?.providers.filter((p) => !p.hub);
-  const showingHubs = selected === hubsTab;
+  const showingHubs = hubsOn && selected === hubsTab;
   const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];
   const chosenTab = current?.instance.id;
   const chosenName = current?.instance.name;

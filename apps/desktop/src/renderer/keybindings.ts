@@ -340,9 +340,8 @@ export function bindingsJson(): string {
   return JSON.stringify(all, null, 2);
 }
 
-/** A key, as `keybindingOf` writes one or a default ("Mod") does, its last part a key's code. */
-const keyShape =
-  /^((Ctrl|Alt|Shift|Meta|Mod)\+)+(Key[A-Z]|Digit[0-9]|F[0-9]{1,2}|Numpad\w+|Arrow(Up|Down|Left|Right)|Comma|Period|Slash|Backslash|Semicolon|Quote|Backquote|Bracket(Left|Right)|Minus|Equal|Space|Tab|Backspace|Delete|Home|End|Page(Up|Down))$/;
+/** A key, as `keybindingOf` writes one or a default ("Mod") does: a code such as KeyK, never K. */
+const keyShape = /^((Ctrl|Alt|Shift|Meta|Mod)\+)+[A-Z][A-Za-z0-9]+$/;
 
 /** Why a resolved `key` can't be a command's, as recording it would say: it'd never run. */
 function refusal(key: string): string | undefined {
@@ -383,7 +382,11 @@ export function applyBindingsJson(text: string): string[] {
       errors.push(`Unknown command: ${id}`);
       continue;
     }
-    const { key, when } = (value ?? {}) as { key?: unknown; when?: unknown };
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      errors.push(`${id}: an object with key and when`);
+      continue;
+    }
+    const { key, when } = value as { key?: unknown; when?: unknown };
     if (key !== undefined && key !== null && !(typeof key === "string" && keyShape.test(key))) {
       errors.push(`${id}: a key like "Mod+KeyK", or null for none`);
       continue;

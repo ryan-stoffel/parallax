@@ -28,6 +28,9 @@ import {
 } from "./parts";
 import { RepoScripts } from "./ScriptSettings";
 
+/** What search can pick on a repository's pane. */
+const repoAnchors = ["new-thread-defaults", "scripts", "from-parallax-json", "git"];
+
 /** The composer's own menus are borderless; on a settings row they get a field's outline. */
 const pickerBox = "rounded-lg border border-border bg-background";
 
@@ -54,7 +57,10 @@ export function ProjectSettings({
   const current = [...repos, ...chats].find((r) => r.id === chosen) ?? repos[0] ?? chats[0];
   const firstChat = chats[0]?.id;
   useEffect(() => {
-    if (focus?.anchor === "instructions" && firstChat) setChosen(firstChat);
+    if (!focus) return;
+    if (focus.anchor === "instructions") setChosen(firstChat);
+    // Anything else search picks is only a repository's.
+    else if (repoAnchors.includes(focus.anchor)) setChosen(undefined);
   }, [focus]);
 
   return (

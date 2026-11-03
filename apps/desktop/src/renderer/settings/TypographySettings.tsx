@@ -139,8 +139,8 @@ function DiffPreview() {
           <span className="size-1.5 rounded-full bg-accent" />
         </span>
         src/formatUser.ts
-        <span className="ml-auto text-danger">−1</span>
-        <span className="text-added">+1</span>
+        <span className="ml-auto text-diff-removed">−1</span>
+        <span className="text-diff-added">+1</span>
       </div>
       {line(
         1,

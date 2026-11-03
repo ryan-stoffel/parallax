@@ -54,6 +54,11 @@ test("Applying the JSON as it opens changes nothing, and a left-out When stays",
 
   expect(applyBindingsJson('{"find":{"key":"Mod+KeyG"}}')).toEqual([]);
   expect(whenOf("find")).toBe("!terminalFocus");
+
+  // Any key recording can take applies again, and an entry that isn't an object says so.
+  setBinding("find", "Meta+IntlBackslash");
+  expect(applyBindingsJson(bindingsJson())).toEqual([]);
+  expect(applyBindingsJson('{"find":"Mod+KeyG"}')).toHaveLength(1);
 });
 
 test("the JSON editor applies all of it, or nothing and says why", () => {
