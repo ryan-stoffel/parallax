@@ -32,6 +32,8 @@ use setup::InstanceLock;
 use setup::Pipe;
 #[cfg(unix)]
 use setup::Socket;
+#[cfg(unix)]
+pub(crate) use setup::lock_for_move;
 pub use setup::prepare_data_dir;
 
 use crate::agents::{self, Agents};

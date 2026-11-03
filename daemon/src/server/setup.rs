@@ -155,6 +155,14 @@ fn write_pid(mut file: File, path: &Path) -> Result<File, StartError> {
     Ok(file)
 }
 
+/// The instance lock on `data_dir` while `paths::move_to_default` moves it, or `None` when another
+/// `serve` runs there. The lock stays on the file through a rename, and `Server::start` takes it
+/// again at the new path.
+#[cfg(unix)]
+pub(crate) fn lock_for_move(data_dir: &crate::paths::DataDir) -> Option<File> {
+    lock(&data_dir.lock_file(), data_dir.root()).ok()
+}
+
 impl InstanceLock {
     /// Locks the file at `path`, creating it if needed, and writes this process's pid into it.
     ///

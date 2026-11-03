@@ -282,6 +282,34 @@ mod tests {
     use super::Store;
 
     #[test]
+    fn moving_paths_changes_only_those_under_the_folder() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let mut store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");
+        for (id, path) in [
+            (uuid::Uuid::now_v7(), "/old/data/scratch"),
+            (uuid::Uuid::now_v7(), "/old/data-other/repo"),
+        ] {
+            let fields = crate::RepoFields {
+                name: id.to_string(),
+                path: path.to_owned(),
+                scratch: false,
+                project: false,
+            };
+            store.add_repo(id, &fields).expect("add repo");
+        }
+
+        store.move_paths("/old/data", "/new").expect("move");
+
+        let mut paths: Vec<String> = store
+            .conn
+            .prepare("SELECT path FROM repos")
+            .and_then(|mut rows| rows.query_map([], |row| row.get(0))?.collect())
+            .expect("read repos");
+        paths.sort();
+        assert_eq!(paths, ["/new/scratch", "/old/data-other/repo"]);
+    }
+
+    #[test]
     fn open_enables_wal_busy_timeout_and_foreign_keys() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");

@@ -2,7 +2,8 @@
 //!
 //! Everything lives in one data folder (0009, 0023), which the editor shares:
 //! `~/.parallax` (`%USERPROFILE%\.parallax` on Windows), or the older OS folder where the store is
-//! still there (see [`DataDir::default_location`]). plxd's own entries are:
+//! still there (see [`DataDir::default_location`]). `serve` moves that folder to `~/.parallax` on
+//! macOS and Linux, and leaves a symlink where it was (see [`move_to_default`]). plxd's own entries are:
 //!
 //! - `plxd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
 //!   listens on a named pipe instead, so there it isn't in the folder.
@@ -64,6 +65,13 @@ pub const SANDBOX_TOOLS_DIR: &str = "tools/sandbox";
 /// The store's name in the data folder.
 const STORE_FILE: &str = "plxd.sqlite3";
 
+/// Whether `path` is the `legacy` folder's link to `default`.
+fn links_to_default(path: &Path, legacy: &Path, default: &Path) -> bool {
+    path == legacy
+        && path.is_symlink()
+        && std::fs::canonicalize(path).ok() == std::fs::canonicalize(default).ok()
+}
+
 /// `default`, unless only the `legacy` folder has a store. Other things create `default`, such as
 /// New Repository's `projects/`, so the folder existing doesn't make it the data folder (PLX-1262).
 fn pick_default(default: PathBuf, legacy: Option<PathBuf>) -> PathBuf {
@@ -90,6 +98,129 @@ fn legacy_location(home: &Path) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| home.join(".local/share"));
     Some(data_home.join("parallax"))
+}
+
+/// Where [`move_to_default`] keeps what `~/.parallax` held while the older folder takes its place.
+#[cfg(unix)]
+const ASIDE_NAME: &str = ".parallax.pre-move";
+
+/// The folder in `~/.parallax` for what the older folder also had a copy of, which wins.
+#[cfg(unix)]
+const COLLISIONS_DIR: &str = "pre-move";
+
+/// The data folder to use: `data_dir`, unless it is the older OS folder with the only store, which
+/// this moves to `~/.parallax`. A symlink takes its place, so the absolute paths in events, in
+/// git's worktree links, and in agents' sessions still work. Only the store's worktree and repo
+/// paths, which running code compares with real paths, change (PLX-1264).
+/// The service's plist names that link until its next `service install --replace`, and
+/// [`DataDir::resolve`] follows it. It holds the folder's instance lock during the move, and leaves a folder
+/// another `serve` runs in where it is.
+///
+/// # Errors
+///
+/// If the rename or the symlink fails, as a rename to another volume does. Everything is put back,
+/// so the caller keeps using `data_dir`.
+#[cfg(unix)]
+pub fn move_to_default(data_dir: &DataDir) -> io::Result<DataDir> {
+    let Some(home) = std::env::home_dir().filter(|home| home.is_absolute()) else {
+        return Ok(data_dir.clone());
+    };
+    let default = home.join(DEFAULT_DATA_DIR);
+    if legacy_location(&home).as_deref() != Some(data_dir.root()) {
+        return Ok(data_dir.clone());
+    }
+    if data_dir.root().is_symlink() {
+        return Ok(data_dir.clone());
+    }
+    let Some(_held) = crate::server::lock_for_move(data_dir) else {
+        return Ok(data_dir.clone());
+    };
+    // Another `serve` may have moved it before the lock was free.
+    if data_dir.root().is_symlink() {
+        return DataDir::resolve(Some(data_dir.root()));
+    }
+    if !data_dir.store_file().exists() || default.join(STORE_FILE).exists() {
+        return Ok(data_dir.clone());
+    }
+    // Read before the folder is only a link.
+    let real_legacy = std::fs::canonicalize(data_dir.root())?;
+    move_folder(data_dir.root(), &default)?;
+    let moved = DataDir::new(default)?;
+    if let Err(error) = move_stored_paths(data_dir.root(), &real_legacy, &moved) {
+        // Those paths still resolve through the link.
+        eprintln!("plxd: couldn't update the store's paths after the move: {error}");
+    }
+    Ok(moved)
+}
+
+/// Points the store's paths under the older folder at `to`. With a link in the home folder's path,
+/// the store has both spellings: worktrees under the data folder as given, and repositories' real
+/// paths.
+#[cfg(unix)]
+fn move_stored_paths(
+    legacy: &Path,
+    real_legacy: &Path,
+    to: &DataDir,
+) -> Result<(), parallax_store::StoreError> {
+    let real_to = std::fs::canonicalize(to.root())?;
+    let mut store = parallax_store::Store::open(to.store_file())?;
+    for (from, to) in [(legacy, to.root()), (real_legacy, real_to.as_path())] {
+        if let (Some(from), Some(to)) = (from.to_str(), to.to_str()) {
+            store.move_paths(from, to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Renames `legacy` to `default` and leaves a symlink at `legacy`, with what `default` held kept
+/// inside it. A rename that fails, such as to another volume, puts everything back.
+///
+/// ponytail: a crash between the rename and the symlink, two syscalls apart, leaves old paths
+/// without their link. Add a check at start if a report ever shows one.
+#[cfg(unix)]
+fn move_folder(legacy: &Path, default: &Path) -> io::Result<()> {
+    let aside = default.with_file_name(ASIDE_NAME);
+    if default.exists() {
+        std::fs::rename(default, &aside)?;
+    }
+    let moved = std::fs::rename(legacy, default).and_then(|()| {
+        std::os::unix::fs::symlink(default, legacy).inspect_err(|_| {
+            let _ = std::fs::rename(default, legacy);
+        })
+    });
+    if let Err(error) = moved {
+        if aside.exists() {
+            std::fs::rename(&aside, default)?;
+        }
+        return Err(error);
+    }
+    // The move stands by now, so a failure here only leaves those files in `aside`.
+    if aside.exists()
+        && let Err(error) = merge_aside(&aside, default)
+    {
+        eprintln!(
+            "plxd: couldn't move everything back from {}: {error}",
+            aside.display()
+        );
+    }
+    Ok(())
+}
+
+/// Moves `aside`'s entries into `default`, and those whose names `default` already has into
+/// [`COLLISIONS_DIR`] there, then removes `aside`.
+#[cfg(unix)]
+fn merge_aside(aside: &Path, default: &Path) -> io::Result<()> {
+    for entry in std::fs::read_dir(aside)? {
+        let entry = entry?;
+        let mut to = default.join(entry.file_name());
+        if to.symlink_metadata().is_ok() {
+            let collisions = default.join(COLLISIONS_DIR);
+            std::fs::create_dir_all(&collisions)?;
+            to = collisions.join(entry.file_name());
+        }
+        std::fs::rename(entry.path(), to)?;
+    }
+    std::fs::remove_dir(aside)
 }
 
 /// Where desktop apps such as Cursor and Claude keep their files: `~/Library/Application Support`
@@ -135,8 +266,8 @@ impl DataDir {
     }
 
     /// The data folder for Parallax (0023): `~/.parallax`, with `%USERPROFILE%\.parallax` on Windows.
-    /// A computer whose store is only in the folder older versions used keeps using that one, since the store holds absolute worktree paths that a move would break: see
-    /// [`legacy_location`].
+    /// A computer whose store is only in the folder older versions used keeps using that one until
+    /// `serve` moves it ([`move_to_default`]): see [`legacy_location`].
     ///
     /// # Errors
     ///
@@ -151,16 +282,34 @@ impl DataDir {
         ))
     }
 
-    /// `path` if given, which is `--data-dir` or [`DATA_DIR_ENV`], else the default location.
+    /// `path` if given, which is `--data-dir` or [`DATA_DIR_ENV`], else the default location. A
+    /// `path` that is the link [`move_to_default`] left, as the service's plist names until its
+    /// next `service install --replace`, means `~/.parallax`.
     ///
     /// # Errors
     ///
     /// See [`DataDir::new`] and [`DataDir::default_location`].
     pub fn resolve(path: Option<&Path>) -> io::Result<Self> {
-        match path {
-            Some(path) => Self::new(path),
-            None => Self::default_location(),
-        }
+        let Some(path) = path else {
+            return Self::default_location();
+        };
+        let given = Self::new(path)?;
+        let moved = std::env::home_dir().and_then(|home| {
+            let default = home.join(DEFAULT_DATA_DIR);
+            links_to_default(given.root(), &legacy_location(&home)?, &default).then_some(default)
+        });
+        moved.map_or(Ok(given), Self::new)
+    }
+
+    /// `path`, which an old message may name, under this folder if it is under the link
+    /// [`move_to_default`] left, for checks that compare paths without following links.
+    #[must_use]
+    pub fn current_path(&self, path: &str) -> PathBuf {
+        let inside = std::env::home_dir()
+            .and_then(|home| legacy_location(&home))
+            .filter(|legacy| links_to_default(legacy, legacy, &self.root))
+            .and_then(|legacy| Some(self.root.join(Path::new(path).strip_prefix(legacy).ok()?)));
+        inside.unwrap_or_else(|| path.into())
     }
 
     /// The folder itself.
@@ -491,7 +640,64 @@ fn proc_exe(pid: u32) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::{COLLISIONS_DIR, links_to_default, move_folder};
     use super::{STORE_FILE, pick_default};
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_moved_folders_link_means_the_default_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let (legacy, default) = (root.path().join("legacy"), root.path().join(".parallax"));
+        let other = root.path().join("other");
+        std::fs::create_dir(&default).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&default, &legacy).unwrap();
+        assert!(links_to_default(&legacy, &legacy, &default));
+        assert!(!links_to_default(&other, &legacy, &default));
+
+        std::fs::remove_file(&legacy).unwrap();
+        std::os::unix::fs::symlink(&other, &legacy).unwrap();
+        assert!(!links_to_default(&legacy, &legacy, &default));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn moving_leaves_a_link_and_keeps_what_the_default_folder_held() {
+        let root = tempfile::tempdir().unwrap();
+        let (legacy, default) = (root.path().join("legacy"), root.path().join(".parallax"));
+        std::fs::create_dir_all(default.join("projects/repo")).unwrap();
+        std::fs::write(default.join("remote-device-key"), "default").unwrap();
+        std::fs::create_dir_all(legacy.join("worktrees/run")).unwrap();
+        std::fs::write(legacy.join(STORE_FILE), "").unwrap();
+        std::fs::write(legacy.join("remote-device-key"), "legacy").unwrap();
+
+        move_folder(&legacy, &default).unwrap();
+
+        assert!(legacy.is_symlink());
+        assert!(legacy.join("worktrees/run").is_dir());
+        assert!(default.join(STORE_FILE).exists());
+        assert!(default.join("projects/repo").is_dir());
+        let key = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap();
+        assert_eq!(key(default.join("remote-device-key")), "legacy");
+        assert_eq!(
+            key(default.join(COLLISIONS_DIR).join("remote-device-key")),
+            "default"
+        );
+        assert!(!root.path().join(".parallax.pre-move").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_move_puts_everything_back() {
+        let root = tempfile::tempdir().unwrap();
+        let (legacy, default) = (root.path().join("legacy"), root.path().join(".parallax"));
+        std::fs::create_dir_all(default.join("projects")).unwrap();
+        // A rename fails on a missing folder, as it does across volumes.
+        move_folder(&legacy, &default).unwrap_err();
+        assert!(default.join("projects").is_dir());
+        assert!(!root.path().join(".parallax.pre-move").exists());
+    }
 
     #[test]
     fn the_default_folder_gives_way_only_to_a_legacy_store() {

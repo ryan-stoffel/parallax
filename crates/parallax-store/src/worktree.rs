@@ -163,6 +163,36 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Points the paths running code reads at `to` where they are under `from`, after the data
+    /// folder moved (PLX-1264): worktrees', repo entries', and orchestrators'. Events and transcripts keep what
+    /// they said, which resolves through the link the move leaves.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQLite fails, which changes nothing.
+    pub fn move_paths(&mut self, from: &str, to: &str) -> Result<(), StoreError> {
+        let tx = self.conn.savepoint()?;
+        for (table, column) in [
+            ("worktrees", "path"),
+            ("worktrees", "repo_path"),
+            ("worktrees", "git_dir"),
+            ("repos", "path"),
+            ("orchestrators", "repo_path"),
+        ] {
+            tx.execute(
+                &format!(
+                    "UPDATE {table} SET {column} = ?2 || substr({column}, length(?1) + 1)
+                     WHERE substr({column}, 1, length(?1) + 1) = ?1 || '/'"
+                ),
+                params![from, to],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
 /// Inserts a new worktree row for run `id`, failing with [`StoreError::IdConflict`] if one
 /// exists. For a caller that creates the row inside its own transaction.
 pub(crate) fn insert_worktree(
