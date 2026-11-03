@@ -188,8 +188,8 @@ export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
 
 /**
  * The plan over the composer while the run goes: the step under way (as TodoWrite says it, when it
- * does), how many are done, and a mini bar. It's tucked behind the box, as the tab is under it, and
- * opens the full card above itself. `compact` leaves out the step, for a place beside other tabs.
+ * does), how many are done, and a mini bar. It sits in the box's top row and opens the full card
+ * above itself. `compact` leaves out the step, for a place beside other tabs.
  */
 export function PlanStrip({
   items,

@@ -590,9 +590,9 @@ export function NewThread({
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Chat picks only its computer here, and a Project only among the computers that have it
-          // (`tray`), since its entry is on each computer alone. While a start is under way it stays as it was, but inert, so the thread
-          // can't move. `contents` keeps the tab's own layout.
+          // Where it runs, in the bar under the box. Chat picks only its computer here, and a Project only
+          // among the computers that have it (`tray`), since its entry is on each computer alone.
+          // While a start is under way it stays as it was, but inert, so the thread can't move.
           tab={
             group.project ? (
               tray

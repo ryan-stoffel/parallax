@@ -489,7 +489,7 @@ svg.lucide[stroke-width="2"] * {
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
-  /* 16px since PLX-1089 found 24px too round (0092). */
+  /* 16px since PLX-1089 found 24px too round (0092). The workspace layer's corner, too. */
   --radius-prompt: 16px;
 }
 
@@ -1159,6 +1159,147 @@ body {
    transcript is. */
 [data-pane] [role="log"] {
   scrollbar-width: none;
+}
+
+/* The composer (Composer.tsx) is one shape: a shell holding a field for the text and its actions,
+   a step brighter than the shell in dark and white on a tinted shell in light, with its corners
+   concentric to the shell's. */
+.composer-shell {
+  background-color: light-dark(
+    color-mix(in oklab, var(--foreground) 4%, var(--surface)),
+    var(--surface)
+  );
+  transition:
+    border-color var(--transition-duration-base) var(--ease-out),
+    box-shadow var(--transition-duration-base) var(--ease-out);
+}
+/* The field is a plate raised off the shell: lit along its top, casting down onto it. */
+.composer-entry {
+  background-color: light-dark(
+    var(--surface),
+    color-mix(in oklab, var(--foreground) 6%, var(--surface))
+  );
+  background-image: linear-gradient(
+    light-dark(transparent, rgb(255 255 255 / 3%)),
+    transparent 70%
+  );
+  box-shadow:
+    0 0 0 1px light-dark(color-mix(in oklab, var(--foreground) 7%, transparent), transparent),
+    inset 0 1px 0 light-dark(transparent, rgb(255 255 255 / 8%)),
+    0 1px 2px light-dark(color-mix(in oklab, var(--foreground) 8%, transparent), rgb(0 0 0 / 60%)),
+    0 8px 16px -8px
+      light-dark(color-mix(in oklab, var(--foreground) 16%, transparent), rgb(0 0 0 / 80%));
+  transition: background-color var(--transition-duration-base) var(--ease-out);
+}
+.composer-shell:focus-within .composer-entry {
+  background-color: light-dark(
+    var(--surface),
+    color-mix(in oklab, var(--foreground) 9%, var(--surface))
+  );
+}
+/* The text's height follows the editor's (Composer.tsx), so the box eases as lines wrap. */
+.composer-text {
+  /* Clipped, not hidden: a hidden box still scrolls to the caret, cutting off the first line. */
+  overflow: clip;
+  transition: height var(--transition-duration-fast) var(--ease-out);
+}
+/* Send pops up when there's something to send, and Stop when it takes Send's place. Doubled up to
+   win over a nightly's .send-sky transition. */
+.composer-shell .composer-send.send-sky {
+  transition:
+    scale var(--transition-duration-base) var(--ease-spring),
+    filter var(--transition-duration-fast);
+}
+.composer-shell .composer-send.send-sky:disabled {
+  scale: 0.88;
+}
+/* With nothing to send, a nightly's sky stays out of sight: a quiet disc. It pops in with text. */
+:root.nightly .composer-shell .composer-send.send-sky:disabled {
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  color: var(--faint-foreground);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+}
+.composer-shell .composer-send.send-sky:enabled {
+  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
+}
+.composer-pop {
+  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
+}
+@keyframes composer-pop {
+  from {
+    scale: 0.7;
+    opacity: 0;
+  }
+}
+/* The footer folds away while the box steps back, unless one of its menus is open. */
+.composer-footer {
+  display: grid;
+  grid-template-rows: 1fr;
+  padding-block: 2px 6px;
+  transition:
+    grid-template-rows var(--transition-duration-base) var(--ease-out),
+    padding-block var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-fast) var(--ease-out),
+    visibility var(--transition-duration-fast);
+}
+[data-back] > .composer-footer:not(:has(:popover-open)) {
+  grid-template-rows: 0fr;
+  padding-block: 0;
+  opacity: 0;
+  visibility: hidden;
+}
+/* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
+   its corners following the box's. A step darker, so it reads as behind it. */
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: -1rem 0.75rem 0;
+  padding: calc(1rem + 2px) 0.25rem 2px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+  background-color: color-mix(in oklab, var(--foreground) 4%, var(--background));
+}
+.composer-bar[data-back]:not(:has(:popover-open)) {
+  display: none;
+}
+/* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
+   calm text, without a chevron after each. */
+:is(.composer-footer, .composer-bar) button[aria-haspopup]:not([popover] *) {
+  height: 1.75rem;
+  padding-block: 0;
+  padding-right: 0.5rem;
+  white-space: nowrap;
+  > svg.lucide-chevron-down {
+    display: none;
+  }
+}
+/* Labels give way to their icons as the box narrows, least needed first. Each keeps its title. */
+@container composer (width < 24rem) {
+  .composer-access > span {
+    display: none;
+  }
+}
+@container composer (width < 36rem) {
+  .composer-detail {
+    display: none;
+  }
+}
+/* Rather than cut a computer's name to a letter, it's only its icon. */
+@container composer (width < 28rem) {
+  .composer-host {
+    display: none;
+  }
+}
+@container composer (width < 22rem) {
+  .composer-effort {
+    display: none;
+  }
 }
 
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
