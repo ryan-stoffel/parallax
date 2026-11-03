@@ -1499,9 +1499,10 @@ const tailnet: (TailnetDevice & {
     name: "Mac mini",
     threads: ["Tahoe icon variants"],
     // A repository only the Mac mini has, so New Thread lists it under the Mac mini. It lacks
-    // acme-web, which picking it clones at the same path (PLX-905).
+    // acme-web, which picking it clones at the same path (PLX-905), and every Project, which adding
+    // a thread to one makes here (0097).
     repos: (here) => [
-      ...here.filter((r) => r.name !== "acme-web"),
+      ...here.filter((r) => r.name !== "acme-web" && !r.project),
       {
         id: "0199a6f0-0000-7000-8000-mini0homelab",
         name: "homelab",
@@ -1647,6 +1648,8 @@ function connectChanged() {
 }
 
 /** What a device's plxd answers itself; the rest of a device's calls share the fixtures. */
+const deviceProjects = new Map<string, Repo>();
+
 function deviceRequest(hostId: string, method: string, params: Record<string, unknown>) {
   const device = deviceOf(hostId)!;
   const own = (id: string) => hostOf(id) === hostId;
@@ -1664,6 +1667,24 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
       return { runs: db.runs.filter((r) => own(r.id)), seq };
     case "orchestrator/list":
       return { orchestrators: [], seq };
+    // A Project made on a computer stays there, off this computer's list (0097).
+    case "project/create": {
+      const repo: Repo = {
+        id: String(params["id"]),
+        name: String(params["name"]),
+        path: `/Users/ryan/.parallax/spaces/${String(params["id"])}`,
+        project: true,
+        createdAt: now(),
+      };
+      deviceProjects.set(repo.id, repo);
+      return { repo };
+    }
+    case "repo/update": {
+      const repo = deviceProjects.get(String(params["repo"]));
+      if (repo && typeof params["instructions"] === "string")
+        repo.instructions = params["instructions"];
+      return repo && { repo };
+    }
     // The Gaming PC runs the Remote Control threads' sessions (PLX-1143).
     case "thread/importable":
       return {

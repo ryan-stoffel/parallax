@@ -1272,6 +1272,150 @@ test("Thread details adds the open thread to a Project, which its crumbs then na
   expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
 });
 
+test("a Project's page adds threads from another computer, making the Project there", async () => {
+  capabilities = { projects: {}, projectThreads: {}, projectContext: {} };
+  sshHosts = [{ id: "h-mini", name: "Mac mini", destination: "mini" }];
+  const essays: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const thread = (id: string, title: string, extra: Partial<Thread> = {}): Thread => ({
+    id,
+    repo: parallax.id,
+    title,
+    createdAt: "2026-09-29T11:00:00Z",
+    ...extra,
+  });
+  const live = thread("t-live", "Live");
+  const old = thread("t-old", "Old", { archived: true });
+  const lead = thread("t-lead", "Lead", { repo: "p-lead" });
+  const child = thread("t-child", "Child", { repo: "p-lead", parent: "t-lead" });
+  const onMini = [live, old, lead, child];
+  const outline = thread("t-outline", "Outline", { repo: essays.id });
+  answers["thread/list"] = (_, host) => ({
+    result:
+      host === "h-mini"
+        ? { repos: [parallax], threads: onMini, seq: 7 }
+        : { repos: [essays], threads: [outline], seq: 7 },
+  });
+  answers["orchestrator/list"] = (_, host) => ({
+    result: {
+      orchestrators:
+        host === "h-mini"
+          ? [{ ...orchestrator("lead", "2026-09-29T09:00:00Z"), run: "t-lead" }]
+          : [],
+      seq: 7,
+    },
+  });
+  let made = "";
+  answers["project/create"] = (p) => {
+    made = p["id"] as string;
+    return { result: { repo: { ...essays, id: made, instructions: undefined } } };
+  };
+  answers["repo/update"] = (p) => ({
+    result: { repo: { ...essays, id: p["repo"], instructions: p["instructions"] } },
+  });
+  answers["thread/setProject"] = (p) => ({
+    result: {
+      threads: (p["threads"] as string[]).map((id) => ({
+        ...onMini.find((t) => t.id === id)!,
+        project: p["project"] as string,
+      })),
+    },
+  });
+  answers["thread/archive"] = (p) => ({
+    result: {
+      thread: {
+        ...onMini.find((t) => t.id === p["runId"])!,
+        project: made,
+        archived: p["archived"] as boolean,
+      },
+    },
+  });
+  const onHost = (method: string) =>
+    request.mock.calls.filter(([, m]) => m === method).map(([host, , params]) => [host, params]);
+  await renderApp();
+  await click(projectCard("Essays"));
+
+  // The Mac mini's threads list, archived and orchestrator threads too, but not the child.
+  await click(document.querySelector('main button[aria-label="Add threads"]'));
+  const picker = document.querySelector('ul[aria-label="Threads to add"]')!.closest("dialog")!;
+  const box = (title: string) =>
+    picker.querySelector<HTMLInputElement>(`input[aria-label="Add ${title}"]`);
+  expect(box("Live")).not.toBeNull();
+  expect(box("Old")).not.toBeNull();
+  expect(box("Lead")).not.toBeNull();
+  expect(box("Child")).toBeNull();
+  expect(box("Outline")).toBeNull();
+
+  await click(box("Live"));
+  await click(box("Old"));
+  await act(async () => picker.querySelector("form")!.requestSubmit());
+  await settle();
+
+  const [[createdOn, created]] = onHost("project/create") as [[string, { id: string }]];
+  expect(createdOn).toBe("h-mini");
+  expect(onHost("repo/update")).toEqual([
+    ["h-mini", { repo: created.id, instructions: "Write plainly." }],
+  ]);
+  expect(onHost("thread/setProject")).toEqual([
+    ["h-mini", { threads: ["t-live", "t-old"], project: created.id }],
+  ]);
+  expect(onHost("thread/archive")).toEqual([["h-mini", { runId: "t-old", archived: false }]]);
+  expect(
+    [...document.querySelectorAll('main section[aria-label="Threads"] > ul > li')].map(
+      (li) => li.querySelector("button span.font-semibold")?.textContent,
+    ),
+  ).toEqual(expect.arrayContaining(["Live", "Old", "Outline"]));
+});
+
+test("Thread details offers another computer's Project on a computer with none", async () => {
+  capabilities = { projects: {}, projectThreads: {} };
+  sshHosts = [{ id: "h-mini", name: "Mac mini", destination: "mini" }];
+  const essays: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    project: true,
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const draft: Thread = {
+    id: "t-draft",
+    repo: parallax.id,
+    title: "Draft the intro",
+    createdAt: "2026-09-29T11:00:00Z",
+  };
+  answers["thread/list"] = (_, host) => ({
+    result:
+      host === "h-mini"
+        ? { repos: [parallax], threads: [draft], seq: 7 }
+        : { repos: [essays], threads: [], seq: 7 },
+  });
+  answers["project/create"] = (p) => ({ result: { repo: { ...essays, id: p["id"] } } });
+  answers["thread/setProject"] = (p) => ({
+    result: { threads: [{ ...draft, project: p["project"] as string }] },
+  });
+  await renderApp();
+  await click(document.querySelector('#sidebar li[data-kind="thread"] button'));
+
+  const details = document.getElementById("thread-details")!;
+  await click(details.querySelector('button[aria-label="Add to a Project"]'));
+  const projects = [
+    ...details.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Projects"] button'),
+  ];
+  expect(projects.map((b) => b.textContent)).toEqual(["Essays"]);
+  await click(projects[0]);
+
+  const [made] = calls("project/create");
+  expect(made).toMatchObject({ name: "Essays" });
+  expect(calls("thread/setProject")).toEqual([{ threads: ["t-draft"], project: made!["id"] }]);
+  expect(details.querySelector('button[aria-label="Project: Essays"]')).not.toBeNull();
+});
+
 test("a sidebar row's actions add its thread to a Project", async () => {
   capabilities = { projects: {}, projectThreads: {} };
   const essays: Repo = {

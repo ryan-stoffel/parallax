@@ -476,6 +476,67 @@ export const repoless = (g: { id: string; project?: boolean }) => g.id === noRep
 export const isRepository = (r: { scratch?: boolean; project?: boolean }) =>
   !r.scratch && !r.project;
 
+/**
+ * The Projects a thread on `view`'s computer can join: its own, then those of the other `computers`
+ * under a name it lacks, which `addToProject` makes there. Same-named Projects count as one (0097).
+ */
+export function joinableProjects(view: ThreadsView, computers: { view: ThreadsView }[]): Repo[] {
+  const found = view.state.repos.filter((r) => r.project);
+  if (!("projects" in view.capabilities)) return found;
+  const names = new Set(found.map((r) => r.name));
+  for (const other of computers)
+    for (const repo of other.view.state.repos) {
+      if (!repo.project || names.has(repo.name)) continue;
+      names.add(repo.name);
+      found.push(repo);
+    }
+  return found;
+}
+
+/**
+ * Makes `source`, another computer's Project, on `view`'s computer: its name, icon, and instructions,
+ * but not its files, which live on its own computer (0097). Resolves to the entry or an error message.
+ */
+async function copyProject(view: ThreadsView, source: Repo): Promise<Repo | string> {
+  // An image goes only where its plxd takes one that big (0038).
+  const fits = !source.icon?.image || source.icon.image.data.length <= (view.iconImageBytes ?? -1);
+  const made = await view.createProject(source.name, fits ? source.icon : undefined);
+  if (typeof made === "string" || !source.instructions || !("projectContext" in view.capabilities))
+    return made;
+  const failed = await view.updateRepo(made.id, { instructions: source.instructions });
+  if (!failed) return made;
+  // It's empty, and a retry would find it by name and skip the instructions.
+  await view.removeProject(made.id);
+  return failed;
+}
+
+/**
+ * Adds `threads`, all on `view`'s computer, to `project`, or to its namesake there, made if missing
+ * (0097). An archived thread comes back, since a Project's page lists no archived ones. Resolves to
+ * an error message, or undefined.
+ */
+export async function addToProject(
+  view: ThreadsView,
+  threads: Thread[],
+  project: Repo,
+): Promise<string | undefined> {
+  const { repos } = view.state;
+  const here =
+    repos.find((r) => r.id === project.id) ??
+    repos.find((r) => r.project && r.name === project.name) ??
+    (await copyProject(view, project));
+  if (typeof here === "string") return here;
+  const failed = await view.setProject(
+    threads.map((t) => t.id),
+    here.id,
+  );
+  if (failed) return failed;
+  const restored = await Promise.all(
+    threads.filter((t) => t.archived).map((t) => view.archive(t.id, false)),
+  );
+  return restored.find((error) => error !== undefined);
+}
+
 /** The Project a thread is in: the one it started in, or the one the user added it to (0090). */
 export const projectOf = (state: ThreadsState, thread: Thread) =>
   thread.project ??

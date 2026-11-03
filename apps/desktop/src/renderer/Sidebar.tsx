@@ -1157,7 +1157,7 @@ export function ThreadList({
     const selected = item.key === openKey;
     const { thread: t, view } = item;
     const pinnable = pinsOn(view) && !t.parent;
-    const projects = t.parent ? undefined : projectChoices(t, view);
+    const projects = t.parent ? undefined : projectChoices(t, view, hosts);
     return (
       <ThreadRow
         key={item.key}

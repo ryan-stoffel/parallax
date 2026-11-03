@@ -3,7 +3,6 @@
 import {
   Archive,
   ArrowLeft,
-  Check,
   MessagesSquare,
   Pencil,
   Pin,
@@ -12,9 +11,10 @@ import {
   Search,
   Upload,
 } from "lucide-react";
-import { useId, useRef, useState, type DragEvent, type Ref } from "react";
+import { useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
+import { close, Footer } from "./AddDialog";
 import { activeAt, attentionOf } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { useConnection } from "./ConnectionStatus";
@@ -26,8 +26,9 @@ import { ProjectMenu, ProjectTile } from "./ProjectsPage";
 import { quietButton } from "./settings/parts";
 import type { Host } from "./hosts";
 import { hostIcon } from "./RunTargetMenu";
-import { age, backendLogo, RepoIcon } from "./Sidebar";
-import { asksOf, projectOf, waitingOf, type ThreadsView } from "./threads";
+import { age, backendLogo, ProjectIcon, RepoIcon, type HostThreads } from "./Sidebar";
+import { Check as CheckSymbol } from "./symbols";
+import { addToProject, asksOf, projectOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
 import { toast } from "./undo";
 import { uploadBytes, uploadFiles } from "./uploads";
@@ -102,42 +103,101 @@ export function ProjectHeader({
   );
 }
 
+/** The ids `project` goes by on `where`: its own on its computer, else its namesakes' (0097). */
+function projectIds(where: HostThreads, home: Host, project: Repo) {
+  return new Set(
+    where.host.id === home.id
+      ? [project.id]
+      : where.view.state.repos.filter((r) => r.project && r.name === project.name).map((r) => r.id),
+  );
+}
+
+/**
+ * A thread's card, as the sidebar draws it: `place` and `status` over its title, its computer, and
+ * its provider's logo.
+ */
+function ThreadCardText({
+  place,
+  status,
+  title,
+  host,
+  backend,
+}: {
+  place: ReactNode;
+  status: ReactNode;
+  title: string;
+  host: Host;
+  backend?: string | undefined;
+}) {
+  const Logo = backend ? backendLogo(backend) : undefined;
+  return (
+    <>
+      <span className="flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">{place}</span>
+        {status}
+      </span>
+      <span className="flex w-full items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-body font-semibold transition-colors group-hover/row:font-bold">
+          {title}
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3.5">
+          {hostIcon(host)}
+          {host.name}
+          {Logo && (
+            <>
+              <span aria-hidden>·</span>
+              <Logo className="opacity-80 grayscale" />
+            </>
+          )}
+        </span>
+      </span>
+    </>
+  );
+}
+
 /**
  * A Project's threads under the composer, newest first, as the sidebar's thread cards show them:
- * those started in it, and those the user added. Each archives from its card, as in the sidebar,
- * and Add opens a picker of this computer's other threads.
+ * those started in it or added to it, on its computer and on any computer with a Project of its name
+ * (0097). Each archives from its card, as in the sidebar, and Add opens a picker of the other threads.
  */
 export function ProjectThreads({
   host,
   project,
-  view,
+  computers,
   onOpenThread,
 }: {
-  /** The computer the Project, and so each thread in it, is on. */
+  /** The computer `project` is on. */
   host: Host;
   project: Repo;
-  view: ThreadsView;
-  onOpenThread: (threadId: string) => void;
+  /** Every computer, whose threads the page and its picker list. */
+  computers: HostThreads[];
+  onOpenThread: (hostId: string, threadId: string) => void;
 }) {
-  const { state } = view;
-  const picker = useRef<HTMLDialogElement>(null);
-  const canAdd = "projectThreads" in view.capabilities;
-  const archive = async (thread: string, title: string) => {
+  const [picking, setPicking] = useState(false);
+  const canAdd = computers.some(({ view }) => "projectThreads" in view.capabilities);
+  const archive = async (view: ThreadsView, thread: string, title: string) => {
     const failed = await view.archive(thread, true);
     if (failed)
       return notify({ tone: "error", title: "Couldn't archive the thread", body: failed });
     toast(`Archived “${title}”`, () => void view.archive(thread, false));
   };
-  const threads = state.threads
-    .filter((t) => projectOf(state, t) === project.id && !t.parent && !t.archived)
-    .map((t) => {
-      const run = state.runs[t.id];
-      return {
-        thread: t,
-        run,
-        at: activeAt(t, run, state.stoppedAt[t.id]),
-        attention: attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
-      };
+  const threads = computers
+    .flatMap((computer) => {
+      const { state } = computer.view;
+      const ids = projectIds(computer, host, project);
+      return state.threads
+        .filter((t) => ids.has(projectOf(state, t) ?? "") && !t.parent && !t.archived)
+        .map((t) => {
+          const run = state.runs[t.id];
+          return {
+            ...computer,
+            thread: t,
+            title: state.titles[t.id] ?? "Thread",
+            run,
+            at: activeAt(t, run, state.stoppedAt[t.id]),
+            attention: attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
+          };
+        });
     })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   return (
@@ -145,7 +205,7 @@ export function ProjectThreads({
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-reading font-medium">Threads</h2>
         {canAdd && (
-          <IconButton label="Add threads" onClick={() => picker.current?.showModal()}>
+          <IconButton label="Add threads" onClick={() => setPicking(true)}>
             <Plus />
           </IconButton>
         )}
@@ -163,213 +223,230 @@ export function ProjectThreads({
         </div>
       ) : (
         <ul className="-mx-2 flex flex-col gap-1">
-          {threads.map(({ thread, run, at, attention }) => {
-            const Logo = run?.backend ? backendLogo(run.backend) : undefined;
-            const title = state.titles[thread.id] ?? "Thread";
-            return (
-              <li key={thread.id} className="group/row relative rounded-lg hover:bg-hover">
-                <button
-                  type="button"
-                  onClick={() => onOpenThread(thread.id)}
-                  className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-2 text-left transition-transform duration-100 active:scale-[0.985]"
-                >
-                  <span className="flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground">
-                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {threads.map(({ host: where, view, thread, title, run, at, attention }) => (
+            <li
+              key={`${where.id}/${thread.id}`}
+              className="group/row relative rounded-lg hover:bg-hover"
+            >
+              <button
+                type="button"
+                onClick={() => onOpenThread(where.id, thread.id)}
+                className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-2 text-left transition-transform duration-100 active:scale-[0.985]"
+              >
+                <ThreadCardText
+                  place={
+                    <>
                       <RepoIcon repo={project} />
                       <span className="truncate">{project.name}</span>
-                    </span>
+                    </>
+                  }
+                  status={
                     <span className="shrink-0 group-focus-within/row:invisible group-hover/row:invisible">
                       {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
                     </span>
-                  </span>
-                  <span className="flex w-full items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-body font-semibold transition-colors group-hover/row:font-bold">
-                      {title}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3.5">
-                      {hostIcon(host)}
-                      {host.name}
-                      {Logo && (
-                        <>
-                          <span aria-hidden>·</span>
-                          <Logo className="opacity-80 grayscale" />
-                        </>
-                      )}
-                    </span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  title="Archive (E)"
-                  onClick={() => void archive(thread.id, title)}
-                  className="absolute top-1 right-1 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground opacity-0 transition-opacity duration-150 group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-                >
-                  <Archive aria-hidden />
-                  Archive
-                </button>
-              </li>
-            );
-          })}
+                  }
+                  title={title}
+                  host={where}
+                  backend={run?.backend}
+                />
+              </button>
+              <button
+                type="button"
+                title="Archive (E)"
+                onClick={() => void archive(view, thread.id, title)}
+                className="absolute top-1 right-1 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground opacity-0 transition-opacity duration-150 group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+              >
+                <Archive aria-hidden />
+                Archive
+              </button>
+            </li>
+          ))}
         </ul>
       )}
-      {canAdd && <AddThreads ref={picker} project={project} view={view} />}
+      {picking && (
+        <AddThreads
+          host={host}
+          project={project}
+          computers={computers}
+          onClose={() => setPicking(false)}
+        />
+      )}
     </section>
   );
 }
 
 /**
- * Add threads: this computer's threads outside the Project, newest first, to search and check, then
- * add. A thread started in a Project lives there, and an orchestrator's in its orchestrator, so
- * neither shows.
+ * Add threads, New thread's picker in shape: the threads outside the Project on every computer that
+ * can hold it, newest first, archived and orchestrator threads included, to search and check, then
+ * add. A thread started in a Project lives there, and an orchestrator's child with its orchestrator,
+ * so neither shows. It opens when mounted, and `onClose` should unmount it.
  */
 function AddThreads({
-  ref,
+  host,
   project,
-  view,
+  computers,
+  onClose,
 }: {
-  ref: Ref<HTMLDialogElement>;
+  host: Host;
   project: Repo;
-  view: ThreadsView;
+  computers: HostThreads[];
+  onClose: () => void;
 }) {
-  const { state } = view;
+  const dialog = useRef<HTMLDialogElement>(null);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string>();
   const [adding, setAdding] = useState(false);
-  const titleId = useId();
-  const homes = new Map(state.repos.map((r) => [r.id, r]));
+  useEffect(() => dialog.current?.showModal(), []);
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const threads = state.threads
-    .filter((t) => {
-      const home = homes.get(t.repo);
-      return home && !home.project && !t.parent && !t.archived && t.project !== project.id;
-    })
-    .map((t) => {
-      const run = state.runs[t.id];
-      const home = homes.get(t.repo)!;
-      return {
-        thread: t,
-        title: state.titles[t.id] ?? "Thread",
+  const candidates = computers
+    .flatMap((computer) => {
+      const { host: where, view } = computer;
+      const { state, capabilities } = view;
+      const ids = projectIds(computer, host, project);
+      // Where it can't join, or can't make the Project it lacks, its threads don't show.
+      if (!("projectThreads" in capabilities) || (ids.size === 0 && !("projects" in capabilities)))
+        return [];
+      const homes = new Map(state.repos.map((r) => [r.id, r]));
+      return state.threads.flatMap((t) => {
+        const home = homes.get(t.repo);
+        const orchestrator = state.orchestrators.find((o) => o.run === t.id);
+        if ((home ? home.project : !orchestrator) || t.parent || ids.has(t.project ?? ""))
+          return [];
         // Where it is now: the Project it was added to, else where it works.
-        place: (t.project && homes.get(t.project)) || home,
-        at: activeAt(t, run, state.stoppedAt[t.id]),
-      };
-    })
-    .filter(({ title, place }) => {
-      const text = `${title} ${place.scratch ? "No repo" : place.name}`.toLowerCase();
-      return words.every((w) => text.includes(w));
+        const added = t.project ? homes.get(t.project) : undefined;
+        const repo = added ?? home;
+        return {
+          key: `${where.id}/${t.id}`,
+          view,
+          where,
+          thread: t,
+          title: state.titles[t.id] ?? orchestrator?.name ?? "Thread",
+          backend: state.runs[t.id]?.backend,
+          repo,
+          placeName: repo ? (repo.scratch ? "No repo" : repo.name) : (orchestrator?.name ?? ""),
+          placeIcon: orchestrator?.icon,
+          at: activeAt(t, state.runs[t.id], state.stoppedAt[t.id]),
+        };
+      });
     })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  const toggle = (id: string) => {
+  const shown = candidates.filter(({ title, placeName, where }) => {
+    const text = `${title} ${placeName} ${where.name}`.toLowerCase();
+    return words.every((w) => text.includes(w));
+  });
+  const chosen = candidates.filter((c) => picked.has(c.key));
+  const toggle = (key: string) => {
     const next = new Set(picked);
-    if (!next.delete(id)) next.add(id);
+    if (!next.delete(key)) next.add(key);
     setPicked(next);
-  };
-  const reset = () => {
-    setQuery("");
-    setPicked(new Set());
-    setError(undefined);
   };
   return (
     <dialog
-      ref={ref}
-      aria-labelledby={titleId}
-      onClose={reset}
-      className="m-auto w-[min(36rem,90vw)] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+      ref={dialog}
+      aria-label={`Add threads to ${project.name}`}
+      onClose={onClose}
+      // A click on the backdrop, outside the panel, closes it.
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) e.currentTarget.close();
+      }}
+      className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
     >
       <form
-        method="dialog"
         onSubmit={async (e) => {
           e.preventDefault();
-          const dialog = e.currentTarget.closest("dialog");
           setAdding(true);
-          const failed = await view.setProject([...picked], project.id);
+          // A computer that fails leaves its threads checked, and the rest are out of the list.
+          const failures = await Promise.all(
+            computers.map(async ({ host: where, view }) => {
+              const threads = chosen.filter((c) => c.where.id === where.id).map((c) => c.thread);
+              return threads.length ? addToProject(view, threads, project) : undefined;
+            }),
+          );
           setAdding(false);
+          const failed = failures.find((f) => f !== undefined);
           if (failed) return setError(failed);
-          dialog?.close();
+          dialog.current?.close();
         }}
-        className="flex flex-col p-5"
       >
-        <h2 id={titleId} className="text-reading font-semibold">
-          Add threads to {project.name}
-        </h2>
-        <p className="mt-1 text-body text-muted-foreground">
-          They keep working where they are, and follow this Project's instructions from their next
-          message.
-        </p>
-        <label className="mt-4 flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 focus-within:outline-2 focus-within:outline-ring">
+        <div className="flex items-center gap-3 px-4 py-3.5">
           <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
           <input
+            // The native attribute, so showModal focuses the search box.
+            ref={(el) => el?.setAttribute("autofocus", "")}
             type="search"
             aria-label="Search threads"
-            placeholder="Search threads"
-            autoFocus
+            placeholder={`Add threads to ${project.name}`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-reading placeholder:text-faint-foreground focus-visible:outline-none"
           />
-        </label>
+        </div>
         <ul
           aria-label="Threads to add"
-          className="-mx-2 mt-3 flex h-80 flex-col gap-0.5 overflow-y-auto"
+          className="flex h-[50vh] flex-col gap-1 overflow-y-auto px-2 pb-2"
         >
-          {threads.length === 0 && (
+          {shown.length === 0 && (
             <li className="m-auto text-body text-faint-foreground">
-              {words.length ? "Nothing matches" : "No other threads on this computer"}
+              {words.length ? "Nothing matches" : "No other threads"}
             </li>
           )}
-          {threads.map(({ thread, title, place, at }) => (
-            <li key={thread.id}>
-              <label
-                className={`flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-hover ${picked.has(thread.id) ? "bg-accent/8" : ""}`}
-              >
+          {shown.map(({ key, where, thread, title, backend, repo, placeName, placeIcon, at }) => (
+            <li
+              key={key}
+              // Off-screen rows skip layout, so a long list stays quick.
+              className="group/row shrink-0 [contain-intrinsic-size:auto_56px] [content-visibility:auto]"
+            >
+              <label className="flex cursor-pointer flex-col gap-0.5 rounded-lg px-2 py-2 hover:bg-hover has-checked:bg-selected has-focus-visible:outline-2 has-focus-visible:outline-ring">
                 <input
                   type="checkbox"
                   aria-label={`Add ${title}`}
-                  checked={picked.has(thread.id)}
-                  onChange={() => toggle(thread.id)}
-                  className="peer sr-only"
+                  checked={picked.has(key)}
+                  onChange={() => toggle(key)}
+                  className="sr-only"
                 />
-                <span
-                  aria-hidden
-                  className="grid size-4 shrink-0 place-items-center rounded-sm border border-faint-foreground/50 bg-background text-accent-foreground peer-checked:border-accent peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-ring [&_svg]:invisible peer-checked:[&_svg]:visible"
-                >
-                  <Check className="size-3" strokeWidth={3} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-body font-medium">{title}</span>
-                  <span className="flex items-center gap-1.5 text-meta text-faint-foreground">
-                    <RepoIcon repo={place} />
-                    <span className="truncate">{place.scratch ? "No repo" : place.name}</span>
-                    <span aria-hidden>·</span>
-                    <span className="shrink-0">{age(at)}</span>
-                  </span>
-                </span>
+                <ThreadCardText
+                  place={
+                    <>
+                      {placeIcon ? (
+                        <ProjectIcon icon={placeIcon} className="size-4 shrink-0" />
+                      ) : (
+                        <RepoIcon repo={repo} />
+                      )}
+                      <span className="truncate">{placeName}</span>
+                    </>
+                  }
+                  status={
+                    picked.has(key) ? (
+                      <CheckSymbol aria-hidden className="size-4 shrink-0 text-accent" />
+                    ) : (
+                      <span className="shrink-0">
+                        {thread.archived ? `Archived · ${age(at)}` : age(at)}
+                      </span>
+                    )
+                  }
+                  title={title}
+                  host={where}
+                  backend={backend}
+                />
               </label>
             </li>
           ))}
         </ul>
         {error && (
-          <p role="alert" className="mt-2 text-meta text-danger">
+          <p role="alert" className="px-4 pb-2 text-meta text-danger">
             {error}
           </p>
         )}
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={(e) => e.currentTarget.closest("dialog")?.close()}
-            className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
-          >
-            Cancel
-          </button>
+        <Footer keys={[close]}>
           <button
             type="submit"
-            disabled={adding || picked.size === 0}
-            className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+            disabled={adding || chosen.length === 0}
+            className="ml-auto rounded-md bg-primary px-3 py-1 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
-            {adding ? "Adding…" : picked.size > 1 ? `Add ${picked.size} threads` : "Add"}
+            {adding ? "Adding…" : chosen.length > 1 ? `Add ${chosen.length} threads` : "Add"}
           </button>
-        </div>
+        </Footer>
       </form>
     </dialog>
   );

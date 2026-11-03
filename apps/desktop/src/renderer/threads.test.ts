@@ -9,6 +9,7 @@ import type {
   ParallaxEvent,
 } from "../protocol/generated/protocol";
 import {
+  addToProject,
   asksOf,
   emptyThreads,
   holdQuiet,
@@ -16,6 +17,7 @@ import {
   threadOrchestrators,
   threadsReducer,
   type ThreadsState,
+  type ThreadsView,
 } from "./threads";
 
 const messages = samples as { id?: number; method?: string; params?: unknown; result?: unknown }[];
@@ -248,4 +250,30 @@ test("a run's stop time is when it stopped, and a change after that, as a linked
   });
   expect(state.runs["r-1"]!.updatedAt).toBe("2026-10-01T11:00:00Z");
   expect(state.stoppedAt).toEqual({ "r-1": "2026-10-01T10:05:00Z" });
+});
+
+test("addToProject takes back a made Project whose instructions fail, so a retry copies them", async () => {
+  const removeProject = vi.fn(async () => undefined);
+  const setProject = vi.fn(async () => undefined);
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const view = {
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => ({ ...source, id: "s-here" }),
+    updateRepo: async () => "too long",
+    removeProject,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = { id: "t-1", repo: "r-1", createdAt: source.createdAt };
+
+  expect(await addToProject(view, [thread], source)).toBe("too long");
+  expect(removeProject).toHaveBeenCalledWith("s-here");
+  expect(setProject).not.toHaveBeenCalled();
 });
