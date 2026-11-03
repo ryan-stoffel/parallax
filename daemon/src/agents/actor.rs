@@ -2136,13 +2136,9 @@ impl Actor {
                 Err(id_conflict(turn_id))
             };
         }
-        // Only hidden messages under a hold: nothing shows it, so the user's next message ends it,
-        // as it ends a Stop's pause of wake-ups (0025).
-        if self.queue_held
-            && !queued.parallax
-            && queued.from.is_none()
-            && self.queued.iter().all(|waiting| waiting.hidden)
-        {
+        // Only hidden messages under a hold: nothing shows it or can resume it, so the next message
+        // anyone can see ends it, as the user's ends a Stop's pause of wake-ups (0025).
+        if self.queue_held && !queued.hidden && self.queued.iter().all(|waiting| waiting.hidden) {
             self.queue_held = false;
         }
         // No CLI starts while a push or Open PR runs (PLX-458). A steer waits too: no turn runs
@@ -3948,8 +3944,11 @@ impl Actor {
         self.withdraw_approvals().await;
         if settled {
             info!(run = %self.id, "an agent run's session ended");
-            // A message it took as it ended, and lost, had shown it running.
-            if self.queued.is_empty() && self.row.state.status == convert::RUNNING {
+            // A message it took as it ended, and lost, had shown it running. A held queue won't
+            // start another turn either.
+            if (self.queued.is_empty() || self.queue_held)
+                && self.row.state.status == convert::RUNNING
+            {
                 convert::COMPLETED.clone_into(&mut self.row.state.status);
                 self.save().await;
             }
@@ -4872,22 +4871,50 @@ mod tests {
         assert!(actor.queue_held, "a Stop still parks the hidden message");
     }
 
-    /// PLX-1247: a hold over only hidden messages ends with the user's next message, and not with
-    /// plxd's own, so a hidden update can't stay stuck behind a Resume no client shows.
+    /// PLX-1247: a hold over only hidden messages ends with the next message a client can show,
+    /// from the user, another thread, or plxd, so nothing waits behind a Resume that wasn't there.
+    /// Another hidden message leaves it held.
     #[tokio::test]
-    async fn the_users_message_ends_a_hold_over_hidden_messages() {
+    async fn a_visible_message_ends_a_hold_over_hidden_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let from_thread = super::Queued {
+            from: Some(RunId::generate()),
+            ..message("from a thread", false)
+        };
+        let scheduled = super::Queued {
+            parallax: true,
+            ..message("a scheduled task", false)
+        };
+        for visible in [message("mine", false), from_thread, scheduled] {
+            let mut actor = waiting_actor(&daemon, vec![message("update", true)]).await;
+            actor.queue_held = true;
+
+            let another = message("another update", true);
+            actor.send(another, super::Delivery::Queue).await.unwrap();
+            assert!(actor.queue_held);
+
+            actor.send(visible, super::Delivery::Queue).await.unwrap();
+            assert!(!actor.queue_held);
+        }
+    }
+
+    /// PLX-1247: a settled session's CLI that took a message and exits leaves a parked queue, which
+    /// starts no turn, so the run can't stay running with no CLI.
+    #[tokio::test]
+    async fn a_held_queue_doesnt_leave_a_settled_run_running() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
         let mut actor = waiting_actor(&daemon, vec![message("update", true)]).await;
         actor.queue_held = true;
-
-        let another = message("another update", true);
-        actor.send(another, super::Delivery::Queue).await.unwrap();
-        assert!(actor.queue_held);
-
-        let mine = message("mine", false);
-        actor.send(mine, super::Delivery::Queue).await.unwrap();
-        assert!(!actor.queue_held);
+        actor.live.as_mut().unwrap().settled = Some(tokio::time::Instant::now());
+        let outcome = crate::backend::Outcome::Completed { result: None };
+        let finished = Event::Finished {
+            outcome: outcome.clone(),
+            usage_totals: Vec::new(),
+        };
+        actor.exited(finished, &outcome).await;
+        assert_eq!(actor.row.state.status, super::convert::COMPLETED);
     }
 
     /// PLX-1247: a daemon restart holds a queue only when a client can show its Resume.
