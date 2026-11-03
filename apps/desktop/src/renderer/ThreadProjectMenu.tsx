@@ -109,7 +109,13 @@ export function ProjectPicker({
       notify({ tone: "error", title: "Couldn't change the thread's Project", body: failed });
   };
   return (
-    <Menu ref={menu} id={id} label="Projects" align="end" className="min-w-52 p-1.5">
+    <Menu
+      ref={menu}
+      id={id}
+      label="Projects"
+      align="end"
+      className="max-h-80 min-w-52 overflow-y-auto p-1.5"
+    >
       {projects.map((s) => (
         <ToolbarMenuRow
           key={s.id}

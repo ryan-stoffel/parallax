@@ -1327,15 +1327,11 @@ test("a Project's page adds threads from another computer, making the Project th
       })),
     },
   });
-  answers["thread/archive"] = (p) => ({
-    result: {
-      thread: {
-        ...onMini.find((t) => t.id === p["runId"])!,
-        project: made,
-        archived: p["archived"] as boolean,
-      },
-    },
-  });
+  answers["thread/archive"] = (p) => {
+    const thread = onMini.find((t) => t.id === p["runId"])!;
+    thread.archived = p["archived"] as boolean;
+    return { result: { thread: { ...thread } } };
+  };
   const onHost = (method: string) =>
     request.mock.calls.filter(([, m]) => m === method).map(([host, , params]) => [host, params]);
   await renderApp();
@@ -1451,6 +1447,43 @@ test("a sidebar row's actions add its thread to a Project", async () => {
   await click(item);
   await click(row.querySelector('[role="menu"][aria-label="Projects"] button'));
   expect(calls("thread/setProject")).toEqual([{ threads: ["t-draft"], project: "s-essays" }]);
+});
+
+test("a sidebar row's actions offer another computer's Project on a computer with none", async () => {
+  capabilities = { projects: {}, projectThreads: {} };
+  sshHosts = [{ id: "h-mini", name: "Mac mini", destination: "mini" }];
+  const essays: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    project: true,
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const draft: Thread = {
+    id: "t-draft",
+    repo: parallax.id,
+    title: "Draft the intro",
+    createdAt: "2026-09-29T11:00:00Z",
+  };
+  answers["thread/list"] = (_, host) => ({
+    result:
+      host === "h-mini"
+        ? { repos: [parallax], threads: [draft], seq: 7 }
+        : { repos: [essays], threads: [], seq: 7 },
+  });
+  await renderApp();
+  const row = document.querySelector('#sidebar li[data-kind="thread"]')!;
+  await act(async () =>
+    row
+      .querySelector('[role="menu"][aria-label="Thread actions"]')!
+      .dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" })),
+  );
+  expect([...row.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toContain(
+    "Add to Project…",
+  );
+  expect(row.querySelector('[role="menu"][aria-label="Projects"] button')?.textContent).toBe(
+    "Essays",
+  );
 });
 
 test("a row counts unpushed commits for a repo's thread, and none for a thread with no repo", async () => {

@@ -346,9 +346,11 @@ function AddThreads({
       ref={dialog}
       aria-label={`Add threads to ${project.name}`}
       onClose={onClose}
+      // It stays while adding, so a failure has somewhere to show.
+      onCancel={(e) => adding && e.preventDefault()}
       // A click on the backdrop, outside the panel, closes it.
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) e.currentTarget.close();
+        if (e.target === e.currentTarget && !adding) e.currentTarget.close();
       }}
       className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
     >

@@ -477,19 +477,23 @@ export const isRepository = (r: { scratch?: boolean; project?: boolean }) =>
   !r.scratch && !r.project;
 
 /**
- * The Projects a thread on `view`'s computer can join: its own, then those of the other `computers`
- * under a name it lacks, which `addToProject` makes there. Same-named Projects count as one (0097).
+ * The Projects a thread on `view`'s computer can join: its own, then those of the other connected
+ * `computers` under a name it lacks, which `addToProject` makes there. Same-named Projects count as
+ * one (0097).
  */
 export function joinableProjects(view: ThreadsView, computers: { view: ThreadsView }[]): Repo[] {
   const found = view.state.repos.filter((r) => r.project);
   if (!("projects" in view.capabilities)) return found;
   const names = new Set(found.map((r) => r.name));
-  for (const other of computers)
+  for (const other of computers) {
+    // Offline, its capabilities are gone and its repos are only what it last reported.
+    if (!("projectThreads" in other.view.capabilities)) continue;
     for (const repo of other.view.state.repos) {
       if (!repo.project || names.has(repo.name)) continue;
       names.add(repo.name);
       found.push(repo);
     }
+  }
   return found;
 }
 
@@ -506,14 +510,28 @@ async function copyProject(view: ThreadsView, source: Repo): Promise<Repo | stri
   const failed = await view.updateRepo(made.id, { instructions: source.instructions });
   if (!failed) return made;
   // It's empty, and a retry would find it by name and skip the instructions.
-  await view.removeProject(made.id);
-  return failed;
+  const stuck = await view.removeProject(made.id);
+  return stuck ? `${source.name} is there now, but without its instructions: ${failed}` : failed;
+}
+
+// Copies under way, by computer and name, so threads added at once share one Project: plxd only
+// treats `project/create` as a repeat when the id matches, and each copy has a new id.
+const copying = new Map<string, Promise<Repo | string>>();
+
+function copyProjectOnce(view: ThreadsView, source: Repo): Promise<Repo | string> {
+  const key = `${view.hostId}/${source.name}`;
+  const under = copying.get(key);
+  if (under) return under;
+  const copy = copyProject(view, source).finally(() => copying.delete(key));
+  copying.set(key, copy);
+  return copy;
 }
 
 /**
  * Adds `threads`, all on `view`'s computer, to `project`, or to its namesake there, made if missing
- * (0097). An archived thread comes back, since a Project's page lists no archived ones. Resolves to
- * an error message, or undefined.
+ * (0097). An archived thread comes back first, since a Project's page lists no archived ones, and
+ * one that won't stays out of the Project, where adding it can be tried again. Resolves to an error
+ * message, or undefined.
  */
 export async function addToProject(
   view: ThreadsView,
@@ -524,17 +542,17 @@ export async function addToProject(
   const here =
     repos.find((r) => r.id === project.id) ??
     repos.find((r) => r.project && r.name === project.name) ??
-    (await copyProject(view, project));
+    (await copyProjectOnce(view, project));
   if (typeof here === "string") return here;
-  const failed = await view.setProject(
-    threads.map((t) => t.id),
-    here.id,
-  );
-  if (failed) return failed;
   const restored = await Promise.all(
     threads.filter((t) => t.archived).map((t) => view.archive(t.id, false)),
   );
-  return restored.find((error) => error !== undefined);
+  const failed = restored.find((error) => error !== undefined);
+  if (failed) return failed;
+  return view.setProject(
+    threads.map((t) => t.id),
+    here.id,
+  );
 }
 
 /** The Project a thread is in: the one it started in, or the one the user added it to (0090). */
@@ -709,6 +727,8 @@ export interface ThreadsView {
     images: PromptImage[],
     options: OrchestratorOptions,
   ) => Promise<RpcError | undefined>;
+  /** The host these threads are on. */
+  hostId: string;
   /** The host's plxd's capabilities, or none while it isn't connected. */
   capabilities: Capabilities;
   /** The cap on an icon image's base64, where the host's plxd keeps icon images (`iconImages`, 0038). */
@@ -1065,11 +1085,12 @@ export function useThreads(
       error,
       ...(outdated && { outdated }),
       loading,
+      hostId,
       capabilities: capabilities ?? noCapabilities,
       iconImageBytes,
       ...actions,
     }),
-    [state, error, outdated, loading, capabilities, iconImageBytes, actions],
+    [hostId, state, error, outdated, loading, capabilities, iconImageBytes, actions],
   );
 }
 
@@ -1079,6 +1100,7 @@ const noCapabilities: Capabilities = {};
 
 /** A host's view before its list loads: empty, and every action answers that it isn't connected. */
 export const idleThreads: ThreadsView = {
+  hostId: "",
   state: emptyThreads,
   capabilities: noCapabilities,
   addRepo: async () => notConnected,

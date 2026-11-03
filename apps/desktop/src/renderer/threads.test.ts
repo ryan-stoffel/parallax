@@ -277,3 +277,66 @@ test("addToProject takes back a made Project whose instructions fail, so a retry
   expect(removeProject).toHaveBeenCalledWith("s-here");
   expect(setProject).not.toHaveBeenCalled();
 });
+
+test("addToProject makes one Project for threads added while it's being made", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const createProject = vi.fn(async () => ({ ...source, id: "s-here" }));
+  const setProject = vi.fn(async () => undefined);
+  const view = {
+    hostId: "mini",
+    state: emptyThreads,
+    capabilities: {},
+    createProject,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = (id: string) => ({ id, repo: "r-1", createdAt: source.createdAt });
+
+  await Promise.all([
+    addToProject(view, [thread("t-1")], source),
+    addToProject(view, [thread("t-2")], source),
+  ]);
+  expect(createProject).toHaveBeenCalledTimes(1);
+  expect(setProject).toHaveBeenCalledWith(["t-1"], "s-here");
+  expect(setProject).toHaveBeenCalledWith(["t-2"], "s-here");
+});
+
+test("addToProject says so when a made Project can't be taken back, or an archived thread stays", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const thread = { id: "t-1", repo: "r-1", createdAt: source.createdAt, archived: true };
+  const setProject = vi.fn(async () => undefined);
+  const stuck = {
+    hostId: "mini",
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => ({ ...source, id: "s-here" }),
+    updateRepo: async () => "offline",
+    removeProject: async () => "offline",
+    setProject,
+  } as unknown as ThreadsView;
+  expect(await addToProject(stuck, [thread], source)).toBe(
+    "Essays is there now, but without its instructions: offline",
+  );
+
+  const archived = {
+    hostId: "mini",
+    state: { ...emptyThreads, repos: [source] },
+    capabilities: {},
+    archive: async () => "offline",
+    setProject,
+  } as unknown as ThreadsView;
+  expect(await addToProject(archived, [thread], source)).toBe("offline");
+  expect(setProject).not.toHaveBeenCalled();
+});
