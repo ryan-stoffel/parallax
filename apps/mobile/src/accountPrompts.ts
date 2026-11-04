@@ -10,13 +10,13 @@ import { askEach, type Asked } from "./setup";
 export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
 
 /**
- * A new computer's code dialog: the code `plx connect` shows on `name`, typed here, or, with
+ * A new computer's code dialog: the code `name` shows, in its Settings or `plx connect`, typed here, or, with
  * `onAsk`, approving this phone from a device that already uses it.
  */
 export function askSetupCode(name: string, onCode: (code: string) => void, onAsk?: () => void) {
   Alert.prompt(
     `Set up ${name}`,
-    "Type the 6-digit code that plx connect shows on it.",
+    "Type the 6-digit code from Show setup code in its Settings > Connections, or from plx connect.",
     [
       { text: "Cancel", style: "cancel" },
       ...(onAsk ? [{ text: "Approve from Another Device", onPress: onAsk }] : []),
