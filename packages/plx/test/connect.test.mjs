@@ -86,8 +86,8 @@ test("connect signs in, installs, registers, turns relay and remote on, and ends
     "remote/sessions {}",
   ]);
   assert.match(out, /✓ studio is online on Parallax Connect/);
-  assert.match(out, /^ {2}482911$/m);
-  assert.match(out, /✓ Approved MacBook Air\./);
+  assert.match(out, /^ {2}482 911$/m);
+  assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   fake.done();
 });
 
@@ -96,8 +96,8 @@ test("a setup code that lapses is replaced, and the next one is shown", async ()
   const fake = fakes({ expiresInMs: 300, pairAfterCodes: 2 });
   const { code, out } = await printed(() => connect.connect(options, fake.deps));
   assert.equal(code, 0, out);
-  assert.match(out, /^ {2}482911$[\s\S]*The code lapsed\. Here's a new one\.[\s\S]*^ {2}482912$/m);
-  assert.match(out, /✓ Approved MacBook Air\./);
+  assert.match(out, /^ {2}482 911$[\s\S]*The code lapsed\. Here's a new one\.[\s\S]*^ {2}482 912$/m);
+  assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   fake.done();
 });
 
@@ -113,8 +113,14 @@ test("connect keeps plxd's connection open while it waits longer than plxd's idl
   fake.deps.plxd = keptAlive(fake);
   const { code, out } = await printed(() => connect.connect(options, fake.deps));
   assert.equal(code, 0, out);
-  assert.match(out, /✓ Approved MacBook Air\./);
+  assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   fake.done();
+});
+
+test("attach says why plxd attach stopped", async () => {
+  const script = `console.error("plxd attach: could not connect to the pipe"); process.exit(4);`;
+  const child = spawn(process.execPath, ["-e", script], { stdio: "pipe" });
+  await assert.rejects(attach(child), /^Error: plxd stopped answering: could not connect to the pipe$/);
 });
 
 test("connect fails with plxd's reason when the relay never answers", async () => {
@@ -172,8 +178,8 @@ test("approve with nothing waiting shows a new setup code and waits for a device
   const fake = fakes({ relay: true, remote: true, registered: true });
   const { code, out } = await printed(() => connect.approve(fake.deps));
   assert.equal(code, 0, out);
-  assert.match(out, /^ {2}482911$/m);
-  assert.match(out, /✓ Approved MacBook Air\./);
+  assert.match(out, /^ {2}482 911$/m);
+  assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   assert.equal(fake.asked.length, 0);
   fake.done();
 });
@@ -237,7 +243,7 @@ test("add signs in here, then installs and links over ssh", { skip: process.plat
     assert.equal(code, 0, out);
     assert.match(out, /✓ Connected to box\.local/);
     assert.match(fake.installed[0] ?? "", /^box\.local (macos|linux) nightly$/);
-    assert.match(out, /✓ Approved MacBook Air\./);
+    assert.match(out, /✓ Added to Parallax from MacBook Air\./);
     const ssh = readFileSync(path.join(home, "ssh.log"), "utf8");
     assert.match(ssh, /-p 2222 -- ryan@box\.local "\$HOME\/\.parallax-plxd\/plxd" attach/);
     assert.equal(fake.calls()[0], 'relay/register {"token":"good-token"}');

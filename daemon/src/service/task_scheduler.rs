@@ -208,8 +208,8 @@ fn parse_query_output(text: &str) -> ServiceState {
 /// # Errors
 ///
 /// [`ServiceError::AlreadyRunningOutsideService`] when the task isn't running but something is
-/// already answering `data_dir`'s pipe, unless `replace`. With `replace`, that `serve` is stopped
-/// once the task is registered, so an `attach` in between goes through the task. Other variants
+/// already answering `data_dir`'s pipe, unless `replace`. With `replace`, that `serve`, or one
+/// that holds the lock without answering, is stopped once the task is registered, so an `attach` in between goes through the task. Other variants
 /// for a filesystem or `schtasks` failure, or [`ServiceError::StillRunning`].
 #[cfg(windows)]
 pub fn install(
@@ -220,6 +220,9 @@ pub fn install(
     check_label_serves(label, data_dir, DataDir::default_location().ok().as_ref())?;
     let state = load_state(label)?;
     let (program, outside) = prepare_install(data_dir, state.running(), replace)?;
+    // An older `serve` refuses an elevated `install` as a client, so it holds the lock without
+    // answering the probe, and it would keep the new task's `serve` from starting (PLX-1302).
+    let outside = outside || (replace && !state.running() && lock_held(data_dir));
     let user = crate::windows::this_user_sid()
         .map_err(|error| ServiceError::io("reading this user's SID", error))?;
     let task = render_task(&program, data_dir.root(), &user)?;

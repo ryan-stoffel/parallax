@@ -811,7 +811,9 @@ impl Peer {
     }
 
     /// With the client's process's user SID. The pipe's DACL already keeps other users out;
-    /// this checks again (0023).
+    /// this checks again (0023). A `serve` that isn't elevated can't read an elevated client's
+    /// token, as over SSH to an administrator's account, where every session is elevated. Only
+    /// this user could have connected, so being denied means this user, elevated (PLX-1302).
     #[cfg(windows)]
     fn of(pipe: &tokio::net::windows::named_pipe::NamedPipeServer) -> Self {
         let pid = match crate::windows::pipe_client_pid(pipe) {
@@ -821,6 +823,7 @@ impl Peer {
         match crate::windows::runs_as_this_user(pid) {
             Ok(true) => Self::ThisUser,
             Ok(false) => Self::Other(format!("pid {pid}")),
+            Err(error) if crate::windows::is_access_denied(&error) => Self::ThisUser,
             Err(error) => Self::Unknown(error),
         }
     }

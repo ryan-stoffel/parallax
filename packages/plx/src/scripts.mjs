@@ -259,7 +259,8 @@ try {
   New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Program $plxd -ErrorAction Stop | Out-Null
   "Allowed plxd through Windows Firewall on TCP ${port}"
 } catch {
-  "warning: Windows Firewall refused the rule for plxd ($($_.Exception.Message)). Allow $plxd on TCP ${port} as an administrator."
+${tailnet ? `  "warning: Windows Firewall refused the rule for plxd ($($_.Exception.Message)). Allow $plxd on TCP ${port} as an administrator."` : `  # Only a LAN route needs it. Without it, this computer's still reached through the relay.
+  "Windows Firewall refused the rule for plxd, so other devices reach it through the relay."`}
 }
 ${tailnet ? `"Turning on Parallax Connect"\n& $plxd connect on\nif ($LASTEXITCODE -ne 0) { throw 'plxd connect on failed.' }\n` : ""}"Installing plxd's logon task"
 $ErrorActionPreference = 'Continue'
@@ -291,11 +292,14 @@ if (-not $npm) {
  * The command a shell runs for PowerShell to read a script from stdin and run it. The script
  * goes on stdin, not the command line, which cmd.exe limits to 8191 characters; the reader is
  * `-EncodedCommand`, so no shell's quoting can change it. It prints an error as one plain line,
- * where PowerShell would print CLIXML to a redirected stderr, and exits 1.
+ * where PowerShell would print CLIXML to a redirected stderr, and exits 1. `-OutputFormat Text` keeps
+ * the progress records of commands like New-NetFirewallRule from reaching that stderr as CLIXML.
  */
 export const POWERSHELL_ARGS = [
   "-NoProfile",
   "-NonInteractive",
+  "-OutputFormat",
+  "Text",
   "-EncodedCommand",
   Buffer.from(
     "$s = [Console]::In.ReadToEnd(); try { & ([scriptblock]::Create($s)) } catch { [Console]::Error.WriteLine('error: ' + $_.Exception.Message); exit 1 }",

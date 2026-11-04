@@ -18,7 +18,8 @@ use std::ptr;
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::{
-    GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation, WAIT_FAILED,
+    ERROR_ACCESS_DENIED, GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree,
+    SetHandleInformation, WAIT_FAILED,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -145,6 +146,13 @@ pub fn runs_as_this_user(pid: u32) -> io::Result<bool> {
     // SAFETY: OpenProcess returned a handle that nothing else owns.
     let process = unsafe { OwnedHandle::from_raw_handle(process) };
     Ok(user_of(process.as_raw_handle())? == user_of(current_process())?)
+}
+
+/// Whether `error` is `ERROR_ACCESS_DENIED`, as [`runs_as_this_user`] fails for a process with a
+/// higher integrity level than this one.
+#[must_use]
+pub fn is_access_denied(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed())
 }
 
 /// Blocks until process `pid` exits.
