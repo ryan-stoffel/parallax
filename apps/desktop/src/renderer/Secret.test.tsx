@@ -110,7 +110,7 @@ test("An env file shows its names masked, and its values only once asked", async
   field.value = env;
   await act(async () => field.dispatchEvent(new Event("input", { bubbles: true })));
   expect(painted(el)).toBe("•••••••••••\nAPI_KEY=•••\n\n••••••\nexport DB_URL=••••••••••••••\n\n");
-  const show = el.querySelector<HTMLButtonElement>('button[aria-label="Show values"]')!;
+  const show = [...el.querySelectorAll("button")].find((b) => b.textContent === "Show values")!;
   await act(async () => show.click());
   expect(painted(el)).toBe(`${env}\n`);
   await act(async () => show.click());
@@ -194,4 +194,18 @@ test("A file input refuses a file of another type, and keeps Save off", async ()
   expect(el.textContent).not.toContain("notes.txt");
   const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
   expect(save.disabled).toBe(true);
+});
+
+test("Save stays off until the field has something, and the value can be shown", async () => {
+  const el = card(undefined, "value");
+  const input = el.querySelector<HTMLInputElement>('input[name="secret"]')!;
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(true);
+  input.value = "example";
+  await act(async () => input.dispatchEvent(new Event("input", { bubbles: true })));
+  expect(save.disabled).toBe(false);
+  const show = el.querySelector<HTMLButtonElement>('button[aria-label="Show the value"]')!;
+  await act(async () => show.click());
+  expect(input.type).toBe("text");
+  expect(input.value).toBe("example");
 });
