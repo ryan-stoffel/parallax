@@ -94,11 +94,7 @@ test("tokens_used sums accounts away per hour and model, timed at the hour", () 
   expect(JSON.stringify(events)).not.toContain("key-with-a-name");
 });
 
-const claim = (...hours: UsageHour[]) => ({
-  since: "2026-11-03T18:00:00Z",
-  until: "2026-11-03T19:00:00Z",
-  hours,
-});
+const claim = (...hours: UsageHour[]) => ({ claimId: "claim-1", hours });
 const first = hour("2026-11-03T18:00:00Z", "claude", 1);
 const second = hour("2026-11-03T18:00:00Z", "codex", 2);
 

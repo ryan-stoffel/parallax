@@ -132,13 +132,12 @@ pub(crate) async fn report_claim(
         .daemon
         .store
         .run(&context.cancel, move |store| {
-            let (since, hours) = store
+            let claim = store
                 .claim_usage_report(until)
                 .map_err(|error| store_error(&error))?;
             Ok(UsageReportClaimResult {
-                since,
-                until,
-                hours: hours.into_iter().map(usage_hour).collect(),
+                claim_id: claim.id,
+                hours: claim.hours.into_iter().map(usage_hour).collect(),
             })
         })
         .await
@@ -154,7 +153,7 @@ pub(crate) async fn report_release(
         .store
         .run(&context.cancel, move |store| {
             store
-                .release_usage_report(params.since, params.until)
+                .release_usage_report(&params.claim_id)
                 .map_err(|error| store_error(&error))
         })
         .await?;

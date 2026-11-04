@@ -3012,17 +3012,13 @@ export type UsageReportClaimParams = Record<symbol, never>;
  */
 export type UsageReportClaimResult = {
 	/**
-	 * Where the claim starts: the end of the last one, or `until` on a host's first claim, which
-	 * reports none of its past usage.
+	 * This claim's id, for `usage/report/release`.
 	 */
-	since: string,
+	claimId: string,
 	/**
-	 * The start of the current UTC hour, where the claim ends.
-	 */
-	until: string,
-	/**
-	 * The usage in `[since, until)`, as in `usage/history`. No later claim returns these hours,
-	 * unless they are released.
+	 * The usage from the end of the last claim to the start of the current UTC hour, as in
+	 * `usage/history`. Empty on a host's first claim, which reports none of its past usage. No
+	 * later claim returns these hours, unless they are released.
 	 */
 	hours: Array<UsageHour>,
 };
@@ -3032,18 +3028,14 @@ export type UsageReportClaimResult = {
  */
 export type UsageReportReleaseParams = {
 	/**
-	 * The claim's `since`.
+	 * The claim's `claimId`.
 	 */
-	since: string,
-	/**
-	 * The claim's `until`.
-	 */
-	until: string,
+	claimId: string,
 };
 
 /**
- * Result of `usage/report/release`. Empty, and the same when a later claim came first, which
- * keeps its place.
+ * Result of `usage/report/release`. Empty, and the same when the claim was released already or a
+ * later claim came first, which keeps its place.
  */
 export type UsageReportReleaseResult = Record<symbol, never>;
 

@@ -132,13 +132,11 @@ pub struct UsageReportClaimParams {}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageReportClaimResult {
-    /// Where the claim starts: the end of the last one, or `until` on a host's first claim, which
-    /// reports none of its past usage.
-    pub since: Timestamp,
-    /// The start of the current UTC hour, where the claim ends.
-    pub until: Timestamp,
-    /// The usage in `[since, until)`, as in `usage/history`. No later claim returns these hours,
-    /// unless they are released.
+    /// This claim's id, for `usage/report/release`.
+    pub claim_id: String,
+    /// The usage from the end of the last claim to the start of the current UTC hour, as in
+    /// `usage/history`. Empty on a host's first claim, which reports none of its past usage. No
+    /// later claim returns these hours, unless they are released.
     pub hours: Vec<UsageHour>,
 }
 
@@ -146,14 +144,12 @@ pub struct UsageReportClaimResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageReportReleaseParams {
-    /// The claim's `since`.
-    pub since: Timestamp,
-    /// The claim's `until`.
-    pub until: Timestamp,
+    /// The claim's `claimId`.
+    pub claim_id: String,
 }
 
-/// Result of `usage/report/release`. Empty, and the same when a later claim came first, which
-/// keeps its place.
+/// Result of `usage/report/release`. Empty, and the same when the claim was released already or a
+/// later claim came first, which keeps its place.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageReportReleaseResult {}

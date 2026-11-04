@@ -181,7 +181,7 @@ export const hostUsage: HostUsage = {
   async release(hostId, claim) {
     const answer = await connections
       .get(hostId)
-      ?.request("usage/report/release", { since: claim.since, until: claim.until });
+      ?.request("usage/report/release", { claimId: claim.claimId });
     return !!answer && "result" in answer;
   },
 };

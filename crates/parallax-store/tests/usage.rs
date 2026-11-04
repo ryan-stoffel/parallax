@@ -190,33 +190,50 @@ fn a_usage_report_claims_each_hour_once() {
     let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     let at = |hour: u32| format!("2026-09-24T{hour:02}:00:00Z").parse().unwrap();
-    store
-        .record_usage_delta(&delta(run, "a", "2026-09-24T09:30:00Z", 1))
-        .unwrap();
-    let (since, hours) = store.claim_usage_report(at(10)).unwrap();
-    assert_eq!(since, at(10));
-    assert!(hours.is_empty());
+    let tokens = |claim: &parallax_store::UsageClaim| {
+        claim.hours.iter().map(|h| h.input_tokens).sum::<u64>()
+    };
+    let record = |at: &str, input| {
+        store
+            .record_usage_delta(&delta(run, "a", at, input))
+            .unwrap();
+    };
+    record("2026-09-24T09:30:00Z", 1);
+    assert_eq!(tokens(&store.claim_usage_report(at(10)).unwrap()), 0);
 
+    record("2026-09-24T10:30:00Z", 2);
+    record("2026-09-24T11:30:00Z", 4);
+    let claim = store.claim_usage_report(at(11)).unwrap();
+    assert_eq!(tokens(&claim), 2);
+    // A second client in the same hour finds nothing, and doesn't stop the first giving back.
+    assert_eq!(tokens(&store.claim_usage_report(at(11)).unwrap()), 0);
+
+    store.release_usage_report(&claim.id).unwrap();
+    let again = store.claim_usage_report(at(12)).unwrap();
+    assert_eq!(tokens(&again), 2 + 4);
+
+    // Released after a later claim, the earlier claim's hours stay reported.
+    store.release_usage_report(&claim.id).unwrap();
+    assert_eq!(tokens(&store.claim_usage_report(at(12)).unwrap()), 0);
+}
+
+/// A release whose reply was lost is retried. The retry can't undo a later claim of those hours.
+#[test]
+fn a_retried_release_leaves_a_later_claim_alone() {
+    let (_dir, store) = open_temp();
+    let run = Uuid::now_v7();
+    let at = |hour: u32| format!("2026-09-24T{hour:02}:00:00Z").parse().unwrap();
+    store.claim_usage_report(at(10)).unwrap();
     store
         .record_usage_delta(&delta(run, "a", "2026-09-24T10:30:00Z", 2))
         .unwrap();
-    store
-        .record_usage_delta(&delta(run, "a", "2026-09-24T11:30:00Z", 4))
-        .unwrap();
-    let (since, hours) = store.claim_usage_report(at(11)).unwrap();
-    assert_eq!(since, at(10));
-    assert_eq!(hours.len(), 1);
-    assert_eq!(hours[0].input_tokens, 2);
-    assert!(store.claim_usage_report(at(11)).unwrap().1.is_empty());
+    let first = store.claim_usage_report(at(11)).unwrap();
+    store.release_usage_report(&first.id).unwrap();
+    let second = store.claim_usage_report(at(11)).unwrap();
+    assert_eq!(second.hours.len(), 1);
 
-    store.release_usage_report(at(10), at(11)).unwrap();
-    let (since, hours) = store.claim_usage_report(at(12)).unwrap();
-    assert_eq!(since, at(10));
-    assert_eq!(hours.iter().map(|h| h.input_tokens).sum::<u64>(), 2 + 4);
-
-    // Released after a later claim, the earlier claim's hours stay reported.
-    store.release_usage_report(at(10), at(11)).unwrap();
-    assert!(store.claim_usage_report(at(12)).unwrap().1.is_empty());
+    store.release_usage_report(&first.id).unwrap();
+    assert!(store.claim_usage_report(at(11)).unwrap().hours.is_empty());
 }
 
 #[test]
