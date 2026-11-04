@@ -260,6 +260,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // Settings > Connections and Add computer ask for the account's computers when they open, and
   // the window's focus and the network do too, with no timer (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
+  ipcMain.handle("parallax:removedComputers", () => removedComputers());
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
@@ -1702,8 +1703,9 @@ const discoverAccounts = coalesced(async () => {
     keepAccounts(accounts);
   }
   offlineAccounts.clear();
+  onlineAccounts.clear();
   for (const each of answer.result.hosts)
-    if (!each.online) offlineAccounts.add(accountId(each.hostId));
+    (each.online ? onlineAccounts : offlineAccounts).add(accountId(each.hostId));
   for (const each of accounts) addAccountConnection(each);
   // A new computer that was offline may answer now.
   for (const [id, access] of accountAccess)
@@ -1711,6 +1713,16 @@ const discoverAccounts = coalesced(async () => {
       void askForCode(id);
   broadcast("parallax:devices", deviceHosts());
 });
+
+/**
+ * `window.parallax.removedComputers`: the account's online computers this app was told to forget,
+ * which Add computer offers to add back, as set up again or not (PLX-1304). Nothing else brings one
+ * back, so a removed computer stays gone until the user asks.
+ */
+const removedComputers = () =>
+  savedAccounts()
+    .filter((a) => a.removed && onlineAccounts.has(accountId(a.hostId)))
+    .map((a) => ({ id: accountId(a.hostId), name: a.name }));
 
 /** Focus or a network change: the account's computers again, and each relay route's re-check. */
 function lookAgain(): void {
@@ -1829,6 +1841,8 @@ async function beginAccess(id: string): Promise<void> {
 
 /** Account computers the relay last listed as offline, by host id. */
 const offlineAccounts = new Set<string>();
+/** Account computers the relay last listed as online, by host id. */
+const onlineAccounts = new Set<string>();
 /** New account computers whose routes `askForCode` is probing, so one trigger probes once. */
 const probing = new Set<string>();
 

@@ -443,6 +443,8 @@ export interface ParallaxBridge {
    * retrying.
    */
   discoverAccount(): Promise<void>;
+  /** The account's online computers removed from this app, for Add computer to offer back. */
+  removedComputers(): Promise<{ id: string; name: string }[]>;
   /**
    * Pairs with new account computer `hostId` with the 6-digit code it shows, from `plx connect` or
    * `showSetupCode` (0091). Each code is good for one try. Resolves to an error for people, or
