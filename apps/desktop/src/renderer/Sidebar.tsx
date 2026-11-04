@@ -1185,6 +1185,11 @@ export function ThreadList({
               )
             : undefined
         }
+        orchestratorBranch={
+          item.orchestration &&
+          (item.orchestration.orchestrator.integrationBranch ??
+            item.orchestration.orchestrator.branch)
+        }
         thread={t}
         hostId={item.host.id}
         device={item.host}
@@ -3269,6 +3274,7 @@ function DraftRow({
  */
 function ThreadRow({
   orchestration,
+  orchestratorBranch,
   look,
   at,
   rowKey,
@@ -3311,6 +3317,8 @@ function ThreadRow({
 }: {
   /** Orchestrator-only actions alongside the shared thread menu (0093). */
   orchestration?: FavoriteAction[];
+  /** An orchestrator thread's branch, since its run's detached worktree has none (0045). */
+  orchestratorBranch?: string;
   /** Today's one-line look (pins.ts): where it is, its title, and its status. Dense is a card with
    *  less padding, as every row in the Traditional sidebar is. */
   look?: "compact" | "dense";
@@ -3413,7 +3421,8 @@ function ThreadRow({
   const compact = look === "compact";
   // A thread with no repo leaves out its scratch branch, and a Project's thread the branch plxd made
   // in its repository.
-  const branch = repo && !repo.scratch && !repo.project ? run?.branch : undefined;
+  const branch =
+    orchestratorBranch ?? (repo && !repo.scratch && !repo.project ? run?.branch : undefined);
   const { aside, line } = useRowDetails({
     hostId,
     run,
