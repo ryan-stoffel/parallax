@@ -19,6 +19,9 @@ export const VERSION = JSON.parse(readFileSync(new URL("../package.json", import
 /** How often an open connection sends `host/health`, well under plxd's 90 s idle limit. */
 const KEEPALIVE_MS = 30_000;
 
+/** How long after `plxd attach` exits to wait for the last of its stderr. */
+const STDERR_WAIT_MS = 100;
+
 /**
  * Speaks JSON-RPC with `child`, a `plxd attach`, and sends `initialize` first. Resolves once plxd
  * answered it.
@@ -41,7 +44,16 @@ export async function attach(child, { keepaliveMs = KEEPALIVE_MS } = {}) {
     waiting.clear();
   };
   child.once("error", (error) => end(new Error(`Couldn't start plxd: ${error.message}`)));
-  child.once("exit", () => end(new Error("plxd stopped answering.")));
+  // `plxd attach` says why it stopped on stderr, which can arrive just after its exit.
+  let said = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (/** @type {string} */ chunk) => (said = (said + chunk).slice(-2000)));
+  child.once("exit", () => {
+    setTimeout(() => {
+      const why = said.trim().split("\n").pop()?.replace(/^plxd attach: /, "").trim();
+      end(new Error(why ? `plxd stopped answering: ${why}` : "plxd stopped answering."));
+    }, STDERR_WAIT_MS);
+  });
   child.stdin?.on("error", () => {});
 
   let pending = "";
@@ -86,6 +98,7 @@ export async function attach(child, { keepaliveMs = KEEPALIVE_MS } = {}) {
     close() {
       clearInterval(keepalive);
       child.stdin?.end();
+      child.stderr?.destroy();
       child.kill();
     },
   };

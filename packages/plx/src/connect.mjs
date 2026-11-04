@@ -92,8 +92,8 @@ export function connect(options, deps) {
     await withPlxd(
       deps,
       async (plxd) => {
-        await link(plxd, token, deps);
-        await approveNewDevice(plxd, deps);
+        const others = await link(plxd, token, deps);
+        await approveNewDevice(plxd, deps, others);
       },
       runner,
       os,
@@ -118,8 +118,8 @@ export function add(destination, options, deps) {
     await withPlxd(
       deps,
       async (plxd) => {
-        await link(plxd, token, deps);
-        await approveNewDevice(plxd, deps);
+        const others = await link(plxd, token, deps);
+        await approveNewDevice(plxd, deps, others);
       },
       runner,
       details.os,
@@ -138,19 +138,23 @@ export async function install(runner, target, name, channel) {
   const installer = await findInstaller(target, channel, true);
   await step(`Installing plxd on ${name}`, async () => {
     const script = installScript(target.os, installer, channel, true, false);
-    const { code } = await runner.script(target.os === "windows" ? "powershell" : "sh", script, false);
+    const { code, stdout } = await runner.script(target.os === "windows" ? "powershell" : "sh", script, true);
+    // Its steps only matter when it fails, or when it warns.
+    for (const line of stdout.split(/\r?\n/))
+      if (line && (code !== 0 || line.startsWith("warning:"))) console.log(`  ${line}`);
     if (code !== 0) throw new Error(`The install failed on ${name} (exit ${code}).`);
-    return [`Installed plxd ${installer.version} with its login service`, undefined];
+    return [`Installed plxd ${installer.version}`, undefined];
   });
 }
 
 /**
  * Registers the host with the relay under the token's account, turns on `relay` and `remote`,
  * and waits until plxd is connected to the relay and listening. Prints its name as the relay
- * lists it.
+ * lists it, and resolves to the names of the account's other computers.
  * @param {Plxd} plxd
  * @param {string} token
  * @param {Deps} deps
+ * @returns {Promise<string[]>}
  */
 async function link(plxd, token, deps) {
   await step("Registering this computer with Parallax Relay", async () => {
@@ -158,7 +162,7 @@ async function link(plxd, token, deps) {
     await plxd.call("host/settings/set", { relay: true, remote: true });
     return ["Registered, with Reach from anywhere on", undefined];
   });
-  await step("Waiting for it to come online", async () => {
+  return step("Waiting for it to come online", async () => {
     for (let waited = 0; ; waited += 1000) {
       const status = await plxd.call("remote/sessions");
       if (status.relay?.connected && status.listening) break;
@@ -169,8 +173,11 @@ async function link(plxd, token, deps) {
       await deps.sleep(1000);
     }
     const listed = await plxd.call("relay/hosts", { token }).catch(() => undefined);
-    const self = listed?.hosts?.find((/** @type {{ thisComputer: boolean }} */ host) => host.thisComputer);
-    return [`${self?.name ?? "This computer"} is online on Parallax Connect`, undefined];
+    /** @type {{ name: string, thisComputer: boolean }[]} */
+    const hosts = listed?.hosts ?? [];
+    const self = hosts.find((host) => host.thisComputer);
+    const others = hosts.filter((host) => !host.thisComputer && host.name).map((host) => host.name);
+    return [`${self?.name ?? "This computer"} is online on Parallax Connect`, others];
   });
 }
 
@@ -179,12 +186,14 @@ async function link(plxd, token, deps) {
  * until a device pairs with it. Prints the device's name.
  * @param {Plxd} plxd
  * @param {Deps} deps
+ * @param {string[]} [others] The account's other computers, to say where the code goes.
  */
-async function approveNewDevice(plxd, deps) {
-  console.log("\nParallax on your other computer asks for this code. Type it there.");
+async function approveNewDevice(plxd, deps, others = []) {
+  const where = others.length === 1 ? others[0] : "your other computer";
+  console.log(`\nParallax on ${where} asks for this code when you go back to it. Type it there.`);
   for (;;) {
     const { code, expiresAt } = await plxd.call("access/setupCode");
-    console.log(`\n  ${code}\n\nWaiting for a device (Ctrl-C to stop; plx connect approve shows a new code later).`);
+    console.log(`\n  ${code.slice(0, 3)} ${code.slice(3)}\n\nWaiting for you to type it (Ctrl-C to stop; plx connect approve shows a new code later).`);
     let state = await plxd.call("access/get");
     const lapses = deps.sleep(Math.max(0, Date.parse(expiresAt) - Date.now())).then(() => undefined);
     while (!state.setupApproved) {
@@ -193,7 +202,7 @@ async function approveNewDevice(plxd, deps) {
       state = changed;
     }
     if (state.setupApproved) {
-      console.log(`✓ Approved ${state.setupApproved}. It can reach this computer now, and so can your other devices.`);
+      console.log(`✓ Added to Parallax from ${state.setupApproved}. You're done, and you can close this terminal.`);
       return;
     }
     console.log("The code lapsed. Here's a new one.");

@@ -73,7 +73,7 @@ export function sshRunner(destination, options) {
   return {
     command: (command) => exec(ssh, args([command]), { capture: true }),
     script: (shell, script, capture) => exec(ssh, args(remoteReader(shell)), { input: script, capture }),
-    attach: (os) => spawn(ssh, args([remoteAttach(os)]), { stdio: ["pipe", "pipe", "ignore"] }),
+    attach: (os) => spawn(ssh, args([remoteAttach(os)]), { stdio: "pipe" }),
     close() {
       if (!controlDir) return;
       spawn(ssh, ["-O", "exit", ...args([])], { stdio: "ignore" }).once("close", () =>
@@ -91,7 +91,7 @@ export function localRunner() {
       shell === "sh"
         ? exec("sh", ["-s"], { input: script, capture })
         : exec("powershell.exe", POWERSHELL_ARGS, { input: script, capture }),
-    attach: () => spawn(localPlxd(), ["attach"], { stdio: ["pipe", "pipe", "ignore"] }),
+    attach: () => spawn(localPlxd(), ["attach"], { stdio: "pipe" }),
     close() {},
   };
 }

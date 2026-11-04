@@ -18,7 +18,8 @@ use std::ptr;
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::{
-    GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation, WAIT_FAILED,
+    ERROR_ACCESS_DENIED, GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree,
+    SetHandleInformation, WAIT_FAILED,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -134,8 +135,9 @@ pub fn pipe_server_pid(pipe: &impl AsRawHandle) -> io::Result<u32> {
 ///
 /// # Errors
 ///
-/// If either process's user can't be read. Another user's process usually can't be opened at
-/// all, so callers treat an error as "not this user".
+/// If either process's user can't be read. A client treats that as "not this user", since another
+/// user's process usually can't be opened at all. `serve` doesn't when it's access denied, since
+/// that's what this user's elevated process gives it too, and its pipe's DACL admits only this user.
 pub fn runs_as_this_user(pid: u32) -> io::Result<bool> {
     // SAFETY: OpenProcess has no preconditions; a null result is an error.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
@@ -145,6 +147,13 @@ pub fn runs_as_this_user(pid: u32) -> io::Result<bool> {
     // SAFETY: OpenProcess returned a handle that nothing else owns.
     let process = unsafe { OwnedHandle::from_raw_handle(process) };
     Ok(user_of(process.as_raw_handle())? == user_of(current_process())?)
+}
+
+/// Whether `error` is `ERROR_ACCESS_DENIED`, as [`runs_as_this_user`] fails for a process with a
+/// higher integrity level than this one.
+#[must_use]
+pub fn is_access_denied(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed())
 }
 
 /// Blocks until process `pid` exits.

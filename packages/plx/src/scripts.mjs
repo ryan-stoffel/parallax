@@ -194,7 +194,9 @@ fi
  * copies plxd.exe from the folder holding `<app name>.exe`, or with `headless`, downloads plxd.exe
  * alone, to %USERPROFILE%\.parallax-plxd. A running plxd.exe can't be overwritten, but it can be
  * renamed, so the old one moves aside to plxd.exe.old. Then it allows that plxd through Windows
- * Firewall on TCP 7340, or without `tailnet` on the remote listener's 7341, warning when that needs an administrator, and installs plxd's logon task
+ * Firewall on TCP 7340, warning when that needs an administrator, or without `tailnet` on the remote
+ * listener's 7341, saying so only in the output plx shows on failure, since the relay needs no rule.
+ * It installs plxd's logon task
  * (0023) with `service install --replace`. A plxd from before PLX-576 has no `service`, so then
  * plxd is started with `attach`, which runs `serve` outside the SSH session's job. It waits for
  * `attach` alone with `WaitForExit`: `Start-Process -Wait` also waits for its descendants, so the
@@ -259,7 +261,8 @@ try {
   New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Program $plxd -ErrorAction Stop | Out-Null
   "Allowed plxd through Windows Firewall on TCP ${port}"
 } catch {
-  "warning: Windows Firewall refused the rule for plxd ($($_.Exception.Message)). Allow $plxd on TCP ${port} as an administrator."
+${tailnet ? `  "warning: Windows Firewall refused the rule for plxd ($($_.Exception.Message)). Allow $plxd on TCP ${port} as an administrator."` : `  # Only a LAN route needs it. Without it, this computer's still reached through the relay.
+  "Windows Firewall refused the rule for plxd, so other devices reach it through the relay."`}
 }
 ${tailnet ? `"Turning on Parallax Connect"\n& $plxd connect on\nif ($LASTEXITCODE -ne 0) { throw 'plxd connect on failed.' }\n` : ""}"Installing plxd's logon task"
 $ErrorActionPreference = 'Continue'
@@ -291,14 +294,17 @@ if (-not $npm) {
  * The command a shell runs for PowerShell to read a script from stdin and run it. The script
  * goes on stdin, not the command line, which cmd.exe limits to 8191 characters; the reader is
  * `-EncodedCommand`, so no shell's quoting can change it. It prints an error as one plain line,
- * where PowerShell would print CLIXML to a redirected stderr, and exits 1.
+ * where PowerShell would print CLIXML to a redirected stderr, and exits 1. It silences progress
+ * here, not in the script, since commands from modules, like New-NetFirewallRule, only see this
+ * scope's preference, and their progress would reach that stderr as CLIXML. `-OutputFormat Text`
+ * doesn't stop that (tested on Windows 11).
  */
 export const POWERSHELL_ARGS = [
   "-NoProfile",
   "-NonInteractive",
   "-EncodedCommand",
   Buffer.from(
-    "$s = [Console]::In.ReadToEnd(); try { & ([scriptblock]::Create($s)) } catch { [Console]::Error.WriteLine('error: ' + $_.Exception.Message); exit 1 }",
+    "$global:ProgressPreference = 'SilentlyContinue'; $s = [Console]::In.ReadToEnd(); try { & ([scriptblock]::Create($s)) } catch { [Console]::Error.WriteLine('error: ' + $_.Exception.Message); exit 1 }",
     "utf16le",
   ).toString("base64"),
 ];

@@ -14,7 +14,7 @@ Every download is checked against the SHA-256 its GitHub release reports, and pl
 
 | Command | What it does |
 | --- | --- |
-| `plx connect` | Signs in, installs plxd here, registers it with the relay, and turns on `relay` and `remote`. Once it's online it shows a 6-digit code: type it on a signed-in device when that device opens this computer, and plx prints the device's name. |
+| `plx connect` | Signs in, installs plxd here, registers it with the relay, and turns on `relay` and `remote`. Once it's online it shows a 6-digit code. Parallax on your other computer asks for it, and once you type it there, plx says so and exits. |
 | `plx connect add <ssh destination>` | The same on another computer over SSH, with the sign-in here. |
 | `plx connect approve` | Approves a device waiting to sign in, once its code matches, or shows a new code to type on a device. |
 | `plx connect status` | Prints the account, host id, relay state, and routes. |
