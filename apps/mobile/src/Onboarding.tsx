@@ -64,8 +64,8 @@ export function AddInstructions() {
         {CONNECT_COMMAND}
       </T>
       <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-        It signs in to your Parallax account, then shows a 6-digit code. Tap the computer here and
-        type the code.
+        On Windows, use npx.cmd. It signs in to your Parallax account, then shows a 6-digit code. Tap
+        the computer here and type the code.
       </T>
     </View>
   );

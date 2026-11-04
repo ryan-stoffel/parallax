@@ -175,8 +175,8 @@ export function SetupCodeField({
         </p>
       )}
       <p className="mt-2 text-meta text-faint-foreground">
-        No code there? In Parallax on {name}, choose Show setup code in Settings › Connections.
-        Without the app, run <code className="font-mono">npx plx-cli connect approve</code>.
+        No code there? Run the setup command on {name} again, or in Parallax there, choose Show
+        setup code in Settings › Connections.
       </p>
     </>
   );

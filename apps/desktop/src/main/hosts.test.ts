@@ -928,10 +928,12 @@ test("a new account computer that's offline or doesn't answer waits in Settings,
     expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe"]);
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode", offline: true });
 
-    // Once it answers, the dialog may ask.
+    // Once it answers, the dialog may ask. Its listener starting changes nothing in the list, so
+    // the timer probes it again, with no focus change, and the prompt appears on its own.
     fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
-    fake.appEvents.get("browser-window-focus")!();
-    await vi.advanceTimersByTimeAsync(1);
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(15_001);
+    fake.visible = false;
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
 
     // Remove takes it off this app's list, and the account listing it again doesn't add it back.
