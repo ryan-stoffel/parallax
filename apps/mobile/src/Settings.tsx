@@ -423,7 +423,7 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
         </View>
       </View>
       {m.gate && (
-        <Section footer="Type the code plx connect shows on it, or approve this phone from a device that already uses it.">
+        <Section footer="Type the code from Show setup code in its Settings > Connections, or from plx connect, or approve this phone from a device that already uses it.">
           <Row icon={KeyRound} iconColor={c.accent} title={m.gate.kind === "refused" ? "Try again" : "Set up"} last onPress={() => setUp(m.machine.id)} />
         </Section>
       )}
