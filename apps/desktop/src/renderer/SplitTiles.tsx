@@ -66,16 +66,16 @@ type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
 
 /**
  * The window's panes, as cards on a grid (splitLayout.ts) on the window's background. Each card has a
- * row of tabs above it. A card on the window's left whose only tab has no `leading` before it is one
- * shape with that tab, from the card's left edge. With `hideTabs`, the card rises to the window's top,
- * around the row.
+ * row of tabs above it. A card whose only tab has no `leading` before it is one shape with that tab,
+ * from the card's left edge. With `hideTabs`, the card rises to the window's top, around the row.
  * `leading` starts the first card's row, and `controls` end the top right card's,
  * giving up their room to its tabs when it's narrow. Columns or rows with no room for `minTile` stack,
  * their panes in one tile, which shows the focused one, or the last one shown, and lists all their
  * tabs. `maximized` stacks them all. Views are siblings keyed by `key`, so a tile coming, going, or
  * stacking never remounts the others, and they glide to their places.
  *
- * A divider on each line drags or arrow-keys to resize and double-clicks back to even. A drag shows
+ * A divider on each line, showing a short grip under the pointer or keyboard focus, drags or arrow-keys
+ * to resize and double-clicks back to even. A drag shows
  * its lines here and hands them up once it ends, so App doesn't render on every move. `details` floats
  * over the focused pane's card. A tab or sidebar thread `drop` accepts, dragged over the window, previews
  * where it would land: the window's sides, top, bottom, and corners are zones (`zoneAt`), and its
@@ -155,9 +155,7 @@ export function SplitTiles({
   const stackShown = useRef(new Map<Cells, string>());
   const tileOf = (i: number) => tiles.findIndex((tile) => tile.panes.includes(i));
   const flushOf = (tile: Tile, at: number) =>
-    rectOf(tile.cells, shown).left === 0 &&
-    tile.panes.flatMap((i) => items[i]!.tabs).length === 1 &&
-    !(at === 0 && leading);
+    tile.panes.flatMap((i) => items[i]!.tabs).length === 1 && !(at === 0 && leading);
   const activeIn = (tile: Tile) => {
     if (tile.panes.includes(focused)) {
       stackShown.current.set(tile.cells, items[focused]!.paneId);
@@ -371,7 +369,7 @@ export function SplitTiles({
           >
             <span
               aria-hidden
-              className={`rounded-full bg-foreground/40 opacity-0 transition-opacity duration-150 group-hover/cut:opacity-100 group-focus-visible/cut:opacity-100 group-active/cut:opacity-100 ${vertical ? "h-full w-0.5" : "h-0.5 w-full"}`}
+              className={`rounded-full bg-foreground/25 opacity-0 transition-[opacity,background-color] duration-150 group-hover/cut:opacity-100 group-focus-visible/cut:opacity-100 group-active/cut:bg-foreground/50 group-active/cut:opacity-100 ${vertical ? "h-9 w-1" : "h-1 w-9"}`}
             />
           </div>
         );

@@ -41,8 +41,8 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
     await page.mouse.up();
   };
 
-  // New thread alone has no tab. A pane's only tab on the window's left starts at its card's left
-  // edge, and among others a tab starts further in.
+  // New thread alone has no tab. A pane's only tab starts at its card's left edge, and among others
+  // a tab starts further in.
   await expect(tabs).toHaveCount(0);
   await start("First");
   const flush = async () => {
