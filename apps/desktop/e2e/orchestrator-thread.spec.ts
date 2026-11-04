@@ -57,6 +57,7 @@ test("an orchestrator's row pins and archives as a thread's does", async () => {
   await working.locator("summary").click();
   const row = page.locator('#sidebar li[data-kind="orchestrator"]').filter({ hasText: "ember" });
   await expect(row).toHaveCount(1);
+  await expect(row.locator('span[title^="parallax/ember"]')).toBeVisible();
   await row.hover();
   await row.getByRole("button", { name: "Orchestrator actions" }).click();
   const menu = page.getByRole("menu", { name: "Orchestrator actions" });

@@ -1521,6 +1521,35 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
+test("an orchestrator thread's row shows its integration branch, else its repo's", async () => {
+  const lead = (name: string, extra: Partial<Orchestrator>): Orchestrator => ({
+    ...orchestrator(name, "2026-09-29T10:00:00Z"),
+    run: `t-${name}`,
+    ...extra,
+  });
+  const orchestrators = [
+    lead("cut", { integrationBranch: "parallax/cut-1a2b3c4d" }),
+    lead("uncut", {}),
+    lead("notes", { repoPath: "", branch: undefined }),
+  ];
+  const threads: Thread[] = orchestrators.map((o) => ({
+    id: o.run!,
+    repo: parallax.id,
+    createdAt: "2026-09-29T09:00:00Z",
+  }));
+  answers["thread/list"] = () => ({ result: { repos: [parallax], threads, seq: 7 } });
+  answers["orchestrator/list"] = () => ({ result: { orchestrators, seq: 7 } });
+  answers["agent/list"] = () => ({
+    result: { runs: orchestrators.map((o) => orchestratorRun(o.run!, "Plan")), seq: 7 },
+  });
+  await renderApp();
+  const branchOf = (name: string) =>
+    rowButton(name).querySelector("svg.lucide-git-branch + span")?.getAttribute("title");
+  expect(branchOf("cut")).toBe("parallax/cut-1a2b3c4d");
+  expect(branchOf("uncut")).toBe("main");
+  expect(branchOf("notes")).toBeUndefined();
+});
+
 test("an orchestrator row reads its git status only when its repo is listed", async () => {
   const listed = { ...orchestrator("parallax", "2026-09-29T10:00:00Z"), run: "r-listed" };
   const unlisted = { ...orchestrator("photon", "2026-09-29T09:00:00Z"), run: "r-unlisted" };
