@@ -66,8 +66,9 @@ type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
 
 /**
  * The window's panes, as cards on a grid (splitLayout.ts) on the window's background. Each card has a
- * row of tabs above it. The window's only tab, with no `leading` before it, is one shape with its card,
- * from the card's left edge. With `hideTabs`, the card rises to the window's top, around the row.
+ * row of tabs above it. A card on the window's left whose only tab has no `leading` before it is one
+ * shape with that tab, from the card's left edge. With `hideTabs`, the card rises to the window's top,
+ * around the row.
  * `leading` starts the first card's row, and `controls` end the top right card's,
  * giving up their room to its tabs when it's narrow. Columns or rows with no room for `minTile` stack,
  * their panes in one tile, which shows the focused one, or the last one shown, and lists all their
@@ -135,7 +136,6 @@ export function SplitTiles({
   // The line being dragged and the latest cuts, read by pointer events that may land before a render.
   const drag = useRef<{ vertical: boolean; cuts: GridCuts }>(undefined);
   const shown = live ?? cuts;
-  const flush = items.length === 1 && items[0]!.tabs.length === 1 && !leading;
   const endDrag = () => {
     if (!drag.current) return;
     onResize(drag.current.cuts);
@@ -154,6 +154,10 @@ export function SplitTiles({
   // Each stack's shown pane: the focused one when it's there, else the one shown last.
   const stackShown = useRef(new Map<Cells, string>());
   const tileOf = (i: number) => tiles.findIndex((tile) => tile.panes.includes(i));
+  const flushOf = (tile: Tile, at: number) =>
+    rectOf(tile.cells, shown).left === 0 &&
+    tile.panes.flatMap((i) => items[i]!.tabs).length === 1 &&
+    !(at === 0 && leading);
   const activeIn = (tile: Tile) => {
     if (tile.panes.includes(focused)) {
       stackShown.current.set(tile.cells, items[focused]!.paneId);
@@ -230,6 +234,7 @@ export function SplitTiles({
         const group = tile.panes;
         const rect = rectOf(tile.cells, shown);
         const shownPane = items[activeIn(tile)]!;
+        const flush = flushOf(tile, at);
         // The top right card.
         const corner = !!(tile.cells & zoneCells.upperRight);
         return (
@@ -286,7 +291,7 @@ export function SplitTiles({
               paddingTop: hideTabs ? stripHeight : 0,
             }}
             data-marked={tiles.length > 1 && i === focused ? "" : undefined}
-            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,padding,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${flush && !hideTabs ? "rounded-tl-none" : ""} ${active ? "z-[1] bg-pane" : "invisible"}`}
+            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,padding,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${flushOf(tile, tileOf(i)) && !hideTabs ? "rounded-tl-none" : ""} ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
             <div className="relative flex min-h-0 min-w-0 flex-1">
               {/* Content scrolled up fades out rather than butting into the card's top edge. */}

@@ -41,8 +41,8 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
     await page.mouse.up();
   };
 
-  // New thread alone has no tab. A thread alone has one from its card's left edge, and among others
-  // a tab starts further in.
+  // New thread alone has no tab. A pane's only tab on the window's left starts at its card's left
+  // edge, and among others a tab starts further in.
   await expect(tabs).toHaveCount(0);
   await start("First");
   const flush = async () => {
@@ -70,6 +70,7 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await expect(strips).toHaveCount(2);
   await expect(strips.nth(0).getByRole("tab")).toHaveText(["Second"]);
   await expect(strips.nth(1).getByRole("tab")).toHaveText(["First"]);
+  await expect.poll(flush).toBe(true);
 
   // Dragged to the other pane's tabs, it joins them, and the pane it left closes.
   // Over its plus, which is past its tabs however little room they have.
