@@ -69,6 +69,17 @@ export function withListed(known: Machine[], listed: Listed[], hidden: string[] 
 export const toAsk = (listed: Listed[], usesAny: boolean, hidden: string[] = []): Listed[] =>
   usesAny ? [] : listed.filter((l) => l.online && !hidden.includes(accountId(l.hostId)));
 
+/**
+ * What a computer's row says on the first-run screen, where the phone does the asking: it's ready,
+ * offline, waiting on the Allow that shows `code`, connects once one is given, or asking stopped.
+ */
+export function computerStatus(row: { ready: boolean; online: boolean; code?: string; stopped: boolean }) {
+  if (row.ready) return "Ready";
+  if (!row.online) return "Offline";
+  if (row.code) return `Waiting for you to allow · ${row.code}`;
+  return row.stopped ? "Not connected" : "Connects once allowed";
+}
+
 /** How asking ended: allowed, refused so it waits for the user, or no computer answered. */
 export type Asked = "allowed" | "stopped" | "unreachable";
 

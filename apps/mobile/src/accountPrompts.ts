@@ -13,13 +13,13 @@ export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)
  * A new computer's code dialog: the code `plx connect` shows on `name`, typed here, or, with
  * `onAsk`, approving this phone from a device that already uses it.
  */
-export function askSetupCode(name: string, onCode: (code: string) => void, onAsk: () => void) {
+export function askSetupCode(name: string, onCode: (code: string) => void, onAsk?: () => void) {
   Alert.prompt(
     `Set up ${name}`,
     "Type the 6-digit code that plx connect shows on it.",
     [
       { text: "Cancel", style: "cancel" },
-      { text: "Approve from Another Device", onPress: onAsk },
+      ...(onAsk ? [{ text: "Approve from Another Device", onPress: onAsk }] : []),
       { text: "Set Up", isPreferred: true, onPress: (code?: string) => onCode((code ?? "").replace(/\D/g, "")) },
     ],
     "plain-text",
@@ -56,6 +56,24 @@ export function setUpComputer(
         })
         .then(handlers.done, failed),
   );
+}
+
+/**
+ * Sets up a computer no other device uses yet, with the code its `plx connect` shows: asks which
+ * of `computers` that is first, if there's more than one. Calls `done` once this phone may use it.
+ */
+export function enterSetupCode(accounts: AccountHosts, computers: Listed[], done: () => void) {
+  const enter = ({ hostId, name }: Listed) =>
+    askSetupCode(name, (code) => {
+      const failed = (e: unknown) => Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
+      if (code.length !== 6) return failed(new Error("The code has 6 digits."));
+      accounts.setup(hostId, [], code).then(done, failed);
+    });
+  if (computers.length === 1) return enter(computers[0]!);
+  Alert.alert("Which computer shows the code?", undefined, [
+    ...computers.map((computer) => ({ text: computer.name, onPress: () => enter(computer) })),
+    { text: "Cancel", style: "cancel" as const },
+  ]);
 }
 
 /**

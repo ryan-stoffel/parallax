@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { askEach, toAsk, upgraded, withListed } from "./setup";
+import { askEach, computerStatus, toAsk, upgraded, withListed } from "./setup";
 
 const listed = (hostId: string, name: string) => ({ hostId, name, online: true });
 
@@ -74,6 +74,15 @@ test("asking passes over a computer it can't reach, and a denial ends it", async
 
   const offline = new Error("offline");
   expect(await askEach(hosts, ask({ a: offline, b: offline, c: offline }), stops, note)).toBe("unreachable");
+});
+
+test("a computer's row says where it stands, and never asks for a tap", () => {
+  const row = { ready: false, online: true, stopped: false };
+  expect(computerStatus({ ...row, ready: true })).toBe("Ready");
+  expect(computerStatus({ ...row, online: false, code: "123 456" })).toBe("Offline");
+  expect(computerStatus({ ...row, code: "123 456" })).toBe("Waiting for you to allow · 123 456");
+  expect(computerStatus(row)).toBe("Connects once allowed");
+  expect(computerStatus({ ...row, stopped: true })).toBe("Not connected");
 });
 
 test("asking stays on a computer that still holds the request, and passes one that doesn't", async () => {
