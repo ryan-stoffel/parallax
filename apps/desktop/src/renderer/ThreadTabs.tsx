@@ -33,7 +33,8 @@ const accepted = [tabDragType, threadDragType];
  * the focused pane among several, that outline is brighter. A tab drags along the tabs or to another pane's
  * to move there, or over the window to land where its preview shows (SplitTiles.tsx). A sidebar thread dropped here gets a tab where it
  * lands, which a bar shows. The shown tab always has its close button, and another shows one under the
- * pointer, over its title. A middle click closes a tab too.
+ * pointer, over its title. A middle click closes a tab too. With `lone`, for the window's only tab, the
+ * tab has no outline, since there's no other tab to tell it from: a plain title, closed like an unshown tab.
  */
 export function ThreadTabs({
   tabs,
@@ -45,6 +46,7 @@ export function ThreadTabs({
   onNew,
   onDrop,
   closable,
+  lone,
 }: {
   tabs: TabItem[];
   active: string;
@@ -54,8 +56,10 @@ export function ThreadTabs({
   onClose: (id: string) => void;
   onNew: () => void;
   onDrop: (drop: TabDrop, before?: string) => void;
-  /** False for the window's only tab on New thread, with nothing to close to. */
+  /** False for the window's only tab on New thread or a Project's page, with nothing to close to. */
   closable: boolean;
+  /** True when this is the window's only tab. */
+  lone: boolean;
 }) {
   const closeKeys = useShortcutLabel("closeTab");
   // Where a drop would land: before this tab, or last for null.
@@ -110,6 +114,7 @@ export function ThreadTabs({
       >
         {tabs.map((tab, i) => {
           const selected = tab.id === active;
+          const outlined = selected && !lone;
           const last = i === tabs.length - 1;
           return (
             <div
@@ -126,7 +131,7 @@ export function ThreadTabs({
                 e.preventDefault();
                 onClose(tab.id);
               }}
-              className={`group/tab relative flex max-w-56 shrink items-center ${selected ? "pane-edge tab-shown min-w-24 self-stretch rounded-t-[10px] bg-pane pb-px" : "mb-[7px] h-7 min-w-16 rounded-md hover:bg-hover"}`}
+              className={`group/tab relative flex max-w-56 shrink items-center ${outlined ? "pane-edge tab-shown min-w-24 self-stretch rounded-t-[10px] bg-pane pb-px" : "mb-[7px] h-7 min-w-16 rounded-md hover:bg-hover"}`}
               data-marked={selected && marked ? "" : undefined}
             >
               {(landing === tab.id || (landing === null && last)) && (
@@ -135,14 +140,14 @@ export function ThreadTabs({
                   className={`pointer-events-none absolute inset-y-0.5 z-[1] w-0.5 rounded-full bg-accent ${last && landing === null ? "-right-0.5" : "-left-0.5"}`}
                 />
               )}
-              {selected && <span aria-hidden className="tab-cap" />}
+              {outlined && <span aria-hidden className="tab-cap" />}
               <button
                 type="button"
                 role="tab"
                 aria-selected={selected}
                 title={tab.title}
                 onClick={() => onSelect(tab.id)}
-                className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-0 pl-2.5 text-left text-body outline-none focus-visible:ring-1 focus-visible:ring-ring ${selected ? `pr-1 font-medium ${focused ? "text-foreground" : "text-muted-foreground"}` : "pr-2.5 text-faint-foreground"}`}
+                className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-0 pl-2.5 text-left text-body outline-none focus-visible:ring-1 focus-visible:ring-ring ${outlined ? "pr-1" : "pr-2.5"} ${selected ? `font-medium ${focused ? "text-foreground" : "text-muted-foreground"}` : "text-faint-foreground"}`}
               >
                 <span className="flex shrink-0 [&_svg]:size-4">{tab.icon}</span>
                 <span className="min-w-0 flex-1 truncate">{tab.title}</span>
@@ -154,7 +159,7 @@ export function ThreadTabs({
                   title="Close tab"
                   data-keys={selected ? closeKeys : undefined}
                   onClick={() => onClose(tab.id)}
-                  className={`grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-3.5 ${selected ? "mr-1.5" : "absolute right-1 bg-sidebar opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"}`}
+                  className={`grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-3.5 ${outlined ? "mr-1.5" : "absolute right-1 bg-sidebar opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"}`}
                 >
                   <X />
                 </button>

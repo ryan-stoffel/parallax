@@ -89,6 +89,7 @@ export function SplitTiles({
   controls,
   controlsClass = "",
   closable,
+  hideTabs,
   onSelectTab,
   onCloseTab,
   onNewTab,
@@ -106,6 +107,8 @@ export function SplitTiles({
   controls?: ReactNode;
   controlsClass?: string;
   closable: boolean;
+  /** No tabs and no plus, for the window's only tab on plain New thread, whose page says what it is. */
+  hideTabs: boolean;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: (paneId: string) => void;
@@ -237,21 +240,24 @@ export function SplitTiles({
               className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${at === 0 && leading ? `pl-3 ${leadingClass}` : "pl-[22px]"}`}
             >
               {at === 0 && leading}
-              <ThreadTabs
-                tabs={group.flatMap((i) => items[i]!.tabs)}
-                active={shownPane.active}
-                focused={group.includes(focused)}
-                marked={group.includes(focused) && tiles.length > 1}
-                onSelect={onSelectTab}
-                onClose={onCloseTab}
-                onNew={() => onNewTab(shownPane.paneId)}
-                onDrop={(tabDrop, before) => {
-                  // Among stacked panes, the one holding the tab it lands before, or the last.
-                  const holder = group.find((i) => items[i]!.tabs.some((t) => t.id === before));
-                  onDropOnTabs(tabDrop, items[holder ?? group.at(-1)!]!.paneId, before);
-                }}
-                closable={closable}
-              />
+              {!hideTabs && (
+                <ThreadTabs
+                  tabs={group.flatMap((i) => items[i]!.tabs)}
+                  active={shownPane.active}
+                  focused={group.includes(focused)}
+                  marked={group.includes(focused) && tiles.length > 1}
+                  onSelect={onSelectTab}
+                  onClose={onCloseTab}
+                  onNew={() => onNewTab(shownPane.paneId)}
+                  onDrop={(tabDrop, before) => {
+                    // Among stacked panes, the one holding the tab it lands before, or the last.
+                    const holder = group.find((i) => items[i]!.tabs.some((t) => t.id === before));
+                    onDropOnTabs(tabDrop, items[holder ?? group.at(-1)!]!.paneId, before);
+                  }}
+                  closable={closable}
+                  lone={items.length === 1 && items[0]!.tabs.length === 1}
+                />
+              )}
             </div>
             <div className="min-w-3 flex-1" />
             {corner && controls && (

@@ -1142,12 +1142,11 @@ export function App() {
 
   // The window's only tab, on New thread, closes to itself.
   const closableTab = everyTab.length > 1 || selection.kind !== "new";
+  const shownTitle = tabItem(activeTab(workspace), threads).title;
   // The crumbs but the last, when the shown tab says the same, as it does for the page.
   const lastCrumb = crumbs.at(-1);
   const trail =
-    lastCrumb &&
-    !lastCrumb.onClick &&
-    lastCrumb.label === tabItem(activeTab(workspace), threads).title
+    lastCrumb && !lastCrumb.onClick && lastCrumb.label === shownTitle
       ? crumbs.slice(0, -1)
       : crumbs;
 
@@ -1824,6 +1823,7 @@ export function App() {
                         controls={topControls}
                         controlsClass={sidePanelOpen ? "" : "window-controls-inset"}
                         closable={closableTab}
+                        hideTabs={!closableTab && shownTitle === "New thread"}
                         onSelectTab={(tabId) => setWorkspace((state) => selectTab(state, tabId))}
                         onCloseTab={(tabId) => setWorkspace((state) => closeTab(state, tabId))}
                         onNewTab={(paneId) => {

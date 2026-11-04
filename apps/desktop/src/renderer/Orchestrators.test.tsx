@@ -870,7 +870,7 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
     { orchestrator: "p-ember" },
   ]);
   expect(deleteDialog().open).toBe(false);
-  expect(crumbs().at(-1)).toBe("New thread");
+  expect(crumbs().at(-1)).toBe("parallax");
   expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
   expect(orchestratorRows()).toEqual(["photon"]);
 });
@@ -920,7 +920,7 @@ test("without orchestratorDelete there's no Delete…, and another client's orch
     }),
   );
   await settle();
-  expect(crumbs().at(-1)).toBe("New thread");
+  expect(crumbs().at(-1)).toBe("parallax");
   expect(orchestratorRows()).toEqual(["photon"]);
 });
 

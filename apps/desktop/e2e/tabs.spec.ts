@@ -41,10 +41,14 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
     await page.mouse.up();
   };
 
-  await expect(tabs).toHaveText(["New thread"]);
+  // The window's only tab has no outline, and none shows at all on New thread.
+  const outlined = page.locator(".tab-shown");
+  await expect(tabs).toHaveCount(0);
   await start("First");
+  await expect(outlined).toHaveCount(0);
   await page.getByRole("button", { name: "New tab" }).click();
   await expect(tabs).toHaveText(["First", "New thread"]);
+  await expect(outlined).toHaveCount(1);
   await start("Second");
   await expect(tabs).toHaveText(["First", "Second"]);
 
