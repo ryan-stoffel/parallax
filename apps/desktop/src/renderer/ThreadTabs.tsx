@@ -103,7 +103,7 @@ export function ThreadTabs({
         ref={list}
         role="tablist"
         aria-label="Open tabs"
-        className="flex h-full min-w-0 items-end gap-0.5 overflow-x-auto px-2.5"
+        className="flex h-full min-w-0 items-end gap-0.5 overflow-x-auto scroll-px-2.5 px-2.5"
       >
         {tabs.map((tab, i) => {
           const selected = tab.id === active;
@@ -149,7 +149,7 @@ export function ThreadTabs({
                   aria-label={`Close ${tab.title}`}
                   title="Close tab"
                   onClick={() => onClose(tab.id)}
-                  className={`absolute right-0.5 grid size-6 place-items-center rounded-md text-faint-foreground opacity-0 group-hover/tab:opacity-100 hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5 ${selected ? "bg-pane" : "bg-sidebar"}`}
+                  className={`absolute right-0.5 grid size-6 place-items-center rounded-md text-faint-foreground opacity-0 group-hover/tab:opacity-100 hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5 ${selected ? "bg-background" : "bg-sidebar"}`}
                 >
                   <X />
                 </button>
