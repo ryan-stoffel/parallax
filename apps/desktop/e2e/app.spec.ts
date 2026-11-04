@@ -390,7 +390,7 @@ test("shows the orchestrator's tasks in its side panel, opens their chats, and m
     .getByRole("region", { name: "Child thread" })
     .getByRole("button", { name: /^Open parent/ })
     .click();
-  await expect(crumbs).not.toContainText("Tag the release");
+  await expect(crumbs).toBeHidden();
   await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
   // Two wake-ups: one for the task's start (0043), and one for the stop.

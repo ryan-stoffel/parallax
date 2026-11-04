@@ -244,7 +244,7 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
   });
   expect(retry).toEqual(first);
   // The thread opens, and its row is in the sidebar under its repository.
-  expect(crumbs()).toEqual(["This Mac", "other", "Tidy the README"]);
+  expect(crumbs()).toEqual(["Tidy the README"]);
   expect(threadRow("Tidy the README")?.getAttribute("aria-current")).toBe("page");
 });
 
@@ -291,7 +291,7 @@ test("a finished thread opens on Loading…, not its prompt alone, while its tra
   await renderApp();
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+  expect(crumbs()).toEqual(["Fix the flaky test"]);
   expect(bubble()).toBeUndefined();
   expect(document.querySelector("main")!.textContent).toContain("Loading…");
   expect(document.querySelector("[data-status=running]")).toBeNull();
@@ -655,6 +655,6 @@ describe("a host with no usable default account for threads", () => {
     ]);
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
-    expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
+    expect(crumbs()).toEqual(["Tidy the README"]);
   });
 });

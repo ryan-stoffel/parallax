@@ -142,9 +142,14 @@ test("every connected host's threads are one list, newest prompt first, each ope
   await renderApp();
   expect(rows().map(title)).toEqual(["Add the endpoint", "Fix the flaky test"]);
 
+  request.mockClear();
   await click(rows()[0]!);
-  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Mac mini", "api"]);
+  // Opening it asks its own host for it.
+  const asked = request.mock.calls.filter((call: unknown[]) =>
+    JSON.stringify(call).includes("t-2"),
+  );
+  expect(asked.length).toBeGreaterThan(0);
+  expect(asked.every(([host]: unknown[]) => host === mini.id)).toBe(true);
   expect(
     document.querySelector('[aria-label="Open tabs"] [aria-selected="true"]')?.textContent,
   ).toBe("Add the endpoint");

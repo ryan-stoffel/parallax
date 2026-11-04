@@ -771,13 +771,11 @@ export function App() {
     return lineage.chips[next]?.id;
   };
 
-  // The orchestrator or repository crumb wears its sidebar icon. Under a subagent, the
-  // orchestrator's goes back to the orchestrator. In a thread, the repository's opens New thread on
-  // that repository.
+  // The top right names only what leads elsewhere or isn't plain: the tab and sidebar say which thread
+  // and repository this is. Under a subagent, the orchestrator's crumb goes back to the orchestrator.
   let crumbs: Crumb[];
   if (orchestrator) {
     crumbs = [
-      { label: host.name },
       {
         label: orchestrator.name,
         icon: <ProjectIcon icon={orchestrator.icon} />,
@@ -786,32 +784,17 @@ export function App() {
     ];
     if (agentTitle) crumbs.push({ label: agentTitle });
   } else {
-    // A thread added to a Project names the Project, and opens its page (0090).
-    const addedTo =
-      selection.kind === "thread" && openThread?.project
-        ? threads.state.repos.find((r) => r.id === openThread.project)
-        : undefined;
-    const groupRepo = addedTo ?? threads.state.repos.find((r) => r.id === group.id);
-    const repo = {
-      label: addedTo?.name ?? group.name,
-      icon: <RepoIcon repo={groupRepo} />,
-      onClick:
-        selection.kind === "thread"
-          ? () => setSelection({ kind: "new", groupId: addedTo?.id ?? group.id })
-          : undefined,
-    };
     const page =
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
     // A Claude Remote Control thread runs on another computer, not this host (PLX-1140).
-    const where: Crumb =
+    const where: Crumb[] =
       selection.kind === "thread" && remoteThread
-        ? { label: "Remote Control", icon: <Cloud aria-hidden /> }
-        : { label: host.name };
-    // A Project's page is the Project itself (0090), so its crumbs end there.
-    crumbs =
-      selection.kind === "new" && group.project ? [where, repo] : [where, repo, { label: page }];
+        ? [{ label: "Remote Control", icon: <Cloud aria-hidden /> }]
+        : [];
+    // A Project's page is the Project itself (0090), which its tab names.
+    crumbs = selection.kind === "new" && group.project ? where : [...where, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
@@ -821,9 +804,7 @@ export function App() {
         label: threads.state.titles[parent.id] ?? "Thread",
         onClick: () => openThreadId(parent.id),
       };
-      crumbs = lineage.active
-        ? [crumbs[0]!, repo, back]
-        : [crumbs[0]!, repo, back, { label: page }];
+      crumbs = lineage.active ? [...where, back] : [...where, back, { label: page }];
     }
     // A fork's original, while it's listed, goes before the fork's own crumb (0050).
     const original = threads.state.threads.find((t) => t.id === openThread?.forkedFrom?.run);
@@ -1434,7 +1415,7 @@ export function App() {
   );
   const topControls = (
     <>
-      <Breadcrumb items={trail} tight />
+      {trail.length > 0 && <Breadcrumb items={trail} tight />}
       {tiled && (
         <IconButton
           label={workspace.maximized ? "Restore tiles" : "Maximize thread"}
