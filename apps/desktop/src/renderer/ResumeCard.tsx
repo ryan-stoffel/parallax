@@ -7,8 +7,8 @@ import { notify } from "./notifications";
 import { clockOptions } from "./prefs";
 
 /**
- * When a waiting run resumes, in the user's locale: "3:40 PM", or "Oct 5, 3:40 PM" when it isn't
- * today.
+ * When a waiting run resumes or a snooze ends, in the user's locale: "3:40 PM", or "Oct 5, 3:40 PM"
+ * when it isn't today.
  */
 export function resumeTime(iso: string, now = Date.now()): string {
   const at = new Date(iso);

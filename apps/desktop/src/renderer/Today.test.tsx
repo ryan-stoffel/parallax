@@ -15,6 +15,7 @@ import type {
 import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
 import { autoClear } from "./pins";
+import { resumeTime } from "./ResumeCard";
 import { flushToasts } from "./undo";
 
 // Today's Clear, auto-archive, and keys (0075).
@@ -216,6 +217,24 @@ const drawer = (label: string) =>
     d.querySelector("summary")?.textContent?.startsWith(label),
   )!;
 const list = () => document.querySelector('[aria-label="Threads"]')!.parentElement!;
+
+test("a snoozed row shows when it wakes, and an archived one its age (PLX-1308)", async () => {
+  capabilities = { threadAttention: {} } as Capabilities;
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  threads = [
+    thread("later", 10, { snoozedUntil: until }),
+    thread("old", 10, { snoozedUntil: until, archived: true }),
+  ];
+  runs = [run("later", "completed", 10), run("old", "completed", 10)];
+  await renderApp();
+  const status = (id: string) =>
+    document.querySelector(`[data-flip$="${id}"] [data-status]`)?.textContent;
+
+  act(() => drawer("Snoozed").querySelector("summary")!.click());
+  expect(status("later")).toBe(`Wakes ${resumeTime(until)}`);
+  act(() => drawer("Archived").querySelector("summary")!.click());
+  expect(status("old")).toBe("10m");
+});
 
 test("a row dragged onto another section moves there: Archived archives, Snoozed snoozes, and the list brings it back (PLX-1095)", async () => {
   capabilities = { threadAttention: {} } as Capabilities;
