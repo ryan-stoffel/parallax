@@ -11,6 +11,7 @@ import {
   isRect,
   rectOf,
   tilesOf,
+  usedCuts,
   zoneAt,
   zoneCells,
 } from "./splitLayout";
@@ -136,4 +137,14 @@ test("a side with no room isn't a zone", () => {
   expect(fits(evenCuts, 1000, 1000)).toEqual({ columns: true, rows: true });
   expect(fits(evenCuts, 500, 1000)).toEqual({ columns: false, rows: true });
   expect(fits(evenCuts, 0, 0)).toEqual({ columns: true, rows: true });
+});
+
+test("a drop sees the lines it would land on: a used one where it sits, a new one even", () => {
+  const dragged = { x: 0.3, y: 0.3 };
+  const columns = [zoneCells.left, zoneCells.right];
+  expect(usedCuts(columns, dragged)).toEqual({ x: 0.3, y: 0.5 });
+  expect(usedCuts([allCells], dragged)).toEqual(evenCuts);
+  // A narrow window stacks columns left at 0.3, so a side isn't a zone until they have room.
+  expect(fits(usedCuts(columns, dragged), 800, 1000).columns).toBe(false);
+  expect(zoneAt(0.9, 0.5, fits(usedCuts(columns, dragged), 800, 1000))).toBeUndefined();
 });

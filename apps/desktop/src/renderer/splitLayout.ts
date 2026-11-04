@@ -130,6 +130,12 @@ export function cellSplit(cells: Cells): Cells {
   return cells & topRow && cells & bottomRow ? cells & bottomRow : cells & rightColumn;
 }
 
+/** `cuts` for panes on `cells`, with a line none of them use back at even, where a new one starts. */
+export function usedCuts(cells: readonly Cells[], { x, y }: GridCuts): GridCuts {
+  const splits = (side: Cells) => cells.some((c) => !(c & side) || !(c & (allCells & ~side)));
+  return { x: splits(leftColumn) ? x : evenRatio, y: splits(topRow) ? y : evenRatio };
+}
+
 /** Whether two columns, and two rows, each keep `minTile` in a window `width` by `height` pixels. */
 export function fits({ x, y }: GridCuts, width: number, height: number) {
   // Unmeasured, everything fits.

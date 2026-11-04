@@ -19,6 +19,7 @@ import {
   fits,
   rectOf,
   tilesOf,
+  usedCuts,
   zoneAt,
   zoneCells,
   zoneNames,
@@ -171,14 +172,15 @@ export function SplitTiles({
     const r = box.current!.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width;
     const y = (e.clientY - r.top) / r.height;
-    const zone = zoneAt(x, y, fits(evenCuts, size.width, size.height));
+    // The lines the drop would land on, so what's previewed is what it does.
+    const landing = usedCuts(
+      items.map((item) => item.cells),
+      shown,
+    );
+    const zone = zoneAt(x, y, fits(landing, size.width, size.height));
     if (zone) {
-      // A line the window doesn't have yet starts even.
-      const line = (vertical: boolean, at: number) =>
-        dividers.some((d) => d.vertical === vertical) ? at : evenRatio;
-      const preview = { x: line(true, shown.x), y: line(false, shown.y) };
       const cells = zoneCells[zone];
-      return { zone, cells, rect: rectOf(cells, preview), label: zoneNames[zone] };
+      return { zone, cells, rect: rectOf(cells, landing), label: zoneNames[zone] };
     }
     const under = tiles.find((tile) => {
       const t = rectOf(tile.cells, shown);

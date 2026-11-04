@@ -10,10 +10,10 @@ import {
   cellsFilled,
   cellsLeft,
   cellSplit,
-  evenRatio,
   evenCuts,
   lowestCell,
   maxTiles,
+  usedCuts,
   zoneCells,
   type Cells,
   type GridCuts,
@@ -87,24 +87,18 @@ const withPane = (state: Workspace, pane: TabPane): Workspace => ({
   panes: state.panes.map((p) => (p.id === pane.id ? pane : p)),
 });
 
-/** Whether any of `panes` sits in one column, or one row, of two. */
-const split = (panes: readonly TabPane[], side: Cells) =>
-  panes.some((p) => !(p.cells & side) || !(p.cells & (allCells & ~side)));
-
 /**
  * `state` with `panes` in reading order. A line the grid didn't have before starts even, not where
  * it last sat.
  */
 function laidOut(state: Workspace, panes: TabPane[]): Workspace {
-  const left = zoneCells.left;
-  const top = zoneCells.top;
   return {
     ...state,
     panes: panes.toSorted((a, b) => lowestCell(a.cells) - lowestCell(b.cells)),
-    cuts: {
-      x: split(state.panes, left) ? state.cuts.x : evenRatio,
-      y: split(state.panes, top) ? state.cuts.y : evenRatio,
-    },
+    cuts: usedCuts(
+      state.panes.map((p) => p.cells),
+      state.cuts,
+    ),
   };
 }
 
