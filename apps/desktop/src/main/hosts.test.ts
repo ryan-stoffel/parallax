@@ -162,6 +162,7 @@ function signedIn() {
 
 const studio = "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o";
 const buildBox = "Q2s9vX1k7d0b8Lr4mT6pWc3eYh5uNz2aFgJ_iK-oPqR";
+const newBox = "Z9y8Xw7V6u5T4s3R2q1P0o9N8m7L6k5J4i3H2g1F0eD";
 const connected = (capabilities = {}): ConnectionState => ({
   status: "connected",
   plxd: "1.0.0",
@@ -399,10 +400,22 @@ test("the account's computers are asked for on sign-in, focus, the network, Sett
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(asked).toBe(1);
 
-    // A window on screen looks again by itself, so a new computer's prompt appears unasked.
+    // A window on screen reads the list by itself, and discovery runs only when it changed, so a
+    // new computer's prompt appears unasked and nothing dials on every read.
     fake.visible = true;
     await vi.advanceTimersByTimeAsync(15_000);
     expect(asked).toBe(2);
+    const dials = fake.dials.length;
+    const retries = connection.retry.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(asked).toBe(5);
+    expect(fake.dials.length).toBe(dials);
+    expect(connection.retry.mock.calls.length).toBe(retries);
+    hosts = [...hosts, { hostId: newBox, name: "new-box", online: true, thisComputer: false }];
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(listed(newBox)?.name).toBe("new-box");
+    hosts = hosts.slice(0, 2);
+    await vi.advanceTimersByTimeAsync(15_000);
     fake.visible = false;
     asked = 1;
 

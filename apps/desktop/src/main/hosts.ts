@@ -193,10 +193,8 @@ export const hostUsage: HostUsage = {
  */
 export function startHosts(signedIn: Account | undefined, target: () => string): void {
   account = signedIn;
-  // A computer set up elsewhere changes nothing here, so its code prompt would wait for a focus
-  // change. Only while a window is on screen, within the relay's 120 requests a minute per user.
   setInterval(() => {
-    if (anyWindowVisible()) void discoverAccounts();
+    if (anyWindowVisible()) void lookForNewComputers();
   }, LOOK_MS).unref();
   // Signing in registers every computer this app is connected to (PLX-1146).
   account?.onSignIn(() => {
@@ -1697,9 +1695,9 @@ const LOOK_MS = 15_000;
 /**
  * Asks the local plxd for the account's computers (`relay/hosts`), keeps them, and connects to
  * each, reviving any that stopped. Runs on a sign-in, the network coming back or changing, focus,
- * Settings > Connections opening, and every `LOOK_MS` while a window is on screen, so a new
- * computer's code prompt appears on its own (PLX-1306). Add computer also runs it on a faster timer
- * while it's open, since the user is waiting on that computer.
+ * Settings > Connections opening, and `lookForNewComputers` noticing a change, so a new computer's
+ * code prompt appears on its own (PLX-1306). Add computer also runs it on a faster timer while it's
+ * open, since the user is waiting on that computer.
  */
 const discoverAccounts = coalesced(async () => {
   const token = await account?.accessToken();
@@ -1707,6 +1705,7 @@ const discoverAccounts = coalesced(async () => {
   if (!token || local?.state.status !== "connected") return;
   const answer = await local.request("relay/hosts", { token });
   if ("error" in answer) return;
+  lastListed = listedKey(answer.result.hosts);
   const { accounts, changed } = mergeListed(savedAccounts(), answer.result.hosts);
   if (changed) {
     for (const old of savedAccounts())
@@ -1735,6 +1734,29 @@ const removedComputers = () =>
   savedAccounts()
     .filter((a) => a.removed && onlineAccounts.has(accountId(a.hostId)))
     .map((a) => ({ id: accountId(a.hostId), name: a.name }));
+
+/** Which computers the account lists and which are online, to notice a change. */
+const listedKey = (hosts: RelayHost[]) =>
+  hosts
+    .map((host) => `${host.hostId} ${host.online}`)
+    .sort()
+    .join("\n");
+
+/** The account's computers as discovery last saw them. */
+let lastListed: string | undefined;
+
+/**
+ * A computer set up elsewhere changes nothing here, so its code prompt would wait for a focus
+ * change. This reads the list every `LOOK_MS` while a window is on screen, well within the relay's
+ * 120 requests a minute per user, and runs discovery, with its dials, only when the list changed.
+ */
+async function lookForNewComputers(): Promise<void> {
+  const token = await account?.accessToken();
+  const local = connections.get("local");
+  if (!token || local?.state.status !== "connected") return;
+  const answer = await local.request("relay/hosts", { token });
+  if ("result" in answer && listedKey(answer.result.hosts) !== lastListed) void discoverAccounts();
+}
 
 /** Focus or a network change: the account's computers again, and each relay route's re-check. */
 function lookAgain(): void {
