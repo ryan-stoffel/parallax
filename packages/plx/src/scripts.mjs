@@ -194,7 +194,9 @@ fi
  * copies plxd.exe from the folder holding `<app name>.exe`, or with `headless`, downloads plxd.exe
  * alone, to %USERPROFILE%\.parallax-plxd. A running plxd.exe can't be overwritten, but it can be
  * renamed, so the old one moves aside to plxd.exe.old. Then it allows that plxd through Windows
- * Firewall on TCP 7340, or without `tailnet` on the remote listener's 7341, warning when that needs an administrator, and installs plxd's logon task
+ * Firewall on TCP 7340, warning when that needs an administrator, or without `tailnet` on the remote
+ * listener's 7341, saying so only in the output plx shows on failure, since the relay needs no rule.
+ * It installs plxd's logon task
  * (0023) with `service install --replace`. A plxd from before PLX-576 has no `service`, so then
  * plxd is started with `attach`, which runs `serve` outside the SSH session's job. It waits for
  * `attach` alone with `WaitForExit`: `Start-Process -Wait` also waits for its descendants, so the

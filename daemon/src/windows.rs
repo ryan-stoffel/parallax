@@ -135,8 +135,9 @@ pub fn pipe_server_pid(pipe: &impl AsRawHandle) -> io::Result<u32> {
 ///
 /// # Errors
 ///
-/// If either process's user can't be read. Another user's process usually can't be opened at
-/// all, so callers treat an error as "not this user".
+/// If either process's user can't be read. A client treats that as "not this user", since another
+/// user's process usually can't be opened at all. `serve` doesn't when it's access denied, since
+/// that's what this user's elevated process gives it too, and its pipe's DACL admits only this user.
 pub fn runs_as_this_user(pid: u32) -> io::Result<bool> {
     // SAFETY: OpenProcess has no preconditions; a null result is an error.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };

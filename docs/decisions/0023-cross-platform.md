@@ -57,7 +57,7 @@ Windows and Linux are supported, for the app and for `plxd`. This supersedes PLA
   - `first_pipe_instance(true)` makes `serve` fail if someone else already created the name.
   - `reject_remote_clients(true)` keeps out SMB clients. It is tokio's default.
   - The security descriptor is `D:P(A;;GA;;;<user SID>)`, so only the user has access. Windows' default one gives Everyone read access.
-  - Like `getpeereid` in 0007, `serve` checks the client's SID through `GetNamedPipeClientProcessId`.
+  - Like `getpeereid` in 0007, `serve` checks the client's SID through `GetNamedPipeClientProcessId`. Amended 2026-11-04 (PLX-1302): a non-elevated `serve` can't read an elevated client's token, as over SSH to an administrator's account, where every session is elevated. It takes access denied as this user, since the DACL admits nobody else. The client's check of the server stays strict, because a squatter on the pipe's name would also give access denied.
   - A pipe has no half-close, and a byte pipe drops empty writes. So the pipe is a message pipe, and a client ends its input with an empty message, which `serve` reads as EOF. `serve` can then finish its responses, as after a socket's half-close (0007).
   - The protocol stays NDJSON over a byte stream: `serve` reads messages back to back as bytes. Clients (`plxd::transport`) write at most 4 KiB per message. mio reads a pipe through a buffer of at least 4 KiB and reports a longer message that is already waiting as a 0-byte read, which would look like EOF partway through a frame. Tests push 64 KiB and 1 MiB through attach's bridge and a 32 KiB frame through the `plxd mcp` client.
 - **Client.**
