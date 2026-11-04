@@ -47,6 +47,33 @@ export function DoneMark({ animate }: { animate: boolean }) {
   );
 }
 
+/**
+ * An alarm clock ringing, for a snoozed thread's wake time. Lucide's AlarmClock, drawn smaller to
+ * leave room for a sound arc on each side, since Lucide has no ringing one.
+ */
+export function RingingAlarmMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="13.5" r="6.5" />
+      <path d="M12 10.5v3l1.5 1.5" />
+      <path d="m7.5 3-2.5 2.5" />
+      <path d="m16.5 3 2.5 2.5" />
+      <path d="m7.5 19.5-1.5 2" />
+      <path d="m16.5 19.5 1.5 2" />
+      <path d="M2 10.5c-.7 2-.7 4 0 6" />
+      <path d="M22 10.5c.7 2 .7 4 0 6" />
+    </svg>
+  );
+}
+
 /** Whole seconds since `from`, ticking every second. */
 export function useSeconds(from: string) {
   const [now, setNow] = useState(Date.now);

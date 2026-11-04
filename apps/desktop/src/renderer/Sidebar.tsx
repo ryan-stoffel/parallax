@@ -111,7 +111,7 @@ import {
   snoozed,
   type Attention,
 } from "./attention";
-import { AttentionBadge } from "./AttentionMark";
+import { AttentionBadge, RingingAlarmMark } from "./AttentionMark";
 import { locale } from "./locale";
 import { AutonomyChoice } from "./OrchestratorPermission";
 import { resumeTime } from "./ResumeCard";
@@ -3258,7 +3258,7 @@ function DraftRow({
 
 /**
  * A thread's card (0033, 0075, PLX-1043): its repo's icon and name with its status at the end (what
- * it asks of the user, or how long ago it was last active), its title in bold, then its branch (not
+ * it asks of the user, when its snooze ends, or how long ago it was last active), its title in bold, then its branch (not
  * a Chat's), cut in the middle (`shortBranch`), its git status, linked pull requests (the number
  * of one, or +N for more) and their checks, its computer, and its provider, in color while it's
  * open. A pinned one keeps its pin in its top-right, which unpins it (0094). Under a search, the
@@ -3438,7 +3438,12 @@ function ThreadRow({
   const drafted = threadDrafts.use(`${hostId}/${thread.id}`);
   const status =
     badge ??
-    (run?.status === "waiting" && attention === "settled" && !thread.archived ? (
+    (!thread.archived && snoozed(thread, attention) ? (
+      <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+        <RingingAlarmMark />
+        Wakes {resumeTime(thread.snoozedUntil!)}
+      </span>
+    ) : run?.status === "waiting" && attention === "settled" && !thread.archived ? (
       <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
         <AlarmClock aria-hidden />
         {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
