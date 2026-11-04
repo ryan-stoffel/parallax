@@ -851,9 +851,11 @@ function ConnectRows() {
               <DeviceIcon icon={d.icon} />
             </span>
             <RowText title={d.name}>
-              {[d.hostName, d.os && osName(d.os), d.ip, !d.enabled && "Off here"]
-                .filter(Boolean)
-                .join(" · ")}
+              {confirming === d.id && d.id.startsWith("account:")
+                ? "It leaves your account, and none of your computers or devices reach it anymore."
+                : [d.hostName, d.os && osName(d.os), d.ip, !d.enabled && "Off here"]
+                    .filter(Boolean)
+                    .join(" · ")}
             </RowText>
           </div>
           {confirming === d.id ? (

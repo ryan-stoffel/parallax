@@ -976,14 +976,14 @@ test("Remove takes a computer off the account and forgets it everywhere, unless 
     expect(await remove()).toBe("the relay refused");
     expect(box.disposed).toBe(false);
     expect(listed(buildBox)).toBeDefined();
-    expect(calls).toEqual(['set {"relay":false}', 'set {"relay":true}']);
+    expect(calls).toEqual([]);
 
     refuse = false;
     calls.length = 0;
     expect(await remove()).toBeUndefined();
     expect(calls).toEqual([
-      'set {"relay":false}',
       `remove ${buildBox}`,
+      'set {"relay":false}',
       // The local plxd is the one left: the removed computer's connection is gone by now.
       `forget ${buildBox}`,
     ]);
@@ -1019,11 +1019,12 @@ test("this computer can't remove itself", async () => {
   }
 });
 
-test("a computer removed while it couldn't hear stays off the account at its next start, until a sign-in", async () => {
+test("a computer removed while it couldn't hear stays off at its next start, unless its key or account changed", async () => {
   vi.useFakeTimers();
   fake.answers.clear();
   try {
     const calls: string[] = [];
+    fake.answers.set("relay/id", { result: { hostId: buildBox } });
     fake.answers.set("relay/hosts", { result: { hosts: [] } });
     fake.answers.set("access/get", accessState([]));
     fake.answers.set("host/settings/get", { result: { connect: false } });
@@ -1032,15 +1033,29 @@ test("a computer removed while it couldn't hear stays off the account at its nex
       return { result: {} };
     });
     fake.answers.set("relay/register", () => (calls.push("register"), { result: {} }));
-    const { account, signIn } = signedIn();
-    const local = await start({ joinedRelay: true }, account);
-    local.set(connected({ accountAccess: {} }));
-    await vi.advanceTimersByTimeAsync(1);
-    expect(calls).toEqual(['set {"relay":false}']);
+    const startWith = async (joinedRelay: object) => {
+      calls.length = 0;
+      const { account, signIn } = signedIn();
+      const local = await start({ joinedRelay }, account);
+      local.set(connected({ accountAccess: {} }));
+      await vi.advanceTimersByTimeAsync(1);
+      return signIn;
+    };
 
+    // The same key and account, not listed: removed, so it stays off until a sign-in.
+    const signIn = await startWith({ hostId: buildBox, user: "user_1" });
+    expect(calls).toEqual(['set {"relay":false}']);
     signIn();
     await vi.advanceTimersByTimeAsync(1);
     expect(calls.at(-1)).toBe("register");
+    rmSync(fake.userData, { recursive: true, force: true });
+
+    // Another account or another key never joined, so it just registers.
+    await startWith({ hostId: buildBox, user: "user_2" });
+    expect(calls).toEqual(["register"]);
+    rmSync(fake.userData, { recursive: true, force: true });
+    await startWith({ hostId: studio, user: "user_1" });
+    expect(calls).toEqual(["register"]);
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });

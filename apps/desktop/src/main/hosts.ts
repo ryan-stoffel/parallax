@@ -1121,7 +1121,9 @@ async function registerRelay(): Promise<string | undefined> {
   const answer = await connections.get("local")?.request("relay/register", { token });
   if (!answer) return "Parallax isn't connected to this computer's plxd.";
   if ("error" in answer) return answer.error.message;
-  keepJoined();
+  const own = await connections.get("local")?.request("relay/id", {});
+  const user = tokenSubject(token);
+  if (own && "result" in own && user) keepJoined(own.result.hostId, user);
   return undefined;
 }
 
@@ -1139,17 +1141,21 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
   const local = connections.get("local");
   if (!token || local?.state.status !== "connected") return;
   if (hostId === "local") {
-    // Joined once and no longer listed: the user removed this computer from another one while it
-    // couldn't hear (PLX-1312), so it stays off the account until they sign in or set it up again.
-    if (!signingIn && settings.joinedRelay) {
+    const own = await local.request("relay/id", {});
+    const hostId = "result" in own ? own.result.hostId : undefined;
+    const user = tokenSubject(token);
+    // This key joined this account and isn't listed: the user removed this computer from another
+    // one while it couldn't hear (PLX-1312). It stays off until they sign in or set it up again.
+    const { joinedRelay } = settings;
+    if (!signingIn && hostId && joinedRelay?.hostId === hostId && joinedRelay.user === user) {
       const listed = await local.request("relay/hosts", { token });
-      if ("result" in listed && !listed.result.hosts.some((host) => host.thisComputer)) {
+      if ("result" in listed && !listed.result.hosts.some((host) => host.hostId === hostId)) {
         await local.request("host/settings/set", { relay: false });
         return;
       }
     }
     const joined = await local.request("relay/register", { token });
-    if ("result" in joined) keepJoined();
+    if ("result" in joined && hostId && user) keepJoined(hostId, user);
     return;
   }
   const tokenHash = createHash("sha256").update(token).digest("base64url");
@@ -1161,11 +1167,10 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
     await local.request("relay/register", { token, signed: signed.result });
 }
 
-/** Remembers that this computer joined the relay, in memory even when it can't be written. */
-function keepJoined(): void {
-  if (settings.joinedRelay) return;
-  if (saveSettings({ ...settings, joinedRelay: true }))
-    settings = { ...settings, joinedRelay: true };
+/** Remembers which key and account joined the relay, in memory even when it can't be written. */
+function keepJoined(hostId: string, user: string): void {
+  const joinedRelay = { hostId, user };
+  if (saveSettings({ ...settings, joinedRelay })) settings = { ...settings, joinedRelay };
 }
 
 /** The hosts the last `discoverLan` found, by the id the renderer picks one with. */
@@ -1614,12 +1619,12 @@ async function removeDevice(hostId: unknown): Promise<string | undefined> {
 }
 
 /**
- * Ends account computer `relayId`'s association with the account (PLX-1312): turns its `relay` off
- * when it answers, so it stops reconnecting, removes it from the relay, then forgets it here and on
- * every computer this app reaches. Other apps drop it the next time they read the list, and its own
- * app stays off the account at its next start (`joinRelay`). Setting it up again takes its code, as
- * a new computer does. If the relay refuses, nothing is forgotten and its `relay` goes back on.
- * This computer can't remove itself. Resolves to why not, for people.
+ * Ends account computer `relayId`'s association with the account (PLX-1312): removes it from the
+ * relay, turns its `relay` off when it answers, so it stops reconnecting, then forgets it here and
+ * on every computer this app reaches. Other apps drop it the next time they read the list, and its
+ * own app stays off the account at its next start (`joinRelay`). Setting it up again takes its
+ * code, as a new computer does. If the relay refuses, nothing changes. This computer can't remove
+ * itself. Resolves to why not, for people.
  */
 async function removeFromAccount(relayId: string): Promise<string | undefined> {
   const token = await account?.accessToken();
@@ -1630,15 +1635,13 @@ async function removeFromAccount(relayId: string): Promise<string | undefined> {
   const own = await local.request("relay/id", {});
   if ("result" in own && own.result.hostId === relayId)
     return "This is the computer you're on. Remove it from another one, or turn off Reach from anywhere.";
-  const computer = connections.get(accountId(relayId));
-  const reachable = computer?.state.status === "connected";
-  if (reachable) await computer.request("host/settings/set", { relay: false });
   const answer = await local.request("relay/remove", { token, hostId: relayId });
-  if ("error" in answer) {
-    // Still on the account, so it goes back to reaching the relay.
-    if (reachable) await computer.request("host/settings/set", { relay: true });
-    return answer.error.message;
-  }
+  if ("error" in answer) return answer.error.message;
+  // After the removal, so a refused one changes nothing there. Over a relay route this can fail, as
+  // the connection goes with it, and that computer keeps retrying a relay that refuses it.
+  const computer = connections.get(accountId(relayId));
+  if (computer?.state.status === "connected")
+    await computer.request("host/settings/set", { relay: false });
   await forgetComputer(relayId);
   return undefined;
 }
