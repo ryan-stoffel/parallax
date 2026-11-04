@@ -8,6 +8,8 @@ It publishes as `plx-cli`, with a `plx` command, until the `plx` name on npm is 
 npx plx-cli connect
 ```
 
+In Windows PowerShell, use `npx.cmd`. On a computer without Node.js, use the commands in the Parallax app's Add a computer dialog, which bring it along.
+
 Every download is checked against the SHA-256 its GitHub release reports, and plx refuses one that doesn't match or has none. plxd goes in `~/.parallax-plxd` (`%USERPROFILE%\.parallax-plxd` on Windows), and its login service runs it from there. On Linux, `~/.local/bin/plxd` links to it.
 
 ## Commands
@@ -55,7 +57,7 @@ For each failed check it can fix, it asks first: it starts plxd or runs an agent
 
 ## Requirements
 
-- Node 20 or newer on the computer that runs plx, unless the Parallax app runs it.
+- Node 20 or newer on the computer that runs plx, unless the Parallax app or Add a computer's command brings it.
 - For `add`, SSH on the other computer: Remote Login on macOS, OpenSSH Server on Windows, or sshd on Linux. On macOS and Linux, SSH asks for the password at most once.
 - Parallax builds for macOS on Apple silicon, Windows x64 and arm64, and Linux x64 and arm64.
 - On Linux, plxd brings the bubblewrap and socat Claude Code's sandbox needs. Ubuntu 24.04 and later also need the distro's `bubblewrap` and the AppArmor profile from Claude Code's sandboxing docs. NixOS needs `programs.nix-ld.enable = true;` to run agent CLIs.

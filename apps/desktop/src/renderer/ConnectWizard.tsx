@@ -22,13 +22,20 @@ export const osName = (os: string) =>
   ({ macOS: "macOS", windows: "Windows", linux: "Linux", iOS: "iOS", android: "Android" })[os] ??
   os;
 
+/** Where Add computer's commands get their setup script (PLX-1307). */
+const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts";
+
 /**
- * The command that adds a computer to the account (0091), for this app's channel. `-y` skips npx's
- * question, and `@latest` skips a copy npx kept. Windows needs `npx.cmd`, which works in cmd and in
- * PowerShell, where `npx` is a script its default execution policy refuses.
+ * The command that adds a computer to the account (0091), for this app's channel. Each needs nothing
+ * installed: its script brings Node.js when the computer has none, and runs `plx connect`. Windows
+ * reads its script as text, which the execution policy doesn't stop, from cmd or PowerShell.
  */
-export const connectCommand = (channel: "stable" | "nightly", os: "unix" | "windows") =>
-  `${os === "windows" ? "npx.cmd" : "npx"} -y plx-cli@latest connect${channel === "nightly" ? " --channel nightly" : ""}`;
+export const connectCommand = (channel: "stable" | "nightly", os: "unix" | "windows") => {
+  const flag = channel === "nightly" ? "--channel nightly" : "";
+  return os === "windows"
+    ? `powershell -c "& ([scriptblock]::Create((irm ${SCRIPTS}/connect.ps1)))${flag && ` ${flag}`}"`
+    : `curl -fsSL ${SCRIPTS}/connect.sh | sh${flag ? ` -s -- ${flag}` : ""}`;
+};
 
 /** Where the app is downloaded. */
 const DOWNLOAD_URL = "https://github.com/ryan-stoffel/parallax/releases/latest";
@@ -218,7 +225,7 @@ function Setup({ channel }: { channel: "stable" | "nightly" }) {
           <Step n={1} title="Run this there">
             <Command label="macOS or Linux" command={connectCommand(channel, "unix")} />
             <Command label="Windows" command={connectCommand(channel, "windows")} />
-            It needs Node.js, and works on a server or over SSH.
+            It needs nothing installed, and works on a server or over SSH.
           </Step>
           <Step n={2} title="Sign in">
             In a browser there, or with a link it prints that opens on any device.

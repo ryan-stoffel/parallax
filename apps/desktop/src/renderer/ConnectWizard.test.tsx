@@ -104,10 +104,17 @@ test("with no dialog open the prompt asks for the code on its own, then confirms
   expect(document.querySelector("h2")!.textContent).toBe("build-box is added");
 });
 
-test("the terminal path gives a command for each OS, with no npx question", () => {
-  expect(connectCommand("stable", "unix")).toBe("npx -y plx-cli@latest connect");
+test("the terminal path gives a command for each OS that needs nothing installed", () => {
+  const scripts = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts";
+  expect(connectCommand("stable", "unix")).toBe(`curl -fsSL ${scripts}/connect.sh | sh`);
+  expect(connectCommand("nightly", "unix")).toBe(
+    `curl -fsSL ${scripts}/connect.sh | sh -s -- --channel nightly`,
+  );
+  expect(connectCommand("stable", "windows")).toBe(
+    `powershell -c "& ([scriptblock]::Create((irm ${scripts}/connect.ps1)))"`,
+  );
   expect(connectCommand("nightly", "windows")).toBe(
-    "npx.cmd -y plx-cli@latest connect --channel nightly",
+    `powershell -c "& ([scriptblock]::Create((irm ${scripts}/connect.ps1))) --channel nightly"`,
   );
 });
 
