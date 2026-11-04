@@ -20,7 +20,7 @@ afterEach(() => {
   request.mockClear();
 });
 
-function card(delivery?: "file") {
+function card(delivery?: "file", input?: "value" | "env" | "file", accept?: string[]) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -37,6 +37,8 @@ function card(delivery?: "file") {
             label: "Webhook secret",
             reason: "To check signatures.",
             delivery,
+            input,
+            accept,
           },
         }}
       />,
@@ -153,4 +155,43 @@ test.each([
   ["assignments among other text", "A=1\nB=2\nnot an assignment"],
 ])("isEnvFile refuses %s", (_, value) => {
   expect(isEnvFile(value)).toBe(false);
+});
+
+test("input picks the view, whatever the delivery", () => {
+  const key = card("file", "value");
+  expect(key.querySelector<HTMLInputElement>('input[name="secret"]')!.type).toBe("password");
+  expect(key.querySelector("textarea")).toBeNull();
+  expect(key.textContent).toContain("this agent's commands can read for 24 hours");
+  act(() => root!.unmount());
+
+  expect(card("file", "env").querySelector("textarea")).not.toBeNull();
+});
+
+test("A file input offers its extensions, and saves a binary file byte for byte", async () => {
+  const el = card("file", "file", [".p12"]);
+  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+  expect(picker.accept).toBe(".p12");
+  expect(el.querySelector("textarea")).toBeNull();
+  expect(el.querySelector('input[name="secret"]')).toBeNull();
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(true);
+
+  await pick(el, new File([new Uint8Array([0x30, 0x82, 0xff, 0x00])], "signing.p12"));
+  await vi.waitFor(() => expect(el.textContent).toContain("signing.p12"));
+  await act(async () => save.click());
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("h1", "secret/answer", {
+      runId: "r1",
+      requestId: "s1",
+      answer: { type: "saveBytes", base64: "MIL/AA==" },
+    }),
+  );
+});
+
+test("A file input refuses a file of another type, and keeps Save off", async () => {
+  const el = card("file", "file", [".p8"]);
+  await pick(el, new File(["x"], "notes.txt"));
+  expect(el.textContent).not.toContain("notes.txt");
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(true);
 });

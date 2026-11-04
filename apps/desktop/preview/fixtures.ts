@@ -1220,6 +1220,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       reason:
         "To export the tinted variant's layers from the design file. Make one in Figma under Settings > Security > Personal access tokens, with read access to files.",
       placeholder: "figd_…",
+      input: "value",
     },
   );
 

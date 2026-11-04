@@ -3,6 +3,8 @@
 // asks for), and the tabs tucked behind the box (ComposerTabs.tsx): whose child the thread is, its
 // subagents at work, what a settled turn still waits on, the goal, the plan, and the queue. The
 // first tab shows in full and the rest compact, on one row; a tap opens a tab's details above it.
+import * as DocumentPicker from "expo-document-picker";
+import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import {
   ArrowDown,
@@ -29,9 +31,12 @@ import type {
 import { latestPlan } from "../../desktop/src/renderer/plans";
 import { inputText, toolKind } from "../../desktop/src/renderer/steps";
 import {
+  acceptsFile,
   backgroundCalls,
+  maxSecretBytes,
   nativeTitle,
   pursuedGoal,
+  secretInput,
   subagentLabels,
   subagentState,
   waitingApprovals,
@@ -138,7 +143,9 @@ type SecretItem = Extract<Item, { kind: "secret" }>;
 
 /**
  * The oldest secret the agent waits on (`request_secret`, 0063), as the desktop's SecretCard: a
- * password field whose value goes only to plxd's `secret/answer`, and Decline or Save.
+ * password field, or a document picker for `input: file` (0099), whose value goes only to plxd's
+ * `secret/answer`, and Decline or Save. An env file stays in the password field, since iOS doesn't
+ * mask a multi-line one (0098).
  */
 function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; secret: SecretItem }) {
   const c = useColors();
@@ -146,8 +153,17 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
   // Held only until it's sent: never in state, the transcript, or the log.
   const value = useRef("");
   const [busy, setBusy] = useState<"save" | "decline">();
-  async function send(answer: { type: "save"; secret: string } | { type: "decline" }) {
-    setBusy(answer.type);
+  const isFile = secretInput(request) === "file";
+  const wanted = request.accept?.length ? `a ${request.accept.join(" or ")} file` : "a file";
+  const [fileName, setFileName] = useState<string>();
+  async function send(
+    answer:
+      | { type: "save"; secret: string }
+      | { type: "saveBytes"; base64: string }
+      | { type: "decline" },
+  ) {
+    const saving = answer.type !== "decline";
+    setBusy(saving ? "save" : "decline");
     const reply = await window.parallax.request(hostId, "secret/answer", {
       runId,
       requestId: request.requestId,
@@ -155,8 +171,26 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
     });
     // On success the card goes once plxd logs the answer.
     if ("error" in reply) {
-      Alert.alert(answer.type === "save" ? "Couldn't save the secret" : "Couldn't decline the secret", reply.error.message);
+      Alert.alert(saving ? "Couldn't save the secret" : "Couldn't decline the secret", reply.error.message);
       setBusy(undefined);
+    }
+  }
+  /** Reads a picked file into `value` as base64, and deletes the picker's copy in the app's cache. */
+  async function pickFile() {
+    const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+    if (picked.canceled) return;
+    const { name, uri } = picked.assets[0]!;
+    const copy = new File(uri);
+    try {
+      if (!acceptsFile(name, request.accept)) return Alert.alert(`Couldn't use ${name}`, `Choose ${wanted}.`);
+      if (!copy.size) return Alert.alert(`Couldn't use ${name}`, "It's empty.");
+      if (copy.size > maxSecretBytes) return Alert.alert(`Couldn't use ${name}`, "A secret can be up to 64 KB.");
+      value.current = await copy.base64();
+      setFileName(name);
+    } catch (e) {
+      Alert.alert(`Couldn't use ${name}`, (e as Error).message);
+    } finally {
+      if (copy.exists) copy.delete();
     }
   }
   return (
@@ -175,17 +209,25 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
           {request.reason}
         </T>
       )}
-      <TextInput
-        accessibilityLabel={request.label}
-        secureTextEntry
-        autoCapitalize="none"
-        autoCorrect={false}
-        editable={!busy}
-        placeholder={request.placeholder ?? "Paste the secret"}
-        placeholderTextColor={c.faintForeground}
-        onChangeText={(text) => (value.current = text)}
-        style={[styles.input, { borderColor: c.border, backgroundColor: c.code, color: c.foreground }]}
-      />
+      {isFile ? (
+        <Button
+          label={fileName ?? `Choose ${wanted}`}
+          disabled={!!busy}
+          onPress={() => void pickFile()}
+        />
+      ) : (
+        <TextInput
+          accessibilityLabel={request.label}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!busy}
+          placeholder={request.placeholder ?? "Paste the secret"}
+          placeholderTextColor={c.faintForeground}
+          onChangeText={(text) => (value.current = text)}
+          style={[styles.input, { borderColor: c.border, backgroundColor: c.code, color: c.foreground }]}
+        />
+      )}
       <T faint style={{ fontSize: 12, lineHeight: 16 }}>
         {request.delivery === "file"
           ? "Kept out of chat, in a private file this agent's commands can read for 24 hours."
@@ -203,7 +245,10 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
           primary
           style={{ flex: 1 }}
           disabled={!!busy}
-          onPress={() => value.current.trim() && void send({ type: "save", secret: value.current })}
+          onPress={() => {
+            if (!value.current.trim()) return;
+            void send(isFile ? { type: "saveBytes", base64: value.current } : { type: "save", secret: value.current });
+          }}
         />
       </View>
     </View>

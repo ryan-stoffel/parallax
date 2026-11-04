@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId, SecretDelivery, SecretStatus,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, RunId, SecretDelivery, SecretInput,
+    SecretStatus,
 };
 
 /// When a delegated task's end wakes its parent, as T3 Code's `completionWake`.
@@ -163,6 +164,14 @@ pub struct SecretRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub delivery: Option<SecretDelivery>,
+    /// What the user gives. `env` and `file` always deliver a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub input: Option<SecretInput>,
+    /// With `input: file`: the extensions to offer, each with its leading dot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub accept: Option<Vec<String>>,
     /// How long to wait for an answer before answering `pending`, at most 50000.
     pub wait_ms: u32,
 }
@@ -196,6 +205,11 @@ pub enum SecretChoice {
         /// The secret.
         secret: String,
     },
+    /// A file the user picked, byte for byte, for a request with `delivery: file`.
+    SaveBytes {
+        /// The file's contents, as standard base64.
+        base64: String,
+    },
     /// The user chose not to give one.
     Decline,
     /// The agent stopped waiting.
@@ -211,6 +225,7 @@ impl std::fmt::Debug for SecretChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Save { .. } => "Save { .. }",
+            Self::SaveBytes { .. } => "SaveBytes { .. }",
             Self::Decline => "Decline",
             Self::Cancel => "Cancel",
             Self::Unknown => "Unknown",

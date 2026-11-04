@@ -2,10 +2,12 @@
 // composer while it waits, and the line it leaves in the transcript. The value goes from the
 // field to plxd's `secret/answer`, which keeps it in the host's keystore, or with `delivery: file`
 // in a private file the agent's commands can read (0098). It is never kept in the window's state,
-// the transcript, or the log. A file's value waits in the editor's field, and `paintSecret` draws
-// it into the DOM beside the field, masked until the user shows it, without going through state.
+// the transcript, or the log. The request's `input` picks the view (0099): one masked field, an
+// env file's editor, or a file picker. The editor's value waits in its field, and `paintSecret`
+// draws it into the DOM beside the field, masked until the user shows it, without going through
+// state. A picked file's contents are read only when the user saves.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
-import { Eye, EyeOff, FileText, KeyRound, Paperclip } from "lucide-react";
+import { Eye, EyeOff, FileKey, FileText, KeyRound, Paperclip } from "lucide-react";
 import {
   useId,
   useLayoutEffect,
@@ -19,7 +21,7 @@ import {
 import { quietButton } from "./Approval";
 import { describeError } from "./errors";
 import { notify } from "./notifications";
-import type { Item } from "./transcript";
+import { acceptsFile, maxSecretBytes, secretInput, type Item } from "./transcript";
 import { IconButton } from "./ui";
 
 type SecretItem = Extract<Item, { kind: "secret" }>;
@@ -29,9 +31,6 @@ const fieldClass =
 
 const saveButton =
   "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
-
-/** plxd's limit on an answer (`MAX_SECRET_BYTES`). */
-const maxSecretBytes = 64 * 1024;
 
 // A name, then an empty value, a value quoted whole, or an unquoted one with no quotes in it.
 const envLine = /^((?:export )?[A-Za-z_]\w*)=(|"[^"]*"|'[^']*'|[^\s"'=][^"']*)$/;
@@ -88,9 +87,10 @@ export function paintSecret(target: HTMLElement, value: string, shown: boolean) 
 }
 
 /**
- * The oldest secret request of run `runId` still waiting, as a card with a password field, or for
- * a file a small editor to paste into, pick a file for, or drop one on, which keeps the newlines
- * a password field drops. Its values stay masked until the user shows them.
+ * The oldest secret request of run `runId` still waiting, as a card with the input it asks for: a
+ * password field for one value, a small editor for an env file, which keeps the newlines a password
+ * field drops and masks its values until the user shows them, or a file picker that also takes a
+ * drop, whose file goes byte for byte. The editor also takes a picked or dropped text file.
  */
 export function SecretCard({
   hostId,
@@ -108,7 +108,10 @@ export function SecretCard({
   const inputId = useId();
   const [busy, setBusy] = useState<"save" | "decline">();
   const off = !!disabledReason || !!busy;
-  const toFile = request.delivery === "file";
+  const input = secretInput(request);
+  const takesFiles = input === "env" || input === "file";
+  // A handle: the contents stay on disk until Save.
+  const [picked, setPicked] = useState<File>();
   const [fileName, setFileName] = useState<string>();
   const [lineCount, setLineCount] = useState(1);
   const [shown, setShown] = useState(false);
@@ -124,8 +127,14 @@ export function SecretCard({
   }
   useLayoutEffect(repaint, [shown]);
 
-  async function send(answer: { type: "save"; secret: string } | { type: "decline" }) {
-    setBusy(answer.type);
+  async function send(
+    answer:
+      | { type: "save"; secret: string }
+      | { type: "saveBytes"; base64: string }
+      | { type: "decline" },
+  ) {
+    const saving = answer.type !== "decline";
+    setBusy(saving ? "save" : "decline");
     const reply = await window.parallax.request(hostId, "secret/answer", {
       runId,
       requestId: request.requestId,
@@ -135,7 +144,7 @@ export function SecretCard({
     if ("error" in reply) {
       notify({
         tone: "error",
-        title: answer.type === "save" ? "Couldn't save the secret" : "Couldn't decline the secret",
+        title: saving ? "Couldn't save the secret" : "Couldn't decline the secret",
         body: describeError(reply.error),
       });
       setBusy(undefined);
@@ -143,6 +152,10 @@ export function SecretCard({
   }
   function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (input === "file") {
+      if (picked) void savePicked(picked);
+      return;
+    }
     const field = event.currentTarget.elements.namedItem("secret") as
       | HTMLInputElement
       | HTMLTextAreaElement
@@ -150,6 +163,30 @@ export function SecretCard({
     const value = field?.value ?? "";
     if (!value.trim()) return;
     void send({ type: "save", secret: value });
+  }
+
+  /** Sends file `file`'s bytes, which can be binary, such as a .p12's. */
+  async function savePicked(file: File) {
+    setBusy("save");
+    let bytes;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch {
+      notify({ tone: "error", title: `Couldn't use ${file.name}`, body: "It couldn't be read." });
+      setBusy(undefined);
+      return;
+    }
+    await send({ type: "saveBytes", base64: btoa(String.fromCharCode(...bytes)) });
+  }
+
+  /** Takes `file` for a `file` input, if it's what the request asks for. */
+  function pick(file: File) {
+    const refuse = (body: string) =>
+      notify({ tone: "error", title: `Couldn't use ${file.name}`, body });
+    if (!acceptsFile(file.name, request.accept)) return refuse(`Choose ${wanted}.`);
+    if (!file.size) return refuse("It's empty.");
+    if (file.size > maxSecretBytes) return refuse("A secret can be up to 64 KB.");
+    setPicked(file);
   }
 
   // Enter makes a new line, as in any editor.
@@ -180,7 +217,7 @@ export function SecretCard({
   }
 
   function dragOver(event: DragEvent<HTMLFormElement>) {
-    if (!toFile || off || !event.dataTransfer.types.includes("Files")) return;
+    if (!takesFiles || off || !event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     setDropOver(true);
   }
@@ -188,10 +225,29 @@ export function SecretCard({
   function drop(event: DragEvent<HTMLFormElement>) {
     setDropOver(false);
     const file = event.dataTransfer.files[0];
-    if (!toFile || off || !file) return;
+    if (!takesFiles || off || !file) return;
     event.preventDefault();
-    void loadFile(file);
+    if (input === "file") pick(file);
+    else void loadFile(file);
   }
+
+  const wanted = request.accept?.length ? `a ${request.accept.join(" or ")} file` : "a file";
+  const picker = (
+    <input
+      ref={filePicker}
+      type="file"
+      hidden
+      accept={input === "file" ? request.accept?.join(",") : undefined}
+      onChange={(event) => {
+        const file = event.target.files?.[0];
+        if (file) {
+          if (input === "file") pick(file);
+          else void loadFile(file);
+        }
+        event.target.value = "";
+      }}
+    />
+  );
 
   return (
     <section aria-labelledby={titleId} className="mb-3">
@@ -221,7 +277,28 @@ export function SecretCard({
           <label htmlFor={inputId} className="sr-only">
             {request.label}
           </label>
-          {toFile ? (
+          {input === "file" ? (
+            <div
+              className={`flex items-center gap-2.5 rounded-md border border-dashed bg-code py-2 pr-2 pl-3 ${dropOver ? "border-ring" : "border-border"}`}
+            >
+              <FileKey aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+              <span
+                className={`mr-auto min-w-0 truncate text-body ${picked ? "" : "text-muted-foreground"}`}
+              >
+                {picked?.name ?? `Choose ${wanted}, or drop it here`}
+              </span>
+              <button
+                id={inputId}
+                type="button"
+                disabled={off}
+                onClick={() => filePicker.current?.click()}
+                className={quietButton}
+              >
+                {picked ? "Replace" : "Choose file"}
+              </button>
+              {picker}
+            </div>
+          ) : input === "env" ? (
             <div
               className={`overflow-hidden rounded-md border bg-code focus-within:border-ring ${dropOver ? "border-ring" : "border-border"}`}
             >
@@ -246,16 +323,7 @@ export function SecretCard({
                 >
                   <Paperclip />
                 </IconButton>
-                <input
-                  ref={filePicker}
-                  type="file"
-                  hidden
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) void loadFile(file);
-                    event.target.value = "";
-                  }}
-                />
+                {picker}
               </div>
               <div className="flex max-h-64 min-h-28 overflow-auto font-mono text-body">
                 <div
@@ -304,7 +372,7 @@ export function SecretCard({
         </div>
         <div className="flex items-center justify-end gap-2 px-4 pt-3 pb-3">
           <p className="mr-auto text-meta text-faint-foreground">
-            {toFile
+            {request.delivery === "file"
               ? "Kept out of chat, in a private file this agent's commands can read for 24 hours."
               : "Kept in this host's keychain. The agent gets a one-time reference, never the value."}
           </p>
@@ -317,7 +385,12 @@ export function SecretCard({
           >
             {busy === "decline" ? "Declining…" : "Decline"}
           </button>
-          <button type="submit" disabled={off} title={disabledReason} className={saveButton}>
+          <button
+            type="submit"
+            disabled={off || (input === "file" && !picked)}
+            title={disabledReason}
+            className={saveButton}
+          >
             {busy === "save" ? "Saving…" : "Save"}
           </button>
         </div>
