@@ -35,8 +35,15 @@ class Recognition implements VoiceEngine {
     if (!granted) throw new SpeechDenied();
     // Not `throwIfAborted`, which React Native's AbortSignal lacks.
     if (signal.aborted) throw new Error("Dictation was cancelled.");
-    signal.addEventListener("abort", () => this.settle(), { once: true });
     await new Promise<void>((started, refused) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          this.abandon();
+          refused(new Error("Dictation was cancelled."));
+        },
+        { once: true },
+      );
       this.listeners = [
         Speech.addListener("start", () => started()),
         Speech.addListener("result", (e) => this.heard.add(e.results[0]?.transcript ?? "", e.isFinal)),
@@ -75,10 +82,7 @@ class Recognition implements VoiceEngine {
       finish: () => {
         if (!this.over && !this.ending) Speech.stop();
       },
-      cancel: () => {
-        if (!this.over) Speech.abort();
-        this.settle();
-      },
+      cancel: () => this.abandon(),
     };
   }
 
@@ -87,6 +91,12 @@ class Recognition implements VoiceEngine {
   }
 
   close = async () => this.settle();
+
+  /** Turns the microphone off and drops what was heard. */
+  private abandon() {
+    if (!this.over) Speech.abort();
+    this.settle();
+  }
 
   /** Ends this recording once: with `failure`, or with what was heard. */
   private settle(failure?: Error) {
