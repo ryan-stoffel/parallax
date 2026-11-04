@@ -20,11 +20,12 @@ import { Button, DeviceIcon, Dot, Icon, T, useColors } from "./ui";
 const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts";
 /**
  * The commands that add a computer to the account (0091 "Setup"), as the desktop's wizard shows
- * them, with nothing installed. Windows Defender blocks other ways of running the script.
+ * them, with nothing installed. The channel is nightly, as the phone's computers need a plxd newer
+ * than the stable release. Windows Defender blocks other ways of running the script.
  */
 const CONNECT_COMMANDS = [
-  { os: "macOS or Linux", command: `curl -fsSL ${SCRIPTS}/connect.sh | sh` },
-  { os: "Windows", command: `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax"` },
+  { os: "macOS or Linux", command: `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- --channel nightly` },
+  { os: "Windows", command: `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax --channel nightly"` },
 ];
 
 /** How often this looks for the account's computers while it's open. */
