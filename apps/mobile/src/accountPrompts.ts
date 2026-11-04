@@ -2,7 +2,9 @@
 
 import { Alert } from "react-native";
 
-import type { AccountHosts } from "./accountHosts";
+import { Limited } from "./access";
+import { Denied, type AccountHosts, type Listed } from "./accountHosts";
+import { askEach, type Asked } from "./setup";
 
 /** A 6-digit code as both ends show it: `482 915`. */
 export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
@@ -53,6 +55,30 @@ export function setUpComputer(
           showWaiting(name, code);
         })
         .then(handlers.done, failed),
+  );
+}
+
+/**
+ * A new phone asks to use the account's computers on its own (0091): `hosts` in turn until one
+ * lets it in on another device, which `onWaiting`'s code matches. One Allow covers them all, as
+ * that device copies this phone's key to the rest. While one can still be holding its request, it
+ * stays with that one, so a lost connection doesn't start another. Past that, a computer that won't
+ * answer is passed over. A denied or lapsed request, or a limit, stops it until the user asks again.
+ */
+export async function allowThisPhone(
+  accounts: AccountHosts,
+  hosts: Listed[],
+  onWaiting: (hostId: string, code: string) => void,
+): Promise<Asked> {
+  const asked = (host: Listed) => accounts.asked(host.hostId);
+  return askEach(
+    [...hosts.filter(asked), ...hosts.filter((host) => !asked(host))],
+    (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
+    (error, host) => error instanceof Denied || error instanceof Limited || accounts.waiting(host.hostId),
+    (error) => {
+      if (accounts.usesAny) return;
+      if (error instanceof Denied || error instanceof Limited) void accounts.stopAsking(error.message);
+    },
   );
 }
 

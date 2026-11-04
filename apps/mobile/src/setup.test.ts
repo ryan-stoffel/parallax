@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { upgraded, withListed } from "./setup";
+import { askEach, toAsk, upgraded, withListed } from "./setup";
 
 const listed = (hostId: string, name: string) => ({ hostId, name, online: true });
 
@@ -42,4 +42,53 @@ test("onboarding lists the account's computers, leaving out those removed from t
   const renamed = [{ ...known[0]!, name: "Studio Mac" }];
   expect(withListed(renamed, [listed("h1", "studio")])).toBe(renamed);
   expect(withListed([], [listed("h1", "studio")], ["account:h1"])).toEqual([]);
+});
+
+test("a new phone asks the computers that are online, and none once it uses one", () => {
+  const off = { hostId: "off", name: "off", online: false };
+  const hosts = [off, listed("a", "a"), listed("b", "b")];
+  expect(toAsk(hosts, false).map((h) => h.hostId)).toEqual(["a", "b"]);
+  expect(toAsk(hosts, true)).toEqual([]);
+  expect(toAsk(hosts, false, ["account:a"]).map((h) => h.hostId)).toEqual(["b"]);
+});
+
+test("asking passes over a computer it can't reach, and a denial ends it", async () => {
+  const hosts = [listed("a", "a"), listed("b", "b"), listed("c", "c")];
+  const denied = new Error("denied");
+  const asked: string[] = [];
+  const ask = (answers: Record<string, Error | undefined>) => async (host: { hostId: string }) => {
+    asked.push(host.hostId);
+    if (answers[host.hostId]) throw answers[host.hostId];
+  };
+  const stops = (e: unknown) => e === denied;
+  const stopped: unknown[] = [];
+  const note = (e: unknown) => void stopped.push(e);
+
+  expect(await askEach(hosts, ask({ a: new Error("offline") }), stops, note)).toBe("allowed");
+  expect(asked).toEqual(["a", "b"]);
+
+  asked.length = 0;
+  expect(await askEach(hosts, ask({ a: denied }), stops, note)).toBe("stopped");
+  expect(asked).toEqual(["a"]);
+  expect(stopped).toEqual([denied]);
+
+  const offline = new Error("offline");
+  expect(await askEach(hosts, ask({ a: offline, b: offline, c: offline }), stops, note)).toBe("unreachable");
+});
+
+test("asking stays on a computer that still holds the request, and passes one that doesn't", async () => {
+  const hosts = [listed("a", "studio"), listed("b", "laptop")];
+  const asked: string[] = [];
+  const ask = async ({ hostId }: { hostId: string }) => {
+    asked.push(hostId);
+    if (hostId === "a") throw new Error("offline");
+  };
+  const none = () => {};
+
+  expect(await askEach(hosts, ask, (_, host) => host.hostId === "a", none)).toBe("stopped");
+  expect(asked).toEqual(["a"]);
+
+  asked.length = 0;
+  expect(await askEach(hosts, ask, () => false, none)).toBe("allowed");
+  expect(asked).toEqual(["a", "b"]);
 });

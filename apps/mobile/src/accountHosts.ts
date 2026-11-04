@@ -26,6 +26,9 @@ import { isRelay, ordered, race, usable, withPort, WrongHost } from "./routes";
 
 const KEY = "account-hosts";
 
+/** How long a request through the relay waits, seconds: its stream opens first. */
+const RELAY_TIMEOUT_S = 30;
+
 /** A host the relay lists for the account. */
 export interface Listed {
   hostId: string;
@@ -50,6 +53,8 @@ interface Stored {
   /** The hosts this phone uses: approved with its own code, or listed by one it uses. */
   trusted: string[];
   books: Record<string, HostBook>;
+  /** Why this phone stopped asking on its own, until the user asks again. */
+  askingStopped?: string;
 }
 
 /** What answers on a route: where requests go, the pin, and how to let it go. */
@@ -131,6 +136,50 @@ export class AccountHosts {
     return this.stored.trusted.includes(hostId);
   }
 
+  /**
+   * Whether this phone uses any account computer yet. A session counts, not trust alone, as a
+   * computer paired on the LAN can list hosts this phone was never approved on.
+   */
+  get usesAny() {
+    return this.sessions.length > 0;
+  }
+
+  /** Why asking on its own ended, as a denied or lapsed request did, until the user asks again. */
+  get askingStopped() {
+    return this.stored.askingStopped;
+  }
+
+  async stopAsking(why: string) {
+    this.stored = { ...this.stored, askingStopped: why };
+    await this.save();
+  }
+
+  /**
+   * The user asked, by tapping a computer: this phone may ask on its own again. A request that
+   * ended was forgotten when it did, and one still waiting stays, as its host holds its value.
+   */
+  async resumeAsking() {
+    const { askingStopped: _, ...rest } = this.stored;
+    this.stored = rest;
+    await this.save();
+  }
+
+  /** Whether this phone started a request at `hostId` that it hasn't heard the end of. */
+  asked(hostId: string) {
+    return !!this.book(hostId).kept;
+  }
+
+  /** Whether `hostId` can still be holding this phone's request, so it's worth waiting for. */
+  waiting(hostId: string) {
+    const { kept } = this.book(hostId);
+    return !!kept && kept.until > Date.now();
+  }
+
+  /** Whether this phone started a request anywhere that it hasn't heard the end of. */
+  private get askedAny() {
+    return Object.values(this.stored.books).some((book) => book.kept);
+  }
+
   /** Trusts `hostIds` too, as a host this phone uses listed them. */
   async trust(hostIds: string[]) {
     const added = hostIds.filter((id) => !this.stored.trusted.includes(id));
@@ -176,14 +225,14 @@ export class AccountHosts {
     };
   }
 
-  /** One request to `path` at `at`, with its JSON answer. */
+  /** One request to `path` at `at`, with its JSON answer. A relay stream can take seconds to open. */
   private async call(
     at: Endpoint,
     method: string,
     path: string,
     headers: Record<string, string>,
     body?: object,
-    timeout?: number,
+    timeout = isRelay(at.route) ? RELAY_TIMEOUT_S : undefined,
   ) {
     const answer = await request(`${at.base}${path}`, method, headers, body, at.pin, timeout).catch(
       (e: { code?: string; message?: string }) => {
@@ -334,17 +383,28 @@ export class AccountHosts {
       { DPoP: proof(this.secret, "POST", `${at.base}${path}`, token) },
       { token, clientLabel: this.label },
     );
-    // Already approved: trusted only if it already was, by a code or a host this phone uses.
-    if (status === 200) return this.approved(hostId, json, false);
+    // Already approved: trusted only if it already was, by a code or a host this phone uses, or if
+    // this phone asked, and was allowed while it couldn't hear. That Allow may have come from any
+    // of them, as it covers them all.
+    if (status === 200) return this.approved(hostId, json, this.askedAny);
     if (status === 401 || status === 403)
       throw new Refused(describeRefusal(json) ?? "That computer refused this phone's sign-in.");
     if (status !== 202) throw new Error(describeRefusal(json) ?? `That computer answered ${status}.`);
     const requestId = String(json["request"]);
     const committed = String(json["commitment"]);
     const now = Date.now();
-    let value = keptValue(this.book(hostId), requestId, committed, now);
+    let value: Uint8Array | undefined;
+    try {
+      value = keptValue(this.book(hostId), requestId, committed, now);
+    } catch (e) {
+      if (!ask || !(e instanceof WrongHost)) throw e;
+      // A new request there means the one this phone kept ended, denied while it couldn't hear.
+      throw new Denied("That request wasn't allowed.");
+    }
     if (!value) {
       if (!ask) return { gate: { kind: "setup" } };
+      // One this phone kept has lapsed, so it ended while the phone couldn't hear.
+      if (this.asked(hostId)) throw new Denied("That request wasn't allowed in time.");
       const started = newRequest(this.book(hostId), requestId, committed, now, randomBytes);
       await this.setBook(hostId, started.book);
       value = started.value;
@@ -371,26 +431,30 @@ export class AccountHosts {
       path,
       { DPoP: proof(this.secret, "POST", `${at.base}${path}`) },
       { ...body, wait },
-      wait ? 40 : 10,
+      wait ? 40 : RELAY_TIMEOUT_S,
     );
     if (status === 200) return { session: json };
     if (status === 202) return { pending: json };
-    throw new Refused(describeRefusal(json) ?? "That computer refused the request.");
+    throw new Denied(describeRefusal(json) ?? "That request wasn't allowed.");
   }
 
   /**
    * Keeps the session in `answer`, and trusts its host when the user approved it with a code on
-   * this phone: typed it, or matched it on another device.
+   * this phone: typed it, or matched it on another device. That ends any other request and any
+   * stop, since it covers every computer.
    */
   private async approved(hostId: string, answer: Record<string, unknown>, byCode: boolean) {
     const session = String(answer["accessToken"] ?? "");
     if (!session) throw new Error("That computer sent no session.");
-    const { trusted } = this.stored;
+    const { trusted, books } = this.stored;
     this.stored = {
       ...this.stored,
       sessions: { ...this.stored.sessions, [hostId]: session },
-      trusted: byCode && !trusted.includes(hostId) ? [...trusted, hostId] : trusted,
-      books: { ...this.stored.books, [hostId]: forgetRequest(this.book(hostId)) },
+      ...(byCode && {
+        trusted: trusted.includes(hostId) ? trusted : [...trusted, hostId],
+        books: Object.fromEntries(Object.entries(books).map(([id, book]) => [id, forgetRequest(book)])),
+        askingStopped: undefined,
+      }),
     };
     await this.save();
     return { session };
@@ -399,27 +463,30 @@ export class AccountHosts {
   /**
    * Asks to use `hostId` as a new device, because the user asked: signs in and starts a request,
    * or goes on with the one it kept. Resolves once approved, after `onCode` shows the code to
-   * match on another device. Rejects when it's denied or lapses, with a message for people.
+   * match on another device. Rejects when it's denied or lapses, with a message for people, which
+   * ends that request: the user may ask again, which starts a new one, counted.
    */
   async ask(hostId: string, learned: string[], onCode: (code: string) => void): Promise<void> {
     const { at } = await this.first(hostId, ordered(hostId, learned));
     try {
       const signed = await this.signIn(at, hostId, true);
-      if ("session" in signed)
-        throw new Error("That computer already approved this phone. Enter its setup code to use it.");
+      if ("session" in signed) {
+        if (this.trusts(hostId)) return;
+        // Asking again can't change this, and each try leaves a session there.
+        throw new Denied("That computer already approved this phone. Run plx connect on it, and type the code it shows.");
+      }
       if (signed.gate.kind !== "waiting" || !signed.request) throw new Error("That computer didn't start a request.");
       onCode(signed.gate.code);
       for (;;) {
-        const step = await this.approval(at, { request: signed.request }, true).catch(async (e: unknown) => {
-          // Denied or lapsed: the user may ask again, which starts a new request, counted.
-          if (e instanceof Refused) await this.setBook(hostId, forgetRequest(this.book(hostId)));
-          throw e;
-        });
+        const step = await this.approval(at, { request: signed.request }, true);
         if ("session" in step) {
           await this.approved(hostId, step.session, true);
           return;
         }
       }
+    } catch (e) {
+      if (e instanceof Denied) await this.setBook(hostId, forgetRequest(this.book(hostId)));
+      throw e;
     } finally {
       at.close();
     }
@@ -435,7 +502,8 @@ export class AccountHosts {
     try {
       await this.setBook(hostId, setupRun(this.book(hostId), Date.now()));
       const at_ = (path: string) => `${at.base}${path}`;
-      const finished = await spakePair(at_, at.pin, described.fingerprint, code, this.secret, this.label).catch(
+      const timeout = isRelay(at.route) ? RELAY_TIMEOUT_S : undefined;
+      const finished = await spakePair(at_, at.pin, described.fingerprint, code, this.secret, this.label, timeout).catch(
         (e: Error) => {
           throw new Error(at.problem() ?? e.message);
         },
@@ -449,6 +517,9 @@ export class AccountHosts {
 
 /** A sign-in or request the host refused: this phone needs setting up or approving again. */
 class Refused extends Error {}
+
+/** A new device's request that ended, denied or lapsed. Starting another is the user's to do. */
+export class Denied extends Refused {}
 
 const describeRefusal = (json: Record<string, unknown>) =>
   typeof json["error_description"] === "string" ? json["error_description"] : undefined;

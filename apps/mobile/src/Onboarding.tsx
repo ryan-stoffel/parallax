@@ -1,13 +1,14 @@
-// First run, after signing in to the Parallax account: the account's computers, each set up once
-// with the code `plx connect` shows on it (0091), or how to add one when there are none, then
-// notifications. Settings › Add computer shows how to add one too.
-import { useEffect, useState } from "react";
+// First run, after signing in to the Parallax account: the account's computers, which this phone
+// asks to use on its own, so one Allow on another device connects them all (0091), or how to add
+// one when there are none, then notifications. Settings › Add computer shows how to add one too.
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { formatCode, setUpComputer } from "./accountPrompts";
+import { allowThisPhone, formatCode, setUpComputer } from "./accountPrompts";
 import type { Saved } from "./host";
 import { pairedId, withListed, type Machine, type Setup } from "./machines";
+import { toAsk } from "./setup";
 import { Pairing } from "./PairScreen";
 import { askForNotifications } from "./push";
 import { font } from "./theme";
@@ -17,6 +18,9 @@ import { Button, DeviceIcon, Dot, Icon, T, useColors } from "./ui";
 
 /** The command that adds a computer to the account (0091 "Setup"). */
 export const CONNECT_COMMAND = "npx -y plx-cli@latest connect";
+
+/** How often this looks for the account's computers while it's open. */
+const LOOK_MS = 15_000;
 
 /** A LAN-paired computer as a machine (0065). */
 const pairedMachine = (saved: Saved): Machine => ({ id: pairedId(saved), name: saved.name, paired: saved });
@@ -121,16 +125,44 @@ export function Onboarding({
   const [listed, setListed] = useState<Listed[]>();
   const [paired, setPaired] = useState<Machine[]>([]);
   const [gates, setGates] = useState<Record<string, Gate>>({});
+  const [stopped, setStopped] = useState(accounts?.askingStopped);
+  const [unanswered, setUnanswered] = useState(false);
+  const asking = useRef(false);
+  const allowed = useRef(false);
+
+  /** Asks on its own, once at a time, with no taps here. One Allow elsewhere covers them all. */
+  const ask = async (found: Listed[]) => {
+    const hosts = accounts ? toAsk(found, accounts.usesAny) : [];
+    if (!accounts || !hosts.length || asking.current || accounts.askingStopped) return;
+    asking.current = true;
+    const asked = await allowThisPhone(accounts, hosts, (hostId, code) =>
+      setGates((g) => ({ ...g, [hostId]: { kind: "waiting", code } })),
+    );
+    asking.current = false;
+    setStopped(accounts.askingStopped);
+    setUnanswered(asked === "unreachable");
+    // The rest connect once this phone reaches its computers, which vouch for them.
+    if (asked === "allowed") {
+      allowed.current = true;
+      setGates({});
+    } else if (accounts.askingStopped)
+      setGates((g) =>
+        Object.fromEntries(Object.keys(g).map((id) => [id, { kind: "setup" as const }])),
+      );
+  };
 
   const look = async () => {
     const bearer = await token();
-    const found = (bearer && (await listHosts(bearer))) || [];
+    const found = bearer ? await listHosts(bearer) : undefined;
+    // Offline for now: what's showing stays, with any code, and the next look tries again.
+    if (!found) return setListed((l) => l ?? []);
     setListed(found);
+    void ask(found);
     setGates((g) =>
       Object.fromEntries(
         found
-          .filter((l) => !accounts?.trusts(l.hostId))
-          .map((l) => [l.hostId, g[l.hostId]?.kind === "waiting" ? g[l.hostId]! : { kind: "setup" as const }]),
+          .filter((l) => !allowed.current && !accounts?.usesAny && !accounts?.trusts(l.hostId))
+          .map((l) => [l.hostId, l.online && g[l.hostId]?.kind === "waiting" ? g[l.hostId]! : { kind: "setup" as const }]),
       ),
     );
   };
@@ -138,12 +170,23 @@ export function Onboarding({
   useEffect(() => {
     void look();
     const sub = AppState.addEventListener("change", (s) => s === "active" && void look());
-    return () => sub.remove();
+    // A computer that comes online here gets asked, with nothing to tap.
+    const timer = setInterval(() => void look(), LOOK_MS);
+    return () => {
+      sub.remove();
+      clearInterval(timer);
+    };
   }, []);
 
   const setUp = (l: Listed) => {
     if (!accounts) return;
-    const ready = () => setGates(({ [l.hostId]: _, ...rest }) => rest);
+    void accounts.resumeAsking();
+    setStopped(undefined);
+    const ready = () => {
+      allowed.current = true;
+      setStopped(undefined);
+      setGates({});
+    };
     setUpComputer(accounts, { hostId: l.hostId, name: l.name, routes: [] }, {
       onWaiting: (code) => setGates((g) => ({ ...g, [l.hostId]: { kind: "waiting", code } })),
       done: ready,
@@ -162,12 +205,15 @@ export function Onboarding({
       />
     );
 
+  const waiting = Object.values(gates).find((g) => g.kind === "waiting") as
+    | Extract<Gate, { kind: "waiting" }>
+    | undefined;
   if (step === "computers")
     return (
       <Step
         index={0}
         title="Your computers"
-        subtitle="The computers on your Parallax account. Set each one up once with the code it shows."
+        subtitle="The computers on your Parallax account. Allow this iPhone once on one of them, and they all connect."
       >
         {!listed ? (
           <ActivityIndicator color={c.accent} style={{ marginVertical: 24 }} />
@@ -180,6 +226,29 @@ export function Onboarding({
               <ComputerRow key={m.id} listed={{ hostId: m.id, name: m.name, online: true }} onPress={() => {}} />
             ))}
             {!listed.length && !paired.length && <AddInstructions />}
+            {waiting ? (
+              <T muted style={{ fontSize: 14, lineHeight: 20 }}>
+                Open Parallax on one of your computers and allow this iPhone. Both show{" "}
+                {formatCode(waiting.code)}. A computer that's new can take the code it shows instead:
+                tap it.
+              </T>
+            ) : stopped ? (
+              <T muted style={{ fontSize: 14, lineHeight: 20 }}>
+                {stopped} Tap a computer to ask again.
+              </T>
+            ) : unanswered ? (
+              <T muted style={{ fontSize: 14, lineHeight: 20 }}>
+                Your computers aren't answering this iPhone yet. It keeps trying.
+              </T>
+            ) : (
+              listed.length > 0 &&
+              !listed.some((l) => l.online) &&
+              !accounts?.usesAny && (
+                <T muted style={{ fontSize: 14, lineHeight: 20 }}>
+                  None of your computers are online. Turn one on, and this iPhone asks it by itself.
+                </T>
+              )
+            )}
           </View>
         )}
         <Button label="Continue" primary onPress={() => setStep("notify")} />

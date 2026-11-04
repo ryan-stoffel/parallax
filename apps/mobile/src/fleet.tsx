@@ -2,8 +2,8 @@
 // came from. Each computer's threads come from the desktop's `useThreads`, one per computer.
 //
 // With the account signed in it also finds the account's computers on Parallax Relay (0091),
-// when it starts, the app comes to the front, the network changes, and Settings opens, with no
-// timer. It sets them up or asks to use them, asks the user to allow other devices that ask, and
+// when it starts, the app comes to the front, the network changes, and Settings opens, and every
+// 15 seconds while it's in front. It sets them up or asks to use them, asks the user to allow other devices that ask, and
 // copies who's approved between the computers this phone uses.
 import { File } from "expo-file-system";
 import {
@@ -22,10 +22,14 @@ import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protoc
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { confirmDevice, setUpComputer } from "./accountPrompts";
+import { allowThisPhone, confirmDevice, setUpComputer, showWaiting } from "./accountPrompts";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
+import { toAsk } from "./setup";
+
+/** How often the account's computers are listed while the app is in front. */
+const LOOK_MS = 15_000;
 
 /** One computer as the screens see it. */
 export interface Computer {
@@ -157,12 +161,18 @@ export function FleetProvider({
   const [views, setViews] = useState<Record<string, ThreadsView>>({});
   const [gates, setGates] = useState<Record<string, Gate | undefined>>({});
   const [listed, setListed] = useState<Listed[]>([]);
+  const [stopped, setStopped] = useState(accounts?.askingStopped);
   const [drafts] = useState(() => new Map<string, string>());
   /** Requests already shown, so each asks once. */
   const [asked] = useState(() => new Set<string>());
   const fleetRef = useRef<Fleet>(null);
   const latest = useRef(setup);
   latest.current = setup;
+  const gatesNow = useRef(gates);
+  gatesNow.current = gates;
+  const asking = useRef(false);
+  const shownCode = useRef<string | undefined>(undefined);
+  const retries = useRef(new Map<string, number>());
   const gate = (id: string, next: Gate | undefined) =>
     setGates((g) => (JSON.stringify(g[id]) === JSON.stringify(next) ? g : { ...g, [id]: next }));
   const [fleet] = useState(() => {
@@ -210,12 +220,59 @@ export function FleetProvider({
     });
   }
 
+  /**
+   * A new phone asks to use the account's computers on its own (0091), as onboarding does, for one
+   * that skipped it. It shows the code once, since its row is out of sight here. A denied or lapsed
+   * request stops it until the user taps a computer.
+   */
+  async function askOnItsOwn(found: Listed[]) {
+    const hosts = accounts ? toAsk(found, accounts.usesAny, latest.current.hidden) : [];
+    if (!accounts || !hosts.length || asking.current || accounts.askingStopped) return;
+    asking.current = true;
+    const asked = await allowThisPhone(accounts, hosts, (hostId, code) => {
+      const id = accountId(hostId);
+      gate(id, { kind: "waiting", code });
+      if (shownCode.current === code) return;
+      shownCode.current = code;
+      showWaiting(latest.current.machines.find((m) => m.id === id)?.name ?? "your computers", code);
+    });
+    asking.current = false;
+    setStopped(accounts.askingStopped);
+    for (const host of hosts) {
+      const id = accountId(host.hostId);
+      const m = latest.current.machines.find((x) => x.id === id);
+      if (m && accounts.trusts(host.hostId)) {
+        if (fleet.hosts.get(id)?.state.status !== "connected") connect(m);
+      } else if (asked !== "allowed" && accounts.askingStopped) gate(id, { kind: "setup" });
+    }
+  }
+
+  /**
+   * A computer this phone uses that wasn't ready for it, as before another device copied its key,
+   * gets a couple of tries, then waits for the app to come to the front: each try can start a
+   * request there, and a computer takes 5 an hour.
+   */
+  function retryGated() {
+    for (const m of latest.current.machines) {
+      if (!m.account || !accounts?.trusts(m.account.hostId)) continue;
+      if (gatesNow.current[m.id]?.kind !== "setup") continue;
+      const tries = retries.current.get(m.id) ?? 0;
+      if (tries >= 2) continue;
+      retries.current.set(m.id, tries + 1);
+      connect(m);
+    }
+  }
+
   /** Lists the account's computers on the relay, and adds new ones. */
   async function discover() {
     const bearer = accounts && (await token());
     const found = bearer && (await listHosts(bearer));
     if (!found) return;
     setListed(found);
+    void askOnItsOwn(found);
+    retryGated();
+    // A computer added since: the ones this phone uses may vouch for it now.
+    if (found.some((l) => !accounts.trusts(l.hostId))) void share();
     update((s) => {
       const machines = withListed(s.machines, found, s.hidden);
       return machines === s.machines ? s : { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
@@ -297,15 +354,19 @@ export function FleetProvider({
     // front, or a network that changed, also lists the account's computers again.
     const again = () => {
       fleet.wake();
+      retries.current.clear();
       void discover();
     };
     const awake = AppState.addEventListener("change", (s) => s === "active" && again());
     const network = onNetwork(again);
     void discover();
+    // A computer set up elsewhere changes nothing here. iOS suspends this in the background.
+    const look = setInterval(() => void discover(), LOOK_MS);
     return () => {
       listener();
       awake.remove();
       network();
+      clearInterval(look);
       // Signed out: this provider's connections end with it.
       fleet.close();
     };
@@ -328,7 +389,8 @@ export function FleetProvider({
       connected: state.status === "connected",
       view: views[machine.id] ?? idleThreads,
       outbox: outbox(machine.id),
-      gate: gates[machine.id],
+      // Asking stopped: a computer waiting to be set up says why.
+      gate: gates[machine.id]?.kind === "setup" && stopped ? { kind: "refused", message: stopped } : gates[machine.id],
     };
   });
 
@@ -343,6 +405,8 @@ export function FleetProvider({
     const m = setup.machines.find((x) => x.id === id);
     if (!accounts || !m?.account) return;
     const { hostId, routes } = m.account;
+    void accounts.resumeAsking();
+    setStopped(undefined);
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
     if (accounts.trusts(hostId)) return connect(m);
     setUpComputer(accounts, { hostId, name: m.name, routes }, {
