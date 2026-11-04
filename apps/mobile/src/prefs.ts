@@ -1,5 +1,5 @@
 // What this phone keeps of the user's choices: which notifications to show, the appearance, where
-// the last new thread started, and the access new threads start with.
+// the last new thread started, the access new threads start with, and whether dictation is tidied.
 // One file, out of backups like the rest of the app's (machines.ts), read once at launch.
 import { File } from "expo-file-system";
 import { useSyncExternalStore } from "react";
@@ -16,9 +16,15 @@ export interface Prefs {
   lastStart?: { hostId: string; groupId: string };
   /** The access a new thread starts with, as the desktop's New thread default. Unset: the provider's own. */
   access?: AgentPermission;
+  /** Whether dictated text is tidied by a computer's small model, which then receives it (PLX-1232). */
+  cleanDictation: boolean;
 }
 
-const defaults: Prefs = { notify: { needsYou: true, done: true, failed: true }, appearance: "system" };
+const defaults: Prefs = {
+  notify: { needsYou: true, done: true, failed: true },
+  appearance: "system",
+  cleanDictation: true,
+};
 const file = new File(privateFile("prefs.json"));
 
 let prefs: Prefs = (() => {

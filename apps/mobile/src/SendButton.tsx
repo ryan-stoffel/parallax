@@ -2,7 +2,7 @@
 // night sky (a deep indigo fall, a violet glow, four stars, and clouds along its foot) with a
 // white arrow, at a quarter strength while there's nothing to send. While a thread works and the
 // box is empty, it's Stop instead: a filled square on the danger color.
-import { ArrowUp, Square } from "lucide-react-native";
+import { ArrowUp, Square, type LucideIcon } from "lucide-react-native";
 import { Pressable, StyleSheet } from "react-native";
 import Svg, { Circle, ClipPath, Defs, G, LinearGradient, Path, RadialGradient, Stop } from "react-native-svg";
 
@@ -70,14 +70,16 @@ function Sky() {
   );
 }
 
-/** The composer's send button, or with `stop`, its Stop. */
+/** The composer's send button, with `icon` in place of its arrow, or with `stop`, its Stop. */
 export function SendButton({
   stop = false,
+  icon: Glyph = ArrowUp,
   disabled = false,
   label,
   onPress,
 }: {
   stop?: boolean;
+  icon?: LucideIcon;
   disabled?: boolean;
   label: string;
   onPress: () => void;
@@ -102,7 +104,7 @@ export function SendButton({
       ) : (
         <>
           <Sky />
-          <ArrowUp size={18} color="#ffffff" />
+          <Glyph size={18} color="#ffffff" />
         </>
       )}
     </Pressable>
