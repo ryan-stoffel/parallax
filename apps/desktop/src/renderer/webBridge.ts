@@ -668,6 +668,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     setDeviceEnabled: async () => {},
     removeDevice: async () => {},
     discoverAccount: async () => {},
+    removedComputers: async () => [],
     enterSetupCode: async () => NOT_HERE,
     showSetupCode: async () => NOT_HERE,
     onSetupApproved: () => () => {},

@@ -903,6 +903,14 @@ test("a new account computer that's offline or doesn't answer waits in Settings,
     fake.handlers.get("parallax:discoverAccount")!();
     await vi.advanceTimersByTimeAsync(1);
     expect(listed(buildBox)).toBeUndefined();
+
+    // Add computer offers it back, and only asking brings it back.
+    expect(await fake.handlers.get("parallax:removedComputers")!({})).toEqual([
+      { id: `account:${buildBox}`, name: expect.any(String) },
+    ]);
+    await fake.handlers.get("parallax:setDeviceEnabled")!({}, `account:${buildBox}`, true);
+    expect(listed(buildBox)).toBeDefined();
+    expect(await fake.handlers.get("parallax:removedComputers")!({})).toEqual([]);
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
