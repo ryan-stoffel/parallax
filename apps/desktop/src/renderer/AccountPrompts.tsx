@@ -55,9 +55,12 @@ export function AccountPrompts() {
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => window.parallax.onDevices(setDevices), []);
   useEffect(() => window.parallax.onAccessRequests(setRequests), []);
+  // The computer whose code just worked, until the user closes the confirmation.
+  const [added, setAdded] = useState<string>();
   const close = (id: string) => setClosed((old) => new Set(old).add(id));
   const held = useSyncExternalStore(watchHolds, () => holds);
 
+  if (added) return <AddedDialog name={added} onClose={() => setAdded(undefined)} />;
   const request = requests.find((r) => !closed.has(r.id));
   if (request)
     return <AllowDialog key={request.id} request={request} onClose={() => close(request.id)} />;
@@ -66,7 +69,12 @@ export function AccountPrompts() {
     : devices.find((d) => asksForCode(d) && !closed.has(d.id) && !held.asked.has(d.id));
   if (computer)
     return (
-      <NewComputerDialog key={computer.id} computer={computer} onClose={() => close(computer.id)} />
+      <NewComputerDialog
+        key={computer.id}
+        computer={computer}
+        onClose={() => close(computer.id)}
+        onAdded={() => setAdded(computer.name)}
+      />
     );
   return null;
 }
@@ -146,7 +154,9 @@ export function SetupCodeField({
 }) {
   return (
     <>
-      <p className="mt-1.5 text-body text-muted-foreground">Type the 6-digit code {name} shows.</p>
+      <p className="mt-1.5 text-body text-muted-foreground">
+        Type the 6-digit code showing on {name}, in its terminal or its Parallax.
+      </p>
       <input
         aria-label="Code"
         autoFocus
@@ -165,8 +175,8 @@ export function SetupCodeField({
         </p>
       )}
       <p className="mt-2 text-meta text-faint-foreground">
-        No code there? In Parallax on {name}, choose Show setup code in Settings › Connections.
-        Without the app, run <code className="font-mono">npx plx-cli connect approve</code>.
+        No code there? Run the setup command on {name} again, or in Parallax there, choose Show
+        setup code in Settings › Connections.
       </p>
     </>
   );
@@ -176,14 +186,17 @@ export function SetupCodeField({
 export function NewComputerDialog({
   computer,
   onClose,
+  onAdded = onClose,
 }: {
   computer: Pick<DeviceHost, "id" | "name" | "icon" | "access">;
   onClose: () => void;
+  /** Runs once its code works. */
+  onAdded?: () => void;
 }) {
-  const form = useSetupCode(computer, onClose);
+  const form = useSetupCode(computer, onAdded);
   return (
     <Modal
-      title={`Connect ${computer.name}`}
+      title={`Add ${computer.name}`}
       icon={<DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />}
       onClose={onClose}
       onSubmit={(e) => void form.submit(e)}
@@ -195,6 +208,29 @@ export function NewComputerDialog({
         </button>
         <button type="submit" className={primaryButton} disabled={!form.ready}>
           {form.busy ? "Connecting…" : "Connect"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Says a new computer's code worked, the end of adding it. */
+function AddedDialog({ name, onClose }: { name: string; onClose: () => void }) {
+  return (
+    <Modal
+      title={`${name} is added`}
+      onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+    >
+      <p className="mt-1.5 text-body text-muted-foreground">
+        Pick it under Runs on when you start a thread. Its threads show up in your sidebar.
+      </p>
+      <div className="mt-4 flex justify-end">
+        <button type="submit" className={primaryButton} autoFocus>
+          Done
         </button>
       </div>
     </Modal>

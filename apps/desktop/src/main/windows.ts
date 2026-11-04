@@ -5,6 +5,10 @@ export function broadcast(channel: string, ...args: unknown[]): void {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, ...args);
 }
 
+/** Whether a window is on screen, so what it would show is worth looking for. */
+export const anyWindowVisible = () =>
+  BrowserWindow.getAllWindows().some((window) => window.isVisible() && !window.isMinimized());
+
 /**
  * `sender`'s own map in `all`, made on first use. `end` runs on it when the window reloads or
  * closes, since nothing there can use its entries any more, and a closed window's map goes.

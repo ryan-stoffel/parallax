@@ -56,9 +56,9 @@ const type = async (text: string) => {
   });
 };
 
-test("a new computer's dialog takes its 6 digits once, clears a wrong code, and closes on the right one", async () => {
+test("a new computer's dialog takes its 6 digits once, clears a wrong code, and confirms the right one", async () => {
   const parallax = await render([buildBox], []);
-  expect(dialog()?.textContent).toContain("Connect build-box");
+  expect(dialog()?.textContent).toContain("Add build-box");
   await type("482 91");
   expect(button("Connect").disabled).toBe(true);
 
@@ -71,7 +71,9 @@ test("a new computer's dialog takes its 6 digits once, clears a wrong code, and 
   await type("482 913");
   await act(async () => button("Connect").click());
   expect(parallax.enterSetupCode).toHaveBeenLastCalledWith(buildBox.id, "482913");
-  expect(dialog()).toBeNull();
+  expect(dialog()?.textContent).toContain("build-box is added");
+  await act(async () => button("Done").click());
+  expect(dialog()?.textContent).not.toContain("build-box is added");
 });
 
 test("an offline new computer asks for nothing, and the dialog opens once it answers", async () => {
@@ -79,7 +81,7 @@ test("an offline new computer asks for nothing, and the dialog opens once it ans
   expect(dialog()).toBeNull();
   act(() => root?.unmount());
   await render([buildBox], []);
-  expect(dialog()?.textContent).toContain("Connect build-box");
+  expect(dialog()?.textContent).toContain("Add build-box");
 });
 
 test("a device's request comes first, shows its code, and is allowed or denied", async () => {
@@ -94,5 +96,5 @@ test("a device's request comes first, shows its code, and is allowed or denied",
   await act(async () => button("Deny").click());
   expect(parallax.answerAccess).toHaveBeenLastCalledWith("r2", false);
   // Then the new computer's code.
-  expect(dialog()?.textContent).toContain("Connect build-box");
+  expect(dialog()?.textContent).toContain("Add build-box");
 });

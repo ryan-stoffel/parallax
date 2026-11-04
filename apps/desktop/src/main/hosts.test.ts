@@ -54,6 +54,8 @@ const fake = vi.hoisted(() => {
     /** What the next `plxd dial` run prints, a line each, and its exit code. */
     dialOutput: { lines: [] as string[], code: 0 },
     opened: [] as { runner: unknown; params: unknown }[],
+    /** Whether a window is on screen. */
+    visible: false,
   };
 });
 vi.mock("electron", () => ({
@@ -78,6 +80,7 @@ vi.mock("./windows", () => ({
     fake.sent.set(channel, value);
   },
   perWindow: () => new Map(),
+  anyWindowVisible: () => fake.visible,
 }));
 vi.mock("./connection", async (actual) => ({
   ...(await actual<typeof import("./connection")>()),
@@ -159,6 +162,7 @@ function signedIn() {
 
 const studio = "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o";
 const buildBox = "Q2s9vX1k7d0b8Lr4mT6pWc3eYh5uNz2aFgJ_iK-oPqR";
+const newBox = "Z9y8Xw7V6u5T4s3R2q1P0o9N8m7L6k5J4i3H2g1F0eD";
 const connected = (capabilities = {}): ConnectionState => ({
   status: "connected",
   plxd: "1.0.0",
@@ -366,7 +370,7 @@ test("streamFile answers ranges in agent/file slices, and refuses what isn't a f
   }
 });
 
-test("the account's computers are asked for on sign-in, focus, the network, and Settings opening, never on a timer", async () => {
+test("the account's computers are asked for on sign-in, focus, the network, Settings opening, and a timer only while a window shows", async () => {
   vi.useFakeTimers();
   fake.answers.clear();
   try {
@@ -395,6 +399,25 @@ test("the account's computers are asked for on sign-in, focus, the network, and 
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(asked).toBe(1);
+
+    // A window on screen reads the list by itself, and discovery runs only when it changed, so a
+    // new computer's prompt appears unasked and nothing dials on every read.
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(asked).toBe(2);
+    const dials = fake.dials.length;
+    const retries = connection.retry.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(asked).toBe(5);
+    expect(fake.dials.length).toBe(dials);
+    expect(connection.retry.mock.calls.length).toBe(retries);
+    hosts = [...hosts, { hostId: newBox, name: "new-box", online: true, thisComputer: false }];
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(listed(newBox)?.name).toBe("new-box");
+    hosts = hosts.slice(0, 2);
+    await vi.advanceTimersByTimeAsync(15_000);
+    fake.visible = false;
+    asked = 1;
 
     const triggers = [
       () => fake.appEvents.get("browser-window-focus")!(),
@@ -905,10 +928,12 @@ test("a new account computer that's offline or doesn't answer waits in Settings,
     expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe"]);
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode", offline: true });
 
-    // Once it answers, the dialog may ask.
+    // Once it answers, the dialog may ask. Its listener starting changes nothing in the list, so
+    // the timer probes it again, with no focus change, and the prompt appears on its own.
     fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
-    fake.appEvents.get("browser-window-focus")!();
-    await vi.advanceTimersByTimeAsync(1);
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(15_001);
+    fake.visible = false;
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
 
     // Remove takes it off this app's list, and the account listing it again doesn't add it back.

@@ -106,7 +106,7 @@ import {
 } from "./plxd";
 import { requestAccepted, type HostUsage } from "./telemetry";
 import { isNightly } from "./updater";
-import { broadcast, perWindow } from "./windows";
+import { anyWindowVisible, broadcast, perWindow } from "./windows";
 
 // With PLX_IPC_STATS set, the subscription messages sent to renderers and their JSON bytes, for
 // the load test (PLX-447), which reads `globalThis.ipcStats` through Playwright's `app.evaluate`.
@@ -193,6 +193,9 @@ export const hostUsage: HostUsage = {
  */
 export function startHosts(signedIn: Account | undefined, target: () => string): void {
   account = signedIn;
+  setInterval(() => {
+    if (anyWindowVisible()) void lookForNewComputers();
+  }, LOOK_MS).unref();
   // Signing in registers every computer this app is connected to (PLX-1146).
   account?.onSignIn(() => {
     for (const [hostId, connection] of connections)
@@ -258,7 +261,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   );
   ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
   // Settings > Connections and Add computer ask for the account's computers when they open, and
-  // the window's focus and the network do too, with no timer (0091).
+  // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
   ipcMain.handle("parallax:removedComputers", () => removedComputers());
   ipcMain.on("parallax:network", () => void networkChanged());
@@ -1358,6 +1361,7 @@ const runPlxd = (plxd: string, ...args: string[]) =>
 const dialPlxd = (plxd: string, args: string[], token?: string) =>
   promisify(execFile)(plxd, ["dial", ...args], {
     timeout: 60_000,
+    windowsHide: true,
     env: { ...process.env, ...(token && { PLXD_RELAY_TOKEN: token }) },
   });
 
@@ -1686,11 +1690,15 @@ function dropAccountConnection(id: string): void {
   setAccess(id, undefined);
 }
 
+/** How often the account's computers are asked for while a window is on screen. */
+const LOOK_MS = 15_000;
+
 /**
  * Asks the local plxd for the account's computers (`relay/hosts`), keeps them, and connects to
  * each, reviving any that stopped. Runs on a sign-in, the network coming back or changing, focus,
- * and Settings > Connections opening, with no timer, as T3 Connect does. Add computer also runs it
- * on a timer while it's open, since the computer it waits on changes none of those here.
+ * Settings > Connections opening, and `lookForNewComputers` noticing a change, so a new computer's
+ * code prompt appears on its own (PLX-1306). Add computer also runs it on a faster timer while it's
+ * open, since the user is waiting on that computer.
  */
 const discoverAccounts = coalesced(async () => {
   const token = await account?.accessToken();
@@ -1698,6 +1706,7 @@ const discoverAccounts = coalesced(async () => {
   if (!token || local?.state.status !== "connected") return;
   const answer = await local.request("relay/hosts", { token });
   if ("error" in answer) return;
+  lastListed = listedKey(answer.result.hosts);
   const { accounts, changed } = mergeListed(savedAccounts(), answer.result.hosts);
   if (changed) {
     for (const old of savedAccounts())
@@ -1726,6 +1735,36 @@ const removedComputers = () =>
   savedAccounts()
     .filter((a) => a.removed && onlineAccounts.has(accountId(a.hostId)))
     .map((a) => ({ id: accountId(a.hostId), name: a.name }));
+
+/** Which computers the account lists and which are online, to notice a change. */
+const listedKey = (hosts: RelayHost[]) =>
+  hosts
+    .map((host) => `${host.hostId} ${host.online}`)
+    .sort()
+    .join("\n");
+
+/** The account's computers as discovery last saw them. */
+let lastListed: string | undefined;
+
+/**
+ * A computer set up elsewhere changes nothing here, so its code prompt would wait for a focus
+ * change. This reads the list every `LOOK_MS` while a window is on screen, well within the relay's
+ * 120 requests a minute per user, and runs discovery, with its dials, only when the list changed.
+ * The only other dial is the probe of a new computer that's online but hasn't answered yet.
+ */
+async function lookForNewComputers(): Promise<void> {
+  const token = await account?.accessToken();
+  const local = connections.get("local");
+  if (!token || local?.state.status !== "connected") return;
+  const answer = await local.request("relay/hosts", { token });
+  if ("result" in answer && listedKey(answer.result.hosts) !== lastListed)
+    return void discoverAccounts();
+  // Online on the relay can come before its listener answers, and nothing changes in the list when
+  // it starts to, so a computer waiting for that is probed again.
+  for (const [id, access] of accountAccess)
+    if (access.step === "needsCode" && access.offline && !offlineAccounts.has(id))
+      void askForCode(id);
+}
 
 /** Focus or a network change: the account's computers again, and each relay route's re-check. */
 function lookAgain(): void {
