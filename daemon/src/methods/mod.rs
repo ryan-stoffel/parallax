@@ -245,6 +245,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         AccessApprove => |p| remote::access_approve(context, p),
         AccessDeny => |p| remote::access_deny(context, p),
         AccessRemove => |p| remote::access_remove(context, p),
+        AccessForgetHost => |p| remote::access_forget_host(context, p),
         AccessSetupCode => |p| remote::access_setup_code(context, p),
         RemoteRevoke => |p| remote::revoke(context, p),
         AccountsList => |p| accounts::list(context, p),

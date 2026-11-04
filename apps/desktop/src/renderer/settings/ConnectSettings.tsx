@@ -437,7 +437,7 @@ function DeviceCard({
               onClick={choose(() => removeDialog.current?.showModal())}
             >
               <Trash2 aria-hidden />
-              Remove from this device…
+              Remove…
             </button>
           </>
         )}
@@ -473,11 +473,10 @@ function DeviceCard({
           className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
         >
           <form method="dialog" className="px-5 pt-4 pb-4">
-            <h2 className="text-reading font-semibold">Remove {device.name} from this device?</h2>
+            <h2 className="text-reading font-semibold">Remove {device.name}?</h2>
             <p className="mt-1.5 text-body text-muted-foreground">
-              Parallax here stops connecting to it, and its threads leave this sidebar. Nothing on{" "}
-              {device.name} changes, and your other computers still reach it. Add it again from Add
-              computer.
+              It leaves your account, and none of your computers or devices reach it anymore. Its
+              threads leave your sidebars. To add it again, run the setup on it from Add computer.
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button type="submit" className={quietButton}>
@@ -486,7 +485,16 @@ function DeviceCard({
               <button
                 type="submit"
                 className="rounded-md bg-red-600 px-3 py-1 text-body font-medium text-white hover:opacity-90"
-                onClick={() => void window.parallax.removeDevice(device.id)}
+                onClick={() =>
+                  void window.parallax.removeDevice(device.id).then((failed) => {
+                    if (failed)
+                      notify({
+                        tone: "error",
+                        title: `Couldn't remove ${device.name}`,
+                        body: failed,
+                      });
+                  })
+                }
               >
                 Remove
               </button>

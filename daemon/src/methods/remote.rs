@@ -5,11 +5,11 @@
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequestParams,
-    AccessSetupCodeParams, AccessSetupCodeResult, AccessState, RelayHostsParams, RelayHostsResult,
-    RelayIdParams, RelayIdResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
-    RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
-    RemoteSessionsResult,
+    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
+    AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
+    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayRegisterParams,
+    RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult,
+    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -134,6 +134,15 @@ pub(crate) async fn access_remove(
     params: AccessRemoveParams,
 ) -> Result<AccessState, ErrorObject> {
     access::remove(&context.daemon, &context.cancel, params.thumbprint).await?;
+    access_now(context).await
+}
+
+/// `access/forgetHost`.
+pub(crate) async fn access_forget_host(
+    context: &Context,
+    params: AccessForgetHostParams,
+) -> Result<AccessState, ErrorObject> {
+    access::forget_host(&context.daemon, &context.cancel, params.host_id).await?;
     access_now(context).await
 }
 

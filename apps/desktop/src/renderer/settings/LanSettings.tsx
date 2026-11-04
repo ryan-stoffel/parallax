@@ -130,8 +130,7 @@ export function LanSettings() {
     retry();
     setConfirmingRelay(undefined);
     const hosts = await window.parallax.removeRelayHost(hostId);
-    if (typeof hosts === "string")
-      return failed("Couldn't remove the computer from the relay", hosts);
+    if (typeof hosts === "string") return failed("Couldn't remove the computer", hosts);
     setRelayHosts(hosts);
   };
   const pair = async () => {
@@ -206,7 +205,7 @@ export function LanSettings() {
                   title={h.name || "Unnamed computer"}
                   description={
                     confirmingRelay === h.hostId
-                      ? "Remove this computer from the relay? One Parallax still connects to joins again, unless its Reach from anywhere is off."
+                      ? "Remove this computer from your account? None of your computers or devices reach it anymore."
                       : `On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`
                   }
                 >
@@ -219,7 +218,7 @@ export function LanSettings() {
                     <button
                       type="button"
                       className={quietButton}
-                      aria-label={`Remove ${h.name || "Unnamed computer"} from the relay`}
+                      aria-label={`Remove ${h.name || "Unnamed computer"} from your account`}
                       onClick={() => setConfirmingRelay(h.hostId)}
                     >
                       Remove

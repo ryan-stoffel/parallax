@@ -18,7 +18,7 @@ export type SavedAccount = {
   icon?: DeviceIcon;
   /** Turned off in this app: listed, with no connection. */
   off?: true;
-  /** Removed from this app's list. Kept, so only Add computer's Add back brings it back. */
+  /** From before Remove left the account (PLX-1312): discovery finishes removing it. */
   removed?: true;
   /** When a typed setup code ran against it, in ms since the epoch, within the last hour. */
   pairRuns?: number[];

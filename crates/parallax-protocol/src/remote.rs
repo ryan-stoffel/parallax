@@ -284,6 +284,14 @@ pub struct AccessRemoveParams {
     pub thumbprint: String,
 }
 
+/// Params of `access/forgetHost`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessForgetHostParams {
+    /// The relay id of the computer the user removed from their account.
+    pub host_id: String,
+}
+
 /// Params of `access/setupCode`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

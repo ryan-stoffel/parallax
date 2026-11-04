@@ -436,15 +436,14 @@ export interface ParallaxBridge {
    * Removes a device from this app's list until it's added again from Add computer. Nothing on
    * the device changes, and other computers still reach it.
    */
-  removeDevice(hostId: string): Promise<void>;
+  /** Takes a computer off the account for good. Resolves to why not, for people. */
+  removeDevice(hostId: string): Promise<string | undefined>;
   /**
    * Asks the account for its computers now (0091), as Settings > Connections does when it opens
    * and Add computer does while it's open, and starts again any connection to one that stopped
    * retrying.
    */
   discoverAccount(): Promise<void>;
-  /** The account's online computers removed from this app, for Add computer to offer back. */
-  removedComputers(): Promise<{ id: string; name: string }[]>;
   /**
    * Pairs with new account computer `hostId` with the 6-digit code it shows, from `plx connect` or
    * `showSetupCode` (0091). Each code is good for one try. Resolves to an error for people, or
@@ -825,6 +824,7 @@ export const withheldMethods = [
   "access/approve",
   "access/deny",
   "access/remove",
+  "access/forgetHost",
   "access/setupCode",
   // Revoking goes through `revokeDevice`, which also removes the device's key everywhere (0091).
   "remote/revoke",

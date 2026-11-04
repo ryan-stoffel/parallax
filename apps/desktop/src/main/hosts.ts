@@ -263,7 +263,6 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // Settings > Connections and Add computer ask for the account's computers when they open, and
   // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
-  ipcMain.handle("parallax:removedComputers", () => removedComputers());
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
@@ -1101,12 +1100,13 @@ function relayEnv(): Record<string, string> | undefined {
  * asks the relay. Answers the hosts, or why not.
  */
 async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
+  if (remove) {
+    const failed = await removeFromAccount(remove);
+    if (failed) return failed;
+  }
   const token = await account?.accessToken();
   if (!token) return "Sign in to Parallax from Profile in the sidebar first.";
-  const local = connections.get("local");
-  const answer = remove
-    ? await local?.request("relay/remove", { token, hostId: remove })
-    : await local?.request("relay/hosts", { token });
+  const answer = await connections.get("local")?.request("relay/hosts", { token });
   if (!answer) return "Parallax isn't connected to this computer's plxd.";
   return "error" in answer ? answer.error.message : answer.result.hosts;
 }
@@ -1580,22 +1580,54 @@ async function setDeviceEnabled(hostId: unknown, enabled: boolean): Promise<void
   broadcast("parallax:devices", deviceHosts());
 }
 
-/** `window.parallax.removeDevice`. The device stays saved as removed, so discovery skips it. */
-function removeDevice(hostId: unknown): void {
+/**
+ * `window.parallax.removeDevice`. An account computer leaves the account for good
+ * (`removeFromAccount`). A Tailscale device stays saved as removed, so discovery skips it. Resolves
+ * to an error for people.
+ */
+async function removeDevice(hostId: unknown): Promise<string | undefined> {
   const saved = accountOf(hostId);
-  if (saved) {
-    const { off: _off, ...rest } = saved;
-    updateAccount(saved.hostId, () => ({ ...rest, removed: true }));
-    dropAccountConnection(accountId(saved.hostId));
-    broadcast("parallax:devices", deviceHosts());
-    return;
-  }
+  if (saved) return removeFromAccount(saved.hostId);
   const device = deviceOf(hostId);
-  if (!device) return;
+  if (!device) return undefined;
   const { off: _off, ...rest } = device;
   keepDevices(savedDevices().map((d) => (d === device ? { ...rest, removed: true as const } : d)));
   dropDeviceConnection(deviceHostId(device.id));
   broadcast("parallax:devices", deviceHosts());
+  return undefined;
+}
+
+/**
+ * Ends account computer `relayId`'s association with the account (PLX-1312): turns its `relay` off
+ * when it answers, so it stops reconnecting, removes it from the relay, then forgets it here and on
+ * every computer this app reaches. Other apps drop it the next time they read the list. Setting it
+ * up again takes its code, as a new computer does. If the relay refuses, nothing is forgotten.
+ * Resolves to why not, for people.
+ */
+async function removeFromAccount(relayId: string): Promise<string | undefined> {
+  const token = await account?.accessToken();
+  if (!token) return "Sign in to Parallax from Profile in the sidebar first.";
+  const local = connections.get("local");
+  if (local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  const computer = connections.get(accountId(relayId));
+  if (computer?.state.status === "connected")
+    await computer.request("host/settings/set", { relay: false });
+  const answer = await local.request("relay/remove", { token, hostId: relayId });
+  if ("error" in answer) return answer.error.message;
+  await forgetComputer(relayId);
+  return undefined;
+}
+
+/** Forgets account computer `relayId` here and on every computer this app reaches. */
+async function forgetComputer(relayId: string): Promise<void> {
+  dropAccountConnection(accountId(relayId));
+  keepAccounts(savedAccounts().filter((a) => a.hostId !== relayId));
+  broadcast("parallax:devices", deviceHosts());
+  // An older plxd has no `access/forgetHost`, which leaves only what it kept for this computer.
+  await Promise.all(
+    accessHosts().map(([, each]) => each.request("access/forgetHost", { hostId: relayId })),
+  );
 }
 
 // Parallax Connect over the relay (0091): while signed in, this app keeps a connection to every
@@ -1706,6 +1738,12 @@ const discoverAccounts = coalesced(async () => {
   if (!token || local?.state.status !== "connected") return;
   const answer = await local.request("relay/hosts", { token });
   if ("error" in answer) return;
+  // Remove used to only hide a computer here (PLX-1312), so one saved that way finishes leaving.
+  for (const saved of savedAccounts().filter((a) => a.removed))
+    if (!answer.result.hosts.some((h) => h.hostId === saved.hostId))
+      await forgetComputer(saved.hostId);
+    else if (!(await removeFromAccount(saved.hostId)))
+      answer.result.hosts = answer.result.hosts.filter((h) => h.hostId !== saved.hostId);
   lastListed = listedKey(answer.result.hosts);
   const { accounts, changed } = mergeListed(savedAccounts(), answer.result.hosts);
   if (changed) {
@@ -1715,9 +1753,8 @@ const discoverAccounts = coalesced(async () => {
     keepAccounts(accounts);
   }
   offlineAccounts.clear();
-  onlineAccounts.clear();
   for (const each of answer.result.hosts)
-    (each.online ? onlineAccounts : offlineAccounts).add(accountId(each.hostId));
+    if (!each.online) offlineAccounts.add(accountId(each.hostId));
   for (const each of accounts) addAccountConnection(each);
   // A new computer that was offline may answer now.
   for (const [id, access] of accountAccess)
@@ -1725,16 +1762,6 @@ const discoverAccounts = coalesced(async () => {
       void askForCode(id);
   broadcast("parallax:devices", deviceHosts());
 });
-
-/**
- * `window.parallax.removedComputers`: the account's online computers this app was told to forget,
- * which Add computer offers to add back, as set up again or not (PLX-1304). Nothing else brings one
- * back, so a removed computer stays gone until the user asks.
- */
-const removedComputers = () =>
-  savedAccounts()
-    .filter((a) => a.removed && onlineAccounts.has(accountId(a.hostId)))
-    .map((a) => ({ id: accountId(a.hostId), name: a.name }));
 
 /** Which computers the account lists and which are online, to notice a change. */
 const listedKey = (hosts: RelayHost[]) =>
@@ -1883,8 +1910,6 @@ async function beginAccess(id: string): Promise<void> {
 
 /** Account computers the relay last listed as offline, by host id. */
 const offlineAccounts = new Set<string>();
-/** Account computers the relay last listed as online, by host id. */
-const onlineAccounts = new Set<string>();
 /** New account computers whose routes `askForCode` is probing, so one trigger probes once. */
 const probing = new Set<string>();
 

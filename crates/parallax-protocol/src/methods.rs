@@ -27,8 +27,8 @@ use ts_rs::TS;
 use crate::jsonrpc::CancelRequestParams;
 use crate::schedule::{PrFailureLogParams, PrFailureLogResult};
 use crate::{
-    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequestParams,
-    AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
+    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
+    AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
 };
 use crate::{
     AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
@@ -610,6 +610,9 @@ method_table! {
         AccessDeny = "access/deny": AccessRequestParams => AccessState;
         /// `access/remove`: removes a client's key for good and ends its sessions.
         AccessRemove = "access/remove": AccessRemoveParams => AccessState;
+        /// `access/forgetHost`: forgets a computer the user removed from their account: drops it
+        /// from the approved hosts and deletes this computer's saved session for it.
+        AccessForgetHost = "access/forgetHost": AccessForgetHostParams => AccessState;
         /// `access/setupCode`: a new code for a signed-in client to type, which replaces any
         /// pairing code waiting.
         AccessSetupCode = "access/setupCode": AccessSetupCodeParams => AccessSetupCodeResult;

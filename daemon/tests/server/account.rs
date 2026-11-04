@@ -5,13 +5,14 @@
 use std::path::Path;
 
 use parallax_protocol::methods::{
-    AccessApprove, AccessDeny, AccessGet, AccessMerge, AccessRemove, AccessSetupCode,
-    HostSettingsSet, RelayId, RelayRegister, RelaySign, RemoteRevoke, RemoteSessions,
+    AccessApprove, AccessDeny, AccessForgetHost, AccessGet, AccessMerge, AccessRemove,
+    AccessSetupCode, HostSettingsSet, RelayId, RelayRegister, RelaySign, RemoteRevoke,
+    RemoteSessions,
 };
 use parallax_protocol::{
-    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequestParams,
-    AccessSetupCodeParams, HostSettingsSetParams, RelayIdParams, RelayRegisterParams,
-    RelaySignParams, RemoteRevokeParams, RemoteSessionsParams,
+    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
+    AccessRequestParams, AccessSetupCodeParams, HostSettingsSetParams, RelayIdParams,
+    RelayRegisterParams, RelaySignParams, RemoteRevokeParams, RemoteSessionsParams,
 };
 use plxd::remote::{self, SignIn};
 use ring::rand::SystemRandom;
@@ -179,6 +180,43 @@ async fn fake_relay(answer: String) -> String {
         }
     });
     url
+}
+
+#[tokio::test]
+async fn forgetting_a_computer_drops_its_approval_and_this_computers_session_for_it() {
+    const OTHER: &str = "kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA";
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (_server, mut client, _, _) = host(dir.path(), &issuer).await;
+    client
+        .call::<AccessMerge>(AccessMergeParams {
+            approved_clients: Vec::new(),
+            removed_clients: Vec::new(),
+            approved_hosts: vec![OTHER.to_owned()],
+        })
+        .await
+        .unwrap();
+    let saved = dir.path().join("remote-hosts");
+    std::fs::create_dir_all(&saved).unwrap();
+    std::fs::write(saved.join(OTHER), "{}").unwrap();
+    std::fs::write(saved.join(format!("{OTHER}.requests")), "[]").unwrap();
+
+    let state = client
+        .call::<AccessForgetHost>(AccessForgetHostParams {
+            host_id: OTHER.to_owned(),
+        })
+        .await
+        .unwrap();
+    assert!(state.approved_hosts.is_empty());
+    assert_eq!(std::fs::read_dir(&saved).unwrap().count(), 0);
+
+    // Doing it again, as a second computer's Remove would, changes nothing.
+    client
+        .call::<AccessForgetHost>(AccessForgetHostParams {
+            host_id: OTHER.to_owned(),
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
