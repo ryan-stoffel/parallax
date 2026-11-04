@@ -83,7 +83,7 @@ test("a computer's row says where it stands, and never asks for a tap", () => {
   expect(computerStatus({ ...row, code: "123 456" })).toBe("Waiting for you to allow · 123 456");
   expect(computerStatus(row)).toBe("Connects once allowed");
   expect(computerStatus({ ...row, stopped: true })).toBe("Not connected");
-  expect(computerStatus({ ...row, usesAny: true })).toBe("Connects after you continue");
+  expect(computerStatus({ ...row, usesAny: true })).toBe("Not connected yet");
 });
 
 test("asking stays on a computer that still holds the request, and passes one that doesn't", async () => {

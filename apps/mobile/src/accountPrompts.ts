@@ -60,14 +60,26 @@ export function setUpComputer(
 
 /**
  * Sets up a computer no other device uses yet, with the code its `plx connect` shows: asks which
- * of `computers` that is first, if there's more than one. Calls `done` once this phone may use it.
+ * of `computers` that is first, if there's more than one. `started` and `ended` bracket the run,
+ * and `done` follows once this phone may use it.
  */
-export function enterSetupCode(accounts: AccountHosts, computers: Listed[], done: (hostId: string) => void) {
+export function enterSetupCode(
+  accounts: AccountHosts,
+  computers: Listed[],
+  handlers: { started: () => void; ended: () => void; done: (hostId: string) => void },
+) {
   const enter = ({ hostId, name }: Listed) =>
     askSetupCode(name, (code) => {
-      const failed = (e: unknown) => Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
-      if (code.length !== 6) return failed(new Error("The code has 6 digits."));
-      accounts.setup(hostId, [], code).then(() => done(hostId), failed);
+      const failed = (e: unknown) => {
+        handlers.ended();
+        Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
+      };
+      if (code.length !== 6) return Alert.alert(`Couldn't set up ${name}`, "The code has 6 digits.");
+      handlers.started();
+      accounts.setup(hostId, [], code).then(() => {
+        handlers.ended();
+        handlers.done(hostId);
+      }, failed);
     });
   if (computers.length === 1) return enter(computers[0]!);
   Alert.alert("Which computer shows the code?", undefined, [

@@ -146,6 +146,8 @@ export function Onboarding({
   const [unanswered, setUnanswered] = useState(false);
   const asking = useRef(false);
   const allowed = useRef(false);
+  /** A typed code is running, or let this phone in: an answer to its request is no Allow then. */
+  const typed = useRef(false);
 
   /** Asks on its own, once at a time, with no taps here. One Allow elsewhere covers them all. */
   const ask = async (found: Listed[]) => {
@@ -159,12 +161,17 @@ export function Onboarding({
     setStopped(accounts.askingStopped);
     setUnanswered(asked === "unreachable");
     // The rest connect once this phone reaches its computers, which vouch for them.
-    if (asked === "allowed") {
+    if (asked === "allowed" && !typed.current) {
       allowed.current = true;
       setGates({});
-    } else if (accounts.askingStopped)
+    } else if (accounts.askingStopped || accounts.usesAny)
+      // No request is waiting now, and a typed code covers only its own computer.
       setGates((g) =>
-        Object.fromEntries(Object.keys(g).map((id) => [id, { kind: "setup" as const }])),
+        Object.fromEntries(
+          Object.keys(g)
+            .filter((id) => !accounts.trusts(id))
+            .map((id) => [id, { kind: "setup" as const }]),
+        ),
       );
   };
 
@@ -209,10 +216,18 @@ export function Onboarding({
    */
   const enterCode = (computers: Listed[]) =>
     accounts &&
-    enterSetupCode(accounts, computers, (hostId) => {
-      setStopped(undefined);
-      setUnanswered(false);
-      setGates(({ [hostId]: _, ...rest }) => rest);
+    enterSetupCode(accounts, computers, {
+      started: () => {
+        typed.current = true;
+      },
+      ended: () => {
+        typed.current = !!accounts.usesAny;
+      },
+      done: (hostId) => {
+        setStopped(undefined);
+        setUnanswered(false);
+        setGates(({ [hostId]: _, ...rest }) => rest);
+      },
     });
 
   if (step === "pair")
@@ -246,7 +261,7 @@ export function Onboarding({
                 key={l.hostId}
                 listed={l}
                 gate={gates[l.hostId]}
-                stopped={!!stopped}
+                stopped={!!stopped || !accounts}
                 usesAny={!!accounts?.usesAny}
               />
             ))}
