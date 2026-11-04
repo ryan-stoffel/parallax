@@ -9,7 +9,8 @@ $ProgressPreference = 'SilentlyContinue'
 
 function Test-Node {
   if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) { return $false }
-  $version = & node.exe -p 'process.versions.node.split(".")[0]'
+  # Windows PowerShell strips double quotes from a native command's arguments.
+  $version = (& node.exe --version) -replace '^v(\d+).*$', '$1'
   return [int]$version -ge 20
 }
 
