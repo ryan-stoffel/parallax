@@ -782,6 +782,13 @@ body {
 .pane-edge[data-marked] {
   --edge: color-mix(in srgb, var(--foreground) 32%, var(--background));
 }
+/* On glass, a solid outline can match what's behind the window, so it's a tint of the text instead. */
+:root.translucent .pane-edge {
+  --edge: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+:root.translucent .pane-edge[data-marked] {
+  --edge: color-mix(in srgb, var(--foreground) 45%, transparent);
+}
 .pane-card {
   border: 1px solid var(--edge);
 }
@@ -810,6 +817,12 @@ body {
   right: -11px;
   border-left: 1px solid var(--edge);
   border-bottom-left-radius: 11px;
+}
+
+/* On glass nothing can cover what's beyond a curve, so the tab sits on the card's line instead. */
+:root.translucent .tab-shown::before,
+:root.translucent .tab-shown::after {
+  display: none;
 }
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
