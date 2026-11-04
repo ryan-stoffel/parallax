@@ -27,6 +27,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -55,13 +56,22 @@ import {
   threadOrchestrators,
   waitingOf,
 } from "../../desktop/src/renderer/threads";
+import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Avatar } from "./Account";
 import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
 import { GlassButton } from "./Glass";
 import { ProviderLogo } from "./logos";
+import { setStarted } from "./started";
 import { OrchestratorGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
 import { ago, useNav, useShow } from "./nav";
+import {
+  agentsLine,
+  canOrchestrate,
+  orchestratorChildren,
+  startOrchestrator,
+  type OrchestratorChild,
+} from "./orchestratorLogic";
 import { getPrefs } from "./prefs";
 import { AttentionBadge, Button, DeviceIcon, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
 
@@ -95,8 +105,8 @@ export interface ProjectEntry {
   computer: Computer;
   orchestrator: Orchestrator;
   attention: Attention;
-  /** How many threads it has, but its orchestrator, for Search. */
-  threads: number;
+  /** Its child threads, most urgent first. */
+  children: OrchestratorChild[];
   at: string;
 }
 
@@ -111,61 +121,129 @@ export function orchestratorsOf(computers: Computer[]): ProjectEntry[] {
         computer,
         orchestrator,
         attention: orchestratorAttention(runs, (id) => asksOf(state, id)),
-        threads: runs.filter((r) => r.id !== orchestrator.run).length,
+        children: orchestratorChildren(state, orchestrator, inOrchestrator),
         at: runs.reduce((latest, r) => (r.updatedAt > latest ? r.updatedAt : latest), ""),
       };
     });
   });
 }
 
-/** An orchestrator's row: its icon and name, its status, and its computer with its folder there. */
+/**
+ * Starting an orchestrator with no run: `ask` asks for its first message, which plxd needs, starts
+ * it, and makes its chat the main view. `starting` is the orchestrator on its way.
+ */
+export function useStartOrchestrator() {
+  const show = useShow();
+  const [starting, setStarting] = useState<string>();
+  const ask = ({ computer, orchestrator }: ProjectEntry) =>
+    Alert.prompt(`Start ${orchestrator.name}`, "What should it work on?", (text) => {
+      const prompt = text.trim();
+      if (!prompt) return;
+      const runId = uuidv7();
+      setStarting(orchestrator.id);
+      void startOrchestrator(computer.view, orchestrator.id, runId, prompt).then((failed) => {
+        setStarting(undefined);
+        if (failed) return Alert.alert(`Couldn't start ${orchestrator.name}`, failed);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Keyboard.dismiss();
+        setStarted(runId, prompt);
+        show({ name: "Thread", params: { hostId: computer.machine.id, runId } });
+      });
+    });
+  return { ask, starting };
+}
+
+/**
+ * An orchestrator's row: its icon and name, its status, and its computer with its children's count,
+ * or its folder with none. It opens its chat, or with no run starts it where its computer can. Its
+ * chevron unfolds its children, each with its status, opening its own chat.
+ */
 function OrchestratorRow({ entry }: { entry: ProjectEntry }) {
   const c = useColors();
   const show = useShow();
-  const { orchestrator, computer, attention } = entry;
+  const { ask, starting } = useStartOrchestrator();
+  const [open, setOpen] = useState(false);
+  const { orchestrator, computer, attention, children } = entry;
+  const hostId = computer.machine.id;
   const orchestratorRun = orchestrator.run;
+  const startable = !orchestratorRun && canOrchestrate(computer) && !starting;
+  const unstarted = !orchestratorRun && (starting ? "Starting…" : "Not started");
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${orchestrator.name}, on ${computer.machine.name}`}
-      disabled={!orchestratorRun}
-      onPress={() => orchestratorRun && show({ name: "Thread", params: { hostId: computer.machine.id, runId: orchestratorRun } })}
-      style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
-    >
-      <View style={styles.line}>
-        {orchestrator.icon?.image ? (
-          <View style={styles.orchestratorIcon}>
-            <OrchestratorGlyph icon={orchestrator.icon} size={30} />
-          </View>
-        ) : (
-          <View style={[styles.orchestratorIcon, { backgroundColor: c.selected }]}>
-            <OrchestratorGlyph icon={orchestrator.icon} size={16} />
-          </View>
-        )}
-        <View style={{ flex: 1, gap: 2 }}>
+    <View>
+      <View style={styles.orchestrator}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${startable ? "Start " : ""}${orchestrator.name}, on ${computer.machine.name}`}
+          disabled={!orchestratorRun && !startable}
+          onPress={() =>
+            orchestratorRun ? show({ name: "Thread", params: { hostId, runId: orchestratorRun } }) : ask(entry)
+          }
+          style={({ pressed }) => [styles.row, { flex: 1 }, pressed && { backgroundColor: c.hover }]}
+        >
           <View style={styles.line}>
-            <T numberOfLines={1} style={{ flex: 1, fontWeight: attention === "needsYou" ? "600" : "500" }}>
-              {orchestrator.name}
-            </T>
-            {attention === "settled" ? (
-              !!entry.at && (
-                <T faint style={styles.small}>
-                  {ago(entry.at)}
-                </T>
-              )
+            {orchestrator.icon?.image ? (
+              <View style={styles.orchestratorIcon}>
+                <OrchestratorGlyph icon={orchestrator.icon} size={30} />
+              </View>
             ) : (
-              <AttentionBadge attention={attention} />
+              <View style={[styles.orchestratorIcon, { backgroundColor: c.selected }]}>
+                <OrchestratorGlyph icon={orchestrator.icon} size={16} />
+              </View>
             )}
+            <View style={{ flex: 1, gap: 2 }}>
+              <View style={styles.line}>
+                <T numberOfLines={1} style={{ flex: 1, fontWeight: attention === "needsYou" ? "600" : "500" }}>
+                  {orchestrator.name}
+                </T>
+                {attention === "settled" ? (
+                  !!entry.at && (
+                    <T faint style={styles.small}>
+                      {ago(entry.at)}
+                    </T>
+                  )
+                ) : (
+                  <AttentionBadge attention={attention} />
+                )}
+              </View>
+              <View style={styles.line}>
+                <DeviceIcon name={computer.machine.name} size={13} color={c.faintForeground} />
+                <T faint numberOfLines={1} ellipsizeMode="head" style={{ ...styles.small, flex: 1 }}>
+                  {[unstarted, agentsLine(children)].filter(Boolean).join(" · ") || homeless(orchestrator.repoPath)}
+                </T>
+              </View>
+            </View>
           </View>
-          <View style={styles.line}>
-            <DeviceIcon name={computer.machine.name} size={13} color={c.faintForeground} />
-            <T faint numberOfLines={1} ellipsizeMode="head" style={{ ...styles.small, flex: 1 }}>
-              {homeless(orchestrator.repoPath)}
-            </T>
-          </View>
-        </View>
+        </Pressable>
+        {children.length > 0 && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${orchestrator.name}'s threads, ${children.length}`}
+            accessibilityState={{ expanded: open }}
+            hitSlop={6}
+            onPress={() => setOpen(!open)}
+            style={({ pressed }) => [styles.fold, pressed && { opacity: 0.6 }]}
+          >
+            <View style={{ transform: [{ rotate: open ? "180deg" : "0deg" }] }}>
+              <Icon icon={ChevronDown} size={16} color={c.faintForeground} />
+            </View>
+          </Pressable>
+        )}
       </View>
-    </Pressable>
+      {open &&
+        children.map(({ run, title, attention: status }) => (
+          <Pressable
+            key={run.id}
+            accessibilityRole="button"
+            onPress={() => show({ name: "Thread", params: { hostId, runId: run.id } })}
+            style={({ pressed }) => [styles.child, pressed && { backgroundColor: c.hover }]}
+          >
+            <T numberOfLines={1} style={{ flex: 1, fontSize: 14 }}>
+              {title}
+            </T>
+            <AttentionBadge attention={status} />
+          </Pressable>
+        ))}
+    </View>
   );
 }
 
@@ -807,6 +885,10 @@ const styles = StyleSheet.create({
   drawer: { flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 20, paddingVertical: 8 },
   rule: { flex: 1, height: StyleSheet.hairlineWidth },
   orchestratorIcon: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", marginRight: 4 },
+  orchestrator: { flexDirection: "row", alignItems: "center" },
+  fold: { width: 32, height: 44, marginRight: 8, alignItems: "center", justifyContent: "center" },
+  // Its title lines up under the orchestrator's name.
+  child: { flexDirection: "row", alignItems: "center", gap: 6, marginLeft: 52, marginRight: 8, paddingHorizontal: 8, paddingVertical: 7, borderRadius: 10 },
   swipe: { marginVertical: 2, borderRadius: 12, borderCurve: "continuous", justifyContent: "center" },
   swipeButton: { width: SWIPE + 8, flex: 1, alignItems: "center", justifyContent: "center", gap: 3 },
   row: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, gap: 3 },

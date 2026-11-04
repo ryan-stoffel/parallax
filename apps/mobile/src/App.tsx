@@ -33,6 +33,7 @@ import { GlassButton, SidebarIcon } from "./Glass";
 import { loadSetup, saveSetup, type Setup } from "./machines";
 import { SidebarControl, type PullRequestScreens, type Screens, type SettingsScreens } from "./nav";
 import { NewThreadScreen, StartThreadScreen } from "./NewThread";
+import { NewOrchestratorScreen } from "./NewOrchestrator";
 import { Loading, Onboarding } from "./Onboarding";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
 import { alertFor, phaseOf, type Phase } from "./alerts";
@@ -451,6 +452,7 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
             />
             {/* Its title is the page's own: a native header here leaves the list's foot under the screen's edge. */}
             <Stack.Screen name="NewThread" component={NewThreadScreen} options={{ ...sheet(c), headerShown: false }} />
+            <Stack.Screen name="NewOrchestrator" component={NewOrchestratorScreen} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen name="Search" component={SearchScreen} options={{ ...sheet(c), headerShown: false }} />
             {/* The sheet's grabber is its own; each page's header is its stack's. */}
             <Stack.Screen name="Settings" component={SettingsSheet} options={{ ...sheet(c), headerShown: false }} />
