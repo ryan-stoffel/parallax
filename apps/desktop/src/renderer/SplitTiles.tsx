@@ -57,10 +57,9 @@ interface DropTarget {
 
 /**
  * The window's panes, as cards in their Fibonacci layout (splitLayout.ts) on the window's background.
- * Each card's tabs sit in a notch cut from its top left, as the fill beside them rises to meet the
- * top of the window. `leading` starts the first card's notch, and `controls` get a notch of their own
- * at the top right of the top right card, giving up their room to its tabs when it's narrow. As many
- * panes tile as keep `minTile`: the rest stack in the
+ * Each card has a row of tabs above it, on the window's background. `leading` starts the first card's
+ * row, and `controls` end the top right card's, giving up their room to its tabs when it's narrow. As
+ * many panes tile as keep `minTile`: the rest stack in the
  * last tile, which shows the focused one, or the last one shown, and lists all their tabs. `maximized`
  * stacks them all in one tile. Views are siblings keyed by `key`, so a tile coming, going, or stacking
  * never remounts the others, and they glide to their places.
@@ -212,7 +211,7 @@ export function SplitTiles({
             className={`titlebar @container absolute flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
           >
             <div
-              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${tile === 0 && leading ? `pl-3 ${leadingClass}` : "pl-1"}`}
+              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${tile === 0 && leading ? `pl-3 ${leadingClass}` : "pl-3.5"}`}
             >
               {tile === 0 && leading}
               <ThreadTabs
@@ -231,14 +230,7 @@ export function SplitTiles({
                 closable={closable}
               />
             </div>
-            {/* With too little room between the tabs and the controls, the top right card doesn't rise. */}
-            <div
-              className={`relative min-w-3 flex-1 ${corner && controls ? "@container/rise" : ""}`}
-            >
-              <div
-                className={`card-rise absolute inset-0 rounded-t-xl bg-pane ${corner && controls ? "card-rise-end @max-[5rem]/rise:hidden" : ""}`}
-              />
-            </div>
+            <div className="min-w-3 flex-1" />
             {corner && controls && (
               <div
                 className={`flex min-w-0 shrink items-center justify-end gap-2 overflow-clip pr-1.5 pl-3 ${controlsClass}`}
@@ -252,14 +244,13 @@ export function SplitTiles({
       {items.map(({ key, node }, i) => {
         const tile = tileOf(i);
         const active = activeIn(tile) === i;
-        const corner = tile === Math.min(1, last);
         return (
           <div
             key={key}
             // A stacked pane's view stays mounted, out of sight and reach.
             inert={!active}
             style={placed(tiles[tile]!, gutter, stripHeight)}
-            className={`absolute flex min-h-0 min-w-0 overflow-clip rounded-b-xl rounded-tl-xl transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${corner && controls ? "rounded-tr-xl" : ""} ${active ? "z-[1] bg-pane" : "invisible"}`}
+            className={`absolute flex min-h-0 min-w-0 overflow-clip rounded-xl transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
             {node}
             {i === focused && details}

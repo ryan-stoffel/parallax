@@ -773,47 +773,27 @@ body {
   }
 }
 
-/* A pane's card rises beside its tabs to meet the top of the window (SplitTiles.tsx). The corner it
-   makes with the card under the tabs curves away from them, on its right too when controls sit
-   there. It overlaps the card a pixel so antialiasing never shows a seam. */
-.card-rise {
-  margin-bottom: -1px;
+/* A pane's shown tab (ThreadTabs.tsx) is part of its card: the curves at its foot join it, and for
+   the focused pane among several, a line follows its top edge. */
+.tab-shown[data-marked] {
+  box-shadow: inset 0 2px 0 var(--accent);
 }
-.card-rise::before,
-.card-rise-end::after {
-  content: "";
-  position: absolute;
-  bottom: 1px;
-  width: 12px;
-  height: 12px;
-  pointer-events: none;
-}
-.card-rise::before {
-  left: -12px;
-  background: radial-gradient(circle at 0 0, transparent 11.5px, var(--pane) 12px);
-}
-.card-rise-end::after {
-  right: -12px;
-  background: radial-gradient(circle at 100% 0, transparent 11.5px, var(--pane) 12px);
-}
-
-/* A pane's shown tab (ThreadTabs.tsx) is part of its card: the curves at its foot join it. */
 .tab-shown::before,
 .tab-shown::after {
   content: "";
   position: absolute;
   bottom: 0;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   pointer-events: none;
 }
 .tab-shown::before {
-  left: -8px;
-  background: radial-gradient(circle at 0 0, transparent 7.5px, var(--pane) 8px);
+  left: -10px;
+  background: radial-gradient(circle at 0 0, transparent 9.5px, var(--pane) 10px);
 }
 .tab-shown::after {
-  right: -8px;
-  background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--pane) 8px);
+  right: -10px;
+  background: radial-gradient(circle at 100% 0, transparent 9.5px, var(--pane) 10px);
 }
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's

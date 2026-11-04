@@ -27,9 +27,9 @@ function dropOf(e: DragEvent): TabDrop | undefined {
 const accepted = [tabDragType, threadDragType];
 
 /**
- * A pane's tabs (PLX-1289), in the notch of its card, then a button that opens a new one. The shown
+ * A pane's tabs (PLX-1289), in a row above its card, then a button that opens a new one. The shown
  * tab is part of the card: its color, joined to it by curves at its foot (.tab-shown). With `marked`,
- * a line tops it, for the focused pane among several. A tab drags along the tabs or to another pane's
+ * for the focused pane among several, a line follows its top edge. A tab drags along the tabs or to another pane's
  * to move there, and into a pane to open beside it. A sidebar thread dropped here gets a tab where it
  * lands, which a bar shows. A middle click closes a tab.
  */
@@ -103,7 +103,7 @@ export function ThreadTabs({
         ref={list}
         role="tablist"
         aria-label="Open tabs"
-        className="flex h-full min-w-0 items-end gap-0.5 overflow-x-auto px-2"
+        className="flex h-full min-w-0 items-end gap-0.5 overflow-x-auto px-2.5"
       >
         {tabs.map((tab, i) => {
           const selected = tab.id === active;
@@ -123,18 +123,13 @@ export function ThreadTabs({
                 e.preventDefault();
                 onClose(tab.id);
               }}
-              className={`group/tab relative flex max-w-56 min-w-16 shrink items-center ${selected ? "tab-shown h-8 rounded-t-lg bg-pane" : "mb-0.5 h-7 rounded-md hover:bg-hover"}`}
+              className={`group/tab relative flex max-w-56 min-w-16 shrink items-center ${selected ? "tab-shown h-10 rounded-t-[10px] bg-pane" : "mb-1.5 h-7 rounded-md hover:bg-hover"}`}
+              data-marked={selected && marked ? "" : undefined}
             >
               {(landing === tab.id || (landing === null && last)) && (
                 <span
                   aria-hidden
                   className={`pointer-events-none absolute inset-y-0.5 z-[1] w-0.5 rounded-full bg-accent ${last && landing === null ? "-right-0.5" : "-left-0.5"}`}
-                />
-              )}
-              {selected && marked && (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-x-2 top-0 h-0.5 rounded-b-full bg-accent"
                 />
               )}
               <button
@@ -163,7 +158,13 @@ export function ThreadTabs({
           );
         })}
       </div>
-      <IconButton label="New tab" command="newTab" size="sm" className="-ml-1" onClick={onNew}>
+      <IconButton
+        label="New tab"
+        command="newTab"
+        size="sm"
+        className="-ml-1 self-end mb-2"
+        onClick={onNew}
+      >
         <Plus />
       </IconButton>
     </div>
