@@ -280,7 +280,7 @@ export function TerminalDrawer({
       aria-label="Terminal"
       hidden={!open}
       style={{ height }}
-      className="pane-edge pane-card relative mx-1.5 mb-1.5 flex shrink-0 flex-col rounded-xl bg-pane"
+      className="pane-edge pane-card relative mx-1.5 mb-1.5 flex shrink-0 flex-col rounded-prompt bg-pane"
     >
       <div
         role="separator"

@@ -212,7 +212,7 @@ export function SplitTiles({
             className={`titlebar @container absolute z-[2] flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
           >
             <div
-              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${tile === 0 && leading ? `pl-3 ${leadingClass}` : "pl-3.5"}`}
+              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${tile === 0 && leading ? `pl-3 ${leadingClass}` : "pl-[22px]"}`}
             >
               {tile === 0 && leading}
               <ThreadTabs
@@ -252,7 +252,7 @@ export function SplitTiles({
             inert={!active}
             style={placed(tiles[tile]!, gutter, stripHeight)}
             data-marked={visible > 1 && i === focused ? "" : undefined}
-            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-xl transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
+            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
             {node}
             {i === focused && details}

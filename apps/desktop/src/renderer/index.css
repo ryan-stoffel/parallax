@@ -772,13 +772,15 @@ body {
 }
 
 /* A pane's card and its shown tab (ThreadTabs.tsx) are one outline, which shows on a window the
-   same color as the card, as dark mode's true black is. The tab's foot covers the card's top edge,
-   and curves join the two, covering the foot of the tab's sides. The focused pane among several has a brighter outline. */
+   same color as the card, as dark mode's true black is. It's a solid color, so overlapping strokes
+   don't brighten where they meet. The tab's foot covers the card's top edge, and at each side a
+   rounded border curves out to it, its shadow, clipped to its box, covering what's beyond the curve.
+   The focused pane among several has a brighter outline. */
 .pane-edge {
-  --edge: var(--border);
+  --edge: color-mix(in srgb, var(--foreground) 14%, var(--background));
 }
 .pane-edge[data-marked] {
-  --edge: color-mix(in srgb, var(--foreground) 28%, transparent);
+  --edge: color-mix(in srgb, var(--foreground) 32%, var(--background));
 }
 .pane-card {
   border: 1px solid var(--edge);
@@ -795,26 +797,19 @@ body {
   width: 11px;
   height: 11px;
   pointer-events: none;
+  border-bottom: 1px solid var(--edge);
+  box-shadow: 0 0 0 11px var(--pane);
+  clip-path: inset(0);
 }
 .tab-shown::before {
   left: -11px;
-  background: radial-gradient(
-    circle at 0 0,
-    transparent 9.5px,
-    var(--edge) 10px,
-    var(--edge) 10.5px,
-    var(--pane) 11px
-  );
+  border-right: 1px solid var(--edge);
+  border-bottom-right-radius: 11px;
 }
 .tab-shown::after {
   right: -11px;
-  background: radial-gradient(
-    circle at 100% 0,
-    transparent 9.5px,
-    var(--edge) 10px,
-    var(--edge) 10.5px,
-    var(--pane) 11px
-  );
+  border-left: 1px solid var(--edge);
+  border-bottom-left-radius: 11px;
 }
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's

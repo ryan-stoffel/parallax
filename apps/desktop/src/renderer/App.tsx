@@ -1595,7 +1595,7 @@ export function App() {
 
   // A full page, as one card on the window's background.
   const pageCard =
-    "pane-edge pane-card m-1.5 flex min-h-0 flex-1 flex-col overflow-clip rounded-xl bg-pane";
+    "pane-edge pane-card m-1.5 flex min-h-0 flex-1 flex-col overflow-clip rounded-prompt bg-pane";
 
   const page = (
     <div className="flex h-full">
