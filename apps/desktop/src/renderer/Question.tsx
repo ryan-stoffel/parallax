@@ -37,14 +37,14 @@ import {
   fill,
   isAnswered,
   questionsOf,
+  SKIPPED,
   type Choice,
   type Filled,
   type Question,
 } from "./questions";
 import { IconButton } from "./ui";
 
-/** What the agent reads when the user skips, since no answer may otherwise read as a denial. */
-export const SKIPPED = "The user skipped this question. Continue without an answer.";
+export { SKIPPED };
 
 const unanswered: Choice = { picked: [], typed: "" };
 

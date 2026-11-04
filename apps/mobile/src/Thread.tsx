@@ -11,7 +11,7 @@ import type { NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@r
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
-import { Check, ChevronRight, Copy, FoldVertical, Hand, KeyRound, RotateCcw, WifiOff } from "lucide-react-native";
+import { Check, ChevronRight, Copy, FoldVertical, Hand, KeyRound, MessageCircleQuestion, RotateCcw, WifiOff } from "lucide-react-native";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Alert,
@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { splitFiles, isImagePath } from "../../desktop/src/renderer/attachments";
 import { attentionOf } from "../../desktop/src/renderer/attention";
+import { isQuestion } from "../../desktop/src/renderer/questions";
 import { activity, stepLabel, summarize, toolKind } from "../../desktop/src/renderer/steps";
 import { asksOf, parentOf } from "../../desktop/src/renderer/threads";
 import {
@@ -51,6 +52,7 @@ import { MessageMenu } from "./MessageMenu";
 import type { Screens } from "./nav";
 import { DiffStats } from "./PullRequestParts";
 import { setViewing } from "./push";
+import { questionLine } from "./questionLogic";
 import { TranscriptSkeleton } from "./Skeleton";
 import { startedPrompt } from "./started";
 import { ThreadStrips } from "./ThreadStrips";
@@ -309,16 +311,34 @@ async function readPicture(hostId: string, f: DocRef): Promise<string | undefine
 
 /**
  * A permission request's line: waiting, its card pinned over the composer (ThreadStrips.tsx), then
- * how it was answered.
+ * how it was answered. An agent's question reads as what it asked, with the answers under it.
  */
 function ApprovalLine({ item }: { item: Extract<Item, { kind: "approval" }> }) {
   const c = useColors();
-  return (
+  const question = questionLine(item);
+  const line = (
     <TraceLine
-      icon={<Icon icon={Hand} size={15} color={item.resolved ? c.mutedForeground : c.warning} />}
-      title={titleOf(item, undefined, false)}
+      icon={<Icon icon={question ? MessageCircleQuestion : Hand} size={15} color={item.resolved ? c.mutedForeground : c.warning} />}
+      title={question?.title ?? titleOf(item, undefined, false)}
     />
   );
+  if (!question?.answers) return line;
+  return (
+    <View>
+      {line}
+      <T faint numberOfLines={2} style={{ ...styles.trace, marginLeft: 24 }}>
+        {question.answers}
+      </T>
+    </View>
+  );
+}
+
+/** Items without the tool calls of an agent's questions, whose own lines say it, as the desktop's. */
+function withoutQuestionCalls(items: readonly Item[]): readonly Item[] {
+  const asked = new Set(
+    items.flatMap((i) => (i.kind === "approval" && i.request.callId && isQuestion(i.request) ? [i.request.callId] : [])),
+  );
+  return asked.size === 0 ? items : items.filter((i) => i.kind !== "tool" || !asked.has(i.callId));
 }
 
 /**
@@ -616,7 +636,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   );
   const logged = new Set(transcript.items.map((i) => (i.kind === "user" ? i.turnId : undefined)));
   const pending = waiting.filter((m) => m.threadId === runId && !logged.has(m.id));
-  const rows = groupWork(transcript.items.filter((i) => i.kind !== "session" && i.kind !== "modelSwitch"));
+  const rows = groupWork(withoutQuestionCalls(transcript.items).filter((i) => i.kind !== "session" && i.kind !== "modelSwitch"));
   const replies = useMemo(() => turnReplies(rows, runs), [transcript.items, runs]);
   // A thread started on this phone shows its prompt until the transcript has it, which plxd logs
   // with no turn id, so it's matched by there being none.

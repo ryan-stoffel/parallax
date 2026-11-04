@@ -1,8 +1,9 @@
 // What sits over a thread's composer, as on the desktop (AgentChat.tsx): the requests waiting on the
-// user, pinned so they can't scroll away (the oldest permission request, then a secret the agent
-// asks for), and the tabs tucked behind the box (ComposerTabs.tsx): whose child the thread is, its
-// subagents at work, what a settled turn still waits on, the goal, the plan, and the queue. The
-// first tab shows in full and the rest compact, on one row; a tap opens a tab's details above it.
+// user, pinned so they can't scroll away (the oldest permission request or agent's question, which
+// QuestionCard.tsx draws, then a secret the agent asks for), and the tabs tucked behind the box
+// (ComposerTabs.tsx): whose child the thread is, its subagents at work, what a settled turn still
+// waits on, the goal, the plan, and the queue. The first tab shows in full and the rest compact, on
+// one row; a tap opens a tab's details above it.
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
@@ -29,6 +30,7 @@ import type {
   QueuedMessage,
 } from "../../desktop/src/protocol/generated/protocol";
 import { latestPlan } from "../../desktop/src/renderer/plans";
+import { questionsOf } from "../../desktop/src/renderer/questions";
 import { inputText, toolKind } from "../../desktop/src/renderer/steps";
 import {
   acceptsFile,
@@ -49,6 +51,7 @@ import {
 import { presentWaiting } from "../../desktop/src/renderer/waiting";
 import { DiffView } from "./Diff";
 import { editRows } from "./diffLogic";
+import { QuestionCard } from "./QuestionCard";
 import { font } from "./theme";
 import { Button, Dot, Icon, KindIcon, T, useColors, WorkingMark } from "./ui";
 
@@ -119,7 +122,10 @@ function ApprovalCard({
   );
 }
 
-/** The thread's permission requests, oldest first: one card at a time, gone once answered here. */
+/**
+ * The thread's permission requests, oldest first: one card at a time, an agent's questions as their
+ * form and any other as Deny and Allow, gone once answered here.
+ */
 function PinnedApprovals({ hostId, runId, items }: { hostId: string; runId: string; items: readonly Item[] }) {
   // Answered here, so the card goes before plxd's `approvalResolved` arrives.
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
@@ -127,16 +133,21 @@ function PinnedApprovals({ hostId, runId, items }: { hostId: string; runId: stri
   const head = waiting[0];
   if (!head) return null;
   const id = head.request.approvalId;
-  return (
-    <ApprovalCard
-      key={id}
-      hostId={hostId}
-      runId={runId}
-      item={head}
-      count={waiting.length}
-      onAnswered={() => setAnswered((prev) => new Set(prev).add(id))}
-    />
-  );
+  const onAnswered = () => setAnswered((prev) => new Set(prev).add(id));
+  const questions = questionsOf(head.request);
+  if (questions.length > 0)
+    return (
+      <QuestionCard
+        key={id}
+        hostId={hostId}
+        runId={runId}
+        request={head.request}
+        questions={questions}
+        count={waiting.length}
+        onAnswered={onAnswered}
+      />
+    );
+  return <ApprovalCard key={id} hostId={hostId} runId={runId} item={head} count={waiting.length} onAnswered={onAnswered} />;
 }
 
 type SecretItem = Extract<Item, { kind: "secret" }>;
