@@ -186,21 +186,21 @@ test("signs in with PKCE through the browser; main keeps the tokens, encrypted",
   expect(electron.safeStorage.decryptString(Buffer.from(disk))).toContain('"refreshToken":"rt1"');
 });
 
-test("a code traded without the sign-in's verifier, or a denied sign-in, shows why", async () => {
+test("a code traded without the sign-in's verifier, or a denied sign-in, tells only the app why", async () => {
   startAccount();
   const answer = call("parallax:signIn", false);
   await vi.waitFor(() => expect(electron.opened).toHaveLength(1));
   const sent = new URL(electron.opened[0]!);
   sent.searchParams.set("code_challenge", "someone-elses");
   const page = await signInInBrowser(sent.href);
-  expect(await page.text()).toContain("invalid_grant");
+  expect(await page.text()).not.toContain("invalid_grant");
   await expect(answer).resolves.toBe("invalid_grant");
 
   const denied = call("parallax:signIn", false);
   await vi.waitFor(() => expect(electron.opened).toHaveLength(2));
   const again = new URL(electron.opened[1]!);
   const back = `${again.searchParams.get("redirect_uri")}?error=access_denied&error_description=<b>No</b>&state=${again.searchParams.get("state")}`;
-  expect(await (await realFetch(back)).text()).toContain("&lt;b&gt;No&lt;/b&gt;");
+  expect(await (await realFetch(back)).text()).not.toContain("&lt;b&gt;No");
   await expect(denied).resolves.toBe("<b>No</b>");
   expect(published.filter(Boolean)).toEqual([]);
 });

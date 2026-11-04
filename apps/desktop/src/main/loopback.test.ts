@@ -35,6 +35,11 @@ test("takes one callback with the state, and resolves to why it stopped", async 
   await expect(page.done).resolves.toBeUndefined();
   expect(codes).toEqual(["b"]);
 
+  const refused = await serveCallback("s", never);
+  const failure = await fetch(`${refused.redirectUri}?state=s&error_description=Secret`);
+  expect(await failure.text()).not.toContain("Secret");
+  await expect(refused.done).resolves.toBe("Secret");
+
   const closed = await serveCallback("s", never);
   closed.close();
   await expect(closed.done).resolves.toContain("cancelled");
