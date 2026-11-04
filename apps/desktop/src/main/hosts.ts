@@ -1703,8 +1703,9 @@ const discoverAccounts = coalesced(async () => {
     keepAccounts(accounts);
   }
   offlineAccounts.clear();
+  onlineAccounts.clear();
   for (const each of answer.result.hosts)
-    if (!each.online) offlineAccounts.add(accountId(each.hostId));
+    (each.online ? onlineAccounts : offlineAccounts).add(accountId(each.hostId));
   for (const each of accounts) addAccountConnection(each);
   // A new computer that was offline may answer now.
   for (const [id, access] of accountAccess)
@@ -1720,7 +1721,7 @@ const discoverAccounts = coalesced(async () => {
  */
 const removedComputers = () =>
   savedAccounts()
-    .filter((a) => a.removed && !offlineAccounts.has(accountId(a.hostId)))
+    .filter((a) => a.removed && onlineAccounts.has(accountId(a.hostId)))
     .map((a) => ({ id: accountId(a.hostId), name: a.name }));
 
 /** Focus or a network change: the account's computers again, and each relay route's re-check. */
@@ -1840,6 +1841,8 @@ async function beginAccess(id: string): Promise<void> {
 
 /** Account computers the relay last listed as offline, by host id. */
 const offlineAccounts = new Set<string>();
+/** Account computers the relay last listed as online, by host id. */
+const onlineAccounts = new Set<string>();
 /** New account computers whose routes `askForCode` is probing, so one trigger probes once. */
 const probing = new Set<string>();
 
