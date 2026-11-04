@@ -199,7 +199,7 @@ async function start(settings: object, account?: ReturnType<typeof signedIn>["ac
 
 /** Account computer `relayId`'s latest connection. */
 const accountConnection = (relayId: string) =>
-  fake.made.findLast((c) => c.options.command()?.includes(relayId));
+  fake.made.findLast((c) => c.options.command()?.includes(`--account=${relayId}`));
 
 /** What the renderer last heard of account computer `relayId`. */
 const listed = (relayId: string) =>
@@ -854,7 +854,7 @@ test("an account computer's routes are read again from relay/id once it connects
       routes: ["10.0.0.9", "100.70.1.2", `relay:${studio}`],
     };
     fake.answers.set("relay/id", () => ({ result: reported }));
-    const dialed = () => connection.options.command()?.slice(5);
+    const dialed = () => connection.options.command()?.slice(4);
 
     connection.set(connected());
     await vi.advanceTimersByTimeAsync(0);
