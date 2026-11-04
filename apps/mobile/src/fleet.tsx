@@ -239,8 +239,9 @@ export function FleetProvider({
     for (const host of hosts) {
       const id = accountId(host.hostId);
       const m = latest.current.machines.find((x) => x.id === id);
-      if (m && accounts.trusts(host.hostId)) connect(m);
-      else if (asked !== "allowed" && accounts.askingStopped) gate(id, { kind: "setup" });
+      if (m && accounts.trusts(host.hostId)) {
+        if (fleet.hosts.get(id)?.state.status !== "connected") connect(m);
+      } else if (asked !== "allowed" && accounts.askingStopped) gate(id, { kind: "setup" });
     }
   }
 
@@ -401,9 +402,9 @@ export function FleetProvider({
     const m = setup.machines.find((x) => x.id === id);
     if (!accounts || !m?.account) return;
     const { hostId, routes } = m.account;
+    void accounts.resumeAsking();
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
     if (accounts.trusts(hostId)) return connect(m);
-    void accounts.resumeAsking();
     setUpComputer(accounts, { hostId, name: m.name, routes }, {
       onWaiting: (code) => gate(id, { kind: "waiting", code }),
       done: () => connect(m),

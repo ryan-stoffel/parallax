@@ -151,16 +151,15 @@ export function Onboarding({
 
   const look = async () => {
     const bearer = await token();
-    const answered = bearer ? await listHosts(bearer) : undefined;
+    const found = bearer ? await listHosts(bearer) : undefined;
     // Offline for now: what's showing stays, with any code, and the next look tries again.
-    if (bearer && !answered) return setListed((l) => l ?? []);
-    const found = answered ?? [];
+    if (!found) return setListed((l) => l ?? []);
     setListed(found);
     void ask(found);
     setGates((g) =>
       Object.fromEntries(
         found
-          .filter((l) => !allowed.current && !accounts?.trusts(l.hostId))
+          .filter((l) => !allowed.current && !accounts?.usesAny && !accounts?.trusts(l.hostId))
           .map((l) => [l.hostId, g[l.hostId]?.kind === "waiting" ? g[l.hostId]! : { kind: "setup" as const }]),
       ),
     );

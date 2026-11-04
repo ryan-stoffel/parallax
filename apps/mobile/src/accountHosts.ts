@@ -26,6 +26,9 @@ import { isRelay, ordered, race, usable, withPort, WrongHost } from "./routes";
 
 const KEY = "account-hosts";
 
+/** How long a request through the relay waits, seconds: its stream opens first. */
+const RELAY_TIMEOUT_S = 30;
+
 /** A host the relay lists for the account. */
 export interface Listed {
   hostId: string;
@@ -151,17 +154,22 @@ export class AccountHosts {
     await this.save();
   }
 
-  /** The user asked, by tapping a computer: this phone may ask on its own again. */
+  /**
+   * The user asked, by tapping a computer: this phone may ask on its own again, with new requests,
+   * so what it kept from the ones that ended goes too.
+   */
   async resumeAsking() {
     const { askingStopped: _, ...rest } = this.stored;
-    this.stored = rest;
+    const books = Object.fromEntries(
+      Object.entries(rest.books).map(([id, book]) => [id, forgetRequest(book)]),
+    );
+    this.stored = { ...rest, books };
     await this.save();
   }
 
-  /** Whether this phone is waiting on `hostId` for a request it started. */
-  isWaitingOn(hostId: string) {
-    const { kept } = this.book(hostId);
-    return !!kept && kept.until > Date.now();
+  /** Whether this phone started a request at `hostId` that it hasn't heard the end of. */
+  asked(hostId: string) {
+    return !!this.book(hostId).kept;
   }
 
   /** Trusts `hostIds` too, as a host this phone uses listed them. */
@@ -209,14 +217,14 @@ export class AccountHosts {
     };
   }
 
-  /** One request to `path` at `at`, with its JSON answer. */
+  /** One request to `path` at `at`, with its JSON answer. A relay stream can take seconds to open. */
   private async call(
     at: Endpoint,
     method: string,
     path: string,
     headers: Record<string, string>,
     body?: object,
-    timeout?: number,
+    timeout = isRelay(at.route) ? RELAY_TIMEOUT_S : undefined,
   ) {
     const answer = await request(`${at.base}${path}`, method, headers, body, at.pin, timeout).catch(
       (e: { code?: string; message?: string }) => {
@@ -368,8 +376,8 @@ export class AccountHosts {
       { token, clientLabel: this.label },
     );
     // Already approved: trusted only if it already was, by a code or a host this phone uses, or if
-    // this phone's own request was waiting there, and it was allowed while the phone couldn't hear.
-    if (status === 200) return this.approved(hostId, json, this.isWaitingOn(hostId));
+    // this phone asked there, and it was allowed while the phone couldn't hear.
+    if (status === 200) return this.approved(hostId, json, this.asked(hostId));
     if (status === 401 || status === 403)
       throw new Refused(describeRefusal(json) ?? "That computer refused this phone's sign-in.");
     if (status !== 202) throw new Error(describeRefusal(json) ?? `That computer answered ${status}.`);
@@ -387,6 +395,11 @@ export class AccountHosts {
     }
     if (!value) {
       if (!ask) return { gate: { kind: "setup" } };
+      // One this phone kept has lapsed, so it ended while the phone couldn't hear.
+      if (this.asked(hostId)) {
+        await this.setBook(hostId, forgetRequest(this.book(hostId)));
+        throw new Denied("That request wasn't allowed in time.");
+      }
       const started = newRequest(this.book(hostId), requestId, committed, now, randomBytes);
       await this.setBook(hostId, started.book);
       value = started.value;
@@ -413,7 +426,7 @@ export class AccountHosts {
       path,
       { DPoP: proof(this.secret, "POST", `${at.base}${path}`) },
       { ...body, wait },
-      wait ? 40 : 10,
+      wait ? 40 : RELAY_TIMEOUT_S,
     );
     if (status === 200) return { session: json };
     if (status === 202) return { pending: json };

@@ -35,8 +35,9 @@ final class RelayBridge {
 
   init(url: URL, token: String) throws {
     let parameters = NWParameters.tcp
+    // Bound to loopback, so only this device reaches it. `acceptLocalOnly` would also reset every
+    // connection, at least on the iOS 27 simulator, before `newConnectionHandler` sees it.
     parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-    parameters.acceptLocalOnly = true
     listener = try NWListener(using: parameters)
     connect = url
     var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)!

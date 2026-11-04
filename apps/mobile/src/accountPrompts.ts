@@ -59,29 +59,24 @@ export function setUpComputer(
 }
 
 /**
- * A new phone asks to use the account's computers on its own (0091): `hosts` in turn, the one it's
- * already waiting on first, until one lets it in on another device, which `onWaiting`'s code
- * matches. One Allow covers them all, as that device copies this phone's key to the rest. A denied
- * or lapsed request, or a limit, stops it until the user asks again. A connection lost while
- * waiting stops only this try, so the next stays with that computer and its code.
+ * A new phone asks to use the account's computers on its own (0091): `hosts` in turn until one
+ * lets it in on another device, which `onWaiting`'s code matches. One Allow covers them all, as
+ * that device copies this phone's key to the rest. While it has a request at one, it stays with
+ * that one, so a lost connection doesn't start another. A denied or lapsed request, or a limit,
+ * stops it until the user asks again.
  */
 export async function allowThisPhone(
   accounts: AccountHosts,
   hosts: Listed[],
   onWaiting: (hostId: string, code: string) => void,
 ): Promise<Asked> {
-  const ordered = [...hosts].sort((a, b) => +accounts.isWaitingOn(b.hostId) - +accounts.isWaitingOn(a.hostId));
-  let shown = false;
-  const lostWhileWaiting = () => shown;
+  const waitingOn = hosts.filter((host) => accounts.asked(host.hostId));
   return askEach(
-    ordered,
-    (host) =>
-      accounts.ask(host.hostId, [], (code) => {
-        shown = true;
-        onWaiting(host.hostId, code);
-      }),
-    (error) => error instanceof Denied || error instanceof Limited || lostWhileWaiting(),
+    waitingOn.length ? waitingOn : hosts,
+    (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
+    (error) => error instanceof Denied || error instanceof Limited || waitingOn.length > 0,
     (error) => {
+      if (accounts.usesAny) return;
       if (error instanceof Denied || error instanceof Limited) void accounts.stopAsking(error.message);
     },
   );
