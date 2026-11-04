@@ -386,8 +386,7 @@ test("the account's computers are asked for on sign-in, focus, the network, and 
     expect(connection.options.command()).toEqual([
       process.execPath,
       "dial",
-      "--account",
-      studio,
+      `--account=${studio}`,
       "--",
       `relay:${studio}`,
     ]);
@@ -450,8 +449,7 @@ test("an account computer on the relay moves once a re-check finds a direct rout
     expect(fake.dials.at(-1)?.args).toEqual([
       "dial",
       "--probe",
-      "--account",
-      studio,
+      `--account=${studio}`,
       "--",
       "192.168.1.20:7341",
     ]);
@@ -500,7 +498,14 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
     await vi.advanceTimersByTimeAsync(0);
     expect(await wrong).toMatch(/wrong, used, or expired/);
     expect(fake.dials.at(-1)).toEqual({
-      args: ["dial", "--account", buildBox, "--pair", "--name=macbook", "--", `relay:${buildBox}`],
+      args: [
+        "dial",
+        `--account=${buildBox}`,
+        "--pair",
+        "--name=macbook",
+        "--",
+        `relay:${buildBox}`,
+      ],
       stdin: "482913\n",
     });
     expect(listed(buildBox)?.access).toMatchObject({
@@ -551,8 +556,7 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
     expect(fake.dials.at(-1)).toEqual({
       args: [
         "dial",
-        "--account",
-        studio,
+        `--account=${studio}`,
         "--sign-in",
         "--name=macbook",
         "--",
@@ -571,6 +575,17 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
     ]);
   } finally {
     vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a relay id that starts with a hyphen reaches plxd as a value, not a flag", async () => {
+  fake.answers.clear();
+  const hyphen = "-Kz8DTElabcdefghijklmnopqrstuvwxyz012345678";
+  try {
+    await start({ accounts: [{ hostId: hyphen, name: "box", routes: [] }] });
+    expect(accountConnection(hyphen)!.options.command()).toContain(`--account=${hyphen}`);
+  } finally {
     rmSync(fake.userData, { recursive: true, force: true });
   }
 });

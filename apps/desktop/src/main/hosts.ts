@@ -1351,7 +1351,10 @@ let serviceRetryAt = 0;
 const runPlxd = (plxd: string, ...args: string[]) =>
   promisify(execFile)(plxd, args, { timeout: 60_000 });
 
-/** Runs `plxd dial` with `args`, and the relay's sign-in for a `relay:` route (PLX-652). */
+/**
+ * Runs `plxd dial` with `args`, and the relay's sign-in for a `relay:` route (PLX-652). A relay id
+ * can start with `-`, so it always goes as `--account=<id>`, which clap can't read as a flag.
+ */
 const dialPlxd = (plxd: string, args: string[], token?: string) =>
   promisify(execFile)(plxd, ["dial", ...args], {
     timeout: 60_000,
@@ -1668,7 +1671,7 @@ function addAccountConnection(saved: SavedAccount): void {
       const plxd = localPlxd();
       return plxd === undefined
         ? undefined
-        : [plxd, "dial", "--account", saved.hostId, "--", ...routes.dial()];
+        : [plxd, "dial", `--account=${saved.hostId}`, "--", ...routes.dial()];
     },
     { account: saved.name, env: relayEnv, onRoute: (route) => (routes.route = route) },
   );
@@ -1759,7 +1762,7 @@ async function probeRoutes(relayId: string, routes: string[]): Promise<string | 
   const plxd = localPlxd();
   if (!plxd) return undefined;
   try {
-    const args = ["--probe", "--account", relayId, "--", ...routes];
+    const args = ["--probe", `--account=${relayId}`, "--", ...routes];
     const { stdout } = await dialPlxd(plxd, args, await account?.accessToken());
     const { route } = JSON.parse(stdout) as { route?: unknown };
     return typeof route === "string" ? route : undefined;
@@ -1888,7 +1891,7 @@ async function signIn(id: string): Promise<void> {
   const relayToken = await account?.accessToken();
   const child = spawn(
     plxd,
-    ["dial", "--account", relayId, "--sign-in", `--name=${localName()}`, "--", ...routes.dial()],
+    ["dial", `--account=${relayId}`, "--sign-in", `--name=${localName()}`, "--", ...routes.dial()],
     {
       windowsHide: true,
       env: { ...process.env, ...(relayToken && { PLXD_RELAY_TOKEN: relayToken }) },
@@ -1959,7 +1962,7 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
   setAccess(id, { step: "pairing" });
   let stdout: string;
   try {
-    const args = ["--account", saved.hostId, "--pair", `--name=${localName()}`, "--"];
+    const args = [`--account=${saved.hostId}`, "--pair", `--name=${localName()}`, "--"];
     const running = dialPlxd(plxd, [...args, ...routes.dial()], await account?.accessToken());
     running.child.stdin?.end(`${digits}\n`);
     ({ stdout } = await running);
