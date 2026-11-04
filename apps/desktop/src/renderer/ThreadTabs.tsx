@@ -130,7 +130,7 @@ export function ThreadTabs({
                 e.preventDefault();
                 onClose(tab.id);
               }}
-              className={`group/tab relative flex max-w-56 shrink items-center ${selected ? `pane-edge tab-shown min-w-24 self-stretch rounded-t-[10px] bg-pane pb-px ${flush ? "rounded-tl-prompt" : ""}` : "mb-[7px] h-7 min-w-16 rounded-md hover:bg-hover"}`}
+              className={`group/tab relative flex max-w-56 shrink items-center ${selected ? `pane-edge tab-shown min-w-24 self-stretch rounded-t-[10px] bg-pane pb-0.5 ${flush ? "rounded-tl-prompt" : ""}` : "mb-2 h-7 min-w-16 rounded-md hover:bg-hover"}`}
               data-marked={selected && marked ? "" : undefined}
               data-flush={flush ? "" : undefined}
             >
@@ -172,7 +172,7 @@ export function ThreadTabs({
         label="New tab"
         command="newTab"
         size="sm"
-        className="-ml-1 mb-[9px] self-end"
+        className="-ml-1 mb-2.5 self-end"
         onClick={onNew}
       >
         <Plus />

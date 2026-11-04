@@ -235,8 +235,8 @@ export function SplitTiles({
         return (
           <div
             key={`frame-${tile.cells}`}
-            // A pixel into the card, for the shown tab's foot to cover the card's top edge.
-            style={{ ...placed(rect, gutter), height: stripHeight + 1 }}
+            // Into the card, for the shown tab's foot to cover the card's top edge at any display scale.
+            style={{ ...placed(rect, gutter), height: stripHeight + 2 }}
             className={`titlebar @container absolute z-[2] flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
           >
             <div

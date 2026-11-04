@@ -797,7 +797,7 @@ body {
 }
 .tab-cap {
   position: absolute;
-  inset: 0 0 11px;
+  inset: 0 0 12px;
   pointer-events: none;
   border: 1px solid var(--edge);
   border-bottom: 0;
@@ -807,7 +807,7 @@ body {
 .tab-shown::after {
   content: "";
   position: absolute;
-  bottom: 0;
+  bottom: 1px;
   width: 11px;
   height: 11px;
   pointer-events: none;
@@ -830,6 +830,8 @@ body {
 }
 .tab-shown[data-flush]::before {
   left: 0;
+  bottom: 0;
+  height: 12px;
   border: 0;
   border-left: 1px solid var(--edge);
   border-radius: 0;
@@ -842,7 +844,7 @@ body {
   display: none;
 }
 :root.translucent .tab-cap {
-  bottom: 0;
+  bottom: 1px;
 }
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
