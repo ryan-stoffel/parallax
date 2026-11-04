@@ -137,10 +137,11 @@ import {
   closeTab,
   focusedPane,
   moveTab,
-  moveToNewPane,
+  moveToZone,
   navigate,
   openBeside,
   openInTab,
+  openInZone,
   placeView,
   removeThread,
   selectTab,
@@ -1739,9 +1740,7 @@ export function App() {
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.open()}
-          onOpenBeside={(threadId) =>
-            setWorkspace((state) => openBeside(state, host.id, { kind: "thread", threadId }))
-          }
+          onOpenBeside={(threadId) => setWorkspace((state) => openBeside(state, host.id, threadId))}
           onOpenInTab={(hostId, threadId) => {
             setMainPage(undefined);
             setSettings(null);
@@ -1810,8 +1809,8 @@ export function App() {
                     <div className="relative flex min-h-0 flex-1 p-[3px]">
                       <SplitTiles
                         focused={workspace.panes.indexOf(focusedPane(workspace))}
-                        ratios={workspace.ratios}
-                        onResize={(ratios) => setWorkspace((state) => ({ ...state, ratios }))}
+                        cuts={workspace.cuts}
+                        onResize={(cuts) => setWorkspace((state) => ({ ...state, cuts }))}
                         maximized={!!workspace.maximized}
                         leading={
                           !sidebarOpen && (
@@ -1856,27 +1855,27 @@ export function App() {
                             ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")
                             : undefined
                         }
-                        // A tab or sidebar thread dragged over a pane, not over a composer, which
-                        // takes a thread to attach (PLX-378).
+                        // A tab anywhere, or a sidebar thread not over a composer, which takes it to
+                        // attach (PLX-378).
                         drop={{
                           accepts: (e) => {
-                            if (e.defaultPrevented) return false;
                             const { types } = e.dataTransfer;
-                            return types.includes(tabDragType) || types.includes(threadDragType);
+                            if (types.includes(tabDragType)) return true;
+                            return !e.defaultPrevented && types.includes(threadDragType);
                           },
-                          onDrop: (paneId, e) => {
+                          onDrop: (target, e) => {
                             const tabId = e.dataTransfer.getData(tabDragType);
                             const thread = draggedThread(e.dataTransfer);
                             const view = thread && droppedView(thread.hostId, thread.runId);
                             setWorkspace((state) => {
                               if (tabId)
-                                return paneId
-                                  ? moveTab(state, tabId, paneId)
-                                  : moveToNewPane(state, tabId);
+                                return "zone" in target
+                                  ? moveToZone(state, tabId, target.zone)
+                                  : moveTab(state, tabId, target.paneId);
                               if (!thread || !view) return state;
-                              return paneId
-                                ? placeView(state, thread.hostId, view, paneId)
-                                : openBeside(state, thread.hostId, view);
+                              return "zone" in target
+                                ? openInZone(state, thread.hostId, view, target.zone)
+                                : placeView(state, thread.hostId, view, target.paneId);
                             });
                           },
                         }}
@@ -1895,6 +1894,7 @@ export function App() {
                             // Keyed, so another run starts from an empty transcript.
                             key: threadId ? `${tab.hostId}/${threadId}` : `${pane.id}/${tab.id}`,
                             paneId: pane.id,
+                            cells: pane.cells,
                             active: tab.id,
                             tabs: pane.tabs.map((t) => tabItem(t, views[t.hostId] ?? idleThreads)),
                             node: threadId ? (
@@ -1996,8 +1996,9 @@ export function App() {
                               <button
                                 type="button"
                                 onClick={() => setWorkspace((w) => selectTab(w, tab.id))}
-                                className="grid flex-1 place-items-center text-body text-muted-foreground"
+                                className="flex flex-1 flex-col items-center justify-center gap-2 text-body text-muted-foreground hover:text-foreground [&_svg]:size-5"
                               >
+                                {tabItem(tab, view).icon}
                                 {tabItem(tab, view).title}
                               </button>
                             ),

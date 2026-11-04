@@ -1,58 +1,139 @@
 import { expect, test } from "vite-plus/test";
 
-import { fittingTiles, ratioAt, ratiosWithout, tileAt, tileLayout } from "./splitLayout";
+import {
+  allCells,
+  cellsFilled,
+  cellsLeft,
+  cellSplit,
+  dividersOf,
+  evenCuts,
+  fits,
+  isRect,
+  rectOf,
+  tilesOf,
+  zoneAt,
+  zoneCells,
+} from "./splitLayout";
 
-test("tiles dwindle: left | right, then the right splits top / bottom, then the bottom left | right", () => {
-  expect(tileLayout(2, []).tiles).toEqual([
-    { left: 0, top: 0, width: 0.5, height: 1 },
-    { left: 0.5, top: 0, width: 0.5, height: 1 },
+const all = { columns: true, rows: true };
+
+test("cells cover their box, at the grid's lines", () => {
+  expect(rectOf(allCells, evenCuts)).toEqual({ left: 0, top: 0, width: 1, height: 1 });
+  expect(rectOf(zoneCells.left, { x: 0.25, y: 0.5 })).toEqual({
+    left: 0,
+    top: 0,
+    width: 0.25,
+    height: 1,
+  });
+  expect(rectOf(zoneCells.lowerRight, { x: 0.25, y: 0.75 })).toEqual({
+    left: 0.25,
+    top: 0.75,
+    width: 0.75,
+    height: 0.25,
+  });
+});
+
+test("every drop leaves every other pane a rectangle or nothing", () => {
+  for (const cells of [1, 2, 4, 8, 3, 12, 5, 10, 15]) {
+    for (const taken of Object.values(zoneCells)) {
+      const left = cellsLeft(cells, taken);
+      expect(left === 0 || isRect(left)).toBe(true);
+      expect(left & taken).toBe(0);
+    }
+  }
+});
+
+test("a pane alone that loses a corner keeps the column across from it", () => {
+  expect(cellsLeft(allCells, zoneCells.upperLeft)).toBe(zoneCells.right);
+  expect(cellsLeft(allCells, zoneCells.lowerRight)).toBe(zoneCells.left);
+});
+
+// Every way to fill the grid with rectangles.
+const layouts: number[][] = [];
+const fill = (free: number, panes: number[]) => {
+  if (!free) return void layouts.push(panes);
+  const first = free & -free;
+  for (const cells of [1, 2, 4, 8, 3, 12, 5, 10, 15]) {
+    if (cells & first && (cells & free) === cells) fill(free & ~cells, [...panes, cells]);
+  }
+};
+fill(15, []);
+
+test("closing any pane of any layout leaves the grid full of rectangles", () => {
+  expect(layouts).toHaveLength(8);
+  for (const panes of layouts) {
+    if (panes.length === 1) continue;
+    panes.forEach((freed, at) => {
+      const next = cellsFilled(
+        panes.filter((_, i) => i !== at),
+        freed,
+      );
+      expect(next.every(isRect)).toBe(true);
+      expect(next.reduce((a, b) => a | b, 0)).toBe(15);
+      expect(next.reduce((sum, c) => sum + (c.toString(2).match(/1/g)?.length ?? 0), 0)).toBe(4);
+    });
+  }
+});
+
+test("closing a pane gives its cells to one pane when it can", () => {
+  expect(cellsFilled([zoneCells.right], zoneCells.left)).toEqual([allCells]);
+  expect(cellsFilled([zoneCells.upperRight, zoneCells.lowerRight], zoneCells.left)).toEqual([
+    zoneCells.top,
+    zoneCells.bottom,
   ]);
-  expect(tileLayout(4, []).tiles).toEqual([
-    { left: 0, top: 0, width: 0.5, height: 1 },
-    { left: 0.5, top: 0, width: 0.5, height: 0.5 },
-    { left: 0.5, top: 0.5, width: 0.25, height: 0.5 },
-    { left: 0.75, top: 0.5, width: 0.25, height: 0.5 },
+});
+
+test("a new pane splits a pane to its right, or below", () => {
+  expect(cellSplit(allCells)).toBe(zoneCells.right);
+  expect(cellSplit(zoneCells.right)).toBe(zoneCells.lowerRight);
+  expect(cellSplit(zoneCells.top)).toBe(zoneCells.upperRight);
+});
+
+test("what has no room stacks, and overlaps join", () => {
+  const quads = [1, 2, 4, 8];
+  expect(tilesOf(quads, all).map((t) => t.panes)).toEqual([[0], [1], [2], [3]]);
+  expect(tilesOf(quads, { columns: false, rows: true }).map((t) => t.panes)).toEqual([
+    [0, 1],
+    [2, 3],
   ]);
-  expect(tileLayout(3, []).cuts.map((c) => c.vertical)).toEqual([true, false]);
+  expect(tilesOf(quads, { columns: true, rows: false }).map((t) => t.panes)).toEqual([
+    [0, 2],
+    [1, 3],
+  ]);
+  const three = [zoneCells.left, zoneCells.upperRight, zoneCells.lowerRight];
+  expect(tilesOf(three, { columns: false, rows: true })).toEqual([{ cells: 15, panes: [0, 1, 2] }]);
+  expect(tilesOf(three, { columns: false, rows: false })[0]!.cells).toBe(15);
 });
 
-test("a cut's ratio is its tile's share of the region it cuts", () => {
-  const { tiles, cuts } = tileLayout(3, [0.6, 0.25]);
-  expect(tiles[0]!.width).toBeCloseTo(0.6);
-  expect(tiles[1]!.height).toBeCloseTo(0.25);
-  expect(tiles[2]!.top).toBeCloseTo(0.25);
-  // The second cut spans only the right 40%, so x = 0.8 is its middle.
-  expect(ratioAt(cuts[1]!, 0.8, 0.5)).toBeCloseTo(0.5);
-  expect(ratioAt(cuts[0]!, 0.99, 0)).toBe(0.8);
+test("dividers cover only what they divide", () => {
+  const cuts = { x: 0.4, y: 0.6 };
+  const three = tilesOf([zoneCells.left, zoneCells.upperRight, zoneCells.lowerRight], all);
+  expect(dividersOf(three, cuts)).toEqual([
+    { vertical: true, from: 0, to: 1 },
+    { vertical: false, from: 0.4, to: 1 },
+  ]);
+  expect(dividersOf(tilesOf([allCells], all), cuts)).toEqual([]);
+  const two = tilesOf([zoneCells.top, zoneCells.bottom], all);
+  expect(dividersOf(two, cuts)).toEqual([{ vertical: false, from: 0, to: 1 }]);
 });
 
-test("the tile under a point, or the last one off every tile", () => {
-  const { tiles } = tileLayout(4, []);
-  expect(tileAt(tiles, 0.2, 0.9)).toBe(0);
-  expect(tileAt(tiles, 0.6, 0.2)).toBe(1);
-  expect(tileAt(tiles, 0.9, 0.9)).toBe(3);
-  expect(tileAt(tiles, 1, 1)).toBe(3);
+test("the window's edges and corners are the zones, and its middle none", () => {
+  expect(zoneAt(0.1, 0.5, all)).toBe("left");
+  expect(zoneAt(0.9, 0.5, all)).toBe("right");
+  expect(zoneAt(0.5, 0.1, all)).toBe("top");
+  expect(zoneAt(0.5, 0.9, all)).toBe("bottom");
+  expect(zoneAt(0.1, 0.1, all)).toBe("upperLeft");
+  expect(zoneAt(0.9, 0.1, all)).toBe("upperRight");
+  expect(zoneAt(0.1, 0.9, all)).toBe("lowerLeft");
+  expect(zoneAt(0.9, 0.9, all)).toBe("lowerRight");
+  expect(zoneAt(0.5, 0.5, all)).toBeUndefined();
 });
 
-test("closing a tile keeps the cuts before it, and the ones after it, turned, start even", () => {
-  expect(ratiosWithout([0.3, 0.4, 0.6], 4, 1)).toEqual([0.3, 0.5]);
-  expect(ratiosWithout([0.3, 0.4, 0.6], 4, 3)).toEqual([0.3, 0.4]);
-  // The first of three closing: the 30% top share doesn't become a 30% left share.
-  expect(ratiosWithout([0.65, 0.3], 3, 0)).toEqual([0.5]);
-  expect(ratiosWithout([0.3], 2, 0)).toEqual([]);
-});
-
-test("only the tiles that keep their minimum size fit, and the rest stack in the last", () => {
-  // 1340 by 950: the fourth's quarter width is 335px, enough.
-  expect(fittingTiles(4, [], 1340, 950)).toBe(4);
-  // 1060 by 750: a quarter is 265px, so three tile and the last holds two.
-  expect(fittingTiles(4, [], 1060, 750)).toBe(3);
-  // A wider first tile leaves less for the rest; a narrower one makes room.
-  expect(fittingTiles(4, [0.65], 1340, 950)).toBe(3);
-  expect(fittingTiles(4, [0.4], 1100, 950)).toBe(4);
-  // Too short for a top and bottom, too narrow for even two.
-  expect(fittingTiles(3, [], 1000, 500)).toBe(2);
-  expect(fittingTiles(2, [], 600, 900)).toBe(1);
-  // Not measured yet.
-  expect(fittingTiles(3, [], 0, 0)).toBe(3);
+test("a side with no room isn't a zone", () => {
+  expect(zoneAt(0.1, 0.1, { columns: false, rows: true })).toBe("top");
+  expect(zoneAt(0.1, 0.5, { columns: false, rows: true })).toBeUndefined();
+  expect(zoneAt(0.1, 0.1, { columns: false, rows: false })).toBeUndefined();
+  expect(fits(evenCuts, 1000, 1000)).toEqual({ columns: true, rows: true });
+  expect(fits(evenCuts, 500, 1000)).toEqual({ columns: false, rows: true });
+  expect(fits(evenCuts, 0, 0)).toEqual({ columns: true, rows: true });
 });

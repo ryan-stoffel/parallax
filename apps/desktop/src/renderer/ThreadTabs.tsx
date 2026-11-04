@@ -1,6 +1,7 @@
 import { Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 
+import { useShortcutLabel } from "./keybindings";
 import { draggedThread, tabDragType, threadDragType } from "./threadDrag";
 import { IconButton } from "./ui";
 
@@ -31,7 +32,8 @@ const accepted = [tabDragType, threadDragType];
  * tab is part of the card: one outline, joined by curves at its foot (.tab-shown, .tab-cap). With `marked`, for
  * the focused pane among several, that outline is brighter. A tab drags along the tabs or to another pane's
  * to move there, and into a pane to open beside it. A sidebar thread dropped here gets a tab where it
- * lands, which a bar shows. A middle click closes a tab.
+ * lands, which a bar shows. The shown tab always has its close button, and another shows one under the
+ * pointer, over its title. A middle click closes a tab too.
  */
 export function ThreadTabs({
   tabs,
@@ -55,6 +57,7 @@ export function ThreadTabs({
   /** False for the window's only tab on New thread, with nothing to close to. */
   closable: boolean;
 }) {
+  const closeKeys = useShortcutLabel("closeTab");
   // Where a drop would land: before this tab, or last for null.
   const [landing, setLanding] = useState<string | null>();
   const list = useRef<HTMLDivElement>(null);
@@ -123,7 +126,7 @@ export function ThreadTabs({
                 e.preventDefault();
                 onClose(tab.id);
               }}
-              className={`group/tab relative flex max-w-56 min-w-16 shrink items-center ${selected ? "pane-edge tab-shown self-stretch rounded-t-[10px] bg-pane pb-px" : "mb-[7px] h-7 rounded-md hover:bg-hover"}`}
+              className={`group/tab relative flex max-w-56 shrink items-center ${selected ? "pane-edge tab-shown min-w-24 self-stretch rounded-t-[10px] bg-pane pb-px" : "mb-[7px] h-7 min-w-16 rounded-md hover:bg-hover"}`}
               data-marked={selected && marked ? "" : undefined}
             >
               {(landing === tab.id || (landing === null && last)) && (
@@ -139,7 +142,7 @@ export function ThreadTabs({
                 aria-selected={selected}
                 title={tab.title}
                 onClick={() => onSelect(tab.id)}
-                className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-body outline-none focus-visible:ring-1 focus-visible:ring-ring ${selected ? `font-medium ${focused ? "text-foreground" : "text-muted-foreground"}` : "text-faint-foreground"}`}
+                className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-0 pl-2.5 text-left text-body outline-none focus-visible:ring-1 focus-visible:ring-ring ${selected ? `pr-1 font-medium ${focused ? "text-foreground" : "text-muted-foreground"}` : "pr-2.5 text-faint-foreground"}`}
               >
                 <span className="flex shrink-0 [&_svg]:size-4">{tab.icon}</span>
                 <span className="min-w-0 flex-1 truncate">{tab.title}</span>
@@ -149,8 +152,9 @@ export function ThreadTabs({
                   type="button"
                   aria-label={`Close ${tab.title}`}
                   title="Close tab"
+                  data-keys={selected ? closeKeys : undefined}
                   onClick={() => onClose(tab.id)}
-                  className={`absolute right-0.5 grid size-6 place-items-center rounded-md text-faint-foreground opacity-0 group-hover/tab:opacity-100 hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5 ${selected ? "bg-background" : "bg-sidebar"}`}
+                  className={`grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-3.5 ${selected ? "mr-1.5" : "absolute right-1 bg-sidebar opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"}`}
                 >
                   <X />
                 </button>

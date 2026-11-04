@@ -1,11 +1,24 @@
-// The window's panes and their tabs (PLX-1289). The window holds up to four panes, tiled in their
-// Fibonacci layout (splitLayout.ts), and each pane holds tabs and shows one of them. A tab shows one
-// view: a thread, an orchestrator, or New thread. App reads its open host and selection from the
+// The window's panes and their tabs (PLX-1289). The window holds up to four panes, rectangles on a
+// grid (splitLayout.ts), and each pane holds tabs and shows one of them. A tab shows one view: a
+// thread, an orchestrator, or New thread. App reads its open host and selection from the
 // focused pane's shown tab, so these functions are the only way either changes. A thread is in one
 // tab at most.
 
 import type { Selection } from "./App";
-import { evenRatio, maxTiles, ratiosWithout } from "./splitLayout";
+import {
+  allCells,
+  cellsFilled,
+  cellsLeft,
+  cellSplit,
+  evenRatio,
+  evenCuts,
+  lowestCell,
+  maxTiles,
+  zoneCells,
+  type Cells,
+  type GridCuts,
+  type Zone,
+} from "./splitLayout";
 
 export interface ThreadTab {
   id: string;
@@ -15,15 +28,17 @@ export interface ThreadTab {
 
 export interface TabPane {
   id: string;
+  /** Where it sits on the grid. */
+  cells: Cells;
   tabs: ThreadTab[];
   /** The id of the tab it shows. */
   active: string;
 }
 
 export interface Workspace {
+  /** In reading order, by the first cell each covers. */
   panes: TabPane[];
-  /** Each cut's share (splitLayout.ts): one fewer than panes. */
-  ratios: number[];
+  cuts: GridCuts;
   /** The id of the pane App reads from. */
   focused: string;
   /** All the panes in one tile, the focused one shown. */
@@ -36,16 +51,17 @@ const newTab = (hostId: string, selection: Selection): ThreadTab => ({
   hostId,
   selection,
 });
-const newPane = (tab: ThreadTab): TabPane => ({
+const newPane = (tab: ThreadTab, cells: Cells): TabPane => ({
   id: `pane-${++lastId}`,
+  cells,
   tabs: [tab],
   active: tab.id,
 });
 
 /** One pane with one New thread tab, as a window opens. */
 export function startWorkspace(hostId: string, selection: Selection = { kind: "new" }): Workspace {
-  const pane = newPane(newTab(hostId, selection));
-  return { panes: [pane], ratios: [], focused: pane.id };
+  const pane = newPane(newTab(hostId, selection), allCells);
+  return { panes: [pane], cuts: evenCuts, focused: pane.id };
 }
 
 export const focusedPane = ({ panes, focused }: Workspace) => panes.find((p) => p.id === focused)!;
@@ -70,6 +86,27 @@ const withPane = (state: Workspace, pane: TabPane): Workspace => ({
   ...state,
   panes: state.panes.map((p) => (p.id === pane.id ? pane : p)),
 });
+
+/** Whether any of `panes` sits in one column, or one row, of two. */
+const split = (panes: readonly TabPane[], side: Cells) =>
+  panes.some((p) => !(p.cells & side) || !(p.cells & (allCells & ~side)));
+
+/**
+ * `state` with `panes` in reading order. A line the grid didn't have before starts even, not where
+ * it last sat.
+ */
+function laidOut(state: Workspace, panes: TabPane[]): Workspace {
+  const left = zoneCells.left;
+  const top = zoneCells.top;
+  return {
+    ...state,
+    panes: panes.toSorted((a, b) => lowestCell(a.cells) - lowestCell(b.cells)),
+    cuts: {
+      x: split(state.panes, left) ? state.cuts.x : evenRatio,
+      y: split(state.panes, top) ? state.cuts.y : evenRatio,
+    },
+  };
+}
 
 /** `tabs` with `tab` before tab `before`, or last. */
 function placed(tabs: ThreadTab[], tab: ThreadTab, before?: string) {
@@ -171,13 +208,16 @@ export function closeTab(
   }
   if (state.panes.length === 1) return startWorkspace(pane.tabs[0]!.hostId, fallback);
   const side = state.panes.indexOf(pane);
-  const panes = state.panes.filter((p) => p !== pane);
+  const rest = state.panes.filter((p) => p !== pane);
+  const cells = cellsFilled(
+    rest.map((p) => p.cells),
+    pane.cells,
+  );
+  const panes = rest.map((p, i) => ({ ...p, cells: cells[i]! }));
   return arrived(
     {
-      ...state,
-      panes,
-      ratios: ratiosWithout(state.ratios, state.panes.length, side),
-      focused: state.focused === pane.id ? panes[Math.max(0, side - 1)]!.id : state.focused,
+      ...laidOut(state, panes),
+      focused: state.focused === pane.id ? rest[Math.max(0, side - 1)]!.id : state.focused,
     },
     activeTab(state),
   );
@@ -233,28 +273,46 @@ export function moveTab(
 }
 
 /**
- * Tab `tabId` in a new last pane, while there's room. The tab that's already a last pane of its own,
- * or the window's only tab, stays.
+ * `tab`, in no pane yet, in a new pane on `taken`, focused. A pane that takes covers joins it as tabs
+ * before it, and the rest keep what's left. A corner taken from a pane alone leaves a cell no rectangle
+ * can fill, which gets a New thread pane.
  */
-export function moveToNewPane(state: Workspace, tabId: string): Workspace {
+function claim(state: Workspace, tab: ThreadTab, taken: Cells): Workspace {
+  const covered = state.panes.filter((p) => !cellsLeft(p.cells, taken));
+  const pane: TabPane = {
+    ...newPane(tab, taken),
+    tabs: [...covered.flatMap((p) => p.tabs), tab],
+  };
+  const kept = state.panes
+    .filter((p) => !covered.includes(p))
+    .map((p) => ({ ...p, cells: cellsLeft(p.cells, taken) }));
+  const free = kept.reduce((cells, p) => cells & ~p.cells, allCells & ~taken);
+  const empty = free ? [newPane(newTab(tab.hostId, { kind: "new" }), free)] : [];
+  return { ...laidOut(state, [...kept, pane, ...empty]), focused: pane.id, maximized: false };
+}
+
+/**
+ * Tab `tabId` moved to zone `zone`, in a new pane there. The window's only tab stays. A pane it leaves
+ * empty closes first, its room going to its neighbors, so a pane's last tab can trade places.
+ */
+export function moveToZone(state: Workspace, tabId: string, zone: Zone): Workspace {
   const from = paneOf(state, tabId);
   const tab = from?.tabs.find((t) => t.id === tabId);
   if (!from || !tab) return state;
-  const alone = from.tabs.length === 1;
-  if (alone && from === state.panes.at(-1)) return selectTab(state, tabId);
-  if (!alone && state.panes.length >= maxTiles) return state;
-  const rest = closeTab(state, tabId);
-  const pane = newPane(tab);
-  return arrived(
-    {
-      ...rest,
-      panes: [...rest.panes, pane],
-      ratios: [...rest.ratios, evenRatio],
-      focused: pane.id,
-      maximized: false,
-    },
-    activeTab(state),
-  );
+  if (state.panes.length === 1 && from.tabs.length === 1) return selectTab(state, tabId);
+  return arrived(claim(closeTab(state, tabId), tab, zoneCells[zone]), activeTab(state));
+}
+
+/** `selection`, a thread or an orchestrator, in a new pane at zone `zone`, moving a tab showing it. */
+export function openInZone(
+  state: Workspace,
+  hostId: string,
+  selection: Selection,
+  zone: Zone,
+): Workspace {
+  const holder = showing(state, hostId, selection);
+  if (holder) return moveToZone(state, holder.id, zone);
+  return claim(state, newTab(hostId, selection), zoneCells[zone]);
 }
 
 /**
@@ -277,29 +335,28 @@ export function placeView(
 }
 
 /**
- * `selection`, a thread or an orchestrator, beside the focused pane, in a new last pane. Once the
- * window has all its panes, it's a tab in pane `paneId`, by default the last pane that isn't focused.
+ * Thread `threadId` beside the focused pane, in a new pane that splits it, or else the last pane with
+ * room. A tab already alone in its pane is only shown. Once the window has all its panes, it's a tab in
+ * the last pane that isn't focused.
  */
-export function openBeside(
-  state: Workspace,
-  hostId: string,
-  selection: Selection,
-  paneId?: string,
-): Workspace {
-  if (paneId || state.panes.length >= maxTiles) {
-    const target = paneId ?? state.panes.findLast((p) => p.id !== state.focused)!.id;
-    return placeView(state, hostId, selection, target);
+export function openBeside(state: Workspace, hostId: string, threadId: string): Workspace {
+  const selection: Selection = { kind: "thread", threadId };
+  const holder = holderOf(state, hostId, threadId);
+  if (holder && paneOf(state, holder.id)!.tabs.length === 1) return selectTab(state, holder.id);
+  const rest = holder ? closeTab(state, holder.id) : state;
+  if (rest.panes.length >= maxTiles) {
+    return placeView(
+      state,
+      hostId,
+      selection,
+      state.panes.findLast((p) => p.id !== state.focused)!.id,
+    );
   }
-  const holder = showing(state, hostId, selection);
-  if (holder) return moveToNewPane(state, holder.id);
-  const pane = newPane(newTab(hostId, selection));
-  return {
-    ...state,
-    panes: [...state.panes, pane],
-    ratios: [...state.ratios, evenRatio],
-    focused: pane.id,
-    maximized: false,
-  };
+  const single = (cells: Cells) => (cells & -cells) === cells;
+  const focused = focusedPane(rest);
+  const target = single(focused.cells) ? rest.panes.findLast((p) => !single(p.cells))! : focused;
+  const tab = holder ?? newTab(hostId, selection);
+  return arrived(claim(rest, tab, cellSplit(target.cells)), activeTab(state));
 }
 
 /** The tab `step` places from the shown one, across every pane in order, wrapping around. */

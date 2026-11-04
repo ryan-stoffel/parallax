@@ -53,14 +53,14 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await drag(tabs.nth(0), second.x + second.width - 2, second.y + second.height / 2);
   await expect(tabs).toHaveText(["Second", "First"]);
 
-  // Dragged into the open thread, a tab opens in a pane of its own beside it.
+  // Dragged to the window's left side, a tab opens in a pane of its own there.
   const pane = page.getByRole("log", { name: "Transcript" }).first();
   const paneBox = (await pane.boundingBox())!;
-  await drag(tabs.nth(0), paneBox.x + paneBox.width / 2, paneBox.y + paneBox.height / 2);
+  await drag(tabs.nth(0), paneBox.x + 20, paneBox.y + paneBox.height / 2);
   await expect(panes).toHaveCount(2);
   await expect(strips).toHaveCount(2);
-  await expect(strips.nth(0).getByRole("tab")).toHaveText(["First"]);
-  await expect(strips.nth(1).getByRole("tab")).toHaveText(["Second"]);
+  await expect(strips.nth(0).getByRole("tab")).toHaveText(["Second"]);
+  await expect(strips.nth(1).getByRole("tab")).toHaveText(["First"]);
 
   // Dragged to the other pane's tabs, it joins them, and the pane it left closes.
   // Over its plus, which is past its tabs however little room they have.
@@ -68,7 +68,7 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await drag(tabs.nth(0), target.x + target.width / 2, target.y + target.height / 2);
   await expect(panes).toHaveCount(0);
   await expect(strips).toHaveCount(1);
-  await expect(tabs).toHaveText(["Second", "First"]);
+  await expect(tabs).toHaveText(["First", "Second"]);
 
   await page.keyboard.press("ControlOrMeta+T");
   await expect(tabs).toHaveCount(3);
