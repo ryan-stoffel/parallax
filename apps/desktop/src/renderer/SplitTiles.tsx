@@ -66,8 +66,9 @@ type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
 
 /**
  * The window's panes, as cards on a grid (splitLayout.ts) on the window's background. Each card has a
- * row of tabs above it, except that the window's only tab has its row inside its card, which rises to
- * the window's top. `leading` starts the first card's row, and `controls` end the top right card's,
+ * row of tabs above it. The window's only tab, with no `leading` before it, is one shape with its card,
+ * from the card's left edge. With `hideTabs`, the card rises to the window's top, around the row.
+ * `leading` starts the first card's row, and `controls` end the top right card's,
  * giving up their room to its tabs when it's narrow. Columns or rows with no room for `minTile` stack,
  * their panes in one tile, which shows the focused one, or the last one shown, and lists all their
  * tabs. `maximized` stacks them all. Views are siblings keyed by `key`, so a tile coming, going, or
@@ -134,7 +135,7 @@ export function SplitTiles({
   // The line being dragged and the latest cuts, read by pointer events that may land before a render.
   const drag = useRef<{ vertical: boolean; cuts: GridCuts }>(undefined);
   const shown = live ?? cuts;
-  const lone = items.length === 1 && items[0]!.tabs.length === 1;
+  const flush = items.length === 1 && items[0]!.tabs.length === 1 && !leading;
   const endDrag = () => {
     if (!drag.current) return;
     onResize(drag.current.cuts);
@@ -239,7 +240,7 @@ export function SplitTiles({
             className={`titlebar @container absolute z-[2] flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
           >
             <div
-              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${at === 0 && leading ? `pl-3 ${leadingClass}` : "pl-[22px]"}`}
+              className={`flex min-w-40 shrink items-center gap-1 pr-1 ${flush ? "" : "-ml-1.5"} ${at === 0 && leading ? `pl-3 ${leadingClass}` : flush ? "" : "pl-[22px]"}`}
             >
               {at === 0 && leading}
               {!hideTabs && (
@@ -257,7 +258,7 @@ export function SplitTiles({
                     onDropOnTabs(tabDrop, items[holder ?? group.at(-1)!]!.paneId, before);
                   }}
                   closable={closable}
-                  lone={lone}
+                  flush={flush}
                 />
               )}
             </div>
@@ -281,11 +282,11 @@ export function SplitTiles({
             // A stacked pane's view stays mounted, out of sight and reach.
             inert={!active}
             style={{
-              ...placed(rectOf(tile.cells, shown), gutter, lone ? 0 : stripHeight),
-              paddingTop: lone ? stripHeight : 0,
+              ...placed(rectOf(tile.cells, shown), gutter, hideTabs ? 0 : stripHeight),
+              paddingTop: hideTabs ? stripHeight : 0,
             }}
             data-marked={tiles.length > 1 && i === focused ? "" : undefined}
-            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,padding,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
+            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,padding,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${flush && !hideTabs ? "rounded-tl-none" : ""} ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
             <div className="relative flex min-h-0 min-w-0 flex-1">
               {/* Content scrolled up fades out rather than butting into the card's top edge. */}

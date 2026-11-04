@@ -776,7 +776,9 @@ body {
    don't brighten where they meet. The tab's foot covers the card's top edge. Its top and sides
    (.tab-cap) stop where a rounded border at each side curves out to that edge, so a tab of a
    fractional width has no side left to show past the curve. The curve's shadow, clipped to its box,
-   covers the card's edge beyond it. The focused pane among several has a brighter outline. */
+   covers the card's edge beyond it. A flush tab (ThreadTabs.tsx) starts at the card's left edge, so
+   its left side runs straight down into that edge. The focused pane among several has a brighter
+   outline. */
 .pane-edge {
   --edge: color-mix(in srgb, var(--foreground) 14%, var(--background));
 }
@@ -822,6 +824,16 @@ body {
   right: -10px;
   border-left: 1px solid var(--edge);
   border-bottom-left-radius: 11px;
+}
+.tab-shown[data-flush] .tab-cap {
+  border-top-left-radius: var(--radius-prompt);
+}
+.tab-shown[data-flush]::before {
+  left: 0;
+  border: 0;
+  border-left: 1px solid var(--edge);
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* On glass nothing can cover what's beyond a curve, so the tab sits on the card's line instead. */

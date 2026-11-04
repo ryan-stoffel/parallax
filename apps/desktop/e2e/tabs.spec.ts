@@ -41,20 +41,19 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
     await page.mouse.up();
   };
 
-  // The window's only tab has no outline, and none shows at all on New thread.
-  const outlined = page.locator(".tab-shown");
+  // New thread alone has no tab. A thread alone has one from its card's left edge, and among others
+  // a tab starts further in.
   await expect(tabs).toHaveCount(0);
   await start("First");
-  await expect(outlined).toHaveCount(0);
-  // That tab sits inside the card, and tabs among others sit above it.
-  const inCard = async () =>
-    (await page.locator(".pane-card").first().boundingBox())!.y <
-    (await tabs.first().boundingBox())!.y;
-  await expect.poll(inCard).toBe(true);
+  const flush = async () => {
+    const card = (await page.locator(".pane-card").first().boundingBox())!;
+    const tab = (await page.locator("[data-tab]").first().boundingBox())!;
+    return Math.abs(card.x - tab.x) < 1;
+  };
+  await expect.poll(flush).toBe(true);
   await page.getByRole("button", { name: "New tab" }).click();
   await expect(tabs).toHaveText(["First", "New thread"]);
-  await expect(outlined).toHaveCount(1);
-  await expect.poll(inCard).toBe(false);
+  await expect.poll(flush).toBe(false);
   await start("Second");
   await expect(tabs).toHaveText(["First", "Second"]);
 
