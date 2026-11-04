@@ -13,13 +13,13 @@ export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)
  * A new computer's code dialog: the code `plx connect` shows on `name`, typed here, or, with
  * `onAsk`, approving this phone from a device that already uses it.
  */
-export function askSetupCode(name: string, onCode: (code: string) => void, onAsk: () => void) {
+export function askSetupCode(name: string, onCode: (code: string) => void, onAsk?: () => void) {
   Alert.prompt(
     `Set up ${name}`,
     "Type the 6-digit code that plx connect shows on it.",
     [
       { text: "Cancel", style: "cancel" },
-      { text: "Approve from Another Device", onPress: onAsk },
+      ...(onAsk ? [{ text: "Approve from Another Device", onPress: onAsk }] : []),
       { text: "Set Up", isPreferred: true, onPress: (code?: string) => onCode((code ?? "").replace(/\D/g, "")) },
     ],
     "plain-text",
@@ -59,6 +59,36 @@ export function setUpComputer(
 }
 
 /**
+ * Sets up a computer no other device uses yet, with the code its `plx connect` shows: asks which
+ * of `computers` that is first, if there's more than one. `started` and `ended` bracket the run,
+ * and `done` follows once this phone may use it.
+ */
+export function enterSetupCode(
+  accounts: AccountHosts,
+  computers: Listed[],
+  handlers: { started: () => void; ended: () => void; done: (hostId: string) => void },
+) {
+  const enter = ({ hostId, name }: Listed) =>
+    askSetupCode(name, (code) => {
+      const failed = (e: unknown) => {
+        handlers.ended();
+        Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
+      };
+      if (code.length !== 6) return Alert.alert(`Couldn't set up ${name}`, "The code has 6 digits.");
+      handlers.started();
+      accounts.setup(hostId, [], code).then(() => {
+        handlers.ended();
+        handlers.done(hostId);
+      }, failed);
+    });
+  if (computers.length === 1) return enter(computers[0]!);
+  Alert.alert("Which computer shows the code?", undefined, [
+    ...computers.map((computer) => ({ text: computer.name, onPress: () => enter(computer) })),
+    { text: "Cancel", style: "cancel" as const },
+  ]);
+}
+
+/**
  * A new phone asks to use the account's computers on its own (0091): `hosts` in turn until one
  * lets it in on another device, which `onWaiting`'s code matches. One Allow covers them all, as
  * that device copies this phone's key to the rest. While one can still be holding its request, it
@@ -74,7 +104,9 @@ export async function allowThisPhone(
   return askEach(
     [...hosts.filter(asked), ...hosts.filter((host) => !asked(host))],
     (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
-    (error, host) => error instanceof Denied || error instanceof Limited || accounts.waiting(host.hostId),
+    // A phone that got in another way, as with a typed code, has no more to ask.
+    (error, host) =>
+      error instanceof Denied || error instanceof Limited || accounts.waiting(host.hostId) || accounts.usesAny,
     (error) => {
       if (accounts.usesAny) return;
       if (error instanceof Denied || error instanceof Limited) void accounts.stopAsking(error.message);

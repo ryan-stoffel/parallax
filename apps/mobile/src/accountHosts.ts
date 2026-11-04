@@ -155,7 +155,7 @@ export class AccountHosts {
   }
 
   /**
-   * The user asked, by tapping a computer: this phone may ask on its own again. A request that
+   * The user asked again: this phone may ask on its own again. A request that
    * ended was forgotten when it did, and one still waiting stays, as its host holds its value.
    */
   async resumeAsking() {
