@@ -291,8 +291,7 @@ function Command({ label, command }: { label: string; command: string }) {
       <span className="mt-0.5 flex items-center gap-2 rounded-lg border border-border bg-background py-1 pr-1 pl-3">
         <code
           aria-label={`Command for ${label}`}
-          title={command}
-          className="min-w-0 flex-1 truncate font-mono text-body"
+          className="min-w-0 flex-1 font-mono text-body break-all"
         >
           {command}
         </code>
