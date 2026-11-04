@@ -1,13 +1,13 @@
 // The sidebar, as Claude's app has one: a swipe right on the main view opens it over most of the
 // screen. Its top wears the nightly sky, with the Parallax mark (a new thread where the last one
-// started), the filter, and search. Below are every computer's threads, as the desktop's sidebar
-// lists a host's: orchestrators, pinned, then the rest grouped by day or by repository, each with
-// its status (Working, Monitoring, Waiting, Needs you, Done, Failed), and pinned under the list, as
-// the desktop's, drawers for those working, snoozed, and archived. The filter narrows it to one
-// computer or repository. A swipe left on a thread shows Archive, and a full one archives it; on an
-// archived thread a swipe right does the same for Unarchive. A long press pins, snoozes, renames,
-// or archives it. Its bottom has the profile picture (Settings), pull requests, and New thread. The
-// drawer keeps it mounted, so the sky never flickers in.
+// started), Projects, the filter, and search. Below are every computer's threads, as the desktop's
+// sidebar lists a host's: orchestrators, pinned, then the rest grouped by day or by repository, each
+// with its status (Working, Monitoring, Waiting, Needs you, Done, Failed), and pinned under the
+// list, as the desktop's, drawers for those working, snoozed, and archived. The filter narrows it to
+// one computer or repository. A swipe left on a thread shows Archive, and a full one archives it; on
+// an archived thread a swipe right does the same for Unarchive. A long press pins, snoozes, renames,
+// changes the Project of, or archives it. Its bottom has the profile picture (Settings), pull
+// requests, and New thread. The drawer keeps it mounted, so the sky never flickers in.
 import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
 import {
@@ -63,6 +63,7 @@ import { ProviderLogo } from "./logos";
 import { OrchestratorGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
 import { ago, useNav, useShow } from "./nav";
 import { getPrefs } from "./prefs";
+import { threadProject } from "./Projects";
 import { AttentionBadge, Button, DeviceIcon, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
 
 /** How much of the screen's width the sidebar takes. */
@@ -307,12 +308,14 @@ function Swipe({
 function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string, ChosenIcon> }) {
   const c = useColors();
   const show = useShow();
+  const { computers } = useFleet();
   const { thread, run, computer, title, repo, attention } = entry;
   const diff = run?.diff;
   const view = computer.view;
   const unseen = attention === "done" || attention === "failed";
 
   function actions() {
+    const project = threadProject(thread, view, computers);
     const list: [string, () => void][] = [
       [thread.pinned ? "Unpin" : "Pin", () => void view.update(thread.id, { pinned: !thread.pinned })],
       ...snoozeChoices().map(
@@ -327,6 +330,7 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
         () =>
           Alert.prompt("Rename thread", undefined, (next) => void view.update(thread.id, { title: next.trim() }), "plain-text", title),
       ],
+      ...(project ? [[project.label, project.choose ?? (() => {})] as [string, () => void]] : []),
       [thread.archived ? "Unarchive" : "Archive", () => void view.archive(thread.id, !thread.archived)],
     ];
     ActionSheetIOS.showActionSheetWithOptions(
@@ -588,6 +592,9 @@ export function Sidebar() {
             <Wordmark size={19} color="#ffffff" />
           </Pressable>
           <View style={[styles.line, { gap: 10 }]}>
+            <GlassButton label="Projects" size={40} dark onPress={() => nav.navigate("Projects")}>
+              <Icon icon={Lucide.LayoutGrid} size={18} color="#ffffff" />
+            </GlassButton>
             <View>
               <GlassButton
                 label={scope === "all" ? "Filter threads" : `Filter threads, showing ${scopeLabel}`}

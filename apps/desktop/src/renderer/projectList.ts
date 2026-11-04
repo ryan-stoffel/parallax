@@ -68,7 +68,7 @@ export function sortProjects(entries: ProjectEntry[], sort: ProjectSort): Projec
   const byName = (a: ProjectEntry, b: ProjectEntry) =>
     a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   const time = (e: ProjectEntry) => Date.parse(sort === "created" ? e.createdAt : e.activeAt);
-  return entries.toSorted((a, b) =>
+  return [...entries].sort((a, b) =>
     sort === "name"
       ? byName(a, b)
       : (sort === "threads" ? b.threads - a.threads : time(b) - time(a)) || byName(a, b),

@@ -7,26 +7,10 @@ import { type RefObject, useId, useRef } from "react";
 import type { Repo, Thread } from "../protocol/generated/protocol";
 import { notify } from "./notifications";
 import { RepoIcon, type HostThreads } from "./Sidebar";
-import { addToProject, joinableProjects, type ThreadsView } from "./threads";
+import { addToProject, projectChoices, type ThreadsView } from "./threads";
 import { Menu, menuItem, ToolbarMenuRow, toolbarMenuDivider } from "./ui";
 
-/**
- * Where `thread` can be added to a Project: any computer's Projects (`joinableProjects`), and the
- * Project it was started in, which it stays in. Orchestrator threads can join Projects too (0093).
- * Undefined for an orchestrator's child, or where plxd can't add threads to Projects or none exist.
- */
-export function projectChoices(
-  thread: Thread,
-  view: ThreadsView,
-  computers: HostThreads[],
-): { projects: Repo[]; startedIn?: Repo } | undefined {
-  const home = view.state.repos.find((r) => r.id === thread.repo);
-  const projects = joinableProjects(view, computers);
-  const orchestrator = view.state.orchestrators.some((p) => p.run === thread.id);
-  if ((!home && !orchestrator) || !("projectThreads" in view.capabilities) || projects.length === 0)
-    return undefined;
-  return { projects, startedIn: home?.project ? home : undefined };
-}
+export { projectChoices };
 
 /**
  * The thread's Project, or Add to a Project, opening a menu of every computer's Projects. A thread

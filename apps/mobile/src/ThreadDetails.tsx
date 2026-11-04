@@ -1,6 +1,7 @@
 // A thread's details, as the desktop's Thread details popover and its top bar show them: where it
-// runs (computer, repository, folder, branch), what it runs on (provider, model, effort, access),
-// its changes and pull requests, and when it started. A row with a value copies it.
+// runs (computer, repository, Project, folder, branch), what it runs on (provider, model, effort,
+// access), its changes and pull requests, and when it started. A row with a value copies it, but
+// the Project's opens the thread's Project choices.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -16,6 +17,7 @@ import {
   GitPullRequest,
   Hash,
   LockOpen,
+  MessagesSquare,
 } from "lucide-react-native";
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -24,10 +26,12 @@ import { accessLevels, effortLevels } from "../../desktop/src/renderer/catalog";
 import { groupOf, noRepo } from "../../desktop/src/renderer/threads";
 import { statusLabel } from "../../desktop/src/renderer/transcript";
 import { accessIcons } from "./Composer";
-import { useComputer } from "./fleet";
+import { useComputer, useFleet } from "./fleet";
 import { ProviderLogo } from "./logos";
 import { useOffers } from "./offers";
 import type { Screens } from "./nav";
+import { threadProject } from "./Projects";
+import { RepoIcon } from "./RepoIcon";
 import { DeviceIcon, Row, Section, T, useColors } from "./ui";
 
 const copy = (text: string) => {
@@ -41,6 +45,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
   const { hostId, runId } = route.params;
   const c = useColors();
   const computer = useComputer(hostId);
+  const { computers } = useFleet();
   const insets = useSafeAreaInsets();
   const offers = useOffers(computer);
   const state = computer?.view.state;
@@ -79,6 +84,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
   const mark = <ProviderLogo kind={offer?.kind ?? run?.backend} size={17} />;
   const modelName = offer?.models.find((m) => m.id === run?.model)?.name ?? run?.model;
   const diff = run?.diff;
+  const project = computer && threadProject(thread, computer.view, computers);
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
@@ -90,6 +96,16 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
       <Section title="Workspace">
         {row(<DeviceIcon name={computer?.machine.name ?? ""} size={17} color={c.mutedForeground} />, "Computer", computer?.machine.name)}
         {row(FolderGit2, "Repository", repo?.name ?? "No repo")}
+        {project && (
+          <Row
+            icon={project.current ? undefined : MessagesSquare}
+            leading={project.current && <RepoIcon repo={project.current} />}
+            title="Project"
+            detail={project.current?.name ?? "Add to Project"}
+            chevron={!!project.choose}
+            onPress={project.choose}
+          />
+        )}
         {row(run?.worktreePath ? FolderGit2 : FolderOpen, run?.worktreePath ? "Worktree" : "Folder", run?.worktreePath ?? repo?.path)}
         {row(GitBranch, "Branch", run?.branch, true)}
       </Section>

@@ -1,9 +1,10 @@
 // The app: sign in, then onboarding until a computer is found, then the shell Claude's app has.
 // The main view is always one thread, or a new thread's page, with no back stack of threads. A
 // swipe right anywhere on it, or its header's sidebar button, slides the sidebar (Sidebar.tsx) in
-// from the left, pushing the main view along. Search, Settings, and the pull requests rise as
-// sheets up to just below the notch that drag away. Settings and the pull requests each hold
-// their own stack, so what they open changes the sheet's content in place, with a back chevron.
+// from the left, pushing the main view along. Search, Settings, the pull requests, and the Projects
+// rise as sheets up to just below the notch that drag away. Settings, the pull requests, and the
+// Projects each hold their own stack, so what they open changes the sheet's content in place, with
+// a back chevron.
 // The connections, thread lists, and transcripts are the desktop renderer's (fleet.tsx).
 import {
   CommonActions,
@@ -31,9 +32,10 @@ import { AccountScreen } from "./AccountScreen";
 import { useFleet, FleetProvider } from "./fleet";
 import { GlassButton, SidebarIcon } from "./Glass";
 import { loadSetup, saveSetup, type Setup } from "./machines";
-import { SidebarControl, type PullRequestScreens, type Screens, type SettingsScreens } from "./nav";
+import { SidebarControl, type ProjectScreens, type PullRequestScreens, type Screens, type SettingsScreens } from "./nav";
 import { NewThreadScreen, StartThreadScreen } from "./NewThread";
 import { Loading, Onboarding } from "./Onboarding";
+import { ProjectInstructionsScreen, ProjectList, ProjectScreen } from "./Projects";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
 import { alertFor, phaseOf, type Phase } from "./alerts";
 import { notify, onOpened, registerWithRelay } from "./push";
@@ -53,6 +55,7 @@ import { UsageScreen } from "./Usage";
 const Stack = createNativeStackNavigator<Screens>();
 const SettingsStack = createNativeStackNavigator<SettingsScreens>();
 const PullRequestStack = createNativeStackNavigator<PullRequestScreens>();
+const ProjectStack = createNativeStackNavigator<ProjectScreens>();
 const nav = createNavigationContainerRef<Screens>();
 
 /** The main view's header button that opens the sidebar: a sidebar's mark in a glass circle. */
@@ -93,8 +96,8 @@ const clearHeader = (c: Colors): NativeStackNavigationOptions => ({
  * A form sheet sizes only the scroll view at the root of its screen (react-native-screens), so
  * each such screen is a scroll view, or a header view then one, with
  * `contentInsetAdjustmentBehavior="automatic"`, which keeps its rows clear of the header and the
- * home indicator. A sheet with its own stack (Settings, Pull requests) hides this header and shows
- * its pages' own.
+ * home indicator. A sheet with its own stack (Settings, Pull requests, Projects) hides this header
+ * and shows its pages' own.
  */
 const sheet = (c: Colors): NativeStackNavigationOptions => ({
   presentation: "formSheet",
@@ -180,13 +183,14 @@ function Alerts() {
 const THREADS = "parallax://threads";
 
 /**
- * Links into the app: `parallax://threads` opens the sidebar, and `prs`, `usage`, `settings`,
- * and `search` their sheets; `parallax://thread/<computer>/<thread>` a thread, its details at
- * `details/<computer>/<thread>`, a computer's settings at `computer/<computer>` and its pages at
- * `computer/<computer>/<page>`, and a thread's pull request at
- * `parallax://pr/<computer>/<thread>?url=<its URL>`; a new thread's picker at `new` and its page
- * at `new/<computer>/<repo>`. A thread or a new thread's page becomes the main view. A link to a
- * page of the Settings sheet opens it inside the sheet, over the sheet's first page.
+ * Links into the app: `parallax://threads` opens the sidebar, and `prs`, `projects`, `usage`,
+ * `settings`, and `search` their sheets; `parallax://thread/<computer>/<thread>` a thread, its
+ * details at `details/<computer>/<thread>`, a computer's settings at `computer/<computer>` and its
+ * pages at `computer/<computer>/<page>`, a Project at `project/<computer>/<project>`, and a
+ * thread's pull request at `parallax://pr/<computer>/<thread>?url=<its URL>`; a new thread's picker
+ * at `new` and its page at `new/<computer>/<repo>`. A thread or a new thread's page becomes the
+ * main view. A link to a page of the Settings or Projects sheet opens it inside the sheet, over the
+ * sheet's first page.
  */
 const linking: LinkingOptions<Screens> = {
   prefixes: ["parallax://"],
@@ -198,6 +202,7 @@ const linking: LinkingOptions<Screens> = {
       ThreadDetails: "details/:hostId/:runId",
       PullRequest: "pr/:hostId/:runId",
       PullRequests: { initialRouteName: "PullRequestList", screens: { PullRequestList: "prs" } },
+      Projects: { initialRouteName: "ProjectList", screens: { ProjectList: "projects", Project: "project/:hostId/:id" } },
       Settings: {
         initialRouteName: "SettingsHome",
         screens: {
@@ -383,6 +388,28 @@ function PullRequestsSheet() {
   );
 }
 
+/**
+ * The Projects sheet: the list, with a close button, and each Project and its instructions, pushed
+ * inside it. The list's plus and each Project's title are their screens' own (Projects.tsx).
+ */
+function ProjectsSheet() {
+  const c = useColors();
+  return (
+    <ProjectStack.Navigator screenOptions={inSheet(c)}>
+      <ProjectStack.Screen
+        name="ProjectList"
+        component={ProjectList}
+        options={({ navigation }) => ({
+          title: "Projects",
+          headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
+        })}
+      />
+      <ProjectStack.Screen name="Project" component={ProjectScreen} />
+      <ProjectStack.Screen name="ProjectInstructions" component={ProjectInstructionsScreen} options={{ title: "Instructions" }} />
+    </ProjectStack.Navigator>
+  );
+}
+
 function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
   const { accessToken } = useAccount();
   const scheme = useColorScheme();
@@ -455,6 +482,7 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
             {/* The sheet's grabber is its own; each page's header is its stack's. */}
             <Stack.Screen name="Settings" component={SettingsSheet} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen name="PullRequests" component={PullRequestsSheet} options={{ ...sheet(c), headerShown: false }} />
+            <Stack.Screen name="Projects" component={ProjectsSheet} options={{ ...sheet(c), headerShown: false }} />
           </Stack.Navigator>
         </Shell>
       </NavigationContainer>
