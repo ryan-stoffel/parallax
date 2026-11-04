@@ -20,8 +20,8 @@ import { Button, DeviceIcon, Dot, Icon, T, useColors } from "./ui";
 const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts";
 /**
  * The commands that add a computer to the account (0091 "Setup"), as the desktop's wizard shows
- * them, with nothing installed. The channel is nightly, as the phone's computers need a plxd newer
- * than the stable release. Windows Defender blocks other ways of running the script.
+ * them, with nothing installed. Nightly, until a stable release has this flow (0091). Windows
+ * Defender blocks other ways of running the script.
  */
 const CONNECT_COMMANDS = [
   { os: "macOS or Linux", command: `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- --channel nightly` },
@@ -88,12 +88,23 @@ export function AddInstructions() {
 }
 
 /** One of the account's computers and where it stands. There's nothing to do on it here. */
-function ComputerRow({ listed, gate, stopped = false }: { listed: Listed; gate?: Gate; stopped?: boolean }) {
+function ComputerRow({
+  listed,
+  gate,
+  stopped = false,
+  usesAny = false,
+}: {
+  listed: Listed;
+  gate?: Gate;
+  stopped?: boolean;
+  usesAny?: boolean;
+}) {
   const c = useColors();
   const status = computerStatus({
     ready: !gate,
     online: listed.online,
     stopped,
+    usesAny,
     ...(gate?.kind === "waiting" && { code: formatCode(gate.code) }),
   });
   return (
@@ -110,7 +121,7 @@ function ComputerRow({ listed, gate, stopped = false }: { listed: Listed; gate?:
       {!gate ? (
         <Dot color={c.added} size={10} />
       ) : (
-        listed.online && !stopped && <ActivityIndicator color={c.faintForeground} />
+        listed.online && !stopped && (!usesAny || gate.kind === "waiting") && <ActivityIndicator color={c.faintForeground} />
       )}
     </View>
   );
@@ -167,7 +178,7 @@ export function Onboarding({
     setGates((g) =>
       Object.fromEntries(
         found
-          .filter((l) => !allowed.current && !accounts?.usesAny && !accounts?.trusts(l.hostId))
+          .filter((l) => !allowed.current && !accounts?.trusts(l.hostId))
           .map((l) => [l.hostId, l.online && g[l.hostId]?.kind === "waiting" ? g[l.hostId]! : { kind: "setup" as const }]),
       ),
     );
@@ -192,14 +203,16 @@ export function Onboarding({
     void look();
   };
 
-  /** A computer no other device uses yet takes the code its `plx connect` shows. */
+  /**
+   * A computer no other device uses yet takes the code its `plx connect` shows. That covers only
+   * that one, so another new computer here can take its own.
+   */
   const enterCode = (computers: Listed[]) =>
     accounts &&
-    enterSetupCode(accounts, computers, () => {
-      allowed.current = true;
+    enterSetupCode(accounts, computers, (hostId) => {
       setStopped(undefined);
       setUnanswered(false);
-      setGates({});
+      setGates(({ [hostId]: _, ...rest }) => rest);
     });
 
   if (step === "pair")
@@ -229,7 +242,13 @@ export function Onboarding({
         ) : (
           <View style={{ gap: 10 }}>
             {listed.map((l) => (
-              <ComputerRow key={l.hostId} listed={l} gate={gates[l.hostId]} stopped={!!stopped} />
+              <ComputerRow
+                key={l.hostId}
+                listed={l}
+                gate={gates[l.hostId]}
+                stopped={!!stopped}
+                usesAny={!!accounts?.usesAny}
+              />
             ))}
             {paired.map((m) => (
               <ComputerRow key={m.id} listed={{ hostId: m.id, name: m.name, online: true }} />
@@ -239,6 +258,10 @@ export function Onboarding({
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
                 Open Parallax on one of your computers and allow this iPhone. Both show{" "}
                 {formatCode(waiting.code)}.
+              </T>
+            ) : !accounts ? (
+              <T muted style={{ fontSize: 14, lineHeight: 20 }}>
+                Parallax couldn't read what this iPhone saved. Close the app and open it again.
               </T>
             ) : stopped ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
@@ -262,7 +285,7 @@ export function Onboarding({
         {stopped && <Button label="Ask again" onPress={() => void askAgain()} />}
         <Button label="Continue" primary onPress={() => setStep("notify")} />
         {listed?.length === 0 && <Button label="Look again" onPress={() => void look()} />}
-        {notReady.length > 0 && (
+        {accounts && notReady.length > 0 && (
           <Pressable accessibilityRole="button" onPress={() => enterCode(notReady)} style={{ alignSelf: "center", padding: 10 }}>
             <T style={{ fontSize: 14, color: c.accent }}>Enter a code from plx connect</T>
           </Pressable>

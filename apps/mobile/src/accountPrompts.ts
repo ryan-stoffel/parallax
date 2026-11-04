@@ -62,12 +62,12 @@ export function setUpComputer(
  * Sets up a computer no other device uses yet, with the code its `plx connect` shows: asks which
  * of `computers` that is first, if there's more than one. Calls `done` once this phone may use it.
  */
-export function enterSetupCode(accounts: AccountHosts, computers: Listed[], done: () => void) {
+export function enterSetupCode(accounts: AccountHosts, computers: Listed[], done: (hostId: string) => void) {
   const enter = ({ hostId, name }: Listed) =>
     askSetupCode(name, (code) => {
       const failed = (e: unknown) => Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
       if (code.length !== 6) return failed(new Error("The code has 6 digits."));
-      accounts.setup(hostId, [], code).then(done, failed);
+      accounts.setup(hostId, [], code).then(() => done(hostId), failed);
     });
   if (computers.length === 1) return enter(computers[0]!);
   Alert.alert("Which computer shows the code?", undefined, [
@@ -92,7 +92,9 @@ export async function allowThisPhone(
   return askEach(
     [...hosts.filter(asked), ...hosts.filter((host) => !asked(host))],
     (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
-    (error, host) => error instanceof Denied || error instanceof Limited || accounts.waiting(host.hostId),
+    // A phone that got in another way, as with a typed code, has no more to ask.
+    (error, host) =>
+      error instanceof Denied || error instanceof Limited || accounts.waiting(host.hostId) || accounts.usesAny,
     (error) => {
       if (accounts.usesAny) return;
       if (error instanceof Denied || error instanceof Limited) void accounts.stopAsking(error.message);

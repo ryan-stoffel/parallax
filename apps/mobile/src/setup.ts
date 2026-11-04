@@ -71,12 +71,20 @@ export const toAsk = (listed: Listed[], usesAny: boolean, hidden: string[] = [])
 
 /**
  * What a computer's row says on the first-run screen, where the phone does the asking: it's ready,
- * offline, waiting on the Allow that shows `code`, connects once one is given, or asking stopped.
+ * offline, waiting on the Allow that shows `code`, connects once one is given or, for a phone that
+ * already uses another computer (`usesAny`), once that one vouches for it, or asking stopped.
  */
-export function computerStatus(row: { ready: boolean; online: boolean; code?: string; stopped: boolean }) {
+export function computerStatus(row: {
+  ready: boolean;
+  online: boolean;
+  code?: string;
+  stopped: boolean;
+  usesAny: boolean;
+}) {
   if (row.ready) return "Ready";
   if (!row.online) return "Offline";
   if (row.code) return `Waiting for you to allow · ${row.code}`;
+  if (row.usesAny) return "Connects after you continue";
   return row.stopped ? "Not connected" : "Connects once allowed";
 }
 
