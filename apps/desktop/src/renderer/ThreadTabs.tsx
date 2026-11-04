@@ -28,14 +28,16 @@ const accepted = [tabDragType, threadDragType];
 
 /**
  * A pane's tabs (PLX-1289), in the notch of its card, then a button that opens a new one. The shown
- * one reads brightest, the brighter still in the focused pane. A tab drags along the tabs or to
- * another pane's to move there, and into a pane to open beside it. A sidebar thread dropped here gets
- * a tab where it lands, which a bar shows. A middle click closes a tab.
+ * tab is part of the card: its color, joined to it by curves at its foot (.tab-shown). With `marked`,
+ * a line tops it, for the focused pane among several. A tab drags along the tabs or to another pane's
+ * to move there, and into a pane to open beside it. A sidebar thread dropped here gets a tab where it
+ * lands, which a bar shows. A middle click closes a tab.
  */
 export function ThreadTabs({
   tabs,
   active,
   focused,
+  marked,
   onSelect,
   onClose,
   onNew,
@@ -45,6 +47,7 @@ export function ThreadTabs({
   tabs: TabItem[];
   active: string;
   focused: boolean;
+  marked: boolean;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
@@ -81,7 +84,7 @@ export function ThreadTabs({
 
   return (
     <div
-      className="tab-strip flex min-w-0 items-center gap-0.5"
+      className="tab-strip flex h-full min-w-0 items-center"
       onDragEnter={over}
       onDragOver={over}
       onDragLeave={(e) => {
@@ -100,7 +103,7 @@ export function ThreadTabs({
         ref={list}
         role="tablist"
         aria-label="Open tabs"
-        className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
+        className="flex h-full min-w-0 items-end gap-0.5 overflow-x-auto px-2"
       >
         {tabs.map((tab, i) => {
           const selected = tab.id === active;
@@ -120,12 +123,18 @@ export function ThreadTabs({
                 e.preventDefault();
                 onClose(tab.id);
               }}
-              className="group/tab relative flex h-7 max-w-56 min-w-16 shrink items-center rounded-md hover:bg-hover"
+              className={`group/tab relative flex max-w-56 min-w-16 shrink items-center ${selected ? "tab-shown h-8 rounded-t-lg bg-pane" : "mb-0.5 h-7 rounded-md hover:bg-hover"}`}
             >
               {(landing === tab.id || (landing === null && last)) && (
                 <span
                   aria-hidden
                   className={`pointer-events-none absolute inset-y-0.5 z-[1] w-0.5 rounded-full bg-accent ${last && landing === null ? "-right-0.5" : "-left-0.5"}`}
+                />
+              )}
+              {selected && marked && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-2 top-0 h-0.5 rounded-b-full bg-accent"
                 />
               )}
               <button
@@ -145,7 +154,7 @@ export function ThreadTabs({
                   aria-label={`Close ${tab.title}`}
                   title="Close tab"
                   onClick={() => onClose(tab.id)}
-                  className="absolute right-0.5 grid size-6 place-items-center rounded-md bg-sidebar text-faint-foreground opacity-0 group-hover/tab:opacity-100 hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5"
+                  className={`absolute right-0.5 grid size-6 place-items-center rounded-md text-faint-foreground opacity-0 group-hover/tab:opacity-100 hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5 ${selected ? "bg-pane" : "bg-sidebar"}`}
                 >
                   <X />
                 </button>
@@ -154,7 +163,7 @@ export function ThreadTabs({
           );
         })}
       </div>
-      <IconButton label="New tab" command="newTab" size="sm" onClick={onNew}>
+      <IconButton label="New tab" command="newTab" size="sm" className="-ml-1" onClick={onNew}>
         <Plus />
       </IconButton>
     </div>

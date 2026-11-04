@@ -212,13 +212,14 @@ export function SplitTiles({
             className={`titlebar @container absolute flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
           >
             <div
-              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-2 pl-3 ${tile === 0 ? leadingClass : ""}`}
+              className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${tile === 0 && leading ? `pl-3 ${leadingClass}` : "pl-1"}`}
             >
               {tile === 0 && leading}
               <ThreadTabs
                 tabs={group.flatMap((i) => items[i]!.tabs)}
                 active={shownPane.active}
                 focused={group.includes(focused)}
+                marked={group.includes(focused) && visible > 1}
                 onSelect={onSelectTab}
                 onClose={onCloseTab}
                 onNew={() => onNewTab(shownPane.paneId)}
@@ -230,9 +231,14 @@ export function SplitTiles({
                 closable={closable}
               />
             </div>
+            {/* With too little room between the tabs and the controls, the top right card doesn't rise. */}
             <div
-              className={`card-rise relative min-w-3 flex-1 rounded-tl-xl bg-pane ${corner && controls ? "card-rise-end rounded-tr-xl" : "rounded-tr-xl"}`}
-            />
+              className={`relative min-w-3 flex-1 ${corner && controls ? "@container/rise" : ""}`}
+            >
+              <div
+                className={`card-rise absolute inset-0 rounded-t-xl bg-pane ${corner && controls ? "card-rise-end @max-[5rem]/rise:hidden" : ""}`}
+              />
+            </div>
             {corner && controls && (
               <div
                 className={`flex min-w-0 shrink items-center justify-end gap-2 overflow-clip pr-1.5 pl-3 ${controlsClass}`}

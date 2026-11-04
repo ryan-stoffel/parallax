@@ -797,6 +797,25 @@ body {
   background: radial-gradient(circle at 100% 0, transparent 11.5px, var(--pane) 12px);
 }
 
+/* A pane's shown tab (ThreadTabs.tsx) is part of its card: the curves at its foot join it. */
+.tab-shown::before,
+.tab-shown::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+}
+.tab-shown::before {
+  left: -8px;
+  background: radial-gradient(circle at 0 0, transparent 7.5px, var(--pane) 8px);
+}
+.tab-shown::after {
+  right: -8px;
+  background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--pane) 8px);
+}
+
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
    through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
