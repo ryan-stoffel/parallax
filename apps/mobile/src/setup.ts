@@ -74,13 +74,13 @@ export type Asked = "allowed" | "stopped" | "unreachable";
 
 /**
  * Asks `hosts` in turn until one lets this phone in, as approving on one covers them all. One that
- * can't be reached is passed over. One that denies it, or a limit, ends it (`stops`), since a new
- * request is the user's to start.
+ * can't be reached is passed over. One that denies it, a limit, or one still holding its request
+ * ends it (`stops`), since a new request is the user's to start.
  */
 export async function askEach(
   hosts: Listed[],
   ask: (host: Listed) => Promise<void>,
-  stops: (error: unknown) => boolean,
+  stops: (error: unknown, host: Listed) => boolean,
   stopped: (error: unknown) => void,
 ): Promise<Asked> {
   for (const host of hosts) {
@@ -88,7 +88,7 @@ export async function askEach(
       await ask(host);
       return "allowed";
     } catch (error) {
-      if (!stops(error)) continue;
+      if (!stops(error, host)) continue;
       stopped(error);
       return "stopped";
     }

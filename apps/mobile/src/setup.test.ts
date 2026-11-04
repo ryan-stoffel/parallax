@@ -75,3 +75,20 @@ test("asking passes over a computer it can't reach, and a denial ends it", async
   const offline = new Error("offline");
   expect(await askEach(hosts, ask({ a: offline, b: offline, c: offline }), stops, note)).toBe("unreachable");
 });
+
+test("asking stays on a computer that still holds the request, and passes one that doesn't", async () => {
+  const hosts = [listed("a", "studio"), listed("b", "laptop")];
+  const asked: string[] = [];
+  const ask = async ({ hostId }: { hostId: string }) => {
+    asked.push(hostId);
+    if (hostId === "a") throw new Error("offline");
+  };
+  const none = () => {};
+
+  expect(await askEach(hosts, ask, (_, host) => host.hostId === "a", none)).toBe("stopped");
+  expect(asked).toEqual(["a"]);
+
+  asked.length = 0;
+  expect(await askEach(hosts, ask, () => false, none)).toBe("allowed");
+  expect(asked).toEqual(["a", "b"]);
+});

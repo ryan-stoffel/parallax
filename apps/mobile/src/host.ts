@@ -45,8 +45,8 @@ export const forget = () => SecureStore.deleteItemAsync(KEY, keychain);
 const url = (route: string, path: string) => `https://${withPort(route)}${path}`;
 
 /** A POST to `target`, pinned to `pin`: its JSON answer, or a pairing error for people. */
-async function post(target: string, pin: string, body: object, headers = {}) {
-  const answer = await request(target, "POST", headers, body, pin);
+async function post(target: string, pin: string, body: object, headers = {}, timeout?: number) {
+  const answer = await request(target, "POST", headers, body, pin, timeout);
   if (answer.status === 401)
     throw new Error("That code is wrong, used, or expired. Show a new one.");
   if (answer.status === 429) throw new Error("That computer's code was tried too often. Try again later.");
@@ -66,9 +66,10 @@ export async function spakePair(
   code: string,
   secret: Uint8Array,
   label: string,
+  timeout?: number,
 ): Promise<Record<string, unknown>> {
   const exchange = spake(code, fp);
-  const started = await post(at("/api/pair/start"), pin, { pake: base64url(exchange.message) });
+  const started = await post(at("/api/pair/start"), pin, { pake: base64url(exchange.message) }, {}, timeout);
   const shared = exchange.finish(fromBase64url(String(started["pake"])));
   const tp = thumbprint(secret);
   const finished = await post(
@@ -80,6 +81,7 @@ export async function spakePair(
       clientLabel: label,
     },
     { DPoP: proof(secret, "POST", at("/api/pair/finish")) },
+    timeout,
   );
   // Only a host that knows the code can vouch for the certificate this phone saw.
   if (!same(confirmation(shared, "host", fp, tp), fromBase64url(String(finished["confirm"]))))

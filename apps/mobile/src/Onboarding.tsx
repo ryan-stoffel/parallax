@@ -126,6 +126,7 @@ export function Onboarding({
   const [paired, setPaired] = useState<Machine[]>([]);
   const [gates, setGates] = useState<Record<string, Gate>>({});
   const [stopped, setStopped] = useState(accounts?.askingStopped);
+  const [unanswered, setUnanswered] = useState(false);
   const asking = useRef(false);
   const allowed = useRef(false);
 
@@ -139,6 +140,7 @@ export function Onboarding({
     );
     asking.current = false;
     setStopped(accounts.askingStopped);
+    setUnanswered(asked === "unreachable");
     // The rest connect once this phone reaches its computers, which vouch for them.
     if (asked === "allowed") {
       allowed.current = true;
@@ -160,7 +162,7 @@ export function Onboarding({
       Object.fromEntries(
         found
           .filter((l) => !allowed.current && !accounts?.usesAny && !accounts?.trusts(l.hostId))
-          .map((l) => [l.hostId, g[l.hostId]?.kind === "waiting" ? g[l.hostId]! : { kind: "setup" as const }]),
+          .map((l) => [l.hostId, l.online && g[l.hostId]?.kind === "waiting" ? g[l.hostId]! : { kind: "setup" as const }]),
       ),
     );
   };
@@ -233,6 +235,10 @@ export function Onboarding({
             ) : stopped ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
                 {stopped} Tap a computer to ask again.
+              </T>
+            ) : unanswered ? (
+              <T muted style={{ fontSize: 14, lineHeight: 20 }}>
+                Your computers aren't answering this iPhone yet. It keeps trying.
               </T>
             ) : (
               listed.length > 0 &&

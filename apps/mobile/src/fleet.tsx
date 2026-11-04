@@ -2,8 +2,8 @@
 // came from. Each computer's threads come from the desktop's `useThreads`, one per computer.
 //
 // With the account signed in it also finds the account's computers on Parallax Relay (0091),
-// when it starts, the app comes to the front, the network changes, and Settings opens, with no
-// timer. It sets them up or asks to use them, asks the user to allow other devices that ask, and
+// when it starts, the app comes to the front, the network changes, and Settings opens, and every
+// 15 seconds while it's in front. It sets them up or asks to use them, asks the user to allow other devices that ask, and
 // copies who's approved between the computers this phone uses.
 import { File } from "expo-file-system";
 import {
@@ -161,6 +161,7 @@ export function FleetProvider({
   const [views, setViews] = useState<Record<string, ThreadsView>>({});
   const [gates, setGates] = useState<Record<string, Gate | undefined>>({});
   const [listed, setListed] = useState<Listed[]>([]);
+  const [stopped, setStopped] = useState(accounts?.askingStopped);
   const [drafts] = useState(() => new Map<string, string>());
   /** Requests already shown, so each asks once. */
   const [asked] = useState(() => new Set<string>());
@@ -236,6 +237,7 @@ export function FleetProvider({
       showWaiting(latest.current.machines.find((m) => m.id === id)?.name ?? "your computers", code);
     });
     asking.current = false;
+    setStopped(accounts.askingStopped);
     for (const host of hosts) {
       const id = accountId(host.hostId);
       const m = latest.current.machines.find((x) => x.id === id);
@@ -387,7 +389,8 @@ export function FleetProvider({
       connected: state.status === "connected",
       view: views[machine.id] ?? idleThreads,
       outbox: outbox(machine.id),
-      gate: gates[machine.id],
+      // Asking stopped: a computer waiting to be set up says why.
+      gate: gates[machine.id]?.kind === "setup" && stopped ? { kind: "refused", message: stopped } : gates[machine.id],
     };
   });
 
@@ -403,6 +406,7 @@ export function FleetProvider({
     if (!accounts || !m?.account) return;
     const { hostId, routes } = m.account;
     void accounts.resumeAsking();
+    setStopped(undefined);
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
     if (accounts.trusts(hostId)) return connect(m);
     setUpComputer(accounts, { hostId, name: m.name, routes }, {

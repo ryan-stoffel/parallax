@@ -61,20 +61,20 @@ export function setUpComputer(
 /**
  * A new phone asks to use the account's computers on its own (0091): `hosts` in turn until one
  * lets it in on another device, which `onWaiting`'s code matches. One Allow covers them all, as
- * that device copies this phone's key to the rest. While it has a request at one, it stays with
- * that one, so a lost connection doesn't start another. A denied or lapsed request, or a limit,
- * stops it until the user asks again.
+ * that device copies this phone's key to the rest. While one can still be holding its request, it
+ * stays with that one, so a lost connection doesn't start another. Past that, a computer that won't
+ * answer is passed over. A denied or lapsed request, or a limit, stops it until the user asks again.
  */
 export async function allowThisPhone(
   accounts: AccountHosts,
   hosts: Listed[],
   onWaiting: (hostId: string, code: string) => void,
 ): Promise<Asked> {
-  const waitingOn = hosts.filter((host) => accounts.asked(host.hostId));
+  const asked = (host: Listed) => accounts.asked(host.hostId);
   return askEach(
-    waitingOn.length ? waitingOn : hosts,
+    [...hosts.filter(asked), ...hosts.filter((host) => !asked(host))],
     (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
-    (error) => error instanceof Denied || error instanceof Limited || waitingOn.length > 0,
+    (error, host) => error instanceof Denied || error instanceof Limited || accounts.waiting(host.hostId),
     (error) => {
       if (accounts.usesAny) return;
       if (error instanceof Denied || error instanceof Limited) void accounts.stopAsking(error.message);
