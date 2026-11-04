@@ -73,6 +73,28 @@ test("the pasted code's redirect is the relay's /connect/code page", () => {
   assert.equal(codePage({ PLX_RELAY_URL: "http://127.0.0.1:8787/" }), "http://127.0.0.1:8787/connect/code");
 });
 
+test("an empty line at the code prompt waits for the code, and doesn't use up a try", async () => {
+  const fake = await fakeClerk();
+  const answers = ["", "  ", "bad-code", "", "good-code"];
+  try {
+    const { token } = await quietly((printed) =>
+      signIn({
+        clerk: fake.clerk,
+        browser: false,
+        codePage: "https://relay.example/connect/code",
+        open: async () => assert.fail("no browser opens in the paste flow"),
+        prompt: async () => {
+          fake.authorize(/(http\S+\/oauth\/authorize\S+)/.exec(printed())?.[1] ?? "");
+          return answers.shift() ?? assert.fail("it asked too many times");
+        },
+      }),
+    );
+    assert.equal(token, "token-1");
+  } finally {
+    fake.close();
+  }
+});
+
 test("the paste flow prints the link, reads the code, and redeems it with the PKCE verifier", async () => {
   const clerk = await fakeClerk();
   const page = "https://relay.example/connect/code";
