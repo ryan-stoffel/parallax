@@ -195,13 +195,15 @@ async function signInElsewhere({ clerk, codePage, prompt }) {
   const verifier = randomBytes(32).toString("base64url");
   const url = authorizeUrl(clerk, { redirectUri: codePage, state: randomBytes(16).toString("base64url"), verifier });
   console.log(`Open this link in a browser on any device, sign in, and allow this computer:\n\n  ${url}\n`);
-  for (let tries = 1; ; tries++) {
+  for (let tries = 1; ; ) {
     const code = (await prompt("Paste the code it shows: ")).trim();
-    if (!code) throw new Error("No code was pasted.");
+    // An empty line isn't an answer: a stray Enter, such as one copied with the command, waits on.
+    if (!code) continue;
+    tries++;
     try {
       return await redeem(clerk, { code, verifier, redirectUri: codePage });
     } catch (error) {
-      if (tries === 3) throw error;
+      if (tries > 3) throw error;
       console.log(`✗ ${error instanceof Error ? error.message : String(error)} Try again.`);
     }
   }
