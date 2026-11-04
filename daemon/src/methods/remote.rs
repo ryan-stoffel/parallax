@@ -5,11 +5,11 @@
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequestParams,
-    AccessSetupCodeParams, AccessSetupCodeResult, AccessState, RelayHostsParams, RelayHostsResult,
-    RelayIdParams, RelayIdResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
-    RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
-    RemoteSessionsResult,
+    AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
+    AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
+    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayRegisterParams,
+    RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult,
+    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -137,6 +137,15 @@ pub(crate) async fn access_remove(
     access_now(context).await
 }
 
+/// `access/forgetHost`.
+pub(crate) async fn access_forget_host(
+    context: &Context,
+    params: AccessForgetHostParams,
+) -> Result<AccessState, ErrorObject> {
+    access::forget_host(&context.daemon, &context.cancel, params.host_id).await?;
+    access_now(context).await
+}
+
 /// `access/setupCode`: a new computer's code, for `plx connect` or the app to show.
 pub(crate) async fn access_setup_code(
     context: &Context,
@@ -170,11 +179,12 @@ pub(crate) async fn relay_remove(
     crate::relay::remove(&context.daemon, &params.token, &params.host_id)
         .await
         .map_err(ErrorObject::invalid_params)?;
-    relay_hosts(
-        context,
-        RelayHostsParams {
-            token: params.token,
-        },
-    )
-    .await
+    // It's removed by now, so failing to read the rest can't be reported as failing to remove it.
+    let hosts = crate::relay::hosts(&context.daemon, &params.token)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "removed a host, but couldn't read the rest");
+            Vec::new()
+        });
+    Ok(RelayHostsResult { hosts })
 }

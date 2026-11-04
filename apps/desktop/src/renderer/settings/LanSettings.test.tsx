@@ -146,20 +146,23 @@ test("Reach from anywhere registers this computer with the relay before turning 
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(document.body.textContent).toContain("Connected to the relay.");
 
-  // The account's computers on the relay, each with Remove, which frees its place.
+  // The account's computers on the relay, each other one with Remove, which frees its place.
   expect(document.body.textContent).toContain("On the relay, this computer. Connected.");
-  await click(document.querySelectorAll('[aria-label="Remove macbook from the relay"]')[1]!);
+  await click(document.querySelectorAll('[aria-label="Remove macbook from your account"]')[0]!);
   // It asks first, and Cancel keeps the computer.
-  expect(document.body.textContent).toContain("unless its Reach from anywhere is off");
+  expect(document.body.textContent).toContain("None of your computers or devices reach it anymore");
   expect(removeRelayHost).not.toHaveBeenCalled();
   await click(button("Cancel"));
   expect(removeRelayHost).not.toHaveBeenCalled();
-  await click(document.querySelectorAll('[aria-label="Remove macbook from the relay"]')[1]!);
+  await click(document.querySelectorAll('[aria-label="Remove macbook from your account"]')[0]!);
   // The confirming Remove is the one without the row's label.
   const confirmRemove = [...document.querySelectorAll("button")].find(
     (b) => b.textContent === "Remove" && !b.hasAttribute("aria-label"),
   )!;
   await click(confirmRemove);
   expect(removeRelayHost).toHaveBeenCalledWith("b");
-  expect(document.querySelectorAll('[aria-label="Remove macbook from the relay"]')).toHaveLength(1);
+  // This computer has no Remove: it can only be removed from another one.
+  expect(document.querySelectorAll('[aria-label="Remove macbook from your account"]')).toHaveLength(
+    0,
+  );
 });

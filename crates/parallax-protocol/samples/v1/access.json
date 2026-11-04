@@ -143,5 +143,22 @@
       "removedClients": ["Qm9vZ3JhcGhpY2FsbHktZXF1YWwtdGh1bWJwcmludA0"],
       "approvedHosts": ["kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA"]
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "access/forgetHost",
+    "params": { "hostId": "kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": {
+      "version": 11,
+      "account": "user_2abc",
+      "approvedClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"],
+      "removedClients": ["Qm9vZ3JhcGhpY2FsbHktZXF1YWwtdGh1bWJwcmludA0"],
+      "approvedHosts": []
+    }
   }
 ]

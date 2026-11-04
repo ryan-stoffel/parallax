@@ -935,22 +935,152 @@ test("a new account computer that's offline or doesn't answer waits in Settings,
     await vi.advanceTimersByTimeAsync(15_001);
     fake.visible = false;
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
 
-    // Remove takes it off this app's list, and the account listing it again doesn't add it back.
-    await fake.handlers.get("parallax:removeDevice")!({}, `account:${buildBox}`);
+test("Remove takes a computer off the account and forgets it everywhere, unless the relay refuses", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    let hosts = [{ hostId: buildBox, name: "box", online: true, thisComputer: false }];
+    const calls: string[] = [];
+    fake.answers.set("relay/hosts", () => ({ result: { hosts } }));
+    fake.answers.set("access/get", accessState([]));
+    fake.answers.set("host/settings/set", (params: unknown) => {
+      calls.push(`set ${JSON.stringify(params)}`);
+      return { result: {} };
+    });
+    fake.answers.set("access/forgetHost", (params: unknown) => {
+      calls.push(`forget ${(params as { hostId: string }).hostId}`);
+      return { result: {} };
+    });
+    let refuse = true;
+    fake.answers.set("relay/remove", (params: unknown) => {
+      if (refuse) return { error: { code: -32603, message: "the relay refused" } };
+      calls.push(`remove ${(params as { hostId: string }).hostId}`);
+      hosts = [];
+      return { result: { hosts } };
+    });
+    const local = await start({}, signedIn().account);
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    const box = accountConnection(buildBox)!;
+    box.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    const remove = () => fake.handlers.get("parallax:removeDevice")!({}, `account:${buildBox}`);
+
+    // If the relay refuses, the user hears why, and nothing is forgotten.
+    expect(await remove()).toBe("the relay refused");
+    expect(box.disposed).toBe(false);
+    expect(listed(buildBox)).toBeDefined();
+    expect(calls).toEqual([]);
+
+    refuse = false;
+    calls.length = 0;
+    expect(await remove()).toBeUndefined();
+    expect(calls).toEqual([
+      `remove ${buildBox}`,
+      'set {"relay":false}',
+      // The local plxd is the one left: the removed computer's connection is gone by now.
+      `forget ${buildBox}`,
+    ]);
     expect(box.disposed).toBe(true);
     expect(listed(buildBox)).toBeUndefined();
+    const saved = JSON.parse(readFileSync(path.join(fake.userData, "settings.json"), "utf8"));
+    expect(saved.accounts).toEqual([]);
+
+    // Set up again, it's a new computer here.
+    hosts = [{ hostId: buildBox, name: "box", online: true, thisComputer: false }];
     fake.handlers.get("parallax:discoverAccount")!();
     await vi.advanceTimersByTimeAsync(1);
-    expect(listed(buildBox)).toBeUndefined();
-
-    // Add computer offers it back, and only asking brings it back.
-    expect(await fake.handlers.get("parallax:removedComputers")!({})).toEqual([
-      { id: `account:${buildBox}`, name: expect.any(String) },
-    ]);
-    await fake.handlers.get("parallax:setDeviceEnabled")!({}, `account:${buildBox}`, true);
     expect(listed(buildBox)).toBeDefined();
-    expect(await fake.handlers.get("parallax:removedComputers")!({})).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("this computer can't remove itself", async () => {
+  fake.answers.clear();
+  try {
+    let removed = false;
+    fake.answers.set("relay/id", { result: { hostId: buildBox } });
+    fake.answers.set("relay/remove", () => ((removed = true), { result: { hosts: [] } }));
+    const local = await start({}, signedIn().account);
+    local.set(connected({ accountAccess: {} }));
+    const answer = await fake.handlers.get("parallax:removeRelayHost")!({}, buildBox);
+    expect(answer).toMatch(/computer you're on/);
+    expect(removed).toBe(false);
+  } finally {
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a computer removed while it couldn't hear stays off at its next start, unless its key or account changed", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const calls: string[] = [];
+    fake.answers.set("relay/id", { result: { hostId: buildBox } });
+    fake.answers.set("relay/hosts", { result: { hosts: [] } });
+    fake.answers.set("access/get", accessState([]));
+    fake.answers.set("host/settings/get", { result: { connect: false } });
+    fake.answers.set("host/settings/set", (params: unknown) => {
+      calls.push(`set ${JSON.stringify(params)}`);
+      return { result: {} };
+    });
+    fake.answers.set("relay/register", () => (calls.push("register"), { result: {} }));
+    const startWith = async (joinedRelay: object) => {
+      calls.length = 0;
+      const { account, signIn } = signedIn();
+      const local = await start({ joinedRelay }, account);
+      local.set(connected({ accountAccess: {} }));
+      await vi.advanceTimersByTimeAsync(1);
+      return signIn;
+    };
+
+    // The same key and account, not listed: removed, so it stays off until a sign-in.
+    const signIn = await startWith({ hostId: buildBox, user: "user_1" });
+    expect(calls).toEqual(['set {"relay":false}']);
+    signIn();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls.at(-1)).toBe("register");
+    rmSync(fake.userData, { recursive: true, force: true });
+
+    // Another account or another key never joined, so it just registers.
+    await startWith({ hostId: buildBox, user: "user_2" });
+    expect(calls).toEqual(["register"]);
+    rmSync(fake.userData, { recursive: true, force: true });
+    await startWith({ hostId: studio, user: "user_1" });
+    expect(calls).toEqual(["register"]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a computer saved as removed by an older app finishes leaving the account", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    let hosts = [{ hostId: buildBox, name: "box", online: false, thisComputer: false }];
+    fake.answers.set("relay/hosts", () => ({ result: { hosts } }));
+    fake.answers.set("access/get", accessState([]));
+    fake.answers.set("access/forgetHost", { result: {} });
+    fake.answers.set("relay/remove", () => ((hosts = []), { result: { hosts } }));
+    const local = await start(
+      { accounts: [{ hostId: buildBox, name: "box", routes: [], removed: true }] },
+      signedIn().account,
+    );
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(hosts).toEqual([]);
+    expect(listed(buildBox)).toBeUndefined();
+    const saved = JSON.parse(readFileSync(path.join(fake.userData, "settings.json"), "utf8"));
+    expect(saved.accounts).toEqual([]);
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });

@@ -582,6 +582,28 @@ pub(crate) async fn remove(
     Ok(())
 }
 
+/// `access/forgetHost`: drops a computer the user removed from the approved hosts, and deletes
+/// this computer's saved session for it, so setting it up again takes its code. An offline
+/// computer that still lists it can copy the entry back when it next syncs (PLX-1312).
+pub(crate) async fn forget_host(
+    daemon: &Daemon,
+    cancel: &CancellationToken,
+    host_id: String,
+) -> Result<(), ErrorObject> {
+    if !remote::is_host_id(&host_id) {
+        return Err(ErrorObject::invalid_params("not a host id"));
+    }
+    remote::forget_host(daemon.data_dir.root(), &host_id)
+        .map_err(|error| ErrorObject::internal_error(format!("couldn't forget it: {error}")))?;
+    info!(%host_id, "forgot a removed computer");
+    update(daemon, cancel, move |lists| {
+        lists.approved_hosts.remove(&host_id);
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
 /// Approves the key that paired with a setup code, as `label` (0091), unless it was removed.
 pub(super) async fn approve_by_setup(
     daemon: &Daemon,

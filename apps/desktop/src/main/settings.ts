@@ -21,6 +21,8 @@ export type Settings = {
   lan?: SavedLan[];
   /** The other computers on the signed-in account (0091), as Parallax Relay last listed them. */
   accounts?: SavedAccount[];
+  /** The key and account that joined the relay, so not being listed means removed (PLX-1312). */
+  joinedRelay?: { hostId: string; user: string };
 };
 
 /**

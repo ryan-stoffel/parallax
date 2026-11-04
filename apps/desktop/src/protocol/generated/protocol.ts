@@ -716,6 +716,11 @@ export type ParallaxRequests = {
 	 */
 	"access/remove": { params: AccessRemoveParams, result: AccessState },
 	/**
+	 * `access/forgetHost`: forgets a computer the user removed from their account: drops it
+	 * from the approved hosts and deletes this computer's saved session for it.
+	 */
+	"access/forgetHost": { params: AccessForgetHostParams, result: AccessState },
+	/**
 	 * `access/setupCode`: a new code for a signed-in client to type, which replaces any
 	 * pairing code waiting.
 	 */
@@ -1226,6 +1231,7 @@ export const REQUEST_METHODS = [
 	"access/approve",
 	"access/deny",
 	"access/remove",
+	"access/forgetHost",
 	"access/setupCode",
 	"inbox/list",
 	"inbox/seen",
@@ -8762,6 +8768,16 @@ export type AccessRemoveParams = {
 	 * The client's `DPoP` key thumbprint.
 	 */
 	thumbprint: string,
+};
+
+/**
+ * Params of `access/forgetHost`.
+ */
+export type AccessForgetHostParams = {
+	/**
+	 * The relay id of the computer the user removed from their account.
+	 */
+	hostId: string,
 };
 
 /**

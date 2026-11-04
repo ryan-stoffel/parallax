@@ -2265,12 +2265,11 @@ export const mockBridge: ParallaxBridge = {
     connectChanged();
     return delay(undefined);
   },
-  removedComputers: async () => [],
   removeDevice: (hostId) => {
     const device = deviceOf(hostId);
     if (device) device.removed = true;
     connectChanged();
-    return delay(undefined);
+    return delay<string | undefined>(undefined);
   },
   discoverAccount: () => delay(undefined),
   enterSetupCode: async (hostId, code) => {

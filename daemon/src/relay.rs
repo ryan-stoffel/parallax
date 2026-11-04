@@ -672,7 +672,10 @@ pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<Vec<RelayHost>
         Ok((status, _)) => return Err(format!("The relay answered {status}.")),
         Err(error) => return Err(cant_reach(&error)),
     };
-    let listed = body["hosts"].as_array().cloned().unwrap_or_default();
+    // Not an empty list: an app takes not being listed to mean this computer was removed.
+    let Some(listed) = body["hosts"].as_array() else {
+        return Err("The relay's answer didn't list any hosts.".to_owned());
+    };
     Ok(listed
         .iter()
         .filter_map(|host| {

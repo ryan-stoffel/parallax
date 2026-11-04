@@ -41,8 +41,6 @@ function bridge(devices: () => DeviceHost[]) {
     onAccessRequests: () => () => {},
     onProfile: () => () => {},
     discoverAccount: vi.fn(async () => {}),
-    removedComputers: vi.fn(async (): Promise<{ id: string; name: string }[]> => []),
-    setDeviceEnabled: vi.fn(async () => {}),
     enterSetupCode: vi.fn(async () => undefined),
     showSetupCode: vi.fn(async () => ({
       code: "482913",
@@ -80,16 +78,6 @@ test("while open it asks the account for its computers on a timer, and stops whe
   root = undefined;
   await act(async () => vi.advanceTimersByTime(10_000));
   expect(parallax.discoverAccount).toHaveBeenCalledTimes(3);
-});
-
-test("it offers a removed computer back, and adds it only when asked", async () => {
-  const parallax = bridge(() => []);
-  parallax.removedComputers.mockResolvedValue([{ id: "account:box", name: "build-box" }]);
-  await renderWizard([]);
-  expect(parallax.setDeviceEnabled).not.toHaveBeenCalled();
-  const add = [...document.querySelectorAll("button")].find((b) => b.textContent === "Add back")!;
-  await act(async () => add.click());
-  expect(parallax.setDeviceEnabled).toHaveBeenCalledWith("account:box", true);
 });
 
 test("with no dialog open the prompt asks for the code on its own, then confirms", async () => {

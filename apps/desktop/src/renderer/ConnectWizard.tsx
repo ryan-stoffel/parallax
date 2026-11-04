@@ -57,14 +57,9 @@ export function ConnectWizard({
   const titleId = useId();
   useHoldCodePrompts();
   useEffect(() => dialog.current?.showModal(), []);
-  const [removed, setRemoved] = useState<{ id: string; name: string }[]>([]);
   useEffect(() => {
-    const look = async () => {
-      await window.parallax.discoverAccount();
-      setRemoved(await window.parallax.removedComputers());
-    };
-    void look();
-    const timer = setInterval(() => void look(), LOOK_MS);
+    void window.parallax.discoverAccount();
+    const timer = setInterval(() => void window.parallax.discoverAccount(), LOOK_MS);
     return () => clearInterval(timer);
   }, []);
   const computers = devices.filter((d) => d.id.startsWith("account:"));
@@ -126,29 +121,6 @@ export function ConnectWizard({
         ) : (
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-4">
             {finished ? <Finished /> : <Setup channel={channel} />}
-            {removed.length > 0 && (
-              <ul aria-label="Removed computers" className="rounded-lg border border-border">
-                {removed.map((d) => (
-                  <li
-                    key={d.id}
-                    className="flex items-center gap-3 border-border px-3 py-2.5 not-last:border-b"
-                  >
-                    <p className="min-w-0 flex-1 truncate text-body font-medium">{d.name}</p>
-                    <span className="text-body text-muted-foreground">Removed from this app</span>
-                    <button
-                      type="button"
-                      className={quietButton}
-                      onClick={() => {
-                        setRemoved((old) => old.filter((each) => each.id !== d.id));
-                        void window.parallax.setDeviceEnabled(d.id, true);
-                      }}
-                    >
-                      Add back
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
             {found.length > 0 && (
               <ul aria-label="New computers" className="rounded-lg border border-border">
                 {found.map((d) => (
