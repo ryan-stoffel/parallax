@@ -209,7 +209,7 @@ export function LanSettings() {
                       : `On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`
                   }
                 >
-                  {confirmingRelay === h.hostId ? (
+                  {h.thisComputer ? null : confirmingRelay === h.hostId ? (
                     <ConfirmRemove
                       onRemove={() => void removeRelayHost(h.hostId)}
                       onCancel={() => setConfirmingRelay(undefined)}

@@ -34,7 +34,7 @@ import { backendLogos } from "./Sidebar";
 import { isRepository, type ThreadsView } from "./threads";
 import { hourCycle } from "./prefs";
 import { compact } from "./Usage";
-import { quietButton, Section, settingRow } from "./settings/parts";
+import { ConfirmRemove, quietButton, Section, settingRow } from "./settings/parts";
 import { IconButton } from "./ui";
 
 /** How far back the Tokens chart looks, in days. */
@@ -825,11 +825,16 @@ const deviceKinds: Record<string, string> = {
 
 /**
  * The Parallax Connect tab: each device added with it (0056), with its icon, address, and whether
- * this app uses it. Remove takes it off this app's list until it's added again; nothing on the
- * device changes.
+ * this app uses it. Remove asks first, since an account computer leaves the account for good.
  */
 function ConnectRows() {
   const [devices, setDevices] = useState<DeviceHost[]>([]);
+  const [confirming, setConfirming] = useState<string>();
+  const [failed, setFailed] = useState<string>();
+  const remove = async (id: string) => {
+    setConfirming(undefined);
+    setFailed(await window.parallax.removeDevice(id));
+  };
   useEffect(() => window.parallax.onDevices(setDevices), []);
   if (!devices.length)
     return (
@@ -851,15 +856,23 @@ function ConnectRows() {
                 .join(" · ")}
             </RowText>
           </div>
-          <button
-            type="button"
-            onClick={() => void window.parallax.removeDevice(d.id)}
-            className={dangerOutline}
-          >
-            Remove
-          </button>
+          {confirming === d.id ? (
+            <ConfirmRemove
+              onRemove={() => void remove(d.id)}
+              onCancel={() => setConfirming(undefined)}
+            />
+          ) : (
+            <button type="button" onClick={() => setConfirming(d.id)} className={dangerOutline}>
+              Remove
+            </button>
+          )}
         </div>
       ))}
+      {failed && (
+        <p role="alert" className={`${settingRow} text-body text-danger`}>
+          {failed}
+        </p>
+      )}
     </Section>
   );
 }

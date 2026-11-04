@@ -976,7 +976,7 @@ test("Remove takes a computer off the account and forgets it everywhere, unless 
     expect(await remove()).toBe("the relay refused");
     expect(box.disposed).toBe(false);
     expect(listed(buildBox)).toBeDefined();
-    expect(calls.filter((c) => c.startsWith("forget"))).toEqual([]);
+    expect(calls).toEqual(['set {"relay":false}', 'set {"relay":true}']);
 
     refuse = false;
     calls.length = 0;
@@ -997,6 +997,50 @@ test("Remove takes a computer off the account and forgets it everywhere, unless 
     fake.handlers.get("parallax:discoverAccount")!();
     await vi.advanceTimersByTimeAsync(1);
     expect(listed(buildBox)).toBeDefined();
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("this computer can't remove itself", async () => {
+  fake.answers.clear();
+  try {
+    let removed = false;
+    fake.answers.set("relay/id", { result: { hostId: buildBox } });
+    fake.answers.set("relay/remove", () => ((removed = true), { result: { hosts: [] } }));
+    const local = await start({}, signedIn().account);
+    local.set(connected({ accountAccess: {} }));
+    const answer = await fake.handlers.get("parallax:removeRelayHost")!({}, buildBox);
+    expect(answer).toMatch(/computer you're on/);
+    expect(removed).toBe(false);
+  } finally {
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a computer removed while it couldn't hear stays off the account at its next start, until a sign-in", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const calls: string[] = [];
+    fake.answers.set("relay/hosts", { result: { hosts: [] } });
+    fake.answers.set("access/get", accessState([]));
+    fake.answers.set("host/settings/get", { result: { connect: false } });
+    fake.answers.set("host/settings/set", (params: unknown) => {
+      calls.push(`set ${JSON.stringify(params)}`);
+      return { result: {} };
+    });
+    fake.answers.set("relay/register", () => (calls.push("register"), { result: {} }));
+    const { account, signIn } = signedIn();
+    const local = await start({ joinedRelay: true }, account);
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(['set {"relay":false}']);
+
+    signIn();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls.at(-1)).toBe("register");
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });

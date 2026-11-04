@@ -433,10 +433,9 @@ export interface ParallaxBridge {
    */
   setDeviceEnabled(hostId: string, enabled: boolean): Promise<void>;
   /**
-   * Removes a device from this app's list until it's added again from Add computer. Nothing on
-   * the device changes, and other computers still reach it.
+   * Takes an account computer off the account for good, and a Tailscale device off this app's
+   * list. Resolves to why not, for people.
    */
-  /** Takes a computer off the account for good. Resolves to why not, for people. */
   removeDevice(hostId: string): Promise<string | undefined>;
   /**
    * Asks the account for its computers now (0091), as Settings > Connections does when it opens

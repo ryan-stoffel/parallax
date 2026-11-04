@@ -199,6 +199,7 @@ async fn forgetting_a_computer_drops_its_approval_and_this_computers_session_for
     let saved = dir.path().join("remote-hosts");
     std::fs::create_dir_all(&saved).unwrap();
     std::fs::write(saved.join(OTHER), "{}").unwrap();
+    std::fs::write(saved.join(format!("{OTHER}.request")), "{}").unwrap();
     std::fs::write(saved.join(format!("{OTHER}.requests")), "[]").unwrap();
 
     let state = client

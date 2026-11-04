@@ -475,8 +475,9 @@ function DeviceCard({
           <form method="dialog" className="px-5 pt-4 pb-4">
             <h2 className="text-reading font-semibold">Remove {device.name}?</h2>
             <p className="mt-1.5 text-body text-muted-foreground">
-              It leaves your account, and none of your computers or devices reach it anymore. Its
-              threads leave your sidebars. To add it again, run the setup on it from Add computer.
+              {device.id.startsWith("account:")
+                ? "It leaves your account, and none of your computers or devices reach it anymore. Its threads leave your sidebars. To add it again, run the setup on it from Add computer."
+                : `Parallax here stops connecting to it, and its threads leave this sidebar. Nothing on ${device.name} changes.`}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button type="submit" className={quietButton}>

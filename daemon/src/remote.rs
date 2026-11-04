@@ -1211,8 +1211,8 @@ fn committed_path(data_dir: &Path, host_id: &str) -> PathBuf {
     credential_path(data_dir, &format!("{host_id}.request"))
 }
 
-/// Deletes what this computer keeps for reaching the `account:` host `host_id`: its credential
-/// and its requests. Either being gone already is not an error.
+/// Deletes what this computer keeps for reaching the `account:` host `host_id`: its credential,
+/// its waiting request, and its requests this hour. Any being gone already is not an error.
 ///
 /// # Errors
 ///
@@ -1220,6 +1220,7 @@ fn committed_path(data_dir: &Path, host_id: &str) -> PathBuf {
 pub fn forget_host(data_dir: &Path, host_id: &str) -> io::Result<()> {
     for path in [
         credential_path(data_dir, host_id),
+        committed_path(data_dir, host_id),
         requests_path(data_dir, host_id),
     ] {
         match fs::remove_file(path) {
