@@ -179,9 +179,10 @@ export const hostUsage: HostUsage = {
     return answer && "result" in answer ? answer.result : undefined;
   },
   async release(hostId, claim) {
-    await connections
+    const answer = await connections
       .get(hostId)
       ?.request("usage/report/release", { since: claim.since, until: claim.until });
+    return !!answer && "result" in answer;
   },
 };
 

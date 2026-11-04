@@ -109,11 +109,12 @@ test("each computer's claimed hours are sent, and one with nothing or no answer 
     "account:old-plxd": undefined,
     "account:mini": claim(second),
   };
-  const release = vi.fn(async () => {});
+  const release = vi.fn(async () => true);
   const send = vi.fn(async () => true);
   await reportTokens(
     { hosts: () => Object.keys(claims), claim: async (id) => claims[id], release },
     send,
+    new Map(),
   );
   expect(send.mock.calls).toEqual([[[first]], [[second]]]);
   expect(release).not.toHaveBeenCalled();
@@ -124,7 +125,7 @@ test("a failed send gives only its computer's claim back", async () => {
     local: claim(first),
     "account:mini": claim(second),
   };
-  const release = vi.fn(async () => {});
+  const release = vi.fn(async () => true);
   const send = vi.fn(async (hours: UsageHour[]) => {
     if (hours[0] === first) throw new Error("offline");
     return true;
@@ -132,6 +133,31 @@ test("a failed send gives only its computer's claim back", async () => {
   await reportTokens(
     { hosts: () => Object.keys(claims), claim: async (id) => claims[id]!, release },
     send,
+    new Map(),
   );
   expect(release.mock.calls).toEqual([["local", claims["local"]]]);
+});
+
+test("a claim plxd couldn't take back is given back before that computer's next claim", async () => {
+  const held = claim(first);
+  const release = vi.fn(async () => false);
+  const claimed = vi.fn(async () => held);
+  const usage = { hosts: () => ["account:mini"], claim: claimed, release };
+  const unreleased = new Map<string, typeof held>();
+  const send = vi.fn(async () => false);
+
+  await reportTokens(usage, send, unreleased);
+  expect(unreleased.get("account:mini")).toBe(held);
+
+  // Still out of reach: no new claim on top of the one held.
+  await reportTokens(usage, send, unreleased);
+  expect(claimed).toHaveBeenCalledTimes(1);
+
+  // Back: the release lands, and the same hours go.
+  release.mockResolvedValue(true);
+  send.mockResolvedValue(true);
+  await reportTokens(usage, send, unreleased);
+  expect(unreleased.size).toBe(0);
+  expect(claimed).toHaveBeenCalledTimes(2);
+  expect(send).toHaveBeenLastCalledWith([first]);
 });

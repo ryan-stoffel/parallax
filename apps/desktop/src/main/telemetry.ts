@@ -125,22 +125,31 @@ export function tokenEvents(key: string, install: Install, hours: UsageHour[]) {
 export type HostUsage = {
   hosts(): string[];
   claim(hostId: string): Promise<UsageReportClaimResult | undefined>;
-  release(hostId: string, claim: UsageReportClaimResult): Promise<void>;
+  /** Whether plxd took the claim back. */
+  release(hostId: string, claim: UsageReportClaimResult): Promise<boolean>;
 };
 
 /**
  * Sends each computer's unreported whole hours. Its plxd keeps the place, so two apps connected to
  * one computer send each hour once. A failed send gives the claim back, so its hours go again later.
+ * `unreleased` holds the claims plxd couldn't take back yet, as when the network went with the send,
+ * and each is given back before that computer's next claim.
  */
 export async function reportTokens(
   usage: HostUsage,
   send: (hours: UsageHour[]) => Promise<boolean>,
+  unreleased: Map<string, UsageReportClaimResult>,
 ): Promise<void> {
+  const release = (hostId: string, claim: UsageReportClaimResult) =>
+    usage.release(hostId, claim).catch(() => false);
   for (const hostId of usage.hosts()) {
+    const held = unreleased.get(hostId);
+    if (held && !(await release(hostId, held))) continue;
+    unreleased.delete(hostId);
     const claim = await usage.claim(hostId).catch(() => undefined);
     if (!claim || claim.hours.length === 0) continue;
-    if (!(await send(claim.hours).catch(() => false)))
-      await usage.release(hostId, claim).catch(() => {});
+    if (!(await send(claim.hours).catch(() => false)) && !(await release(hostId, claim)))
+      unreleased.set(hostId, claim);
   }
 }
 
@@ -225,15 +234,20 @@ export function startTelemetry(account: Account, usage: HostUsage) {
       .then((each) => post(CAPTURE_URL, JSON.stringify(promptEvent(KEY, each, kind))))
       .catch(() => {});
 
+  const unreleased = new Map<string, UsageReportClaimResult>();
   const reportHours = () =>
     install()
       .then(async (each) => {
         if (!each.account) return;
-        await reportTokens(usage, async (hours) => {
-          const batch = tokenEvents(KEY, each, hours);
-          const sent = await post(BATCH_URL, JSON.stringify({ api_key: KEY, batch }));
-          return sent.ok;
-        });
+        await reportTokens(
+          usage,
+          async (hours) => {
+            const batch = tokenEvents(KEY, each, hours);
+            const sent = await post(BATCH_URL, JSON.stringify({ api_key: KEY, batch }));
+            return sent.ok;
+          },
+          unreleased,
+        );
       })
       .catch(() => {});
   // A minute in, since plxd isn't connected at launch.
