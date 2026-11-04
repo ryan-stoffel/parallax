@@ -773,9 +773,10 @@ body {
 
 /* A pane's card and its shown tab (ThreadTabs.tsx) are one outline, which shows on a window the
    same color as the card, as dark mode's true black is. It's a solid color, so overlapping strokes
-   don't brighten where they meet. The tab's foot covers the card's top edge, and at each side a
-   rounded border curves out to it, its shadow, clipped to its box, covering what's beyond the curve.
-   The focused pane among several has a brighter outline. */
+   don't brighten where they meet. The tab's foot covers the card's top edge. Its top and sides
+   (.tab-cap) stop where a rounded border at each side curves out to that edge, so a tab of a
+   fractional width has no side left to show past the curve. The curve's shadow, clipped to its box,
+   covers the card's edge beyond it. The focused pane among several has a brighter outline. */
 .pane-edge {
   --edge: color-mix(in srgb, var(--foreground) 14%, var(--background));
 }
@@ -792,9 +793,13 @@ body {
 .pane-card {
   border: 1px solid var(--edge);
 }
-.tab-shown {
+.tab-cap {
+  position: absolute;
+  inset: 0 0 11px;
+  pointer-events: none;
   border: 1px solid var(--edge);
   border-bottom: 0;
+  border-radius: 10px 10px 0 0;
 }
 .tab-shown::before,
 .tab-shown::after {
@@ -809,12 +814,12 @@ body {
   clip-path: inset(0);
 }
 .tab-shown::before {
-  left: -11px;
+  left: -10px;
   border-right: 1px solid var(--edge);
   border-bottom-right-radius: 11px;
 }
 .tab-shown::after {
-  right: -11px;
+  right: -10px;
   border-left: 1px solid var(--edge);
   border-bottom-left-radius: 11px;
 }
@@ -823,6 +828,9 @@ body {
 :root.translucent .tab-shown::before,
 :root.translucent .tab-shown::after {
   display: none;
+}
+:root.translucent .tab-cap {
+  bottom: 0;
 }
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's

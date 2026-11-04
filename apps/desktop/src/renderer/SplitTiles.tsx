@@ -254,6 +254,11 @@ export function SplitTiles({
             data-marked={visible > 1 && i === focused ? "" : undefined}
             className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
+            {/* Content scrolled up fades out rather than butting into the card's top edge. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-4 bg-linear-to-b from-pane to-transparent"
+            />
             {node}
             {i === focused && details}
           </div>
