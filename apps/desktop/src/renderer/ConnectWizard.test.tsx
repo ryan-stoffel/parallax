@@ -111,10 +111,10 @@ test("the terminal path gives a command for each OS that needs nothing installed
     `curl -fsSL ${scripts}/connect.sh | sh -s -- --channel nightly`,
   );
   expect(connectCommand("stable", "windows")).toBe(
-    `powershell -c "& ([scriptblock]::Create((irm ${scripts}/connect.ps1)))"`,
+    `powershell -c "irm ${scripts}/connect.ps1 | iex; Connect-Parallax"`,
   );
   expect(connectCommand("nightly", "windows")).toBe(
-    `powershell -c "& ([scriptblock]::Create((irm ${scripts}/connect.ps1))) --channel nightly"`,
+    `powershell -c "irm ${scripts}/connect.ps1 | iex; Connect-Parallax --channel nightly"`,
   );
 });
 

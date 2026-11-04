@@ -28,13 +28,14 @@ const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop
 /**
  * The command that adds a computer to the account (0091), for this app's channel. Each needs nothing
  * installed: its script brings Node.js when the computer has none, and runs `plx connect`. Windows
- * reads its script as text, which the execution policy doesn't stop, from cmd or PowerShell.
+ * reads its script as text, which the execution policy doesn't stop, from cmd or PowerShell. Keep
+ * that form: Defender blocks `[scriptblock]::Create((irm ...))` as malicious.
  */
 export const connectCommand = (channel: "stable" | "nightly", os: "unix" | "windows") => {
-  const flag = channel === "nightly" ? "--channel nightly" : "";
+  const flag = channel === "nightly" ? " --channel nightly" : "";
   return os === "windows"
-    ? `powershell -c "& ([scriptblock]::Create((irm ${SCRIPTS}/connect.ps1)))${flag && ` ${flag}`}"`
-    : `curl -fsSL ${SCRIPTS}/connect.sh | sh${flag ? ` -s -- ${flag}` : ""}`;
+    ? `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax${flag}"`
+    : `curl -fsSL ${SCRIPTS}/connect.sh | sh${flag && ` -s --${flag}`}`;
 };
 
 /** Where the app is downloaded. */
