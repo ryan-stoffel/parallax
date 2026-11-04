@@ -225,7 +225,7 @@ function Setup({ channel }: { channel: "stable" | "nightly" }) {
           <Step n={1} title="Run this there">
             <Command label="macOS or Linux" command={connectCommand(channel, "unix")} />
             <Command label="Windows" command={connectCommand(channel, "windows")} />
-            It needs nothing installed, and works on a server or over SSH.
+            Setup needs nothing installed, and works on a server or over SSH.
           </Step>
           <Step n={2} title="Sign in">
             In a browser there, or with a link it prints that opens on any device.
