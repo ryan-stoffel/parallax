@@ -83,16 +83,38 @@ export const snoozed = (thread: Thread, attention: Attention, now = Date.now()) 
 /** When a thread's newest message was sent. */
 export const lastPrompt = (thread: Thread) => thread.lastPromptAt ?? thread.createdAt;
 
+/** The later of two times, `a` for no `b`. */
+export const later = (a: string, b?: string) => (b && Date.parse(b) > Date.parse(a) ? b : a);
+
 /**
- * When a thread was last active, for the sidebar's order (PLX-1043): its newest message, or when its
- * run last stopped after that (`stoppedAt`, ThreadsState), so a thread that finishes rises to the
- * top. A running thread, or one waiting out a usage limit (0049), keeps its message's time, so its
- * row doesn't move until it finishes.
+ * When a thread's snooze ended, if it has. plxd keeps the time, so a woken thread stays woken. An
+ * archived thread doesn't wake.
  */
-export function activeAt(thread: Thread, run: AgentRun | undefined, stoppedAt?: string): string {
+export const wokeAt = (thread: Thread, now = Date.now()) =>
+  !thread.archived && thread.snoozedUntil && Date.parse(thread.snoozedUntil) <= now
+    ? thread.snoozedUntil
+    : undefined;
+
+/** Whether a run holds its row's place: it's running, or waiting out a usage limit (0049). */
+export const holdsPlace = (run: AgentRun) => isRunning(run.status) || run.status === "waiting";
+
+/**
+ * When a thread was last active, for the sidebar's order (PLX-1043): its newest message, when its
+ * run last stopped after that (`stoppedAt`, ThreadsState), or when its snooze ended (PLX-1322), so a
+ * thread that finishes or wakes rises to the top. A run that holds its place keeps its message's
+ * time, so its row doesn't move until it finishes. Its agent still waiting (`waiting`, as
+ * `attentionOf` takes it) keeps a wake from moving it too.
+ */
+export function activeAt(
+  thread: Thread,
+  run: AgentRun | undefined,
+  stoppedAt?: string,
+  waiting?: "monitoring" | "waiting",
+): string {
   const prompt = lastPrompt(thread);
-  if (!run || !stoppedAt || isRunning(run.status) || run.status === "waiting") return prompt;
-  return Date.parse(stoppedAt) > Date.parse(prompt) ? stoppedAt : prompt;
+  if (run && holdsPlace(run)) return prompt;
+  const stopped = later(prompt, run && stoppedAt);
+  return waiting ? stopped : later(stopped, wokeAt(thread));
 }
 
 /** When the user last sent a thread a message, for Working's clock: wake-ups don't reset it (PLX-1012). */

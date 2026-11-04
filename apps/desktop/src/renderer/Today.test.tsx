@@ -236,6 +236,54 @@ test("a snoozed row shows when it wakes, and an archived one its age (PLX-1308)"
   expect(status("old")).toBe("10m");
 });
 
+const listOrder = () =>
+  [...list().querySelectorAll("[data-flip]")].map((r) =>
+    r.getAttribute("data-flip")!.split("/").at(-1),
+  );
+
+test("a thread that wakes from a snooze rises to the top of the list and stays (PLX-1322)", async () => {
+  capabilities = { threadAttention: {} } as Capabilities;
+  threads = [
+    thread("recent", 5),
+    thread("timed", 60, { snoozedUntil: ago(1) }),
+    thread("by-hand", 90, { snoozedUntil: new Date(Date.now() + 3_600_000).toISOString() }),
+  ];
+  runs = [];
+  await renderApp();
+  // Past its wake time, it sits above a thread active more recently than its last message.
+  expect(listOrder()).toEqual(["timed", "recent"]);
+
+  // Dragged out by hand, it wakes right away, not at the sidebar's next minute.
+  if (!drawer("Snoozed").open) act(() => drawer("Snoozed").querySelector("summary")!.click());
+  await dragRow("by-hand", list);
+  expect(listOrder()).toEqual(["by-hand", "timed", "recent"]);
+
+  // A later mount, as after a restart, keeps the order.
+  threads = threads.map((t) => (t.id === "by-hand" ? { ...t, snoozedUntil: ago(0) } : t));
+  act(() => unmount());
+  await renderApp();
+  expect(listOrder()).toEqual(["by-hand", "timed", "recent"]);
+});
+
+test("undoing a snooze puts a thread back where it was (PLX-1322)", async () => {
+  capabilities = { threadAttention: {} } as Capabilities;
+  threads = [thread("recent", 5), thread("older", 60)];
+  runs = [];
+  answers["thread/update"] = (p) => {
+    threads = threads.map((t) =>
+      t.id === p["runId"] ? { ...t, snoozedUntil: p["snoozedUntil"] as string } : t,
+    );
+    return { result: { thread: threads.find((t) => t.id === p["runId"]) } };
+  };
+  await renderApp();
+  await dragRow("older", () => drawer("Snoozed"));
+  expect(listOrder()).toEqual(["recent"]);
+
+  await act(async () => button("Undo")!.click());
+  await settle();
+  expect(listOrder()).toEqual(["recent", "older"]);
+});
+
 test("a row dragged onto another section moves there: Archived archives, Snoozed snoozes, and the list brings it back (PLX-1095)", async () => {
   capabilities = { threadAttention: {} } as Capabilities;
   threads = [

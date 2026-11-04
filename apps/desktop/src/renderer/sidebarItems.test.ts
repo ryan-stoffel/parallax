@@ -212,3 +212,27 @@ test("a backing orchestrator thread lists once with its lifecycle metadata and P
   h.view.state.runs = {};
   expect(sidebarItems([h], [])).toHaveLength(1);
 });
+
+test("a backing orchestrator thread rises when its snooze ends, unless its runs are working (PLX-1322)", () => {
+  const woke = "2026-10-29T11:30:00Z";
+  const orchestrator = {
+    id: "p-ember",
+    name: "ember",
+    repoPath: zeta.path,
+    run: "t-lead",
+    updatedAt: "2026-10-29T11:00:00Z",
+  } as Orchestrator;
+  const at = (status: string) =>
+    sidebarItems(
+      [
+        listed("local", [zeta], [thread("t-lead", zeta.id, 90, { snoozedUntil: woke })], {
+          orchestrators: [orchestrator],
+          runs: { "t-lead": { id: "t-lead", project: "p-ember", status } as AgentRun },
+        }),
+      ],
+      [],
+    )[0]?.at;
+  expect(at("completed")).toBe(woke);
+  expect(at("running")).toBe(orchestrator.updatedAt);
+  expect(at("waiting")).toBe(orchestrator.updatedAt);
+});

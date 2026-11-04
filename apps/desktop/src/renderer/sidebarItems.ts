@@ -1,7 +1,15 @@
 // What the sidebar lists (0094): every host's threads and orchestrators as rows, the unsent New
 // Thread drafts, and how rows group, as pure functions, so a sidebar mode is mostly its grouping.
 import type { AgentRun, Orchestrator, Repo, Thread } from "../protocol/generated/protocol";
-import { activeAt, attentionOf, orchestratorAttention, type Attention } from "./attention";
+import {
+  activeAt,
+  attentionOf,
+  holdsPlace,
+  later,
+  orchestratorAttention,
+  wokeAt,
+  type Attention,
+} from "./attention";
 import type { Draft } from "./drafts";
 import { numberOf } from "./github";
 import type { Host } from "./hosts";
@@ -82,7 +90,7 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
             run,
             unread.includes(`${h.id}/${t.id}`),
           ),
-          at: activeAt(t, run, state.stoppedAt[t.id]),
+          at: activeAt(t, run, state.stoppedAt[t.id], waitingOf(state, t.id)),
           title,
           text: [
             title,
@@ -98,6 +106,8 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
       const run = p.run ? state.runs[p.run] : undefined;
       const key = `${h.id}/${p.id}`;
       const attention = orchestratorAttention(runs, (id) => asksOf(state, id));
+      // As `activeAt`: a row that's working stays put when its snooze ends.
+      const woke = thread && !runs.some(holdsPlace) ? wokeAt(thread) : undefined;
       return {
         ...(thread
           ? { kind: "thread" as const, thread, run, orchestration: { orchestrator: p, runs } }
@@ -107,13 +117,17 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
         view,
         repo: state.repos.find((r) => r.path === p.repoPath),
         attention: markedUnread(attention, run, unread.includes(key)),
-        // Its last change, or when one of its runs last stopped, so finished work raises it too.
-        at: runs.reduce((at, r) => {
-          const stopped = state.stoppedAt[r.id];
-          return stopped && !isRunning(r.status) && Date.parse(stopped) > Date.parse(at)
-            ? stopped
-            : at;
-        }, p.updatedAt),
+        // Its last change, when its snooze ended, or when one of its runs last stopped, so finished
+        // work raises it too.
+        at: runs.reduce(
+          (at, r) => {
+            const stopped = state.stoppedAt[r.id];
+            return stopped && !isRunning(r.status) && Date.parse(stopped) > Date.parse(at)
+              ? stopped
+              : at;
+          },
+          later(p.updatedAt, woke),
+        ),
         title: p.name,
         text: p.name,
       };
