@@ -170,6 +170,13 @@ test("a pane's only tab can trade places, and the window's only tab stays", () =
   expect(shape(moveToZone(alone, tabOf(alone, "a"), "left"))).toEqual(["[a] *"]);
 });
 
+test("a pane's only tab trading places lands on the line it previewed", () => {
+  const state = { ...openBeside(opened("a"), "h", "b"), cuts: { x: 0.65, y: 0.5 } };
+  const traded = moveToZone(state, tabOf(state, "a"), "right");
+  expect(cellsOf(traded)).toEqual([5, 10]);
+  expect(traded.cuts.x).toBe(0.65);
+});
+
 test("closing a pane gives its room back, and a line it brings back starts even", () => {
   let state = openBeside(opened("a"), "h", "b");
   state = { ...state, cuts: { x: 0.3, y: 0.5 } };

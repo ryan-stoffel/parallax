@@ -294,7 +294,15 @@ export function moveToZone(state: Workspace, tabId: string, zone: Zone): Workspa
   const tab = from?.tabs.find((t) => t.id === tabId);
   if (!from || !tab) return state;
   if (state.panes.length === 1 && from.tabs.length === 1) return selectTab(state, tabId);
-  return arrived(claim(closeTab(state, tabId), tab, zoneCells[zone]), activeTab(state));
+  // Closing the pane can take a line away for a moment, but the drop lands on the lines it previewed.
+  const cuts = usedCuts(
+    state.panes.map((p) => p.cells),
+    state.cuts,
+  );
+  return arrived(
+    { ...claim(closeTab(state, tabId), tab, zoneCells[zone]), cuts },
+    activeTab(state),
+  );
 }
 
 /** `selection`, a thread or an orchestrator, in a new pane at zone `zone`, moving a tab showing it. */
