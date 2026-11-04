@@ -29,7 +29,7 @@ download_node() {
   esac
   base=https://nodejs.org/dist/latest-v22.x
   line=$(curl -fsSL "$base/SHASUMS256.txt" | grep -E "  node-v[0-9.]+-$os-$arch\.tar\.gz$") || {
-    echo "nodejs.org lists no Node.js for $os $arch." >&2
+    echo "Couldn't find Node.js for $os $arch at nodejs.org." >&2
     exit 1
   }
   expected=${line%% *}
@@ -39,6 +39,8 @@ download_node() {
   mkdir -p "$(dirname "$1")"
   tmp=$(mktemp -d "$1.XXXXXX")
   trap 'rm -rf "$tmp"' EXIT
+  # Some shells skip the EXIT trap on an interrupt.
+  trap 'rm -rf "$tmp"; exit 130' INT TERM
   curl -fsSL -o "$tmp/$name" "$base/$name"
   if [ "$(sha256_of "$tmp/$name")" != "$expected" ]; then
     echo "The Node.js download's SHA-256 isn't the one nodejs.org lists, so it wasn't used." >&2
@@ -48,8 +50,15 @@ download_node() {
   rm -rf "$1"
   mv "$tmp/${name%.tar.gz}" "$1"
   rm -rf "$tmp"
-  trap - EXIT
+  trap - EXIT INT TERM
 }
+
+# This script arrives on stdin, so plx reads the sign-in code from the terminal instead. With no
+# terminal there's nowhere to paste it, and plx would stop at the prompt with nothing done.
+if ! (: </dev/tty) 2>/dev/null; then
+  echo "Parallax's setup needs a terminal for its sign-in. Over ssh, run it with ssh -t." >&2
+  exit 1
+fi
 
 if ! node_is_new_enough; then
   node_dir=$HOME/.parallax-plxd/node
@@ -62,10 +71,4 @@ fi
 NPM_CONFIG_UPDATE_NOTIFIER=false
 export NPM_CONFIG_UPDATE_NOTIFIER
 
-# This script arrives on stdin, so plx reads the sign-in code from the terminal instead. With no
-# terminal there's nowhere to paste it, and plx would stop at the prompt with nothing done.
-if ! (: </dev/tty) 2>/dev/null; then
-  echo "Parallax's setup needs a terminal for its sign-in. Over ssh, run it with ssh -t." >&2
-  exit 1
-fi
 exec npx -y plx-cli@latest connect "$@" </dev/tty
