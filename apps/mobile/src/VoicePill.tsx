@@ -88,7 +88,7 @@ export function VoicePill({
           <Waveform waveform={waveform} />
         ) : (
           // Not listening yet, or any more: the app's working mark, where the bars go.
-          <View style={styles.bars}>
+          <View style={[styles.bars, { justifyContent: "center" }]}>
             <WorkingMark size={20} />
           </View>
         )}

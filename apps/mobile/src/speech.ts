@@ -33,7 +33,8 @@ class Recognition implements VoiceEngine {
   async listen(signal: AbortSignal): Promise<VoiceCapture> {
     const { granted } = await Speech.requestPermissionsAsync();
     if (!granted) throw new SpeechDenied();
-    signal.throwIfAborted();
+    // Not `throwIfAborted`, which React Native's AbortSignal lacks.
+    if (signal.aborted) throw new Error("Dictation was cancelled.");
     signal.addEventListener("abort", () => this.settle(), { once: true });
     await new Promise<void>((started, refused) => {
       this.listeners = [
