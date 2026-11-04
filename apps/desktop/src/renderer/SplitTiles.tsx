@@ -207,8 +207,9 @@ export function SplitTiles({
         return (
           <div
             key={`frame-${tile}`}
-            style={{ ...placed(rect, gutter), height: stripHeight }}
-            className={`titlebar @container absolute flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
+            // A pixel into the card, for the shown tab's foot to cover the card's top edge.
+            style={{ ...placed(rect, gutter), height: stripHeight + 1 }}
+            className={`titlebar @container absolute z-[2] flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
           >
             <div
               className={`-ml-1.5 flex min-w-40 shrink items-center gap-1 pr-1 ${tile === 0 && leading ? `pl-3 ${leadingClass}` : "pl-3.5"}`}
@@ -233,7 +234,7 @@ export function SplitTiles({
             <div className="min-w-3 flex-1" />
             {corner && controls && (
               <div
-                className={`flex min-w-0 shrink items-center justify-end gap-2 overflow-clip pr-1.5 pl-3 ${controlsClass}`}
+                className={`flex min-w-0 shrink items-center justify-end gap-2 overflow-clip pr-1.5 pb-px pl-3 ${controlsClass}`}
               >
                 {controls}
               </div>
@@ -250,7 +251,8 @@ export function SplitTiles({
             // A stacked pane's view stays mounted, out of sight and reach.
             inert={!active}
             style={placed(tiles[tile]!, gutter, stripHeight)}
-            className={`absolute flex min-h-0 min-w-0 overflow-clip rounded-xl transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
+            data-marked={visible > 1 && i === focused ? "" : undefined}
+            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-xl transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
             {node}
             {i === focused && details}

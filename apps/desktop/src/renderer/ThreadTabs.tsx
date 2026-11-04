@@ -28,8 +28,8 @@ const accepted = [tabDragType, threadDragType];
 
 /**
  * A pane's tabs (PLX-1289), in a row above its card, then a button that opens a new one. The shown
- * tab is part of the card: its color, joined to it by curves at its foot (.tab-shown). With `marked`,
- * for the focused pane among several, a line follows its top edge. A tab drags along the tabs or to another pane's
+ * tab is part of the card: one outline, joined by curves at its foot (.tab-shown). With `marked`, for
+ * the focused pane among several, that outline is brighter. A tab drags along the tabs or to another pane's
  * to move there, and into a pane to open beside it. A sidebar thread dropped here gets a tab where it
  * lands, which a bar shows. A middle click closes a tab.
  */
@@ -123,7 +123,7 @@ export function ThreadTabs({
                 e.preventDefault();
                 onClose(tab.id);
               }}
-              className={`group/tab relative flex max-w-56 min-w-16 shrink items-center ${selected ? "tab-shown h-10 rounded-t-[10px] bg-pane" : "mb-1.5 h-7 rounded-md hover:bg-hover"}`}
+              className={`group/tab relative flex max-w-56 min-w-16 shrink items-center ${selected ? "pane-edge tab-shown self-stretch rounded-t-[10px] bg-pane pb-0.5" : "mb-[7px] h-7 rounded-md hover:bg-hover"}`}
               data-marked={selected && marked ? "" : undefined}
             >
               {(landing === tab.id || (landing === null && last)) && (
@@ -162,7 +162,7 @@ export function ThreadTabs({
         label="New tab"
         command="newTab"
         size="sm"
-        className="-ml-1 self-end mb-2"
+        className="-ml-1 mb-[9px] self-end"
         onClick={onNew}
       >
         <Plus />
