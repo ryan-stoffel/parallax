@@ -22,7 +22,7 @@ import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protoc
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { allowThisPhone, confirmDevice, setUpComputer } from "./accountPrompts";
+import { allowThisPhone, confirmDevice, setUpComputer, showWaiting } from "./accountPrompts";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
@@ -170,7 +170,8 @@ export function FleetProvider({
   const gatesNow = useRef(gates);
   gatesNow.current = gates;
   const asking = useRef(false);
-  const stoppedAsking = useRef(false);
+  const shownCode = useRef<string | undefined>(undefined);
+  const retries = useRef(new Map<string, number>());
   const gate = (id: string, next: Gate | undefined) =>
     setGates((g) => (JSON.stringify(g[id]) === JSON.stringify(next) ? g : { ...g, [id]: next }));
   const [fleet] = useState(() => {
@@ -220,34 +221,43 @@ export function FleetProvider({
 
   /**
    * A new phone asks to use the account's computers on its own (0091), as onboarding does, for one
-   * that skipped it. It stops once denied, until the user asks: tapping a computer.
+   * that skipped it. It shows the code once, since its row is out of sight here. A denied or lapsed
+   * request stops it until the user taps a computer.
    */
   async function askOnItsOwn(found: Listed[]) {
     const hosts = accounts ? toAsk(found, accounts.usesAny, latest.current.hidden) : [];
-    if (!accounts || !hosts.length || asking.current || stoppedAsking.current) return;
+    if (!accounts || !hosts.length || asking.current || accounts.askingStopped) return;
     asking.current = true;
-    const id = (hostId: string) => accountId(hostId);
-    const asked = await allowThisPhone(
-      accounts,
-      hosts,
-      (hostId, code) => gate(id(hostId), { kind: "waiting", code }),
-      () => {
-        stoppedAsking.current = true;
-      },
-    );
+    const asked = await allowThisPhone(accounts, hosts, (hostId, code) => {
+      const id = accountId(hostId);
+      gate(id, { kind: "waiting", code });
+      if (shownCode.current === code) return;
+      shownCode.current = code;
+      showWaiting(latest.current.machines.find((m) => m.id === id)?.name ?? "your computers", code);
+    });
     asking.current = false;
     for (const host of hosts) {
-      const m = latest.current.machines.find((x) => x.id === id(host.hostId));
+      const id = accountId(host.hostId);
+      const m = latest.current.machines.find((x) => x.id === id);
       if (m && accounts.trusts(host.hostId)) connect(m);
-      else if (asked !== "allowed") gate(id(host.hostId), { kind: "setup" });
+      else if (asked !== "allowed" && accounts.askingStopped) gate(id, { kind: "setup" });
     }
   }
 
-  /** A computer this phone uses, that wasn't ready for it, as before another device copied its key. */
+  /**
+   * A computer this phone uses that wasn't ready for it, as before another device copied its key,
+   * gets a couple of tries, then waits for the app to come to the front: each try can start a
+   * request there, and a computer takes 5 an hour.
+   */
   function retryGated() {
-    for (const m of latest.current.machines)
-      if (m.account && accounts?.trusts(m.account.hostId) && gatesNow.current[m.id]?.kind === "setup")
-        connect(m);
+    for (const m of latest.current.machines) {
+      if (!m.account || !accounts?.trusts(m.account.hostId)) continue;
+      if (gatesNow.current[m.id]?.kind !== "setup") continue;
+      const tries = retries.current.get(m.id) ?? 0;
+      if (tries >= 2) continue;
+      retries.current.set(m.id, tries + 1);
+      connect(m);
+    }
   }
 
   /** Lists the account's computers on the relay, and adds new ones. */
@@ -258,6 +268,8 @@ export function FleetProvider({
     setListed(found);
     void askOnItsOwn(found);
     retryGated();
+    // A computer added since: the ones this phone uses may vouch for it now.
+    if (found.some((l) => !accounts.trusts(l.hostId))) void share();
     update((s) => {
       const machines = withListed(s.machines, found, s.hidden);
       return machines === s.machines ? s : { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
@@ -339,6 +351,7 @@ export function FleetProvider({
     // front, or a network that changed, also lists the account's computers again.
     const again = () => {
       fleet.wake();
+      retries.current.clear();
       void discover();
     };
     const awake = AppState.addEventListener("change", (s) => s === "active" && again());
@@ -390,7 +403,7 @@ export function FleetProvider({
     const { hostId, routes } = m.account;
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
     if (accounts.trusts(hostId)) return connect(m);
-    stoppedAsking.current = false;
+    void accounts.resumeAsking();
     setUpComputer(accounts, { hostId, name: m.name, routes }, {
       onWaiting: (code) => gate(id, { kind: "waiting", code }),
       done: () => connect(m),

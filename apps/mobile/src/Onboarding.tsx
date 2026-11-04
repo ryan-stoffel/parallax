@@ -125,32 +125,25 @@ export function Onboarding({
   const [listed, setListed] = useState<Listed[]>();
   const [paired, setPaired] = useState<Machine[]>([]);
   const [gates, setGates] = useState<Record<string, Gate>>({});
-  // Why a request ended, until the user starts another. Set, this phone doesn't ask on its own.
-  const [stopped, setStopped] = useState<string>();
+  const [stopped, setStopped] = useState(accounts?.askingStopped);
   const asking = useRef(false);
-  const stoppedRef = useRef(false);
   const allowed = useRef(false);
 
   /** Asks on its own, once at a time, with no taps here. One Allow elsewhere covers them all. */
   const ask = async (found: Listed[]) => {
     const hosts = accounts ? toAsk(found, accounts.usesAny) : [];
-    if (!accounts || !hosts.length || asking.current || stoppedRef.current) return;
+    if (!accounts || !hosts.length || asking.current || accounts.askingStopped) return;
     asking.current = true;
-    const asked = await allowThisPhone(
-      accounts,
-      hosts,
-      (hostId, code) => setGates((g) => ({ ...g, [hostId]: { kind: "waiting", code } })),
-      (message) => {
-        stoppedRef.current = true;
-        setStopped(message);
-      },
+    const asked = await allowThisPhone(accounts, hosts, (hostId, code) =>
+      setGates((g) => ({ ...g, [hostId]: { kind: "waiting", code } })),
     );
     asking.current = false;
+    setStopped(accounts.askingStopped);
     // The rest connect once this phone reaches its computers, which vouch for them.
     if (asked === "allowed") {
       allowed.current = true;
       setGates({});
-    } else
+    } else if (accounts.askingStopped)
       setGates((g) =>
         Object.fromEntries(Object.keys(g).map((id) => [id, { kind: "setup" as const }])),
       );
@@ -158,7 +151,10 @@ export function Onboarding({
 
   const look = async () => {
     const bearer = await token();
-    const found = (bearer && (await listHosts(bearer))) || [];
+    const answered = bearer ? await listHosts(bearer) : undefined;
+    // Offline for now: what's showing stays, with any code, and the next look tries again.
+    if (bearer && !answered) return setListed((l) => l ?? []);
+    const found = answered ?? [];
     setListed(found);
     void ask(found);
     setGates((g) =>
@@ -183,6 +179,8 @@ export function Onboarding({
 
   const setUp = (l: Listed) => {
     if (!accounts) return;
+    void accounts.resumeAsking();
+    setStopped(undefined);
     const ready = () => {
       allowed.current = true;
       setStopped(undefined);

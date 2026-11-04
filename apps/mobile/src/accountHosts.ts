@@ -50,6 +50,8 @@ interface Stored {
   /** The hosts this phone uses: approved with its own code, or listed by one it uses. */
   trusted: string[];
   books: Record<string, HostBook>;
+  /** Why this phone stopped asking on its own, until the user asks again. */
+  askingStopped?: string;
 }
 
 /** What answers on a route: where requests go, the pin, and how to let it go. */
@@ -131,9 +133,35 @@ export class AccountHosts {
     return this.stored.trusted.includes(hostId);
   }
 
-  /** Whether this phone uses any computer yet, so a new one has someone to vouch for it. */
+  /**
+   * Whether this phone uses any account computer yet. A session counts, not trust alone, as a
+   * computer paired on the LAN can list hosts this phone was never approved on.
+   */
   get usesAny() {
-    return this.stored.trusted.length > 0;
+    return this.sessions.length > 0;
+  }
+
+  /** Why asking on its own ended, as a denied or lapsed request did, until the user asks again. */
+  get askingStopped() {
+    return this.stored.askingStopped;
+  }
+
+  async stopAsking(why: string) {
+    this.stored = { ...this.stored, askingStopped: why };
+    await this.save();
+  }
+
+  /** The user asked, by tapping a computer: this phone may ask on its own again. */
+  async resumeAsking() {
+    const { askingStopped: _, ...rest } = this.stored;
+    this.stored = rest;
+    await this.save();
+  }
+
+  /** Whether this phone is waiting on `hostId` for a request it started. */
+  isWaitingOn(hostId: string) {
+    const { kept } = this.book(hostId);
+    return !!kept && kept.until > Date.now();
   }
 
   /** Trusts `hostIds` too, as a host this phone uses listed them. */
@@ -339,15 +367,24 @@ export class AccountHosts {
       { DPoP: proof(this.secret, "POST", `${at.base}${path}`, token) },
       { token, clientLabel: this.label },
     );
-    // Already approved: trusted only if it already was, by a code or a host this phone uses.
-    if (status === 200) return this.approved(hostId, json, false);
+    // Already approved: trusted only if it already was, by a code or a host this phone uses, or if
+    // this phone's own request was waiting there, and it was allowed while the phone couldn't hear.
+    if (status === 200) return this.approved(hostId, json, this.isWaitingOn(hostId));
     if (status === 401 || status === 403)
       throw new Refused(describeRefusal(json) ?? "That computer refused this phone's sign-in.");
     if (status !== 202) throw new Error(describeRefusal(json) ?? `That computer answered ${status}.`);
     const requestId = String(json["request"]);
     const committed = String(json["commitment"]);
     const now = Date.now();
-    let value = keptValue(this.book(hostId), requestId, committed, now);
+    let value: Uint8Array | undefined;
+    try {
+      value = keptValue(this.book(hostId), requestId, committed, now);
+    } catch (e) {
+      if (!ask || !(e instanceof WrongHost)) throw e;
+      // A new request there means the one this phone kept ended, denied while it couldn't hear.
+      await this.setBook(hostId, forgetRequest(this.book(hostId)));
+      throw new Denied("That request wasn't allowed.");
+    }
     if (!value) {
       if (!ask) return { gate: { kind: "setup" } };
       const started = newRequest(this.book(hostId), requestId, committed, now, randomBytes);
@@ -380,7 +417,7 @@ export class AccountHosts {
     );
     if (status === 200) return { session: json };
     if (status === 202) return { pending: json };
-    throw new Refused(describeRefusal(json) ?? "That computer refused the request.");
+    throw new Denied(describeRefusal(json) ?? "That request wasn't allowed.");
   }
 
   /**
@@ -410,14 +447,16 @@ export class AccountHosts {
     const { at } = await this.first(hostId, ordered(hostId, learned));
     try {
       const signed = await this.signIn(at, hostId, true);
-      if ("session" in signed)
+      if ("session" in signed) {
+        if (this.trusts(hostId)) return;
         throw new Error("That computer already approved this phone. Enter its setup code to use it.");
+      }
       if (signed.gate.kind !== "waiting" || !signed.request) throw new Error("That computer didn't start a request.");
       onCode(signed.gate.code);
       for (;;) {
         const step = await this.approval(at, { request: signed.request }, true).catch(async (e: unknown) => {
           // Denied or lapsed: the user may ask again, which starts a new request, counted.
-          if (e instanceof Refused) await this.setBook(hostId, forgetRequest(this.book(hostId)));
+          if (e instanceof Denied) await this.setBook(hostId, forgetRequest(this.book(hostId)));
           throw e;
         });
         if ("session" in step) {
@@ -453,7 +492,10 @@ export class AccountHosts {
 }
 
 /** A sign-in or request the host refused: this phone needs setting up or approving again. */
-export class Refused extends Error {}
+class Refused extends Error {}
+
+/** A new device's request that ended, denied or lapsed. Starting another is the user's to do. */
+export class Denied extends Refused {}
 
 const describeRefusal = (json: Record<string, unknown>) =>
   typeof json["error_description"] === "string" ? json["error_description"] : undefined;

@@ -3,7 +3,7 @@
 import { Alert } from "react-native";
 
 import { Limited } from "./access";
-import { Refused, type AccountHosts, type Listed } from "./accountHosts";
+import { Denied, type AccountHosts, type Listed } from "./accountHosts";
 import { askEach, type Asked } from "./setup";
 
 /** A 6-digit code as both ends show it: `482 915`. */
@@ -59,23 +59,33 @@ export function setUpComputer(
 }
 
 /**
- * A new phone asks to use the account's computers on its own (0091): `hosts` in turn, until one
- * lets it in on another device, which `onWaiting`'s code matches. One Allow covers them all, as
- * that device copies this phone's key to the rest. `stopped` hears why a denied or lapsed request,
- * or a limit, ended it, and a new one is the user's to start.
+ * A new phone asks to use the account's computers on its own (0091): `hosts` in turn, the one it's
+ * already waiting on first, until one lets it in on another device, which `onWaiting`'s code
+ * matches. One Allow covers them all, as that device copies this phone's key to the rest. A denied
+ * or lapsed request, or a limit, stops it until the user asks again. A connection lost while
+ * waiting stops only this try, so the next stays with that computer and its code.
  */
-export const allowThisPhone = (
+export async function allowThisPhone(
   accounts: AccountHosts,
   hosts: Listed[],
   onWaiting: (hostId: string, code: string) => void,
-  stopped: (message: string) => void,
-): Promise<Asked> =>
-  askEach(
-    hosts,
-    (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
-    (error) => error instanceof Refused || error instanceof Limited,
-    (error) => stopped((error as Error).message),
+): Promise<Asked> {
+  const ordered = [...hosts].sort((a, b) => +accounts.isWaitingOn(b.hostId) - +accounts.isWaitingOn(a.hostId));
+  let shown = false;
+  const lostWhileWaiting = () => shown;
+  return askEach(
+    ordered,
+    (host) =>
+      accounts.ask(host.hostId, [], (code) => {
+        shown = true;
+        onWaiting(host.hostId, code);
+      }),
+    (error) => error instanceof Denied || error instanceof Limited || lostWhileWaiting(),
+    (error) => {
+      if (error instanceof Denied || error instanceof Limited) void accounts.stopAsking(error.message);
+    },
   );
+}
 
 /** This phone's own request to use `name`, waiting on another device that shows `code`. */
 export function showWaiting(name: string, code: string) {
