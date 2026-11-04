@@ -63,8 +63,11 @@ test("a thread whose snooze ended is active as of then, until something newer (P
   expect(activeAt({ ...woken, lastPromptAt: "2026-10-01T12:00:00Z" }, undefined)).toBe(
     "2026-10-01T12:00:00Z",
   );
-  // While it works, its row stays where its prompt put it.
+  // While it works, or its agent waits, its row stays where it was.
   expect(activeAt(woken, run({ status: "running" }))).toBe("2026-10-01T10:30:00Z");
+  expect(activeAt(woken, run(), undefined, "monitoring")).toBe("2026-10-01T10:30:00Z");
+  // Archived, it doesn't wake.
+  expect(activeAt({ ...woken, archived: true }, undefined)).toBe("2026-10-01T10:30:00Z");
   // A snooze still running isn't activity.
   const asleep = thread({ snoozedUntil: new Date(Date.now() + 3_600_000).toISOString() });
   expect(activeAt(asleep, undefined)).toBe("2026-10-01T10:00:00Z");

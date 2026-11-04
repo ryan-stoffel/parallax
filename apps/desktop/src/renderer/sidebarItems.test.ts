@@ -234,4 +234,5 @@ test("a backing orchestrator thread rises when its snooze ends, unless its runs 
     )[0]?.at;
   expect(at("completed")).toBe(woke);
   expect(at("running")).toBe(orchestrator.updatedAt);
+  expect(at("waiting")).toBe(orchestrator.updatedAt);
 });

@@ -4,6 +4,7 @@ import type { AgentRun, Orchestrator, Repo, Thread } from "../protocol/generated
 import {
   activeAt,
   attentionOf,
+  holdsPlace,
   later,
   orchestratorAttention,
   wokeAt,
@@ -89,7 +90,7 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
             run,
             unread.includes(`${h.id}/${t.id}`),
           ),
-          at: activeAt(t, run, state.stoppedAt[t.id]),
+          at: activeAt(t, run, state.stoppedAt[t.id], waitingOf(state, t.id)),
           title,
           text: [
             title,
@@ -106,7 +107,7 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
       const key = `${h.id}/${p.id}`;
       const attention = orchestratorAttention(runs, (id) => asksOf(state, id));
       // As `activeAt`: a row that's working stays put when its snooze ends.
-      const woke = thread && !runs.some((r) => isRunning(r.status)) ? wokeAt(thread) : undefined;
+      const woke = thread && !runs.some(holdsPlace) ? wokeAt(thread) : undefined;
       return {
         ...(thread
           ? { kind: "thread" as const, thread, run, orchestration: { orchestrator: p, runs } }
