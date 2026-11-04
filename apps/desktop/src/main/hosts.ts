@@ -106,7 +106,7 @@ import {
 } from "./plxd";
 import { requestAccepted, type HostUsage } from "./telemetry";
 import { isNightly } from "./updater";
-import { broadcast, perWindow } from "./windows";
+import { anyWindowVisible, broadcast, perWindow } from "./windows";
 
 // With PLX_IPC_STATS set, the subscription messages sent to renderers and their JSON bytes, for
 // the load test (PLX-447), which reads `globalThis.ipcStats` through Playwright's `app.evaluate`.
@@ -193,6 +193,11 @@ export const hostUsage: HostUsage = {
  */
 export function startHosts(signedIn: Account | undefined, target: () => string): void {
   account = signedIn;
+  // A computer set up elsewhere changes nothing here, so its code prompt would wait for a focus
+  // change. Only while a window is on screen, within the relay's 120 requests a minute per user.
+  setInterval(() => {
+    if (anyWindowVisible()) void discoverAccounts();
+  }, LOOK_MS).unref();
   // Signing in registers every computer this app is connected to (PLX-1146).
   account?.onSignIn(() => {
     for (const [hostId, connection] of connections)
@@ -1686,11 +1691,15 @@ function dropAccountConnection(id: string): void {
   setAccess(id, undefined);
 }
 
+/** How often the account's computers are asked for while a window is on screen. */
+const LOOK_MS = 15_000;
+
 /**
  * Asks the local plxd for the account's computers (`relay/hosts`), keeps them, and connects to
  * each, reviving any that stopped. Runs on a sign-in, the network coming back or changing, focus,
- * and Settings > Connections opening, with no timer, as T3 Connect does. Add computer also runs it
- * on a timer while it's open, since the computer it waits on changes none of those here.
+ * Settings > Connections opening, and every `LOOK_MS` while a window is on screen, so a new
+ * computer's code prompt appears on its own (PLX-1306). Add computer also runs it on a faster timer
+ * while it's open, since the user is waiting on that computer.
  */
 const discoverAccounts = coalesced(async () => {
   const token = await account?.accessToken();

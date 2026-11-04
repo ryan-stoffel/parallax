@@ -115,7 +115,7 @@ test("a new account computer takes its code in a dialog, then installs and signs
   });
   const { page } = launched;
 
-  const dialog = page.getByRole("dialog", { name: "Connect build-box" });
+  const dialog = page.getByRole("dialog", { name: "Add build-box" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("textbox", { name: "Code" }).fill(`${code.slice(0, 3)} ${code.slice(3)}`);
   // A wrong code is refused, and cleared: each code is good for one try.
@@ -128,6 +128,10 @@ test("a new account computer takes its code in a dialog, then installs and signs
   await dialog.getByRole("textbox", { name: "Code" }).fill(next.code);
   await dialog.getByRole("button", { name: "Connect" }).click();
   await expect(dialog).toBeHidden();
+  await page
+    .getByRole("dialog", { name: "build-box is added" })
+    .getByRole("button", { name: "Done" })
+    .click();
   const state = () =>
     page.evaluate(`window.parallax.connectionState("${hostId}").then((s) => s.status)`);
   await expect.poll(state).toBe("connected");
@@ -155,7 +159,7 @@ test("a computer waiting on its code stops asking once another computer vouches 
     accounts: [{ hostId: box.hostId, name: "build-box", routes: [`127.0.0.1:${port}`] }],
   });
   const { page, dataDir } = launched;
-  const dialog = page.getByRole("dialog", { name: "Connect build-box" });
+  const dialog = page.getByRole("dialog", { name: "Add build-box" });
   await expect(dialog).toBeVisible();
 
   // The other computer's app copies its list here, as `syncAccess` does once it has joined.

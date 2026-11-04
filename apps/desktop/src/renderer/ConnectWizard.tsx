@@ -22,9 +22,13 @@ export const osName = (os: string) =>
   ({ macOS: "macOS", windows: "Windows", linux: "Linux", iOS: "iOS", android: "Android" })[os] ??
   os;
 
-/** The command that adds a computer to the account (0091), for this app's channel. */
-export const connectCommand = (channel: "stable" | "nightly") =>
-  `npx plx-cli connect${channel === "nightly" ? " --channel nightly" : ""}`;
+/**
+ * The command that adds a computer to the account (0091), for this app's channel. `-y` skips npx's
+ * question, and `@latest` skips a copy npx kept. Windows needs `npx.cmd`, which works in cmd and in
+ * PowerShell, where `npx` is a script its default execution policy refuses.
+ */
+export const connectCommand = (channel: "stable" | "nightly", os: "unix" | "windows") =>
+  `${os === "windows" ? "npx.cmd" : "npx"} -y plx-cli@latest connect${channel === "nightly" ? " --channel nightly" : ""}`;
 
 /** Where the app is downloaded. */
 const DOWNLOAD_URL = "https://github.com/ryan-stoffel/parallax/releases/latest";
@@ -239,15 +243,16 @@ function Setup({ channel }: { channel: "stable" | "nightly" }) {
         </ol>
       ) : (
         <ol className="rounded-lg border border-border">
-          <Step n={1} title="Run this">
-            <Command command={connectCommand(channel)} />
+          <Step n={1} title="Run this there">
+            <Command label="macOS or Linux" command={connectCommand(channel, "unix")} />
+            <Command label="Windows" command={connectCommand(channel, "windows")} />
             It needs Node.js, and works on a server or over SSH.
           </Step>
           <Step n={2} title="Sign in">
             In a browser there, or with a link it prints that opens on any device.
           </Step>
-          <Step n={3} title="Leave it showing its code">
-            Then type the code here.
+          <Step n={3} title="Type its code here">
+            Parallax asks for it as soon as that computer is ready.
           </Step>
         </ol>
       )}
@@ -298,24 +303,31 @@ function CodeStep({
   );
 }
 
-/** The command to run, with its Copy. */
-function Command({ command }: { command: string }) {
+/** The command to run on `label`'s OS, with its Copy. */
+function Command({ label, command }: { label: string; command: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <span className="my-1.5 flex items-center gap-2 rounded-lg border border-border bg-background py-1 pr-1 pl-3">
-      <code aria-label="Command" className="min-w-0 flex-1 truncate font-mono text-body">
-        {command}
-      </code>
-      <IconButton
-        label={copied ? "Copied" : "Copy command"}
-        onClick={() => {
-          void navigator.clipboard.writeText(command);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1_500);
-        }}
-      >
-        {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-      </IconButton>
+    <span className="my-1.5 block">
+      <span className="block text-meta text-faint-foreground">{label}</span>
+      <span className="mt-0.5 flex items-center gap-2 rounded-lg border border-border bg-background py-1 pr-1 pl-3">
+        <code
+          aria-label={`Command for ${label}`}
+          title={command}
+          className="min-w-0 flex-1 truncate font-mono text-body"
+        >
+          {command}
+        </code>
+        <IconButton
+          label={copied ? "Copied" : `Copy command for ${label}`}
+          onClick={() => {
+            void navigator.clipboard.writeText(command);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1_500);
+          }}
+        >
+          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+        </IconButton>
+      </span>
     </span>
   );
 }

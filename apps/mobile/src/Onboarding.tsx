@@ -16,7 +16,7 @@ import { BellRing, ChevronRight } from "lucide-react-native";
 import { Button, DeviceIcon, Dot, Icon, T, useColors } from "./ui";
 
 /** The command that adds a computer to the account (0091 "Setup"). */
-export const CONNECT_COMMAND = "npx plx-cli connect";
+export const CONNECT_COMMAND = "npx -y plx-cli@latest connect";
 
 /** A LAN-paired computer as a machine (0065). */
 const pairedMachine = (saved: Saved): Machine => ({ id: pairedId(saved), name: saved.name, paired: saved });

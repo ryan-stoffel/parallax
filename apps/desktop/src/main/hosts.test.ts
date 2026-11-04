@@ -54,6 +54,8 @@ const fake = vi.hoisted(() => {
     /** What the next `plxd dial` run prints, a line each, and its exit code. */
     dialOutput: { lines: [] as string[], code: 0 },
     opened: [] as { runner: unknown; params: unknown }[],
+    /** Whether a window is on screen. */
+    visible: false,
   };
 });
 vi.mock("electron", () => ({
@@ -78,6 +80,7 @@ vi.mock("./windows", () => ({
     fake.sent.set(channel, value);
   },
   perWindow: () => new Map(),
+  anyWindowVisible: () => fake.visible,
 }));
 vi.mock("./connection", async (actual) => ({
   ...(await actual<typeof import("./connection")>()),
@@ -366,7 +369,7 @@ test("streamFile answers ranges in agent/file slices, and refuses what isn't a f
   }
 });
 
-test("the account's computers are asked for on sign-in, focus, the network, and Settings opening, never on a timer", async () => {
+test("the account's computers are asked for on sign-in, focus, the network, Settings opening, and a timer only while a window shows", async () => {
   vi.useFakeTimers();
   fake.answers.clear();
   try {
@@ -395,6 +398,13 @@ test("the account's computers are asked for on sign-in, focus, the network, and 
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(asked).toBe(1);
+
+    // A window on screen looks again by itself, so a new computer's prompt appears unasked.
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(asked).toBe(2);
+    fake.visible = false;
+    asked = 1;
 
     const triggers = [
       () => fake.appEvents.get("browser-window-focus")!(),

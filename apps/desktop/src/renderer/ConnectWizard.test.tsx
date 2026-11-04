@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { DeviceHost, ParallaxBridge } from "../preload/bridge";
 import { AccountPrompts } from "./AccountPrompts";
-import { ConnectWizard, SetupCodeDialog } from "./ConnectWizard";
+import { connectCommand, ConnectWizard, SetupCodeDialog } from "./ConnectWizard";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLDialogElement.prototype.showModal = function () {
@@ -90,6 +90,37 @@ test("it offers a removed computer back, and adds it only when asked", async () 
   const add = [...document.querySelectorAll("button")].find((b) => b.textContent === "Add back")!;
   await act(async () => add.click());
   expect(parallax.setDeviceEnabled).toHaveBeenCalledWith("account:box", true);
+});
+
+test("with no dialog open the prompt asks for the code on its own, then confirms", async () => {
+  const devices = [computer({ access: { step: "needsCode" } })];
+  const parallax = bridge(() => devices);
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  await act(async () => root!.render(<AccountPrompts />));
+  expect(document.querySelector("h2")!.textContent).toBe("Add build-box");
+
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Code"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "482913",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    document
+      .querySelector("dialog form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  expect(parallax.enterSetupCode).toHaveBeenCalledWith("account:build-box", "482913");
+  expect(document.querySelector("h2")!.textContent).toBe("build-box is added");
+});
+
+test("the terminal path gives a command for each OS, with no npx question", () => {
+  expect(connectCommand("stable", "unix")).toBe("npx -y plx-cli@latest connect");
+  expect(connectCommand("nightly", "windows")).toBe(
+    "npx.cmd -y plx-cli@latest connect --channel nightly",
+  );
 });
 
 test("it asks for a new computer's code itself, then says it's connected", async () => {
