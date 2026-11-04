@@ -31,7 +31,7 @@ const accepted = [tabDragType, threadDragType];
  * A pane's tabs (PLX-1289), in a row above its card, then a button that opens a new one. The shown
  * tab is part of the card: one outline, joined by curves at its foot (.tab-shown, .tab-cap). With `marked`, for
  * the focused pane among several, that outline is brighter. A tab drags along the tabs or to another pane's
- * to move there, and into a pane to open beside it. A sidebar thread dropped here gets a tab where it
+ * to move there, or over the window to land where its preview shows (SplitTiles.tsx). A sidebar thread dropped here gets a tab where it
  * lands, which a bar shows. The shown tab always has its close button, and another shows one under the
  * pointer, over its title. A middle click closes a tab too.
  */
