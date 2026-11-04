@@ -261,7 +261,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   );
   ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
   // Settings > Connections and Add computer ask for the account's computers when they open, and
-  // the window's focus and the network do too, with no timer (0091).
+  // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
   ipcMain.handle("parallax:removedComputers", () => removedComputers());
   ipcMain.on("parallax:network", () => void networkChanged());
@@ -1361,6 +1361,7 @@ const runPlxd = (plxd: string, ...args: string[]) =>
 const dialPlxd = (plxd: string, args: string[], token?: string) =>
   promisify(execFile)(plxd, ["dial", ...args], {
     timeout: 60_000,
+    windowsHide: true,
     env: { ...process.env, ...(token && { PLXD_RELAY_TOKEN: token }) },
   });
 
