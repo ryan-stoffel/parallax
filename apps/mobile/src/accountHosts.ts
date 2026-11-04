@@ -131,6 +131,11 @@ export class AccountHosts {
     return this.stored.trusted.includes(hostId);
   }
 
+  /** Whether this phone uses any computer yet, so a new one has someone to vouch for it. */
+  get usesAny() {
+    return this.stored.trusted.length > 0;
+  }
+
   /** Trusts `hostIds` too, as a host this phone uses listed them. */
   async trust(hostIds: string[]) {
     const added = hostIds.filter((id) => !this.stored.trusted.includes(id));
@@ -448,7 +453,7 @@ export class AccountHosts {
 }
 
 /** A sign-in or request the host refused: this phone needs setting up or approving again. */
-class Refused extends Error {}
+export class Refused extends Error {}
 
 const describeRefusal = (json: Record<string, unknown>) =>
   typeof json["error_description"] === "string" ? json["error_description"] : undefined;

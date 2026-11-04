@@ -61,3 +61,37 @@ export function withListed(known: Machine[], listed: Listed[], hidden: string[] 
     .map((l) => ({ id: accountId(l.hostId), name: l.name || "Computer", account: { hostId: l.hostId, routes: [] } }));
   return added.length ? [...known, ...added] : known;
 }
+
+/**
+ * The computers a new phone asks to use, on its own, once it's signed in (0091): those online, in
+ * the relay's order, and none once it uses any, since those vouch for the rest.
+ */
+export const toAsk = (listed: Listed[], usesAny: boolean, hidden: string[] = []): Listed[] =>
+  usesAny ? [] : listed.filter((l) => l.online && !hidden.includes(accountId(l.hostId)));
+
+/** How asking ended: allowed, refused so it waits for the user, or no computer answered. */
+export type Asked = "allowed" | "stopped" | "unreachable";
+
+/**
+ * Asks `hosts` in turn until one lets this phone in, as approving on one covers them all. One that
+ * can't be reached is passed over. One that denies it, or a limit, ends it (`stops`), since a new
+ * request is the user's to start.
+ */
+export async function askEach(
+  hosts: Listed[],
+  ask: (host: Listed) => Promise<void>,
+  stops: (error: unknown) => boolean,
+  stopped: (error: unknown) => void,
+): Promise<Asked> {
+  for (const host of hosts) {
+    try {
+      await ask(host);
+      return "allowed";
+    } catch (error) {
+      if (!stops(error)) continue;
+      stopped(error);
+      return "stopped";
+    }
+  }
+  return "unreachable";
+}

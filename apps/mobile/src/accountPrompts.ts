@@ -2,7 +2,9 @@
 
 import { Alert } from "react-native";
 
-import type { AccountHosts } from "./accountHosts";
+import { Limited } from "./access";
+import { Refused, type AccountHosts, type Listed } from "./accountHosts";
+import { askEach, type Asked } from "./setup";
 
 /** A 6-digit code as both ends show it: `482 915`. */
 export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
@@ -55,6 +57,25 @@ export function setUpComputer(
         .then(handlers.done, failed),
   );
 }
+
+/**
+ * A new phone asks to use the account's computers on its own (0091): `hosts` in turn, until one
+ * lets it in on another device, which `onWaiting`'s code matches. One Allow covers them all, as
+ * that device copies this phone's key to the rest. `stopped` hears why a denied or lapsed request,
+ * or a limit, ended it, and a new one is the user's to start.
+ */
+export const allowThisPhone = (
+  accounts: AccountHosts,
+  hosts: Listed[],
+  onWaiting: (hostId: string, code: string) => void,
+  stopped: (message: string) => void,
+): Promise<Asked> =>
+  askEach(
+    hosts,
+    (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
+    (error) => error instanceof Refused || error instanceof Limited,
+    (error) => stopped((error as Error).message),
+  );
 
 /** This phone's own request to use `name`, waiting on another device that shows `code`. */
 export function showWaiting(name: string, code: string) {

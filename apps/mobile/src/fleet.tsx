@@ -22,10 +22,14 @@ import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protoc
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { confirmDevice, setUpComputer } from "./accountPrompts";
+import { allowThisPhone, confirmDevice, setUpComputer } from "./accountPrompts";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
+import { toAsk } from "./setup";
+
+/** How often the account's computers are listed while the app is in front. */
+const LOOK_MS = 15_000;
 
 /** One computer as the screens see it. */
 export interface Computer {
@@ -163,6 +167,10 @@ export function FleetProvider({
   const fleetRef = useRef<Fleet>(null);
   const latest = useRef(setup);
   latest.current = setup;
+  const gatesNow = useRef(gates);
+  gatesNow.current = gates;
+  const asking = useRef(false);
+  const stoppedAsking = useRef(false);
   const gate = (id: string, next: Gate | undefined) =>
     setGates((g) => (JSON.stringify(g[id]) === JSON.stringify(next) ? g : { ...g, [id]: next }));
   const [fleet] = useState(() => {
@@ -210,12 +218,46 @@ export function FleetProvider({
     });
   }
 
+  /**
+   * A new phone asks to use the account's computers on its own (0091), as onboarding does, for one
+   * that skipped it. It stops once denied, until the user asks: tapping a computer.
+   */
+  async function askOnItsOwn(found: Listed[]) {
+    const hosts = accounts ? toAsk(found, accounts.usesAny, latest.current.hidden) : [];
+    if (!accounts || !hosts.length || asking.current || stoppedAsking.current) return;
+    asking.current = true;
+    const id = (hostId: string) => accountId(hostId);
+    const asked = await allowThisPhone(
+      accounts,
+      hosts,
+      (hostId, code) => gate(id(hostId), { kind: "waiting", code }),
+      () => {
+        stoppedAsking.current = true;
+      },
+    );
+    asking.current = false;
+    for (const host of hosts) {
+      const m = latest.current.machines.find((x) => x.id === id(host.hostId));
+      if (m && accounts.trusts(host.hostId)) connect(m);
+      else if (asked !== "allowed") gate(id(host.hostId), { kind: "setup" });
+    }
+  }
+
+  /** A computer this phone uses, that wasn't ready for it, as before another device copied its key. */
+  function retryGated() {
+    for (const m of latest.current.machines)
+      if (m.account && accounts?.trusts(m.account.hostId) && gatesNow.current[m.id]?.kind === "setup")
+        connect(m);
+  }
+
   /** Lists the account's computers on the relay, and adds new ones. */
   async function discover() {
     const bearer = accounts && (await token());
     const found = bearer && (await listHosts(bearer));
     if (!found) return;
     setListed(found);
+    void askOnItsOwn(found);
+    retryGated();
     update((s) => {
       const machines = withListed(s.machines, found, s.hidden);
       return machines === s.machines ? s : { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
@@ -302,10 +344,13 @@ export function FleetProvider({
     const awake = AppState.addEventListener("change", (s) => s === "active" && again());
     const network = onNetwork(again);
     void discover();
+    // A computer set up elsewhere changes nothing here. iOS suspends this in the background.
+    const look = setInterval(() => void discover(), LOOK_MS);
     return () => {
       listener();
       awake.remove();
       network();
+      clearInterval(look);
       // Signed out: this provider's connections end with it.
       fleet.close();
     };
@@ -345,6 +390,7 @@ export function FleetProvider({
     const { hostId, routes } = m.account;
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
     if (accounts.trusts(hostId)) return connect(m);
+    stoppedAsking.current = false;
     setUpComputer(accounts, { hostId, name: m.name, routes }, {
       onWaiting: (code) => gate(id, { kind: "waiting", code }),
       done: () => connect(m),
