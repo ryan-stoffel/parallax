@@ -46,9 +46,15 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await expect(tabs).toHaveCount(0);
   await start("First");
   await expect(outlined).toHaveCount(0);
+  // That tab sits inside the card, and tabs among others sit above it.
+  const inCard = async () =>
+    (await page.locator(".pane-card").first().boundingBox())!.y <
+    (await tabs.first().boundingBox())!.y;
+  await expect.poll(inCard).toBe(true);
   await page.getByRole("button", { name: "New tab" }).click();
   await expect(tabs).toHaveText(["First", "New thread"]);
   await expect(outlined).toHaveCount(1);
+  await expect.poll(inCard).toBe(false);
   await start("Second");
   await expect(tabs).toHaveText(["First", "Second"]);
 

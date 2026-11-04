@@ -66,7 +66,8 @@ type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
 
 /**
  * The window's panes, as cards on a grid (splitLayout.ts) on the window's background. Each card has a
- * row of tabs above it. `leading` starts the first card's row, and `controls` end the top right card's,
+ * row of tabs above it, except that the window's only tab has its row inside its card, which rises to
+ * the window's top. `leading` starts the first card's row, and `controls` end the top right card's,
  * giving up their room to its tabs when it's narrow. Columns or rows with no room for `minTile` stack,
  * their panes in one tile, which shows the focused one, or the last one shown, and lists all their
  * tabs. `maximized` stacks them all. Views are siblings keyed by `key`, so a tile coming, going, or
@@ -133,6 +134,7 @@ export function SplitTiles({
   // The line being dragged and the latest cuts, read by pointer events that may land before a render.
   const drag = useRef<{ vertical: boolean; cuts: GridCuts }>(undefined);
   const shown = live ?? cuts;
+  const lone = items.length === 1 && items[0]!.tabs.length === 1;
   const endDrag = () => {
     if (!drag.current) return;
     onResize(drag.current.cuts);
@@ -255,7 +257,7 @@ export function SplitTiles({
                     onDropOnTabs(tabDrop, items[holder ?? group.at(-1)!]!.paneId, before);
                   }}
                   closable={closable}
-                  lone={items.length === 1 && items[0]!.tabs.length === 1}
+                  lone={lone}
                 />
               )}
             </div>
@@ -278,17 +280,22 @@ export function SplitTiles({
             key={key}
             // A stacked pane's view stays mounted, out of sight and reach.
             inert={!active}
-            style={placed(rectOf(tile.cells, shown), gutter, stripHeight)}
+            style={{
+              ...placed(rectOf(tile.cells, shown), gutter, lone ? 0 : stripHeight),
+              paddingTop: lone ? stripHeight : 0,
+            }}
             data-marked={tiles.length > 1 && i === focused ? "" : undefined}
-            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
+            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,padding,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
-            {/* Content scrolled up fades out rather than butting into the card's top edge. */}
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-4 bg-linear-to-b from-pane to-transparent"
-            />
-            {node}
-            {i === focused && details}
+            <div className="relative flex min-h-0 min-w-0 flex-1">
+              {/* Content scrolled up fades out rather than butting into the card's top edge. */}
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-4 bg-linear-to-b from-pane to-transparent"
+              />
+              {node}
+              {i === focused && details}
+            </div>
           </div>
         );
       })}
