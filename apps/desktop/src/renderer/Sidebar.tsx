@@ -991,8 +991,8 @@ export function ThreadList({
     focusAfter(item.key, stays ? undefined : focusAt);
     const ending = until.getTime() <= Date.now();
     toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
-      // A snooze that ended meanwhile ends now.
-      void viewOf(h.id)?.update(t.id, { snoozedUntil: was ?? new Date().toISOString() });
+      // With no snooze to restore, a past time ends this one. Its creation keeps its place in the list.
+      void viewOf(h.id)?.update(t.id, { snoozedUntil: was ?? t.createdAt });
     });
   };
   // A thread row dragged onto another section (PLX-1095): Today takes it out of Archived or
@@ -1101,7 +1101,7 @@ export function ThreadList({
       toast(`Snoozed ${plural(able.length, "thread")} for an hour`, () => {
         for (const { item, t } of able)
           void viewOf(item.host.id)?.update(t.id, {
-            snoozedUntil: t.snoozedUntil ?? new Date().toISOString(),
+            snoozedUntil: t.snoozedUntil ?? t.createdAt,
           });
       });
     } else {
@@ -2209,14 +2209,14 @@ function orchestratorLoss(agents: number): string {
   return `, with its ${agents} agents' transcripts, worktrees, and branches. Running agents are stopped first.`;
 }
 
-/** `Date.now()`, again each minute. */
+/** `Date.now()`, rendering again each minute. */
 function useMinute() {
-  const [now, setNow] = useState(Date.now);
+  const [, tick] = useState(0);
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    const timer = window.setInterval(() => tick((n) => n + 1), 60_000);
     return () => window.clearInterval(timer);
   }, []);
-  return now;
+  return Date.now();
 }
 
 /**

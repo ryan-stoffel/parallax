@@ -54,6 +54,22 @@ test("a thread is active as of its last prompt, or when its run stopped after it
   expect(activeAt(thread(), undefined)).toBe("2026-10-01T10:00:00Z");
 });
 
+test("a thread whose snooze ended is active as of then, until something newer (PLX-1322)", () => {
+  const woke = "2026-10-01T11:00:00Z";
+  const woken = thread({ lastPromptAt: "2026-10-01T10:30:00Z", snoozedUntil: woke });
+  expect(activeAt(woken, undefined)).toBe(woke);
+  expect(activeAt(woken, run(), "2026-10-01T10:45:00Z")).toBe(woke);
+  expect(activeAt(woken, run(), "2026-10-01T11:30:00Z")).toBe("2026-10-01T11:30:00Z");
+  expect(activeAt({ ...woken, lastPromptAt: "2026-10-01T12:00:00Z" }, undefined)).toBe(
+    "2026-10-01T12:00:00Z",
+  );
+  // While it works, its row stays where its prompt put it.
+  expect(activeAt(woken, run({ status: "running" }))).toBe("2026-10-01T10:30:00Z");
+  // A snooze still running isn't activity.
+  const asleep = thread({ snoozedUntil: new Date(Date.now() + 3_600_000).toISOString() });
+  expect(activeAt(asleep, undefined)).toBe("2026-10-01T10:00:00Z");
+});
+
 test("a long branch is cut in the middle at a word break, keeping its start and last word", () => {
   expect(shortBranch("feature/PLX-49-full-sidebar-implementation", 32)).toBe(
     "feature/PLX-49-…implementation",
