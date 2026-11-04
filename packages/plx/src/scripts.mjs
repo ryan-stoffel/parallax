@@ -292,17 +292,17 @@ if (-not $npm) {
  * The command a shell runs for PowerShell to read a script from stdin and run it. The script
  * goes on stdin, not the command line, which cmd.exe limits to 8191 characters; the reader is
  * `-EncodedCommand`, so no shell's quoting can change it. It prints an error as one plain line,
- * where PowerShell would print CLIXML to a redirected stderr, and exits 1. `-OutputFormat Text` keeps
- * the progress records of commands like New-NetFirewallRule from reaching that stderr as CLIXML.
+ * where PowerShell would print CLIXML to a redirected stderr, and exits 1. It silences progress
+ * here, not in the script, since commands from modules, like New-NetFirewallRule, only see this
+ * scope's preference, and their progress would reach that stderr as CLIXML. `-OutputFormat Text`
+ * doesn't stop that (tested on Windows 11).
  */
 export const POWERSHELL_ARGS = [
   "-NoProfile",
   "-NonInteractive",
-  "-OutputFormat",
-  "Text",
   "-EncodedCommand",
   Buffer.from(
-    "$s = [Console]::In.ReadToEnd(); try { & ([scriptblock]::Create($s)) } catch { [Console]::Error.WriteLine('error: ' + $_.Exception.Message); exit 1 }",
+    "$global:ProgressPreference = 'SilentlyContinue'; $s = [Console]::In.ReadToEnd(); try { & ([scriptblock]::Create($s)) } catch { [Console]::Error.WriteLine('error: ' + $_.Exception.Message); exit 1 }",
     "utf16le",
   ).toString("base64"),
 ];
