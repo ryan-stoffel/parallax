@@ -104,7 +104,7 @@ import {
   serviceRuns,
   serviceStep,
 } from "./plxd";
-import { requestAccepted } from "./telemetry";
+import { requestAccepted, type HostUsage } from "./telemetry";
 import { isNightly } from "./updater";
 import { broadcast, perWindow } from "./windows";
 
@@ -168,11 +168,23 @@ let settings: Settings = { hosts: [] };
 let settingsError: string | undefined;
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 
-/** The local plxd's usage since a time, for telemetry. Absent while it can't answer. */
-export async function localUsage(since: string) {
-  const answer = await connections.get("local")?.request("usage/history", { since });
-  return answer && "result" in answer ? answer.result : undefined;
-}
+/**
+ * How telemetry reads usage: from this computer and the others on the account (0091), not one
+ * only reachable some other way, which may be someone else's. An older plxd answers no claim.
+ */
+export const hostUsage: HostUsage = {
+  hosts: () => [...connections.keys()].filter((id) => id === "local" || id.startsWith("account:")),
+  async claim(hostId) {
+    const answer = await connections.get(hostId)?.request("usage/report/claim", {});
+    return answer && "result" in answer ? answer.result : undefined;
+  },
+  async release(hostId, claim) {
+    const answer = await connections
+      .get(hostId)
+      ?.request("usage/report/release", { claimId: claim.claimId });
+    return !!answer && "result" in answer;
+  },
+};
 
 /**
  * Connects to the local plxd, as host id `local`, and to every saved SSH host at once, and

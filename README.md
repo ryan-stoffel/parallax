@@ -131,7 +131,7 @@ The installed app sends three events to PostHog, so we can count how many instal
 
 - `app_active`, at launch and once a day while it runs.
 - `prompt_sent`, for each prompt you send from the app, saying whether it started a thread or followed one up.
-- `tokens_used`, for each hour and model the local `plxd` ran, with the tokens used and the cost when the vendor reports one.
+- `tokens_used`, when you're signed in, for each hour and model `plxd` ran on this computer and the others on your account, with the tokens used and the cost when the vendor reports one.
 
 Each carries an id, the app's version and channel, the OS and architecture, and whether you're signed in. Signed in, the id is a one-way hash of your Parallax account's id, the same on all your devices, so we count you once and can see your activity across them. Signed out, it's a random id made for the install. None carries your name, your email, your account's actual id, a path, the text of a prompt, or code, and PostHog adds no location from them. Set `DO_NOT_TRACK=1` in the app's environment to turn it off. On macOS an app opened from the Dock or Finder doesn't read your shell profile, so run `launchctl setenv DO_NOT_TRACK 1` and restart the app.
 

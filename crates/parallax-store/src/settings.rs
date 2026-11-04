@@ -1,7 +1,11 @@
+use jiff::Timestamp;
 use rusqlite::{OptionalExtension, params};
+use uuid::Uuid;
 
 use crate::Store;
 use crate::error::StoreError;
+use crate::timestamp;
+use crate::usage::UsageHour;
 
 /// The `host_settings` key prefix for a thread's rollback in progress, before its id.
 const CHECKPOINT_REVERT: &str = "checkpoint_revert:";
@@ -51,6 +55,23 @@ const ACCOUNT_ACCESS: &str = "account_access";
 /// The `host_settings` key for account sign-in's hourly counts and waiting request, as plxd's JSON
 /// (0091), so a restart resets neither.
 const ACCOUNT_LIMITS: &str = "account_limits";
+
+/// The `host_settings` key for where usage data's reporting of this host's hours has reached
+/// (PLX-1301).
+const USAGE_REPORTED_UNTIL: &str = "usage_reported_until";
+
+/// The `host_settings` key for the last claim that can be given back: its id and where it started
+/// (PLX-1301).
+const USAGE_REPORT_CLAIM: &str = "usage_report_claim";
+
+/// A claim of usage not reported yet: see [`Store::claim_usage_report`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageClaim {
+    /// The id to give it back with.
+    pub id: String,
+    /// The usage it holds.
+    pub hours: Vec<UsageHour>,
+}
 
 /// The `host_settings` key for the Claude Remote Control sessions plxd's sync already imported
 /// or found imported, as a JSON array of their ids (PLX-1140).
@@ -326,6 +347,56 @@ impl Store {
     /// A database error.
     pub fn relay_account(&self) -> Result<Option<String>, StoreError> {
         self.text(RELAY_ACCOUNT)
+    }
+
+    /// Marks the usage from the end of the last claim to `until` reported, and returns it with an
+    /// id for [`Store::release_usage_report`]. The first claim starts at `until`, so it holds no
+    /// past usage. Run it in one transaction, so two clients can't claim the same hours.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn claim_usage_report(&self, until: Timestamp) -> Result<UsageClaim, StoreError> {
+        let id = Uuid::now_v7().to_string();
+        let since = self
+            .text(USAGE_REPORTED_UNTIL)?
+            .and_then(|at| at.parse::<Timestamp>().ok());
+        let Some(since) = since.filter(|since| *since < until) else {
+            if since.is_none() {
+                self.set_text(USAGE_REPORTED_UNTIL, Some(&timestamp::format(until)))?;
+            }
+            return Ok(UsageClaim {
+                id,
+                hours: Vec::new(),
+            });
+        };
+        self.set_text(USAGE_REPORTED_UNTIL, Some(&timestamp::format(until)))?;
+        self.set_text(
+            USAGE_REPORT_CLAIM,
+            Some(&format!("{id} {}", timestamp::format(since))),
+        )?;
+        Ok(UsageClaim {
+            id,
+            hours: self.usage_hours(since, until)?,
+        })
+    }
+
+    /// Gives back claim `id`, once, so its hours go in the next claim. Does nothing for an id
+    /// already released or one a later claim replaced, whose place stands. Run it in one
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn release_usage_report(&self, id: &str) -> Result<(), StoreError> {
+        let held = self.text(USAGE_REPORT_CLAIM)?;
+        if let Some((held_id, since)) = held.as_deref().and_then(|held| held.split_once(' '))
+            && held_id == id
+        {
+            self.set_text(USAGE_REPORTED_UNTIL, Some(since))?;
+            self.set_text(USAGE_REPORT_CLAIM, None)?;
+        }
+        Ok(())
     }
 
     /// Records the Clerk user id this host registered under.

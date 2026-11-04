@@ -1,0 +1,15 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "usage/report/release",
+    "params": {
+      "claimId": "019a0000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {}
+  }
+]

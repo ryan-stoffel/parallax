@@ -184,6 +184,16 @@ export type ParallaxRequests = {
 	 */
 	"usage/history": { params: UsageHistoryParams, result: UsageHistoryResult },
 	/**
+	 * `usage/report/claim`: the whole hours of usage no app has reported to usage data yet,
+	 * marked reported, so two apps connected to this host report each hour once (PLX-1301).
+	 */
+	"usage/report/claim": { params: UsageReportClaimParams, result: UsageReportClaimResult },
+	/**
+	 * `usage/report/release`: gives back a claim whose hours couldn't be reported, so they
+	 * go in the next one.
+	 */
+	"usage/report/release": { params: UsageReportReleaseParams, result: UsageReportReleaseResult },
+	/**
 	 * `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
 	 * host since a local day, per local day, agent, and model (0039), and each source that
 	 * failed.
@@ -1112,6 +1122,8 @@ export const REQUEST_METHODS = [
 	"providers/upgrade",
 	"usage/get",
 	"usage/history",
+	"usage/report/claim",
+	"usage/report/release",
 	"usage/daily",
 	"usage/limits",
 	"accounts/defaults/get",
@@ -2989,6 +3001,43 @@ export type UsageHour = {
 	 */
 	costUsdMicros?: number,
 };
+
+/**
+ * Params of `usage/report/claim`. Empty: plxd names the whole hours by its own clock.
+ */
+export type UsageReportClaimParams = Record<symbol, never>;
+
+/**
+ * Result of `usage/report/claim`.
+ */
+export type UsageReportClaimResult = {
+	/**
+	 * This claim's id, for `usage/report/release`.
+	 */
+	claimId: string,
+	/**
+	 * The usage from the end of the last claim to the start of the current UTC hour, as in
+	 * `usage/history`. Empty on a host's first claim, which reports none of its past usage. No
+	 * later claim returns these hours, unless they are released.
+	 */
+	hours: Array<UsageHour>,
+};
+
+/**
+ * Params of `usage/report/release`: a claim whose hours couldn't be reported.
+ */
+export type UsageReportReleaseParams = {
+	/**
+	 * The claim's `claimId`.
+	 */
+	claimId: string,
+};
+
+/**
+ * Result of `usage/report/release`. Empty, and the same when the claim was released already or a
+ * later claim came first, which keeps its place.
+ */
+export type UsageReportReleaseResult = Record<symbol, never>;
 
 /**
  * Params of `usage/daily`.

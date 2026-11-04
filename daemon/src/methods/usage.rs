@@ -1,6 +1,6 @@
-//! `usage/get` and `usage/history`, from what plxd's own runs recorded, `usage/daily`, from
-//! every Claude Code, Codex, and Cursor session on the host (0039), and `usage/limits`, from each
-//! subscription's CLI (PLX-541).
+//! `usage/get`, `usage/history`, and `usage/report/*`, from what plxd's own runs recorded,
+//! `usage/daily`, from every Claude Code, Codex, and Cursor session on the host (0039), and
+//! `usage/limits`, from each subscription's CLI (PLX-541).
 
 mod ccusage;
 mod cursor;
@@ -11,7 +11,8 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageGetParams,
     UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour, UsageLimitWindow,
-    UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem, UsageSource,
+    UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem, UsageReportClaimParams,
+    UsageReportClaimResult, UsageReportReleaseParams, UsageReportReleaseResult, UsageSource,
 };
 use parallax_store::{LimitSnapshot, Store, StoreError};
 
@@ -95,16 +96,7 @@ fn usage_history(
     let hours = store
         .usage_hours(since, until)?
         .into_iter()
-        .map(|hour| UsageHour {
-            hour: hour.hour,
-            account_id: hour.account_id,
-            model: hour.model,
-            input_tokens: hour.input_tokens,
-            output_tokens: hour.output_tokens,
-            cache_read_tokens: hour.cache_read_tokens,
-            cache_write_tokens: hour.cache_write_tokens,
-            cost_usd_micros: hour.cost_usd_micros,
-        })
+        .map(usage_hour)
         .collect();
     let runs = store
         .usage_run_counts(since, until)?
@@ -112,6 +104,60 @@ fn usage_history(
         .map(|(account_id, runs)| AccountRuns { account_id, runs })
         .collect();
     Ok(UsageHistoryResult { hours, runs })
+}
+
+fn usage_hour(hour: parallax_store::UsageHour) -> UsageHour {
+    UsageHour {
+        hour: hour.hour,
+        account_id: hour.account_id,
+        model: hour.model,
+        input_tokens: hour.input_tokens,
+        output_tokens: hour.output_tokens,
+        cache_read_tokens: hour.cache_read_tokens,
+        cache_write_tokens: hour.cache_write_tokens,
+        cost_usd_micros: hour.cost_usd_micros,
+    }
+}
+
+/// The whole hours of usage no client has reported yet, marked reported. The hour in progress
+/// waits until it's over.
+pub(crate) async fn report_claim(
+    context: &Context,
+    _params: UsageReportClaimParams,
+) -> Result<UsageReportClaimResult, ErrorObject> {
+    let now = jiff::Timestamp::now();
+    let until = jiff::Timestamp::from_second(now.as_second() - now.as_second().rem_euclid(3600))
+        .map_err(ErrorObject::internal_error)?;
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |store| {
+            let claim = store
+                .claim_usage_report(until)
+                .map_err(|error| store_error(&error))?;
+            Ok(UsageReportClaimResult {
+                claim_id: claim.id,
+                hours: claim.hours.into_iter().map(usage_hour).collect(),
+            })
+        })
+        .await
+}
+
+/// Gives back a claim whose hours couldn't be reported.
+pub(crate) async fn report_release(
+    context: &Context,
+    params: UsageReportReleaseParams,
+) -> Result<UsageReportReleaseResult, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |store| {
+            store
+                .release_usage_report(&params.claim_id)
+                .map_err(|error| store_error(&error))
+        })
+        .await?;
+    Ok(UsageReportReleaseResult {})
 }
 
 /// Every Claude Code and Codex session's usage from ccusage, and Cursor's from its API, since

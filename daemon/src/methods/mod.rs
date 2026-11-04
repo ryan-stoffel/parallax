@@ -314,6 +314,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ProvidersUpgrade => |p| provider_updates::upgrade(context, p),
         UsageGet => |p| usage::get(context, p),
         UsageHistory => |p| usage::history(context, p),
+        UsageReportClaim => |p| usage::report_claim(context, p),
+        UsageReportRelease => |p| usage::report_release(context, p),
         UsageDaily => |p| usage::daily(context, p),
         UsageLimits => |p| usage::limits(context, p),
         CursorSignIn => |p| cursor::sign_in(context, p),
