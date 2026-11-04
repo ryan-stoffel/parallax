@@ -105,7 +105,8 @@ use crate::{
     ThreadSetProjectResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
     ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
     UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
-    UsageLimitsResult, VoiceCleanParams, VoiceCleanResult,
+    UsageLimitsResult, UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
+    UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -284,6 +285,13 @@ method_table! {
         /// `usage/history`: tokens and cost since a time, summed per UTC hour, account, and
         /// model, and each account's run count over the same range.
         UsageHistory = "usage/history": UsageHistoryParams => UsageHistoryResult;
+        /// `usage/report/claim`: the whole hours of usage no app has reported to usage data yet,
+        /// marked reported, so two apps connected to this host report each hour once (PLX-1301).
+        UsageReportClaim = "usage/report/claim": UsageReportClaimParams => UsageReportClaimResult;
+        /// `usage/report/release`: gives back a claim whose hours couldn't be reported, so they
+        /// go in the next one.
+        UsageReportRelease = "usage/report/release":
+            UsageReportReleaseParams => UsageReportReleaseResult;
         /// `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
         /// host since a local day, per local day, agent, and model (0039), and each source that
         /// failed.

@@ -1,5 +1,7 @@
 import { expect, test, vi } from "vite-plus/test";
 
+import type { UsageHour } from "../protocol/generated/protocol";
+
 vi.mock("electron", () => ({ app: {} }));
 
 const { accountHash, activeEvent, enabled, promptEvent, promptKind, reportTokens, tokenEvents } =
@@ -92,23 +94,44 @@ test("tokens_used sums accounts away per hour and model, timed at the hour", () 
   expect(JSON.stringify(events)).not.toContain("key-with-a-name");
 });
 
-const now = Date.parse("2026-11-03T19:30:00Z");
-const since = "2026-11-03T18:00:00.000Z";
-const history = {
-  hours: [hour("2026-11-03T18:00:00Z", "claude", 1), hour("2026-11-03T19:00:00Z", "claude", 2)],
-  runs: [],
-};
+const claim = (...hours: UsageHour[]) => ({
+  since: "2026-11-03T18:00:00Z",
+  until: "2026-11-03T19:00:00Z",
+  hours,
+});
+const first = hour("2026-11-03T18:00:00Z", "claude", 1);
+const second = hour("2026-11-03T18:00:00Z", "codex", 2);
 
-test("each whole hour is reported once, and the hour in progress waits", async () => {
+test("each computer's claimed hours are sent, and one with nothing or no answer is skipped", async () => {
+  const claims: Record<string, ReturnType<typeof claim> | undefined> = {
+    local: claim(first),
+    "account:empty": claim(),
+    "account:old-plxd": undefined,
+    "account:mini": claim(second),
+  };
+  const release = vi.fn(async () => {});
   const send = vi.fn(async () => true);
-  const next = await reportTokens(since, now, async () => history, send);
-  expect(send).toHaveBeenCalledWith([history.hours[0]]);
-  expect(next).toBe("2026-11-03T19:00:00.000Z");
+  await reportTokens(
+    { hosts: () => Object.keys(claims), claim: async (id) => claims[id], release },
+    send,
+  );
+  expect(send.mock.calls).toEqual([[[first]], [[second]]]);
+  expect(release).not.toHaveBeenCalled();
 });
 
-test("hours stay unreported when plxd can't answer or the send fails", async () => {
-  const send = vi.fn(async () => false);
-  expect(await reportTokens(since, now, async () => undefined, send)).toBe(since);
-  expect(send).not.toHaveBeenCalled();
-  expect(await reportTokens(since, now, async () => history, send)).toBe(since);
+test("a failed send gives only its computer's claim back", async () => {
+  const claims: Record<string, ReturnType<typeof claim>> = {
+    local: claim(first),
+    "account:mini": claim(second),
+  };
+  const release = vi.fn(async () => {});
+  const send = vi.fn(async (hours: UsageHour[]) => {
+    if (hours[0] === first) throw new Error("offline");
+    return true;
+  });
+  await reportTokens(
+    { hosts: () => Object.keys(claims), claim: async (id) => claims[id]!, release },
+    send,
+  );
+  expect(release.mock.calls).toEqual([["local", claims["local"]]]);
 });

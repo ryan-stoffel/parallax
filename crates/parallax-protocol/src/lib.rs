@@ -282,7 +282,8 @@ pub use usage::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,
     UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageHour,
     UsageLimitWindow, UsageLimitsParams, UsageLimitsResult, UsagePeriod, UsageProblem,
-    UsageSessions, UsageSource,
+    UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
+    UsageReportReleaseResult, UsageSessions, UsageSource,
 };
 pub use voice::{VoiceCleanParams, VoiceCleanResult};
 

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import type { UsageHistoryResult, UsageHour } from "../protocol/generated/protocol";
+import type { UsageHour, UsageReportClaimResult } from "../protocol/generated/protocol";
 import type { Account } from "./account";
 import { tokenSubject } from "./accountHosts";
 import { isNightly } from "./updater";
@@ -121,26 +121,28 @@ export function tokenEvents(key: string, install: Install, hours: UsageHour[]) {
   }));
 }
 
+/** The computers telemetry reports usage from, and their plxd's claims on it (PLX-1301). */
+export type HostUsage = {
+  hosts(): string[];
+  claim(hostId: string): Promise<UsageReportClaimResult | undefined>;
+  release(hostId: string, claim: UsageReportClaimResult): Promise<void>;
+};
+
 /**
- * Sends the whole hours of usage since `since`, an hour's start, and answers the hour to report
- * from next. That stays `since` when plxd can't answer or the send fails, so the hours go again
- * later, and the hour in progress waits until it's over, so each hour goes once.
+ * Sends each computer's unreported whole hours. Its plxd keeps the place, so two apps connected to
+ * one computer send each hour once. A failed send gives the claim back, so its hours go again later.
  */
 export async function reportTokens(
-  since: string,
-  now: number,
-  usage: (since: string) => Promise<UsageHistoryResult | undefined>,
+  usage: HostUsage,
   send: (hours: UsageHour[]) => Promise<boolean>,
-): Promise<string> {
-  const history = await usage(since);
-  if (!history) return since;
-  const until = hourStart(now);
-  const whole = history.hours.filter((h) => Date.parse(h.hour) < Date.parse(until));
-  if (whole.length > 0 && !(await send(whole))) return since;
-  return until;
+): Promise<void> {
+  for (const hostId of usage.hosts()) {
+    const claim = await usage.claim(hostId).catch(() => undefined);
+    if (!claim || claim.hours.length === 0) continue;
+    if (!(await send(claim.hours).catch(() => false)))
+      await usage.release(hostId, claim).catch(() => {});
+  }
 }
-
-const hourStart = (now: number) => new Date(now - (now % HOUR)).toISOString();
 
 // The install's id, made on first use and kept in userData. Throws when the file can't be written.
 function installId(): string {
@@ -152,16 +154,6 @@ function installId(): string {
   const id = randomUUID();
   writeFileSync(file, id);
   return id;
-}
-
-// Where token reporting left off, kept in userData. A first run reports from this hour on, not
-// the install's past usage.
-function tokensSince(file: string, now: number): string {
-  try {
-    const since = readFileSync(file, "utf8").trim();
-    if (!Number.isNaN(Date.parse(since))) return since;
-  } catch {}
-  return hourStart(now);
 }
 
 function post(url: string, body: string) {
@@ -185,14 +177,12 @@ export function requestAccepted(method: string, params: Record<string, unknown>)
 /**
  * Sends `app_active` at launch, at each sign-in, and once a day while the app runs, so PostHog's
  * unique users per day, week, and month count the accounts in use, `prompt_sent` for each prompt,
- * and `tokens_used` hourly from the local plxd's `usage`. A packaged app only. Telemetry never keeps
- * the app from starting: without an id it sends nothing. Every send is best effort: a failed one
- * is a count missing, not an error to show.
+ * and `tokens_used` hourly from `usage`, when signed in, since a signed-out install isn't counted
+ * and would use up the hours of an account on the same computer. A packaged app only. Telemetry
+ * never keeps the app from starting: without an id it sends nothing. Every send is best effort: a
+ * failed one is a count missing, not an error to show.
  */
-export function startTelemetry(
-  account: Account,
-  usage: (since: string) => Promise<UsageHistoryResult | undefined>,
-) {
+export function startTelemetry(account: Account, usage: HostUsage) {
   if (!app.isPackaged || !enabled(KEY, process.env)) return;
   let id: string;
   try {
@@ -235,24 +225,18 @@ export function startTelemetry(
       .then((each) => post(CAPTURE_URL, JSON.stringify(promptEvent(KEY, each, kind))))
       .catch(() => {});
 
-  const sinceFile = path.join(app.getPath("userData"), "telemetry-tokens-since");
-  let since = tokensSince(sinceFile, Date.now());
-  const saveSince = () => {
-    try {
-      writeFileSync(sinceFile, since);
-    } catch {}
-  };
-  // Now, not at the first report, so a first session under a minute keeps its place.
-  saveSince();
-  const reportHours = async () => {
-    since = await reportTokens(since, Date.now(), usage, async (hours) => {
-      const batch = tokenEvents(KEY, await install(), hours);
-      const sent = await post(BATCH_URL, JSON.stringify({ api_key: KEY, batch })).catch(() => {});
-      return sent?.ok ?? false;
-    });
-    saveSince();
-  };
-  // A minute in, since the local plxd isn't connected at launch.
+  const reportHours = () =>
+    install()
+      .then(async (each) => {
+        if (!each.account) return;
+        await reportTokens(usage, async (hours) => {
+          const batch = tokenEvents(KEY, each, hours);
+          const sent = await post(BATCH_URL, JSON.stringify({ api_key: KEY, batch }));
+          return sent.ok;
+        });
+      })
+      .catch(() => {});
+  // A minute in, since plxd isn't connected at launch.
   setTimeout(() => {
     void reportHours();
     setInterval(() => void reportHours(), HOUR);

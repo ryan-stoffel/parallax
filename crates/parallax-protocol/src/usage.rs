@@ -123,6 +123,41 @@ pub struct UsageHistoryResult {
     pub runs: Vec<AccountRuns>,
 }
 
+/// Params of `usage/report/claim`. Empty: plxd names the whole hours by its own clock.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportClaimParams {}
+
+/// Result of `usage/report/claim`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportClaimResult {
+    /// Where the claim starts: the end of the last one, or `until` on a host's first claim, which
+    /// reports none of its past usage.
+    pub since: Timestamp,
+    /// The start of the current UTC hour, where the claim ends.
+    pub until: Timestamp,
+    /// The usage in `[since, until)`, as in `usage/history`. No later claim returns these hours,
+    /// unless they are released.
+    pub hours: Vec<UsageHour>,
+}
+
+/// Params of `usage/report/release`: a claim whose hours couldn't be reported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportReleaseParams {
+    /// The claim's `since`.
+    pub since: Timestamp,
+    /// The claim's `until`.
+    pub until: Timestamp,
+}
+
+/// Result of `usage/report/release`. Empty, and the same when a later claim came first, which
+/// keeps its place.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportReleaseResult {}
+
 /// One account's usage of one model within one UTC hour.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

@@ -1,7 +1,10 @@
+use jiff::Timestamp;
 use rusqlite::{OptionalExtension, params};
 
 use crate::Store;
 use crate::error::StoreError;
+use crate::timestamp;
+use crate::usage::UsageHour;
 
 /// The `host_settings` key prefix for a thread's rollback in progress, before its id.
 const CHECKPOINT_REVERT: &str = "checkpoint_revert:";
@@ -51,6 +54,10 @@ const ACCOUNT_ACCESS: &str = "account_access";
 /// The `host_settings` key for account sign-in's hourly counts and waiting request, as plxd's JSON
 /// (0091), so a restart resets neither.
 const ACCOUNT_LIMITS: &str = "account_limits";
+
+/// The `host_settings` key for where usage data's reporting of this host's hours has reached
+/// (PLX-1301).
+const USAGE_REPORTED_UNTIL: &str = "usage_reported_until";
 
 /// The `host_settings` key for the Claude Remote Control sessions plxd's sync already imported
 /// or found imported, as a JSON array of their ids (PLX-1140).
@@ -326,6 +333,46 @@ impl Store {
     /// A database error.
     pub fn relay_account(&self) -> Result<Option<String>, StoreError> {
         self.text(RELAY_ACCOUNT)
+    }
+
+    /// Marks usage in `[since, until)` reported and returns `since` with that usage, where `since`
+    /// is where the last claim ended. The first claim starts at `until`, so it holds no past usage.
+    /// Run it in one transaction, so two clients can't claim the same hours.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn claim_usage_report(
+        &self,
+        until: Timestamp,
+    ) -> Result<(Timestamp, Vec<UsageHour>), StoreError> {
+        let since = self
+            .text(USAGE_REPORTED_UNTIL)?
+            .and_then(|at| at.parse::<Timestamp>().ok())
+            .unwrap_or(until);
+        if since >= until {
+            self.set_text(USAGE_REPORTED_UNTIL, Some(&timestamp::format(since)))?;
+            return Ok((since, Vec::new()));
+        }
+        self.set_text(USAGE_REPORTED_UNTIL, Some(&timestamp::format(until)))?;
+        Ok((since, self.usage_hours(since, until)?))
+    }
+
+    /// Gives back a claim of `[since, until)`, unless a later claim came first, which keeps its
+    /// place so the hours since go once. Run it in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn release_usage_report(
+        &self,
+        since: Timestamp,
+        until: Timestamp,
+    ) -> Result<(), StoreError> {
+        if self.text(USAGE_REPORTED_UNTIL)?.as_deref() == Some(timestamp::format(until).as_str()) {
+            self.set_text(USAGE_REPORTED_UNTIL, Some(&timestamp::format(since)))?;
+        }
+        Ok(())
     }
 
     /// Records the Clerk user id this host registered under.

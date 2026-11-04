@@ -183,6 +183,42 @@ fn usage_hours_cover_since_up_to_until() {
     );
 }
 
+/// A host's first claim holds no past usage. Each later one holds the hours since the last, once,
+/// whichever client asks, and a released claim's hours go in the next.
+#[test]
+fn a_usage_report_claims_each_hour_once() {
+    let (_dir, store) = open_temp();
+    let run = Uuid::now_v7();
+    let at = |hour: u32| format!("2026-09-24T{hour:02}:00:00Z").parse().unwrap();
+    store
+        .record_usage_delta(&delta(run, "a", "2026-09-24T09:30:00Z", 1))
+        .unwrap();
+    let (since, hours) = store.claim_usage_report(at(10)).unwrap();
+    assert_eq!(since, at(10));
+    assert!(hours.is_empty());
+
+    store
+        .record_usage_delta(&delta(run, "a", "2026-09-24T10:30:00Z", 2))
+        .unwrap();
+    store
+        .record_usage_delta(&delta(run, "a", "2026-09-24T11:30:00Z", 4))
+        .unwrap();
+    let (since, hours) = store.claim_usage_report(at(11)).unwrap();
+    assert_eq!(since, at(10));
+    assert_eq!(hours.len(), 1);
+    assert_eq!(hours[0].input_tokens, 2);
+    assert!(store.claim_usage_report(at(11)).unwrap().1.is_empty());
+
+    store.release_usage_report(at(10), at(11)).unwrap();
+    let (since, hours) = store.claim_usage_report(at(12)).unwrap();
+    assert_eq!(since, at(10));
+    assert_eq!(hours.iter().map(|h| h.input_tokens).sum::<u64>(), 2 + 4);
+
+    // Released after a later claim, the earlier claim's hours stay reported.
+    store.release_usage_report(at(10), at(11)).unwrap();
+    assert!(store.claim_usage_report(at(12)).unwrap().1.is_empty());
+}
+
 #[test]
 fn run_counts_are_distinct_runs_per_account_in_range() {
     let (_dir, store) = open_temp();
