@@ -47,19 +47,21 @@ export function CheckGroup({
   const [open, setOpen] = useState(true);
   const failedRun = group.checks.find((c) => c.state === "failed" && c.runId)?.runId;
   return (
-    <section aria-label={group.name} className="rounded-xl border border-border">
-      <div className="flex h-10 items-center gap-2 pr-2 pl-1">
+    <section aria-label={group.name}>
+      <div className="flex h-8 items-center gap-1 pr-1">
         <button
           type="button"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-md px-2 text-left"
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-md px-2 text-left transition-colors hover:bg-hover"
         >
           <icons.next
             aria-hidden
             className={`size-3.5 shrink-0 text-faint-foreground transition-transform duration-base ${open ? "rotate-90" : ""}`}
           />
-          <span className="min-w-0 truncate text-body font-medium">{group.name}</span>
+          <span className="min-w-0 truncate text-meta font-medium text-muted-foreground">
+            {group.name}
+          </span>
           <ChecksMark checks={group.checks} count className="ml-1" />
         </button>
         {actions.onRerunFailed && failedRun && (
@@ -70,7 +72,7 @@ export function CheckGroup({
         )}
       </div>
       <Reveal open={open}>
-        <ul className="border-t border-border p-1">
+        <ul>
           {group.checks.map((c, i) => (
             <CheckRow key={`${c.name} ${c.url} ${i}`} check={c} now={now} actions={actions} />
           ))}
@@ -103,17 +105,27 @@ export function CheckRow({
     if (!log && actions.log) void actions.log(check).then(setLog);
   };
   const time = checkTime(check, now);
+  const canAct =
+    !!check.url ||
+    (!!actions.onRerun && check.state !== "pending" && !!(check.jobId || check.runId));
   const name = (
     <>
       <Icon aria-label={check.state} className={`size-4 shrink-0 ${color}`} />
-      <span className="min-w-0 flex-1 truncate" title={check.name}>
+      <span className="min-w-0 truncate" title={check.name}>
         {check.name}
       </span>
+      {check.required && <Badge>Required</Badge>}
+      {failed && (
+        <icons.next
+          aria-hidden
+          className={`size-3 shrink-0 text-faint-foreground transition-transform duration-base ${open ? "rotate-90" : ""}`}
+        />
+      )}
     </>
   );
   return (
     <li className="group">
-      <div className="flex h-9 items-center gap-2 rounded-lg pr-1 pl-2 text-body hover:bg-hover">
+      <div className="flex h-8 items-center gap-2 rounded-md pr-1 pl-2 text-body transition-colors hover:bg-hover">
         {failed ? (
           <button
             type="button"
@@ -124,36 +136,39 @@ export function CheckRow({
             {name}
           </button>
         ) : (
-          name
+          <div className="flex min-w-0 flex-1 items-center gap-2">{name}</div>
         )}
-        {check.required && <Badge>Required</Badge>}
-        {/* How long it ran: the icon already says how it ended. */}
-        <span
-          title={`${checkStatus(check)}${time ? ` in ${time}` : ""}`}
-          className="w-16 shrink-0 truncate text-right text-meta text-faint-foreground tabular-nums"
-        >
-          {time ?? checkStatus(check)}
-        </span>
-        <span className="flex w-14 shrink-0 justify-end">
-          {actions.onRerun && check.state !== "pending" && (check.jobId || check.runId) && (
-            <IconButton
-              size="sm"
-              reveal
-              label={`Re-run ${check.name}`}
-              onClick={() => actions.onRerun!(check)}
-            >
-              <icons.refresh aria-hidden />
-            </IconButton>
-          )}
-          {check.url && (
-            <IconButton
-              size="sm"
-              reveal
-              label={`Open ${check.name} on GitHub`}
-              onClick={() => actions.onOpen(check.url!)}
-            >
-              <icons.external aria-hidden />
-            </IconButton>
+        {/* How long it ran, the icon already saying how it ended, until its actions take the place. */}
+        <span className="relative flex h-6 min-w-16 shrink-0 items-center justify-end">
+          <span
+            title={`${checkStatus(check)}${time ? ` in ${time}` : ""}`}
+            className={`truncate pr-1 text-meta text-faint-foreground tabular-nums ${canAct ? "transition-opacity group-focus-within:opacity-0 group-hover:opacity-0" : ""}`}
+          >
+            {time ?? checkStatus(check)}
+          </span>
+          {canAct && (
+            <span className="absolute inset-y-0 right-0 flex items-center">
+              {actions.onRerun && check.state !== "pending" && (check.jobId || check.runId) && (
+                <IconButton
+                  size="sm"
+                  reveal
+                  label={`Re-run ${check.name}`}
+                  onClick={() => actions.onRerun!(check)}
+                >
+                  <icons.refresh aria-hidden />
+                </IconButton>
+              )}
+              {check.url && (
+                <IconButton
+                  size="sm"
+                  reveal
+                  label={`Open ${check.name} on GitHub`}
+                  onClick={() => actions.onOpen(check.url!)}
+                >
+                  <icons.external aria-hidden />
+                </IconButton>
+              )}
+            </span>
           )}
         </span>
       </div>

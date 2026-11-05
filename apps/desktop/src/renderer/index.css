@@ -328,16 +328,29 @@
 /* A diff's changed lines (diffLook), and the words that changed in them. */
 .diff-row-added {
   background: color-mix(in srgb, var(--diff-added) var(--diff-tint), transparent);
-  box-shadow: inset 2px 0 0 var(--diff-added);
+  box-shadow: inset 3px 0 0 var(--diff-added);
 }
 .diff-row-removed {
   background: color-mix(in srgb, var(--diff-removed) var(--diff-tint), transparent);
-  box-shadow: inset 2px 0 0 var(--diff-removed);
+  box-shadow: inset 3px 0 0 var(--diff-removed);
+}
+/* A diff's line numbers: quiet on context, its change's color on a changed line. */
+.diff-gutter {
+  color: var(--faint-foreground);
+}
+.diff-row-added > .diff-gutter {
+  color: var(--diff-added);
+}
+.diff-row-removed > .diff-gutter {
+  color: var(--diff-removed);
 }
 /* Lines picked for a comment. */
 .diff-row-picked {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.diff-row-picked > .diff-gutter {
+  color: var(--accent);
 }
 .diff-word-added {
   border-radius: 2px;

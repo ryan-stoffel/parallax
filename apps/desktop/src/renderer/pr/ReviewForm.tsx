@@ -15,6 +15,7 @@ export function ReviewForm({
   draftKey,
   reviewId,
   pending = 0,
+  bare,
   onDone,
 }: {
   write?: (w: PrWrite) => Promise<boolean>;
@@ -24,6 +25,8 @@ export function ReviewForm({
   reviewId?: string;
   /** How many comments it holds. */
   pending?: number;
+  /** Sits in a panel of its own, so it draws no box. */
+  bare?: boolean;
   onDone?: () => void;
 }) {
   const [body, setBody] = useSticky(draftKey, "");
@@ -59,7 +62,11 @@ export function ReviewForm({
   return (
     <form
       aria-label="Comment"
-      className="overflow-hidden rounded-xl border border-border bg-surface focus-within:border-faint-foreground/60"
+      className={
+        bare
+          ? ""
+          : "overflow-hidden rounded-xl border border-border bg-surface focus-within:border-faint-foreground/60"
+      }
       onSubmit={(e) => {
         e.preventDefault();
         if (canSay) void comment();

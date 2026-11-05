@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -9,7 +10,8 @@ import {
   type ReactNode,
 } from "react";
 
-import { diffBand, diffLook } from "./Approval";
+import { diffLook } from "./Approval";
+import { languageOf, lineTokens, markTokens } from "./diffHighlight";
 import { icons } from "./icons";
 import {
   diffRows,
@@ -28,13 +30,34 @@ import { parseDiff, type DiffFile, type DiffLine } from "./parseDiff";
 import { kindsOf, type ThreadView } from "./pr/model";
 import { DiffStat } from "./pr/parts";
 import { fileTree, FileIcon, type TreeNode } from "./TurnChanges";
-import { Checkbox, IconButton, Segmented } from "./ui";
+import { Checkbox, IconButton, Menu, menuPanel, MenuOption, Segmented } from "./ui";
 
 /** Where the Unified/Split choice is kept, for every diff. */
 const LAYOUT_KEY = "parallax.diffLayout";
 
+/** Where the file tree's choice is kept, for every diff. */
+const TREE_KEY = "parallax.diffTree";
+
 /** The diff column's narrowest width for split, about 40 columns of code on each side. */
 const SPLIT_MIN_WIDTH = 760;
+
+/** The whole view's narrowest width with the file tree beside the diff. */
+const TREE_MIN_WIDTH = 900;
+
+/** The file tree's width beside the diff. */
+const TREE_WIDTH = 256;
+
+/** Below this width, the bar drops its line count, which the header above also has. */
+const TIGHT_WIDTH = 400;
+
+/** Below this width, the bar also drops its viewed count, which each file's checkbox shows. */
+const TIGHTER_WIDTH = 360;
+
+/** How far into the diff counts as reading it, past a stray nudge at its top. */
+const SCROLLED_PAST = 40;
+
+/** Below this width, the bar's controls fold into a menu and a file's header drops its words. */
+const COMPACT_WIDTH = 560;
 
 /** Where a focus or jump scrolls: a file, and a line of its new side, from `line` to `end`. */
 export type DiffFocus = { path?: string; line?: number; end?: number };
@@ -104,8 +127,9 @@ const focused = (to: DiffFocus | undefined, path: string, line?: DiffLine) =>
  * header stays at the top while its lines scroll. `threads` sit under their line on their side, or under their file's header when plxd
  * doesn't say the line, drawn by `renderThread`. With `comments`, a line's gutter takes a comment:
  * its + on hover, a drag or a shift-click for a range, and each file's header for the whole file.
- * `actions` sit in the bar above the files. With `tree`, a file tree that jumps to a file shows
- * beside the diff once its container (an `@container`) is at least 900px wide.
+ * `actions` sit in the bar above the files, with `leading` at its start. `onScrolled` hears when the
+ * reader scrolls in, so a header above can fold. With `tree`, a file tree
+ * that jumps to a file shows beside the diff when there's room, and from a button when there isn't.
  */
 export function ChangesDiff({
   diff,
@@ -118,6 +142,9 @@ export function ChangesDiff({
   renderThread,
   comments,
   actions,
+  leading,
+  roomForActions,
+  onScrolled,
   tree,
 }: {
   diff: string;
@@ -130,25 +157,41 @@ export function ChangesDiff({
   renderThread?: (thread: ThreadView) => ReactNode;
   comments?: DiffComments;
   actions?: ReactNode;
+  leading?: ReactNode;
+  /** `actions` need more of a narrow bar than usual, so its counts give way. */
+  roomForActions?: boolean;
+  /** Told whether the reader has scrolled into the diff, or back to its top. */
+  onScrolled?: (scrolled: boolean) => void;
   tree?: boolean;
 }) {
   const files = useMemo(() => parseDiff(diff), [diff]);
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [jump, setJump] = useState<DiffFocus>();
   const scroll = useRef<HTMLDivElement>(null);
+  const treeId = useId();
   const [chosen, setChosen] = useState<DiffLayout>(() =>
     localStorage.getItem(LAYOUT_KEY) === "split" ? "split" : "unified",
   );
-  const [narrow, setNarrow] = useState(false);
+  const [treeOn, setTreeOn] = useState(() => localStorage.getItem(TREE_KEY) !== "off");
+  const root = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
-    const el = scroll.current;
+    const el = root.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const measure = () => setNarrow(el.clientWidth < SPLIT_MIN_WIDTH);
+    const measure = () => setWidth(el.clientWidth);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  const hasTree = !!tree && files.length > 1;
+  const treeFits = width >= TREE_MIN_WIDTH;
+  const compact = width < COMPACT_WIDTH;
+  // What the narrowest bars let go of, in turn. Unmeasured, nothing goes.
+  const tight = width > 0 && (width < TIGHT_WIDTH || (compact && !!roomForActions));
+  const tighter = width > 0 && (width < TIGHTER_WIDTH || (compact && !!roomForActions));
+  const treeBeside = hasTree && treeFits && treeOn;
+  const narrow = width - (treeBeside ? TREE_WIDTH : 0) < SPLIT_MIN_WIDTH;
   const layout = narrow ? "unified" : chosen;
   const shut = (path: string) => folded.has(path) || !!viewed?.has(path);
   const rows = useMemo(
@@ -165,7 +208,11 @@ export function ChangesDiff({
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroll.current,
-    estimateSize: (i) => (rows[i]!.header ? 38 : rows[i]!.threads || rows[i]!.sides ? 140 : 20),
+    estimateSize: (i) => {
+      const row = rows[i]!;
+      if (row.header || row.line?.op === "@") return 36;
+      return row.threads || row.sides ? 120 : 20;
+    },
     overscan: 8,
   });
   const to = jump ?? focus;
@@ -190,6 +237,13 @@ export function ChangesDiff({
   const kinds = useMemo(() => kindsOf(files), [files]);
   const added = files.reduce((n, f) => n + f.added, 0);
   const removed = files.reduce((n, f) => n + f.removed, 0);
+  // A viewed file stays folded until it's unticked, which writes to GitHub, so these leave it be.
+  const foldable = files.filter((f) => !viewed?.has(f.path));
+  const allShut = foldable.length > 0 && foldable.every((f) => folded.has(f.path));
+  const foldAll = () => {
+    setFolded(allShut ? new Set() : new Set(foldable.map((f) => f.path)));
+    virtualizer.measure();
+  };
   const toggle = (path: string) => {
     if (viewed?.has(path)) onViewed?.(path, false);
     else
@@ -250,6 +304,12 @@ export function ChangesDiff({
   };
   // The header of the file at the top, once its own header has scrolled off.
   const offset = virtualizer.scrollOffset ?? 0;
+  const scrolled = offset > SCROLLED_PAST;
+  useEffect(() => {
+    onScrolled?.(scrolled);
+    // Gone, it isn't scrolled, as when Commits takes its place.
+    return () => onScrolled?.(false);
+  }, [scrolled, onScrolled]);
   const topItem = virtualizer.getVirtualItems().find((item) => item.end > offset);
   const topRow = topItem && rows[topItem.index];
   const stuck = topRow && !(topRow.header && topItem.start >= offset) ? topRow.file : undefined;
@@ -273,48 +333,101 @@ export function ChangesDiff({
         }}
         threads={threads.filter((t) => t.path === path).length}
       >
-        {changedSinceViewed?.has(path) && (
-          <span className="shrink-0 text-meta text-warning">Changed since viewed</span>
-        )}
+        {changedSinceViewed?.has(path) &&
+          (compact ? (
+            <span
+              role="img"
+              aria-label="Changed since viewed"
+              title="Changed since viewed"
+              className="size-1.5 shrink-0 rounded-full bg-warning"
+            />
+          ) : (
+            <span className="shrink-0 text-meta text-warning">Changed since viewed</span>
+          ))}
         {comments?.canRetarget && (
-          <IconButton
-            size="sm"
-            label={`Comment on ${file.path}`}
-            onClick={() => {
-              if (shut(path)) toggle(path);
-              comments.onTarget({ path });
-              backToHeader();
-            }}
-          >
-            <icons.comment aria-hidden />
-          </IconButton>
+          <span className="opacity-0 transition-opacity group-hover/file:opacity-100 focus-within:opacity-100">
+            <IconButton
+              size="sm"
+              label={`Comment on ${file.path}`}
+              onClick={() => {
+                if (shut(path)) toggle(path);
+                comments.onTarget({ path });
+                backToHeader();
+              }}
+            >
+              <icons.comment aria-hidden />
+            </IconButton>
+          </span>
         )}
         {onViewed && (
-          <Checkbox
-            checked={!!viewed?.has(path)}
-            onChange={(on) => {
-              onViewed(path, on);
-              virtualizer.measure();
-              backToHeader();
-            }}
-          >
-            <span className="text-meta text-muted-foreground">Viewed</span>
-          </Checkbox>
+          <span className="ml-1 flex shrink-0">
+            <Checkbox
+              checked={!!viewed?.has(path)}
+              onChange={(on) => {
+                onViewed(path, on);
+                virtualizer.measure();
+                backToHeader();
+              }}
+            >
+              <span className={compact ? "sr-only" : "text-meta text-muted-foreground"}>
+                Viewed
+              </span>
+            </Checkbox>
+          </span>
         )}
       </DiffFileHeader>
     );
   };
+  const seen = files.filter((f) => viewed?.has(f.path)).length;
+  const currentPath = topRow?.file.path;
+  const setLayout = (next: DiffLayout) => {
+    localStorage.setItem(LAYOUT_KEY, next);
+    setChosen(next);
+  };
+  const setTree = (on: boolean) => {
+    localStorage.setItem(TREE_KEY, on ? "on" : "off");
+    setTreeOn(on);
+  };
+  // Beside the diff there's room to list the kinds in the bar. Otherwise they open from the count.
+  const stat =
+    treeFits || kinds.length < 2 ? (
+      <DiffStat added={added} removed={removed} />
+    ) : (
+      <span tabIndex={0} className="group/stat relative shrink-0 rounded-sm outline-offset-2">
+        <DiffStat added={added} removed={removed} />
+        <span
+          role="tooltip"
+          className="invisible absolute top-full left-0 z-30 mt-2 w-44 rounded-lg border border-border bg-surface p-2 opacity-0 shadow-composer transition-opacity group-hover/stat:visible group-hover/stat:opacity-100 group-focus/stat:visible group-focus/stat:opacity-100"
+        >
+          {kinds.map((k) => (
+            <span key={k.kind} className="flex items-center justify-between gap-3 py-0.5">
+              <span className="text-muted-foreground">{k.kind}</span>
+              <DiffStat added={k.added} removed={k.removed} />
+            </span>
+          ))}
+        </span>
+      </span>
+    );
   return (
-    <>
-      <div className="flex min-h-11 flex-wrap items-center gap-2 px-3 py-1.5 text-body text-muted-foreground">
+    <div ref={root} className="flex min-h-0 flex-1 flex-col">
+      <div
+        role="toolbar"
+        aria-label="Diff"
+        className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2 text-meta text-muted-foreground"
+      >
+        {leading}
         {files.length === 0 ? (
-          "No files changed."
+          <span className="px-1">No files changed.</span>
         ) : (
           <>
-            {files.length} {files.length === 1 ? "file" : "files"} changed
-            <DiffStat added={added} removed={removed} />
-            {kinds.length > 1 && (
-              <span className="flex flex-wrap items-center gap-x-3 pl-1 text-meta text-faint-foreground">
+            {!leading && (
+              <span className="shrink-0 px-1 tabular-nums">
+                {files.length} {files.length === 1 ? "file" : "files"}
+              </span>
+            )}
+            {!tight && stat}
+            {treeFits && kinds.length > 1 && (
+              <span className="flex min-w-0 items-center gap-3 overflow-hidden pl-1 whitespace-nowrap text-faint-foreground">
                 {kinds.map((k) => (
                   <span key={k.kind} className="flex items-center gap-1.5">
                     {k.kind}
@@ -326,47 +439,119 @@ export function ChangesDiff({
           </>
         )}
         {truncated && (
-          <span className="text-warning">· cut short, open it on GitHub for the rest</span>
+          <icons.warning
+            role="img"
+            aria-label="Cut short, open it on GitHub for the rest"
+            className="size-3.5 shrink-0 text-warning"
+          >
+            <title>Cut short, open it on GitHub for the rest</title>
+          </icons.warning>
         )}
-        {files.length > 0 && (
-          <div className="ml-auto flex items-center gap-3">
-            {onViewed && (
-              <span className="text-meta tabular-nums">
-                {files.filter((f) => viewed?.has(f.path)).length} / {files.length} viewed
-              </span>
-            )}
-            {actions}
-            {narrow && chosen === "split" && (
-              <span className="text-meta text-faint-foreground">Too narrow for split</span>
-            )}
-            <Segmented
-              label="Diff layout"
-              value={layout}
-              onChange={(next) => {
-                localStorage.setItem(LAYOUT_KEY, next);
-                setChosen(next);
-              }}
-              options={[
-                { value: "unified", name: layoutName(icons.unified, "Unified") },
-                {
-                  value: "split",
-                  name: layoutName(icons.split, "Split"),
-                  disabled: narrow,
-                  title: narrow ? "Too narrow for split" : undefined,
-                },
-              ]}
+        <span className="flex-1" />
+        {onViewed && files.length > 0 && !tighter && (
+          <span title={`${seen} of ${files.length} files viewed`} className="shrink-0 tabular-nums">
+            {seen}/{files.length}
+            {compact ? "" : " viewed"}
+          </span>
+        )}
+        {actions}
+        {files.length > 0 &&
+          (compact ? (
+            <DiffOptions
+              layout={layout}
+              narrow={narrow}
+              onLayout={setLayout}
+              allShut={allShut}
+              canFold={foldable.length > 0}
+              onFoldAll={foldAll}
             />
-          </div>
-        )}
+          ) : (
+            <>
+              {narrow && chosen === "split" && (
+                <span className="shrink-0 text-faint-foreground">Too narrow for split</span>
+              )}
+              <Segmented
+                label="Diff layout"
+                value={layout}
+                onChange={setLayout}
+                options={[
+                  {
+                    value: "unified",
+                    title: "Unified",
+                    name: layoutName(icons.unified, "Unified"),
+                  },
+                  {
+                    value: "split",
+                    name: layoutName(icons.split, "Split"),
+                    disabled: narrow,
+                    title: narrow ? "Too narrow for split" : "Split",
+                  },
+                ]}
+              />
+              <IconButton
+                size="sm"
+                label={allShut ? "Expand all files" : "Collapse all files"}
+                disabled={foldable.length === 0}
+                onClick={foldAll}
+              >
+                {allShut ? <icons.expandAll aria-hidden /> : <icons.collapseAll aria-hidden />}
+              </IconButton>
+            </>
+          ))}
+        {hasTree &&
+          (treeFits ? (
+            <IconButton
+              size="sm"
+              label={treeOn ? "Hide file tree" : "Show file tree"}
+              aria-pressed={treeOn}
+              onClick={() => setTree(!treeOn)}
+            >
+              <icons.fileTree aria-hidden />
+            </IconButton>
+          ) : (
+            <>
+              <IconButton
+                size="sm"
+                label="Files"
+                aria-haspopup="dialog"
+                popoverTarget={`${treeId}-tree`}
+              >
+                <icons.fileTree aria-hidden />
+              </IconButton>
+              <div
+                id={`${treeId}-tree`}
+                popover="auto"
+                className={`${menuPanel("end")} max-h-[70vh] w-[min(22rem,90vw)] overflow-y-auto p-1`}
+              >
+                <FileTree
+                  files={files}
+                  viewed={viewed}
+                  changed={changedSinceViewed}
+                  current={currentPath}
+                  onPick={(path) => {
+                    document.getElementById(`${treeId}-tree`)?.hidePopover();
+                    setJump({ path });
+                  }}
+                />
+              </div>
+            </>
+          ))}
       </div>
-      <div className="flex min-h-0 flex-1 border-t border-border">
-        {tree && files.length > 1 && (
-          <FileTree
-            files={files}
-            viewed={viewed}
-            changed={changedSinceViewed}
-            onPick={(path) => setJump({ path })}
-          />
+      <div className="flex min-h-0 flex-1">
+        {treeBeside && (
+          <nav
+            aria-label="Files"
+            style={{ width: TREE_WIDTH }}
+            className="shrink-0 overflow-y-auto border-r border-border p-1"
+          >
+            <FileTree
+              files={files}
+              viewed={viewed}
+              changed={changedSinceViewed}
+              current={currentPath}
+              onPick={(path) => setJump({ path })}
+            />
+          </nav>
         )}
         <div
           ref={scroll}
@@ -389,13 +574,13 @@ export function ChangesDiff({
                   {row.header ? (
                     fileHeader(row.file)
                   ) : row.composer ? (
-                    <ComposerRow side={row.composer}>
+                    <ComposerRow side={row.composer} indent={!compact}>
                       {comments?.renderBox(linesInRange(row.file, comments.target?.range))}
                     </ComposerRow>
                   ) : row.threads ? (
-                    <ThreadColumn threads={row.threads} render={renderThread!} edged />
+                    <ThreadColumn threads={row.threads} render={renderThread!} indent={!compact} />
                   ) : row.sides ? (
-                    <div className="grid grid-cols-2 border-y border-border bg-background">
+                    <div className="grid grid-cols-2">
                       <ThreadColumn threads={row.sides.left} render={renderThread!} />
                       <ThreadColumn threads={row.sides.right} render={renderThread!} divider />
                     </div>
@@ -407,10 +592,12 @@ export function ChangesDiff({
                         <div className="grid grid-cols-2">
                           <DiffSide
                             line={row.left}
+                            lang={languageOf(path)}
                             gutter={row.left && gutterOf(row.file, "left", row.left.old)}
                           />
                           <DiffSide
                             line={row.right}
+                            lang={languageOf(path)}
                             gutter={row.right && gutterOf(row.file, "right", row.right.new)}
                             divider
                           />
@@ -418,6 +605,7 @@ export function ChangesDiff({
                       ) : row.line ? (
                         <DiffLineView
                           line={row.line}
+                          lang={languageOf(path)}
                           gutter={
                             row.line.op === "@"
                               ? undefined
@@ -439,6 +627,62 @@ export function ChangesDiff({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The bar's controls when narrow: the diff's layout, and folding every file. */
+function DiffOptions({
+  layout,
+  narrow,
+  onLayout,
+  allShut,
+  canFold,
+  onFoldAll,
+}: {
+  layout: DiffLayout;
+  narrow: boolean;
+  onLayout: (layout: DiffLayout) => void;
+  allShut: boolean;
+  canFold: boolean;
+  onFoldAll: () => void;
+}) {
+  const id = useId();
+  return (
+    <>
+      <IconButton size="sm" label="Diff options" aria-haspopup="menu" popoverTarget={id}>
+        <icons.options aria-hidden />
+      </IconButton>
+      <Menu id={id} label="Diff options" align="end" className="w-56 p-1">
+        <MenuOption
+          option={{ value: "unified", label: "Unified", icon: <icons.unified aria-hidden /> }}
+          checked={layout === "unified"}
+          onClick={() => onLayout("unified")}
+        />
+        <MenuOption
+          option={{
+            value: "split",
+            label: "Split",
+            icon: <icons.split aria-hidden />,
+            hint: narrow ? "Too narrow" : undefined,
+          }}
+          checked={layout === "split"}
+          disabled={narrow}
+          onClick={() => onLayout("split")}
+        />
+        <MenuOption
+          option={{
+            value: "fold",
+            label: allShut ? "Expand all files" : "Collapse all files",
+            icon: allShut ? <icons.expandAll aria-hidden /> : <icons.collapseAll aria-hidden />,
+            divider: true,
+          }}
+          role="menuitemcheckbox"
+          checked={false}
+          disabled={!canFold}
+          onClick={onFoldAll}
+        />
+      </Menu>
     </>
   );
 }
@@ -459,29 +703,36 @@ export function DiffFileHeader({
   children?: ReactNode;
 }) {
   const name = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+  const cut = file.path.lastIndexOf("/") + 1;
   return (
-    <div className="flex h-10 items-center gap-2 border-b border-border bg-code px-3 text-body">
+    <div className="group/file flex h-9 items-center gap-1.5 border-b border-border bg-surface pr-2 pl-1.5 text-meta">
       <button
         type="button"
         aria-expanded={!shut}
         aria-label={`${shut ? "Show" : "Hide"} ${file.path}`}
         onClick={onToggle}
-        className="grid size-5 shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-hover"
+        className="grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
       >
         <icons.next
           aria-hidden
-          className={`size-4 transition-transform duration-fast ${shut ? "" : "rotate-90"}`}
+          className={`size-3.5 transition-transform duration-fast ${shut ? "" : "rotate-90"}`}
         />
       </button>
-      <span className="min-w-0 flex-1 truncate font-mono text-body" title={name}>
-        {name}
+      <FileIcon path={file.path} />
+      {/* The folders give way first, so the file's name is what stays. */}
+      <span className="flex min-w-0 flex-1 items-baseline" title={name}>
+        {file.oldPath && (
+          <span className="min-w-0 truncate text-faint-foreground">{file.oldPath} → </span>
+        )}
+        <span className="min-w-0 truncate text-muted-foreground">{file.path.slice(0, cut)}</span>
+        <span className="shrink-0 font-medium text-foreground">{file.path.slice(cut)}</span>
       </span>
       {threads > 0 && (
         <span
           title={`${threads} review ${threads === 1 ? "thread" : "threads"}`}
-          className="flex shrink-0 items-center gap-1 text-meta text-muted-foreground"
+          className="flex shrink-0 items-center gap-1 text-faint-foreground"
         >
-          <icons.comment aria-hidden className="size-3.5" />
+          <icons.comment aria-hidden className="size-3" />
           {threads}
         </span>
       )}
@@ -494,17 +745,23 @@ export function DiffFileHeader({
 /** The comment box's row: across the diff, or under its side of a split row. */
 function ComposerRow({
   side,
+  indent,
   children,
 }: {
   side: "left" | "right" | "across";
+  indent?: boolean;
   children: ReactNode;
 }) {
   if (side === "across")
-    return <div className="border-y border-border bg-background px-3 py-2">{children}</div>;
+    return (
+      <div className={`py-2 pr-3 ${indent ? "pl-11" : "pl-2"}`}>
+        <div className="max-w-3xl">{children}</div>
+      </div>
+    );
   return (
-    <div className="grid grid-cols-2 border-y border-border bg-background">
+    <div className="grid grid-cols-2">
       <div
-        className={`min-w-0 px-3 py-2 ${side === "right" ? "col-start-2 border-l border-border" : ""}`}
+        className={`min-w-0 px-2 py-2 ${side === "right" ? "col-start-2 border-l border-border" : ""}`}
       >
         {children}
       </div>
@@ -530,61 +787,88 @@ function AddComment({ gutter }: { gutter: Gutter }) {
   );
 }
 
-/** Threads under a line: across the diff when `edged`, else one side of a split row. */
+/** Threads under a line: across the diff, past its gutter with `indent`, or one side of a split row. */
 function ThreadColumn({
   threads,
   render,
-  edged,
+  indent,
   divider,
 }: {
   threads: readonly ThreadView[];
   render: (thread: ThreadView) => ReactNode;
-  edged?: boolean;
+  indent?: boolean;
   divider?: boolean;
 }) {
   return (
     <div
-      className={`flex min-w-0 flex-col gap-2 ${threads.length ? "px-3 py-2" : ""} ${edged ? "border-y border-border bg-background" : ""} ${divider ? "border-l border-border" : ""}`}
+      className={`flex min-w-0 flex-col gap-2 ${threads.length ? `py-2 pr-3 ${indent ? "pl-11" : "pl-2"}` : ""} ${divider ? "border-l border-border" : ""}`}
     >
       {threads.map((t, i) => (
-        <div key={t.id ?? i}>{render(t)}</div>
+        <div key={t.id ?? i} className="max-w-3xl">
+          {render(t)}
+        </div>
       ))}
     </div>
   );
 }
 
-/** A layout option's name: its icon and word. */
+/** A layout option's name: its icon, its word for screen readers. */
 const layoutName = (Icon: typeof icons.unified, name: string) => (
   <>
     <Icon aria-hidden />
-    {name}
+    <span className="sr-only">{name}</span>
   </>
 );
 
-/** A line's text, its changed part marked. */
-function LineText({ line }: { line: DiffLine }) {
-  if (!line.mark) return line.text || " ";
-  return (
-    <>
-      {line.text.slice(0, line.mark[0])}
-      <span className={line.op === "+" ? "diff-word-added" : "diff-word-removed"}>
-        {line.text.slice(line.mark[0], line.mark[1])}
+/** A line's text, in its language's colors, its changed part marked. */
+function LineText({ line, lang }: { line: DiffLine; lang?: string }) {
+  if (!line.text) return " ";
+  return markTokens(lineTokens(lang, line.text), line.mark).map((t, i) => {
+    const look = `${t.cls ?? ""} ${
+      t.marked ? (line.op === "+" ? "diff-word-added" : "diff-word-removed") : ""
+    }`.trim();
+    return look ? (
+      <span key={i} className={look}>
+        {t.text}
       </span>
-      {line.text.slice(line.mark[1])}
-    </>
+    ) : (
+      t.text
+    );
+  });
+}
+
+/** A line's number, which holds its + for a comment and takes a pick. */
+function LineNumber({ n, gutter }: { n?: number; gutter?: Gutter }) {
+  return (
+    <span
+      aria-hidden
+      onPointerDown={gutter?.active ? gutter.onPointerDown : undefined}
+      onPointerEnter={gutter?.active ? gutter.onPointerEnter : undefined}
+      className={`diff-gutter w-10 shrink-0 pr-2 text-right tabular-nums select-none ${gutter?.active ? "cursor-pointer" : ""}`}
+    >
+      {n}
+    </span>
   );
 }
 
+/** What a change is, for screen readers, since a colored bar says it by sight alone. */
+const ChangeName = ({ op }: { op: DiffLine["op"] }) =>
+  op === "+" || op === "-" ? (
+    <span className="sr-only">{op === "+" ? "Added: " : "Removed: "}</span>
+  ) : null;
+
 /**
- * One side of a split row: its line number, sign, and text, or a filler where this side has no line.
+ * One side of a split row: its line number and text, or a filler where this side has no line.
  * Always wrapping, whatever Settings says, so both sides of a row keep one height.
  */
 function DiffSide({
   line,
+  lang,
   gutter,
   divider,
 }: {
   line?: DiffLine;
+  lang?: string;
   gutter?: Gutter;
   divider?: boolean;
 }) {
@@ -596,71 +880,71 @@ function DiffSide({
       className={`group/line relative flex min-w-0 ${look.row} ${edge} ${gutter?.selected ? "diff-row-picked" : ""}`}
     >
       {gutter?.active && <AddComment gutter={gutter} />}
-      <span
-        aria-hidden
-        onPointerDown={gutter?.active ? gutter.onPointerDown : undefined}
-        onPointerEnter={gutter?.active ? gutter.onPointerEnter : undefined}
-        className={`w-10 shrink-0 pr-2 text-right text-faint-foreground select-none ${gutter?.active ? "cursor-pointer hover:text-foreground" : ""}`}
-      >
-        {divider ? line.new : line.old}
-      </span>
-      <span aria-hidden className={`w-5 shrink-0 select-none ${look.sign}`}>
-        {line.op === "-" ? "−" : line.op}
-      </span>
-      {line.op !== " " && (
-        <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
-      )}
-      <span className="min-w-0 flex-1 pr-3 break-all whitespace-pre-wrap">
-        <LineText line={line} />
+      <LineNumber n={divider ? line.new : line.old} gutter={gutter} />
+      <ChangeName op={line.op} />
+      <span className="min-w-0 flex-1 pr-3 pl-2 wrap-anywhere whitespace-pre-wrap">
+        <LineText line={line} lang={lang} />
       </span>
     </div>
   );
 }
 
-/** A diff's line, wrapping, numbered on both sides, its change named for screen readers. */
-export function DiffLineView({ line, gutter }: { line: DiffLine; gutter?: Gutter }) {
-  return line.op === "@" ? (
-    <div className={`${diffBand} code-lines break-all whitespace-pre-wrap`}>{line.text}</div>
-  ) : (
+/** A hunk's band: how many unchanged lines it skips, and where it picks up. */
+function HunkBand({ line }: { line: DiffLine }) {
+  const { hidden, context } = line;
+  if (!hidden && !context) return <div className="h-1" />;
+  return (
+    <div
+      title={line.text}
+      className="mx-2 my-1 flex h-6 items-center gap-2 rounded-md bg-hover px-2 font-sans text-meta text-faint-foreground"
+    >
+      {!!hidden && (
+        <span className="shrink-0">
+          {hidden} unmodified {hidden === 1 ? "line" : "lines"}
+        </span>
+      )}
+      {context && <span className="min-w-0 truncate font-mono">{context}</span>}
+    </div>
+  );
+}
+
+/** A diff's line, numbered as T3 Code numbers one: its own side's number, its change a colored bar. */
+export function DiffLineView({
+  line,
+  lang,
+  gutter,
+}: {
+  line: DiffLine;
+  lang?: string;
+  gutter?: Gutter;
+}) {
+  if (line.op === "@") return <HunkBand line={line} />;
+  return (
     <div
       className={`group/line relative flex ${diffLook[line.op].row} ${gutter?.selected ? "diff-row-picked" : ""}`}
     >
       {gutter?.active && <AddComment gutter={gutter} />}
-      <span
-        aria-hidden
-        onPointerDown={gutter?.active ? gutter.onPointerDown : undefined}
-        onPointerEnter={gutter?.active ? gutter.onPointerEnter : undefined}
-        className={`flex shrink-0 text-faint-foreground select-none ${gutter?.active ? "cursor-pointer hover:text-foreground" : ""}`}
-      >
-        <span className="w-10 pr-2 text-right">{line.old}</span>
-        <span className="w-10 pr-2 text-right">{line.new}</span>
-      </span>
-      <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[line.op].sign}`}>
-        {line.op === "-" ? "−" : line.op}
-      </span>
-      {line.op !== " " && (
-        <span className="sr-only">{line.op === "+" ? "Added: " : "Removed: "}</span>
-      )}
-      <span className="code-lines min-w-0 pr-3 break-all whitespace-pre-wrap">
-        <LineText line={line} />
+      <LineNumber n={line.new ?? line.old} gutter={gutter} />
+      <ChangeName op={line.op} />
+      <span className="code-lines min-w-0 flex-1 pr-3 pl-2">
+        <LineText line={line} lang={lang} />
       </span>
     </div>
   );
 }
 
-/**
- * The changed files as a folder tree beside the diff, shown only when its container is wide: a
- * file jumps to it, with a check once viewed.
- */
+/** The changed files as a folder tree: a file jumps to it, with a check once viewed. */
 function FileTree({
   files,
   viewed,
   changed,
+  current,
   onPick,
 }: {
   files: DiffFile[];
   viewed?: ReadonlySet<string>;
   changed?: ReadonlySet<string>;
+  current?: string;
   onPick: (path: string) => void;
 }) {
   const nodes = fileTree(
@@ -668,21 +952,21 @@ function FileTree({
   );
   const rows = (list: TreeNode[], depth: number): ReactNode[] =>
     list.flatMap((node) => {
-      const indent = { paddingLeft: 8 + depth * 12 };
+      const indent = { paddingLeft: 6 + depth * 12 };
       if (node.kind === "dir")
         return [
           <li
             key={`d ${node.path}`}
-            className="flex h-7 items-center gap-1.5 truncate pr-2 font-mono text-meta text-faint-foreground"
+            className="flex h-6 items-center truncate pr-2 text-meta text-faint-foreground"
             style={indent}
             title={node.path}
           >
-            <icons.folder aria-hidden className="size-3.5 shrink-0" />
             <span className="truncate">{node.name}</span>
           </li>,
           ...rows(node.children, depth + 1),
         ];
       const seen = viewed?.has(node.file.path);
+      const here = current === node.file.path;
       return [
         <li key={node.file.path}>
           <button
@@ -692,8 +976,9 @@ function FileTree({
                 ? `${node.file.path}, changed since viewed`
                 : node.file.path
             }
+            aria-current={here || undefined}
             onClick={() => onPick(node.file.path)}
-            className={`flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-meta hover:bg-hover ${seen ? "text-faint-foreground" : ""}`}
+            className={`flex h-6 w-full items-center gap-1.5 rounded-md pr-1.5 text-left text-meta hover:bg-hover ${here ? "bg-selected" : ""} ${seen ? "text-faint-foreground" : "text-muted-foreground"}`}
             style={indent}
           >
             <FileIcon path={node.file.path} />
@@ -713,12 +998,5 @@ function FileTree({
         </li>,
       ];
     });
-  return (
-    <nav
-      aria-label="Files"
-      className="hidden w-64 shrink-0 overflow-y-auto border-r border-border p-1 @min-[900px]:block"
-    >
-      <ul>{rows(nodes, 0)}</ul>
-    </nav>
-  );
+  return <ul>{rows(nodes, 0)}</ul>;
 }

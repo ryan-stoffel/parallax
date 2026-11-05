@@ -7,12 +7,15 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   CircleAlert,
   CircleCheck,
   CircleMinus,
   CircleX,
   Columns2,
   Copy,
+  CornerDownRight,
   Download,
   Ellipsis,
   FileDiff,
@@ -26,6 +29,7 @@ import {
   Info,
   LayoutGrid,
   Lightbulb,
+  ListTree,
   LoaderCircle,
   MessageCircleQuestion,
   MessageSquare,
@@ -42,6 +46,7 @@ import {
   Search,
   Server,
   Settings,
+  Settings2,
   SquarePen,
   SquareTerminal,
   Tag,
@@ -108,6 +113,16 @@ export const icons = {
   commit: GitCommitHorizontal,
   /** A suggested change to a pull request's lines. */
   suggest: FileDiff,
+  /** Opens a diff's folded files. */
+  expandAll: ChevronsUpDown,
+  /** Folds a diff's files. */
+  collapseAll: ChevronsDownUp,
+  /** A diff's file tree. */
+  fileTree: ListTree,
+  /** A diff's options, when its bar folds them away. */
+  options: Settings2,
+  /** Answers a review thread. */
+  reply: CornerDownRight,
   /** The unified layout of a diff. */
   unified: Rows2,
   /** The split layout of a diff. */
