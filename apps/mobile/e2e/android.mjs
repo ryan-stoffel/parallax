@@ -206,7 +206,7 @@ function gradle(...args) {
   });
 }
 
-/** The screen's elements now: each one's text or description, and where its center is. */
+/** The screen's elements now: each one's text or description, whether it's a text field, and its center. */
 function screen() {
   const xml = adbWithin(20_000, "exec-out", "uiautomator", "dump", "/dev/tty").toString();
   return [...xml.matchAll(/<node [^>]*?>/g)].map(([node]) => {
@@ -214,6 +214,7 @@ function screen() {
     const [, x1, y1, x2, y2] = attribute("bounds").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/) ?? [];
     return {
       label: attribute("text") || attribute("content-desc"),
+      field: attribute("class") === "android.widget.EditText",
       x: (Number(x1) + Number(x2)) >> 1,
       y: (Number(y1) + Number(y2)) >> 1,
     };
@@ -224,10 +225,13 @@ const shot = (name) => writeFileSync(join(out, `${name}.png`), adb("exec-out", "
 
 /**
  * Waits for an element whose label is `wanted` or matches it, and returns it, tapping any of
- * `dismiss` it sees meanwhile.
+ * `dismiss` it sees meanwhile. With `field`, only a text field counts, as a dialog's title can share
+ * its field's label.
  */
-async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [] } = {}) {
-  const matches = (label) => (typeof wanted === "string" ? label === wanted : wanted.test(label));
+async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [], field = false } = {}) {
+  const matches = (element) =>
+    (!field || element.field) &&
+    (typeof wanted === "string" ? element.label === wanted : wanted.test(element.label));
   log(`waiting for ${wanted} on screen, up to ${timeoutMs / 1000}s`);
   const deadline = Date.now() + timeoutMs;
   let last = [];
@@ -236,7 +240,7 @@ async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [] } = {}) {
     try {
       last = screen();
       problem = undefined;
-      const found = last.find((element) => matches(element.label));
+      const found = last.find(matches);
       if (found) return found;
       const obstacle = last.find((element) => dismiss.includes(element.label));
       if (obstacle) adb("shell", "input", "tap", String(obstacle.x), String(obstacle.y));
@@ -261,19 +265,35 @@ async function tap(wanted, options) {
   adb("shell", "input", "tap", String(x), String(y));
 }
 
-/** Waits until `box` has a session named for this phone, which only reaching it can make. */
+/**
+ * Waits until `box` has a session named for this phone, which only reaching it can make. The app's
+ * own refusal, a notice gone in 5 seconds, fails this at once with its words.
+ */
 const phoneSession = (box) =>
   until(`${box.name} to report this phone's session`, async () => {
     const { sessions } = await box.call("remote/sessions");
-    return sessions.some((session) => session.name === "Android phone");
+    if (sessions.some((session) => session.name === "Android phone")) return true;
+    const elements = (() => {
+      try {
+        return screen();
+      } catch {
+        return [];
+      }
+    })();
+    const refusal = elements.findIndex((element) => /^(Couldn't|Parallax couldn't)/.test(element.label));
+    if (refusal >= 0) {
+      shot("refused");
+      throw new Error(`the app says: ${elements.slice(refusal, refusal + 2).map((e) => e.label).join(": ")}`);
+    }
+    return false;
   }, 120_000);
 
-/** Types `text` into the field labelled `label`. */
+/** Types `text` into the field labelled `label`, and waits to see it there. */
 async function type(label, text) {
-  await tap(label);
+  await tap(label, { field: true });
   await sleep(500);
   adb("shell", "input", "text", text);
-  await sleep(500);
+  await waitFor(text, { field: true, timeoutMs: 15_000 });
 }
 
 let failed = true;
