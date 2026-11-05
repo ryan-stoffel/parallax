@@ -17,7 +17,7 @@ export function logEvent(event: string, fields: Record<string, unknown>) {
   console.log(JSON.stringify({ event, ...fields }));
 }
 
-/** The first 8 characters of a host, stream, or object id. */
+/** The first 8 characters of a host or object id. */
 export const short = (id: string) => id.slice(0, 8);
 
 /** `text` without anything shaped like a token or an id, cut to a length that fits a log line. */

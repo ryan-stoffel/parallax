@@ -19,6 +19,26 @@ type Armed = { hostId: string; stream: string; tokenHash: string };
 type Side = "client" | "host";
 
 /**
+ * A stream's object, or null when `stream`, which a request's path can name, can't be one. A
+ * stream's id is its object's unique id, which skips the global check a new name costs. A UUID is
+ * a stream from before PLX-1358, whose object has a name: its host's object may still list it
+ * after a deploy. `idFromString` throws on an id that isn't this namespace's.
+ */
+export function streamObject(env: Env, hostId: string, stream: string) {
+  if (/^[0-9a-f-]{36}$/.test(stream))
+    return env.STREAMS.get(env.STREAMS.idFromName(`${hostId}/${stream}`));
+  if (!/^[0-9a-f]{64}$/.test(stream)) return null;
+  try {
+    return env.STREAMS.get(env.STREAMS.idFromString(stream));
+  } catch {
+    return null;
+  }
+}
+
+/** A stream's id for a log line: its end, since nothing promises a unique id's start varies. */
+const tail = (id: string) => id.slice(-8);
+
+/**
  * One client's stream to a host (0091): its own Durable Object, so a large transfer on one stream
  * doesn't queue another's frames behind it in the host's object. The host's object arms it with
  * the hash of the one-time token it sent plxd, then the Worker brings it the client's WebSocket,
@@ -70,7 +90,7 @@ export class StreamRelay extends DurableObject<Env> {
   private context(ws?: WebSocket) {
     return {
       object: "stream",
-      id: short(this.ctx.id.toString()),
+      id: tail(this.ctx.id.toString()),
       side: ws && this.sideOf(ws),
       stream: ws && this.ctx.getTags(ws).find((tag) => tag.includes("/")),
     };
@@ -115,14 +135,19 @@ export class StreamRelay extends DurableObject<Env> {
       if (this.ctx.getWebSockets("client").length) return json(409, { error: "taken" });
       side = "client";
     } else {
+      // A unique id doesn't tie a stream to its host as a name did, so the path's host is checked.
       const token = url.searchParams.get("token") ?? "";
-      if (this.ctx.getWebSockets("host").length || !same(await sha256(token), armed.tokenHash))
+      if (
+        url.searchParams.get("host") !== armed.hostId ||
+        this.ctx.getWebSockets("host").length ||
+        !same(await sha256(token), armed.tokenHash)
+      )
         return json(404, { error: "not_found" });
       side = "host";
     }
     const [theirs, ours] = Object.values(new WebSocketPair());
     // The second tag names the stream in this socket's log lines, with no storage read to fail.
-    this.ctx.acceptWebSocket(ours!, [side, `${short(armed.hostId)}/${short(armed.stream)}`]);
+    this.ctx.acceptWebSocket(ours!, [side, `${short(armed.hostId)}/${tail(armed.stream)}`]);
     const other = this.side(side === "client" ? "host" : "client");
     if (other) {
       // Both ends are here: each learns it, plxd's side then dials its own listener.

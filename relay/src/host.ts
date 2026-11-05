@@ -12,6 +12,7 @@ import {
 import { type Env, json } from "./index";
 import { logError, logEvent, logged, scrub, short } from "./log";
 import { MAX_SEALED, type Notification } from "./push";
+import { streamObject } from "./stream";
 
 /** The user a host is registered to, and its key. */
 type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
@@ -170,18 +171,15 @@ export class HostRelay extends DurableObject<Env> {
     return (await this.ctx.storage.get<Streams>("streams")) ?? {};
   }
 
-  private streamOf(hostId: string, stream: string) {
-    return this.env.STREAMS.get(this.env.STREAMS.idFromName(`${hostId}/${stream}`));
-  }
-
   /**
    * A new stream for plxd to join, armed with the hash of the one-time token plxd is sent with
    * it, and counted as open. A spare waits for the next client.
    */
   private async newStream(hostId: string, spare: boolean) {
-    const stream = crypto.randomUUID();
+    const id = this.env.STREAMS.newUniqueId();
+    const stream = id.toString();
     const token = randomToken();
-    await this.streamOf(hostId, stream).arm({ hostId, stream, tokenHash: await sha256(token) });
+    await this.env.STREAMS.get(id).arm({ hostId, stream, tokenHash: await sha256(token) });
     const streams = await this.streams();
     streams[stream] = spare ? { spare: true } : {};
     await this.ctx.storage.put<Streams>("streams", streams);
@@ -195,8 +193,8 @@ export class HostRelay extends DurableObject<Env> {
     await this.ctx.storage.delete("streams");
     await Promise.all(
       Object.keys(streams).map((id) =>
-        this.streamOf(hostId, id)
-          .close(code, reason)
+        streamObject(this.env, hostId, id)
+          ?.close(code, reason)
           .catch((error) => logError("host.closeStreams", this.context(), error)),
       ),
     );
