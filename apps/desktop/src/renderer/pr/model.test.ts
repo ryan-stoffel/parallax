@@ -2,6 +2,8 @@ import { expect, test } from "vite-plus/test";
 
 import type { PrCheck, PrGuide, PullRequest } from "../../protocol/generated/protocol";
 import {
+  fileKind,
+  kindsOf,
   checkRollup,
   commitPreview,
   groupChecks,
@@ -394,4 +396,29 @@ test("guideView: the head's guide is ready, an older head's is stale until the n
     error: "no",
   });
   expect(guideView(undefined, "b", "offline")).toEqual({ kind: "error", error: "offline" });
+});
+
+test("file kinds tell tests, snapshots, and test classes from code", () => {
+  const kinds = (path: string) => fileKind(path);
+  expect(kinds("src/a.ts")).toBe("Code");
+  expect(kinds("src/a.test.ts")).toBe("Tests");
+  expect(kinds("pkg/a_test.go")).toBe("Tests");
+  expect(kinds("test_a.py")).toBe("Tests");
+  expect(kinds("src/FooTest.java")).toBe("Tests");
+  expect(kinds("src/Latest.java")).toBe("Code");
+  expect(kinds("src/__snapshots__/a.snap")).toBe("Mocks");
+  expect(kinds("docs/a.md")).toBe("Docs");
+  expect(kinds("pnpm-lock.yaml")).toBe("Generated");
+});
+
+test("a diff's lines add up by kind, and an empty kind stays out", () => {
+  const rows = kindsOf([
+    { path: "a.ts", added: 4, removed: 1 },
+    { path: "b.ts", added: 1, removed: 1 },
+    { path: "a.test.ts", added: 6, removed: 0 },
+  ]);
+  expect(rows).toEqual([
+    { kind: "Code", added: 5, removed: 2 },
+    { kind: "Tests", added: 6, removed: 0 },
+  ]);
 });
