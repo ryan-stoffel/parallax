@@ -19,10 +19,13 @@ export interface ReviewThreadData {
   id: string;
   path?: string;
   line?: number;
+  side?: "left" | "right";
+  startLine?: number;
   isOutdated?: boolean;
   isResolved?: boolean;
   comments: {
     id?: string;
+    pending?: boolean;
     url?: string;
     author: string;
     avatarUrl?: string;
@@ -42,6 +45,7 @@ export interface PullRequestMore {
   mergeMethods?: PrMergeMethod[];
   reviewThreads?: ReviewThreadData[];
   nodeId?: string;
+  pendingReviewId?: string;
 }
 
 /** A check with whether branch protection requires it and its Actions run and job. */
@@ -464,10 +468,21 @@ export interface ThreadView {
   line?: number;
   /** The diff's side `line` is on. Absent means the new side. */
   side?: "left" | "right";
+  /** The first line it covers, when it covers more than `line`. */
+  startLine?: number;
+  /** Every comment waits in the viewer's pending review, so no one else sees it yet. */
+  pending?: boolean;
   outdated?: boolean;
   resolved: boolean;
   url?: string;
-  comments: { author?: string; body: string; createdAt?: string; url?: string }[];
+  comments: {
+    id?: string;
+    pending?: boolean;
+    author?: string;
+    body: string;
+    createdAt?: string;
+    url?: string;
+  }[];
 }
 
 /**
@@ -482,6 +497,8 @@ export function threadsOf(pr: PullRequest, status?: PrStatusResult): ThreadView[
       path: t.path,
       line: t.line,
       side: t.side,
+      startLine: t.startLine,
+      pending: t.comments.length > 0 && t.comments.every((c) => c.pending),
       outdated: t.isOutdated,
       resolved: !!t.isResolved,
       url: t.comments[0]?.url,

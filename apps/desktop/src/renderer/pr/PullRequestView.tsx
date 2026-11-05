@@ -20,7 +20,8 @@ import type {
   PrWrite,
   PullRequest,
 } from "../../protocol/generated/protocol";
-import { ChangesDiff, type DiffFocus } from "../ChangesDiff";
+import { ChangesDiff, type DiffComments, type DiffFocus } from "../ChangesDiff";
+import type { CommentTarget } from "../diffRows";
 import { describeError, githubProblem } from "../errors";
 import { shotName } from "../github";
 import { icons } from "../icons";
@@ -33,6 +34,7 @@ import {
   Badge,
   Button,
   ConfirmDialog,
+  menuPanel,
   EmptyState,
   GroupHeading,
   IconButton,
@@ -59,6 +61,8 @@ import {
   type ThreadView,
 } from "./model";
 import { ago, Avatar, BranchChips, DiffStat, StateBadge } from "./parts";
+import { CommentBox } from "./CommentBox";
+import { ReviewButton, ReviewForm } from "./ReviewForm";
 import { ReviewThread } from "./ReviewThread";
 import { useViewedFiles } from "./viewedFiles";
 
@@ -106,6 +110,12 @@ export function PullRequestView({
   const [shots, setShots] = useState<{ images: { src: string; name: string }[]; index: number }>();
   const [diff, setDiff] = useState<{ for: string; result?: PrDiffResult; error?: string }>();
   const [codeFocus, setCodeFocus] = useState<DiffFocus>();
+  const [commentTarget, setCommentTarget] = useState<{ url: string; target: CommentTarget }>();
+  const [commentHasText, setCommentHasText] = useState(false);
+  const closeComment = () => {
+    setCommentTarget(undefined);
+    setCommentHasText(false);
+  };
   const [guide, setGuide] = useState<{ url: string; result?: PrGuideResult; error?: string }>();
   // The guide's page, kept here so a trip to Code comes back to it. A new pull request or a new
   // guide starts at the overview.
@@ -217,7 +227,8 @@ export function PullRequestView({
     ? (w: PrWrite) =>
         run(async () => {
           const failed = await prs.write!(url, w);
-          if (!failed) void prs.refresh(url);
+          // Waited for, so what was just written shows as its box closes.
+          if (!failed) await prs.refresh(url);
           return failed;
         }, "Couldn't write to the pull request")
     : undefined;
@@ -296,7 +307,8 @@ export function PullRequestView({
 
   const checks = checksOf(pr, status);
   const threads = threadsOf(pr, status);
-  const unresolved = threads.filter((t) => !t.resolved);
+  // A pending thread is only the viewer's, until sent.
+  const unresolved = threads.filter((t) => !t.resolved && !t.pending);
   const open = pr.state === "open";
   const breakdown = lineBreakdown(pr)
     .map((r) => `${r.kind}: +${r.additions} −${r.deletions}`)
@@ -306,6 +318,48 @@ export function PullRequestView({
       `The "${c.name}" check failed on this pull request: ${url}. Read its log with ci_failure_log, fix the cause, and push.`,
       true,
     );
+  const pendingCount = threads.reduce((n, t) => n + t.comments.filter((c) => c.pending).length, 0);
+  const pendingReviewId = more(pr).pendingReviewId;
+  const nodeId = more(pr).nodeId;
+  const commentDraftKey = `prComment/${url}`;
+  const reviewDraftKey = `prReview/${url}`;
+  const comments: DiffComments | undefined =
+    write && nodeId && open
+      ? {
+          target: commentTarget?.url === url ? commentTarget.target : undefined,
+          canRetarget: !commentHasText || commentTarget?.url !== url,
+          onTarget: (target) => setCommentTarget({ url, target }),
+          renderBox: () => {
+            const target = commentTarget?.target;
+            return (
+              target && (
+                <CommentBox
+                  target={target}
+                  draftKey={commentDraftKey}
+                  pending={!!pendingReviewId}
+                  onText={setCommentHasText}
+                  onCancel={closeComment}
+                  onSend={async (body, single) => {
+                    const r = target.range;
+                    const ok = await write({
+                      kind: "addReviewComment",
+                      pullRequestId: nodeId,
+                      path: target.path,
+                      body,
+                      line: r?.end,
+                      startLine: r && r.start !== r.end ? r.start : undefined,
+                      side: r?.side,
+                      headSha: single ? more(pr).headSha : undefined,
+                    });
+                    if (ok) closeComment();
+                    return ok;
+                  }}
+                />
+              )
+            );
+          },
+        }
+      : undefined;
   const threadProps = (t: ThreadView) => ({
     thread: t,
     repo: pr.repo,
@@ -318,6 +372,12 @@ export function PullRequestView({
       write && t.id
         ? () => write({ kind: "replyToThread", reviewThreadId: t.id!, resolve: true })
         : undefined,
+    onEdit: write
+      ? (commentId: string, body: string) => write({ kind: "editReviewComment", commentId, body })
+      : undefined,
+    onDelete: write
+      ? (commentId: string) => write({ kind: "deleteReviewComment", commentId })
+      : undefined,
   });
   const checkActions: CheckActions = {
     onOpen: openOnGithub,
@@ -491,6 +551,29 @@ export function PullRequestView({
               focus={codeFocus}
               threads={threads}
               renderThread={(t) => <ReviewThread bare {...threadProps(t)} />}
+              comments={comments}
+              actions={
+                write && (
+                  <>
+                    <ReviewButton pending={pendingCount} popover={`${id}-review`} />
+                    <div
+                      id={`${id}-review`}
+                      popover="auto"
+                      aria-label="Your review"
+                      className={`${menuPanel("end")} w-[min(32rem,90vw)] p-2`}
+                    >
+                      <ReviewForm
+                        write={write}
+                        open={open}
+                        draftKey={reviewDraftKey}
+                        reviewId={pendingReviewId}
+                        pending={pendingCount}
+                        onDone={() => document.getElementById(`${id}-review`)?.hidePopover()}
+                      />
+                    </div>
+                  </>
+                )
+              }
               tree
             />
           )}
@@ -503,6 +586,9 @@ export function PullRequestView({
           unresolved={unresolved}
           renderThread={(t) => <ReviewThread {...threadProps(t)} />}
           write={write}
+          draftKey={reviewDraftKey}
+          reviewId={pendingReviewId}
+          pending={pendingCount}
           onOpen={openOnGithub}
         />
       )}
@@ -879,12 +965,18 @@ function Activity({
   unresolved,
   renderThread,
   write,
+  draftKey,
+  reviewId,
+  pending,
   onOpen,
 }: {
   pr: PullRequest;
   unresolved: ThreadView[];
   renderThread: (t: ThreadView) => ReactNode;
   write?: (w: PrWrite) => Promise<boolean>;
+  draftKey: string;
+  reviewId?: string;
+  pending: number;
   onOpen: (url: string) => void;
 }) {
   const [oldestFirst, setOldestFirst] = useState(false);
@@ -925,7 +1017,13 @@ function Activity({
             <p className="text-meta text-faint-foreground">Nothing yet.</p>
           )}
         </section>
-        <ReviewBox write={write} open={pr.state === "open"} />
+        <ReviewForm
+          write={write}
+          open={pr.state === "open"}
+          draftKey={draftKey}
+          reviewId={reviewId}
+          pending={pending}
+        />
       </div>
     </div>
   );
@@ -1042,72 +1140,6 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
  * for changes. Asking for changes needs words; approving doesn't. The text stays until GitHub
  * takes it. Without `write` (a plxd without `prWatch`) it says why it's missing.
  */
-function ReviewBox({ write, open }: { write?: (w: PrWrite) => Promise<boolean>; open: boolean }) {
-  const [body, setBody] = useState("");
-  const [sending, setSending] = useState<string>();
-  if (!write)
-    return (
-      <p className="text-meta text-faint-foreground">
-        Commenting and reviewing need a newer plxd on this host.
-      </p>
-    );
-  const send = async (kind: string, w: PrWrite) => {
-    setSending(kind);
-    if (await write(w)) setBody("");
-    setSending(undefined);
-  };
-  const text = body.trim();
-  return (
-    <form
-      aria-label="Comment"
-      className="overflow-hidden rounded-xl border border-border bg-surface focus-within:border-faint-foreground/60"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (text) void send("comment", { kind: "comment", body: text });
-      }}
-    >
-      <textarea
-        aria-label="Comment"
-        placeholder="Leave a comment"
-        rows={3}
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.form?.requestSubmit();
-        }}
-        className="field-sizing-content block max-h-64 min-h-20 w-full resize-none bg-transparent px-3 py-2.5 text-body placeholder:text-faint-foreground focus-visible:outline-none"
-      />
-      <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border px-2 py-2">
-        {open && (
-          <>
-            <Button
-              size="sm"
-              disabled={!text || !!sending}
-              onClick={() =>
-                void send("changes", { kind: "review", event: "requestChanges", body: text })
-              }
-            >
-              <icons.error aria-hidden />
-              {sending === "changes" ? "Sending…" : "Request changes"}
-            </Button>
-            <Button
-              size="sm"
-              disabled={!!sending}
-              onClick={() => void send("approve", { kind: "review", event: "approve", body: text })}
-            >
-              <icons.success aria-hidden />
-              {sending === "approve" ? "Sending…" : "Approve"}
-            </Button>
-          </>
-        )}
-        <Button size="sm" variant="primary" type="submit" disabled={!text || !!sending}>
-          {sending === "comment" ? "Sending…" : "Comment"}
-        </Button>
-      </div>
-    </form>
-  );
-}
-
 /** A menu row: its icon, label, and an optional line under it. */
 function Item({
   Icon,

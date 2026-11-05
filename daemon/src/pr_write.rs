@@ -1,5 +1,5 @@
-//! `pr/write` (PLX-1022, 0086): comments, reviews, title and body edits, and review-thread replies
-//! and resolves on a GitHub pull request, `merge_when_ready`'s merges ([`merge`]), and the app's
+//! `pr/write` (PLX-1022, 0086): comments, reviews, title and body edits, review-thread replies and
+//! resolves, pending-review comments and their submission, and Viewed files on a GitHub pull request, `merge_when_ready`'s merges ([`merge`]), and the app's
 //! `pr/act` merges, branch updates and deletes, and check re-runs and cancels ([`act`], PLX-1151),
 //! all sent by plxd through one queue per host, so writes in parallel don't trip GitHub's
 //! secondary "submitted too quickly" limit.
@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    PrActParams, PrAction, PrMergeMethod, PrReviewEvent, PrWrite, PrWriteParams, PrWriteResult,
+    PrActParams, PrAction, PrDiffSide, PrMergeMethod, PrReviewEvent, PrWrite, PrWriteParams,
+    PrWriteResult,
 };
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -69,7 +70,7 @@ pub(crate) async fn write(
     let sent = async {
         for (step, args) in steps.iter().enumerate() {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            send(gh, &args, deadline)
+            let answer = send(gh, &args, deadline)
                 .await
                 .map_err(|error| match error {
                     // Only a reply then a resolve has a second step.
@@ -79,6 +80,7 @@ pub(crate) async fn write(
                     )),
                     error => error,
                 })?;
+            refusal(&answer).map_or(Ok(()), |why| Err(PrError::Gh(why)))?;
         }
         Ok(())
     };
@@ -364,6 +366,33 @@ const REPLY: &str = "mutation($thread: ID!, $body: String!) { \
 const RESOLVE: &str =
     "mutation($thread: ID!) { resolveReviewThread(input: {threadId: $thread}) { thread { id } } }";
 
+/// Adds a comment to the viewer's pending review, starting one if need be. No `$line` comments on
+/// the whole file, as `$subject` says.
+const ADD_REVIEW_COMMENT: &str = "mutation($pr: ID!, $path: String!, $body: String!, $line: Int, \
+    $startLine: Int, $side: DiffSide, $startSide: DiffSide, \
+    $subject: PullRequestReviewThreadSubjectType) { \
+    addPullRequestReviewThread(input: {pullRequestId: $pr, path: $path, body: $body, line: $line, \
+    startLine: $startLine, side: $side, startSide: $startSide, subjectType: $subject}) { \
+    thread { id } } }";
+
+/// A new `$body` for review comment `$comment`.
+const EDIT_REVIEW_COMMENT: &str = "mutation($comment: ID!, $body: String!) { \
+    updatePullRequestReviewComment(input: {pullRequestReviewCommentId: $comment, body: $body}) { \
+    pullRequestReviewComment { id } } }";
+
+/// Deletes review comment `$comment`.
+const DELETE_REVIEW_COMMENT: &str = "mutation($comment: ID!) { \
+    deletePullRequestReviewComment(input: {id: $comment}) { pullRequestReview { id } } }";
+
+/// Sends pending review `$review` as `$event`, with `$body`.
+const SUBMIT_REVIEW: &str = "mutation($review: ID!, $event: PullRequestReviewEvent!, \
+    $body: String) { submitPullRequestReview(input: {pullRequestReviewId: $review, event: $event, \
+    body: $body}) { pullRequestReview { id } } }";
+
+/// Deletes pending review `$review`.
+const DISCARD_REVIEW: &str = "mutation($review: ID!) { \
+    deletePullRequestReview(input: {pullRequestReviewId: $review}) { pullRequestReview { id } } }";
+
 /// Marks `$path` viewed on pull request `$pr`.
 const MARK_VIEWED: &str = "mutation($pr: ID!, $path: String!) { \
     markFileAsViewed(input: {pullRequestId: $pr, path: $path}) { clientMutationId } }";
@@ -371,6 +400,81 @@ const MARK_VIEWED: &str = "mutation($pr: ID!, $path: String!) { \
 /// Takes back marking `$path` viewed on pull request `$pr`.
 const UNMARK_VIEWED: &str = "mutation($pr: ID!, $path: String!) { \
     unmarkFileAsViewed(input: {pullRequestId: $pr, path: $path}) { clientMutationId } }";
+
+/// Why GitHub refused a write its answer calls a success: a comment on a line outside the diff
+/// comes back as a null thread and no error.
+fn refusal(answer: &str) -> Option<String> {
+    let answer: serde_json::Value = serde_json::from_str(answer).ok()?;
+    let thread = answer.pointer("/data/addPullRequestReviewThread/thread")?;
+    thread.is_null().then(|| {
+        "GitHub didn't take the comment: its lines aren't in this pull request's diff, or the \
+         diff changed. Refresh and try again"
+            .to_owned()
+    })
+}
+
+/// `side` as GraphQL and REST spell it.
+fn side_name(side: Option<PrDiffSide>) -> &'static str {
+    match side {
+        Some(PrDiffSide::Left) => "LEFT",
+        _ => "RIGHT",
+    }
+}
+
+/// The `gh` command that adds a review comment: posted at once with `head_sha`, by REST, which has
+/// nothing to do with a pending review, else to the pending review, by GraphQL.
+#[allow(clippy::too_many_arguments)]
+fn review_comment(
+    url: &str,
+    pull_request_id: &str,
+    path: &str,
+    line: Option<u64>,
+    start_line: Option<u64>,
+    side: Option<PrDiffSide>,
+    head_sha: Option<&str>,
+    body_file: &str,
+) -> Vec<String> {
+    let side = side_name(side);
+    let range = |line_name: &str, start_name: &str, start_side_name: &str| {
+        let mut args = Vec::new();
+        if let Some(line) = line {
+            args.extend(["-F".to_owned(), format!("{line_name}={line}")]);
+            args.extend(["-f".to_owned(), format!("side={side}")]);
+        }
+        if let Some(start) = start_line {
+            args.extend(["-F".to_owned(), format!("{start_name}={start}")]);
+            args.extend(["-f".to_owned(), format!("{start_side_name}={side}")]);
+        }
+        args
+    };
+    let mut args: Vec<String> = ["api"].map(str::to_owned).to_vec();
+    if let Some(head) = head_sha {
+        // `https://github.com/<owner>/<name>/pull/<n>`, checked by the caller.
+        let parts: Vec<_> = url.split('/').collect();
+        let endpoint = format!(
+            "repos/{}/{}/pulls/{}/comments",
+            parts[3], parts[4], parts[6]
+        );
+        args.extend(["-X", "POST", &endpoint].map(str::to_owned));
+        args.extend(["-f".to_owned(), format!("commit_id={head}")]);
+        args.extend(["-f".to_owned(), format!("path={path}")]);
+        args.extend(["-F".to_owned(), format!("body=@{body_file}")]);
+        if line.is_none() {
+            args.extend(["-f".to_owned(), "subject_type=file".to_owned()]);
+        }
+        args.extend(range("line", "start_line", "start_side"));
+    } else {
+        args.extend(["graphql", "-f"].map(str::to_owned));
+        args.push(format!("query={ADD_REVIEW_COMMENT}"));
+        args.extend(["-f".to_owned(), format!("pr={pull_request_id}")]);
+        args.extend(["-f".to_owned(), format!("path={path}")]);
+        args.extend(["-F".to_owned(), format!("body=@{body_file}")]);
+        let subject = if line.is_some() { "LINE" } else { "FILE" };
+        args.extend(["-f".to_owned(), format!("subject={subject}")]);
+        args.extend(range("line", "startLine", "startSide"));
+    }
+    args
+}
 
 /// The `gh` commands that make `write` to `url`, each a step run after the one before, and the
 /// body to put in `body_file`, which they read it from. Other values go as `--flag=value` or
@@ -459,6 +563,95 @@ fn commands(
             Ok((vec![step], None))
         }
         PrWrite::Unknown => Err("unknown pull request write".to_owned()),
+        write => review_commands(url, write, &file),
+    }
+}
+
+/// [`commands`] for a write to a pending review.
+fn review_commands(
+    url: &str,
+    write: PrWrite,
+    file: &str,
+) -> Result<(Vec<Vec<String>>, Option<String>), String> {
+    let gh = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+    let empty = |text: &str| text.trim().is_empty();
+    match write {
+        PrWrite::AddReviewComment {
+            pull_request_id,
+            path,
+            body,
+            line,
+            start_line,
+            side,
+            head_sha,
+        } => {
+            if empty(&body) {
+                return Err("body must not be empty".to_owned());
+            }
+            if start_line.is_some() && line.is_none() {
+                return Err("a range needs its last line".to_owned());
+            }
+            let step = review_comment(
+                url,
+                &pull_request_id,
+                &path,
+                line,
+                start_line,
+                side,
+                head_sha.as_deref(),
+                file,
+            );
+            Ok((vec![step], Some(body)))
+        }
+        PrWrite::EditReviewComment { comment_id, body } => {
+            if empty(&body) {
+                return Err("body must not be empty".to_owned());
+            }
+            let query = format!("query={EDIT_REVIEW_COMMENT}");
+            let (comment, body_arg) = (format!("comment={comment_id}"), format!("body=@{file}"));
+            let step = gh(&[
+                "api", "graphql", "-f", &query, "-f", &comment, "-F", &body_arg,
+            ]);
+            Ok((vec![step], Some(body)))
+        }
+        PrWrite::DeleteReviewComment { comment_id } => {
+            let query = format!("query={DELETE_REVIEW_COMMENT}");
+            let comment = format!("comment={comment_id}");
+            Ok((
+                vec![gh(&["api", "graphql", "-f", &query, "-f", &comment])],
+                None,
+            ))
+        }
+        PrWrite::SubmitReview {
+            review_id,
+            event,
+            body,
+        } => {
+            let event = match event {
+                PrReviewEvent::Comment => "COMMENT",
+                PrReviewEvent::Approve => "APPROVE",
+                PrReviewEvent::RequestChanges => "REQUEST_CHANGES",
+                PrReviewEvent::Unknown => {
+                    return Err("event must be comment, approve, or requestChanges".to_owned());
+                }
+            };
+            let query = format!("query={SUBMIT_REVIEW}");
+            let (review, event) = (format!("review={review_id}"), format!("event={event}"));
+            let body_arg = format!("body=@{file}");
+            let step = gh(&[
+                "api", "graphql", "-f", &query, "-f", &review, "-f", &event, "-F", &body_arg,
+            ]);
+            Ok((vec![step], Some(body)))
+        }
+        PrWrite::DiscardReview { review_id } => {
+            let query = format!("query={DISCARD_REVIEW}");
+            let review = format!("review={review_id}");
+            Ok((
+                vec![gh(&["api", "graphql", "-f", &query, "-f", &review])],
+                None,
+            ))
+        }
+        _ => Err("unknown pull request write".to_owned()),
     }
 }
 
