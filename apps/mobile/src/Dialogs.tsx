@@ -1,10 +1,11 @@
 // The app's own dialogs, menus, and notices, for dialogStore.ts: a card over a dim, a sheet of rows
-// from the bottom, and a banner at the top that doesn't block the screen. They're drawn in their
-// own window, as a Modal from here can't show over a native form sheet such as Settings.
+// from the bottom, and a banner at the top that doesn't block the screen. On iOS they're drawn in
+// their own window, as a Modal from here can't show over a native form sheet such as Settings. On
+// Android a form sheet is in the app's own view tree, under this last view at its root.
 import * as Haptics from "expo-haptics";
 import { Check, CircleAlert } from "lucide-react-native";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { AccessibilityInfo, Keyboard, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from "react-native";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { AccessibilityInfo, Keyboard, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, { FadeIn, FadeInDown, FadeInUp, FadeOut, FadeOutUp, SlideOutDown, ZoomIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,6 +17,16 @@ import { Button, Icon, Input, T, useColors } from "./ui";
 const NOTICE_MS = 5000;
 /** How long a dialog's window stays after it's put away, for its exit. */
 const EXIT_MS = 240;
+
+/** Over everything. `FullWindowOverlay` is iOS-only, and elsewhere draws its children in a view of no size. */
+const Overlay =
+  Platform.OS === "ios"
+    ? FullWindowOverlay
+    : ({ children }: { children: ReactNode }) => (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          {children}
+        </View>
+      );
 
 /** Draws what dialogStore holds. Mounted once, at the app's root. */
 export function Dialogs() {
@@ -29,7 +40,7 @@ export function Dialogs() {
   }, [showing]);
   if (!mounted) return null;
   return (
-    <FullWindowOverlay>
+    <Overlay>
       <GestureHandlerRootView style={StyleSheet.absoluteFill} pointerEvents="box-none">
         {dialog?.kind === "menu" ? (
           <MenuSheet key={keyOf(dialog)} dialog={dialog} />
@@ -38,7 +49,7 @@ export function Dialogs() {
         ) : null}
         {notice && <Banner key={notice.id} notice={notice} />}
       </GestureHandlerRootView>
-    </FullWindowOverlay>
+    </Overlay>
   );
 }
 
@@ -98,8 +109,8 @@ function DialogCard({ dialog }: { dialog: Exclude<Dialog, { kind: "menu" }> }) {
   const preferred = [...dialog.buttons].reverse().find((b) => b.style !== "cancel" && b.style !== "destructive");
 
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", (e) => setLifted(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardWillHide", () => setLifted(0));
+    const show = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow", (e) => setLifted(e.endCoordinates.height));
+    const hide = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide", () => setLifted(0));
     return () => {
       show.remove();
       hide.remove();

@@ -6,7 +6,7 @@
 import * as Haptics from "expo-haptics";
 import { Check, ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
+import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
 
 import type { AgentApproveParams } from "../../desktop/src/protocol/generated/protocol";
 import { fill, isAnswered, SKIPPED, type Choice, type Question, type QuestionOption } from "../../desktop/src/renderer/questions";
@@ -26,8 +26,8 @@ const heightOverKeyboard = 72;
 function useKeyboardUp() {
   const [up, setUp] = useState(false);
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", () => setUp(true));
-    const hide = Keyboard.addListener("keyboardWillHide", () => setUp(false));
+    const show = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow", () => setUp(true));
+    const hide = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide", () => setUp(false));
     return () => {
       show.remove();
       hide.remove();
