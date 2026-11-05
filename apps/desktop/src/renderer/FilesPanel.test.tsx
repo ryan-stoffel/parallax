@@ -146,7 +146,7 @@ const row = (name: string) =>
   );
 const openTabs = () => [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
 
-test("files open in tabs, one of them selected, and closing one goes to its neighbor", async () => {
+test("a click opens a preview tab that the next click replaces, and a double-click keeps it", async () => {
   await render(<FilesPanel hostId="local" runId="run-1" writable />);
   await click(row("README.md"));
   await vi.dynamicImportSettled();
@@ -154,20 +154,26 @@ test("files open in tabs, one of them selected, and closing one goes to its neig
   expect(openTabs()).toEqual(["README.md"]);
   expect(document.querySelector('[data-testid="editor"]')?.textContent).toBe("README.md");
 
-  // Narrow, the tree and the file take turns, from the button beside the tabs.
+  // Narrow, the tree opens over the file from the button beside the tabs.
   expect(row("src")).toBeUndefined();
   await click(button("Show files"));
   await click(row("src"));
   await click(row("main.rs"));
-  expect(openTabs()).toEqual(["README.md", "main.rs"]);
-  expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("main.rs");
+  expect(openTabs()).toEqual(["main.rs"]);
 
-  await click(button("Close main.rs"));
+  await click(button("Show files"));
+  const readme = row("README.md")!;
+  await act(async () => readme.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
   await settle();
-  expect(openTabs()).toEqual(["README.md"]);
+  expect(openTabs()).toEqual(["main.rs", "README.md"]);
   expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe(
     "README.md",
   );
+
+  await click(button("Close README.md"));
+  await settle();
+  expect(openTabs()).toEqual(["main.rs"]);
+  expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("main.rs");
 });
 
 test("a file renamed in the tree stays open under its new name", async () => {
@@ -217,7 +223,7 @@ test("a search finds files anywhere in the folder and opens one", async () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await settle();
-  const found = [...document.querySelectorAll('ul[aria-label="Matching files"] button')];
+  const found = [...document.querySelectorAll('[aria-label="Search results"] button')];
   expect(found.map((b) => b.getAttribute("title"))).toEqual(["src/main.rs"]);
   await click(found[0]);
   expect(openTabs()).toEqual(["main.rs"]);

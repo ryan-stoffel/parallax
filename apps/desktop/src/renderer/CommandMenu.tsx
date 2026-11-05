@@ -626,7 +626,7 @@ function MenuRow({
 }
 
 /** `text` with the query's words marked where they appear. */
-function Marked({ text, words }: { text: string; words: readonly string[] }) {
+export function Marked({ text, words }: { text: string; words: readonly string[] }) {
   return marks(text, words).map((run, i) =>
     run.mark ? (
       <mark key={i} className="bg-transparent font-semibold text-foreground">

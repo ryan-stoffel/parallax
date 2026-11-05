@@ -1243,11 +1243,16 @@ const handlers: { [M in Method]?: Handler<M> } = {
     ],
   }),
   "repo/files": () => ({ files: [...mockFiles.keys()], truncated: false }),
-  // The fixtures hold no file contents, so every file's path is its one line.
   "repo/grep": (p) => ({
-    matches: db.repoFiles
-      .filter((path) => path.toLowerCase().includes(p.query.toLowerCase()))
-      .map((path) => ({ path, line: 1, text: path })),
+    matches: [...mockFiles].flatMap(([path, text]) =>
+      text
+        .split("\n")
+        .flatMap((line, i) =>
+          line.toLowerCase().includes(p.query.toLowerCase())
+            ? [{ path, line: i + 1, text: line }]
+            : [],
+        ),
+    ),
     truncated: false,
   }),
 
@@ -1425,7 +1430,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
       if (rest.length) seen.set(name!, { name: name!, kind: "dir" });
       else seen.set(name!, { name: name!, kind: "file", size: text.length });
     }
-    return { entries: [...seen.values()], truncated: false };
+    return { entries: [...seen.values()], truncated: false, folder: "/Users/ryan/parallax" };
   },
   "agent/file": (p) => {
     const text = mockFiles.get(p.path);

@@ -58,9 +58,27 @@ export type OpenFile = {
   saveError?: string;
   /** The file changed on disk under these edits: what's there now, or nothing when it's gone. */
   conflict?: { sha256?: string };
-  /** Whether Markdown shows rendered. */
-  preview: boolean;
+  /** How Markdown shows: its text, rendered, or both side by side. */
+  view: MarkdownView;
+  /**
+   * A preview tab, as in VS Code and Zed: the next file opened the same way takes its place. An
+   * edit or a double-click keeps it.
+   */
+  transient: boolean;
+  /** A line to go to, with what counts asks to go there, so asking twice goes twice. */
+  jump?: { line: number; count: number };
+  /** What's on disk, while the editor shows edits against it. */
+  compare?: string;
 };
+
+export type MarkdownView = "code" | "split" | "preview";
+
+const MARKDOWN_VIEW_KEY = "parallax.files.markdownView";
+/** The view last chosen for Markdown, which new tabs open in, as T3 Code remembers it. */
+function lastMarkdownView(): MarkdownView {
+  const saved = localStorage.getItem(MARKDOWN_VIEW_KEY);
+  return saved === "split" || saved === "preview" ? saved : "code";
+}
 
 /** What the Files view draws, replaced on each change. */
 export type OpenFilesView = { tabs: readonly OpenFile[]; active?: number };
@@ -163,19 +181,58 @@ export class OpenFiles {
     });
   }
 
-  /** Opens `path`, or goes to its tab. A `link` shows its target, which can't be edited. */
-  open(path: string, link = false): number {
+  /**
+   * Opens `path`, or goes to its tab. A `link` shows its target, which can't be edited. A `transient`
+   * one takes the place of the last transient tab, unless that has edits. `line` goes to that line.
+   */
+  open(path: string, options: { link?: boolean; transient?: boolean; line?: number } = {}): number {
+    const { link = false, transient = false, line } = options;
     const open = this.view.tabs.find((f) => f.path === path);
     if (open) {
       this.activate(open.id);
+      if (!transient) this.pin(open.id);
+      if (line) this.goTo(open.id, line);
       return open.id;
     }
     const id = this.nextId++;
     this.runs.set(id, { edits: 0, saved: 0, epoch: 0, link });
-    const file: OpenFile = { id, path, body: { kind: "loading" }, save: "saved", preview: false };
-    this.draw({ tabs: [...this.view.tabs, file], active: id });
+    const file: OpenFile = {
+      id,
+      path,
+      body: { kind: "loading" },
+      save: "saved",
+      view: lastMarkdownView(),
+      transient,
+      ...(line && { jump: { line, count: 1 } }),
+    };
+    const replaced = transient
+      ? this.view.tabs.find((f) => f.transient && !this.unsaved(f.id) && !f.conflict)
+      : undefined;
+    const tabs = replaced
+      ? this.view.tabs.map((f) => (f === replaced ? file : f))
+      : [...this.view.tabs, file];
+    if (replaced) this.forget(replaced);
+    this.draw({ tabs, active: id });
     void this.read(path, link, 0).then((body) => this.change(id, { body }));
     return id;
+  }
+
+  /** Keeps a transient tab open. */
+  pin(id: number) {
+    if (this.find(id)?.transient) this.change(id, { transient: false });
+  }
+
+  /** Puts the cursor on `line` and scrolls to it. */
+  goTo(id: number, line: number) {
+    const file = this.find(id);
+    if (file) this.change(id, { jump: { line, count: (file.jump?.count ?? 0) + 1 } });
+  }
+
+  private forget(file: OpenFile) {
+    const run = this.runs.get(file.id);
+    if (run?.timer) clearTimeout(run.timer);
+    this.runs.delete(file.id);
+    if (file.body.kind === "media") URL.revokeObjectURL(file.body.url);
   }
 
   activate(id: number) {
@@ -237,6 +294,7 @@ export class OpenFiles {
     run.read = read;
     if (run.timer) clearTimeout(run.timer);
     run.timer = setTimeout(() => void this.save(id), SAVE_AFTER_MS);
+    this.pin(id);
     const file = this.find(id);
     if (file && file.save !== "saving" && file.save !== "edited")
       this.change(id, { save: "edited" });
@@ -371,7 +429,13 @@ export class OpenFiles {
     if (!now || run.edits !== edits || run.epoch !== epoch) return;
     run.saved = run.edits;
     run.read = undefined;
-    this.change(id, { body, save: "saved", saveError: undefined, conflict: undefined });
+    this.change(id, {
+      body,
+      save: "saved",
+      saveError: undefined,
+      conflict: undefined,
+      compare: undefined,
+    });
   }
 
   /** Writes tab `id`'s edits over what changed on disk: the same save, from what's there now. */
@@ -380,7 +444,7 @@ export class OpenFiles {
     const file = this.find(id);
     if (!run || !file?.conflict || file.body.kind !== "text") return;
     while (run.saving) await run.saving;
-    this.change(id, { conflict: undefined });
+    this.change(id, { conflict: undefined, compare: undefined });
     run.saving = this.write(id, run, this.textNow(id), file.conflict.sha256);
     await run.saving;
     run.saving = undefined;
@@ -399,11 +463,8 @@ export class OpenFiles {
 
   /** Closes tab `id`, dropping any edits. */
   discard(id: number) {
-    const run = this.runs.get(id);
-    if (run?.timer) clearTimeout(run.timer);
-    this.runs.delete(id);
     const file = this.find(id);
-    if (file?.body.kind === "media") URL.revokeObjectURL(file.body.url);
+    if (file) this.forget(file);
     const tabs = this.view.tabs.filter((f) => f.id !== id);
     const at = this.view.tabs.findIndex((f) => f.id === id);
     this.draw({
@@ -412,8 +473,24 @@ export class OpenFiles {
     });
   }
 
-  setPreview(id: number, preview: boolean) {
-    this.change(id, { preview });
+  /** Closes every tab but `except`, leaving any whose edits can't be saved. */
+  async closeAll(except?: number) {
+    await Promise.all(this.view.tabs.filter((f) => f.id !== except).map((f) => this.close(f.id)));
+  }
+
+  setView(id: number, view: MarkdownView) {
+    localStorage.setItem(MARKDOWN_VIEW_KEY, view);
+    this.change(id, { view });
+  }
+
+  /** Shows tab `id`'s edits against what's on disk, or stops. */
+  async toggleCompare(id: number) {
+    const file = this.find(id);
+    if (!file) return;
+    if (file.compare !== undefined) return this.change(id, { compare: undefined });
+    const body = await this.read(file.path, this.runs.get(id)?.link ?? false, 0);
+    // Gone from disk is nothing to compare with: all of it shows as added.
+    this.change(id, { compare: body.kind === "text" ? body.text : "" });
   }
 
   /** Saves every open edit under `path`, as a rename or delete of it needs first. */

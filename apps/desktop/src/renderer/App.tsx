@@ -2351,6 +2351,7 @@ export function App() {
                 }
                 editable={connected && "fileEdit" in connection.capabilities}
                 writable={connected && "fileWrite" in connection.capabilities}
+                grep={connected && "repoGrep" in connection.capabilities}
                 reveal={revealFile?.runId === filesRunId ? revealFile : undefined}
               />
             )

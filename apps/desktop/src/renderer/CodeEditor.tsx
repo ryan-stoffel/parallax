@@ -6,15 +6,18 @@ import {
   foldKeymap,
   HighlightStyle,
   indentOnInput,
+  indentUnit,
   LanguageDescription,
   syntaxHighlighting,
 } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
+import { unifiedMergeView } from "@codemirror/merge";
 import {
   closeSearchPanel,
   findNext,
   findPrevious,
   getSearchQuery,
+  gotoLine,
   highlightSelectionMatches,
   openSearchPanel,
   replaceAll,
@@ -24,8 +27,18 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
-import { Annotation, Compartment, EditorState, type Extension, Prec } from "@codemirror/state";
 import {
+  Annotation,
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  Prec,
+  RangeSetBuilder,
+} from "@codemirror/state";
+import {
+  Decoration,
+  type DecorationSet,
   drawSelection,
   EditorView,
   highlightActiveLine,
@@ -35,15 +48,78 @@ import {
   lineNumbers,
   type Panel,
   rectangularSelection,
+  type ViewUpdate,
+  ViewPlugin,
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { useEffect, useRef } from "react";
+import { type CSSProperties, type RefObject, useEffect, useImperativeHandle, useRef } from "react";
 
 import type { OpenFile, OpenFiles } from "./openFiles";
 import { appShortcut } from "./ui";
 
 /** Where the cursor is, for the status line. */
-export type Cursor = { line: number; column: number; selected: number; language?: string };
+export type Cursor = {
+  line: number;
+  column: number;
+  selected: number;
+  language?: string;
+  /** How the file indents, such as "Spaces: 2". */
+  indent?: string;
+};
+
+/** What the view around the editor can ask of it. */
+export type EditorHandle = { find: () => void; goToLine: () => void };
+
+type Indent = { unit: string; size: number; name: string };
+
+/** How `text` indents: a tab, or the smallest step of spaces its lines use, as VS Code detects it. */
+function detectIndent(text: string): Indent {
+  let tabs = 0;
+  let spaced = 0;
+  let step = 0;
+  let previous = 0;
+  const lines = text.split("\n", 2000);
+  for (const line of lines) {
+    if (line.startsWith("\t")) tabs++;
+    else if (line.startsWith(" ")) {
+      spaced++;
+      const width = line.length - line.trimStart().length;
+      const change = Math.abs(width - previous);
+      if (change > 1 && change <= 8 && (!step || change < step)) step = change;
+      previous = width;
+    } else if (line.trim()) previous = 0;
+  }
+  if (tabs > spaced) return { unit: "\t", size: 4, name: "Tabs" };
+  const size = step || 2;
+  return { unit: " ".repeat(size), size, name: `Spaces: ${size}` };
+}
+
+/** Draws an indent guide through the leading whitespace of each line on screen. */
+const indentGuides = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = this.build(view);
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) this.decorations = this.build(update.view);
+    }
+    build(view: EditorView) {
+      const builder = new RangeSetBuilder<Decoration>();
+      const mark = Decoration.mark({ class: "cm-indent" });
+      for (const { from, to } of view.visibleRanges) {
+        for (let at = from; at <= to;) {
+          const line = view.state.doc.lineAt(at);
+          const width = /^[ \t]*/.exec(line.text)![0].length;
+          if (width && width < line.length) builder.add(line.from, line.from + width, mark);
+          at = line.to + 1;
+        }
+      }
+      return builder.finish();
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
 
 /** Marks a change that came from disk, which isn't an edit to save. */
 const fromDisk = Annotation.define<boolean>();
@@ -78,8 +154,8 @@ const look = EditorView.theme({
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": {
     fontFamily: "var(--font-mono)",
-    fontSize: "var(--text-meta, 12px)",
-    lineHeight: "20px",
+    fontSize: "var(--editor-size, 12px)",
+    lineHeight: "1.6",
     overflow: "auto",
   },
   ".cm-content": { caretColor: "var(--foreground)", padding: "6px 0 24px" },
@@ -91,6 +167,39 @@ const look = EditorView.theme({
   },
   ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 12px", minWidth: "40px" },
   ".cm-foldGutter .cm-gutterElement": { padding: "0 4px 0 0" },
+  ".cm-indent": {
+    backgroundImage:
+      "repeating-linear-gradient(to right, var(--border) 0 1px, transparent 1px var(--indent-width))",
+  },
+  ".cm-changedLine": {
+    backgroundColor: "color-mix(in oklab, var(--added, #22c55e) 12%, transparent)",
+  },
+  ".cm-deletedChunk": {
+    backgroundColor: "color-mix(in oklab, var(--removed, #ef4444) 12%, transparent)",
+    padding: "0",
+  },
+  ".cm-gotoLine": {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "4px 8px",
+    fontSize: "12px",
+  },
+  ".cm-gotoLine input": {
+    backgroundColor: "var(--hover)",
+    border: "1px solid transparent",
+    borderRadius: "6px",
+    color: "var(--foreground)",
+    fontSize: "12px",
+    outline: "none",
+    padding: "2px 6px",
+  },
+  ".cm-gotoLine button": {
+    background: "none",
+    border: "none",
+    color: "var(--muted-foreground)",
+    fontSize: "12px",
+  },
   ".cm-activeLine": { backgroundColor: "var(--hover)" },
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--foreground)" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, ::selection":
@@ -295,11 +404,16 @@ function findBar(view: EditorView): Panel {
 }
 
 /** Where each view sends its cursor, since a state moves between views. */
-const cursorReports = new WeakMap<EditorView, (state: EditorState) => void>();
+const cursorReports = new WeakMap<EditorView, (update: ViewUpdate) => void>();
 
 const language = new Compartment();
 const wrapping = new Compartment();
 const editing = new Compartment();
+const comparing = new Compartment();
+
+/** Your edits shown against `original`: what's on disk. */
+const comparedTo = (original: string | undefined): Extension =>
+  original === undefined ? [] : unifiedMergeView({ original, mergeControls: false, gutter: true });
 
 const wrapped = (on: boolean): Extension => (on ? EditorView.lineWrapping : []);
 const editable = (on: boolean): Extension => [
@@ -319,31 +433,62 @@ function cursorOf(state: EditorState): Cursor {
  * its edits, cursor, undo, and scroll. Its changes go to `store`, which saves them.
  */
 export default function CodeEditor({
+  handle,
   store,
   file,
   wrap,
+  roomy,
   onCursor,
+  onEdit,
 }: {
+  handle?: RefObject<EditorHandle | null>;
   store: OpenFiles;
   file: OpenFile;
   wrap: boolean;
+  /** A full view's larger text. */
+  roomy?: boolean;
   onCursor: (cursor: Cursor) => void;
+  /** The text changed, however it changed, as `read` now reads it. */
+  onEdit?: (read: () => string) => void;
 }) {
   const body = file.body.kind === "text" ? file.body : undefined;
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | undefined>(undefined);
   const shown = useRef<number | undefined>(undefined);
   const lang = useRef<string | undefined>(undefined);
-  const reportCursor = useRef<(state: EditorState) => void>(() => {});
-  reportCursor.current = (state) =>
-    onCursor({ ...cursorOf(state), ...(lang.current && { language: lang.current }) });
+  const indent = useRef<string | undefined>(undefined);
+  const report = (state: EditorState) =>
+    onCursor({
+      ...cursorOf(state),
+      ...(lang.current && { language: lang.current }),
+      ...(indent.current && { indent: indent.current }),
+    });
+  const reportUpdate = useRef<(update: ViewUpdate) => void>(() => {});
+  reportUpdate.current = (update) => {
+    if (update.docChanged) onEdit?.(() => update.state.doc.toString());
+    if (update.docChanged || update.selectionSet) report(update.state);
+  };
+  useImperativeHandle(handle, () => ({
+    find: () => {
+      if (view.current) openSearchPanel(view.current);
+    },
+    goToLine: () => {
+      if (view.current) gotoLine(view.current);
+    },
+  }));
 
   // A state outlives this component, kept in `store`, so it holds only its own tab and store, and
   // reaches whichever component shows it through its view.
-  const stateFor = (id: number, text: string, canEdit: boolean) =>
+  const stateFor = (id: number, text: string, canEdit: boolean, detected: Indent) =>
     EditorState.create({
       doc: text,
       extensions: [
+        indentUnit.of(detected.unit),
+        EditorState.tabSize.of(detected.size),
+        EditorView.editorAttributes.of({
+          style: `--indent-width: ${detected.size}ch; --tab-size: ${detected.size}`,
+        }),
+        indentGuides,
         lineNumbers(),
         foldGutter(),
         highlightSpecialChars(),
@@ -391,13 +536,13 @@ export default function CodeEditor({
         language.of([]),
         wrapping.of(wrapped(wrap)),
         editing.of(editable(canEdit)),
+        comparing.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !update.transactions.some((tr) => tr.annotation(fromDisk))) {
             const { state } = update;
             store.edited(id, () => state.doc.toString());
           }
-          if (update.docChanged || update.selectionSet)
-            cursorReports.get(update.view)?.(update.state);
+          cursorReports.get(update.view)?.(update);
         }),
       ],
     });
@@ -405,7 +550,7 @@ export default function CodeEditor({
   // The view, for as long as a text tab is on screen.
   useEffect(() => {
     const created = new EditorView({ parent: host.current! });
-    cursorReports.set(created, (state) => reportCursor.current(state));
+    cursorReports.set(created, (update) => reportUpdate.current(update));
     view.current = created;
     return () => {
       if (shown.current !== undefined) store.keep(shown.current, created.state);
@@ -441,8 +586,11 @@ export default function CodeEditor({
     if (!current || !body || shown.current === file.id) return;
     if (shown.current !== undefined) store.keep(shown.current, current.state);
     shown.current = file.id;
+    const detected = detectIndent(body.text);
+    indent.current = detected.name;
     current.setState(
-      (store.kept(file.id) as EditorState | undefined) ?? stateFor(file.id, body.text, canEdit),
+      (store.kept(file.id) as EditorState | undefined) ??
+        stateFor(file.id, body.text, canEdit, detected),
     );
     current.dispatch({
       effects: [wrapping.reconfigure(wrapped(wrap)), editing.reconfigure(editable(canEdit))],
@@ -450,7 +598,7 @@ export default function CodeEditor({
     // A reload while another tab was on screen.
     if (!store.unsaved(file.id)) takeFromDisk(current, body.text);
     lang.current = undefined;
-    onCursor(cursorOf(current.state));
+    report(current.state);
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- on another tab only; the next effects keep it current
   }, [file.id, !!body]);
 
@@ -470,13 +618,31 @@ export default function CodeEditor({
     void description.load().then((support) => {
       if (stopped || !view.current) return;
       view.current.dispatch({ effects: language.reconfigure(support) });
-      onCursor({ ...cursorOf(view.current.state), language: description.name });
+      report(view.current.state);
     });
     return () => {
       stopped = true;
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- by file; onCursor is the latest anyway
   }, [file.id, file.path, !!body]);
+
+  // A tab's Compare, kept with the tab.
+  useEffect(() => {
+    view.current?.dispatch({ effects: comparing.reconfigure(comparedTo(file.compare)) });
+  }, [file.id, file.compare]);
+
+  // Going to a line, once for each time it's asked.
+  const jump = file.jump;
+  useEffect(() => {
+    const current = view.current;
+    if (!current || !jump || !body) return;
+    const line = current.state.doc.line(Math.min(jump.line, current.state.doc.lines));
+    current.dispatch({
+      selection: EditorSelection.cursor(line.from),
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- on a new jump or once the text is in
+  }, [file.id, jump?.count, !!body]);
 
   // A reload from disk.
   const reloads = body?.reloads ?? 0;
@@ -487,5 +653,12 @@ export default function CodeEditor({
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- only a reload replaces the text
   }, [reloads]);
 
-  return <div ref={host} aria-label={file.path} className="min-h-0 flex-1 overflow-hidden" />;
+  return (
+    <div
+      ref={host}
+      aria-label={file.path}
+      style={{ "--editor-size": roomy ? "13px" : "12px" } as CSSProperties}
+      className="min-h-0 min-w-0 flex-1 overflow-hidden"
+    />
+  );
 }
