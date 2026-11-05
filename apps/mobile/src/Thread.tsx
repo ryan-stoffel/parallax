@@ -27,7 +27,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { splitFiles, isImagePath } from "../../desktop/src/renderer/attachments";
 import { attentionOf } from "../../desktop/src/renderer/attention";
 import { activity, stepLabel, summarize, toolKind } from "../../desktop/src/renderer/steps";
-import { asksOf, parentOf } from "../../desktop/src/renderer/threads";
+import { asksOf } from "../../desktop/src/renderer/threads";
 import {
   failureText,
   groupWork,
@@ -49,6 +49,7 @@ import { useComputer, useFleet } from "./fleet";
 import { openLightbox } from "./Lightbox";
 import { MessageMenu } from "./MessageMenu";
 import type { Screens } from "./nav";
+import { parentLink } from "./orchestratorLogic";
 import { DiffStats } from "./PullRequestParts";
 import { setViewing } from "./push";
 import { TranscriptSkeleton } from "./Skeleton";
@@ -621,7 +622,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   // A thread started on this phone shows its prompt until the transcript has it, which plxd logs
   // with no turn id, so it's matched by there being none.
   const first = transcript.items.some((i) => i.kind === "user") ? undefined : startedPrompt(runId);
-  const parent = thread && state ? parentOf(state, thread) : undefined;
+  const parent = useMemo(() => (thread && state ? parentLink(state, thread) : undefined), [state, thread]);
   // When the current turn's prompt went, for "Working for".
   const since = transcript.items.findLast((i) => i.kind === "user")?.at;
   // Nothing in yet: no rows, no prompt from here, and no error to say instead.
@@ -773,8 +774,8 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           connected={connected}
           parent={
             parent && {
-              name: state?.titles[parent.id] ?? "Thread",
-              open: () => navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId: parent.id } }] }),
+              name: parent.name,
+              open: () => navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId: parent.runId } }] }),
             }
           }
         />

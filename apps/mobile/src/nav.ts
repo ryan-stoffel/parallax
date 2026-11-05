@@ -14,6 +14,8 @@ export type Screens = {
   PullRequest: { hostId: string; runId: string; url: string };
   /** The repository, then computer, picker for a new thread, as a sheet. */
   NewThread: undefined;
+  /** A new orchestrator's form, as a sheet over the picker. */
+  NewOrchestrator: undefined;
   /** A new thread's page, the app's home: with no params, where the last new thread started. */
   StartThread: { hostId?: string; groupId?: string } | undefined;
   /** Search every thread, as a sheet. */

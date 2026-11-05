@@ -1,9 +1,9 @@
 // A new thread: first the picker sheet, each repository once across every computer and then no
-// repo, sliding over to which computer it runs on; then the new thread's page, the repository's
-// icon and a greeting over the message box that starts it.
+// repo, sliding over to which computer it runs on, with New orchestrator at its foot; then the new
+// thread's page, the repository's icon and a greeting over the message box that starts it.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import { ChevronDown, ChevronLeft, MonitorSmartphone, Plus, Search, SquareDashed } from "lucide-react-native";
+import { ChevronDown, ChevronLeft, Layers, MonitorSmartphone, Plus, Search, SquareDashed } from "lucide-react-native";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -26,6 +26,7 @@ import { Composer, type Start } from "./Composer";
 import { type Computer, useComputer, useFleet } from "./fleet";
 import { greeting } from "./greeting";
 import type { Screens } from "./nav";
+import { orchestratorPlaces } from "./orchestratorLogic";
 import { getPrefs, setPrefs } from "./prefs";
 import { RepoIcon, useSharedIcons } from "./RepoIcon";
 import { homeless } from "./Sidebar";
@@ -33,7 +34,7 @@ import { setStarted } from "./started";
 import { Button, DeviceIcon, Icon, Section, T, useColors } from "./ui";
 
 /** The default computer first, then the rest by name. */
-const ordered = (computers: Computer[], defaultId?: string) =>
+export const ordered = (computers: Computer[], defaultId?: string) =>
   [...computers].sort(
     (a, b) =>
       Number(b.machine.id === defaultId) - Number(a.machine.id === defaultId) ||
@@ -206,6 +207,22 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
               onPress={() => pickRepo(null)}
             />
           </Section>
+          {orchestratorPlaces(machines).length > 0 && (
+            <Section>
+              <Choice
+                leading={<Icon icon={Layers} size={24} color={c.faintForeground} />}
+                title="New orchestrator"
+                detail="A focused chat where agents coordinate work"
+                label="New orchestrator"
+                last
+                onPress={() => {
+                  void Haptics.selectionAsync();
+                  Keyboard.dismiss();
+                  navigation.navigate("NewOrchestrator");
+                }}
+              />
+            </Section>
+          )}
         </ScrollView>
         <ScrollView
           style={{ width }}

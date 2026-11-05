@@ -2,7 +2,7 @@
 // glass field at the top, focused once the sheet is up, then the recent threads; with a query, the
 // Orchestrators, threads, and archived threads whose name, repository, branch, or computer has
 // every word, each match highlighted. A result becomes the main view, which closes the sheet and
-// the sidebar.
+// the sidebar. An orchestrator with no run asks for its first message and starts first.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { History, MessagesSquare, Search as SearchIcon, X, type LucideIcon } from "lucide-react-native";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -12,8 +12,9 @@ import { useFleet } from "./fleet";
 import { Glass } from "./Glass";
 import { ago, useShow, type Screens } from "./nav";
 import { OrchestratorGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
+import { agentsLine, canOrchestrate } from "./orchestratorLogic";
 import { marks, matchesAll, wordsOf } from "./searchText";
-import { entriesOf, orchestratorsOf, when, type Entry, type ProjectEntry } from "./Sidebar";
+import { entriesOf, orchestratorsOf, useStartOrchestrator, when, type Entry, type ProjectEntry } from "./Sidebar";
 import { AttentionBadge, Icon, T, useColors } from "./ui";
 
 const RECENT = 8;
@@ -29,6 +30,7 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
   const show = useShow();
   const { computers } = useFleet();
   const shared = useSharedIcons();
+  const { ask, starting } = useStartOrchestrator();
   const input = useRef<TextInput>(null);
   const [query, setQuery] = useState("");
   const words = wordsOf(query);
@@ -117,18 +119,23 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
         )}
         renderItem={({ item }) => {
           if (item.kind === "orchestrator") {
-            const { orchestrator, computer, threads: count } = item.entry;
+            const { orchestrator, computer, children } = item.entry;
             const orchestratorRun = orchestrator.run;
+            const unstarted = !orchestratorRun && (starting === orchestrator.id ? "Starting…" : "Not started");
             return (
               <ResultRow
                 icon={<OrchestratorGlyph icon={orchestrator.icon} size={orchestrator.icon?.image ? 36 : 18} />}
                 title={orchestrator.name}
-                detail={[`${count} thread${count === 1 ? "" : "s"}`, computer.machine.name, !orchestratorRun && "Not started"]
-                  .filter(Boolean)
-                  .join(" · ")}
+                detail={[agentsLine(children), computer.machine.name, unstarted].filter(Boolean).join(" · ")}
                 words={words}
                 right={<AttentionBadge attention={item.entry.attention} />}
-                onPress={orchestratorRun ? () => open(computer.machine.id, orchestratorRun) : undefined}
+                onPress={
+                  orchestratorRun
+                    ? () => open(computer.machine.id, orchestratorRun)
+                    : canOrchestrate(computer) && !starting
+                      ? () => ask(item.entry)
+                      : undefined
+                }
               />
             );
           }
