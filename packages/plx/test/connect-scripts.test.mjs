@@ -13,17 +13,17 @@ const script = (/** @type {string} */ name) => fileURLToPath(new URL(`../../../s
 
 /**
  * Runs `file` with `args` with no terminal, and `input` on stdin, or none. On macOS and Linux that
- * takes a new session. On Windows, `detached` means no console at all, which only a test that asks
- * for it gets. Resolves to its exit code, stdout, and stderr.
+ * takes a new session. `options` replaces that, for Windows' ways of having no terminal. Resolves
+ * to its exit code, stdout, and stderr.
  * @param {string} file
  * @param {string[]} args
  * @param {NodeJS.ProcessEnv} env
  * @param {string} [input]
- * @param {boolean} [detached]
+ * @param {import("node:child_process").SpawnOptions} [options]
  * @returns {Promise<{ code: number | null, stdout: string, stderr: string }>}
  */
-function run(file, args, env, input, detached = process.platform !== "win32") {
-  const child = spawn(file, args, { env, detached, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+function run(file, args, env, input, options = { detached: process.platform !== "win32" }) {
+  const child = spawn(file, args, { env, ...options, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
   child.stdin?.end(input);
   let stdout = "";
   let stderr = "";
@@ -86,7 +86,17 @@ test("connect.sh as a file with no terminal leaves plx the script's stdin for a 
   assert.equal(recorded, "-y plx-cli@>=0.7.0 connect --channel nightly\nthe-code\n");
 });
 
-for (const [launch, detached] of /** @type {[string, boolean][]} */ ([["piped output", false], ["no console", true]])) {
+const POWERSHELL = ["-NoProfile", "-NonInteractive", "-Command"];
+
+// Windows' ways of having no terminal. cmd with no console gets powershell.exe a console of its own.
+/** @type {[string, (command: string) => [string, string[], import("node:child_process").SpawnOptions]][]} */
+const LAUNCHES = [
+  ["piped output", (command) => ["powershell.exe", [...POWERSHELL, command], {}]],
+  ["a hidden console", (command) => ["powershell.exe", [...POWERSHELL, command], { windowsHide: true }]],
+  ["no console, through cmd", (command) => [`powershell.exe ${POWERSHELL.join(" ")} "${command}"`, [], { detached: true, shell: true }]],
+];
+
+for (const [launch, how] of LAUNCHES) {
   test(`connect.ps1 with ${launch} runs plx, outlasts npm's stderr, and passes on its exit code`, { skip: process.platform !== "win32", timeout: 180_000 }, async () => {
     const root = mkdtempSync(path.join(tmpdir(), "plx-scripts-"));
     try {
@@ -94,8 +104,8 @@ for (const [launch, detached] of /** @type {[string, boolean][]} */ ([["piped ou
       writeFileSync(path.join(root, "npx.cmd"), `@echo off\r\necho npm warn something 1>&2\r\necho %*> "${recorded}"\r\nexit /b 7\r\n`);
       // Node.js stays the real one, which the script only asks for its version. npx is the stub.
       const env = { ...process.env, PATH: `${root};${process.env["PATH"]}`, USERPROFILE: root };
-      const command = `Get-Content -Raw -LiteralPath '${script("connect.ps1")}' | Invoke-Expression; Connect-Parallax --channel stable`;
-      const { code, stdout, stderr } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], env, undefined, detached);
+      const [file, args, options] = how(`Get-Content -Raw -LiteralPath '${script("connect.ps1")}' | Invoke-Expression; Connect-Parallax --channel stable`);
+      const { code, stdout, stderr } = await run(file, args, env, undefined, options);
       assert.equal(code, 7, `exit ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
       // Quoted as cmd sees it, so only a plx that fails at end of input runs.
       assert.equal(readFileSync(recorded, "utf8").trim(), '-y "plx-cli@0.7.0 - 99" connect --channel nightly --channel stable');
