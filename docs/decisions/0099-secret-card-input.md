@@ -14,7 +14,7 @@ The secret card picked its view from `delivery`, which says how the agent gets t
 - **`env` and `file` always deliver a file.** Asking for `delivery: "secretRef"` with either is refused, because a keystore ref holds text and no tool takes one of these.
 - **`accept` lists the extensions a `file` input offers,** each with its leading dot, such as `.p8`. It filters the OS file dialog, and the card checks a dropped file against it.
 - **A picked file goes as `saveBytes`,** in base64, so a binary file reaches the private file byte for byte. The contents are read only on Save. The limit stays 64 KB, measured on the bytes.
-- **The desktop card follows T3 Code's:** its label and reason, the input with Save on one line, then the privacy note and a quiet Decline. The editor needs the width, so its Save joins that last line.
+- **The desktop card follows T3 Code's:** its label and reason, the input with Save on one line, then the privacy note and a quiet Decline. The editor and the file's drop zone need the width, so their Save joins that last line.
 - **An item with no `input`,** from before this record, shows what it showed before: the editor with `delivery: "file"`, else the field.
 - **On the phone, `file` opens the document picker,** and the app deletes the picker's cached copy once it has read it. `env` stays in the secure field, since iOS doesn't mask a multi-line one (0098).
 

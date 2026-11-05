@@ -7,7 +7,7 @@
 // draws it into the DOM beside the field, masked until the user shows it, without going through
 // state. A picked file's contents are read only when the user saves.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
-import { Eye, EyeOff, FolderOpen, KeyRound, Paperclip, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, FileKey, FolderOpen, KeyRound, ShieldCheck, Upload, X } from "lucide-react";
 import {
   useId,
   useLayoutEffect,
@@ -17,9 +17,11 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import { flushSync } from "react-dom";
 
 import { describeError } from "./errors";
 import { notify } from "./notifications";
+import { formatBytes } from "./settings/parts";
 import { acceptsFile, maxSecretBytes, secretInput, type Item } from "./transcript";
 import { Button, buttonClass, IconButton } from "./ui";
 
@@ -115,6 +117,7 @@ export function SecretCard({
   const field = useRef<HTMLTextAreaElement>(null);
   const paint = useRef<HTMLDivElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
+  const dropZone = useRef<HTMLButtonElement>(null);
 
   // Only the editor has a textarea. The single field keeps `filled` itself.
   function repaint() {
@@ -185,6 +188,12 @@ export function SecretCard({
     if (!file.size) return refuse("It's empty.");
     if (file.size > maxSecretBytes) return refuse("A secret can be up to 64 KB.");
     setPicked(file);
+  }
+
+  /** Takes the picked file off, and hands focus to the drop zone that comes back. */
+  function unpick() {
+    flushSync(() => setPicked(undefined));
+    dropZone.current?.focus();
   }
 
   // Enter makes a new line, as in any editor.
@@ -279,7 +288,54 @@ export function SecretCard({
           </label>
           <p className="text-body leading-relaxed text-muted-foreground">{request.reason}</p>
         </div>
-        {input === "env" ? (
+        {input === "file" ? (
+          <>
+            {picked ? (
+              <div
+                className={`flex animate-fade-in items-center gap-3 rounded-lg border bg-background py-2.5 pr-2 pl-3 transition-colors ${dropOver ? "border-ring bg-accent/10" : "border-border"}`}
+              >
+                <FileKey aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body">
+                    {dropOver ? "Drop to replace this file" : picked.name}
+                  </span>
+                  <span className="block text-meta text-faint-foreground">
+                    {formatBytes(picked.size)}
+                  </span>
+                </span>
+                <IconButton label="Remove the file" size="sm" disabled={off} onClick={unpick}>
+                  <X />
+                </IconButton>
+              </div>
+            ) : (
+              <button
+                ref={dropZone}
+                type="button"
+                disabled={off}
+                onClick={() => filePicker.current?.click()}
+                className={`flex min-h-20 w-full animate-fade-in flex-col items-center justify-center gap-1.5 rounded-lg border px-4 py-4 transition-colors focus-visible:border-ring focus-visible:outline-none disabled:opacity-50 ${dropOver ? "border-ring bg-accent/10" : "border-dashed border-foreground/15 enabled:hover:border-foreground/30 enabled:hover:bg-hover"}`}
+              >
+                <Upload
+                  aria-hidden
+                  className={`size-4 transition-[color,translate] motion-reduce:transition-none ${dropOver ? "-translate-y-0.5 text-accent" : "text-faint-foreground"}`}
+                />
+                <span className="text-body text-muted-foreground">
+                  {dropOver ? (
+                    "Drop to use this file"
+                  ) : (
+                    <>
+                      Drop {wanted} here, or{" "}
+                      <span className="text-foreground underline decoration-foreground/30 underline-offset-2">
+                        choose one
+                      </span>
+                    </>
+                  )}
+                </span>
+              </button>
+            )}
+            {picker}
+          </>
+        ) : input === "env" ? (
           <div
             className={`flex max-h-64 min-h-24 overflow-auto rounded-md border bg-background font-mono text-body focus-within:border-ring ${dropOver ? "border-ring" : "border-border"}`}
           >
@@ -308,34 +364,17 @@ export function SecretCard({
           </div>
         ) : (
           <div className="flex min-w-0 items-center gap-2">
-            {input === "file" ? (
-              <>
-                <button
-                  type="button"
-                  disabled={off}
-                  onClick={() => filePicker.current?.click()}
-                  className={`${fieldClass} flex h-8 min-w-0 flex-1 items-center gap-2 px-2.5 text-left enabled:hover:border-foreground/20 ${dropOver ? "border-ring" : ""}`}
-                >
-                  <Paperclip aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-                  <span className={`truncate ${picked ? "" : "text-faint-foreground"}`}>
-                    {picked?.name ?? `Choose ${wanted}, or drop it here`}
-                  </span>
-                </button>
-                {picker}
-              </>
-            ) : (
-              <input
-                id={inputId}
-                name="secret"
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                disabled={off}
-                onInput={(event) => setFilled(!!event.currentTarget.value.trim())}
-                placeholder={request.placeholder ?? "Paste the secret"}
-                className={`${fieldClass} h-8 min-w-0 flex-1 px-2.5 font-mono placeholder:font-sans placeholder:text-faint-foreground`}
-              />
-            )}
+            <input
+              id={inputId}
+              name="secret"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={off}
+              onInput={(event) => setFilled(!!event.currentTarget.value.trim())}
+              placeholder={request.placeholder ?? "Paste the secret"}
+              className={`${fieldClass} h-8 min-w-0 flex-1 px-2.5 font-mono placeholder:font-sans placeholder:text-faint-foreground`}
+            />
             {saveButton}
           </div>
         )}
@@ -374,7 +413,7 @@ export function SecretCard({
           >
             {busy === "decline" ? "Declining…" : "Decline"}
           </Button>
-          {input === "env" && saveButton}
+          {input !== "value" && saveButton}
         </div>
       </form>
     </section>

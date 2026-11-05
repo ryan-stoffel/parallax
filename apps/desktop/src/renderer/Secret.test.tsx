@@ -204,3 +204,16 @@ test("Save stays off until the field has something", async () => {
   await act(async () => input.dispatchEvent(new Event("input", { bubbles: true })));
   expect(save.disabled).toBe(false);
 });
+
+test("Removing a picked file brings the drop zone back, focused, with Save off", async () => {
+  const el = card("file", "file", [".p8"]);
+  await pick(el, new File(["key"], "AuthKey.p8"));
+  await vi.waitFor(() => expect(el.textContent).toContain("AuthKey.p8"));
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(false);
+  const remove = el.querySelector<HTMLButtonElement>('button[aria-label="Remove the file"]')!;
+  await act(async () => remove.click());
+  expect(el.textContent).not.toContain("AuthKey.p8");
+  expect(save.disabled).toBe(true);
+  expect(document.activeElement?.textContent).toContain("Drop a .p8 file here");
+});
