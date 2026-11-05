@@ -24,7 +24,7 @@ Goals:
 Non-goals:
 
 * A hosted cloud service, except Parallax accounts ([0067](decisions/0067-clerk-accounts.md)) and Parallax Relay for remote access, webhooks, and push ([0068](decisions/0068-relay.md))
-* An editor. The Code - OSS fork was dropped ([0020](decisions/0020-drop-the-editor-fork.md)).
+* A full IDE. The Code - OSS fork was dropped ([0020](decisions/0020-drop-the-editor-fork.md)), and the Files view edits a thread's files without being one ([0102](decisions/0102-files-view-editor.md)).
 * Slack triggers
 
 ## Core concepts
