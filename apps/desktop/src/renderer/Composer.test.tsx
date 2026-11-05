@@ -6,11 +6,13 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
-import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
+import type { AgentRun, PromptImage, PullRequest } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
+import { PullRequestsContext } from "./Mention";
 import { Notifications } from "./notifications";
 import { behaviorDefaults, newThreadDefaults, newThreadPrefs, setBehaviorPrefs } from "./prefs";
+import type { PullRequests } from "./PullRequests";
 import type { AttachThreads } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
@@ -64,10 +66,15 @@ function render(
   // null: a plxd that takes no images.
   imageCaps: ImageCaps | null = caps,
   props: Partial<ComposerProps> = {},
+  pullRequests?: PullRequests,
 ) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
-    root.render(<Composer onSend={onSend} imageCaps={imageCaps ?? undefined} {...props} />),
+    root.render(
+      <PullRequestsContext value={pullRequests}>
+        <Composer onSend={onSend} imageCaps={imageCaps ?? undefined} {...props} />
+      </PullRequestsContext>,
+    ),
   );
   unmount = () => {
     root.unmount();
@@ -107,7 +114,9 @@ function render(
   const rerender = (more: Partial<ComposerProps>) =>
     act(() =>
       root.render(
-        <Composer onSend={onSend} imageCaps={imageCaps ?? undefined} {...props} {...more} />,
+        <PullRequestsContext value={pullRequests}>
+          <Composer onSend={onSend} imageCaps={imageCaps ?? undefined} {...props} {...more} />
+        </PullRequestsContext>,
       ),
     );
   return { box, type, press, paste, rerender };
@@ -528,15 +537,21 @@ let runs = 0;
 const withMenus = async (
   onSend: (text: string) => Promise<string | undefined>,
   props: Partial<ComposerProps> = {},
+  pullRequests?: PullRequests,
 ) => {
   request.mockClear();
   window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
   const runId = `run-${++runs}`;
-  const composer = render(onSend, caps, {
-    backend: "claude",
-    menus: { hostId: "local", runId },
-    ...props,
-  });
+  const composer = render(
+    onSend,
+    caps,
+    {
+      backend: "claude",
+      menus: { hostId: "local", runId },
+      ...props,
+    },
+    pullRequests,
+  );
   await settle();
   // Typing settles too, for the lists fetched on the first `/` or `@`.
   const type = async (text: string) => {
@@ -581,6 +596,60 @@ const chips = () =>
   [...document.querySelectorAll('.composer-shell [data-chip="threadRef"]')].map(
     (c) => c.textContent,
   );
+
+// A thread's pull requests: #7 is merged and #12 open.
+const threadPrs: PullRequests = {
+  urls: ["https://github.com/o/r/pull/7", "https://github.com/o/r/pull/12"],
+  get: (url) =>
+    url.endsWith("/7")
+      ? { pr: { state: "merged", draft: false, title: "Fix the flaky test" } as PullRequest }
+      : { pr: { state: "open", draft: false, title: "Speed up CI" } as PullRequest },
+  refresh: async () => {},
+  act: async () => undefined,
+};
+const options = () =>
+  [...document.querySelectorAll('[role="listbox"] [data-label]')].map((o) => o.textContent);
+
+test("# lists the thread's pull requests, newest first, and sends the one picked as its URL, drawn as a chip in its state's color", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { type, press } = await withMenus(onSend, {}, threadPrs);
+  await type("See #");
+  expect(options()).toEqual(["#12", "#7"]);
+  await press("ArrowDown");
+  await press("Enter");
+  await settle();
+  const chip = document.querySelector('.composer-shell [data-chip="mention"]')!;
+  expect(chip.textContent).toBe("#7");
+  expect(chip.querySelector('[class*="text-project-violet"]')?.textContent).toBe("#7");
+  await type("first");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "See https://github.com/o/r/pull/7 first",
+    expect.anything(),
+    [],
+    [],
+  );
+});
+
+test("# filters by number and title, and a heading's # still types", async () => {
+  const { type, box } = await withMenus(vi.fn(), {}, threadPrs);
+  await type("#fl");
+  expect(options()).toEqual(["#7"]);
+  await type("x");
+  expect(options()).toEqual([]);
+  act(() => void box.editor!.commands.clearContent(true));
+  await type("#1");
+  expect(options()).toEqual(["#12"]);
+  act(() => void box.editor!.commands.clearContent(true));
+  await type("# Title");
+  expect(box.querySelector("h1")?.textContent).toBe("Title");
+});
+
+test("# opens no menu in a thread with no pull requests", async () => {
+  const { type } = await withMenus(vi.fn());
+  await type("#");
+  expect(document.querySelector('[role="listbox"]')).toBeNull();
+});
 
 test("a failed send puts its threads back within the cap, and another computer's can't be undone back", async () => {
   let fail = (_error: string) => {};

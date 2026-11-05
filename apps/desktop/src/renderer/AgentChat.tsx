@@ -107,7 +107,7 @@ import {
 import { locale } from "./locale";
 import { ClaudeLogo, GitHubLogo, ParallaxGlyph } from "./logos";
 import { codeRuns, markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
-import { mentionsOf, withMentions } from "./Mention";
+import { mentionsOf, PullRequestsContext, withMentions } from "./Mention";
 import { isHttps, prNumber } from "./github";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
@@ -696,6 +696,13 @@ export function AgentChat({
   // The run as the composer shows it: the transcript's, or until that loads, the thread list's, so
   // the box opens as it will look.
   const box = run ?? listed;
+  // Every pane knows its thread's pull requests, but only the open thread's states are read, so
+  // another pane's chips stay neutral. Undefined without any, so the rows' memo holds.
+  const linked = (listed ?? run)?.pullRequests;
+  const linkedPrs = useMemo(
+    () => linked && { urls: linked, get: (url: string) => pullRequests?.get(url) },
+    [linked, pullRequests],
+  );
   // A Claude Remote Control thread (PLX-1140): its messages go to a session on another computer,
   // as text, with nothing to choose about how it runs.
   const remote = isRemoteControl(box);
@@ -957,77 +964,79 @@ export function AgentChat({
   // With a transcript, the composer floats over its bottom, which scrolls under it.
   const hasRows = rows.length > 0 || !!editing;
   return (
-    <SubagentsContext value={subagents}>
-      {/* A container, so in a narrow window or split tile the column and composer compact. */}
-      <div className="@container relative flex min-h-0 flex-1 flex-col">
-        {hasRows ? (
-          <ThreadLinksContext value={threadLinks}>
-            <ForkContext value={forkTarget}>
-              <TurnChangesContext value={turnChanges}>
-                <TranscriptView
-                  rows={rows}
-                  sent={unsent}
-                  live={running}
-                  stalled={stalled}
-                  turnDone={transcript.turnDone}
-                  root={run?.worktreePath}
-                  runId={runId}
-                  backend={run?.backend}
-                  // plxd logs a fork's copied history with its agent.started, at its creation (0050).
-                  copiedAt={forked ? run?.createdAt : undefined}
-                  onResend={resend}
-                  loadImage={showImage}
-                  onCite={setCite}
-                  onNearTop={older ? loadOlder : undefined}
-                  onScrolledUp={setAway}
-                  docked={docked}
-                  onEdit={
-                    live && !editing && unanswered?.row
-                      ? { key: unanswered.row.key, edit: () => void edit() }
-                      : undefined
-                  }
-                  end={
-                    editing ? (
-                      <EditMessage
-                        editing={editing}
-                        loadImage={showImage}
-                        disabledReason={disabledReason}
-                        onSend={(text, images) =>
-                          setEditing({ ...editing, text, images, ready: true })
-                        }
-                        onCancel={cancelEdit}
-                      />
-                    ) : (
-                      run?.status === "waiting" && (
-                        <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+    <PullRequestsContext value={linkedPrs}>
+      <SubagentsContext value={subagents}>
+        {/* A container, so in a narrow window or split tile the column and composer compact. */}
+        <div className="@container relative flex min-h-0 flex-1 flex-col">
+          {hasRows ? (
+            <ThreadLinksContext value={threadLinks}>
+              <ForkContext value={forkTarget}>
+                <TurnChangesContext value={turnChanges}>
+                  <TranscriptView
+                    rows={rows}
+                    sent={unsent}
+                    live={running}
+                    stalled={stalled}
+                    turnDone={transcript.turnDone}
+                    root={run?.worktreePath}
+                    runId={runId}
+                    backend={run?.backend}
+                    // plxd logs a fork's copied history with its agent.started, at its creation (0050).
+                    copiedAt={forked ? run?.createdAt : undefined}
+                    onResend={resend}
+                    loadImage={showImage}
+                    onCite={setCite}
+                    onNearTop={older ? loadOlder : undefined}
+                    onScrolledUp={setAway}
+                    docked={docked}
+                    onEdit={
+                      live && !editing && unanswered?.row
+                        ? { key: unanswered.row.key, edit: () => void edit() }
+                        : undefined
+                    }
+                    end={
+                      editing ? (
+                        <EditMessage
+                          editing={editing}
+                          loadImage={showImage}
+                          disabledReason={disabledReason}
+                          onSend={(text, images) =>
+                            setEditing({ ...editing, text, images, ready: true })
+                          }
+                          onCancel={cancelEdit}
+                        />
+                      ) : (
+                        run?.status === "waiting" && (
+                          <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+                        )
                       )
-                    )
-                  }
-                />
-              </TurnChangesContext>
-            </ForkContext>
-          </ThreadLinksContext>
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-body text-faint-foreground">
-            {error ? (
-              <>
-                <p className="font-medium text-foreground">This chat couldn't load</p>
-                <p className="text-muted-foreground">{error}</p>
-              </>
-            ) : (
-              connected && "Loading…"
-            )}
+                    }
+                  />
+                </TurnChangesContext>
+              </ForkContext>
+            </ThreadLinksContext>
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-body text-faint-foreground">
+              {error ? (
+                <>
+                  <p className="font-medium text-foreground">This chat couldn't load</p>
+                  <p className="text-muted-foreground">{error}</p>
+                </>
+              ) : (
+                connected && "Loading…"
+              )}
+            </div>
+          )}
+          {/* In one place either way, so the composer keeps its focus and choices as rows arrive. */}
+          <div
+            ref={dockRef}
+            className={`flex min-h-0 flex-col ${hasRows ? "pointer-events-none absolute inset-x-0 bottom-0 max-h-full" : ""}`}
+          >
+            {dock}
           </div>
-        )}
-        {/* In one place either way, so the composer keeps its focus and choices as rows arrive. */}
-        <div
-          ref={dockRef}
-          className={`flex min-h-0 flex-col ${hasRows ? "pointer-events-none absolute inset-x-0 bottom-0 max-h-full" : ""}`}
-        >
-          {dock}
         </div>
-      </div>
-    </SubagentsContext>
+      </SubagentsContext>
+    </PullRequestsContext>
   );
 }
 
@@ -1092,8 +1101,9 @@ function SubagentView({
 }
 
 /**
- * Whether a sent prompt's `/name` or `@path` names one of the thread's commands or files, so only
- * those are chips. Commands are fetched once a prompt has a `/name`, and files for each new `@path`.
+ * Whether a sent prompt's `/name`, `@path`, or pull request URL names one of the thread's commands,
+ * files, or pull requests, so only those are chips. Commands are fetched once a prompt has a
+ * `/name`, and files for each new `@path`.
  */
 function useKnownMentions(
   hostId: string | undefined,
@@ -1140,13 +1150,15 @@ function useKnownMentions(
       live = false;
     };
   }, [wantsPaths, key, hostId, runId]);
+  const pullRequests = useContext(PullRequestsContext)?.urls;
   return useMemo(() => {
     const names = new Set([
       ...(commands?.key === key ? commands.list : []),
       ...(paths?.key === key ? paths.list.map((p) => `@${p}`) : []),
+      ...(pullRequests ?? []),
     ]);
     return (token: string) => names.has(token);
-  }, [commands, paths, key]);
+  }, [commands, paths, key, pullRequests]);
 }
 
 /**

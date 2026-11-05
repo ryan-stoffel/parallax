@@ -1,11 +1,10 @@
 import { Info } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 
 import type { AgentBackgroundTask } from "../protocol/generated/protocol";
-import { numberOf } from "./github";
-import { GitHubLogo } from "./logos";
+import { PullRequestChip } from "./Mention";
 import { notify } from "./notifications";
-import { lookOf, type PullRequests } from "./PullRequests";
+import type { PullRequests } from "./PullRequests";
 import { menuPanel, popoverBeside } from "./ui";
 import { presentWaiting } from "./waiting";
 
@@ -14,8 +13,9 @@ import { presentWaiting } from "./waiting";
  * (PLX-777): one line naming its background tasks, such as a Monitor, and the pull requests plxd
  * watches for it, and Stop, which ends them all. Hidden while it waits on nothing. `compact` shows
  * only how many, opening the details and Stop above itself, for a place beside other tabs. Each
- * watched pull request shows as GitHub's mark and its number, the number in its state's color
- * from `pullRequests`, a link the thread's pane opens as it opens any of the thread's pull requests.
+ * watched pull request shows as the composer's chip, its state from `pullRequests`, a link the
+ * thread's pane opens as it opens any of the thread's pull requests. Those that don't fit the line
+ * count as `+N`, which opens the details, where they're all listed.
  */
 export function WaitingBar({
   hostId,
@@ -38,6 +38,17 @@ export function WaitingBar({
 }) {
   const [stopping, setStopping] = useState(false);
   const id = useId();
+  const pullRequest = (url: string) => (
+    <a
+      key={url}
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="flex h-6 shrink-0 items-center rounded-md hover:brightness-125"
+    >
+      <PullRequestChip url={url} pr={pullRequests?.get(url)?.pr} />
+    </a>
+  );
   const shown = presentWaiting(background, watching, agentsShown);
   if (!shown) return null;
 
@@ -110,21 +121,13 @@ export function WaitingBar({
             className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground"
           />
           <span className="min-w-0 truncate font-medium">{title}</span>
-          {labels && <span className="min-w-0 truncate text-muted-foreground">{labels}</span>}
-          {watching.map((url) => {
-            const { color, tint } = lookOf(pullRequests?.get(url)?.pr);
-            return (
-              <a
-                key={url}
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 font-medium tabular-nums hover:brightness-125 ${color} ${tint}`}
-              >
-                <GitHubLogo className="size-3.5 text-foreground" />#{numberOf(url)}
-              </a>
-            );
-          })}
+          {/* Only what the chips leave, so in a short line the labels give way first. */}
+          {labels && (
+            <span className="min-w-0 flex-[1_1_0] truncate text-muted-foreground">{labels}</span>
+          )}
+          {watching.length > 0 && (
+            <FittingChips details={`${id}-details`}>{watching.map(pullRequest)}</FittingChips>
+          )}
           <button
             type="button"
             popoverTarget={`${id}-details`}
@@ -151,16 +154,76 @@ export function WaitingBar({
         <p className="mb-2 text-muted-foreground">
           The agent picks up when one of these ends or changes.
         </p>
-        <ul className="space-y-1.5">
-          {shown.items.map((item, i) => (
-            <li key={i} className="flex min-w-0 gap-2">
-              <span className="w-20 shrink-0 text-muted-foreground capitalize">{item.kind}</span>
-              <span className="min-w-0 break-words">{item.label}</span>
+        <ul className="max-h-60 space-y-1.5 overflow-y-auto">
+          {shown.items
+            .filter((item) => item.kind !== "pull request")
+            .map((item, i) => (
+              <li key={i} className="flex min-w-0 gap-2">
+                <span className="w-20 shrink-0 text-muted-foreground capitalize">{item.kind}</span>
+                <span className="min-w-0 break-words">{item.label}</span>
+              </li>
+            ))}
+          {watching.map((url) => (
+            <li key={url} className="flex min-w-0 items-center gap-2">
+              <span className="w-20 shrink-0 text-muted-foreground capitalize">Pull request</span>
+              {pullRequest(url)}
+              <span className="min-w-0 truncate text-muted-foreground">
+                {pullRequests?.get(url)?.pr?.title}
+              </span>
             </li>
           ))}
         </ul>
         {compact && <div className="mt-2 flex justify-end">{stopButton}</div>}
       </div>
     </section>
+  );
+}
+
+/**
+ * `children`, each a line tall, on one line: the ones that don't fit wrap out of sight, and `+N`
+ * counts them and opens `details`.
+ */
+function FittingChips({ details, children }: { details: string; children: ReactElement[] }) {
+  const row = useRef<HTMLDivElement>(null);
+  const [wrapped, setWrapped] = useState(0);
+  useLayoutEffect(() => {
+    const el = row.current!;
+    const measure = () => {
+      const chips = [...el.children] as HTMLElement[];
+      setWrapped(chips.filter((chip) => chip.offsetTop > chips[0]!.offsetTop).length);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [children.length]);
+  const fit = children.length - wrapped;
+  return (
+    // It gives up room before the title does, and always holds one chip and the count.
+    <div className="flex min-w-28 flex-[0_1000000_auto] items-center gap-1">
+      {/* Beside `+N` once there's one, so the count reads as theirs. */}
+      <div
+        ref={row}
+        className={`flex h-6 min-w-0 flex-1 flex-wrap overflow-clip ${wrapped > 0 ? "justify-end" : ""}`}
+      >
+        {/* Hidden too, so Tab and a screen reader skip what's out of sight. */}
+        {children.map((chip, i) => (
+          <div key={chip.key} className={i < fit ? "" : "invisible"}>
+            {chip}
+          </div>
+        ))}
+      </div>
+      {wrapped > 0 && (
+        <button
+          type="button"
+          popoverTarget={details}
+          aria-haspopup="dialog"
+          aria-label={`${wrapped} more pull requests`}
+          className="shrink-0 rounded-sm bg-hover px-1.5 text-foreground tabular-nums hover:brightness-125"
+        >
+          +{wrapped}
+        </button>
+      )}
+    </div>
   );
 }

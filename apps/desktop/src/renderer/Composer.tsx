@@ -86,7 +86,10 @@ import { EffortMenu } from "./EffortMenu";
 import { accessPrefs } from "./accessPrefs";
 import { FileCard } from "./FileCard";
 import { citationText, CommentBox, type Citation } from "./Cite";
-import { Chip, fileIcon, Mention } from "./Mention";
+import { numberOf } from "./github";
+import { GitHubLogo } from "./logos";
+import { Chip, fileIcon, Mention, PullRequestsContext } from "./Mention";
+import { lookOf as lookOfPr } from "./pr/parts";
 import { imageFromUrl, imageUrl, readImage, type ImageCaps } from "./images";
 import { Lightbox } from "./Lightbox";
 import { encodedImage, withFiles } from "./attachments";
@@ -188,7 +191,8 @@ const chipNode = (
       ),
   });
 
-// A picked /skill or @file: one node, drawn as a chip and deleted whole, holding the token it sends.
+// A picked /skill, @file, or #pull request: one node, drawn as a chip and deleted whole, holding the
+// token it sends.
 const MentionNode = chipNode("mention", { token: "" }, ({ node }) => (
   <Mention token={node.attrs["token"] as string} />
 )).extend({
@@ -551,10 +555,10 @@ const manualDenials = {
   run: "Asks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",
 };
 
-/** What a `/` or `@` at the start of a word, up to the cursor, is typing: its kind, what follows
- * it, and where it is, for the menus. */
+/** What a `/`, `@`, or `#` at the start of a word, up to the cursor, is typing: its kind, what
+ * follows it, and where it is, for the menus. */
 interface Trigger {
-  kind: "/" | "@";
+  kind: "/" | "@" | "#";
   query: string;
   from: number;
   to: number;
@@ -564,14 +568,19 @@ function triggerAt(editor: Editor): Trigger | undefined {
   const { $from, empty } = editor.state.selection;
   if (!empty || $from.parent.type.spec.code) return undefined;
   const before = $from.parent.textBetween(0, $from.parentOffset, undefined, "\ufffc");
-  const match = /(?:^|\s)([/@])(\S*)$/.exec(before);
+  const match = /(?:^|\s)([/@#])(\S*)$/.exec(before);
   if (!match) return undefined;
   const query = match[2]!;
-  return { kind: match[1] as "/" | "@", query, from: $from.pos - query.length - 1, to: $from.pos };
+  return {
+    kind: match[1] as Trigger["kind"],
+    query,
+    from: $from.pos - query.length - 1,
+    to: $from.pos,
+  };
 }
 
 /**
- * A transaction turning each `known` `/skill` or `@path` in `state`'s text into a mention, or
+ * A transaction turning each `known` `/skill`, `@path`, or pull request URL in `state`'s text into a mention, or
  * undefined if there's none. One that ends at the cursor is still being typed and stays text. It
  * isn't an undo step of its own, so undo takes back what was typed, nor an edit, so a recalled
  * prompt stays recalled for Up and Down.
@@ -580,7 +589,7 @@ function mentionsIn(state: EditorState, known: (token: string) => boolean) {
   const { tr, selection } = state;
   state.doc.descendants((node, pos, parent) => {
     if (!node.isText || parent?.type.spec.code || node.marks.some((m) => m.type.spec.code)) return;
-    for (const m of node.text!.matchAll(/(?<=^|\s)([/@]\S+)/g)) {
+    for (const m of node.text!.matchAll(/(?<=^|\s)([/@]\S+|https:\/\/\S+)/g)) {
       const from = pos + m.index;
       const to = from + m[1]!.length;
       if (!known(m[1]!) || (selection.empty && selection.from === to)) continue;
@@ -683,10 +692,12 @@ export function listCommands(
   return list;
 }
 
-/** A row of the `/` or `@` menu, under its `group`'s heading. */
+/** A row of the `/`, `@`, or `#` menu, under its `group`'s heading. */
 interface MenuEntry {
   key: string;
   label: string;
+  /** The label's color, such as a pull request's state. */
+  labelColor?: string;
   description?: string;
   /** What the menu's footer says while the row is highlighted, such as a skill's whole description. */
   detail?: string;
@@ -696,7 +707,7 @@ interface MenuEntry {
   badge?: ReactNode;
   /** Muted text at the row's end, such as how long ago a thread was prompted. */
   meta?: string;
-  group: "Controls" | "Commands and skills" | "Threads" | "Files";
+  group: "Controls" | "Commands and skills" | "Threads" | "Files" | "Pull requests";
   pick: () => void;
 }
 
@@ -913,6 +924,8 @@ const lineWidth = 480;
  * With `attach`, `@` also lists the host's threads above the files: its newest, or the best matches
  * for what's typed (`rankThreads`). Picking one, or dropping a sidebar row on the box, attaches it
  * as a chip in the text, sent as `@"Title"` (PLX-378).
+ * Under a `PullRequestsContext`, `#` lists the thread's pull requests, newest first. Picking one
+ * puts it in the text as a chip, sent as its URL (PLX-1342).
  */
 export function Composer({
   newThread,
@@ -1099,8 +1112,8 @@ export function Composer({
       ...(target !== backend && { account }),
     };
   if (orchestratorMode) delete options.permission;
-  // The `/` and `@` menus: what's typed, the lists, and the highlighted row. Esc closes the menu
-  // until its `/` or `@` goes.
+  // The `/`, `@`, and `#` menus: what's typed, the lists, and the highlighted row. Esc closes the
+  // menu until what opened it goes.
   const [trigger, setTrigger] = useState<Trigger>();
   const [closedAt, setClosedAt] = useState<number>();
   const [active, setActive] = useState(0);
@@ -1109,6 +1122,7 @@ export function Composer({
   const [paths, setPaths] = useState<{ key: string; list: string[] }>();
   const controls = useRef<HTMLFieldSetElement>(null);
   const menuId = useId();
+  const pullRequests = useContext(PullRequestsContext);
   const { hostId, repo, runId } = menus ?? {};
   const folder = runId ?? repo ?? "";
   const commandsKey =
@@ -1324,6 +1338,22 @@ export function Composer({
       };
     });
     entries = [...threadRows, ...fileRows];
+  } else if (trigger?.kind === "#") {
+    const title = (url: string) => pullRequests?.get(url)?.pr?.title ?? "";
+    entries = byName(
+      [...(pullRequests?.urls ?? [])].reverse(),
+      trigger.query,
+      (url) => `${numberOf(url)} ${title(url)}`,
+    ).map((url): MenuEntry => ({
+      key: url,
+      label: `#${numberOf(url)}`,
+      labelColor: lookOfPr(pullRequests?.get(url)?.pr).color,
+      description: title(url),
+      detail: title(url) || url,
+      icon: <GitHubLogo />,
+      group: "Pull requests",
+      pick: () => replaceTrigger(trigger, `${url} `),
+    }));
   }
   // What the menu still waits for, shown as a row of its own.
   const loading =
@@ -1557,11 +1587,14 @@ export function Composer({
     (newThread
       ? "Build a feature, fix a bug, paste an image, use /skills, @files or threads"
       : "Reply, add detail, or steer what it does next");
-  // A known /skill, or an @ naming one of the thread's files, becomes a chip.
+  // A known /skill, an @ naming one of the thread's files, or the URL of one of its pull requests
+  // becomes a chip.
   const known = (token: string) =>
     token[0] === "/"
       ? !!loadedCommands?.some((c) => c.text === token)
-      : !!loadedPaths?.includes(token.slice(1));
+      : token[0] === "@"
+        ? !!loadedPaths?.includes(token.slice(1))
+        : !!pullRequests?.urls.includes(token);
   // Its props are read again on every render, so its handlers see this render's state.
   const editor: Editor = useEditor({
     extensions,
@@ -2029,9 +2062,11 @@ export function Composer({
                   aria-label={
                     trigger.kind === "/"
                       ? "Commands"
-                      : entries[0]?.group === "Threads"
-                        ? "Threads and files"
-                        : "Files"
+                      : trigger.kind === "#"
+                        ? "Pull requests"
+                        : entries[0]?.group === "Threads"
+                          ? "Threads and files"
+                          : "Files"
                   }
                   className="max-h-72 overflow-y-auto p-1.5"
                 >
@@ -2060,7 +2095,10 @@ export function Composer({
                         <span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_img]:size-4 [&_svg]:size-4">
                           {entry.icon}
                         </span>
-                        <span data-label className="max-w-[55%] shrink-0 truncate font-medium">
+                        <span
+                          data-label
+                          className={`max-w-[55%] shrink-0 truncate font-medium ${entry.labelColor ?? ""}`}
+                        >
                           {entry.label}
                         </span>
                         {entry.hint && (

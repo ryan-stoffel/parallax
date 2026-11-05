@@ -69,6 +69,8 @@ afterEach(() => {
   for (const close of notices.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]'))
     act(() => close.click());
   act(() => unmount());
+  // Each test's sends count from 0, so none reaches the support ask's bridge call.
+  localStorage.removeItem("parallax.promptsBeforeSupportAsk");
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -477,6 +479,32 @@ test("Enter sends with a fresh v7 turn id, but not while an IME is composing", a
   expect(box.textContent).toBe("");
   // Shown as pending until its turn starts.
   expect(transcriptText()).toContain("Also mention the tests.");
+});
+
+test("a sent prompt draws its thread's pull request as a chip, neutral in a pane that doesn't read its state", async () => {
+  const url = "https://github.com/o/r/pull/7";
+  const { request } = fakeBridge(4);
+  render(
+    <AgentChat
+      hostId="local"
+      runId={runId}
+      listed={{ id: runId, pullRequests: [url] } as AgentRun}
+    />,
+  );
+  await settle();
+  type(`See ${url} and https://github.com/o/r/pull/8 `);
+  const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
+  await act(async () => void composer().dispatchEvent(enter));
+  expect(sendCalls(request)[0]![2]).toMatchObject({
+    text: `See ${url} and https://github.com/o/r/pull/8`,
+  });
+  await settle();
+  const log = document.querySelector('[role="log"]')!;
+  expect(
+    log.querySelector('[class*="text-muted-foreground"][class*="tabular-nums"]')?.textContent,
+  ).toBe("#7");
+  // One the thread didn't link stays text.
+  expect(log.textContent).toContain("https://github.com/o/r/pull/8");
 });
 
 test("a dropped follow-up sent from here can be sent again, once", async () => {
