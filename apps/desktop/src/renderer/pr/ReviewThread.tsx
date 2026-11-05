@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { icons } from "../icons";
 import { useSticky } from "../sticky";
@@ -41,6 +41,7 @@ export function ReviewThread({
   const [reply, setReply] = useSticky(`prReply/${thread.id ?? thread.url}`, "");
   const [replying, setReplying] = useState(false);
   const [open, setOpen] = useState(!thread.resolved);
+  useEffect(() => setOpen(!thread.resolved), [thread.resolved]);
   const [sending, setSending] = useState<"reply" | "resolve">();
   const send = async (what: "reply" | "resolve") => {
     setSending(what);

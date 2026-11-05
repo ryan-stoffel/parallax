@@ -632,19 +632,28 @@ export function PullRequestView({
         <CodeTab commits={pr.commits ?? []} files={pr.changedFiles}>
           {(leading) =>
             !prs.diff ? (
-              <EmptyState
-                icon={<icons.diff aria-hidden />}
-                title="Files aren't available"
-                body="This host's plxd can't read a pull request's diff."
-              />
+              <>
+                <CodeBar>{leading}</CodeBar>
+                <EmptyState
+                  icon={<icons.diff aria-hidden />}
+                  title="Files aren't available"
+                  body="This host's plxd can't read a pull request's diff."
+                />
+              </>
             ) : !diff ? (
-              <DiffSkeleton />
+              <>
+                <CodeBar>{leading}</CodeBar>
+                <DiffSkeleton />
+              </>
             ) : diff.error ? (
-              <EmptyState
-                icon={<icons.error aria-hidden />}
-                title="Couldn't read the diff"
-                body={<span role="alert">{diff.error}</span>}
-              />
+              <>
+                <CodeBar>{leading}</CodeBar>
+                <EmptyState
+                  icon={<icons.error aria-hidden />}
+                  title="Couldn't read the diff"
+                  body={<span role="alert">{diff.error}</span>}
+                />
+              </>
             ) : (
               <ChangesDiff
                 diff={diff.result!.diff}
@@ -981,6 +990,15 @@ function Description({
   );
 }
 
+/** The bar over the Code tab when there's no diff to draw its own, so Commits stays in reach. */
+function CodeBar({ children }: { children: ReactNode }) {
+  return children ? (
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
+      {children}
+    </div>
+  ) : null;
+}
+
 /** The Code tab: the diff, and Files and Commits to switch between when it has commits. */
 function CodeTab({
   commits,
@@ -1007,9 +1025,7 @@ function CodeTab({
     return <div className="flex min-h-0 flex-1 flex-col">{children(leading)}</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
-        {leading}
-      </div>
+      <CodeBar>{leading}</CodeBar>
       <ol aria-label="Commits" className="min-h-0 flex-1 overflow-y-auto p-1">
         {commits.map((c) => (
           <li
