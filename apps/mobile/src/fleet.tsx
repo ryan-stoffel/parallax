@@ -3,8 +3,8 @@
 //
 // With the account signed in it also finds the account's computers on Parallax Relay (0091),
 // when it starts, the app comes to the front, the network changes, and Settings opens, and every
-// 15 seconds while it's in front. It sets them up or asks to use them, asks the user to allow other devices that ask, and
-// copies who's approved between the computers this phone uses.
+// 15 seconds while it's in front. It sets them up or asks to use them, asks the user to allow other devices that ask,
+// copies who's approved between the computers this phone uses, and drops those the relay marks removed.
 import { File } from "expo-file-system";
 import {
   createContext,
@@ -264,18 +264,26 @@ export function FleetProvider({
     }
   }
 
-  /** Lists the account's computers on the relay, and adds new ones. */
+  /** Lists the account's computers on the relay, adds new ones, and drops those marked removed. */
   async function discover() {
     const bearer = accounts && (await token());
-    const found = bearer && (await listHosts(bearer));
-    if (!found) return;
+    const list = bearer && (await listHosts(bearer));
+    if (!list) return;
+    const { hosts: found, removed } = list;
+    // Only the mark drops a computer (0091). This comes first, so nothing below connects it again,
+    // and runs on each read, as a sign-in in flight can still save a session.
+    await accounts.forget(removed);
+    for (const hostId of removed) {
+      fleet.remove(accountId(hostId));
+      gate(accountId(hostId), undefined);
+    }
     setListed(found);
     void askOnItsOwn(found);
     retryGated();
     // A computer added since: the ones this phone uses may vouch for it now.
     if (found.some((l) => !accounts.trusts(l.hostId))) void share();
     update((s) => {
-      const machines = withListed(s.machines, found, s.hidden);
+      const machines = withListed(s.machines, found, s.hidden, removed);
       return machines === s.machines ? s : { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
     });
   }

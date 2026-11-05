@@ -36,6 +36,12 @@ export interface Listed {
   online: boolean;
 }
 
+/** The relay's list: the account's hosts, and those marked as having left it. */
+export interface HostList {
+  hosts: Listed[];
+  removed: string[];
+}
+
 /**
  * Why an account host isn't connecting: it needs setting up, waits on another device that shows
  * `code`, or refused this phone's sign-in.
@@ -84,14 +90,19 @@ function relayProblem(status: number | undefined): string | undefined {
   return `Parallax Relay refused the connection (${status}).`;
 }
 
-/** The account's hosts, from Parallax Relay with the account's token, or undefined offline. */
-export async function listHosts(token: string): Promise<Listed[] | undefined> {
+/**
+ * The account's list, from Parallax Relay with the account's token, or undefined when the read
+ * failed. A relay from before `removed` marks nothing, and a host in both counts as removed.
+ */
+export async function listHosts(token: string): Promise<HostList | undefined> {
   const answer = await fetch(`${RELAY_URL}/v1/hosts`, {
     headers: { Authorization: `Bearer ${token}` },
   }).catch(() => undefined);
   if (!answer?.ok) return undefined;
-  const { hosts } = (await answer.json()) as { hosts: Listed[] };
-  return hosts;
+  const body = (await answer.json().catch(() => undefined)) as Partial<HostList> | undefined;
+  if (!Array.isArray(body?.hosts)) return undefined;
+  const removed = body.removed ?? [];
+  return { hosts: body.hosts.filter((h) => !removed.includes(h.hostId)), removed };
 }
 
 export class AccountHosts {
@@ -185,6 +196,25 @@ export class AccountHosts {
     const added = hostIds.filter((id) => !this.stored.trusted.includes(id));
     if (!added.length) return;
     this.stored = { ...this.stored, trusted: [...this.stored.trusted, ...added] };
+    await this.save();
+  }
+
+  /**
+   * Lets go of `hostIds`, which left the account (0091): their sessions, trust, and waiting
+   * requests. Their counts stay, since the relay names who left and shouldn't reset a limit.
+   */
+  async forget(hostIds: string[]) {
+    const { sessions, trusted, books } = this.stored;
+    const held = hostIds.filter((id) => sessions[id] || trusted.includes(id) || books[id]?.kept);
+    if (!held.length) return;
+    this.stored = {
+      ...this.stored,
+      sessions: Object.fromEntries(Object.entries(sessions).filter(([id]) => !held.includes(id))),
+      trusted: trusted.filter((id) => !held.includes(id)),
+      books: Object.fromEntries(
+        Object.entries(books).map(([id, book]) => [id, held.includes(id) ? forgetRequest(book) : book]),
+      ),
+    };
     await this.save();
   }
 

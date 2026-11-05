@@ -177,7 +177,7 @@ export function Onboarding({
 
   const look = async () => {
     const bearer = await token();
-    const found = bearer ? await listHosts(bearer) : undefined;
+    const found = bearer ? (await listHosts(bearer))?.hosts : undefined;
     // Offline for now: what's showing stays, with any code, and the next look tries again.
     if (!found) return setListed((l) => l ?? []);
     setListed(found);

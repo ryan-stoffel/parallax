@@ -44,6 +44,20 @@ test("onboarding lists the account's computers, leaving out those removed from t
   expect(withListed([], [listed("h1", "studio")], ["account:h1"])).toEqual([]);
 });
 
+test("only a mark from the relay drops a computer", () => {
+  const paired = { id: "paired-abc", name: "laptop" };
+  const known = [...withListed([], [listed("h1", "studio"), listed("h2", "mini")]), paired];
+  // Empty and partial lists drop nothing.
+  expect(withListed(known, [])).toBe(known);
+  expect(withListed(known, [listed("h1", "studio")])).toBe(known);
+  // A mark naming neither of them changes nothing either.
+  expect(withListed(known, [], [], ["h3"])).toBe(known);
+  expect(withListed(known, [listed("h1", "studio")], [], ["h2"]).map((m) => m.id)).toEqual([
+    "account:h1",
+    "paired-abc",
+  ]);
+});
+
 test("a new phone asks the computers that are online, and none once it uses one", () => {
   const off = { hostId: "off", name: "off", online: false };
   const hosts = [off, listed("a", "a"), listed("b", "b")];

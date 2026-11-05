@@ -1,7 +1,7 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { commitment, REQUEST_LIFETIME_MS } from "./access";
-import { AccountHosts, Denied } from "./accountHosts";
+import { AccountHosts, Denied, listHosts } from "./accountHosts";
 import { base64url } from "./pairing";
 
 /** Each host's bridge port, and how it answers a path. A rejected answer is a lost connection. */
@@ -60,6 +60,8 @@ beforeEach(() => {
   net.answers = {};
   vi.useRealTimers();
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 test("a tap during a wait keeps the request the host still holds", async () => {
   const values: unknown[] = [];
@@ -128,4 +130,55 @@ test("a request past its lifetime is no longer worth waiting for, but still coun
 
   expect(accounts.waiting("a")).toBe(false);
   expect(accounts.asked("a")).toBe(true);
+});
+
+const answering =(response: Response | Error) =>
+  vi.stubGlobal("fetch", async () => {
+    if (response instanceof Error) throw response;
+    return response;
+  });
+
+test("the list says who left, and a failed read is no list at all", async () => {
+  const host = (hostId: string) => ({ hostId, name: hostId, online: true });
+
+  answering(Response.json({ hosts: [host("a"), host("b")], removed: ["b", "c"] }));
+  expect(await listHosts("token")).toEqual({ hosts: [host("a")], removed: ["b", "c"] });
+
+  // A relay from before `removed` marks nothing.
+  answering(Response.json({ hosts: [host("a")] }));
+  expect(await listHosts("token")).toEqual({ hosts: [host("a")], removed: [] });
+
+  for (const failed of [
+    new Error("offline"),
+    Response.json({ error: "clerk_unreachable" }, { status: 503 }),
+    new Response("<html>"),
+    Response.json({ removed: ["a"] }),
+  ]) {
+    answering(failed);
+    expect(await listHosts("token")).toBeUndefined();
+  }
+});
+
+test("forgetting a computer ends its session, trust, and request, and keeps its counts", async () => {
+  const kept = { kept: { request: "r1", commitment: "c", value: "v", until: Date.now() + 1000 }, requests: [1], setupRuns: [2] };
+  const other = { requests: [3], setupRuns: [] };
+  net.store.set(
+    "account-hosts",
+    JSON.stringify({
+      key: base64url(new Uint8Array(32).fill(1)),
+      sessions: { a: "sa", b: "sb" },
+      trusted: ["a", "b"],
+      books: { a: kept, b: other },
+    }),
+  );
+  const accounts = await load();
+
+  await accounts.forget(["a", "never-here"]);
+
+  expect(accounts.sessions).toEqual(["b"]);
+  expect(accounts.trusts("a")).toBe(false);
+  expect(accounts.asked("a")).toBe(false);
+  const saved = JSON.parse(net.store.get("account-hosts")!);
+  expect(saved.sessions).toEqual({ b: "sb" });
+  expect(saved.books).toEqual({ a: { requests: [1], setupRuns: [2] }, b: other });
 });
