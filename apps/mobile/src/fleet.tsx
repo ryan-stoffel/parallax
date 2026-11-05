@@ -17,7 +17,7 @@ import {
 import { AppState } from "react-native";
 
 import type { ConnectionState, RpcResponse } from "../../desktop/src/preload/bridge";
-import { editRoutes, type RouteEdit } from "../../desktop/src/preload/routeList";
+import type { RouteEdit } from "../../desktop/src/preload/routeList";
 import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import type { AccessState, HostUpdateResult, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
@@ -31,7 +31,7 @@ import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
 import { savePushKey } from "./push";
-import { onPhone } from "./routes";
+import { editOnPhone } from "./routes";
 import { keeper, toAsk } from "./setup";
 
 /** How often the account's computers are listed while the app is in front. */
@@ -524,7 +524,7 @@ export function FleetProvider({
     editRoutes: (id, edit) => {
       const account = setup.machines.find((m) => m.id === id)?.account;
       if (!account) return "That computer isn't on this phone anymore.";
-      const next = editRoutes(account.hostId, onPhone(account), edit);
+      const next = editOnPhone(account.hostId, account, edit);
       if ("error" in next) return next.error;
       const edited = { ...account, ...next };
       update((s) => ({

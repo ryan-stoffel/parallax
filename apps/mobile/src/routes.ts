@@ -1,11 +1,19 @@
 
 // How the phone reaches an account's host (0091 "Routes" and "Speed"), as `plxd dial` does in
-// daemon/src/remote.rs: its LAN addresses and any the user added, then the relay. The direct routes
+// daemon/src/remote.rs: its LAN addresses and any address the user added, then the relay. The direct routes
 // start together and the relay 200 ms later, unless every direct one already failed, and the first
 // to answer wins. Once the user orders them, each starts 200 ms after the one above it instead. The
 // phone doesn't use the Tailscale address a host reports. Pure, so it's tested without React Native.
 
-import { isRelay, routeList, withPort, type RouteChoices } from "../../desktop/src/preload/routeList";
+import {
+  editRoutes,
+  isRelay,
+  parseRoute,
+  routeList,
+  withPort,
+  type RouteChoices,
+  type RouteEdit,
+} from "../../desktop/src/preload/routeList";
 
 export { isRelay, withPort } from "../../desktop/src/preload/routeList";
 
@@ -38,9 +46,39 @@ export const onPhone = (choices: RouteChoices): RouteChoices => ({
 export const ordered = (hostId: string, choices: RouteChoices): string[] =>
   routeList(hostId, onPhone(choices));
 
-/** The routes worth trying at `now`: none of those that failed after answering within `COOL_DOWN_MS`. */
+/** Whether `route` failed after answering within `COOL_DOWN_MS` of `now`. */
+const cooling = (route: string, failedAt: Record<string, number>, now: number) =>
+  now - (failedAt[route] ?? -Infinity) < COOL_DOWN_MS;
+
+/** The routes a dial tries at `now`: none of those cooling down, and always the relay. */
 export const usable = (routes: string[], failedAt: Record<string, number>, now: number) =>
-  routes.filter((r) => isRelay(r) || !(now - (failedAt[r] ?? -Infinity) < COOL_DOWN_MS));
+  routes.filter((r) => isRelay(r) || !cooling(r, failedAt, now));
+
+/** The routes a re-check may move to at `now`: none cooling down, the relay included. */
+export const worthChecking = (routes: string[], failedAt: Record<string, number>, now: number) =>
+  routes.filter((r) => !cooling(r, failedAt, now));
+
+/**
+ * `editRoutes` as the phone takes it. It refuses a public DNS name when it's added: the pinned
+ * requests use URLSession, and App Transport Security's only exception in app.json is local
+ * networking, which covers IP addresses and `.local` names. plxd's certificate is self-signed, so a
+ * public name would fail before the pin decides, with no reason to show. Inferred from the code and
+ * Apple's guidance, not a device test (0091).
+ */
+export function editOnPhone(hostId: string, choices: RouteChoices, edit: RouteEdit) {
+  if ("add" in edit) {
+    const parsed = parseRoute(edit.add);
+    if ("route" in parsed && !worksOnPhone(parsed.route))
+      return { error: "On iPhone, a route must be an IP address or a .local name. iOS blocks other names for a computer with its own certificate." };
+  }
+  return editRoutes(hostId, onPhone(choices), edit);
+}
+
+/** Whether `route`, as `parseRoute` gives it, is an IP address or a `.local` name. */
+function worksOnPhone(route: string): boolean {
+  const host = route.slice(0, route.lastIndexOf(":"));
+  return host.startsWith("[") || /^\d+(\.\d+){3}$/.test(host) || host.endsWith(".local");
+}
 
 /** A route's attempt that failed because another key answered: no route after it is better. */
 export class WrongHost extends Error {}

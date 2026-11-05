@@ -27,7 +27,7 @@ export type RouteEdit = { add: string } | { remove: string } | { move: string; b
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 const NAME =
   /^(?=.{1,253}$)[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$/i;
-const NOT_AN_ADDRESS = "Enter a DNS name or an IP address, with a port if it isn't 7341.";
+const NOT_AN_ADDRESS = "That isn't an address. Add a port only if it isn't 7341.";
 
 /**
  * What the user typed as a route, as `host:port` with plxd's port when it has none, or why it isn't
@@ -36,7 +36,7 @@ const NOT_AN_ADDRESS = "Enter a DNS name or an IP address, with a port if it isn
  */
 export function parseRoute(typed: string): { route: string } | { error: string } {
   const text = typed.trim();
-  if (!text) return { error: "Enter an address, such as studio.example.com or 192.168.1.20:7400." };
+  if (!text) return { error: "Enter an address, with a port if it isn't 7341." };
   if (text.includes("/"))
     return { error: "Enter only the address and port, with no https:// or path." };
   if (text.toLowerCase().startsWith(RELAY)) return { error: "Parallax Relay is already a route." };

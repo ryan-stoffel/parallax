@@ -106,19 +106,6 @@ test("a direct route that answered but never came up waits 5 minutes, and the re
   expect(kept.dial()).toHaveLength(3);
 });
 
-test("a route a re-check found, whose move came up over another, waits 5 minutes", async () => {
-  const { kept } = clocked("192.168.1.20:7341");
-  kept.route = `relay:${studio}`;
-  kept.onStatus("connected");
-  await kept.recheck();
-  // The move: the relay connection ends, and the new dial lands on the relay again.
-  kept.onStatus("connecting");
-  kept.route = `relay:${studio}`;
-  kept.onStatus("connected");
-  expect(kept.dial()).toEqual(["100.74.190.83:7341", `relay:${studio}`]);
-  kept.dispose();
-});
-
 test("a direct connection that came up and later ended holds no route back", () => {
   const { kept } = clocked();
   // Sleep, a network change, or the host restarting: up over the LAN, then gone.
@@ -208,6 +195,54 @@ test("an edit tries a held-back route again, moves off a removed one, and checks
   state.choices = { routes: [lan] };
   kept.edited();
   expect(move).toHaveBeenCalledTimes(3);
+  kept.dispose();
+});
+
+test("a slow route above a working one is moved to once, not every re-check", async () => {
+  const { kept, probe, move } = chosen({ routes: [lan], routeOrder: [relay, lan] }, relay);
+  // As a real dial races them: the LAN starts 200 ms in, and beats a relay still opening its
+  // stream, unless the relay is all there is to dial.
+  const dialed = () => (kept.dial().includes(lan) ? lan : kept.dial()[0]);
+  kept.route = lan;
+  kept.onStatus("connected");
+  move.mockImplementation(() => {
+    kept.onStatus("connecting");
+    kept.route = dialed();
+    kept.onStatus("connected");
+  });
+  for (let i = 0; i < 3; i++) await kept.recheck();
+  expect(kept.route).toBe(relay);
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(move).toHaveBeenCalledTimes(1);
+  kept.dispose();
+});
+
+test("a move that fails goes back to every route, and that route waits 5 minutes", async () => {
+  const clock = { now: 1_000_000 };
+  const probe = vi.fn(async () => relay);
+  const kept = new Routes({
+    hostId: studio,
+    choices: () => ({ routes: [lan], routeOrder: [relay, lan] }),
+    probe,
+    move: () => {},
+    now: () => clock.now,
+  });
+  kept.route = lan;
+  kept.onStatus("connected");
+  await kept.recheck();
+  expect(kept.dial()).toEqual([relay]);
+
+  kept.onStatus("connecting");
+  kept.onStatus("failed");
+  // The relay stays in a dial, but no re-check moves to it for the 5 minutes.
+  expect(kept.dial()).toEqual([relay, lan]);
+  kept.route = lan;
+  kept.onStatus("connected");
+  await kept.recheck();
+  expect(probe).toHaveBeenCalledTimes(1);
+  clock.now += BENCH_MS;
+  await kept.recheck();
+  expect(probe).toHaveBeenCalledTimes(2);
   kept.dispose();
 });
 

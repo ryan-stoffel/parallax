@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { COOL_DOWN_MS, ordered, race, usable, WrongHost } from "./routes";
+import { COOL_DOWN_MS, editOnPhone, ordered, race, usable, worthChecking, WrongHost } from "./routes";
 
 const ID = "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE";
 
@@ -39,6 +39,18 @@ test("added routes come after the LAN ones, stay when the host stops reporting, 
   ).toEqual([`relay:${ID}`, added, "192.168.1.20:7341"]);
 });
 
+test("the phone takes IP addresses and .local names, and refuses other names when they're added", () => {
+  const add = (text: string) => editOnPhone(ID, { routes: [] }, { add: text });
+  expect(add("192.168.1.20:7400")).toMatchObject({ addedRoutes: ["192.168.1.20:7400"] });
+  expect(add("203.0.113.7")).toMatchObject({ addedRoutes: ["203.0.113.7:7341"] });
+  expect(add("fd00::1")).toMatchObject({ addedRoutes: ["[fd00::1]:7341"] });
+  expect(add("Studio.local:7400")).toMatchObject({ addedRoutes: ["studio.local:7400"] });
+  for (const name of ["studio.example.com", "studio.example.com:7400", "studio", "local"])
+    expect(add(name)).toEqual({ error: expect.stringMatching(/IP address or a \.local name/) });
+  // Other bad input keeps its own reason.
+  expect(add("https://x")).toEqual({ error: expect.stringMatching(/no https/) });
+});
+
 test("in the user's order, each route starts 200 ms after the one above it", async () => {
   const added = "studio.example.com:7400";
   const lan = "192.168.1.20:7341";
@@ -69,6 +81,11 @@ test("a LAN route that failed after answering waits out its cool-down", () => {
   const routes = ordered(ID, { routes: ["192.168.1.20"] });
   expect(usable(routes, { "192.168.1.20:7341": 0 }, COOL_DOWN_MS - 1)).toEqual([`relay:${ID}`]);
   expect(usable(routes, { "192.168.1.20:7341": 0 }, COOL_DOWN_MS)).toEqual(routes);
+  // The relay that failed a move stays in a dial, but no re-check goes back to it for a while.
+  const relayFailed = { [`relay:${ID}`]: 0 };
+  expect(usable(routes, relayFailed, 1)).toEqual(routes);
+  expect(worthChecking(routes, relayFailed, 1)).toEqual(["192.168.1.20:7341"]);
+  expect(worthChecking(routes, relayFailed, COOL_DOWN_MS)).toEqual(routes);
 });
 
 /** An attempt per route that answers or fails after `ms`, recording when each started. */

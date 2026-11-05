@@ -216,11 +216,12 @@ export const BENCH_MS = 5 * 60_000;
  * routes not waiting out a failure: `plxd dial` races the direct ones with the relay 200 ms after
  * them, or takes the user's order, once they've set one (`--in-order`). While the connection is on
  * a route with better ones, `recheck` probes those, every `RECHECK_MS` and when hosts.ts calls it
- * on a network change or focus, and `move` reconnects once one answers with the pinned key.
+ * on a network change or focus, and `move` reconnects, over that route alone, once one answers with
+ * the pinned key.
  *
- * A direct route that answered, a probe's or the dial's, but whose connection then never came up
- * over it waits `BENCH_MS`, so a flaky network can't bounce the connection. A connection that came
- * up and later ended, as on sleep, a network change, or the host restarting, holds nothing back.
+ * A route that answered, a probe's or the dial's, but whose connection then never came up over it
+ * waits `BENCH_MS`, so a flaky network can't bounce the connection. A connection that came up and
+ * later ended, as on sleep, a network change, or the host restarting, holds nothing back.
  */
 export class Routes {
   /** The route the current attempt went over, from `plxd dial`'s stderr. */
@@ -246,9 +247,16 @@ export class Routes {
     },
   ) {}
 
-  /** The routes a dial tries, in order. */
+  /**
+   * The routes a dial tries, in order: only the route a re-check found, for the move to it, so a
+   * slower route above a working one can't lose the dial and be moved to again at every re-check.
+   * Otherwise every route not waiting out a failure, and always the relay.
+   */
   dial(): string[] {
-    return this.usable(this.list());
+    if (this.probed) return [this.probed];
+    const list = this.list();
+    const usable = this.usable(list);
+    return list.filter((r) => isRelay(r) || usable.includes(r));
   }
 
   /** Whether a dial takes the routes in the user's order. */
@@ -275,8 +283,6 @@ export class Routes {
   /** The connection's status changed. */
   onStatus(status: "connecting" | "connected" | "failed"): void {
     if (status === "connected") {
-      // Moved for a route that answered a probe, but came up over another.
-      if (this.probed && this.route !== this.probed) this.bench(this.probed);
       this.probed = undefined;
       this.connected = true;
       this.keepChecking();
@@ -322,6 +328,7 @@ export class Routes {
    */
   edited(): void {
     this.benched.clear();
+    this.probed = undefined;
     if (!this.connected || !this.route || !this.list().includes(this.route)) {
       this.options.move();
       return;
@@ -337,9 +344,9 @@ export class Routes {
     else this.stop();
   }
 
-  /** Holds direct route `route` back for `BENCH_MS`. The relay is never held back. */
+  /** Holds `route` back for `BENCH_MS`. A dial still tries the relay, but no re-check moves to it. */
   private bench(route: string): void {
-    if (!isRelay(route)) this.benched.set(route, (this.options.now ?? Date.now)() + BENCH_MS);
+    this.benched.set(route, (this.options.now ?? Date.now)() + BENCH_MS);
   }
 
   dispose(): void {

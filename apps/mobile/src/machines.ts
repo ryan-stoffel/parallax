@@ -59,6 +59,8 @@ interface Link {
   socket?: PinnedSocket;
   failedAt: Record<string, number>;
   recheck?: ReturnType<typeof setInterval>;
+  /** The route a re-check found, which the next open dials alone. */
+  moveTo?: string;
 }
 
 /** The phone's connections, one `WebHost` per computer, and the bridge the shared hooks use. */
@@ -136,11 +138,18 @@ export class Fleet {
     const account = this.account!;
     const link = this.links.get(id) ?? { failedAt: {} };
     this.links.set(id, link);
-    const opened = await account.hosts.open(m.account!.hostId, m.account!, link.failedAt, (routes, name) => {
+    const only = link.moveTo;
+    link.moveTo = undefined;
+    const learn = (routes: string[], name: string) => {
       this.learn(id, routes, name);
       account.learned(id, routes, name);
-    });
-    if ("error" in opened) return opened;
+    };
+    const opened = await account.hosts.open(m.account!.hostId, m.account!, link.failedAt, learn, only);
+    if ("error" in opened) {
+      // The move failed: no re-check goes back to that route for a while, and the retry dials them all.
+      if (only) link.failedAt[only] = Date.now();
+      return opened;
+    }
     if ("gate" in opened) {
       account.gated(id, opened.gate);
       // WebHost hands a revoked connection to `signedOut`, which lets it go.
@@ -165,7 +174,7 @@ export class Fleet {
 
   /**
    * Moves the account computer `id` to a better route when one answers with its key: its connection
-   * ends and opens again, and the race then picks that route.
+   * ends and opens again over that route alone.
    */
   async recheck(id: string): Promise<void> {
     const link = this.links.get(id);
@@ -173,7 +182,10 @@ export class Fleet {
     const socket = link?.socket;
     if (!link || !socket || !link.route || !m?.account || !this.account) return;
     const better = await this.account.hosts.recheck(m.account.hostId, m.account, link.route, link.failedAt);
-    if (better && link.socket === socket) this.reopen(id, link, socket);
+    if (better && link.socket === socket) {
+      link.moveTo = better;
+      this.reopen(id, link, socket);
+    }
   }
 
   private reopen(id: string, link: Link, socket: PinnedSocket): void {
@@ -201,7 +213,10 @@ export class Fleet {
     const account = { ...m.account, ...choices };
     this.machines.set(id, { ...m, account });
     const link = this.links.get(id);
-    if (link) link.failedAt = {};
+    if (link) {
+      link.failedAt = {};
+      link.moveTo = undefined;
+    }
     if (!link?.socket || !link.route) return void this.hosts.get(id)?.retry();
     if (!ordered(account.hostId, account).includes(link.route))
       return this.reopen(id, link, link.socket);

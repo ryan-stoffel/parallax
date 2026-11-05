@@ -112,7 +112,7 @@ export function ComputerRoutesScreen({ route }: NativeStackScreenProps<SettingsS
             value={typed}
             onChangeText={setTyped}
             onSubmitEditing={add}
-            placeholder="studio.example.com:7400"
+            placeholder="192.168.1.20:7400"
             keyboardType="url"
             returnKeyType="done"
             style={{ flex: 1 }}
@@ -125,7 +125,7 @@ export function ComputerRoutesScreen({ route }: NativeStackScreenProps<SettingsS
           </T>
         )}
         <T faint style={styles.note}>
-          A DNS name or address of this computer, with a port if it isn't 7341. It must present this computer's key before anything is sent. plxd only accepts connections from private networks, so a port forward from the internet won't connect.
+          An IP address or .local name of this computer, with a port if it isn't 7341. It must present this computer's key before anything is sent. plxd only accepts connections from private networks, so a port forward from the internet won't connect.
         </T>
       </View>
     </ScrollView>

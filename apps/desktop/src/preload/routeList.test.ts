@@ -30,12 +30,12 @@ test.each([
   ["studio:65536", /port must be/],
   ["999.1.1.1", /valid IP address/],
   ["1.2.3", /valid IP address/],
-  ["--probe", /DNS name or an IP/],
-  ["a b", /DNS name or an IP/],
-  ["user@studio", /DNS name or an IP/],
-  ["fe80::1%en0", /DNS name or an IP/],
-  ["1:2:3", /DNS name or an IP/],
-  ["[studio]", /DNS name or an IP/],
+  ["--probe", /isn't an address/],
+  ["a b", /isn't an address/],
+  ["user@studio", /isn't an address/],
+  ["fe80::1%en0", /isn't an address/],
+  ["1:2:3", /isn't an address/],
+  ["[studio]", /isn't an address/],
   [relay, /already a route/],
 ])("%j is refused", (typed, why) => {
   const parsed = parseRoute(typed);
