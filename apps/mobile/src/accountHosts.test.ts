@@ -93,7 +93,7 @@ test("a fake computer the phone trusts with no tap adds nothing to a real one", 
   // The relay lists "fake", which answers the phone's own request as if allowed: no tap, no prompt.
   net.answers["fake"] = holding(() => session);
   const accounts = await load();
-  await accounts.ask("fake", [], () => {});
+  await accounts.ask("fake", { routes: [] }, () => {});
   expect(accounts.trusts("fake")).toBe(true);
 
   const fake = { id: "fake", lists: fakeLists("real") };
@@ -102,7 +102,7 @@ test("a fake computer the phone trusts with no tap adds nothing to a real one", 
 
   // The phone's request at the real computer is allowed on the user's desktop: it's approved there.
   net.answers["real"] = () => session;
-  await accounts.ask("real", [], () => {});
+  await accounts.ask("real", { routes: [] }, () => {});
   expect(accounts.sessions).toContain("real");
 
   const real = { id: "real", lists: { ...none, approvedClients: ["desktop"], approvedHosts: ["real"] } };
@@ -143,7 +143,7 @@ test("two fakes that list each other, and a real one, still add nothing to it", 
 test("a fake computer can't restrict a real one, here or on any other device", async () => {
   net.answers["fake"] = holding(() => session);
   const accounts = await load();
-  await accounts.ask("fake", [], () => {});
+  await accounts.ask("fake", { routes: [] }, () => {});
   const real = { id: "real", lists: { ...none, approvedHosts: ["real", "other"] } };
   const other = { id: "other", lists: { ...none, approvedClients: ["desktop"], approvedHosts: ["real", "other"] } };
   const known = await accounts.absorb([real, other, { id: "fake", lists: { ...none, allowedHosts: ["real"] } }]);
@@ -160,13 +160,13 @@ test("real computers approved from another device still sync, with no tap and no
   net.answers["a"] = holding(() => session);
   net.answers["b"] = () => session;
   const accounts = await load();
-  await accounts.ask("a", [], () => {});
+  await accounts.ask("a", { routes: [] }, () => {});
 
   const hosts = ["a", "b"];
   const a = { id: "a", lists: { ...none, approvedClients: ["phone", "desktop", "new"], approvedHosts: hosts } };
   await accounts.absorb([a]);
   expect(accounts.trusts("b")).toBe(true);
-  await accounts.ask("b", [], () => {});
+  await accounts.ask("b", { routes: [] }, () => {});
 
   const b = {
     id: "b",
@@ -184,7 +184,7 @@ test("real computers approved from another device still sync, with no tap and no
 test("a computer set up with a typed code gives lists to every computer, and vouches for those it lists", async () => {
   net.answers["typed"] = () => session;
   const accounts = await load();
-  await accounts.setup("typed", [], "123456");
+  await accounts.setup("typed", { routes: [] }, "123456");
 
   const typed = { id: "typed", lists: { ...none, approvedClients: ["phone"], approvedHosts: ["listed"] } };
   const listed = { id: "listed", lists: { ...none, approvedClients: ["desktop"] } };
@@ -207,12 +207,12 @@ test("a computer set up with a typed code gives lists to every computer, and vou
 test("a typed code on a computer that first signed in with no tap counts from then on", async () => {
   net.answers["a"] = holding(() => session);
   const accounts = await load();
-  await accounts.ask("a", [], () => {});
+  await accounts.ask("a", { routes: [] }, () => {});
   const a = { id: "a", lists: { ...none, approvedClients: ["k"] } };
   const other = { id: "other", lists: none };
   expect(of(await accounts.absorb([a, other]), "other").union.approvedClients).toEqual([]);
 
-  await accounts.setup("a", [], "123456");
+  await accounts.setup("a", { routes: [] }, "123456");
   expect(of(await accounts.absorb([a, other]), "other").union.approvedClients).toEqual(["k"]);
 });
 
@@ -262,7 +262,7 @@ test("a malformed answer to access/get is no list, and the others still count", 
 
 test("a restriction a proved computer states outlives it going offline, and a relaunch", async () => {
   const accounts = await load();
-  await accounts.setup("real", [], "123456");
+  await accounts.setup("real", { routes: [] }, "123456");
   // The real computer is online, and says "fake" was added with Allow on another device.
   await accounts.absorb([
     { id: "real", lists: { ...none, allowedHosts: ["fake"] } },

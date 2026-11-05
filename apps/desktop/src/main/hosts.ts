@@ -2058,8 +2058,11 @@ async function readRoutes(id: string): Promise<void> {
   if ("error" in answer || answer.result.hostId !== relayId || !answer.result.routes) return;
   const routes = directRoutes(answer.result.routes);
   const saved = savedAccounts().find((a) => a.hostId === relayId);
-  if (saved && saved.routes.join("\n") !== routes.join("\n"))
+  if (saved && saved.routes.join("\n") !== routes.join("\n")) {
     updateAccount(relayId, (each) => ({ ...each, routes }));
+    // The Routes dialog shows them, and a move there acts on this list.
+    broadcast("parallax:devices", deviceHosts());
+  }
 }
 
 /** The first of `routes` to present account computer `relayId`'s key, sent nothing (0091). */

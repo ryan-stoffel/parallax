@@ -231,8 +231,18 @@ test("an added route reaches a computer, a reorder moves it, and another key get
   await expect(dialog.getByText("Connected")).toBeVisible();
   await expect(row(named)).toContainText("Added");
 
-  // With no order, the LAN route build-box now reports races it and may win. In an order, with the
-  // relay on top, which fails at once here, the name is next and the connection moves to it.
+  // Pairing learned the name as a route too, until build-box's own report replaces that, which puts
+  // what it reports above the name. Moving routes before then would order the wrong list.
+  const relay = `relay:${box.hostId}`;
+  const reported = (await box.result<{ routes: string[] }>("relay/id", {})).routes;
+  const shown = () =>
+    dialog.locator("li").evaluateAll((rows) => rows.map((li) => li.getAttribute("data-route")));
+  await expect
+    .poll(shown)
+    .toEqual([...reported.filter((route) => !route.startsWith("relay:")), named, relay]);
+
+  // With no order, those routes race the name and may win. In an order, with the relay on top,
+  // which fails at once here, the name is next and the connection moves to it.
   const moveToTop = (route: string) =>
     expect(async () => {
       if ((await dialog.locator("li").first().getAttribute("data-route")) === route) return;
@@ -240,7 +250,7 @@ test("an added route reaches a computer, a reorder moves it, and another key get
       throw new Error("one step up");
     }).toPass();
   await moveToTop(named);
-  await moveToTop(`relay:${box.hostId}`);
+  await moveToTop(relay);
   await expect(row(named)).toContainText("Connected");
   await shot("routes-connected-over-added");
 
