@@ -120,8 +120,10 @@ export function SecretCard({
   const paint = useRef<HTMLDivElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
 
+  // Only the editor has a textarea, and the single field keeps `filled` itself.
   function repaint() {
-    const value = field.current?.value ?? "";
+    if (!field.current) return;
+    const { value } = field.current;
     if (paint.current) paintSecret(paint.current, value, shown);
     setLineCount(value.split("\n").length);
     setFilled(!!value.trim());

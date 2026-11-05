@@ -208,4 +208,5 @@ test("Save stays off until the field has something, and the value can be shown",
   await act(async () => show.click());
   expect(input.type).toBe("text");
   expect(input.value).toBe("example");
+  expect(save.disabled).toBe(false);
 });
