@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { isOlder } from "../main/hostUpdate";
 import type { ConnectionState, UpdateState } from "../preload/bridge";
 import type { CliKind, ProviderUpdate } from "../protocol/generated/protocol";
+import { onConnectionShown } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { notify } from "./notifications";
@@ -209,7 +210,8 @@ export function useUpdatePlan(update: UpdateState) {
       setStates((old) => ({ ...old, [hostId]: state }));
       if (checkable(state)) void refresh(hostId);
     };
-    const stop = window.parallax.onConnectionState(check);
+    // As shown, so a short reconnect doesn't take its host out of the plan and back.
+    const stop = onConnectionShown(check);
     for (const id of ids)
       window.parallax.connectionState(id).then(
         (s) => check(id, s),

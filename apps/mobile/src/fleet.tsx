@@ -17,6 +17,7 @@ import {
 import { Alert, AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
+import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
@@ -36,7 +37,10 @@ const LOOK_MS = 15_000;
 export interface Computer {
   machine: Machine;
   state: ConnectionState;
-  connected: boolean;
+  /** For showing status only: a short reconnect doesn't change it. Load and sync by `connectedNow`. */
+  shownConnected: boolean;
+  /** Really connected now. Loading and syncing go by this, and run again when it comes back. */
+  connectedNow: boolean;
   view: ThreadsView;
   outbox: Outbox;
   /** Why an account's computer isn't connecting, until it's set up or approved. */
@@ -158,7 +162,11 @@ export function FleetProvider({
   children: ReactNode;
 }) {
   const [setup, setSetup] = useState(initial);
-  const [states, setStates] = useState<Record<string, ConnectionState>>({});
+  // As shown, so a short reconnect stays out of sight. The outbox goes by the real state.
+  const shown = useShownConnections(setup.machines.map((m) => m.id));
+  const states: Record<string, ConnectionState | undefined> = Object.fromEntries(
+    setup.machines.map((m, i) => [m.id, shown[i]]),
+  );
   const [views, setViews] = useState<Record<string, ThreadsView>>({});
   const [gates, setGates] = useState<Record<string, Gate | undefined>>({});
   const [listed, setListed] = useState<Listed[]>([]);
@@ -342,7 +350,6 @@ export function FleetProvider({
 
   useEffect(() => {
     const listener = window.parallax.onConnectionState((id, state) => {
-      setStates((s) => ({ ...s, [id]: state }));
       if (state.status !== "connected") return;
       void outboxes.get(id)?.drain();
       if (id.startsWith("account:")) gate(id, undefined);
@@ -385,12 +392,14 @@ export function FleetProvider({
     setViews((v) => ({ ...v, [id]: view })),
   ).current;
 
-  const list: Computer[] = setup.machines.map((machine) => {
+  const real = useRealConnections(setup.machines.map((m) => m.id));
+  const list: Computer[] = setup.machines.map((machine, i) => {
     const state = states[machine.id] ?? { status: "connecting" };
     return {
       machine,
       state,
-      connected: state.status === "connected",
+      shownConnected: state.status === "connected",
+      connectedNow: real[i]?.status === "connected",
       view: views[machine.id] ?? idleThreads,
       outbox: outbox(machine.id),
       // Asking stopped: a computer waiting to be set up says why.

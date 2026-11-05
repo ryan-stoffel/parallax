@@ -11,6 +11,7 @@ import {
 
 import type { ConnectionState } from "../preload/bridge";
 import type { Repo } from "../protocol/generated/protocol";
+import { onConnectionShown } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { isRepository } from "./threads";
 import { localId, type Host } from "./hosts";
@@ -68,7 +69,8 @@ function useListings(hosts: Host[], open: boolean): Readonly<Record<string, List
       );
     };
     const hostIds = ids.split("\n");
-    const stop = window.parallax.onConnectionState((hostId, state) => {
+    // As shown, so a short reconnect leaves an open menu as it is.
+    const stop = onConnectionShown((hostId, state) => {
       if (hostIds.includes(hostId)) void list(hostId, state);
     });
     // It rejects only for a host just removed, which the next render leaves out.

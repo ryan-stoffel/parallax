@@ -71,7 +71,7 @@ const routesOf = (m: Computer) => [...(m.machine.account?.routes.filter((r) => !
 
 function StatusDot({ m }: { m: Computer }) {
   const c = useColors();
-  return <Dot color={m.connected ? c.added : m.state.status === "connecting" && !m.gate ? c.warning : c.faintForeground} />;
+  return <Dot color={m.shownConnected ? c.added : m.state.status === "connecting" && !m.gate ? c.warning : c.faintForeground} />;
 }
 
 /** "Parallax (Nightly) 1.2.3 (45)": this build's name and version. */
@@ -447,7 +447,7 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
         <T style={{ fontSize: 20, fontWeight: "600" }}>{m.machine.name}</T>
         <View style={styles.line}>
           <StatusDot m={m} />
-          <T muted>{m.connected ? "Connected" : m.gate ? status(m) : m.state.status === "connecting" ? "Connecting…" : "Not reachable"}</T>
+          <T muted>{m.shownConnected ? "Connected" : m.gate ? status(m) : m.state.status === "connecting" ? "Connecting…" : "Not reachable"}</T>
           {isDefault && <Pill label="Default" color={c.accent} />}
         </View>
       </View>
@@ -465,7 +465,7 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
           <Row title="Paired on this Wi‑Fi" detail={m.machine.paired?.routes[0] ?? ""} last />
         )}
       </Section>
-      {m.connected && (
+      {m.shownConnected && (
         <Section title="Settings" footer={`Saved on ${m.machine.name}, for every device that reaches it.`}>
           {shown.map((page, i) => (
             <Row

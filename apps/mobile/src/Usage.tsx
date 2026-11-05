@@ -86,8 +86,11 @@ export function UsageScreen() {
   const [daily, setDaily] = useState<Record<string, Daily>>({});
   const [limits, setLimits] = useState<Record<string, LimitsAnswer>>({});
 
-  const connected = computers.filter((m) => m.connected);
+  const connected = computers.filter((m) => m.shownConnected);
   const connectedKey = connected.map((m) => m.machine.id).join();
+  // What's asked goes by the real connections, each time one comes back.
+  const up = computers.filter((m) => m.connectedNow);
+  const upKey = up.map((m) => m.machine.id).join();
   const span = buckets(range, now);
   // One request covers the range and the one before it.
   const since = dayKey(span.previous[0]!);
@@ -128,15 +131,15 @@ export function UsageScreen() {
     );
 
   useEffect(() => {
-    if (focused) void loadDaily(connected, since);
-  }, [focused, connectedKey, since]);
+    if (focused) void loadDaily(up, since);
+  }, [focused, upKey, since]);
 
   useEffect(() => {
     if (!focused || view !== "limits") return;
-    void loadLimits(connected);
-    const timer = setInterval(() => void loadLimits(connected), LIMITS_POLL_MS);
+    void loadLimits(up);
+    const timer = setInterval(() => void loadLimits(up), LIMITS_POLL_MS);
     return () => clearInterval(timer);
-  }, [focused, view, connectedKey]);
+  }, [focused, view, upKey]);
 
   /** Asks every computer again, from a pull or the header's button, which spins meanwhile. */
   const refresh = async (from: "pull" | "button") => {
@@ -270,10 +273,10 @@ function History({
   const [by, setBy] = useState<BreakdownBy>("model");
   const answer = (id: string) => daily[`${id} ${since}`];
   const { days, sessions, answered } = gather(
-    computers.filter((m) => m.connected).map((m) => m.machine.id),
+    computers.filter((m) => m.shownConnected).map((m) => m.machine.id),
     answer,
   );
-  const waiting = computers.some((m) => m.connected && !answer(m.machine.id));
+  const waiting = computers.some((m) => m.shownConnected && !answer(m.machine.id));
   // The last frame with usage, shown dimmed while another range loads, so nothing jumps.
   const held = useRef<Frame>(undefined);
   const frame: Frame | undefined = answered > 0 ? { range, span, days, sessions } : undefined;

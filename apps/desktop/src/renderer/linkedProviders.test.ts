@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
+import type { ConnectionState } from "../preload/bridge";
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
 import {
   canLink,
@@ -161,6 +162,7 @@ function computers(lists: Record<string, ProviderInstance[]>) {
     capabilities: { providers: {} },
   };
   const request = vi.fn(async (host: string, method: string, params: Record<string, unknown>) => {
+    if (down.has(host)) return { error: { code: -32603, message: "not connected" } };
     const list = lists[host]!;
     if (method === "providers/save") {
       const saved = params["instance"] as ProviderInstance;
@@ -177,11 +179,14 @@ function computers(lists: Record<string, ProviderInstance[]>) {
     parallax: {
       request,
       connectionState: async () => connected,
-      onConnectionState: () => () => {},
+      onConnectionState: (listener: typeof hear) => ((hear = listener), () => {}),
     },
   });
   return request;
 }
+/** The hosts whose connection is really down, which answer every request `not connected`. */
+const down = new Set<string>();
+let hear: (hostId: string, state: ConnectionState) => void = () => {};
 const hosts = [
   { id: "mini", name: "Mac mini" },
   { id: "laptop", name: "Laptop" },
@@ -234,6 +239,35 @@ test("linking uses the chosen computer's list, and later changes reach every com
   });
   await vi.waitFor(() => expect(lists.mini.map((i) => i.id)).toEqual(["codex"]));
   expect(lists.laptop.map((i) => i.id)).toEqual(["codex", "pi"]);
+});
+
+test("a change made during another computer's short drop reaches it once it's back", async () => {
+  const lists = { mini: [instance("codex")], laptop: [instance("codex")] };
+  const request = computers(lists);
+  await reach();
+  await loadProviders("mini");
+  await act(async () => {
+    await linkProviders("mini");
+  });
+
+  // Inside the grace: it still shows as connected, but can't be reached.
+  down.add("laptop");
+  await act(async () => hear("laptop", { status: "connecting" }));
+  await act(async () => {
+    await saveEverywhere("mini", instance("codex", { name: "Work" }));
+  });
+  down.delete("laptop");
+  await act(async () =>
+    hear("laptop", {
+      status: "connected",
+      plxd: "1",
+      protocol: 1,
+      capabilities: { providers: {} },
+    }),
+  );
+
+  await vi.waitFor(() => expect(lists.laptop.find((i) => i.id === "codex")?.name).toBe("Work"));
+  expect(saved(request, "laptop").length).toBe(1);
 });
 
 test("removing leaves another computer's provider of a different kind under that id", async () => {

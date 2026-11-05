@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { SubscribeParams } from "../preload/bridge";
 import type { InboxItem, Question } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
 
 /**
@@ -41,9 +42,10 @@ export function useInbox(
 ): InboxView {
   const [items, setItems] = useState<InboxItem[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const connectedNow = useConnectedNow(hostId);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !connectedNow) return;
     let stopped = false;
     let unsubscribe = () => {};
     const loadQuestions = async () => {
@@ -81,7 +83,7 @@ export function useInbox(
       stopped = true;
       unsubscribe();
     };
-  }, [hostId, orchestrator, enabled, answerable]);
+  }, [hostId, orchestrator, enabled, answerable, connectedNow]);
 
   const seen = useCallback(
     async (ids: string[]) => {

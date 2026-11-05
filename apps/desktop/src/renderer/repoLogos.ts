@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
 import type { ChosenIcon } from "../protocol/generated/protocol";
-import { useConnections } from "./ConnectionStatus";
+import { useRealConnections } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { readRepoLogo } from "./images";
 import { emptyThreads, isRepository, repoIconOf, type ThreadsView } from "./threads";
@@ -54,7 +54,7 @@ export function useRepoLogos(
   shared: ReadonlyMap<string, ChosenIcon>,
 ) {
   const tried = useRef(new Set<string>());
-  const connections = useConnections(hosts.map((host) => host.id));
+  const connections = useRealConnections(hosts.map((host) => host.id));
   useEffect(() => {
     for (const { hostId, repo, maxBytes } of reposWantingLogo(
       hosts,

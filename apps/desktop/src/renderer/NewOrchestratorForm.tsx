@@ -9,7 +9,7 @@ import type {
   OrchestratorPermission,
   Repo,
 } from "../protocol/generated/protocol";
-import { useConnection } from "./ConnectionStatus";
+import { useShownConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
@@ -71,7 +71,7 @@ export function NewOrchestratorForm({
   );
   // The Workspace's host decides, since the orchestrator is made there. Without `orchestratorEdit`
   // its plxd would drop an icon, so none is shown or sent.
-  const connection = useConnection(workspace?.hostId ?? hostId);
+  const connection = useShownConnection(workspace?.hostId ?? hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : {};
   const iconable = "orchestratorEdit" in capabilities;
   const maxImageBytes = iconImageBytes(connection);

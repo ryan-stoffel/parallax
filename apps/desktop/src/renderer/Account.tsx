@@ -22,7 +22,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 
 import type { DeviceHost, Profile } from "../preload/bridge";
 import type { UsageHour } from "../protocol/generated/protocol";
-import { useConnection } from "./ConnectionStatus";
+import { useConnectedNow } from "./ConnectionStatus";
 import { osName } from "./ConnectWizard";
 import { DeviceIcon } from "./DeviceIcon";
 import { localId, useConnect, useHosts, type Host } from "./hosts";
@@ -595,7 +595,7 @@ function HostUsage({
   since: string;
   onLoad: (hostId: string, hours: UsageHour[]) => void;
 }) {
-  const connected = useConnection(host.id)?.status === "connected";
+  const connected = useConnectedNow(host.id);
   useEffect(() => {
     if (!connected) return;
     let stopped = false;

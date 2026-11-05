@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { StorageItem } from "../../preload/bridge";
-import { useConnection } from "../ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
@@ -113,25 +113,25 @@ function ArchivedThreads() {
 
 /** A computer's archived threads: how many, and Delete all, which asks first, in place. */
 function HostArchived({ host, named }: { host: Host; named: boolean }) {
-  const connected = useConnection(host.id)?.status === "connected";
+  const connected = useShownConnection(host.id)?.status === "connected";
+  const connectedNow = useConnectedNow(host.id);
   const [archived, setArchived] = useState<string[]>();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>();
 
   const load = useCallback(async () => {
-    setArchived(undefined);
     const answer = await window.parallax.request(host.id, "thread/list", {});
-    if ("error" in answer) setError(describeError(answer.error));
+    if ("error" in answer) return setError(describeError(answer.error));
+    setError(undefined);
     // An orchestrator's thread goes only with its orchestrator (0093).
-    else
-      setArchived(
-        answer.result.threads.filter((t) => t.archived && !t.orchestrator).map((t) => t.id),
-      );
+    setArchived(
+      answer.result.threads.filter((t) => t.archived && !t.orchestrator).map((t) => t.id),
+    );
   }, [host.id]);
   useEffect(() => {
-    if (connected) void load();
-  }, [connected, load]);
+    if (connectedNow) void load();
+  }, [connectedNow, load]);
 
   const deleteAll = async () => {
     setDeleting(true);

@@ -6,7 +6,7 @@ import type {
   RemotePairResult,
   RemoteSessionsResult,
 } from "../../protocol/generated/protocol";
-import { statusLabel, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId, useConnect, useHosts, type Host } from "../hosts";
 import { dismiss, notify } from "../notifications";
 import {
@@ -43,8 +43,9 @@ const GRANTS =
  * an address, then the code.
  */
 export function LanSettings() {
-  const local = useConnection(localId);
+  const local = useShownConnection(localId);
   const connected = local?.status === "connected";
+  const connectedNow = useConnectedNow(localId);
   const connect = useConnect();
   const computers = useHosts().filter((h) => h.routes);
   const [on, setOn] = useState<boolean>();
@@ -69,7 +70,7 @@ export function LanSettings() {
     if ("result" in answer) setStatus(answer.result);
   };
   useEffect(() => {
-    if (!connected) return;
+    if (!connectedNow) return;
     void window.parallax.request(localId, "host/settings/get", {}).then((answer) => {
       if (!("result" in answer)) return;
       setOn(answer.result.remote);
@@ -77,13 +78,14 @@ export function LanSettings() {
       setRelay(answer.result.relay);
     });
     void readSessions();
-  }, [connected]);
+  }, [connectedNow]);
   useEffect(() => {
     if (!connected || !relay) return setRelayHosts(undefined);
+    if (!connectedNow) return;
     void window.parallax.relayHosts().then((hosts) => {
       if (typeof hosts !== "string") setRelayHosts(hosts);
     });
-  }, [connected, relay]);
+  }, [connected, connectedNow, relay]);
   // While a code is up, a computer that pairs shows up here, and the code goes, as it does once
   // plxd ends the pairing: used, locked, or expired. A bind that failed shows up too.
   const showing =
@@ -470,7 +472,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
 
 /** A computer this app paired with: its connection, its routes in order, and Remove. */
 function LanComputer({ computer }: { computer: Host }) {
-  const state = useConnection(computer.id);
+  const state = useShownConnection(computer.id);
   const remove = async () => {
     const failed = await window.parallax.removeHost(computer.id);
     if (failed) notify({ tone: "error", title: `Couldn't remove ${computer.name}`, body: failed });

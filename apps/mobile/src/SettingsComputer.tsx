@@ -6,7 +6,7 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import { ArrowUpRight, Copy, Download, KeyRound, Plus, RefreshCw, ShieldCheck } from "lucide-react-native";
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { Alert, Linking, Switch, View } from "react-native";
 
 import type {
@@ -17,7 +17,6 @@ import type {
   KeyAccount,
   Provider,
   RemotePairResult,
-  RemoteSessionsResult,
   RepoScript,
   Role,
   ScheduledTask,
@@ -39,6 +38,7 @@ import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Choices } from "./Choices";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { ago, type SettingsScreens } from "./nav";
+import { useRemoteSessions } from "./remoteSessions";
 import { NewThreadsSection, PhoneConnections } from "./Settings";
 import { choiceKey, pages, type SettingsPage } from "./settingsLogic";
 import { ProvidersPage } from "./SettingsProviders";
@@ -95,8 +95,8 @@ function AccountsPage({ m }: { m: Computer }) {
   }, [id]);
   // Again once the computer connects, as the desktop reloads a host's settings.
   useEffect(() => {
-    if (m.connected) void load();
-  }, [load, m.connected]);
+    if (m.connectedNow) void load();
+  }, [load, m.connectedNow]);
 
   const choose = async (role: Role, key: string) => {
     const option = options?.find((o) => choiceKey(o.account) === key);
@@ -302,8 +302,8 @@ function SchedulesPage({ m }: { m: Computer }) {
     }
   }, [id]);
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && m.connectedNow) void load();
+  }, [supported, m.connectedNow, load]);
 
   const act = async (task: ScheduledTask, action: "pause" | "run" | "delete") => {
     setBusy(task.id);
@@ -414,8 +414,8 @@ function SourceControlPage({ m }: { m: Computer }) {
     }
   }, [id]);
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && m.connectedNow) void load();
+  }, [supported, m.connectedNow, load]);
   // The row moves on by itself once the install ends or the browser approves the code.
   const waiting = !!status?.installing || !!status?.signingIn;
   useEffect(() => {
@@ -546,8 +546,8 @@ function ComputerUsePage({ m }: { m: Computer }) {
     [id],
   );
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && m.connectedNow) void load();
+  }, [supported, m.connectedNow, load]);
   // Turned on in System Settings, a permission shows here without a refresh.
   const missing = !!status && !(status.accessibility && status.screenRecording);
   useEffect(() => {
@@ -655,23 +655,27 @@ function ScriptsPage({ m }: { m: Computer }) {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const repoKey = repo?.id;
+  const edited = useRef(false);
   useEffect(() => {
     setSaved(undefined);
     setFile(undefined);
     setError(undefined);
-    if (!supported || !repoKey) return;
+  }, [id, supported, repoKey]);
+  useEffect(() => {
+    if (!supported || !repoKey || !m.connectedNow) return;
     let live = true;
     void window.parallax.request(id, "repo/scripts", { repo: repoKey }).then((answer) => {
       if (!live) return;
       if ("error" in answer) return setError(describeError(answer.error));
       setSaved(answer.result.scripts);
-      setScripts(answer.result.scripts);
+      // Edits waiting for Save stay, as a reconnect reads these again.
+      if (!edited.current) setScripts(answer.result.scripts);
       setFile({ scripts: answer.result.fileScripts ?? [], error: answer.result.fileError });
     });
     return () => {
       live = false;
     };
-  }, [id, supported, repoKey]);
+  }, [id, supported, repoKey, m.connectedNow]);
 
   if (!supported)
     return (
@@ -695,6 +699,7 @@ function ScriptsPage({ m }: { m: Computer }) {
   };
   const edit = (i: number, change: Partial<RepoScript>) => setScripts(scripts.map((s, j) => (j === i ? { ...s, ...change } : s)));
   const dirty = JSON.stringify(scripts) !== JSON.stringify(saved);
+  edited.current = saved !== undefined && dirty;
 
   return (
     <>
@@ -782,20 +787,13 @@ const iconNames = { laptop: "Laptop", desktop: "PC", mini: "Mini PC", server: "S
 function ConnectionsPage({ m }: { m: Computer }) {
   const id = m.machine.id;
   const { settings, error, set } = useHostSettings(m);
-  const [status, setStatus] = useState<RemoteSessionsResult>();
   const { revoke: revokeSession } = useFleet();
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [picking, setPicking] = useState(false);
   const connect = can(m, "connect");
   const remote = can(m, "remote");
+  const { status, setStatus, readSessions } = useRemoteSessions(id, remote, m.connectedNow);
   const sessions = status?.sessions ?? [];
-  const readSessions = useCallback(async () => {
-    const answer = await window.parallax.request(id, "remote/sessions", {});
-    if ("result" in answer) setStatus(answer.result);
-  }, [id]);
-  useEffect(() => {
-    if (remote) void readSessions();
-  }, [remote, readSessions]);
   // While a code is up, a computer that pairs shows up here, and the code goes, as it does once
   // plxd ends the pairing: used, locked, or expired.
   const showing = code && sessions.length <= code.before && status?.pairing !== false ? code : undefined;
@@ -1031,7 +1029,7 @@ export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenP
       {page === "threads" && <NewThreadsSection />}
       {page === "connections" && <PhoneConnections />}
       <ComputerPicker m={m} onChange={(next) => navigation.setParams({ id: next })} />
-      {m.connected ? (
+      {m.shownConnected ? (
         <Body key={id} m={m} />
       ) : (
         <Section>

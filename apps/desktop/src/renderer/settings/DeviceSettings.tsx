@@ -8,7 +8,7 @@ import type {
   DevicePlatformState,
   DeviceStateResult,
 } from "../../protocol/generated/protocol";
-import { statusLabel, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
 import { AndroidLogo, AppleLogo } from "../logos";
@@ -103,9 +103,10 @@ function PlatformLogo({ state }: { state: DevicePlatformState }) {
 /** One computer's hub, source, and devices. */
 function HostDevices({ host }: { host: Host }) {
   const hostId = host.id;
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && "devices" in connection.capabilities;
+  const connectedNow = useConnectedNow(hostId);
   const [state, setState] = useState<DeviceStateResult>();
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
@@ -131,8 +132,8 @@ function HostDevices({ host }: { host: Host }) {
     }
   }, [hostId]);
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && connectedNow) void load();
+  }, [supported, connectedNow, load]);
   const installing = !!state?.hub.installing;
   useEffect(() => {
     if (!installing) return;

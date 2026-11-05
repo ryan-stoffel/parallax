@@ -11,7 +11,7 @@ import {
 
 import { useId, useState } from "react";
 
-import { useConnection } from "./ConnectionStatus";
+import { useShownConnection } from "./ConnectionStatus";
 
 import { DeviceIcon } from "./DeviceIcon";
 import { localId, type Host } from "./hosts";
@@ -76,7 +76,7 @@ function HostOption({
   missing?: string;
   onClick: () => void;
 }) {
-  const status = useConnection(host.id)?.status;
+  const status = useShownConnection(host.id)?.status;
   const offline = status === "failed";
   const note = offline
     ? "Offline"

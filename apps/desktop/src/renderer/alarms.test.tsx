@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, test } from "vite-plus/test";
+import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import { useConnectionAlarms } from "./alarms";
 import type { Host } from "./hosts";
 import { Notifications } from "./notifications";
+import { RECONNECT_GRACE_MS } from "./reconnectGrace";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.showPopover = () => {};
@@ -27,6 +28,48 @@ function Alarms() {
   useConnectionAlarms(hosts);
   return <Notifications />;
 }
+
+test("a drop raises no notice until its grace ends, and none at all if it reconnects in time", async () => {
+  vi.useFakeTimers();
+  try {
+    const connected: ConnectionState = {
+      status: "connected",
+      plxd: "1",
+      protocol: 1,
+      capabilities: {},
+    };
+    const down: ConnectionState = {
+      status: "failed",
+      error: { reason: "exited", message: "gone" },
+      retrying: true,
+    };
+    let changed: (hostId: string, state: ConnectionState) => void = () => {};
+    const parallax: Partial<ParallaxBridge> = {
+      connectionState: async () => connected,
+      onConnectionState: (listener) => ((changed = listener), () => {}),
+    };
+    Object.assign(window, { parallax });
+    root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => root!.render(<Alarms />));
+    const studio = hosts[1]!.id;
+
+    await act(async () => changed(studio, down));
+    await act(async () => void vi.advanceTimersByTime(RECONNECT_GRACE_MS - 1));
+    expect(document.body.textContent).not.toContain("Lost connection");
+    await act(async () => changed(studio, connected));
+    await act(async () => void vi.advanceTimersByTime(RECONNECT_GRACE_MS));
+    expect(document.body.textContent).not.toContain("Lost connection");
+    expect(document.body.textContent).not.toContain("Reconnected");
+
+    await act(async () => changed(studio, down));
+    await act(async () => void vi.advanceTimersByTime(RECONNECT_GRACE_MS));
+    expect(document.body.textContent).toContain("Lost connection to studio");
+    await act(async () => changed(studio, connected));
+    expect(document.body.textContent).toContain("Reconnected to studio");
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 test("an account computer refused for want of a session raises no error, and another host's refusal does", async () => {
   let changed: (hostId: string, state: ConnectionState) => void = () => {};

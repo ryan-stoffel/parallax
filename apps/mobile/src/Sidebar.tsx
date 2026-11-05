@@ -652,8 +652,8 @@ export function Sidebar() {
   ];
   const scopeLabel = scopes.find((s) => s.value === scope)?.label;
 
-  const offline = computers.filter((m) => !m.connected);
-  const loading = computers.some((m) => m.connected && m.view.loading);
+  const offline = computers.filter((m) => !m.shownConnected);
+  const loading = computers.some((m) => m.shownConnected && m.view.loading);
   const toggle = (title: string) =>
     setFolded((f) => {
       const next = new Set(f);

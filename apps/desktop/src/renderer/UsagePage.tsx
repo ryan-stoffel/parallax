@@ -20,7 +20,7 @@ import {
   type UsageLimitWindow,
   type UsageSessions,
 } from "../protocol/generated/protocol";
-import { statusLabel, useConnection } from "./ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
@@ -70,8 +70,9 @@ const backends = Object.fromEntries(backendIds.map((b) => [b, kinds[b]!])) as Re
  */
 function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccount[] {
   const [keys, setKeys] = useState<KeyAccount[]>([]);
+  const connectedNow = useConnectedNow(hostId);
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || !connectedNow) return;
     let stopped = false;
     void window.parallax.request(hostId, "accounts/keys/list", {}).then((answer) => {
       if (!stopped && "result" in answer) setKeys(answer.result.accounts);
@@ -79,7 +80,7 @@ function useKeys(hostId: string, connected: boolean, refresh?: number): KeyAccou
     return () => {
       stopped = true;
     };
-  }, [hostId, connected, refresh]);
+  }, [hostId, connected, connectedNow, refresh]);
   return keys;
 }
 
@@ -91,7 +92,7 @@ function usageError(error: RpcError): string {
 }
 
 /** A host that isn't answering: its status, or undefined once it's connected. */
-function hostStatus(connection: ReturnType<typeof useConnection>): string | undefined {
+function hostStatus(connection: ReturnType<typeof useShownConnection>): string | undefined {
   if (connection?.status === "connected") return undefined;
   return connection ? statusLabel(connection) : "Connecting…";
 }
@@ -290,11 +291,12 @@ function HostUsageLoader({
   onLoad: (hostId: string, state?: Loaded) => void;
   track: Track;
 }) {
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const connected = connection?.status === "connected";
+  const connectedNow = useConnectedNow(host.id);
   const [answer, setAnswer] = useState<{ since: string; value: UsageDailyResult | RpcError }>();
   useEffect(() => {
-    if (!connected) return;
+    if (!connectedNow) return;
     let stopped = false;
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     void track(window.parallax.request(host.id, "usage/daily", { since, timeZone })).then(
@@ -307,7 +309,7 @@ function HostUsageLoader({
     return () => {
       stopped = true;
     };
-  }, [host.id, connected, since, refresh, track]);
+  }, [host.id, connectedNow, since, refresh, track]);
   const current = answer?.since === since ? answer.value : lastDaily.get(`${host.id} ${since}`);
   const result = connected && current && "days" in current ? current : undefined;
   // Still on its way: connecting, or failed but retrying by itself. It waits with the skeleton.
@@ -1212,9 +1214,9 @@ function HostLimitsLoader({
   track: Track;
   onLoad: (hostId: string, answer?: HostAnswer) => void;
 }) {
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const connected = connection?.status === "connected";
-  const { limits, error } = useLimits(host.id, connected, refresh, track);
+  const { limits, error } = useLimits(host.id, useConnectedNow(host.id), refresh, track);
   const keys = useKeys(host.id, connected, refresh);
   const providers = useProviders(host.id)?.providers;
   // A host that isn't connected gives its status, not its last answer, whose resets are stale.

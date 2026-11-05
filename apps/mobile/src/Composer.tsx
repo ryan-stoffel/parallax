@@ -489,15 +489,16 @@ export function Composer({
   const [stored, setRead] = useState<{ hostId: string; backend?: string }>();
   const read = stored?.hostId === hostId ? stored : undefined;
   const standard = read?.backend;
-  const connected = !!computer?.connected;
+  const connected = !!computer?.shownConnected;
+  const connectedNow = !!computer?.connectedNow;
   useEffect(() => {
-    if (!onStart || !hostId || !connected) return;
+    if (!onStart || !hostId || !connectedNow) return;
     let live = true;
     void defaultBackend(hostId, "worker").then((backend) => live && setRead({ hostId, backend }));
     return () => {
       live = false;
     };
-  }, [!!onStart, hostId, connected]);
+  }, [!!onStart, hostId, connectedNow]);
   const shownProvider = provider ?? run?.backend ?? standard;
   const fallback: Offer = {
     id: "",

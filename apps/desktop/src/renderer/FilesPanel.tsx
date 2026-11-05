@@ -13,6 +13,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentEntry } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
 import { chunksOf, failure, progressFrom, readWorking } from "./documents";
 import { describeError } from "./errors";
 import { DownloadButton } from "./FileCards";
@@ -79,6 +80,7 @@ export function FilesPanel({
   reveal?: { path: string };
 }) {
   // Each listed folder by path, the root's as "".
+  const connectedNow = useConnectedNow(hostId);
   const [listings, setListings] = useState<Record<string, Listing>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [openPath, setOpenPath] = useState(reveal?.path);
@@ -103,8 +105,8 @@ export function FilesPanel({
   const show = (folder: string) => (listing: Listing) =>
     setListings((prev) => ({ ...prev, [folder]: listing }));
   useEffect(() => {
-    if (!unavailable) void listFolder(hostId, runId, "").then(show(""));
-  }, [hostId, runId, unavailable]);
+    if (!unavailable && connectedNow) void listFolder(hostId, runId, "").then(show(""));
+  }, [hostId, runId, unavailable, connectedNow]);
   const relist = (...folders: string[]) =>
     Promise.all([...new Set(folders)].map((f) => listFolder(hostId, runId, f).then(show(f))));
 

@@ -84,6 +84,8 @@ beforeEach(async () => {
     platform: "darwin",
     request,
     watch: () => () => {},
+    connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities: {} }),
+    onConnectionState: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   renderPanel = (props = {}) =>

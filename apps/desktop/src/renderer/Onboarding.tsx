@@ -27,7 +27,7 @@ import {
 import { NPM_INSTALLS, type Profile } from "../preload/bridge";
 import type { ProviderInfo } from "../protocol/generated/protocol";
 import { SecuredByClerk } from "./Account";
-import { useConnection } from "./ConnectionStatus";
+import { useShownConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts } from "./hosts";
 import { bindingOf, formatKeybinding, type Command } from "./keybindings";
@@ -335,7 +335,7 @@ function agentFailed(title: string, error: string | undefined) {
  * isn't installed offers Install, after which it's set up again.
  */
 function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }) {
-  const connection = useConnection(localId);
+  const connection = useShownConnection(localId);
   const providers = useProviders(localId)?.providers;
   // Until the first setup ends, a row plxd hasn't probed yet is still looking.
   const [scanned, setScanned] = useState(false);

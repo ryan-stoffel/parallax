@@ -28,7 +28,7 @@ export const allAccess: AgentPermission[] = ["manual", "edit", "auto", "plan", "
 export function useOffers(computer: Computer | undefined): Offer[] {
   const [listed, setListed] = useState<ProvidersListResult>();
   const id = computer?.machine.id;
-  const providers = computer?.connected && "providers" in (computer.view.capabilities ?? {});
+  const providers = computer?.connectedNow && "providers" in (computer.view.capabilities ?? {});
   useEffect(() => {
     if (!id || !providers) return;
     void window.parallax.request(id, "providers/list", { refresh: false }).then((answer) => {

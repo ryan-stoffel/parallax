@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RepoScript } from "../../protocol/generated/protocol";
-import { useConnection } from "../ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { notify } from "../notifications";
 import { field, primaryButton, quietButton, Section, settingRow, Switch } from "./parts";
@@ -21,20 +21,23 @@ export function RepoScripts({
   hostId: string;
   repo: { id: string; name: string };
 }) {
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && "setupScripts" in connection.capabilities;
+  const connectedNow = useConnectedNow(hostId);
   const [saved, setSaved] = useState<RepoScript[]>();
   const [scripts, setScripts] = useState<RepoScript[]>([]);
   const [file, setFile] = useState<{ scripts: RepoScript[]; error?: string }>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const edited = useRef(false);
 
   const load = useCallback(async () => {
     const answer = await window.parallax.request(hostId, "repo/scripts", { repo: repo.id });
     if ("error" in answer) return setError(describeError(answer.error));
     setSaved(answer.result.scripts);
-    setScripts(answer.result.scripts);
+    // Edits waiting for Save stay, as a reconnect reads these again.
+    if (!edited.current) setScripts(answer.result.scripts);
     setFile({ scripts: answer.result.fileScripts ?? [], error: answer.result.fileError });
     setError(undefined);
   }, [hostId, repo.id]);
@@ -42,8 +45,10 @@ export function RepoScripts({
     setSaved(undefined);
     setFile(undefined);
     setError(undefined);
-    if (supported) void load();
-  }, [supported, load]);
+  }, [supported, hostId, repo.id]);
+  useEffect(() => {
+    if (supported && connectedNow) void load();
+  }, [supported, connectedNow, load]);
 
   const save = async () => {
     setBusy(true);
@@ -64,6 +69,7 @@ export function RepoScripts({
   const edit = (i: number, change: Partial<RepoScript>) =>
     setScripts(scripts.map((s, j) => (j === i ? { ...s, ...change } : s)));
   const dirty = JSON.stringify(scripts) !== JSON.stringify(saved);
+  edited.current = saved !== undefined && dirty;
 
   const empty = !connected
     ? "Not connected"

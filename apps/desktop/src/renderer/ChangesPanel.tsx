@@ -2,6 +2,7 @@ import { GitCompare, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { ThreadRun } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { ChangesDiff } from "./ChangesDiff";
 import { useProviders } from "./providers";
@@ -67,6 +68,7 @@ export function ChangesPanel({
   const providers = useProviders(hostId);
   const backendKind =
     providers?.providers.find((p) => p.instance.id === backend)?.instance.kind ?? backend;
+  const connectedNow = useConnectedNow(hostId);
   const [runs, setRuns] = useState<ThreadRun[] | { error: string }>();
   // The turn shown by its ordinal, or every turn.
   const mine = request?.runId === runId ? request : undefined;
@@ -120,6 +122,7 @@ export function ChangesPanel({
 
   useEffect(() => {
     if (latest === undefined) return setShown(undefined);
+    if (!connectedNow) return;
     let stale = false;
     const answer =
       ordinal === undefined
@@ -138,7 +141,7 @@ export function ChangesPanel({
     return () => {
       stale = true;
     };
-  }, [hostId, runId, latest, ordinal]);
+  }, [hostId, runId, latest, ordinal, connectedNow]);
 
   const previous = turn ? turns[turns.indexOf(turn) - 1] : undefined;
   const refusal =

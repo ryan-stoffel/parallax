@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { RpcError } from "../../preload/bridge";
 import type { GithubStatus, PrMergeMethod } from "../../protocol/generated/protocol";
 import { useCopy } from "../AgentChat";
-import { statusLabel, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
 import { locale } from "../locale";
@@ -150,10 +150,11 @@ function GitHub({
   /** Which computer's it shows, beside the first's title. */
   picker: ReactNode;
 }) {
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const connected = connection?.status === "connected";
   // A plxd from before `github/status` can't say, and one from before `githubSetup` can't set up.
   const supported = connected && "githubStatus" in connection.capabilities;
+  const connectedNow = useConnectedNow(host.id);
   const setup = connected && "githubSetup" in connection.capabilities;
   const [status, setStatus] = useState<GithubStatus>();
   const [error, setError] = useState<string>();
@@ -179,8 +180,8 @@ function GitHub({
     [host.id],
   );
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && connectedNow) void load();
+  }, [supported, connectedNow, load]);
   // The row moves on by itself once the install ends or the browser approves the code.
   const waiting = !!status?.installing || !!status?.signingIn;
   useEffect(() => {

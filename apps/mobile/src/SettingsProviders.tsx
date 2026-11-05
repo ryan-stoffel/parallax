@@ -108,8 +108,8 @@ export function ProvidersPage({ m }: { m: Computer }) {
   const [adding, setAdding] = useState(false);
   const supported = can(m, "providers");
   useEffect(() => {
-    if (supported) void load(id).then(setError);
-  }, [id, supported]);
+    if (supported && m.connectedNow) void load(id).then(setError);
+  }, [id, supported, m.connectedNow]);
 
   if (!supported) return <Section><Note>Update plxd on this computer to manage its providers here.</Note></Section>;
   const list = listed?.providers;
@@ -234,7 +234,7 @@ export function ProviderScreen({ route, navigation }: NativeStackScreenProps<Set
     return (
       <Page>
         <Section>
-          <Note>{m?.connected === false ? "Not connected" : "This provider isn't on the computer anymore."}</Note>
+          <Note>{m?.shownConnected === false ? "Not connected" : "This provider isn't on the computer anymore."}</Note>
         </Section>
       </Page>
     );

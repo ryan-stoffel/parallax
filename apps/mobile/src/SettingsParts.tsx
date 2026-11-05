@@ -139,7 +139,7 @@ export function ComputerPicker({ m, onChange }: { m: Computer; onChange: (id: st
       <Row
         leading={<DeviceIcon name={m.machine.name} size={18} color={c.mutedForeground} />}
         title={m.machine.name}
-        detail={m.connected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
+        detail={m.shownConnected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
         last
         onPress={more ? () => setOpen(true) : undefined}
         right={more ? <Icon icon={ChevronsUpDown} size={16} color={c.faintForeground} /> : undefined}
@@ -151,7 +151,7 @@ export function ComputerPicker({ m, onChange }: { m: Computer; onChange: (id: st
         options={computers.map((x) => ({
           value: x.machine.id,
           label: x.machine.name,
-          description: x.connected ? "Connected" : "Not connected",
+          description: x.shownConnected ? "Connected" : "Not connected",
         }))}
         onChoose={onChange}
         onClose={() => setOpen(false)}
@@ -170,7 +170,7 @@ export function useHostSettings(m: Computer) {
   const [error, setError] = useState<string>();
   // Read once the computer connects, and again after each reconnect.
   useEffect(() => {
-    if (!m.connected) return;
+    if (!m.connectedNow) return;
     let live = true;
     void window.parallax.request(id, "host/settings/get", {}).then((answer) => {
       if (!live) return;
@@ -180,7 +180,7 @@ export function useHostSettings(m: Computer) {
     return () => {
       live = false;
     };
-  }, [id, m.connected]);
+  }, [id, m.connectedNow]);
   const set = async (change: HostSettingsSetParams, title: string) => {
     const before = settings;
     setSettings((s) => s && { ...s, ...change });

@@ -108,10 +108,9 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
   const turn = choices.find((t) => t.ordinal === shownTurn);
   const ordinal = turn?.ordinal;
 
+  useEffect(() => setShown(undefined), [hostId, runId, latest, ordinal]);
   useEffect(() => {
-    if (unavailable) return;
-    setShown(undefined);
-    if (latest === undefined) return;
+    if (unavailable || !computer?.connectedNow || latest === undefined) return;
     let live = true;
     const answer =
       ordinal === undefined
@@ -123,7 +122,7 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
     return () => {
       live = false;
     };
-  }, [hostId, runId, latest, ordinal, unavailable]);
+  }, [hostId, runId, latest, ordinal, unavailable, computer?.connectedNow]);
 
   const diff = shown && "diff" in shown ? shown : undefined;
   const files = useMemo(() => (diff ? parseDiff(diff.diff) : []), [diff]);
