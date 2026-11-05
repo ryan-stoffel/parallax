@@ -115,6 +115,8 @@ export function ThreadTabs({
         {tabs.map((tab, i) => {
           const selected = tab.id === active;
           const last = i === tabs.length - 1;
+          // At the card's left edge.
+          const edge = flush && i === 0;
           return (
             <div
               key={tab.id}
@@ -130,14 +132,14 @@ export function ThreadTabs({
                 e.preventDefault();
                 onClose(tab.id);
               }}
-              className={`group/tab relative flex max-w-56 shrink items-center ${selected ? `pane-edge tab-shown min-w-24 self-stretch rounded-t-[10px] bg-pane pb-0.5 ${flush ? "rounded-tl-prompt" : ""}` : "mb-2 h-7 min-w-16 rounded-md hover:bg-hover"}`}
+              className={`group/tab relative flex max-w-56 shrink items-center ${selected ? `pane-edge tab-shown min-w-24 self-stretch rounded-t-[10px] bg-pane pb-0.5 ${edge ? "rounded-tl-prompt" : ""}` : "mb-2 h-7 min-w-16 rounded-md hover:bg-hover"}`}
               data-marked={selected && marked ? "" : undefined}
-              data-flush={flush ? "" : undefined}
+              data-flush={edge ? "" : undefined}
             >
               {(landing === tab.id || (landing === null && last)) && (
                 <span
                   aria-hidden
-                  className={`pointer-events-none absolute inset-y-0.5 z-[1] w-0.5 rounded-full bg-accent ${last && landing === null ? "-right-0.5" : flush ? "left-0" : "-left-0.5"}`}
+                  className={`pointer-events-none absolute inset-y-0.5 z-[1] w-0.5 rounded-full bg-accent ${last && landing === null ? "-right-0.5" : edge ? "left-0" : "-left-0.5"}`}
                 />
               )}
               {selected && <span aria-hidden className="tab-cap" />}
@@ -147,7 +149,7 @@ export function ThreadTabs({
                 aria-selected={selected}
                 title={tab.title}
                 onClick={() => onSelect(tab.id)}
-                className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-0 text-left text-body outline-none focus-visible:ring-1 focus-visible:ring-ring ${flush ? "pl-4" : "pl-2.5"} ${selected && closable ? "pr-1" : "pr-2.5"} ${selected ? `font-medium ${focused ? "text-foreground" : "text-muted-foreground"}` : "text-faint-foreground"}`}
+                className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-0 text-left text-body outline-none focus-visible:ring-1 focus-visible:ring-ring ${edge ? "pl-4" : "pl-2.5"} ${selected && closable ? "pr-1" : "pr-2.5"} ${selected ? `font-medium ${focused ? "text-foreground" : "text-muted-foreground"}` : "text-faint-foreground"}`}
               >
                 <span className="flex shrink-0 [&_svg]:size-4">{tab.icon}</span>
                 <span className="min-w-0 flex-1 truncate">{tab.title}</span>
