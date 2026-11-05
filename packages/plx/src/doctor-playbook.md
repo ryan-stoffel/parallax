@@ -58,7 +58,7 @@ the agent CLIs it runs, git worktrees, and the SQLite store. The app is only a c
   7341 with TLS, and the relay carries only ciphertext to that listener. `npx plx-cli connect` sets
   this up. A new device or computer needs one approval with a 6-digit code.
 - Tailscale is an optional direct route: with `connect` on, plxd also listens on TCP 7340 on its
-  Tailscale address. A computer with the relay connected doesn't need it.
+  Tailscale address. A computer with the relay connected and `remote` listening doesn't need it.
 - SSH hosts are reached with `ssh … plxd attach`, falling back to plxd in `~/.parallax-plxd`,
   `~/.local/bin`, or the app.
 - The `parallax` command is plxd under another name: with no arguments it opens the terminal UI.
