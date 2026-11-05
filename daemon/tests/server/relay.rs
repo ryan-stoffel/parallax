@@ -582,7 +582,7 @@ async fn removing_a_device_on_one_computer_cuts_it_off_on_the_others_within_seco
 async fn the_connection_check_crosses_the_relay_and_names_the_part_that_failed() {
     let (Ok(url), Ok(token)) = (
         std::env::var("PLXD_TEST_RELAY_URL"),
-        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+        std::env::var("PLXD_TEST_RELAY_CHECK_TOKEN"),
     ) else {
         return;
     };
