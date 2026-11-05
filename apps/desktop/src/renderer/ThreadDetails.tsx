@@ -44,15 +44,15 @@ const WORKSPACE_ITEMS = ["environment", "openIn", "actions", "project"] as const
 
 /** The docked card's width, `w-72`, its right gap included. */
 const DOCKED_WIDTH = 288;
-/** The transcript's column, `max-w-3xl`, which a docked card must leave whole. */
-const TRANSCRIPT_WIDTH = 768;
+/** The least a thread keeps beside a docked card, as it keeps beside the app's panels. */
+const MIN_THREAD_WIDTH = 400;
 
 /**
- * Whether docking Thread details in a row `width` wide would squeeze the transcript's column, so
- * the card floats over the thread instead.
+ * Whether docking Thread details in a row `width` wide would leave a thread too little room, so
+ * the card floats over the thread instead. `share` is the narrowest tile's part of the row.
  */
-export const tooNarrowToDock = (width: number) =>
-  width > 0 && width - DOCKED_WIDTH < TRANSCRIPT_WIDTH;
+export const tooNarrowToDock = (width: number, share = 1) =>
+  width > 0 && (width - DOCKED_WIDTH) * share < MIN_THREAD_WIDTH;
 
 type ThreadDetailsMode = "docked" | "floating" | "hidden";
 
@@ -69,23 +69,23 @@ function readOpen(): string[] {
 /**
  * Where Thread details shows for the thread `key` names, in the thread row `ref` is set on, which
  * may unmount and return (behind the Pull requests page) and is measured again each time. Each
- * thread keeps its own choice, hidden until shown there. Shown, it docks beside the thread while
- * the transcript keeps its whole column, and floats over the thread's right when docking would
- * squeeze it.
+ * thread keeps its own choice, hidden until shown there. Shown, it docks beside the thread, which
+ * centers its text and composer in what's left, and floats over the thread only when docking
+ * wouldn't leave it enough room. `share` is the narrowest tile's part of the row.
  */
-export function useThreadDetails(key: string) {
+export function useThreadDetails(key: string, share = 1) {
   const [element, ref] = useState<HTMLElement | null>(null);
   const [open, setOpen] = useState(readOpen);
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
     if (!element) return;
-    const measure = () => setNarrow(tooNarrowToDock(element.getBoundingClientRect().width));
+    const measure = () => setNarrow(tooNarrowToDock(element.getBoundingClientRect().width, share));
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [element]);
+  }, [element, share]);
   // Shows or hides it for `key`'s thread, by default the open one's: a split's tile names its own.
   const toggle = (which = key) =>
     setOpen((was) => {

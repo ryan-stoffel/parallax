@@ -130,6 +130,7 @@ import { keptRemoteControl, MoveRemoteControl } from "./MoveRemoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
+import { rectOf } from "./splitLayout";
 import { SplitTiles } from "./SplitTiles";
 import type { TabItem } from "./ThreadTabs";
 import {
@@ -739,13 +740,16 @@ export function App() {
     "threadLineage" in threads.capabilities && openThread
       ? lineageOf(threads.state, openThread)
       : undefined;
-  // Thread details, docked at the thread's right, or floating over it when the row is narrow.
+  // Thread details, docked at the thread's right, or floating over it when the row is too narrow.
   // Shown or hidden per thread, which its children and parent share, so opening one from
   // Lineage keeps it open.
   const details = useThreadDetails(
     openThread
       ? JSON.stringify([host.id, "thread", rootOf(threads.state, openThread).id])
       : panelKey,
+    workspace.maximized
+      ? 1
+      : Math.min(...workspace.panes.map((pane) => rectOf(pane.cells, workspace.cuts).width)),
   );
   // Each open thread's agent's own subagents, as its chat reports them (PLX-382).
   const [native, setNative] = useState<Readonly<Record<string, NativeSubagent[]>>>({});
@@ -1320,10 +1324,10 @@ export function App() {
     sidePanelOpen ? "" : "window-controls-inset",
   ].join(" ");
 
-  // A split always floats Thread details in its tile. One tile docks it beside the row when there's
-  // room, and floats it in the tile otherwise.
-  const detailsInTile =
-    !group.project && (tiled ? selection.kind === "thread" : details.mode === "floating");
+  // A split shows Thread details for a thread. Floating, it sits in the focused tile, and docked
+  // or hidden, at the row's end.
+  const detailsShown = !tiled || selection.kind === "thread";
+  const detailsInTile = detailsShown && !group.project && details.mode === "floating";
   // The PR view takes over from Thread details when it opens a pull request.
   const openPrFromDetails = (url?: string) => {
     openPr(url);
@@ -1853,11 +1857,7 @@ export function App() {
                           );
                         }}
                         // Floating, it sits in the card, below the tabs' row and its buttons.
-                        details={
-                          detailsInTile
-                            ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")
-                            : undefined
-                        }
+                        details={detailsInTile ? threadDetails("floating") : undefined}
                         // A tab anywhere, or a sidebar thread not over a composer, which takes it to
                         // attach (PLX-378).
                         drop={{
@@ -2011,7 +2011,7 @@ export function App() {
                       />
                     </div>
                   </div>
-                  {!tiled &&
+                  {detailsShown &&
                     !detailsInTile &&
                     threadDetails(group.project ? "hidden" : details.mode)}
                 </div>
