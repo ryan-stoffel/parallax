@@ -137,7 +137,7 @@ export function ThreadTabs({
               {(landing === tab.id || (landing === null && last)) && (
                 <span
                   aria-hidden
-                  className={`pointer-events-none absolute inset-y-0.5 z-[1] w-0.5 rounded-full bg-accent ${last && landing === null ? "-right-0.5" : "-left-0.5"}`}
+                  className={`pointer-events-none absolute inset-y-0.5 z-[1] w-0.5 rounded-full bg-accent ${last && landing === null ? "-right-0.5" : flush ? "left-0" : "-left-0.5"}`}
                 />
               )}
               {selected && <span aria-hidden className="tab-cap" />}

@@ -205,7 +205,9 @@ function tabItem(tab: ThreadTab, { state }: ThreadsView): TabItem {
     };
   }
   if (selection.kind === "new") {
-    const repo = state.repos.find((r) => r.id === selection.groupId);
+    // With no group, it's the first one, as the page's is.
+    const groupId = selection.groupId ?? groupThreads(state)[0]?.id;
+    const repo = state.repos.find((r) => r.id === groupId);
     return { id, title: repo?.project ? repo.name : "New thread", icon: <RepoIcon repo={repo} /> };
   }
   const { threadId } = selection;
@@ -1804,7 +1806,7 @@ export function App() {
                         controls={topControls}
                         controlsClass={sidePanelOpen ? "" : "window-controls-inset"}
                         closable={closableTab}
-                        hideTabs={!closableTab && shownTitle === "New thread"}
+                        hideTabs={!closableTab && !group.project}
                         onSelectTab={(tabId) => setWorkspace((state) => selectTab(state, tabId))}
                         onCloseTab={(tabId) => setWorkspace((state) => closeTab(state, tabId))}
                         onNewTab={(paneId) => {

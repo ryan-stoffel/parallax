@@ -614,17 +614,16 @@ export interface Crumb {
   label: string;
   icon?: ReactNode;
   /**
-   * Makes it a button to that page, such as back to an orchestrator or on to New thread. The last
+   * Makes it a button to that page, such as back to an orchestrator or a parent thread. The last
    * crumb with one isn't the current page.
    */
   onClick?: () => void;
 }
 
 /**
- * Where the user is: host, workspace, then the current page, split by slashes. The host and the
- * workspace keep their names. Crumbs after them, such as a parent thread and the page, shrink down
- * to a few letters. In a narrow `@container`, a trail of three or more drops its host, and with
- * `tight`, a wider one drops its host and workspace too, for the tabs beside it.
+ * A trail of pages, split by slashes. The first two keep their names, and crumbs after them shrink
+ * down to a few letters. In a narrow `@container`, a trail of three or more drops its first crumb,
+ * and with `tight`, a wider one drops its first two, for the tabs beside it.
  */
 export function Breadcrumb({ items, tight }: { items: Crumb[]; tight?: boolean }) {
   return (

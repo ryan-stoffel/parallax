@@ -1119,7 +1119,7 @@ test("a Project is made from the Projects page, opens to New thread in it, and k
   await settle();
   const [made] = calls("project/create");
   expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
-  // A Project's page is the Project, so its crumbs end there.
+  // A Project's page is the Project, so its tab names it and no crumb does.
   expect(crumbs()).toEqual(["Essays"]);
   // Its icon in the header opens the icon picker under it.
   const icon = document.querySelector<HTMLElement>('main button[aria-label="Change icon"]')!;
@@ -1272,6 +1272,29 @@ test("Thread details adds the open thread to a Project and takes it out", async 
 
   await click(projects().find((b) => b.textContent === "Remove from Project"));
   expect(calls("thread/setProject").at(-1)).toEqual({ threads: ["t-draft"] });
+  expect(details.querySelector('button[aria-label="Project: Essays"]')).toBeNull();
+});
+
+test("a Project's page that opens first keeps its tab", async () => {
+  capabilities = { projects: {}, projectThreads: {}, projectContext: {} };
+  answers["thread/list"] = () => ({
+    result: {
+      repos: [
+        {
+          id: "s-essays",
+          name: "Essays",
+          path: "/data/spaces/s-essays",
+          project: true,
+          createdAt: "2026-09-29T11:00:00Z",
+        },
+      ],
+      threads: [],
+      seq: 7,
+    },
+  });
+  await renderApp();
+  expect(crumbs()).toEqual(["Essays"]);
+  expect(document.querySelector('button[aria-label="New tab"]')).not.toBeNull();
 });
 
 test("a Project's page adds threads from another computer, making the Project there", async () => {
