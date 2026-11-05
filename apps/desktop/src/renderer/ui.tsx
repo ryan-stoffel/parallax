@@ -11,6 +11,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type Ref,
   type ToggleEvent,
 } from "react";
 
@@ -127,6 +128,7 @@ export function IconButton({
   command?: Command;
   size?: keyof typeof iconButtonSizes;
   reveal?: boolean;
+  ref?: Ref<HTMLButtonElement>;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   const keys = useShortcutLabel(command);
   return (

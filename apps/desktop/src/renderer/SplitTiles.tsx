@@ -1,6 +1,7 @@
 import { PanelTop } from "lucide-react";
 import {
   useLayoutEffect,
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -76,8 +77,9 @@ type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
  *
  * A divider on each line, showing a short grip under the pointer or keyboard focus, drags or arrow-keys
  * to resize and double-clicks back to even. A drag shows
- * its lines here and hands them up once it ends, so App doesn't render on every move. `details` floats
- * over the focused pane's card. A tab or sidebar thread `drop` accepts, dragged over the window, previews
+ * its lines here and hands them up once it ends, so App doesn't render on every move. `details` sits
+ * in the focused pane's card. It stays as it is until a press ends, so a press in another card doesn't
+ * reflow what's under the pointer and lose its click. A tab or sidebar thread `drop` accepts, dragged over the window, previews
  * where it would land: the window's sides, top, bottom, and corners are zones (`zoneAt`), and its
  * middle adds a tab to the pane under the pointer.
  */
@@ -97,8 +99,8 @@ export function SplitTiles({
   onCloseTab,
   onNewTab,
   onDropOnTabs,
-  details,
   drop,
+  details,
 }: {
   items: TileItem[];
   focused: number;
@@ -116,12 +118,47 @@ export function SplitTiles({
   onCloseTab: (tabId: string) => void;
   onNewTab: (paneId: string) => void;
   onDropOnTabs: (drop: TabDrop, paneId: string, before?: string) => void;
-  details?: ReactNode;
   drop?: {
     accepts: (e: DragEvent) => boolean;
     onDrop: (target: TileDrop, e: DragEvent) => void;
   };
+  details?: ReactNode;
 }) {
+  // `details` as it was when a press began, and the pane it was in, kept until the press ends. A
+  // press may never report its release, as when it opens a native menu, which on a Mac Control-click
+  // does with the primary button. So a menu or the window losing focus ends it too, and another
+  // button never starts one.
+  const [held, setHeld] = useState<{ pane: string; details: ReactNode }>();
+  const latest = useRef({ pane: items[focused]?.paneId, details });
+  latest.current = { pane: items[focused]?.paneId, details };
+  const several = items.length > 1;
+  useEffect(() => {
+    if (!several) return;
+    // Captured, so it's read before the press moves focus.
+    const press = (e: PointerEvent) => {
+      const { pane, details } = latest.current;
+      if (e.button === 0 && pane) setHeld({ pane, details });
+    };
+    // After the click that follows the release.
+    const release = () => window.setTimeout(() => setHeld(undefined));
+    const ends = ["pointerup", "pointercancel", "contextmenu"];
+    window.addEventListener("pointerdown", press, true);
+    for (const end of ends) window.addEventListener(end, release, true);
+    // Not captured, so it's the window's own and not focus moving inside the page, which a press
+    // on a button does.
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("pointerdown", press, true);
+      for (const end of ends) window.removeEventListener(end, release, true);
+      window.removeEventListener("blur", release);
+      setHeld(undefined);
+    };
+  }, [several]);
+  // A held pane that closed during the press gives way to the focused one.
+  const holding =
+    several && held && items.some((item) => item.paneId === held.pane) ? held : undefined;
+  const detailsPane = holding?.pane ?? items[focused]?.paneId;
+  const shownDetails = holding ? holding.details : details;
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
@@ -276,7 +313,7 @@ export function SplitTiles({
           </div>
         );
       })}
-      {items.map(({ key, node }, i) => {
+      {items.map(({ key, paneId, node }, i) => {
         const tile = tiles[tileOf(i)]!;
         const active = activeIn(tile) === i;
         return (
@@ -298,7 +335,7 @@ export function SplitTiles({
                 className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-4 bg-linear-to-b from-pane to-transparent"
               />
               {node}
-              {i === focused && details}
+              {paneId === detailsPane && shownDetails}
             </div>
           </div>
         );

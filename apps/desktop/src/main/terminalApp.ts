@@ -56,6 +56,47 @@ export function terminalCommand(
   return { file: app, args: folderFlags[name]?.(folder) ?? [], cwd: folder };
 }
 
+/**
+ * What precedes a command for each known terminal to run it elsewhere than macOS. `-e` is for the
+ * others, as most terminals take it.
+ */
+const commandFlags: Record<string, string[]> = {
+  "wt.exe": [],
+  "windowsterminal.exe": [],
+  "wezterm-gui.exe": ["start", "--"],
+  wezterm: ["start", "--"],
+  "gnome-terminal": ["--"],
+  "xfce4-terminal": ["-x"],
+  kitty: [],
+};
+
+/** macOS terminals that `open -a` starts in a file's folder rather than running the file. */
+const macEFlag = new Set(["ghostty.app", "alacritty.app", "rio.app"]);
+
+/**
+ * The command that runs `command` in terminal `app`. macOS's `open` can only pass a file to most
+ * apps, so it gets `script`, an executable file that runs the command. Elsewhere the app gets the
+ * command itself.
+ */
+export function terminalRunCommand(
+  platform: NodeJS.Platform,
+  app: string,
+  command: string[],
+  script: string,
+): { file: string; args: string[] } {
+  const name = (platform === "win32" ? path.win32 : path.posix).basename(app).toLowerCase();
+  if (platform === "darwin")
+    return {
+      file: "/usr/bin/open",
+      args: macEFlag.has(name) ? ["-na", app, "--args", "-e", script] : ["-a", app, script],
+    };
+  // Windows Terminal reads `;` as the start of its next command, even inside an argument, so a
+  // folder's name could otherwise run something here.
+  const windowsTerminal = name === "wt.exe" || name === "windowsterminal.exe";
+  const args = windowsTerminal ? command.map((arg) => arg.replaceAll(";", "\\;")) : command;
+  return { file: app, args: [...(commandFlags[name] ?? ["-e"]), ...args] };
+}
+
 /** Known terminal apps only, found in the platform's app folders and PATH. */
 export function detectTerminalApps(
   platform: NodeJS.Platform,

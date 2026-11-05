@@ -23,6 +23,8 @@ export type Settings = {
   accounts?: SavedAccount[];
   /** The key and account that joined the relay, so not being listed means removed (PLX-1312). */
   joinedRelay?: { hostId: string; user: string };
+  /** The ssh destination Open in uses for a host, by host id, when the user set one (PLX-1343). */
+  sshDestinations?: Record<string, string>;
 };
 
 /**
@@ -59,6 +61,7 @@ export function readSettings(file: string): Settings {
     devices = [],
     lan = [],
     accounts = [],
+    sshDestinations = {},
   } = raw as Record<string, unknown>;
   if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
   if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
@@ -113,6 +116,13 @@ export function readSettings(file: string): Settings {
       throw new Error(`LAN computer ${JSON.stringify(entry)} needs a name and routes`);
   }
   checkAccounts(accounts, ids);
+  if (typeof sshDestinations !== "object" || sshDestinations === null)
+    throw new Error("`sshDestinations` isn't an object");
+  for (const [id, destination] of Object.entries(sshDestinations)) {
+    const checked =
+      typeof destination === "string" ? checkHost({ name: "", destination }) : "not a string";
+    if (typeof checked === "string") throw new Error(`\`sshDestinations\` ${id}: ${checked}`);
+  }
   return { ...raw, hosts } as Settings;
 }
 

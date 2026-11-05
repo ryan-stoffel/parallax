@@ -1,3 +1,4 @@
+import { detailsCard } from "./DetailsCard";
 import { Cloud, GitBranch, Network } from "lucide-react";
 
 import type { RemoteControlSession } from "../protocol/generated/protocol";
@@ -102,7 +103,7 @@ export function RemoteControlSection({
   const look = session?.state && remoteControlLook[session.state];
   const row = "flex min-w-0 items-center gap-2 px-2 py-1 text-body";
   return (
-    <section aria-label={NAME} className="border-b border-border p-2">
+    <section aria-label={NAME} className={`${detailsCard} p-1`}>
       <div className="flex items-center gap-2 px-2 py-1.5 text-body font-medium">
         <span className="relative flex shrink-0">
           <ClaudeLogo aria-hidden />

@@ -1,3 +1,4 @@
+import { DetailsCard } from "./DetailsCard";
 import { Bot, ChevronDown, Lock } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
@@ -73,6 +74,7 @@ export function LineageSection({
   onOpenSubagent,
   visible,
   includeThreads = true,
+  hidden,
 }: {
   state: ThreadsState;
   root: Thread;
@@ -83,6 +85,8 @@ export function LineageSection({
   onOpenSubagent?: (id: string) => void;
   visible: boolean;
   includeThreads?: boolean;
+  /** Mounted but not shown, since Thread details can leave it out. */
+  hidden?: boolean;
 }) {
   const previousId = useId();
   const [now, setNow] = useState(Date.now);
@@ -209,10 +213,12 @@ export function LineageSection({
   };
 
   return (
-    <section aria-label="Lineage" className="border-t border-border p-2">
-      <h3 className="px-2 pt-1 pb-2 text-meta text-muted-foreground">
-        Lineage{working > 0 && ` · ${working} running`}
-      </h3>
+    <DetailsCard
+      id="lineage"
+      title="Lineage"
+      summary={working > 0 && `${working} running`}
+      hidden={hidden}
+    >
       {current.length > 0 && <ul className="flex flex-col gap-px">{current.map(rowView)}</ul>}
       {previous.length > 0 && (
         <>
@@ -239,6 +245,6 @@ export function LineageSection({
       {rows.length === 0 && (
         <p className="px-2 py-1 text-meta text-faint-foreground">No child threads yet</p>
       )}
-    </section>
+    </DetailsCard>
   );
 }

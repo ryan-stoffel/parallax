@@ -59,6 +59,7 @@ import { localId, useHosts } from "./hosts";
 import { useProviderLink } from "./linkedProviders";
 import { iconImageBytes } from "./images";
 import { useRepoLogos } from "./repoLogos";
+import type { ComposerUsageData } from "./ComposerUsage";
 import { ThreadDetails, ThreadDetailsButton, useThreadDetails } from "./ThreadDetails";
 import { AgentsPanel, useOrchestratorAgents } from "./OrchestratorAgents";
 import { useOrchestratorContext } from "./ContextPanel";
@@ -130,6 +131,7 @@ import { keptRemoteControl, MoveRemoteControl } from "./MoveRemoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
+import { rectOf } from "./splitLayout";
 import { SplitTiles } from "./SplitTiles";
 import type { TabItem } from "./ThreadTabs";
 import {
@@ -740,13 +742,14 @@ export function App() {
     "threadLineage" in threads.capabilities && openThread
       ? lineageOf(threads.state, openThread)
       : undefined;
-  // Thread details, docked at the thread's right, or floating over it when the row is narrow.
+  // Thread details, docked at the thread's right, or floating over it when the row is too narrow.
   // Shown or hidden per thread, which its children and parent share, so opening one from
-  // Lineage keeps it open.
+  // Lineage keeps it open. It docks in the focused tile, so `share` is that tile's part of the row.
   const details = useThreadDetails(
     openThread
       ? JSON.stringify([host.id, "thread", rootOf(threads.state, openThread).id])
       : panelKey,
+    workspace.maximized ? 1 : rectOf(focusedPane(workspace).cells, workspace.cuts).width,
   );
   // Each open thread's agent's own subagents, as its chat reports them (PLX-382).
   const [native, setNative] = useState<Readonly<Record<string, NativeSubagent[]>>>({});
@@ -756,6 +759,13 @@ export function App() {
     [],
   );
   const subagents = (openThread && native[openThread.id]) || [];
+  // Each open thread's context and usage, as its composer reports them, for Thread details.
+  const [usages, setUsages] = useState<Readonly<Record<string, ComposerUsageData | undefined>>>({});
+  const reportUsage = useCallback(
+    (threadId: string, usage: ComposerUsageData | undefined) =>
+      setUsages((prev) => ({ ...prev, [threadId]: usage })),
+    [],
+  );
   const openSubagent = useCallback(
     (threadId: string, callId?: string) =>
       setSelection({ kind: "thread", threadId, subagent: callId }),
@@ -1314,7 +1324,13 @@ export function App() {
     sidePanelOpen ? "" : "window-controls-inset",
   ].join(" ");
 
-  // Thread details for the open thread: beside the chat, or in a split floating in its tile.
+  // The PR view takes over from Thread details when it opens a pull request.
+  const openPrFromDetails = (url?: string) => {
+    openPr(url);
+    details.close();
+  };
+  // Thread details for the open thread, inside its tile's card in every mode, so it's part of the
+  // thread and changing mode keeps its dialogs and work under way.
   const threadDetails = (mode: ComponentProps<typeof ThreadDetails>["mode"]) => (
     <ThreadDetails
       key={panelKey}
@@ -1346,8 +1362,9 @@ export function App() {
               repo: selection.kind === "new" ? (group.id as RepoId) : undefined,
               title:
                 selection.kind === "thread" ? threads.state.titles[selection.threadId] : agentTitle,
-              // The PR view shows a thread's own; a child's opens in the browser.
-              onPrOpened: linksPrs && threadRun ? openPr : undefined,
+              // The PR view shows a thread's own, in place of this card; a child's opens in the
+              // browser.
+              onPrOpened: linksPrs && threadRun ? openPrFromDetails : undefined,
               onSetUpGithub: setUpGithub,
               onChanges: () => {
                 setPanelOpen(true);
@@ -1356,7 +1373,8 @@ export function App() {
             }
           : undefined
       }
-      prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
+      prs={selection.kind === "thread" ? { prs, onOpen: openPrFromDetails } : undefined}
+      usage={openThread && usages[openThread.id]}
       remoteControl={
         remoteThread
           ? {
@@ -1835,11 +1853,7 @@ export function App() {
                             placeView(state, drop.hostId, view, paneId, before),
                           );
                         }}
-                        details={
-                          tiled && selection.kind === "thread" && !group.project
-                            ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")
-                            : undefined
-                        }
+                        details={threadDetails(group.project ? "hidden" : details.mode)}
                         // A tab anywhere, or a sidebar thread not over a composer, which takes it to
                         // attach (PLX-378).
                         drop={{
@@ -1941,6 +1955,7 @@ export function App() {
                                   }
                                   onOpenSubagent={openSubagent}
                                   onSubagents={reportNative}
+                                  onUsage={reportUsage}
                                   onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
                                   onDevice={(runId, deviceId) =>
                                     void showAgentDevice(runId, deviceId)
@@ -1992,7 +2007,6 @@ export function App() {
                       />
                     </div>
                   </div>
-                  {!tiled && threadDetails(group.project ? "hidden" : details.mode)}
                 </div>
               </>
             )}

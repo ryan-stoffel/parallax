@@ -57,7 +57,7 @@ interface Totals {
 }
 
 /** What the composer's ring shows about the open thread: its context and its usage so far. */
-interface ComposerUsageData {
+export interface ComposerUsageData {
   context?: string;
   /** Context use, 0 to 100, for the ring. */
   contextUsed?: number;
@@ -211,36 +211,8 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
     setKept(false);
   };
   useEffect(() => () => clearTimeout(closing.current), []);
-  const { summary, totals } = data;
+  const { summary } = data;
   if (!summary) return null;
-  const more = totals?.partial ? "+" : "";
-  // The card's groups under the context, each a list of rows apart from the last.
-  const groups = [
-    [
-      data.speed !== undefined && {
-        label: "Output speed",
-        title: data.speedTitle,
-        value: speedText(data.speed),
-      },
-      data.cache && { label: "Cache hit", title: data.cacheTitle, value: data.cache },
-    ],
-    [
-      totals && {
-        label: "Tokens",
-        title: totals.title,
-        value: `${totals.input}${more} in · ${totals.output}${more} out`,
-      },
-      totals?.cost && {
-        label: "API cost",
-        title: totals.costTitle,
-        value: `${totals.cost}${more}`,
-      },
-    ],
-  ]
-    .map((rows) =>
-      rows.filter((row): row is { label: string; title: string; value: string } => !!row),
-    )
-    .filter((rows) => rows.length > 0);
   return (
     <div
       className="relative ml-auto"
@@ -297,40 +269,82 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
         hidden={!open}
         className="absolute right-0 bottom-full z-20 mb-2 w-72 rounded-xl border border-border bg-surface p-3.5 text-body text-foreground shadow-composer tabular-nums"
       >
-        {data.context !== undefined && (
-          <div title={data.contextTitle}>
-            <div className="flex justify-between gap-3">
-              <span className="text-muted-foreground">Context</span>
-              <span>
-                {data.contextDetail} · {data.context}
-              </span>
-            </div>
-            <span aria-hidden className="mt-2 block h-1 overflow-hidden rounded-full bg-selected">
-              <span
-                className={`block h-full rounded-full ${fill[tone(data.contextUsed!)]}`}
-                style={{ width: `${data.contextUsed}%` }}
-              />
-            </span>
-          </div>
-        )}
-        {groups.map((rows, i) => (
-          <div
-            key={i}
-            className={
-              i > 0 || data.context !== undefined
-                ? "mt-3 space-y-1.5 border-t border-border pt-2.5"
-                : "space-y-1.5"
-            }
-          >
-            {rows.map((row) => (
-              <div key={row.label} title={row.title} className="flex justify-between gap-3">
-                <span className="text-muted-foreground">{row.label}</span>
-                <span>{row.value}</span>
-              </div>
-            ))}
-          </div>
-        ))}
+        <UsageRows data={data} />
       </div>
     </div>
+  );
+}
+
+/**
+ * The context as a meter, then the latest request's speed and cache hit, then the thread's tokens
+ * and cost, as the ring's card and Thread details show them. Each row's tooltip says what it
+ * measures.
+ */
+export function UsageRows({ data }: { data: ComposerUsageData }) {
+  const { totals } = data;
+  const more = totals?.partial ? "+" : "";
+  // The card's groups under the context, each a list of rows apart from the last.
+  const groups = [
+    [
+      data.speed !== undefined && {
+        label: "Output speed",
+        title: data.speedTitle,
+        value: speedText(data.speed),
+      },
+      data.cache && { label: "Cache hit", title: data.cacheTitle, value: data.cache },
+    ],
+    [
+      totals && {
+        label: "Tokens",
+        title: totals.title,
+        value: `${totals.input}${more} in · ${totals.output}${more} out`,
+      },
+      totals?.cost && {
+        label: "API cost",
+        title: totals.costTitle,
+        value: `${totals.cost}${more}`,
+      },
+    ],
+  ]
+    .map((rows) =>
+      rows.filter((row): row is { label: string; title: string; value: string } => !!row),
+    )
+    .filter((rows) => rows.length > 0);
+  return (
+    <>
+      {data.context !== undefined && (
+        <div title={data.contextTitle}>
+          <div className="flex justify-between gap-3">
+            <span className="text-muted-foreground">Context</span>
+            <span>
+              {data.contextDetail} · {data.context}
+            </span>
+          </div>
+          <span aria-hidden className="mt-2 block h-1 overflow-hidden rounded-full bg-selected">
+            <span
+              className={`block h-full rounded-full ${fill[tone(data.contextUsed!)]}`}
+              style={{ width: `${data.contextUsed}%` }}
+            />
+          </span>
+        </div>
+      )}
+      {groups.map((rows, i) => (
+        <div
+          key={i}
+          className={
+            i > 0 || data.context !== undefined
+              ? "mt-3 space-y-1.5 border-t border-border pt-2.5"
+              : "space-y-1.5"
+          }
+        >
+          {rows.map((row) => (
+            <div key={row.label} title={row.title} className="flex justify-between gap-3">
+              <span className="text-muted-foreground">{row.label}</span>
+              <span>{row.value}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
   );
 }

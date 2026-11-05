@@ -1,3 +1,4 @@
+import type { ComposerUsageData } from "./ComposerUsage";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeftRight,
@@ -286,6 +287,7 @@ export function AgentChat({
   subagent,
   onOpenSubagent,
   onSubagents,
+  onUsage,
   onPreview,
   onDevice,
   forked,
@@ -343,6 +345,8 @@ export function AgentChat({
   onOpenSubagent?: (runId: string, callId?: string) => void;
   /** Told run `runId`'s own subagents whenever they change, for the top bar's chips. */
   onSubagents?: (runId: string, subagents: NativeSubagent[]) => void;
+  /** Told run `runId`'s context and usage whenever they change, for Thread details. */
+  onUsage?: (runId: string, usage: ComposerUsageData | undefined) => void;
   /**
    * Told when run `runId`'s browser tools (PLX-639) have run, on opening and after each new one,
    * and whether the newest opened a tab the user should see.
@@ -640,6 +644,10 @@ export function AgentChat({
     () => onSubagents?.(runId, JSON.parse(native) as NativeSubagent[]),
     [native, onSubagents, runId],
   );
+  const reportUsage = useCallback(
+    (usage: ComposerUsageData | undefined) => onUsage?.(runId, usage),
+    [onUsage, runId],
+  );
   // The agent's browser tool calls that have answered (PLX-639). Each new one refreshes the side
   // panel's agent tabs; a new preview_open, unless it asked for the background, shows its tab.
   const previews = items.filter(
@@ -935,6 +943,7 @@ export function AgentChat({
           accountId={box?.accountId}
           requestUsage={transcript.requestUsage}
           threadUsage={transcript.threadUsage}
+          onUsage={reportUsage}
           connected={connected}
           hostId={hostId}
           contextAndFast={connected && "contextAndFast" in connection.capabilities}

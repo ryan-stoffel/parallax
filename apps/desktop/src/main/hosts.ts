@@ -87,7 +87,8 @@ import {
   type SavedLan,
   type Settings,
 } from "./settings";
-import { sshSuggestions } from "./sshConfig";
+import { deriveDestination } from "./remoteOpen";
+import { sshConfigHosts, sshSuggestions } from "./sshConfig";
 import {
   closeTerminal,
   installCommand,
@@ -1080,6 +1081,73 @@ const routeHost = (route: string) =>
     : route.split(":").length === 2
       ? route.split(":")[0]!
       : route;
+
+/** Whether `hostId` is a computer other than this one that this app knows. */
+export const isRemoteHost = (hostId: string) => !!savedHost(hostId) || runsOnHost(hostId);
+
+/** The ssh program, as `sshCommand` runs it. */
+export const sshProgram = () => settings.ssh ?? "ssh";
+
+/**
+ * An account computer's address, for Open in: its own Tailscale IP, or a direct route. It answers
+ * over the relay, so a computer offline or taking too long leaves only the route.
+ */
+async function accountAddress(hostId: string, routes: string[]): Promise<string | undefined> {
+  const asked = connections.get(hostId)?.request("connect/devices", {});
+  const answer =
+    asked &&
+    (await Promise.race([
+      asked,
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2_000)),
+    ]));
+  const ip = answer && "result" in answer ? answer.result.self?.ip : undefined;
+  const route = directRoutes(routes)[0];
+  return ip ?? (route && routeHost(route));
+}
+
+/**
+ * The ssh destination Open in reaches `hostId`'s `folder` at (PLX-1343): the one the user set, a
+ * saved host's, else `deriveDestination`'s. Undefined when it can't tell, or for an unknown host.
+ */
+export async function sshDestinationOf(
+  hostId: string,
+  folder: string,
+): Promise<string | undefined> {
+  const set = settings.sshDestinations?.[hostId];
+  if (set) return set;
+  const saved = savedHost(hostId);
+  if (saved) return saved.destination;
+  if (!runsOnHost(hostId)) return undefined;
+  const device = savedDevices().find((d) => deviceHostId(d.id) === hostId);
+  const lan = settings.lan?.find((c) => lanHostId(c.fingerprint) === hostId);
+  const account = savedAccounts().find((a) => accountId(a.hostId) === hostId);
+  const route = lan?.routes[0];
+  return deriveDestination({
+    names: [device?.hostName, device?.name, lan?.name, account?.name],
+    aliases: sshConfigHosts(homedir()),
+    address:
+      device?.ip ??
+      (route && routeHost(route)) ??
+      (account && (await accountAddress(hostId, account.routes))),
+    folder,
+  });
+}
+
+/**
+ * Keeps the ssh destination Open in uses for `hostId`, or with an empty one, forgets it. Resolves
+ * to an error for people.
+ */
+export function setSshDestination(hostId: string, destination: string): string | undefined {
+  if (!isRemoteHost(hostId)) return "That computer isn't in Parallax anymore.";
+  const { [hostId]: _old, ...others } = settings.sshDestinations ?? {};
+  if (!destination.trim()) return saveSettings({ ...settings, sshDestinations: others });
+  const checked = checkHost({ name: "", destination });
+  if (typeof checked === "string") return checked;
+  return saveSettings({
+    ...settings,
+    sshDestinations: { ...others, [hostId]: checked.destination },
+  });
+}
 
 function addLanConnection({ fingerprint, name, routes }: SavedLan): void {
   addConnection(
