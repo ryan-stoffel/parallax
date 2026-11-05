@@ -12,8 +12,9 @@ import { fileURLToPath } from "node:url";
 const script = (/** @type {string} */ name) => fileURLToPath(new URL(`../../../scripts/${name}`, import.meta.url));
 
 /**
- * Runs `file` with `args` in a new session, which has no controlling terminal, with `input` on
- * stdin, or none. Resolves to its exit code, stdout, and stderr.
+ * Runs `file` with `args` with no terminal, and `input` on stdin, or none. On macOS and Linux that
+ * takes a new session. On Windows, `detached` would mean no console at all, which is another case.
+ * Resolves to its exit code, stdout, and stderr.
  * @param {string} file
  * @param {string[]} args
  * @param {NodeJS.ProcessEnv} env
@@ -21,7 +22,7 @@ const script = (/** @type {string} */ name) => fileURLToPath(new URL(`../../../s
  * @returns {Promise<{ code: number | null, stdout: string, stderr: string }>}
  */
 function run(file, args, env, input) {
-  const child = spawn(file, args, { env, detached: true, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+  const child = spawn(file, args, { env, detached: process.platform !== "win32", stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
   child.stdin?.end(input);
   let stdout = "";
   let stderr = "";
@@ -92,8 +93,8 @@ test("connect.ps1 with no terminal runs plx, outlasts npm's stderr, and passes o
     // Node.js stays the real one, which the script only asks for its version. npx is the stub.
     const env = { ...process.env, PATH: `${root};${process.env["PATH"]}`, USERPROFILE: root };
     const command = `Get-Content -Raw -LiteralPath '${script("connect.ps1")}' | Invoke-Expression; Connect-Parallax --channel stable`;
-    const { code, stderr } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], env);
-    assert.equal(code, 7, stderr);
+    const { code, stdout, stderr } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], env);
+    assert.equal(code, 7, `exit ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
     assert.equal(readFileSync(recorded, "utf8").trim(), "-y plx-cli@latest connect --channel nightly --channel stable");
   } finally {
     rmSync(root, { recursive: true, force: true });

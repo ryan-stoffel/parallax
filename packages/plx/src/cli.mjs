@@ -66,13 +66,15 @@ export function lineReader(input, output) {
   /** @type {{ reader: import("node:readline/promises").Interface, lines: AsyncIterator<string> } | undefined} */
   let open;
   let ended = false;
+  // Piped input can end with answers still queued, and Node 24's pause and resume throw once closed.
+  let closed = false;
   return async (question) => {
     if (ended) throw new Error("Input ended before an answer.");
-    if (open) open.reader.resume();
-    else {
+    if (!open) {
       const reader = createInterface({ input, output, terminal: terminal && output.isTTY === true });
+      reader.once("close", () => (closed = true));
       open = { reader, lines: reader[Symbol.asyncIterator]() };
-    }
+    } else if (!closed) open.reader.resume();
     const { reader, lines } = open;
     // Piped, the question gets its own line, so a script reads whole lines.
     if (terminal) {
@@ -87,7 +89,7 @@ export function lineReader(input, output) {
     if (terminal) {
       reader.close();
       open = undefined;
-    } else reader.pause();
+    } else if (!closed) reader.pause();
     return value;
   };
 }
