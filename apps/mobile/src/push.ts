@@ -13,6 +13,7 @@
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 
 import type { HostResponse } from "../../desktop/src/preload/bridge";
 import type { RelayPushKeyResult } from "../../desktop/src/protocol/generated/protocol";
@@ -20,8 +21,8 @@ import { ThreadStatus } from "../modules/thread-status";
 import { lastReplyIn, type Alert } from "./alerts";
 import type { ThreadStatusUpdate } from "./threadStatus";
 
-/** Parallax Relay (0068). */
-export const RELAY_URL = "https://relay.parallax.codes";
+/** Parallax Relay (0068), or the local one a test's bundle names. */
+export const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL ?? "https://relay.parallax.codes";
 
 /** The thread on screen, whose own notifications don't show while it's open. */
 let viewing: string | undefined;
@@ -86,8 +87,9 @@ export async function lastReply(hostId: string, runId: string): Promise<string |
   }
 }
 
-/** The keychain group this app shares with its extensions (`plugins/extensionTarget.js`). */
+/** The keychain group this app shares with its extensions (`plugins/extensionTarget.js`). Android has neither. */
 function sharedGroup(): string | undefined {
+  if (Platform.OS !== "ios") return undefined;
   const { appleTeamId, bundleIdentifier } = Constants.expoConfig?.ios ?? {};
   return appleTeamId && bundleIdentifier ? `${appleTeamId}.${bundleIdentifier}.pushKeys` : undefined;
 }
@@ -97,13 +99,13 @@ export function showThreadStatus({ seen, connected }: ThreadStatusUpdate) {
   const group = sharedGroup();
   // With no computer known now there's no news, and a sync would mark the Live Activity as current.
   if (group && connected.length > 0)
-    void ThreadStatus.sync(JSON.stringify(seen), connected, group).catch(() => {});
+    void ThreadStatus?.sync(JSON.stringify(seen), connected, group).catch(() => {});
 }
 
 /** Takes thread names and push keys off this phone, for signing out, and ends the Live Activity. */
 export async function forgetThreadStatus(): Promise<void> {
   const group = sharedGroup();
-  if (group) await ThreadStatus.signOut(group).catch(() => {});
+  if (group) await ThreadStatus?.signOut(group).catch(() => {});
 }
 
 /** Gives the widget and the Live Activity each sealed push that comes while the app is in front. */
@@ -111,7 +113,7 @@ export function applySealedPushes(): () => void {
   const subscription = Notifications.addNotificationReceivedListener((n) => {
     const data = n.request.content.data as { sealed?: string };
     const group = sharedGroup();
-    if (data.sealed && group) void ThreadStatus.applyPush(data, group).catch(() => {});
+    if (data.sealed && group) void ThreadStatus?.applyPush(data, group).catch(() => {});
   });
   return () => subscription.remove();
 }
@@ -155,6 +157,8 @@ export async function notificationsOn(): Promise<boolean> {
 export async function registerWithRelay(
   token: () => Promise<string | undefined>,
 ): Promise<string | undefined> {
+  // No Firebase project yet (PLX-1372), so no push token to give on Android.
+  if (Platform.OS !== "ios") return "Notifications while Parallax is closed aren't available on Android yet.";
   if (!(await notificationsOn())) return "Notifications are off for Parallax in iOS Settings.";
   const device = await Notifications.getDevicePushTokenAsync().catch(() => undefined);
   if (!device)

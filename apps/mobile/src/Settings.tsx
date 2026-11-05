@@ -36,7 +36,7 @@ import {
   type LucideIcon,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { AppState, Linking, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { AppState, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
 import { appVersion } from "../modules/pinned-tls";
 import { Avatar, nameOf, useAccount } from "./Account";
@@ -260,7 +260,11 @@ function DictationSection() {
   return (
     <Section
       title="Dictation"
-      footer="iOS turns your voice into text, on this iPhone where it can for your language and otherwise through Apple."
+      footer={
+        Platform.OS === "ios"
+          ? "iOS turns your voice into text, on this iPhone where it can for your language and otherwise through Apple."
+          : "Android turns your voice into text, on this phone where it can for your language and otherwise through its speech service."
+      }
     >
       <SwitchRow
         title="Clean up dictation"

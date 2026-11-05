@@ -25,6 +25,15 @@
       },
       "buildNumber": "12"
     },
+    "android": {
+      "package": "dev.parallax.mobile",
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
+    },
     "plugins": [
       [
         "expo-font",
@@ -68,7 +77,8 @@
           "speechRecognitionPermission": "Parallax turns what you say into text for your message."
         }
       ],
-      "./plugins/withSceneLifecycle"
+      "./plugins/withSceneLifecycle",
+      "./plugins/withAndroidMinSdk"
     ],
     "experiments": {
       "tsconfigPaths": false

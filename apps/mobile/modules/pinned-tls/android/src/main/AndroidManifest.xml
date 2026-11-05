@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+  <application>
+    <provider
+      android:name="dev.parallax.pinnedtls.PinnedTlsFileProvider"
+      android:authorities="${applicationId}.pinnedtls.files"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/pinned_tls_files" />
+    </provider>
+  </application>
+</manifest>

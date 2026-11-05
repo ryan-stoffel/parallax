@@ -6,6 +6,7 @@ import type { RouteChoices } from "../../desktop/src/preload/routeList";
 import { Limited } from "./access";
 import { Denied, type AccountHosts, type Listed } from "./accountHosts";
 import { showAlert, showPrompt } from "./dialogStore";
+import { PHONE } from "./phone";
 import { askEach, type Asked } from "./setup";
 
 /** A 6-digit code as both ends show it: `482 915`. */
@@ -150,7 +151,7 @@ export async function allowThisPhone(
 export function showWaiting(name: string, code: string, onAllow: () => void) {
   showAlert(
     "Approve this phone",
-    `${formatCode(code)}\n\nOn a computer or phone that already uses ${name}, allow this iPhone. If you're setting up ${name} and it shows this code, tap Allow.`,
+    `${formatCode(code)}\n\nOn a computer or phone that already uses ${name}, allow this ${PHONE}. If you're setting up ${name} and it shows this code, tap Allow.`,
     [
       { text: "Not Now", style: "cancel" },
       { text: "Allow", onPress: onAllow },

@@ -1,5 +1,6 @@
-// The JS side of PinnedTlsModule.swift: HTTPS and WebSocket to plxd, pinned to its certificate or,
-// for an account's host, its key (0091), directly or inside a Parallax Relay stream.
+// The JS side of PinnedTlsModule.swift and PinnedTlsModule.kt: HTTPS and WebSocket to plxd, pinned
+// to its certificate or, for an account's host, its key (0091), directly or inside a Parallax Relay
+// stream.
 import { requireNativeModule } from "expo";
 
 type SocketEvent = {
@@ -38,16 +39,20 @@ const native = requireNativeModule<{
 
 export const randomBytes = (count: number) => native.randomBytes(count);
 
-/** The `file://` URL of `name` in a folder of Application Support kept out of backups. */
+/** The `file://` URL of `name` in a folder of the app's own files kept out of backups. */
 export const privateFile = (name: string) => native.privateFile(name);
 
 /**
- * Signs in on Clerk's page in a sheet, as the desktop does in a browser (0067). Resolves to the
- * `parallax://` callback URL Clerk sent the sheet to, or rejects with code `ERR_CANCELED`.
+ * Signs in on Clerk's page in a sheet, or a Custom Tab on Android, as the desktop does in a browser
+ * (0067). Resolves to the `parallax://` callback URL Clerk sent it to, or rejects with code
+ * `ERR_CANCELED`.
  */
 export const authorize = (url: string) => native.authorize(url);
 
-/** Shows the file at `url` (`file://`) in Quick Look, whose share button saves or sends it. */
+/**
+ * Shows the file at `url` (`file://`): in Quick Look, whose share button saves or sends it, or on
+ * Android in an app that opens it, or else in the share sheet.
+ */
 export const preview = (url: string) => native.preview(url);
 
 /** This build's version and build number. */
@@ -96,7 +101,7 @@ let nextBridge = 0;
  * Opens a bridge to the relay's `url` (`wss://…/v1/hosts/<hostId>/connect`), whose streams open
  * with the Clerk `token` in a header, or with a ticket from a relay from before 0091 that refuses
  * the header. Requests to `https://127.0.0.1:<port>` then reach the host with TLS inside the
- * stream, and the relay sees only TLS records (RelayBridge.swift).
+ * stream, and the relay sees only TLS records (RelayBridge.swift, RelayBridge.kt).
  */
 export async function openRelay(url: string, token: string): Promise<RelayBridge> {
   const id = String(++nextBridge);

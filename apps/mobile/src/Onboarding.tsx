@@ -11,6 +11,7 @@ import type { Saved } from "./host";
 import { pairedId, withListed, type Machine, type Setup } from "./machines";
 import { computerStatus, toAsk } from "./setup";
 import { Pairing } from "./PairScreen";
+import { PHONE } from "./phone";
 import { askForNotifications } from "./push";
 import { font } from "./theme";
 import { BellRing } from "lucide-react-native";
@@ -259,7 +260,7 @@ export function Onboarding({
       <Step
         index={0}
         title="Your computers"
-        subtitle="The computers on your Parallax account. Allow this iPhone once on one of them, and they all connect."
+        subtitle={`The computers on your Parallax account. Allow this ${PHONE} once on one of them, and they all connect.`}
       >
         {!listed ? (
           <ActivityIndicator color={c.accent} style={{ marginVertical: 24 }} />
@@ -280,12 +281,12 @@ export function Onboarding({
             {!listed.length && !paired.length && <AddInstructions device={accounts?.thumbprint} />}
             {waiting ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                Open Parallax on one of your computers and allow this iPhone. Both show{" "}
+                Open Parallax on one of your computers and allow this {PHONE}. Both show{" "}
                 {formatCode(waiting.code)}.
               </T>
             ) : !accounts ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                Parallax couldn't read what this iPhone saved. Close the app and open it again.
+                Parallax couldn't read what this {PHONE} saved. Close the app and open it again.
               </T>
             ) : stopped ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
@@ -293,14 +294,14 @@ export function Onboarding({
               </T>
             ) : unanswered ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                Your computers aren't answering this iPhone yet. It keeps trying.
+                Your computers aren't answering this {PHONE} yet. It keeps trying.
               </T>
             ) : (
               listed.length > 0 &&
               !listed.some((l) => l.online) &&
               !accounts?.usesAny && (
                 <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-                  None of your computers are online. Turn one on, and this iPhone asks it by itself.
+                  None of your computers are online. Turn one on, and this {PHONE} asks it by itself.
                 </T>
               )
             )}

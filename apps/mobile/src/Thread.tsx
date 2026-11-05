@@ -7,16 +7,17 @@
 // in the trace sheet (TraceSheet.tsx), and a lone step at its detail. Images open in the lightbox,
 // and other files, as cards, in Quick Look. Until the transcript loads, a skeleton stands in.
 import { useHeaderHeight } from "@react-navigation/elements";
-import type { NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@react-navigation/native-stack";
+import type { NativeStackHeaderItemMenu, NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
-import { Check, ChevronRight, Copy, FoldVertical, Hand, KeyRound, MessageCircleQuestion, RotateCcw, WifiOff } from "lucide-react-native";
+import { Check, ChevronRight, Copy, Ellipsis, FoldVertical, Hand, KeyRound, MessageCircleQuestion, RotateCcw, WifiOff } from "lucide-react-native";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   View,
@@ -42,12 +43,13 @@ import {
 import { useAgentRun } from "../../desktop/src/renderer/useAgentRun";
 import type { ThreadRun } from "../../desktop/src/protocol/generated/protocol";
 import { Composer } from "./Composer";
-import { showAlert, showPrompt } from "./dialogStore";
+import { showAlert, showMenu, showPrompt, type MenuItem } from "./dialogStore";
 import { TurnChanges } from "./Diff";
 import { counts, editRows } from "./diffLogic";
 import { FileCard, openLinked } from "./FileCard";
 import { useComputer, useFleet } from "./fleet";
 import { ForkSheet } from "./ForkSheet";
+import { GlassButton } from "./Glass";
 import { openLightbox } from "./Lightbox";
 import { MessageMenu } from "./MessageMenu";
 import type { Screens } from "./nav";
@@ -497,6 +499,38 @@ function WorkingFor({ since }: { since?: string }) {
 
 type MenuIcon = Extract<NativeStackHeaderItemMenuAction["icon"], { type: "sfSymbol" }>;
 type SFSymbol = MenuIcon["name"];
+type MenuEntry = NativeStackHeaderItemMenu["menu"]["items"][number];
+
+/** A section's actions, or an action alone, as one flat list for the app's own menu. */
+const flatActions = (entry: MenuEntry): MenuItem[] =>
+  entry.type === "submenu"
+    ? entry.items.flatMap(flatActions)
+    : [{ label: entry.label, detail: entry.description, destructive: entry.destructive, onPress: entry.onPress }];
+
+/**
+ * The header options of a thread's menu: native, in sections as iOS's own apps group theirs, or on
+ * Android, whose header has no native menu items, the app's own menu from a glass button.
+ */
+function threadMenu(title: string, items: MenuEntry[]) {
+  if (Platform.OS === "ios")
+    return {
+      unstable_headerRightItems: () => [
+        {
+          type: "menu" as const,
+          label: "Thread actions",
+          icon: { type: "sfSymbol" as const, name: "ellipsis" as const },
+          menu: { title, items },
+        },
+      ],
+    };
+  return {
+    headerRight: () => (
+      <GlassButton label="Thread actions" onPress={() => showMenu(items.flatMap(flatActions), title)}>
+        <Icon icon={Ellipsis} size={22} />
+      </GlassButton>
+    ),
+  };
+}
 
 export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Screens, "Thread">) {
   const { hostId, runId } = route.params;
@@ -547,15 +581,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
       // chat. Not transparent: iOS 26 veils an inverted list under a transparent bar.
       headerTitle: "",
       headerShadowVisible: false,
-      // A native menu, in sections as iOS's own apps group theirs.
-      unstable_headerRightItems: () => [
-        {
-          type: "menu",
-          label: "Thread actions",
-          icon: symbol("ellipsis"),
-          menu: {
-            title,
-            items: [
+      ...threadMenu(title, [
               {
                 type: "submenu",
                 label: "Thread",
@@ -645,10 +671,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                   },
                 ],
               },
-            ],
-          },
-        },
-      ],
+      ]),
     });
   });
 

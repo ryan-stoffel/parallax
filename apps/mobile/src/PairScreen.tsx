@@ -11,6 +11,7 @@ import {
 
 import { discover } from "../modules/pinned-tls";
 import { pair, type Saved } from "./host";
+import { PHONE } from "./phone";
 import { font } from "./theme";
 import { Button, Input, Mark, T, useColors } from "./ui";
 
@@ -42,7 +43,7 @@ export function Pairing({
     setBusy(true);
     setError(undefined);
     try {
-      onPaired(await pair(route.trim(), code, "iPhone"));
+      onPaired(await pair(route.trim(), code, PHONE));
     } catch (e) {
       setError((e as Error).message);
     } finally {
