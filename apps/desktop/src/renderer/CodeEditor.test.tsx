@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { foldEffect } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -115,4 +116,22 @@ test("coming back to a tab keeps its unsaved edits, whatever its reload count", 
   unmount();
   mount(store);
   expect(doc()).toBe("mine b\n");
+});
+
+test("a long indented line that spans two visible ranges is decorated once", async () => {
+  const long = `  ${"x".repeat(200_000)}\n`;
+  disk.set("long.ts", long);
+  const store = new OpenFiles("local", "run-1");
+  store.writable = true;
+  store.open("long.ts");
+  await act(async () => {});
+  mount(store);
+  // Folding the middle of the line splits it into two visible ranges.
+  act(() =>
+    editor().dispatch({
+      effects: foldEffect.of({ from: 1_000, to: 199_000 }),
+    }),
+  );
+  expect(editor().visibleRanges.length).toBeGreaterThan(1);
+  expect(document.querySelector(".cm-indent")).not.toBeNull();
 });
