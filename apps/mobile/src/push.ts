@@ -2,13 +2,19 @@
 // computer.
 //
 // While the app runs, it watches every computer's threads and posts the notification itself,
-// with the thread's title and the start of the agent's last reply, which never leave the phone.
-// For when it doesn't, it hands its APNs token to Parallax Relay (0068), which plxd tells about
-// runs and which sends a fixed text with the run's id. Both name one event alike, so iOS shows one
-// of them, and a push doesn't show in front for a thread the app notifies about itself. Tapping
-// either opens the thread.
+// with the thread's title and the start of the agent's last reply. For when it doesn't, it hands
+// its APNs token to Parallax Relay (0068), which plxd tells about runs and which sends a fixed
+// text with the run's id. plxd also seals the title and reply with a key the relay never sees, and
+// the notification service extension (plugins/notification-service) opens them into the
+// notification, or leaves the fixed text if it can't (0100). Both name one event alike, so iOS
+// shows one of them, and a push doesn't show in front for a thread the app notifies about itself.
+// Tapping either opens the thread.
+import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
+import * as SecureStore from "expo-secure-store";
 
+import type { HostResponse } from "../../desktop/src/preload/bridge";
+import type { RelayPushKeyResult } from "../../desktop/src/protocol/generated/protocol";
 import { lastReplyIn, type Alert } from "./alerts";
 
 /** Parallax Relay (0068). */
@@ -75,6 +81,27 @@ export async function lastReply(hostId: string, runId: string): Promise<string |
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Keeps the push key of the computer behind `request` under its relay id, which its pushes carry,
+ * in the keychain group this app shares with its notification service extension
+ * (`plugins/withNotificationService.js`), which reads it while the phone is locked. One that fails
+ * leaves the fixed text until the next connection.
+ */
+export async function savePushKey(
+  request: (method: "relay/pushKey", params: object) => Promise<HostResponse<unknown>>,
+): Promise<void> {
+  const { appleTeamId, bundleIdentifier } = Constants.expoConfig?.ios ?? {};
+  if (!appleTeamId || !bundleIdentifier) return;
+  const answer = await request("relay/pushKey", {}).catch(() => undefined);
+  if (!answer || "error" in answer) return;
+  const { hostId, key } = answer.result as RelayPushKeyResult;
+  await SecureStore.setItemAsync(hostId, key, {
+    keychainService: "pushKeys",
+    accessGroup: `${appleTeamId}.${bundleIdentifier}.pushKeys`,
+    keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+  }).catch(() => {});
 }
 
 /** Asks for permission once. Resolves to whether notifications are on. */

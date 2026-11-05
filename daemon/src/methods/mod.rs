@@ -240,6 +240,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RelayHosts => |p| remote::relay_hosts(context, p),
         RelayRemove => |p| remote::relay_remove(context, p),
         RelayId => |p| remote::relay_id(context, p),
+        RelayPushKey => |p| remote::relay_push_key(context, p),
         AccessGet => |p| remote::access_get(context, p),
         AccessMerge => |p| remote::access_merge(context, p),
         AccessApprove => |p| remote::access_approve(context, p),

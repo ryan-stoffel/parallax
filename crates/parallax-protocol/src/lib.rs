@@ -235,10 +235,10 @@ pub use queue::{
 pub use remote::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequest,
     AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState, RelayHost,
-    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayRegisterParams,
-    RelayRemoveParams, RelaySignParams, RelaySignResult, RelayStatus, RemotePairParams,
-    RemotePairResult, RemoteRevokeParams, RemoteSession, RemoteSessionsParams,
-    RemoteSessionsResult,
+    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams,
+    RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
+    RelayStatus, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession,
+    RemoteSessionsParams, RemoteSessionsResult,
 };
 pub use remote_control::{
     RemoteControlOrigin, RemoteControlSession, RemoteControlState, ThreadRemoteControlOriginParams,

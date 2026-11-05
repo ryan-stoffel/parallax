@@ -10,7 +10,7 @@ import {
   verifyEs256,
 } from "./crypto";
 import { type Env, json } from "./index";
-import type { Notification } from "./push";
+import { MAX_SEALED, type Notification } from "./push";
 
 /** The user a host is registered to, and its key. */
 type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
@@ -403,7 +403,7 @@ export class HostRelay extends DurableObject<Env> {
       const before = (await this.ctx.storage.get<string[]>("hooks")) ?? [];
       if (keys.join() !== before.join()) await this.ctx.storage.put("hooks", keys);
     } else if (parsed?.t === "push") {
-      const { run, state } = parsed;
+      const { run, state, sealed } = parsed;
       const valid =
         typeof run === "string" &&
         run.length <= 64 &&
@@ -412,7 +412,9 @@ export class HostRelay extends DurableObject<Env> {
       const owner = await this.owner();
       if (!valid || !owner || !this.limits.allow("pushes", LIMITS.pushes)) return;
       const account = this.env.USERS.get(this.env.USERS.idFromName(owner.user));
-      await account.push(owner.hostId, run, state as Notification["state"]);
+      // A `sealed` past the cap is dropped, and the push goes with the fixed text.
+      const carried = typeof sealed === "string" && sealed.length <= MAX_SEALED ? sealed : undefined;
+      await account.push(owner.hostId, run, state as Notification["state"], carried);
     } else if (parsed?.t === "spare") {
       // plxd asks once its spare was taken or ended, so any spare still listed is gone.
       const owner = await this.owner();

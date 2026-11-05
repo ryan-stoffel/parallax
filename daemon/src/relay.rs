@@ -11,7 +11,8 @@
 //! - It answers the webhooks the relay forwards, held ones included, with the same check as
 //!   `/api/hooks` ([`crate::schedules::hook`]), keyed by the relay's delivery id so a redelivery
 //!   fires once.
-//! - It tells the relay when a run needs the user, finishes, or fails, for push, with no content.
+//! - It tells the relay when a run needs the user, finishes, or fails, for push, with the thread's
+//!   title and the start of its reply sealed with a key only the user's phones get ([`seal`], 0100).
 //!
 //! It reconnects with jittered exponential backoff and polls nothing. Idle, it sends one ping a
 //! minute, which the relay answers without waking, to keep Cloudflare's idle timer from closing
@@ -44,9 +45,12 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+mod seal;
+
 use crate::event_log::{Entry, EventLog};
 use crate::remote::{self, DpopKey, Error};
 use crate::server::Daemon;
+use crate::store::store_error;
 
 /// Where the relay is unless `PLXD_RELAY_URL` says otherwise.
 pub const DEFAULT_URL: &str = "https://relay.parallax.codes";
@@ -970,17 +974,20 @@ async fn serve(
                 sink.send(hooks().await).await.map_err(failed)?;
             }
             Ok(()) = events.changed() => {
-                for push in pushes.read(&daemon.log, Instant::now()) {
+                for (run, state) in pushes.read(&daemon.log, Instant::now()) {
+                    let push = message(daemon, host_id, run, state).await;
                     sink.send(Message::text(push)).await.map_err(failed)?;
                 }
             }
             () = time::sleep_until(held.unwrap_or_else(Instant::now)), if held.is_some() => {
                 // An event ready at this moment too may cancel a hold, so events go first.
-                for push in pushes.read(&daemon.log, Instant::now()) {
+                for (run, state) in pushes.read(&daemon.log, Instant::now()) {
+                    let push = message(daemon, host_id, run, state).await;
                     sink.send(Message::text(push)).await.map_err(failed)?;
                 }
                 // Each stays held until it's sent, so a socket that fails sends it on the next.
-                for (run, push) in pushes.due(Instant::now()) {
+                for (run, state) in pushes.due(Instant::now()) {
+                    let push = message(daemon, host_id, run, state).await;
                     sink.send(Message::text(push)).await.map_err(failed)?;
                     pushes.holds.remove(&run);
                 }
@@ -1138,6 +1145,9 @@ fn mark(set: &mut HashSet<RunId>, run: RunId, on: bool) {
     }
 }
 
+/// A push to send: the run and the state it reached.
+type Push = (RunId, &'static str);
+
 /// A run's `done` or `failed` push, waiting out [`HOLD`].
 struct Hold {
     /// The status it holds at: any other cancels it.
@@ -1167,8 +1177,8 @@ impl Pushes {
     }
 
     /// The pushes to send now for the events after `after`, a run asking for approval, and the
-    /// holds those events start and cancel. Each names only the run.
-    fn read(&mut self, log: &EventLog, now: Instant) -> Vec<String> {
+    /// holds those events start and cancel.
+    fn read(&mut self, log: &EventLog, now: Instant) -> Vec<Push> {
         let mut pushes = Vec::new();
         loop {
             let (holds, completed) = (&self.holds, &self.completed);
@@ -1212,7 +1222,7 @@ impl Pushes {
     }
 
     /// Takes in `event`: the push it sends at once, if any.
-    fn apply(&mut self, event: &ParallaxEvent, now: Instant) -> Option<String> {
+    fn apply(&mut self, event: &ParallaxEvent, now: Instant) -> Option<Push> {
         match event {
             ParallaxEvent::AgentBackground { run_id, tasks } => {
                 let was = self.waiting.on(*run_id);
@@ -1264,7 +1274,7 @@ impl Pushes {
                 .any(|item| matches!(item, AgentOutputItem::ApprovalRequested { .. })) =>
             {
                 self.holds.remove(run_id);
-                return Some(message(*run_id, "needsYou"));
+                return Some((*run_id, "needsYou"));
             }
             _ => {}
         }
@@ -1297,7 +1307,7 @@ impl Pushes {
     }
 
     /// The pushes whose holds ended by `now`. The caller removes each once it's sent.
-    fn due(&self, now: Instant) -> Vec<(RunId, String)> {
+    fn due(&self, now: Instant) -> Vec<Push> {
         self.holds
             .iter()
             .filter(|(_, hold)| hold.due <= now)
@@ -1307,15 +1317,58 @@ impl Pushes {
                 } else {
                     "done"
                 };
-                (*run, message(*run, state))
+                (*run, state)
             })
             .collect()
     }
 }
 
-/// What tells the relay that `run` reached `state`.
-fn message(run: RunId, state: &str) -> String {
-    json!({ "t": "push", "run": run.to_string(), "state": state }).to_string()
+/// What tells the relay that `run` reached `state`, with its title and text sealed for the phone,
+/// or with neither when they can't be read, so the phone shows the relay's fixed text.
+async fn message(daemon: &Daemon, host_id: &str, run: RunId, state: &str) -> String {
+    let mut push = json!({ "t": "push", "run": run.to_string(), "state": state });
+    if let Some(sealed) = sealed(daemon, host_id, run, state).await {
+        push["sealed"] = sealed.into();
+    } else {
+        debug!(%run, "this push goes with the fixed text only");
+    }
+    push.to_string()
+}
+
+/// How many of a run's newest events are searched for its last reply, as the phone does.
+const REPLY_EVENTS: usize = 200;
+const REPLY_BYTES: usize = 1 << 20;
+
+/// `run`'s title and the start of its last reply, sealed with this host's push key (0100).
+async fn sealed(daemon: &Daemon, host_id: &str, run: RunId, state: &str) -> Option<String> {
+    let title = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| {
+            let thread = db.get_thread(run.into()).map_err(|e| store_error(&e))?;
+            let row = db.get_run(run.into()).map_err(|e| store_error(&e))?;
+            Ok(thread
+                .and_then(|thread| thread.fields.title)
+                .or_else(|| row.map(|row| seal::first_line(&row.fields.prompt))))
+        })
+        .await
+        .ok()??;
+    let log = Arc::clone(&daemon.log);
+    let data_dir = daemon.data_dir.root().to_owned();
+    let (key, reply) = tokio::task::spawn_blocking(move || {
+        let key = remote::push_key(&data_dir).ok()?;
+        let head = log.head();
+        let (entries, _) = log
+            .run_events_before(run, head + 1, REPLY_EVENTS, REPLY_BYTES)
+            .ok()?;
+        Some((
+            key,
+            seal::last_reply(entries.iter().map(|e| e.event().into_owned())),
+        ))
+    })
+    .await
+    .ok()??;
+    let text = seal::text_for(state, reply);
+    seal::seal(&key, host_id, &run.to_string(), state, &title, &text)
 }
 
 #[cfg(test)]
@@ -1353,7 +1406,10 @@ mod tests {
         fn see(&mut self, event: ParallaxEvent) -> Vec<String> {
             self.log(event);
             let pushes = self.pushes.read(&self.log, self.now);
-            pushes.iter().map(|push| state_of(push)).collect()
+            pushes
+                .iter()
+                .map(|(_, state)| (*state).to_owned())
+                .collect()
         }
 
         /// Moves on by `by`: the states of the holds that ended, each sent.
@@ -1363,7 +1419,7 @@ mod tests {
             for (run, _) in &due {
                 self.pushes.holds.remove(run);
             }
-            due.iter().map(|(_, push)| state_of(push)).collect()
+            due.iter().map(|(_, state)| (*state).to_owned()).collect()
         }
 
         fn completed(&self) -> ParallaxEvent {
@@ -1434,11 +1490,6 @@ mod tests {
             }))
             .unwrap()
         }
-    }
-
-    fn state_of(push: &str) -> String {
-        let push = serde_json::from_str::<Value>(push).unwrap();
-        push["state"].as_str().unwrap().to_owned()
     }
 
     const NOTHING: [String; 0] = [];
@@ -1635,6 +1686,71 @@ mod tests {
         });
         assert!(matches!(ended, Ok(Ended::Stopped)));
         assert_eq!(pushes.next_due(), None);
+    }
+
+    #[tokio::test]
+    async fn a_push_carries_the_threads_title_and_reply_sealed_or_goes_without() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let host = "host";
+
+        // A run plxd can't read goes with the fixed text.
+        let unknown = RunId::generate();
+        let push: Value =
+            serde_json::from_str(&message(&daemon, host, unknown, "done").await).unwrap();
+        assert_eq!(push["run"], unknown.to_string());
+        assert_eq!(push.get("sealed"), None);
+
+        let run = crate::agents::orchestrator::tests::plain_thread(&daemon).await;
+        daemon
+            .store
+            .run(&CancellationToken::new(), move |db| {
+                let update = parallax_store::ThreadUpdate {
+                    title: Some(Some("Fix the bug".to_owned())),
+                    ..Default::default()
+                };
+                db.update_thread(run.into(), &update)
+                    .map_err(|e| store_error(&e))?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        daemon
+            .store
+            .append(
+                jiff::Timestamp::now(),
+                None,
+                ParallaxEvent::AgentOutput {
+                    run_id: run,
+                    items: vec![AgentOutputItem::Text {
+                        message_id: None,
+                        text: "**All** done".to_owned(),
+                    }],
+                    compacted: None,
+                },
+            )
+            .await;
+
+        let key = remote::push_key(dir.path()).ok();
+        let sealed_for = async |state: &str| -> Value {
+            let push: Value =
+                serde_json::from_str(&message(&daemon, host, run, state).await).unwrap();
+            assert_eq!(push["state"], state);
+            seal::open(
+                key.as_ref().unwrap(),
+                &format!("{host}:{run}:{state}"),
+                push["sealed"].as_str().unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            sealed_for("done").await,
+            json!({ "title": "Fix the bug", "text": "All done" })
+        );
+        assert_eq!(
+            sealed_for("needsYou").await,
+            json!({ "title": "Fix the bug", "text": "Needs your approval" })
+        );
     }
 
     /// `select!` picks among ready arms at random, so a few rounds, each with a hold's deadline

@@ -81,6 +81,20 @@
   },
   {
     "jsonrpc": "2.0",
+    "id": 9,
+    "method": "relay/pushKey",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": {
+      "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+      "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": 6,
     "method": "relay/sign",
     "params": { "tokenHash": "n4bQgYhMfWWaL-qgxVrQFaO_TxsrC4Is0V1sFbDwCgg" }

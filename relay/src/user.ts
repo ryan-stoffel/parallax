@@ -73,10 +73,11 @@ export class UserAccount extends DurableObject<Env> {
   }
 
   /** Tells this user's devices that run `run` on host `hostId` needs them, finished, or failed,
-   *  and forgets any device Apple no longer knows. */
-  async push(hostId: string, run: string, state: Notification["state"]) {
+   *  with its title and text in `sealed` if plxd sent them, and forgets any device Apple no longer
+   *  knows. */
+  async push(hostId: string, run: string, state: Notification["state"], sealed?: string) {
     if (!this.limits.allow("pushes", USER_LIMITS.pushes)) return;
-    const notification: Notification = { hostId, run, state };
+    const notification: Notification = { hostId, run, state, ...(sealed && { sealed }) };
     for (const device of await this.devices()) {
       const sent = await sendApns(this.env, device, notification);
       if (sent === "gone") await this.removeDevice(device);

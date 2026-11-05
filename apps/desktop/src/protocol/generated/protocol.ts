@@ -695,6 +695,11 @@ export type ParallaxRequests = {
 	 */
 	"relay/id": { params: RelayIdParams, result: RelayIdResult },
 	/**
+	 * `relay/pushKey`: the key this host seals a push's title and text with, for a phone's
+	 * notification service extension to open (0100). Gated on the `relayPushKey` capability.
+	 */
+	"relay/pushKey": { params: RelayPushKeyParams, result: RelayPushKeyResult },
+	/**
 	 * `access/get`: who may sign in with this host's account, and a new device's request
 	 * while it waits (0091). With `after`, it answers once that changes.
 	 */
@@ -1226,6 +1231,7 @@ export const REQUEST_METHODS = [
 	"relay/hosts",
 	"relay/remove",
 	"relay/id",
+	"relay/pushKey",
 	"access/get",
 	"access/merge",
 	"access/approve",
@@ -8673,6 +8679,26 @@ export type RelayIdResult = {
 	 * port than 7341. An older plxd leaves it out.
 	 */
 	routes?: Array<string>,
+};
+
+/**
+ * Params of `relay/pushKey`.
+ */
+export type RelayPushKeyParams = Record<symbol, never>;
+
+/**
+ * Result of `relay/pushKey` (0100): the key this host seals a push's title and text with, for a
+ * phone's notification service extension to open.
+ */
+export type RelayPushKeyResult = {
+	/**
+	 * The relay id its pushes carry, which the phone keeps the key under.
+	 */
+	hostId: string,
+	/**
+	 * 32 random bytes, for AES-256-GCM, in base64url.
+	 */
+	key: string,
 };
 
 /**

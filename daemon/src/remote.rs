@@ -869,6 +869,31 @@ pub fn device_key(data_dir: &Path) -> io::Result<DpopKey> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "the device key file is damaged"))
 }
 
+/// The key this host seals a push's title and text with (0100): 32 random bytes in an owner-only
+/// file, made the first time. A phone keeps a copy from `relay/pushKey`.
+///
+/// # Errors
+///
+/// When the file can't be read or written, or is damaged.
+///
+/// # Panics
+///
+/// If the OS has no random numbers.
+pub fn push_key(data_dir: &Path) -> io::Result<[u8; 32]> {
+    let path = data_dir.join("relay-push-key");
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut key = [0; 32];
+            getrandom::fill(&mut key).expect("the OS's random numbers");
+            create_once(&path, &key)?
+        }
+        Err(error) => return Err(error),
+    };
+    <[u8; 32]>::try_from(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "the push key file is damaged"))
+}
+
 /// A TLS connection to `route` that presents the certificate with fingerprint `pin`, or any
 /// certificate without one, and the fingerprint it presented.
 ///
@@ -1781,6 +1806,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_push_key_is_made_once_and_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = push_key(dir.path()).unwrap();
+        assert_eq!(push_key(dir.path()).unwrap(), key);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(dir.path().join("relay-push-key"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
 
     /// Races `routes` with each answering `(after ms, ok)` from `answers`, by route, and records
     /// when each started: the winner and the start times.
