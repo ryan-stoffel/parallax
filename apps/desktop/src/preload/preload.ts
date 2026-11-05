@@ -159,6 +159,7 @@ const bridge: ParallaxBridge = {
   setDeviceEnabled: (hostId, enabled) =>
     ipcRenderer.invoke("parallax:setDeviceEnabled", hostId, enabled),
   removeDevice: (hostId) => ipcRenderer.invoke("parallax:removeDevice", hostId),
+  editRoutes: (hostId, edit) => ipcRenderer.invoke("parallax:editRoutes", hostId, edit),
   discoverAccount: () => ipcRenderer.invoke("parallax:discoverAccount"),
   enterSetupCode: (hostId, code) => ipcRenderer.invoke("parallax:enterSetupCode", hostId, code),
   showSetupCode: () => ipcRenderer.invoke("parallax:showSetupCode"),

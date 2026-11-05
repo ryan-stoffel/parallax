@@ -17,6 +17,7 @@ import {
 import { AppState } from "react-native";
 
 import type { ConnectionState, RpcResponse } from "../../desktop/src/preload/bridge";
+import type { RouteEdit } from "../../desktop/src/preload/routeList";
 import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import type { AccessState, HostUpdateResult, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
@@ -30,6 +31,7 @@ import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
 import { savePushKey } from "./push";
+import { editOnPhone } from "./routes";
 import { keeper, toAsk } from "./setup";
 
 /** How often the account's computers are listed while the app is in front. */
@@ -68,6 +70,10 @@ interface FleetValue {
   setUp: (id: string) => void;
   /** This phone's key, which its Add computer command names, so its Allow alone is enough. */
   deviceKey?: string;
+  /** Changes an account computer's routes, on this phone. Answers why it can't, for people. */
+  editRoutes: (id: string, edit: RouteEdit) => string | undefined;
+  /** The route computer `id`'s connection is on. */
+  routeOf: (id: string) => string | undefined;
   /**
    * Revokes session `session` on computer `id`. A device signed in with the account also loses its
    * key there, which `share` then copies to the computers that accept this one's lists (0091).
@@ -283,11 +289,11 @@ export function FleetProvider({
     asking.current = true;
     compared.current.add(next.hostId);
     const id = accountId(next.hostId);
-    const routes = latest.current.machines.find((m) => m.id === id)?.account?.routes ?? [];
+    const choices = latest.current.machines.find((m) => m.id === id)?.account ?? { routes: [] };
     await account
       .compare(
         next.hostId,
-        routes,
+        choices,
         (code) => {
           gate(id, { kind: "waiting", code });
           return askToAllow(next.name, code);
@@ -472,12 +478,12 @@ export function FleetProvider({
   function setUp(id: string) {
     const m = setup.machines.find((x) => x.id === id);
     if (!accounts || !m?.account) return;
-    const { hostId, routes } = m.account;
+    const { hostId } = m.account;
     void accounts.resumeAsking();
     setStopped(undefined);
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
     if (accounts.trusts(hostId)) return connect(m);
-    setUpComputer(accounts, { hostId, name: m.name, routes }, {
+    setUpComputer(accounts, { hostId, name: m.name, choices: m.account }, {
       onWaiting: (code) => gate(id, { kind: "waiting", code }),
       done: () => connect(m),
       failed: () => gate(id, { kind: "setup" }),
@@ -515,6 +521,20 @@ export function FleetProvider({
         return { ...s, hidden, machines, defaultId: defaultOf(machines, s.defaultId) };
       }),
     setUp,
+    editRoutes: (id, edit) => {
+      const account = setup.machines.find((m) => m.id === id)?.account;
+      if (!account) return "That computer isn't on this phone anymore.";
+      const next = editOnPhone(account.hostId, account, edit);
+      if ("error" in next) return next.error;
+      const edited = { ...account, ...next };
+      update((s) => ({
+        ...s,
+        machines: s.machines.map((m) => (m.id === id ? { ...m, account: edited } : m)),
+      }));
+      fleet.routesEdited(id, edited);
+      return undefined;
+    },
+    routeOf: (id) => fleet.route(id),
     async revoke(id, session) {
       const answer = await fleet.hosts.get(id)?.request("remote/revoke", { id: session });
       if (!answer) return { error: "That computer isn't connected." };

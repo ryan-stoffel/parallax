@@ -39,6 +39,7 @@ import {
   type SubscribeParams,
   type WatchParams,
 } from "../preload/bridge";
+import { editRoutes, routeList, type RouteEdit } from "../preload/routeList";
 import {
   accountId,
   coalesced,
@@ -270,6 +271,9 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
     typeof enabled === "boolean" ? setDeviceEnabled(hostId, enabled) : undefined,
   );
   ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
+  ipcMain.handle("parallax:editRoutes", (_event, hostId: unknown, edit: unknown) =>
+    editAccountRoutes(hostId, edit),
+  );
   // Settings > Connections and Add computer ask for the account's computers when they open, and
   // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
@@ -1419,6 +1423,9 @@ function deviceHosts(): DeviceHost[] {
         detected: iconFor(a.name),
         hostName: a.name,
         enabled: !a.off,
+        routes: routeList(a.hostId, a),
+        addedRoutes: a.addedRoutes ?? [],
+        route: accountRoutes.get(accountId(a.hostId))?.route,
         ...(access && { access }),
       };
     });
@@ -1840,8 +1847,8 @@ function addAccountConnection(saved: SavedAccount): void {
   }
   const routes = new Routes({
     hostId: saved.hostId,
-    learned: () => accountOf(id)?.routes ?? [],
-    probe: (direct) => probeRoutes(saved.hostId, direct),
+    choices: () => accountOf(id) ?? { routes: [] },
+    probe: (each, inOrder) => probeRoutes(saved.hostId, each, inOrder),
     move: () => connections.get(id)?.reconnect(),
   });
   accountRoutes.set(id, routes);
@@ -1849,11 +1856,48 @@ function addAccountConnection(saved: SavedAccount): void {
     id,
     () => {
       const plxd = localPlxd();
-      return plxd === undefined
-        ? undefined
-        : [plxd, "dial", `--account=${saved.hostId}`, "--", ...routes.dial()];
+      if (plxd === undefined) return undefined;
+      const order = routes.inOrder ? ["--in-order"] : [];
+      return [plxd, "dial", `--account=${saved.hostId}`, ...order, "--", ...routes.dial()];
     },
-    { account: saved.name, env: relayEnv, onRoute: (route) => (routes.route = route) },
+    {
+      account: saved.name,
+      env: relayEnv,
+      onRoute: (route) => {
+        routes.route = route;
+        broadcast("parallax:devices", deviceHosts());
+      },
+    },
+  );
+}
+
+/**
+ * `window.parallax.editRoutes`: changes account computer `hostId`'s routes, in this app only
+ * (0091). Resolves to why it can't, for people. A computer waiting on its code is checked again,
+ * since a new route may be what reaches it, and one signing in dials with the new routes after.
+ */
+function editAccountRoutes(hostId: unknown, edit: unknown): string | undefined {
+  const saved = accountOf(hostId);
+  if (!saved) return "That computer isn't on your account anymore.";
+  if (!isRouteEdit(edit)) return "That isn't a change to a route.";
+  const next = editRoutes(saved.hostId, saved, edit);
+  if ("error" in next) return next.error;
+  updateAccount(saved.hostId, (each) => ({ ...each, ...next }));
+  broadcast("parallax:devices", deviceHosts());
+  const id = accountId(saved.hostId);
+  const access = accountAccess.get(id);
+  if (access?.step === "needsCode") void askForCode(id);
+  else if (!access) accountRoutes.get(id)?.edited();
+  return undefined;
+}
+
+/** Whether what a window sent is a `RouteEdit`. */
+function isRouteEdit(edit: unknown): edit is RouteEdit {
+  const { add, remove, move, by } = (edit ?? {}) as Record<string, unknown>;
+  return (
+    typeof add === "string" ||
+    typeof remove === "string" ||
+    (typeof move === "string" && (by === -1 || by === 1))
   );
 }
 
@@ -2002,8 +2046,9 @@ async function networkChanged(): Promise<void> {
 
 /**
  * Reads connected account computer `id`'s routes from its plxd (`relay/id`), and keeps its direct
- * ones in place of those saved, LAN then Tailscale. The dial adds the relay itself. An older plxd
- * reports none, so what the sign-in or pairing learned stays.
+ * ones in place of those it last reported, LAN then Tailscale, which leaves any the user added. The
+ * dial adds the relay itself. An older plxd reports none, so what the sign-in or pairing learned
+ * stays.
  */
 async function readRoutes(id: string): Promise<void> {
   const relayId = relayIdOf(id);
@@ -2013,16 +2058,24 @@ async function readRoutes(id: string): Promise<void> {
   if ("error" in answer || answer.result.hostId !== relayId || !answer.result.routes) return;
   const routes = directRoutes(answer.result.routes);
   const saved = savedAccounts().find((a) => a.hostId === relayId);
-  if (saved && saved.routes.join("\n") !== routes.join("\n"))
+  if (saved && saved.routes.join("\n") !== routes.join("\n")) {
     updateAccount(relayId, (each) => ({ ...each, routes }));
+    // The Routes dialog shows them, and a move there acts on this list.
+    broadcast("parallax:devices", deviceHosts());
+  }
 }
 
 /** The first of `routes` to present account computer `relayId`'s key, sent nothing (0091). */
-async function probeRoutes(relayId: string, routes: string[]): Promise<string | undefined> {
+async function probeRoutes(
+  relayId: string,
+  routes: string[],
+  inOrder = false,
+): Promise<string | undefined> {
   const plxd = localPlxd();
   if (!plxd) return undefined;
   try {
-    const args = ["--probe", `--account=${relayId}`, "--", ...routes];
+    const order = inOrder ? ["--in-order"] : [];
+    const args = ["--probe", `--account=${relayId}`, ...order, "--", ...routes];
     const { stdout } = await dialPlxd(plxd, args, await account?.accessToken());
     const { route } = JSON.parse(stdout) as { route?: unknown };
     return typeof route === "string" ? route : undefined;

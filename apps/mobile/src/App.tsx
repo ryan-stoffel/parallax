@@ -56,6 +56,7 @@ import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
 import { ThreadFilesScreen } from "./ThreadFiles";
 import { AboutScreen, AddComputerScreen, ComputerScreen, phonePages, PhoneSettingsScreen, SettingsScreen } from "./Settings";
+import { ComputerRoutesScreen } from "./SettingsRoutes";
 import { ComputerSettingsScreen } from "./SettingsComputer";
 import { ProviderScreen } from "./SettingsProviders";
 import { Sidebar, SidebarSky, sidebarWidth } from "./Sidebar";
@@ -404,6 +405,7 @@ function SettingsSheet() {
       {/* Its refresh button is the screen's own (Usage.tsx). */}
       <SettingsStack.Screen name="Usage" component={UsageScreen} options={{ title: "Usage" }} />
       <SettingsStack.Screen name="Computer" component={ComputerScreen} />
+      <SettingsStack.Screen name="ComputerRoutes" component={ComputerRoutesScreen} options={{ title: "Routes" }} />
       <SettingsStack.Screen name="ComputerSettings" component={ComputerSettingsScreen} />
       <SettingsStack.Screen name="Provider" component={ProviderScreen} />
       {/* Its screen doesn't keep clear of a clear header, so its header is solid, on the sheet's background. */}

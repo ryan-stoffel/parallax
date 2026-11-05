@@ -91,7 +91,7 @@ pub(crate) async fn open_account(
     data_dir: &Path,
 ) -> Result<App, remote::Error> {
     Ok(App::bridged(
-        remote::dial_account(routes, host_id, data_dir)
+        remote::dial_account(routes, false, host_id, data_dir)
             .await?
             .socket,
     ))

@@ -28,7 +28,8 @@ import { relayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { keychain, spakePair } from "./host";
 import { base64url, fromBase64url, newDpopSecret, proof, thumbprint } from "./pairing";
 import { RELAY_URL } from "./push";
-import { isRelay, ordered, race, usable, withPort, WrongHost } from "./routes";
+import { inOrder, routesAhead, type RouteChoices } from "../../desktop/src/preload/routeList";
+import { isRelay, ordered, race, usable, withPort, worthChecking, WrongHost } from "./routes";
 
 const KEY = "account-hosts";
 
@@ -352,10 +353,11 @@ export class AccountHosts {
   }
 
   /**
-   * The first of `routes` to answer as `hostId`, as routes.ts races them, with its descriptor.
-   * Only the winner is kept; the caller closes it.
+   * The first of `routes` to answer as `hostId`, as routes.ts races them, with its descriptor. Each
+   * is pinned to `hostId`, and the descriptor sends no credential, so an address the user added
+   * gets nothing unless it holds the host's key. Only the winner is kept; the caller closes it.
    */
-  private async first(hostId: string, routes: string[]) {
+  private async first(hostId: string, routes: string[], byOrder = false) {
     const { value } = await race(
       routes,
       async (route) => {
@@ -368,18 +370,20 @@ export class AccountHosts {
         }
       },
       ({ at }) => at.close(),
+      byOrder,
     );
     return value;
   }
 
   /**
-   * Which of `routes`' direct routes answers as `hostId` now, if any, for moving a connection off
-   * the relay. Sends no credential.
+   * Which route a connection on `route` should move to, if any: the first ahead of it to answer as
+   * `hostId` now. Sends no credential.
    */
-  async recheck(hostId: string, routes: string[], failedAt: Record<string, number>) {
-    const direct = usable(ordered(hostId, routes), failedAt, Date.now()).filter((r) => !isRelay(r));
-    if (!direct.length) return undefined;
-    const found = await this.first(hostId, direct).catch(() => undefined);
+  async recheck(hostId: string, choices: RouteChoices, route: string, failedAt: Record<string, number>) {
+    const ahead = routesAhead(ordered(hostId, choices), route, inOrder(choices));
+    const routes = worthChecking(ahead, failedAt, Date.now());
+    if (!routes.length) return undefined;
+    const found = await this.first(hostId, routes, inOrder(choices)).catch(() => undefined);
     found?.at.close();
     return found?.at.route;
   }
@@ -388,17 +392,21 @@ export class AccountHosts {
    * Opens `/ws` on `hostId`'s first route to answer, with its session's proof on the upgrade, or
    * a new session from a fresh sign-in when it has none or plxd refused it. Resolves to the open
    * socket and its route, with the routes the host reports through `learn`; to a `Gate` when it
-   * needs setting up or approving; or to an error for people.
+   * needs setting up or approving; or to an error for people. `only` is the route a re-check found,
+   * for moving to it: a dial of it alone, so a slower route above a working one can't lose the race
+   * and be moved to again at every re-check.
    */
   async open(
     hostId: string,
-    learned: string[],
+    choices: RouteChoices,
     failedAt: Record<string, number>,
     learn: (routes: string[], name: string) => void,
+    only?: string,
   ): Promise<{ socket: PinnedSocket; route: string } | { gate: Gate } | { error: string }> {
     let found;
     try {
-      found = await this.first(hostId, usable(ordered(hostId, learned), failedAt, Date.now()));
+      const routes = only ? [only] : usable(ordered(hostId, choices), failedAt, Date.now());
+      found = await this.first(hostId, routes, inOrder(choices));
     } catch (e) {
       return { error: (e as Error).message };
     }
@@ -582,11 +590,11 @@ export class AccountHosts {
    */
   async ask(
     hostId: string,
-    learned: string[],
+    choices: RouteChoices,
     onCode: (code: string, allow: () => void) => void,
     onConfirm: () => void = () => {},
   ): Promise<void> {
-    const { at } = await this.first(hostId, ordered(hostId, learned));
+    const { at } = await this.first(hostId, ordered(hostId, choices), inOrder(choices));
     try {
       const signed = await this.signIn(at, hostId, true);
       if ("session" in signed) {
@@ -636,11 +644,11 @@ export class AccountHosts {
    */
   async compare(
     hostId: string,
-    learned: string[],
+    choices: RouteChoices,
     decide: (code: string) => Promise<boolean>,
     onConfirm: () => void = () => {},
   ): Promise<void> {
-    const { at } = await this.first(hostId, ordered(hostId, learned));
+    const { at } = await this.first(hostId, ordered(hostId, choices), inOrder(choices));
     try {
       const signed = await this.signIn(at, hostId, true, true);
       if (!("gate" in signed) || signed.gate.kind !== "waiting" || !signed.request)
@@ -667,8 +675,8 @@ export class AccountHosts {
    * id, which approves this phone's key there and this phone's trust in the host. The code is
    * used once whatever happens, and at most 5 runs an hour go to one host.
    */
-  async setup(hostId: string, learned: string[], code: string): Promise<void> {
-    const { at, described } = await this.first(hostId, ordered(hostId, learned));
+  async setup(hostId: string, choices: RouteChoices, code: string): Promise<void> {
+    const { at, described } = await this.first(hostId, ordered(hostId, choices), inOrder(choices));
     try {
       await this.setBook(hostId, setupRun(this.book(hostId), Date.now()));
       const at_ = (path: string) => `${at.base}${path}`;

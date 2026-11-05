@@ -15,6 +15,7 @@ import type {
   RelayHost,
   RemoteSessionsResult,
 } from "../protocol/generated/protocol";
+import type { RouteEdit } from "./routeList";
 
 /** The Appearance setting: follow the OS, or force a theme. */
 export const THEME_PREFERENCES = ["system", "dark", "light"] as const;
@@ -437,6 +438,8 @@ export interface ParallaxBridge {
    * list. Resolves to why not, for people.
    */
   removeDevice(hostId: string): Promise<string | undefined>;
+  /** Changes an account computer's routes in this app (0091). Resolves to why not, for people. */
+  editRoutes(hostId: string, edit: RouteEdit): Promise<string | undefined>;
   /**
    * Asks the account for its computers now (0091), as Settings > Connections does when it opens
    * and Add computer does while it's open, and starts again any connection to one that stopped
@@ -770,6 +773,12 @@ export type DeviceHost = {
   enabled: boolean;
   /** An account computer's sign-in, while it needs the user or is under way. */
   access?: AccountAccess;
+  /** An account computer's routes in the order this app tries them, the relay's included. */
+  routes?: string[];
+  /** Which of `routes` the user added in this app. */
+  addedRoutes?: string[];
+  /** The route its connection last went over. */
+  route?: string;
 };
 
 /**

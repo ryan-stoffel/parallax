@@ -3,6 +3,8 @@
 //! setup code approves the device that types it, within its run limit.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -20,6 +22,7 @@ use parallax_protocol::{
 use plxd::remote::{self, SignIn};
 use ring::rand::SystemRandom;
 use ring::rsa::{KeyPair, PublicKeyComponents};
+use rustls::pki_types::PrivatePkcs8KeyDer;
 use serde_json::json;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
@@ -280,6 +283,130 @@ async fn relay_id_reports_the_routes_the_descriptor_does() {
     server.stop().await;
 }
 
+/// A TLS server with a key of its own at `name`, as a stale or hostile address the user added
+/// would be, which closes its first `closing` connections before TLS: its route, and how many
+/// bytes any client sent it once TLS was up.
+async fn wrong_key_server(name: &str, closing: usize) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let route = format!("{name}:{}", listener.local_addr().unwrap().port());
+    let made = rcgen::generate_simple_self_signed(["parallax".to_owned()]).unwrap();
+    let key = PrivatePkcs8KeyDer::from(made.signing_key.serialize_der());
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![made.cert.der().clone()], key.into())
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let received = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&received);
+    tokio::spawn(async move {
+        let mut closing = closing;
+        while let Ok((stream, _)) = listener.accept().await {
+            if closing > 0 {
+                closing -= 1;
+                continue;
+            }
+            let acceptor = acceptor.clone();
+            let counted = Arc::clone(&counted);
+            tokio::spawn(async move {
+                let Ok(mut tls) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let mut read = [0; 1024];
+                while let Ok(n @ 1..) = tls.read(&mut read).await {
+                    counted.fetch_add(n, Ordering::SeqCst);
+                }
+            });
+        }
+    });
+    (route, received)
+}
+
+#[tokio::test]
+async fn a_user_added_route_with_the_wrong_key_gets_nothing_and_blocks_nothing() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    // A DNS name, as a user would add one, tried first.
+    let (wrong, received) = wrong_key_server("localhost", 0).await;
+    let pin = remote::Pin::HostId(host_id.clone());
+    let routes = [wrong.clone(), route.clone()];
+    let phone = temp_dir();
+
+    // Alone, it's the wrong host for every step that could send a credential.
+    let alone = std::slice::from_ref(&wrong);
+    assert!(matches!(
+        remote::probe(alone, false, &pin).await,
+        Err(remote::Error::WrongHost)
+    ));
+    let signing_in = sign_in(&issuer, alone, &host_id, USER, "phone", phone.path()).await;
+    assert!(matches!(signing_in, Err(remote::Error::WrongHost)));
+    assert!(matches!(
+        remote::pair_account(alone, &host_id, "000000", "phone", phone.path()).await,
+        Err(remote::Error::WrongHost)
+    ));
+
+    // With the real route after it, each goes on to that: a setup code, a sign-in, a probe, a dial.
+    let setup = client
+        .call::<AccessSetupCode>(AccessSetupCodeParams::default())
+        .await
+        .unwrap();
+    remote::pair_account(&routes, &host_id, &setup.code, "phone", phone.path())
+        .await
+        .unwrap();
+    let (over, signed_in) = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    assert_eq!(over, route);
+    assert!(matches!(signed_in, SignIn::Approved { .. }));
+    for in_order in [false, true] {
+        assert_eq!(remote::probe(&routes, in_order, &pin).await.unwrap(), route);
+        let dialed = remote::dial_account(&routes, in_order, &host_id, phone.path()).await;
+        assert_eq!(dialed.unwrap().route, route);
+    }
+
+    assert_eq!(received.load(Ordering::SeqCst), 0, "nothing reached it");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_route_that_drops_a_connection_then_shows_the_wrong_key_blocks_nothing() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    let phone = temp_dir();
+
+    let (wrong, received) = wrong_key_server("localhost", 1).await;
+    let routes = [wrong, route.clone()];
+    let setup = client
+        .call::<AccessSetupCode>(AccessSetupCodeParams::default())
+        .await
+        .unwrap();
+    remote::pair_account(&routes, &host_id, &setup.code, "phone", phone.path())
+        .await
+        .unwrap();
+    assert_eq!(
+        received.load(Ordering::SeqCst),
+        0,
+        "pairing sent it nothing"
+    );
+
+    let (wrong, received) = wrong_key_server("localhost", 1).await;
+    let routes = [wrong, route.clone()];
+    let (over, _) = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    assert_eq!(over, route);
+    assert_eq!(
+        received.load(Ordering::SeqCst),
+        0,
+        "signing in sent it nothing"
+    );
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
     let issuer = clerk().await;
@@ -295,7 +422,7 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
     let pinned = sign_in(&issuer, &routes, &other_id, USER, "phone", phone.path()).await;
     assert!(matches!(pinned, Err(remote::Error::WrongHost)), "pinned");
     assert!(matches!(
-        remote::dial_account(&routes, &other_id, phone.path()).await,
+        remote::dial_account(&routes, false, &other_id, phone.path()).await,
         Err(remote::Error::Refused | remote::Error::WrongHost)
     ));
 
@@ -328,7 +455,7 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
         ("phone", Some(code.as_str()))
     );
     assert!(matches!(
-        remote::dial_account(&routes, &host_id, phone.path()).await,
+        remote::dial_account(&routes, false, &host_id, phone.path()).await,
         Err(remote::Error::Refused)
     ));
     // It holds the only place: another device can't push it out.
@@ -368,7 +495,7 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
         .unwrap();
     assert!(app.closes().await, "its socket closed");
     assert!(matches!(
-        remote::dial_account(&routes, &host_id, phone.path()).await,
+        remote::dial_account(&routes, false, &host_id, phone.path()).await,
         Err(remote::Error::Refused)
     ));
     let state = client

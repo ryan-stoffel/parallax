@@ -5,6 +5,7 @@ import type {
   RelayHostsResult,
   RemoteSessionsResult,
 } from "../protocol/generated/protocol";
+import { inOrder, isRelay, routeList, routesAhead, type RouteChoices } from "../preload/routeList";
 import { isDeviceIcon } from "./connect";
 import { isRoute } from "./settings";
 
@@ -20,6 +21,10 @@ export type SavedAccount = {
   name: string;
   /** Its direct routes as it last reported them, LAN first, then Tailscale. Never the relay. */
   routes: string[];
+  /** Direct addresses the user added, kept whatever it reports. */
+  addedRoutes?: string[];
+  /** The user's order of all its routes, the relay included, once they move one. */
+  routeOrder?: string[];
   icon?: DeviceIcon;
   /** Turned off in this app: listed, with no connection. */
   off?: true;
@@ -66,15 +71,20 @@ export const directRoutes = (routes: unknown): string[] =>
 export function checkAccounts(accounts: unknown, ids: Set<string>): void {
   if (!Array.isArray(accounts)) throw new Error("`accounts` isn't a list");
   for (const entry of accounts as unknown[]) {
-    const { hostId, name, routes, icon, off, removed, pairRuns } = (entry ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const { hostId, name, routes, addedRoutes, routeOrder, icon, off, removed, pairRuns } =
+      (entry ?? {}) as Record<string, unknown>;
     const where = `account computer ${JSON.stringify(entry)}`;
     if (!isRelayId(hostId) || ids.has(accountId(hostId))) throw new Error(`${where} has a bad id`);
     ids.add(accountId(hostId));
     if (typeof name !== "string" || !Array.isArray(routes) || !routes.every(isRoute))
       throw new Error(`${where} needs a name and routes`);
+    if (
+      addedRoutes !== undefined &&
+      !(Array.isArray(addedRoutes) && addedRoutes.every((r) => isRoute(r) && !isRelay(r)))
+    )
+      throw new Error(`${where} has bad addedRoutes`);
+    if (routeOrder !== undefined && !(Array.isArray(routeOrder) && routeOrder.every(isRoute)))
+      throw new Error(`${where} has a bad routeOrder`);
     if (icon !== undefined && !isDeviceIcon(icon)) throw new Error(`${where} has a bad icon`);
     if ((off !== undefined && off !== true) || (removed !== undefined && removed !== true))
       throw new Error(`${where} has a bad off or removed`);
@@ -194,7 +204,7 @@ export async function waitForListener(
   }
 }
 
-/** How often a connection on the relay checks its direct routes again (0091). */
+/** How often a connection on a later route checks the better ones again (0091). */
 export const RECHECK_MS = 60_000;
 /**
  * How long a direct route waits after it failed having answered (0091), as T3's supervisor does.
@@ -202,63 +212,80 @@ export const RECHECK_MS = 60_000;
 export const BENCH_MS = 5 * 60_000;
 
 /**
- * One account computer's routes: what its dial tries, and moving off the relay. A dial tries the
- * learned direct routes not waiting out a failure, then the relay; `plxd dial` races them, the
- * relay 200 ms after the direct ones. While the connection is on the relay, `recheck` probes the
- * direct routes, every `RECHECK_MS` and when hosts.ts calls it on a network change or focus, and
- * `move` reconnects once one answers with the pinned key.
+ * One account computer's routes: what its dial tries, and moving to a better one. A dial tries the
+ * routes not waiting out a failure: `plxd dial` races the direct ones with the relay 200 ms after
+ * them, or takes the user's order, once they've set one (`--in-order`). While the connection is on
+ * a route with better ones, `recheck` probes those, every `RECHECK_MS` and when hosts.ts calls it
+ * on a network change or focus, and `move` reconnects, over that route alone, once one answers with
+ * the pinned key.
  *
- * A direct route that answered, a probe's or the dial's, but whose connection then never came up
- * over it waits `BENCH_MS`, so a flaky network can't bounce the connection. A connection that came
- * up and later ended, as on sleep, a network change, or the host restarting, holds nothing back.
+ * A route that answered, a probe's or the dial's, but whose connection then never came up over it
+ * waits `BENCH_MS`, so a flaky network can't bounce the connection. A connection that came up and
+ * later ended, as on sleep, a network change, or the host restarting, holds nothing back.
  */
 export class Routes {
   /** The route the current attempt went over, from `plxd dial`'s stderr. */
   route?: string;
   private connected = false;
-  /** The direct route a re-check found answering, until the connection it moved to comes up. */
+  /** The route a re-check found answering, until the connection it moved to comes up. */
   private probed?: string;
   private readonly benched = new Map<string, number>();
   private timer?: ReturnType<typeof setInterval>;
   private checking = false;
+  private editedWhileChecking = false;
 
   constructor(
     private readonly options: {
       hostId: string;
-      learned: () => string[];
+      /** What this device keeps of the computer's routes. */
+      choices: () => RouteChoices;
       /** The first of `routes` to present the pinned key, with nothing sent; undefined for none. */
-      probe: (routes: string[]) => Promise<string | undefined>;
+      probe: (routes: string[], inOrder: boolean) => Promise<string | undefined>;
       /** Reconnects, so the dial races the routes again. */
       move: () => void;
       now?: () => number;
     },
   ) {}
 
-  /** The routes a dial tries, in order. */
+  /**
+   * The routes a dial tries, in order: only the route a re-check found, for the move to it, so a
+   * slower route above a working one can't lose the dial and be moved to again at every re-check.
+   * Otherwise every route not waiting out a failure, and always the relay.
+   */
   dial(): string[] {
-    return [...this.direct(), `relay:${this.options.hostId}`];
+    if (this.probed) return [this.probed];
+    const list = this.list();
+    const usable = this.usable(list);
+    return list.filter((r) => isRelay(r) || usable.includes(r));
   }
 
-  /** The learned direct routes, less those waiting out a failure. */
-  direct(): string[] {
+  /** Whether a dial takes the routes in the user's order. */
+  get inOrder(): boolean {
+    return inOrder(this.options.choices());
+  }
+
+  private list(): string[] {
+    return routeList(this.options.hostId, this.options.choices());
+  }
+
+  /** `routes` less those waiting out a failure. */
+  private usable(routes: string[]): string[] {
     const now = (this.options.now ?? Date.now)();
-    return this.options.learned().filter((r) => !((this.benched.get(r) ?? 0) > now));
+    return routes.filter((r) => !((this.benched.get(r) ?? 0) > now));
   }
 
-  /** Whether the current connection is on the relay. */
-  get onRelay(): boolean {
-    return this.connected && !!this.route?.startsWith("relay:");
+  /** The routes better than the one the connection is on. */
+  private ahead(): string[] {
+    if (!this.connected || !this.route) return [];
+    return routesAhead(this.list(), this.route, this.inOrder);
   }
 
   /** The connection's status changed. */
   onStatus(status: "connecting" | "connected" | "failed"): void {
     if (status === "connected") {
-      // Moved for a route that answered a probe, but came up over another.
-      if (this.probed && this.route !== this.probed) this.bench(this.probed);
       this.probed = undefined;
       this.connected = true;
-      if (this.onRelay) this.timer ??= setInterval(() => void this.recheck(), RECHECK_MS);
-      else this.stop();
+      this.keepChecking();
       return;
     }
     if (!this.connected) {
@@ -273,27 +300,53 @@ export class Routes {
     this.stop();
   }
 
-  /** While on the relay, probes the direct routes, and moves the connection when one answers. */
+  /** While on a route with better ones, probes those, and moves the connection when one answers. */
   async recheck(): Promise<void> {
-    if (!this.onRelay || this.checking) return;
-    const routes = this.direct();
+    if (this.checking) return;
+    const from = this.route;
+    const routes = this.usable(this.ahead());
     if (!routes.length) return;
     this.checking = true;
     try {
-      const answered = await this.options.probe(routes);
-      if (answered && this.onRelay) {
+      const answered = await this.options.probe(routes, this.inOrder);
+      if (answered && this.connected && this.route === from) {
         this.probed = answered;
         this.options.move();
       }
     } finally {
       this.checking = false;
+      if (this.editedWhileChecking) {
+        this.editedWhileChecking = false;
+        void this.recheck();
+      }
     }
   }
 
-  /** Holds direct route `route` back for `BENCH_MS`. The relay is never held back. */
+  /**
+   * The user changed the routes, so each may be tried again. A connection not up, or over a route
+   * that's gone, dials again. Any other checks now whether a route is ahead of it.
+   */
+  edited(): void {
+    this.benched.clear();
+    this.probed = undefined;
+    if (!this.connected || !this.route || !this.list().includes(this.route)) {
+      this.options.move();
+      return;
+    }
+    this.keepChecking();
+    if (this.checking) this.editedWhileChecking = true;
+    else void this.recheck();
+  }
+
+  /** Probes every `RECHECK_MS` while the connection has a better route. */
+  private keepChecking(): void {
+    if (this.ahead().length) this.timer ??= setInterval(() => void this.recheck(), RECHECK_MS);
+    else this.stop();
+  }
+
+  /** Holds `route` back for `BENCH_MS`. A dial still tries the relay, but no re-check moves to it. */
   private bench(route: string): void {
-    if (!route.startsWith("relay:"))
-      this.benched.set(route, (this.options.now ?? Date.now)() + BENCH_MS);
+    this.benched.set(route, (this.options.now ?? Date.now)() + BENCH_MS);
   }
 
   dispose(): void {

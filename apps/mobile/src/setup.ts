@@ -1,6 +1,7 @@
 // What the phone keeps about its computers (machines.json), and how a setup from an older version
 // moves to the account (0091). Pure, so it's tested without React Native.
 
+import type { RouteChoices } from "../../desktop/src/preload/routeList";
 import { asLists } from "./access";
 import type { Listed } from "./accountHosts";
 import type { Saved } from "./host";
@@ -14,8 +15,8 @@ export interface Machine {
   name: string;
   /** A LAN-paired computer's session, which it's reached with. */
   paired?: Saved;
-  /** An account's computer: its host id, and the LAN routes it last reported. */
-  account?: { hostId: string; routes: string[] };
+  /** An account's computer: its host id, the routes it last reported, and the user's choices. */
+  account?: RouteChoices & { hostId: string };
 }
 
 /** What the phone keeps: its computers, the one new threads start on, and whether onboarding is done. */

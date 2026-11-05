@@ -1,7 +1,9 @@
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
+import type { RouteChoices } from "../preload/routeList";
 import {
   BENCH_MS,
+  checkAccounts,
   coalesced,
   countPairRun,
   lacks,
@@ -26,11 +28,11 @@ afterEach(() => vi.useRealTimers());
 
 /** Routes for `studio` with a LAN and a Tailscale route, a probe answering `answer`, and moves counted. */
 function routes(answer?: string) {
-  const probe = vi.fn(async (_routes: string[]) => answer);
+  const probe = vi.fn(async (_routes: string[], _inOrder: boolean) => answer);
   const move = vi.fn();
   const kept = new Routes({
     hostId: studio,
-    learned: () => ["192.168.1.20:7341", "100.74.190.83:7341"],
+    choices: () => ({ routes: ["192.168.1.20:7341", "100.74.190.83:7341"] }),
     probe,
     move,
   });
@@ -53,7 +55,7 @@ test("on the relay, direct routes are checked every minute and the connection mo
   await vi.advanceTimersByTimeAsync(RECHECK_MS - 1);
   expect(probe).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
-  expect(probe).toHaveBeenCalledWith(["192.168.1.20:7341", "100.74.190.83:7341"]);
+  expect(probe).toHaveBeenCalledWith(["192.168.1.20:7341", "100.74.190.83:7341"], false);
   expect(move).not.toHaveBeenCalled();
 
   // A network change or focus checks now; this time the LAN answers.
@@ -78,7 +80,7 @@ function clocked(answer?: string) {
   const clock = { now: 1_000_000 };
   const kept = new Routes({
     hostId: studio,
-    learned: () => ["192.168.1.20:7341", "100.74.190.83:7341"],
+    choices: () => ({ routes: ["192.168.1.20:7341", "100.74.190.83:7341"] }),
     probe: async () => answer,
     move: () => {},
     now: () => clock.now,
@@ -104,19 +106,6 @@ test("a direct route that answered but never came up waits 5 minutes, and the re
   expect(kept.dial()).toHaveLength(3);
 });
 
-test("a route a re-check found, whose move came up over another, waits 5 minutes", async () => {
-  const { kept } = clocked("192.168.1.20:7341");
-  kept.route = `relay:${studio}`;
-  kept.onStatus("connected");
-  await kept.recheck();
-  // The move: the relay connection ends, and the new dial lands on the relay again.
-  kept.onStatus("connecting");
-  kept.route = `relay:${studio}`;
-  kept.onStatus("connected");
-  expect(kept.dial()).toEqual(["100.74.190.83:7341", `relay:${studio}`]);
-  kept.dispose();
-});
-
 test("a direct connection that came up and later ended holds no route back", () => {
   const { kept } = clocked();
   // Sleep, a network change, or the host restarting: up over the LAN, then gone.
@@ -125,6 +114,145 @@ test("a direct connection that came up and later ended holds no route back", () 
   kept.onStatus("failed");
   kept.onStatus("connecting");
   expect(kept.dial()).toEqual(["192.168.1.20:7341", "100.74.190.83:7341", `relay:${studio}`]);
+});
+
+/** `studio`'s routes as `choices` says, with a probe answering `answer` and moves counted. */
+function chosen(choices: RouteChoices, answer?: string) {
+  const probe = vi.fn(async (_routes: string[], _inOrder: boolean) => answer);
+  const move = vi.fn();
+  const state = { choices };
+  const kept = new Routes({ hostId: studio, choices: () => state.choices, probe, move });
+  return { kept, probe, move, state };
+}
+
+const lan = "192.168.1.20:7341";
+const added = "studio.example.com:7400";
+const relay = `relay:${studio}`;
+
+test("an added route is dialed with the direct ones, and with no order nothing is re-checked over it", async () => {
+  vi.useFakeTimers();
+  const { kept, probe } = chosen({ routes: [lan], addedRoutes: [added] });
+  expect(kept.dial()).toEqual([lan, added, relay]);
+  expect(kept.inOrder).toBe(false);
+  kept.route = added;
+  kept.onStatus("connected");
+  await vi.advanceTimersByTimeAsync(5 * RECHECK_MS);
+  expect(probe).not.toHaveBeenCalled();
+
+  // On the relay, an added route is checked with the rest.
+  kept.route = relay;
+  kept.onStatus("connected");
+  await vi.advanceTimersByTimeAsync(RECHECK_MS);
+  expect(probe).toHaveBeenCalledWith([lan, added], false);
+  kept.dispose();
+});
+
+test("in the user's order, a connection re-checks only the routes above it, even direct ones", async () => {
+  vi.useFakeTimers();
+  const { kept, probe, move } = chosen(
+    { routes: [lan], addedRoutes: [added], routeOrder: [added, relay, lan] },
+    added,
+  );
+  expect(kept.dial()).toEqual([added, relay, lan]);
+  expect(kept.inOrder).toBe(true);
+  kept.route = lan;
+  kept.onStatus("connected");
+  await vi.advanceTimersByTimeAsync(RECHECK_MS);
+  expect(probe).toHaveBeenCalledWith([added, relay], true);
+  expect(move).toHaveBeenCalledTimes(1);
+
+  // The relay at the top has nothing above it, so it stays.
+  const top = chosen({ routes: [lan], routeOrder: [relay, lan] }, lan);
+  top.kept.route = relay;
+  top.kept.onStatus("connected");
+  await vi.advanceTimersByTimeAsync(5 * RECHECK_MS);
+  expect(top.probe).not.toHaveBeenCalled();
+  kept.dispose();
+  top.kept.dispose();
+});
+
+test("an edit tries a held-back route again, moves off a removed one, and checks one now ahead", async () => {
+  const { kept, probe, move, state } = chosen({ routes: [lan], addedRoutes: [added] }, added);
+  // Not up: it dials again, with the added route's failure forgotten.
+  kept.route = added;
+  kept.onStatus("failed");
+  expect(kept.dial()).toEqual([lan, relay]);
+  kept.edited();
+  expect(kept.dial()).toEqual([lan, added, relay]);
+  expect(move).toHaveBeenCalledTimes(1);
+
+  // Up over a route now moved below another: that one is checked at once.
+  kept.route = lan;
+  kept.onStatus("connected");
+  state.choices = { ...state.choices, routeOrder: [added, lan, relay] };
+  kept.edited();
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledWith([added], true));
+  await vi.waitFor(() => expect(move).toHaveBeenCalledTimes(2));
+
+  // Up over a route the user removed: it dials again.
+  kept.route = added;
+  kept.onStatus("connected");
+  state.choices = { routes: [lan] };
+  kept.edited();
+  expect(move).toHaveBeenCalledTimes(3);
+  kept.dispose();
+});
+
+test("a slow route above a working one is moved to once, not every re-check", async () => {
+  const { kept, probe, move } = chosen({ routes: [lan], routeOrder: [relay, lan] }, relay);
+  // As a real dial races them: the LAN starts 200 ms in, and beats a relay still opening its
+  // stream, unless the relay is all there is to dial.
+  const dialed = () => (kept.dial().includes(lan) ? lan : kept.dial()[0]);
+  kept.route = lan;
+  kept.onStatus("connected");
+  move.mockImplementation(() => {
+    kept.onStatus("connecting");
+    kept.route = dialed();
+    kept.onStatus("connected");
+  });
+  for (let i = 0; i < 3; i++) await kept.recheck();
+  expect(kept.route).toBe(relay);
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(move).toHaveBeenCalledTimes(1);
+  kept.dispose();
+});
+
+test("a move that fails goes back to every route, and that route waits 5 minutes", async () => {
+  const clock = { now: 1_000_000 };
+  const probe = vi.fn(async () => relay);
+  const kept = new Routes({
+    hostId: studio,
+    choices: () => ({ routes: [lan], routeOrder: [relay, lan] }),
+    probe,
+    move: () => {},
+    now: () => clock.now,
+  });
+  kept.route = lan;
+  kept.onStatus("connected");
+  await kept.recheck();
+  expect(kept.dial()).toEqual([relay]);
+
+  kept.onStatus("connecting");
+  kept.onStatus("failed");
+  // The relay stays in a dial, but no re-check moves to it for the 5 minutes.
+  expect(kept.dial()).toEqual([relay, lan]);
+  kept.route = lan;
+  kept.onStatus("connected");
+  await kept.recheck();
+  expect(probe).toHaveBeenCalledTimes(1);
+  clock.now += BENCH_MS;
+  await kept.recheck();
+  expect(probe).toHaveBeenCalledTimes(2);
+  kept.dispose();
+});
+
+test("settings.json's added routes and order are checked, and the relay can't be added", () => {
+  const check = (entry: object) =>
+    checkAccounts([{ hostId: studio, name: "Studio", routes: [], ...entry }], new Set());
+  expect(() => check({ addedRoutes: [added], routeOrder: [added, relay] })).not.toThrow();
+  expect(() => check({ addedRoutes: [relay] })).toThrow(/bad addedRoutes/);
+  expect(() => check({ addedRoutes: ["https://x"] })).toThrow(/bad addedRoutes/);
+  expect(() => check({ routeOrder: "x" })).toThrow(/bad routeOrder/);
 });
 
 test("the account's list adds and drops computers, keeping what this app learned of each", () => {

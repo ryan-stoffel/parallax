@@ -10,8 +10,12 @@ const { made, FakeHost } = vi.hoisted(() => {
   class FakeHost {
     state: ConnectionState = { status: "connecting" };
     readonly stateListeners = new Set<(hostId: string, state: ConnectionState) => void>();
-    constructor() {
+    retries = 0;
+    constructor(readonly open: () => Promise<unknown>) {
       made.push(this);
+    }
+    retry() {
+      this.retries++;
     }
     emit(state: ConnectionState) {
       this.state = state;
@@ -29,6 +33,99 @@ vi.mock("expo-file-system", () => ({ File: class {} }));
 vi.mock("../modules/pinned-tls", () => ({ privateFile: () => "", onNetwork: () => () => {} }));
 vi.mock("./host", () => ({ loadSaved: async () => null, pairedSocket: async () => ({ error: "" }) }));
 vi.mock("../../desktop/src/renderer/webBridge", () => ({ WebHost: FakeHost }));
+
+const added = "studio.example.com:7400";
+const lan = "192.168.1.20:7341";
+
+/** An account computer connected over `route`, whose re-checks find `better`. */
+async function onRoute(route: string, better?: string) {
+  vi.stubGlobal("window", {});
+  const socket = { close: vi.fn(), onclose: undefined };
+  const recheck = vi.fn(async () => better);
+  const hosts = {
+    trusts: () => true,
+    open: async () => ({ socket, route }),
+    recheck,
+  };
+  const account = { hostId: "h", routes: [lan], addedRoutes: [added] };
+  const m = { id: "account:h", name: "h", account } as Machine;
+  const events = { hosts, learned: () => {}, gated: () => {} };
+  const fleet = new Fleet(async () => {}, [m], events as never);
+  const host = made.at(-1)!;
+  await host.open();
+  return { fleet, host, socket, recheck, account };
+}
+
+test("moving a route above the one in use checks it now, and reopens when it answers", async () => {
+  const { fleet, host, socket, recheck, account } = await onRoute(lan, added);
+  expect(fleet.route("account:h")).toBe(lan);
+  const edited = { ...account, routeOrder: [added, lan, "relay:h"] };
+  fleet.routesEdited("account:h", edited);
+  expect(recheck).toHaveBeenCalledWith("h", expect.objectContaining(edited), lan, {});
+  await vi.waitFor(() => expect(socket.close).toHaveBeenCalled());
+  expect(host.retries).toBe(1);
+  fleet.close();
+});
+
+test("a slow route above a working one is moved to once, not every re-check", async () => {
+  vi.stubGlobal("window", {});
+  const relay = "relay:h";
+  const socket = { close: vi.fn(), onclose: undefined };
+  // As a real dial races them: the LAN starts 200 ms in, and beats a relay still opening its
+  // stream, unless it was told to dial only the route a re-check found.
+  const open = vi.fn(async (...args: unknown[]) => ({ socket, route: (args[4] as string) ?? lan }));
+  const recheck = vi.fn(async (_h: string, _c: unknown, route: string) => (route === lan ? relay : undefined));
+  const account = { hostId: "h", routes: [lan], routeOrder: [relay, lan] };
+  const m = { id: "account:h", name: "h", account } as Machine;
+  const events = { hosts: { trusts: () => true, open, recheck }, learned: () => {}, gated: () => {} };
+  const fleet = new Fleet(async () => {}, [m], events as never);
+  const host = made.at(-1)!;
+  await host.open();
+  for (let i = 0; i < 3; i++) {
+    const moves = host.retries;
+    await fleet.recheck("account:h");
+    if (host.retries > moves) await host.open();
+  }
+  expect(fleet.route("account:h")).toBe(relay);
+  expect(host.retries).toBe(1);
+  fleet.close();
+});
+
+test("a move that fails holds that route back from re-checks, and the next open tries every route", async () => {
+  vi.stubGlobal("window", {});
+  const relay = "relay:h";
+  const socket = { close: vi.fn(), onclose: undefined };
+  const failedAts: Record<string, number>[] = [];
+  const open = vi.fn(async (_h: string, _c: unknown, failedAt: Record<string, number>, _l: unknown, only?: string) => {
+    failedAts.push(failedAt);
+    return only ? { error: "Couldn't reach that computer." } : { socket, route: lan };
+  });
+  const recheck = vi.fn(async () => relay);
+  const account = { hostId: "h", routes: [lan], routeOrder: [relay, lan] };
+  const m = { id: "account:h", name: "h", account } as Machine;
+  const events = { hosts: { trusts: () => true, open, recheck }, learned: () => {}, gated: () => {} };
+  const fleet = new Fleet(async () => {}, [m], events as never);
+  const host = made.at(-1)!;
+  await host.open();
+  await fleet.recheck("account:h");
+
+  expect(await host.open()).toEqual({ error: "Couldn't reach that computer." });
+  expect(open.mock.lastCall?.[4]).toBe(relay);
+  expect(failedAts.at(-1)?.[relay]).toBeGreaterThan(0);
+  await host.open();
+  expect(open.mock.lastCall?.[4]).toBeUndefined();
+  expect(fleet.route("account:h")).toBe(lan);
+  fleet.close();
+});
+
+test("removing the route in use reopens at once, with no check", async () => {
+  const { fleet, host, socket, recheck, account } = await onRoute(added);
+  fleet.routesEdited("account:h", { ...account, addedRoutes: [] });
+  expect(socket.close).toHaveBeenCalled();
+  expect(host.retries).toBe(1);
+  expect(recheck).not.toHaveBeenCalled();
+  fleet.close();
+});
 
 test("a computer removed during a hidden drop and restored is a first connect, shown at once", () => {
   vi.stubGlobal("window", {});
