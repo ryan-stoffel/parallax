@@ -88,11 +88,8 @@ const read = (file: string) => {
   }
 };
 
-/**
- * The hosts to suggest, de-duplicated: `~/.ssh/config`'s, following `Include` (up to 16 files,
- * so a loop can't run away), then `~/.ssh/known_hosts`'s.
- */
-export function sshSuggestions(home: string): string[] {
+/** The hosts `~/.ssh/config` names, following `Include` (up to 16 files, so a loop can't run away). */
+export function sshConfigHosts(home: string): string[] {
   const hosts: string[] = [];
   const seen = new Set<string>();
   const queue = [path.join(home, ".ssh", "config")];
@@ -104,6 +101,13 @@ export function sshSuggestions(home: string): string[] {
     hosts.push(...configHosts(text));
     for (const include of configIncludes(text)) queue.push(...expandInclude(include, home));
   }
-  hosts.push(...knownHosts(read(path.join(home, ".ssh", "known_hosts"))));
-  return [...new Set(hosts)];
+  return hosts;
 }
+
+/** The hosts to suggest, de-duplicated: `~/.ssh/config`'s, then `~/.ssh/known_hosts`'s. */
+export const sshSuggestions = (home: string): string[] => [
+  ...new Set([
+    ...sshConfigHosts(home),
+    ...knownHosts(read(path.join(home, ".ssh", "known_hosts"))),
+  ]),
+];

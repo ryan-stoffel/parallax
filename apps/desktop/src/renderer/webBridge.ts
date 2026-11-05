@@ -736,7 +736,9 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     },
 
     openTargets: async () => [],
-    openFolder: async () => {},
+    openFolder: async () => undefined,
+    sshDestination: async () => undefined,
+    setSshDestination: async () => undefined,
     showFile: async () => NOT_HERE,
     terminalApp: async () => null,
     terminalApps: async () => [],

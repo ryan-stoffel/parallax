@@ -59,6 +59,7 @@ import { localId, useHosts } from "./hosts";
 import { useProviderLink } from "./linkedProviders";
 import { iconImageBytes } from "./images";
 import { useRepoLogos } from "./repoLogos";
+import type { ComposerUsageData } from "./ComposerUsage";
 import { ThreadDetails, ThreadDetailsButton, useThreadDetails } from "./ThreadDetails";
 import { AgentsPanel, useOrchestratorAgents } from "./OrchestratorAgents";
 import { useOrchestratorContext } from "./ContextPanel";
@@ -754,6 +755,13 @@ export function App() {
     [],
   );
   const subagents = (openThread && native[openThread.id]) || [];
+  // Each open thread's context and usage, as its composer reports them, for Thread details.
+  const [usages, setUsages] = useState<Readonly<Record<string, ComposerUsageData | undefined>>>({});
+  const reportUsage = useCallback(
+    (threadId: string, usage: ComposerUsageData | undefined) =>
+      setUsages((prev) => ({ ...prev, [threadId]: usage })),
+    [],
+  );
   const openSubagent = useCallback(
     (threadId: string, callId?: string) =>
       setSelection({ kind: "thread", threadId, subagent: callId }),
@@ -1312,6 +1320,11 @@ export function App() {
     sidePanelOpen ? "" : "window-controls-inset",
   ].join(" ");
 
+  // The PR view takes over from Thread details when it opens a pull request.
+  const openPrFromDetails = (url?: string) => {
+    openPr(url);
+    details.close();
+  };
   // Thread details for the open thread: beside the chat, or in a split floating in its tile.
   const threadDetails = (mode: ComponentProps<typeof ThreadDetails>["mode"]) => (
     <ThreadDetails
@@ -1344,8 +1357,9 @@ export function App() {
               repo: selection.kind === "new" ? (group.id as RepoId) : undefined,
               title:
                 selection.kind === "thread" ? threads.state.titles[selection.threadId] : agentTitle,
-              // The PR view shows a thread's own; a child's opens in the browser.
-              onPrOpened: linksPrs && threadRun ? openPr : undefined,
+              // The PR view shows a thread's own, in place of this card; a child's opens in the
+              // browser.
+              onPrOpened: linksPrs && threadRun ? openPrFromDetails : undefined,
               onSetUpGithub: setUpGithub,
               onChanges: () => {
                 setPanelOpen(true);
@@ -1354,7 +1368,8 @@ export function App() {
             }
           : undefined
       }
-      prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
+      prs={selection.kind === "thread" ? { prs, onOpen: openPrFromDetails } : undefined}
+      usage={openThread && usages[openThread.id]}
       remoteControl={
         remoteThread
           ? {
@@ -1939,6 +1954,7 @@ export function App() {
                                   }
                                   onOpenSubagent={openSubagent}
                                   onSubagents={reportNative}
+                                  onUsage={reportUsage}
                                   onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
                                   onDevice={(runId, deviceId) =>
                                     void showAgentDevice(runId, deviceId)

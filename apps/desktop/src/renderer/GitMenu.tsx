@@ -20,6 +20,7 @@ import { describeError, githubProblem } from "./errors";
 import { titleOf } from "./threads";
 import { isRunning } from "./transcript";
 import { notify, type Notice } from "./notifications";
+import { DetailsCard } from "./DetailsCard";
 import { DiffStat } from "./pr/parts";
 import { Menu, menuItem } from "./ui";
 
@@ -106,7 +107,8 @@ export function syncBrief(status: GitStatus): string {
  * its dialog; a push or Create PR that fails for `gh` offers `onSetUpGithub` (PLX-423). Absent
  * until the host's plxd has the `git` capability. A new repository thread reads its checkout
  * behind `repoGitStatus` and offers no writes until the thread starts. `hasPr` turns Create PR
- * off while the thread has an open pull request.
+ * off while the thread has an open pull request. `branch`, `changes`, and `actions` say which
+ * rows show, since each can be turned off, and the card goes with the last of them.
  */
 export function GitMenu({
   hostId,
@@ -117,6 +119,9 @@ export function GitMenu({
   onSetUpGithub,
   onChanges,
   hasPr,
+  branch = true,
+  changes = true,
+  actions: showActions = true,
 }: {
   hostId: string;
   run?: AgentRun;
@@ -127,6 +132,9 @@ export function GitMenu({
   onSetUpGithub?: () => void;
   onChanges?: () => void;
   hasPr?: boolean;
+  branch?: boolean;
+  changes?: boolean;
+  actions?: boolean;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -268,9 +276,9 @@ export function GitMenu({
   // Nothing to commit or push: the button says so rather than naming an action that can't run.
   const settled = !busy && !!why[main] && !!status && !status.changes && !status.ahead;
   return (
-    <>
-      <h3 className="px-2 pt-1 pb-1 text-meta text-muted-foreground">Git</h3>
+    <DetailsCard id="git" title="Git" hidden={!branch && !changes && !showActions}>
       <div
+        hidden={!branch}
         role={status || !error ? undefined : "alert"}
         title={status ? `${status.branch ?? "Detached HEAD"}\n${syncText(status)}` : diagnostic}
         className="group/branch flex items-center gap-2 rounded-md px-2 py-1.5"
@@ -298,6 +306,7 @@ export function GitMenu({
       </div>
       <button
         type="button"
+        hidden={!changes}
         onClick={onChanges}
         disabled={!status || !onChanges}
         className={`${menuItem} disabled:opacity-50 [&_svg]:size-4`}
@@ -315,7 +324,10 @@ export function GitMenu({
         </span>
         <ChevronRight aria-hidden className="text-faint-foreground" />
       </button>
-      <div className="mx-2 mt-1.5 mb-1 flex h-8 items-stretch rounded-lg border border-border">
+      <div
+        hidden={!showActions}
+        className="mx-1 mt-1 mb-0.5 flex h-8 items-stretch rounded-lg border border-border"
+      >
         <button
           type="button"
           disabled={!!why[main] || !!busy}
@@ -346,7 +358,7 @@ export function GitMenu({
           <ChevronDown aria-hidden />
         </button>
       </div>
-      {!busy && !settled && why[main] && (
+      {showActions && !busy && !settled && why[main] && (
         <p className="px-2 pb-1 text-meta text-faint-foreground">{why[main]}</p>
       )}
       <Menu ref={menu} id={id} label="Git" align="end" className="w-80 p-1" focus="button:enabled">
@@ -412,6 +424,6 @@ export function GitMenu({
           </div>
         </form>
       </dialog>
-    </>
+    </DetailsCard>
   );
 }

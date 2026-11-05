@@ -49,6 +49,8 @@ import {
   Users,
   X,
   type LucideIcon,
+  Network,
+  SlidersHorizontal,
 } from "lucide-react";
 
 /**
@@ -114,6 +116,10 @@ export const icons = {
   branch: GitBranch,
   folder: Folder,
   host: Server,
+  /** How another computer is reached: its ssh destination. */
+  ssh: Network,
+  /** Choosing what a panel shows. */
+  customize: SlidersHorizontal,
   agent: Bot,
   /** Projects (0093): a folder of threads with shared files and instructions. */
   projects: LayoutGrid,

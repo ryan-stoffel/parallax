@@ -531,15 +531,25 @@ export interface ParallaxBridge {
 
   /**
    * Where `openFolder` can open a folder on a host, with their icons where main could read them:
-   * the editors this computer has (only those with Remote SSH for an SSH host), and the file
-   * manager and chosen terminal for this computer's own folders. Empty for an unknown host.
+   * the editors this computer has (only those with Remote SSH for another computer), the chosen
+   * terminal, and for this computer's own folders, the file manager. Empty for an unknown host.
    */
   openTargets(hostId: string): Promise<OpenApp[]>;
   /**
-   * Opens a host's folder with `target`. For `terminal`, `terminal` names one of `terminalApps`
-   * to use instead of the chosen one. Main shows a dialog when it can't.
+   * Opens a host's folder with `target`, on another computer over ssh. For `terminal`, `terminal`
+   * names one of `terminalApps` to use instead of the chosen one. Main shows a dialog when it
+   * can't, and resolves to `noDestination` when it needs the user to say where the computer is.
    */
-  openFolder(hostId: string, target: OpenTarget, folder: string, terminal?: string): Promise<void>;
+  openFolder(
+    hostId: string,
+    target: OpenTarget,
+    folder: string,
+    terminal?: string,
+  ): Promise<"noDestination" | undefined>;
+  /** The ssh destination `openFolder` reaches `folder` on `hostId` at, if it can tell. */
+  sshDestination(hostId: string, folder: string): Promise<string | undefined>;
+  /** Sets the ssh destination for `hostId`, or an empty one forgets it. Resolves to an error. */
+  setSshDestination(hostId: string, destination: string): Promise<string | undefined>;
   /**
    * Selects a file on this computer in Finder or Explorer, given as an absolute path or one from
    * the home folder (`~/`). Resolves to why it couldn't, or undefined.

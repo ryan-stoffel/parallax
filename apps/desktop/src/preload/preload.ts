@@ -203,6 +203,9 @@ const bridge: ParallaxBridge = {
   openTargets: (hostId) => ipcRenderer.invoke("parallax:openTargets", hostId),
   openFolder: (hostId, target, folder, terminal) =>
     ipcRenderer.invoke("parallax:openFolder", hostId, target, folder, terminal),
+  sshDestination: (hostId, folder) => ipcRenderer.invoke("parallax:sshDestination", hostId, folder),
+  setSshDestination: (hostId, destination) =>
+    ipcRenderer.invoke("parallax:setSshDestination", hostId, destination),
   showFile: (path) => ipcRenderer.invoke("parallax:showFile", path),
   terminalApp: () => ipcRenderer.invoke("parallax:terminalApp"),
   terminalApps: () => ipcRenderer.invoke("parallax:terminalApps"),

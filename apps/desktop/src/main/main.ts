@@ -15,7 +15,8 @@ import {
   shell,
   webContents,
 } from "electron";
-import { existsSync, readFileSync, writeFileSync, promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, rmSync, writeFileSync, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -59,7 +60,17 @@ import {
   type FoundEditor,
 } from "./editors";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
-import { hostUsage, renderPage, savedHost, startHosts, streamFile } from "./hosts";
+import {
+  hostUsage,
+  isRemoteHost,
+  renderPage,
+  setSshDestination,
+  sshDestinationOf,
+  sshProgram,
+  startHosts,
+  streamFile,
+} from "./hosts";
+import { selfDeletingScript, sshShellCommand } from "./remoteOpen";
 import {
   addTab,
   addUnpacked,
@@ -89,6 +100,7 @@ import {
   detectTerminalApps,
   readTerminalApp,
   terminalCommand,
+  terminalRunCommand,
   terminalName,
   writeTerminalApp,
 } from "./terminalApp";
@@ -542,15 +554,18 @@ const fileManagerName =
     : process.platform === "win32"
       ? "File Explorer"
       : "Files";
-// Editors open an SSH host's folder over their Remote SSH, so only those with it are listed for
-// one. The file manager and terminal are this computer's.
+// Editors open another computer's folder over their Remote SSH, so only those with it are listed
+// for one, and a terminal opens an ssh session there. The file manager is this computer's.
 function openTargets(hostId: unknown): OpenTarget[] {
   const local = hostId === "local";
-  if (!local && (typeof hostId !== "string" || !savedHost(hostId))) return [];
+  if (!local && (typeof hostId !== "string" || !isRemoteHost(hostId))) return [];
   const found = Object.entries(installedEditors()) as [Editor, FoundEditor][];
   const editorTargets = found.filter(([, e]) => local || e.remote).map(([editor]) => editor);
-  if (!local) return editorTargets;
-  return terminal ? [...editorTargets, "files", "terminal"] : [...editorTargets, "files"];
+  return [
+    ...editorTargets,
+    ...(local ? (["files"] as const) : []),
+    ...(terminal ? (["terminal"] as const) : []),
+  ];
 }
 // Apps' own icons as data URLs, read once each: Quick Look on macOS, since `app.getFileIcon`
 // gives a `.app` bundle a placeholder icon, and the exe's icon on Windows. Linux has none, and
@@ -710,31 +725,59 @@ async function setUpCommand(win: BrowserWindow): Promise<void> {
 const warn = (win: BrowserWindow, message: string, detail: string) =>
   dialog.showMessageBox(win, { type: "warning", message, detail });
 
+/** Opens an ssh session in `folder` on `destination`, in terminal `app`. Resolves to an error. */
+async function openSshTerminal(app_: string, destination: string, folder: string) {
+  const command = sshShellCommand(sshProgram(), destination, folder);
+  const script = path.join(app.getPath("temp"), `parallax-ssh-${randomUUID()}.command`);
+  if (process.platform === "darwin")
+    writeFileSync(script, selfDeletingScript(command), { mode: 0o700 });
+  const error = await launch(terminalRunCommand(process.platform, app_, command, script));
+  if (error) rmSync(script, { force: true });
+  return error;
+}
+
 ipcMain.handle(
   "parallax:openFolder",
   async (event, hostId: unknown, target: unknown, folder: unknown, chosen: unknown) => {
-    if (!isFolderPath(folder) || !openTargets(hostId).some((t) => t === target)) return;
+    if (!isFolderPath(folder) || !openTargets(hostId).some((t) => t === target)) return undefined;
+    const local = hostId === "local";
+    const destination = local ? undefined : await sshDestinationOf(hostId as string, folder);
+    // The renderer asks the user where to reach it.
+    if (!local && !destination) return "noDestination";
     // A listed terminal other than the chosen one, or the chosen one.
     const shellApp =
       installedTerminals().find((app) => chosen !== undefined && app.path === chosen)?.path ??
       terminal!;
-    const destination = savedHost(hostId as string)?.destination;
     let error: string | undefined;
     // A local folder must be one: `shell.openPath` would run an executable file.
-    if (!destination && !isDirectory(folder)) error = "That folder isn't there anymore.";
+    if (local && !isDirectory(folder)) error = "That folder isn't there anymore.";
     else if (target === "files") error = (await shell.openPath(folder)) || undefined;
     // `open -a` starts without complaint when the app is gone, so check it's still there.
+    else if (target === "terminal" && !existsSync(shellApp))
+      error = `${terminalName(shellApp)} isn't there anymore. Choose your terminal again in Settings.`;
     else if (target === "terminal")
-      error = existsSync(shellApp)
-        ? await launch(terminalCommand(process.platform, shellApp, folder))
-        : `${terminalName(shellApp)} isn't there anymore. Choose your terminal again in Settings.`;
+      error = destination
+        ? await openSshTerminal(shellApp, destination, folder)
+        : await launch(terminalCommand(process.platform, shellApp, folder));
     else {
       const editor = installedEditors()[target as Editor]!;
       error = await launch(editorCommand(process.platform, editor, folder, destination));
     }
     const win = BrowserWindow.fromWebContents(event.sender);
     if (error && win) await warn(win, "Parallax couldn't open the folder.", error);
+    return undefined;
   },
+);
+// Where Open in reaches a thread's folder on another computer, and the user's own choice of it.
+ipcMain.handle("parallax:sshDestination", async (_event, hostId: unknown, folder: unknown) =>
+  typeof hostId === "string" && isFolderPath(folder)
+    ? await sshDestinationOf(hostId, folder)
+    : undefined,
+);
+ipcMain.handle("parallax:setSshDestination", (_event, hostId: unknown, destination: unknown) =>
+  typeof hostId === "string" && typeof destination === "string"
+    ? setSshDestination(hostId, destination)
+    : "That isn't an ssh destination.",
 );
 
 // A file a local thread's agent linked from outside the thread's folder, selected in Finder or

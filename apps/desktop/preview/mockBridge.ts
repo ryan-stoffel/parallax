@@ -2353,7 +2353,11 @@ export const mockBridge: ParallaxBridge = {
   openTargets: (hostId) =>
     delay(
       hostId !== LOCAL
-        ? []
+        ? [
+            { target: "cursor" as const, name: "Cursor" },
+            { target: "vscode" as const, name: "VS Code" },
+            ...(mockTerminal ? [{ target: "terminal" as const, name: mockTerminal }] : []),
+          ]
         : [
             { target: "vscode" as const, name: "VS Code" },
             { target: "cursor" as const, name: "Cursor" },
@@ -2364,6 +2368,8 @@ export const mockBridge: ParallaxBridge = {
           ],
     ),
   openFolder: () => delay(undefined),
+  sshDestination: () => delay("ryan@100.64.0.2"),
+  setSshDestination: () => delay(undefined),
   showFile: () => delay(undefined),
   terminalApp: () => delay(mockTerminal),
   terminalApps: () =>

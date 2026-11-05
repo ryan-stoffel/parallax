@@ -80,7 +80,7 @@ import type {
 import { lastPrompt } from "./attention";
 import { sizeOf } from "./documents";
 import type { ComposerContents } from "./drafts";
-import { threadUsageOf, UsageRing } from "./ComposerUsage";
+import { threadUsageOf, UsageRing, type ComposerUsageData } from "./ComposerUsage";
 import type { RequestUsage, ThreadUsage } from "./transcript";
 import { EffortMenu } from "./EffortMenu";
 import { accessPrefs } from "./accessPrefs";
@@ -832,6 +832,8 @@ export interface ComposerProps {
   requestUsage?: RequestUsage;
   /** The open thread's token and cost totals, which the ring's card shows. */
   threadUsage?: ThreadUsage;
+  /** Told what the ring shows whenever it changes, for Thread details. */
+  onUsage?: (usage: ComposerUsageData | undefined) => void;
   /** The account actually charged for an open run, including automatic key fallback. */
   accountId?: string;
   /** Instances the thread can't run on, by why, whose models it doesn't offer: those an open run
@@ -948,6 +950,7 @@ export function Composer({
   connected = false,
   requestUsage,
   threadUsage,
+  onUsage,
   accountId,
   unavailable,
   optionsDisabled,
@@ -1092,6 +1095,12 @@ export function Composer({
         : undefined,
     totals: threadUsage,
   });
+  // As text, since `usage` is a new object on each render.
+  const usageReport = JSON.stringify(usage ?? null);
+  useEffect(
+    () => onUsage?.((JSON.parse(usageReport) as ComposerUsageData | null) ?? undefined),
+    [usageReport, onUsage],
+  );
   let options: RunOptions = {};
   // A started run sends only what changed, unless the message goes to another instance.
   if (run && started && target === backend)
