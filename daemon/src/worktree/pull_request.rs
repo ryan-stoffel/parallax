@@ -550,6 +550,7 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
         label_colors: Vec::new(),
         review_threads: Vec::new(),
         review_threads_truncated: false,
+        node_id: None,
     })
 }
 

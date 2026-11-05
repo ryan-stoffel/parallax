@@ -34,10 +34,10 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ParallaxEvent, PrCheck, PrCheckState, PrComment, PrCommentKind, PrCommit, PrDiffSide, PrFile,
-    PrLabel, PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewDecision,
-    PrReviewState, PrReviewThread, PrState, PrStatusCheck, PrStatusFile, PrStatusResult,
-    PrStatusThread, PrThreadComment, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
-    PullRequest as PrView, RunId, ScopeId, TurnId, WakeReason,
+    PrFileViewed, PrLabel, PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview,
+    PrReviewDecision, PrReviewState, PrReviewThread, PrState, PrStatusCheck, PrStatusFile,
+    PrStatusResult, PrStatusThread, PrThreadComment, PrViewParams, PrWatchResult, PrWatchesParams,
+    PrWatchesResult, PullRequest as PrView, RunId, ScopeId, TurnId, WakeReason,
 };
 use parallax_store::Store;
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,7 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
     pullRequest(number: $number) {
+      id
       number
       url
       title
@@ -114,7 +115,7 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
       reviewRequests(first: 20) { nodes { requestedReviewer {
         ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { name }
       } } }
-      files(first: 100) { nodes { path additions deletions } }
+      files(first: 100) { nodes { path additions deletions viewerViewedState } }
       history: commits(last: 100) { nodes { commit {
         oid messageHeadline committedDate author { name user { login } }
       } } }
@@ -1414,6 +1415,11 @@ async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
     }
 }
 
+/// Drops `url`'s shared read, after a write, so the next read asks GitHub.
+pub(crate) fn forget_read(daemon: &Daemon, url: &str) {
+    daemon.pr_watches.reads().remove(url);
+}
+
 /// Reads pull request `url` from GitHub with one `gh api graphql` call, and shares the read.
 async fn fetch(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
     let started = Instant::now();
@@ -1578,7 +1584,7 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
         compared: None,
         files: pr
             .files
-            .map(|files| files.nodes.into_iter().flatten().collect())
+            .map(|files| files.nodes.into_iter().flatten().map(status_file).collect())
             .unwrap_or_default(),
         checks,
         mergeable: pr.mergeable,
@@ -1648,11 +1654,7 @@ fn pr_view(
             .files
             .iter()
             .flat_map(Nodes::iter)
-            .map(|file| PrFile {
-                path: file.path.clone(),
-                additions: file.additions,
-                deletions: file.deletions,
-            })
+            .map(view_file)
             .collect(),
         body: pr.body.clone(),
         comments,
@@ -1699,7 +1701,32 @@ fn pr_view(
         label_colors: labels,
         review_threads: pr.review_threads.iter().map(review_thread).collect(),
         review_threads_truncated: pr.review_threads.cut(),
+        node_id: pr.id.clone(),
     })
+}
+
+/// A changed file as `pr/status` lists it.
+fn status_file(file: File) -> PrStatusFile {
+    PrStatusFile {
+        path: file.path,
+        additions: file.additions,
+        deletions: file.deletions,
+    }
+}
+
+/// A changed file as `pr/view` lists it.
+fn view_file(file: &File) -> PrFile {
+    PrFile {
+        path: file.path.clone(),
+        additions: file.additions,
+        deletions: file.deletions,
+        viewed: match file.viewer_viewed_state.as_deref() {
+            Some("VIEWED") => Some(PrFileViewed::Viewed),
+            Some("UNVIEWED") => Some(PrFileViewed::Unviewed),
+            Some("DISMISSED") => Some(PrFileViewed::Dismissed),
+            _ => None,
+        },
+    }
 }
 
 /// `pr`'s newest commits, oldest first, each by its author's login, or name without a GitHub
@@ -1921,6 +1948,7 @@ impl Repository {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PullRequest {
+    id: Option<String>,
     number: Option<u64>,
     url: Option<String>,
     #[serde(default)]
@@ -1958,7 +1986,7 @@ struct PullRequest {
     review_requests: Option<Nodes<ReviewRequest>>,
     /// Null when GitHub can't list them, such as for a huge diff.
     #[serde(default)]
-    files: Option<Nodes<PrStatusFile>>,
+    files: Option<Nodes<File>>,
     /// Its newest commits, for `pr/view`; `commits` holds only the head, for its checks.
     history: Option<Nodes<HistoryNode>>,
     commits: Nodes<CommitNode>,
@@ -2255,6 +2283,15 @@ impl Comment {
             .as_ref()
             .and_then(|author| author.avatar_url.clone())
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct File {
+    path: String,
+    additions: u64,
+    deletions: u64,
+    viewer_viewed_state: Option<String>,
 }
 
 #[derive(Deserialize)]
