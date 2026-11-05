@@ -67,7 +67,7 @@ export function Suggestion({
   return (
     <figure
       aria-label="Suggested change"
-      className="overflow-hidden rounded-lg border border-border"
+      className="-ml-7 overflow-hidden rounded-lg border border-border"
     >
       <figcaption className="flex h-7 items-center gap-1.5 border-b border-border px-2 text-meta text-muted-foreground">
         <icons.suggest aria-hidden className="size-3.5" />

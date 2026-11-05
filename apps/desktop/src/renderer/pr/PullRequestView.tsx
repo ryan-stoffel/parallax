@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type ToggleEvent,
 } from "react";
 
 import type { RpcError } from "../../preload/bridge";
@@ -47,6 +48,7 @@ import {
 import type { CheckActions } from "./CheckGroup";
 import { GithubMarkdown } from "./GithubMarkdown";
 import { Guide } from "./Guide";
+import { Reveal } from "./CheckGroup";
 import { MergeBox } from "./MergeBox";
 import {
   baseIssue,
@@ -388,6 +390,18 @@ export function PullRequestView({
           },
         }
       : undefined;
+  const batchName = `${suggestionBatch.size} ${suggestionBatch.size === 1 ? "suggestion" : "suggestions"}`;
+  // In the side panel the form stays over the panel, under its button, not over the chat beside it.
+  const fitReviewToPanel = (e: ToggleEvent<HTMLDivElement>) => {
+    const form = e.currentTarget;
+    if (e.newState !== "open") return;
+    form.removeAttribute("style");
+    const view = viewRoot.current;
+    const button = form.previousElementSibling;
+    if (fullView || !view || !button) return;
+    const panel = view.getBoundingClientRect();
+    form.style.cssText = `position: fixed; position-area: none; margin: 0; width: ${panel.width - 16}px; left: ${panel.left + 8}px; top: ${button.getBoundingClientRect().bottom + 8}px;`;
+  };
   const suggestionActions: SuggestionActions = {
     blocked: !open
       ? "This pull request is closed"
@@ -495,7 +509,7 @@ export function PullRequestView({
   );
   // In the side panel, reading code wants the room: the header folds to a line once the diff has
   // scrolled. The full view has room, so its header stays the same on every tab.
-  const onCode = tab === "code";
+  const folded = tab === "code" && diffScrolled;
   const header = fullView ? (
     <header className="shrink-0 border-b border-border px-3 pt-4 pb-3">
       <div className="flex items-center gap-3">
@@ -523,7 +537,7 @@ export function PullRequestView({
   ) : (
     <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
       <div className="mx-auto max-w-3xl">
-        {onCode && diffScrolled ? (
+        <Reveal open={folded}>
           <div className="flex items-center gap-2">
             <StateBadge pr={pr} />
             <h2 className="min-w-0 flex-1 truncate text-body font-medium" title={pr.title}>
@@ -531,44 +545,32 @@ export function PullRequestView({
             </h2>
             {headerActions}
           </div>
-        ) : (
-          <>
-            <h2
-              className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
-              title={pr.title}
-            >
-              {pr.title}{" "}
-              <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
-            </h2>
-            <div className="mt-2 flex min-w-0 items-center gap-2 text-body">
-              <Avatar login={pr.author} />
-              <span className="shrink-0 font-medium">{pr.author}</span>
-              {pr.createdAt && (
-                <span className="shrink-0 text-meta text-muted-foreground">
-                  {ago(pr.createdAt)}
-                </span>
-              )}
-              <span className="ml-auto flex min-w-0 justify-end">{branches}</span>
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <StateBadge pr={pr} />
-              <DiffStat
-                added={pr.additions}
-                removed={pr.deletions}
-                title={breakdown || undefined}
-              />
-              <span className="flex-1" />
-              {openInGithub}
-              {headerActions}
-            </div>
-          </>
-        )}
-        <Tabs
-          tab={tab}
-          onTab={setTab}
-          tabs={tabs}
-          className={onCode && diffScrolled ? "mt-2" : "mt-3"}
-        />
+        </Reveal>
+        <Reveal open={!folded}>
+          <h2
+            className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
+            title={pr.title}
+          >
+            {pr.title}{" "}
+            <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
+          </h2>
+          <div className="mt-2 flex min-w-0 items-center gap-2 text-body">
+            <Avatar login={pr.author} />
+            <span className="shrink-0 font-medium">{pr.author}</span>
+            {pr.createdAt && (
+              <span className="shrink-0 text-meta text-muted-foreground">{ago(pr.createdAt)}</span>
+            )}
+            <span className="ml-auto flex min-w-0 justify-end">{branches}</span>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <StateBadge pr={pr} />
+            <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
+            <span className="flex-1" />
+            {openInGithub}
+            {headerActions}
+          </div>
+        </Reveal>
+        <Tabs tab={tab} onTab={setTab} tabs={tabs} className={folded ? "mt-2" : "mt-3"} />
       </div>
     </header>
   );
@@ -648,6 +650,7 @@ export function PullRequestView({
                 diff={diff.result!.diff}
                 truncated={diff.result!.truncated}
                 leading={leading}
+                roomForActions={suggestionBatch.size > 0}
                 onScrolled={setDiffScrolled}
                 viewed={viewedFiles.viewed}
                 changedSinceViewed={viewedFiles.changed}
@@ -657,17 +660,22 @@ export function PullRequestView({
                 renderThread={(t) => <ReviewThread bare {...threadProps(t)} />}
                 comments={comments}
                 actions={
-                  write && (
+                  write &&
+                  open && (
                     <>
                       {suggestionBatch.size > 0 && (
                         <Button
                           size="sm"
                           variant="outline"
+                          title={`Commit ${batchName}`}
                           onClick={() => setCommitting([...suggestionBatch])}
                         >
                           <icons.commit aria-hidden />
-                          Commit {suggestionBatch.size}{" "}
-                          {suggestionBatch.size === 1 ? "suggestion" : "suggestions"}
+                          {fullView ? (
+                            `Commit ${batchName}`
+                          ) : (
+                            <span aria-label={`Commit ${batchName}`}>{suggestionBatch.size}</span>
+                          )}
                         </Button>
                       )}
                       <ReviewButton pending={pendingCount} popover={`${id}-review`} />
@@ -675,9 +683,15 @@ export function PullRequestView({
                         id={`${id}-review`}
                         popover="auto"
                         aria-label="Your review"
-                        className={`${menuPanel("end")} w-[min(32rem,calc(100vw-2rem))] p-2`}
+                        onBeforeToggle={fitReviewToPanel}
+                        onToggle={(e) => {
+                          if (e.newState === "open")
+                            e.currentTarget.querySelector("textarea")?.focus();
+                        }}
+                        className={`${menuPanel("end")} w-[min(32rem,calc(100vw-2rem))] overflow-hidden`}
                       >
                         <ReviewForm
+                          bare
                           write={write}
                           open={open}
                           draftKey={reviewDraftKey}
@@ -1035,13 +1049,9 @@ function CommentCard({
   const [full, setFull] = useState(false);
   const folded = isLong(c) && !full;
   return (
-    <div className="rounded-xl border border-border px-4 py-3">
-      <p className="text-meta">
-        <span className="font-medium text-foreground">{c.author}</span>{" "}
-        <span className="text-faint-foreground">{ago(c.createdAt)}</span>
-      </p>
+    <div className="rounded-xl border border-border bg-surface px-3 py-2.5 shadow-xs">
       <div
-        className={`mt-2 ${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
+        className={`${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
       >
         <GithubMarkdown text={c.body} repo={repo} onOpen={onOpen} />
       </div>
@@ -1219,6 +1229,7 @@ function timeline(pr: PullRequest, onOpen: (url: string) => void) {
           title={
             <>
               <span className="font-medium">{c.author}</span> commented
+              <span className="text-meta text-faint-foreground"> · {ago(c.createdAt)}</span>
             </>
           }
         >
