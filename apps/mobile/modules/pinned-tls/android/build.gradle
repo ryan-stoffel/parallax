@@ -1,0 +1,42 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'dev.parallax'
+version = '0.1.0'
+
+android {
+  namespace "dev.parallax.pinnedtls"
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+    testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+  }
+  // One suite, on the JVM and on an emulator.
+  sourceSets {
+    test.java.srcDirs += 'src/sharedTest/java'
+    androidTest.java.srcDirs += 'src/sharedTest/java'
+  }
+  testOptions.unitTests.all {
+    testLogging {
+      events 'failed'
+      exceptionFormat 'full'
+    }
+  }
+}
+
+dependencies {
+  // React Native's own version, which it brings to the app anyway.
+  implementation 'com.squareup.okhttp3:okhttp:4.9.2'
+  implementation 'androidx.browser:browser:1.8.0'
+  implementation 'androidx.core:core:1.13.1'
+
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'com.squareup.okhttp3:mockwebserver:4.9.2'
+  // android.jar's org.json is only stubs on the JVM.
+  testImplementation 'org.json:json:20240303'
+  androidTestImplementation 'junit:junit:4.13.2'
+  androidTestImplementation 'com.squareup.okhttp3:mockwebserver:4.9.2'
+  androidTestImplementation 'androidx.test:runner:1.6.2'
+}

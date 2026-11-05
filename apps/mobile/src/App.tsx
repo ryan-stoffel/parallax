@@ -52,6 +52,7 @@ import {
 import { threadStatus } from "./threadStatus";
 import { LightboxHost } from "./Lightbox";
 import { OrchestratorInboxScreen } from "./OrchestratorInbox";
+import { PHONE } from "./phone";
 import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
 import { ThreadFilesScreen } from "./ThreadFiles";
@@ -559,7 +560,7 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
 }
 
 /** What this phone calls itself to the computers it signs in to. */
-const DEVICE_NAME = "iPhone";
+const DEVICE_NAME = PHONE;
 
 function Gate() {
   const { user, accessToken } = useAccount();

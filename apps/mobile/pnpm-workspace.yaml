@@ -5,3 +5,7 @@ nodeLinker: hoisted
 # them its native build leaves code highlighting and math out.
 allowBuilds:
   react-native-enriched-markdown: true
+# Android only: react-native-screens#4413, a crash on a cold launch, fixed in 4.28.0. Expo 57 pins
+# ~4.26. Drop this with the SDK that moves past it.
+patchedDependencies:
+  react-native-screens@4.26.2: patches/react-native-screens@4.26.2.patch

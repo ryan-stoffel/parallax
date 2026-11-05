@@ -24,7 +24,7 @@ vi.mock("expo-secure-store", () => ({
   setItemAsync: async (key: string, value: string) => void net.store.set(key, value),
   deleteItemAsync: async (key: string) => void net.store.delete(key),
 }));
-vi.mock("react-native", () => ({}));
+vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
 vi.mock("./push", () => ({ RELAY_URL: "https://relay.test" }));
 vi.mock("./host", async (original) => ({
   ...(await original<typeof import("./host")>()),

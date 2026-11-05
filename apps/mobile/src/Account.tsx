@@ -42,8 +42,13 @@ const KEY = "account";
 /** Where Clerk sends the sign-in back: one of the OAuth application's redirect URIs. */
 const REDIRECT = "parallax://oauth/callback";
 
-/** The Frontend API a publishable key names: base64 of `<host>$` after `pk_test_` or `pk_live_`. */
-const API = `https://${atob(PUBLISHABLE_KEY.replace(/^pk_(test|live)_/, "")).replace(/\$$/, "")}`;
+/**
+ * The Frontend API a publishable key names: base64 of `<host>$` after `pk_test_` or `pk_live_`. A
+ * test's bundle names its own stand-in (apps/mobile/e2e/android.mjs).
+ */
+const API =
+  process.env.EXPO_PUBLIC_CLERK_API ??
+  `https://${atob(PUBLISHABLE_KEY.replace(/^pk_(test|live)_/, "")).replace(/\$$/, "")}`;
 /** Clerk's Account Portal beside it: `<slug>.accounts.dev`, or `accounts.<domain>`. */
 export const PORTAL =API.replace("://clerk.", "://accounts.").replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
 
