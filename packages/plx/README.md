@@ -5,10 +5,10 @@ Parallax's command line. `plx connect` sets a computer up for [Parallax](https:/
 It publishes as `plx-cli`, with a `plx` command, until the `plx` name on npm is Parallax's.
 
 ```sh
-npx plx-cli connect --channel nightly
+npx plx-cli connect
 ```
 
-Parallax ships only nightlies for now. plx-cli 0.6.1 on npm still defaults to stable, so the command names the channel. In Windows PowerShell, use `npx.cmd`. On a computer without Node.js, use the commands in the Parallax app's Add a computer dialog, which bring it along.
+Parallax ships only nightlies for now, and plx installs the nightly by default. In Windows PowerShell, use `npx.cmd`. On a computer without Node.js, use the commands in the Parallax app's Add a computer dialog, which bring it along.
 
 Every download is checked against the SHA-256 its GitHub release reports, and plx refuses one that doesn't match or has none. plxd goes in `~/.parallax-plxd` (`%USERPROFILE%\.parallax-plxd` on Windows), and its login service runs it from there. On Linux, `~/.local/bin/plxd` links to it.
 
@@ -74,7 +74,7 @@ Each `plx connect status` that gets as far as the stream spends one of this comp
 | `relay.on` | boolean | The `relay` setting. |
 | `relay.connected` | boolean | Whether plxd is connected to the relay. |
 | `relay.problem` | string or null | Why it isn't connected, for people. |
-| `remote.on` | boolean | The `remote` setting, Reach from anywhere. |
+| `remote.on` | boolean | The `remote` setting, which the app calls Pair computers on this network. |
 | `remote.listening` | boolean | Whether plxd's remote listener is bound. |
 | `remote.problem` | string or null | Why it isn't listening, for people. |
 | `routes` | string array | Where clients can reach this computer, best first. Empty unless it's listening. |
