@@ -10,12 +10,13 @@ import {
   MAX_HOOK_BYTES,
   MAX_STREAMS,
 } from "../src/host";
-import { type Env, network } from "../src/index";
+import worker, { type Env, network } from "../src/index";
 import { logged } from "../src/log";
 import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay } from "../src/stream";
 import { apnsPayload, MAX_SEALED, sendApns } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
+  BASE,
   call,
   connectHost,
   hostProof,
@@ -204,7 +205,7 @@ describe("one user can't reach another user's host", () => {
     const list = (await (await call("/v1/hosts", { token: intruder })).json()) as { hosts: unknown[] };
     expect(list.hosts).toEqual([]);
     const own = await call("/v1/hosts", { token: await session("user_listed") });
-    expect(await own.json()).toEqual({ hosts: [{ hostId: host.id, name: "Ryan's Mac", online: true }] });
+    expect(await own.json()).toEqual({ hosts: [{ hostId: host.id, name: "Ryan's Mac", online: true }], removed: [] });
   });
 
   it("refuses a stream without a ticket, or with a used one", async () => {
@@ -542,6 +543,52 @@ describe("removing hosts", () => {
     );
     expect(stored).toBe(0);
     expect((await register(await newHost(), token)).status).toBe(200);
+  });
+
+  it("lists a host as removed until it registers under that user again", async () => {
+    const token = await session("user_marks");
+    const removed = async (as = token) =>
+      ((await (await call("/v1/hosts", { token: as })).json()) as { removed: string[] }).removed;
+    const host = await newHost();
+    expect((await register(host, token)).status).toBe(200);
+    expect(await removed()).toEqual([]);
+
+    expect((await call(`/v1/hosts/${host.id}`, { method: "DELETE", token })).status).toBe(200);
+    expect(await removed()).toEqual([host.id]);
+    // Registering, here by the key's holder, brings it back.
+    expect((await register(host, token)).status).toBe(200);
+    expect(await removed()).toEqual([]);
+
+    // Another user's Remove marks only their own list.
+    const other = await session("user_marks_other");
+    expect((await call(`/v1/hosts/${host.id}`, { method: "DELETE", token: other })).status).toBe(404);
+    expect(await removed()).toEqual([]);
+    expect(await removed(other)).toEqual([host.id]);
+
+    // Moving to another user leaves this account, as removing does.
+    expect((await register(host, other)).status).toBe(200);
+    expect(await removed()).toEqual([host.id]);
+    expect(await removed(other)).toEqual([]);
+  });
+});
+
+describe("a Clerk outage", () => {
+  it("answers 503, not 401, when Clerk's keys can't be read, and 401 for what isn't a token", async () => {
+    const env = {
+      ...testEnv,
+      CLERK_JWKS: undefined,
+      CLERK_ISSUER: "https://clerk-down.test",
+      CLERK_JWKS_URL: "http://127.0.0.1:1/jwks",
+    } as Env;
+    const list = (token: string) =>
+      worker.fetch(
+        new Request(`${BASE}/v1/hosts`, { headers: { authorization: `Bearer ${token}` } }),
+        env,
+      );
+    const down = await list(await session("user_clerk_down"));
+    expect(down.status).toBe(503);
+    expect(await down.json()).toEqual({ error: "clerk_unreachable" });
+    expect((await list("not-a-jwt")).status).toBe(401);
   });
 });
 

@@ -186,10 +186,7 @@ pub(crate) async fn relay_hosts(
     context: &Context,
     params: RelayHostsParams,
 ) -> Result<RelayHostsResult, ErrorObject> {
-    let hosts = crate::relay::hosts(&context.daemon, &params.token)
-        .await
-        .map_err(ErrorObject::invalid_params)?;
-    Ok(RelayHostsResult { hosts })
+    crate::relay::hosts(&context.daemon, &params.token).await
 }
 
 /// `relay/remove`: removes one of the user's hosts from the relay, and answers with the rest.
@@ -201,11 +198,10 @@ pub(crate) async fn relay_remove(
         .await
         .map_err(ErrorObject::invalid_params)?;
     // It's removed by now, so failing to read the rest can't be reported as failing to remove it.
-    let hosts = crate::relay::hosts(&context.daemon, &params.token)
+    Ok(crate::relay::hosts(&context.daemon, &params.token)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(%error, "removed a host, but couldn't read the rest");
-            Vec::new()
-        });
-    Ok(RelayHostsResult { hosts })
+            RelayHostsResult::default()
+        }))
 }

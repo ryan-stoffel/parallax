@@ -1,5 +1,10 @@
-import type { DeviceIcon } from "../preload/bridge";
-import type { AccessState, RelayHost, RemoteSessionsResult } from "../protocol/generated/protocol";
+import type { DeviceIcon, Outage } from "../preload/bridge";
+import type {
+  AccessState,
+  RelayHost,
+  RelayHostsResult,
+  RemoteSessionsResult,
+} from "../protocol/generated/protocol";
 import { isDeviceIcon } from "./connect";
 import { isRoute } from "./settings";
 
@@ -82,21 +87,75 @@ export function checkAccounts(accounts: unknown, ids: Set<string>): void {
 }
 
 /**
- * `saved` after `relay/hosts` answered `listed`: each other computer kept, with its own name and
- * routes once known, a new one added, and one the account no longer has dropped.
+ * `saved` after `relay/hosts` answered `listed` and `removed`: each computer kept, with its own
+ * name and routes, and a new one added. Only `removed` drops one (PLX-1351): a list without it may
+ * come from a relay that lost its data, and dropping it would close a working LAN connection.
  */
 export function mergeListed(
   saved: SavedAccount[],
   listed: RelayHost[],
+  removed: string[] = [],
 ): { accounts: SavedAccount[]; changed: boolean } {
-  const others = listed.filter((h) => !h.thisComputer && isRelayId(h.hostId));
-  const accounts = others.map(
-    (h) =>
-      saved.find((s) => s.hostId === h.hostId) ?? { hostId: h.hostId, name: h.name, routes: [] },
-  );
-  const changed = accounts.length !== saved.length || accounts.some((each, i) => each !== saved[i]);
-  return { accounts, changed };
+  const own = listed.find((h) => h.thisComputer)?.hostId;
+  const kept = saved.filter((s) => s.hostId !== own && !removed.includes(s.hostId));
+  const added = listed
+    .filter((h) => !h.thisComputer && isRelayId(h.hostId))
+    .filter((h) => !saved.some((s) => s.hostId === h.hostId))
+    .map((h) => ({ hostId: h.hostId, name: h.name, routes: [] }));
+  const accounts = [...kept, ...added];
+  return { accounts, changed: added.length > 0 || kept.length !== saved.length };
 }
+
+/** What a failed `relay/hosts` says is down, from plxd's error kind. Undefined for anything else. */
+export function outageOf(error: { data?: unknown }): Outage | undefined {
+  const { kind } = (error.data ?? {}) as { kind?: unknown };
+  return kind === "relayUnreachable" ? "relay" : kind === "clerkUnreachable" ? "clerk" : undefined;
+}
+
+/** Reads of the account's list that must fail in a row before the app says so, so a blip doesn't. */
+const OUTAGE_READS = 2;
+
+/**
+ * Follows each read of the account's list, and calls `changed` when the notice to show changes. A
+ * read that found a problem counts toward `OUTAGE_READS`, and one that didn't ends it.
+ */
+export class NoticeWatch<T extends string> {
+  /** The notice to show, if any. */
+  current?: T;
+  private failed = 0;
+
+  constructor(private readonly changed: () => void) {}
+
+  /** One read: the problem it found, if any. */
+  read(found: T | undefined): void {
+    this.failed = found ? this.failed + 1 : 0;
+    const next = this.failed >= OUTAGE_READS ? found : undefined;
+    if (next === this.current) return;
+    this.current = next;
+    this.changed();
+  }
+}
+
+/**
+ * Whether the key and account that joined the relay are missing from `list`, with no mark that it
+ * was removed. The relay may have lost its data, or it was removed before the relay kept marks.
+ */
+export const joinedNotListed = (
+  { hosts, removed }: RelayHostsResult,
+  joined: { hostId: string; user: string } | undefined,
+  user: string | undefined,
+): boolean =>
+  !!joined &&
+  joined.user === user &&
+  !hosts.some((host) => host.hostId === joined.hostId) &&
+  !removed?.includes(joined.hostId);
+
+/** Which computers the account lists, which are online, and which it marks removed. */
+export const listedKey = ({ hosts, removed }: RelayHostsResult): string =>
+  [
+    ...hosts.map((host) => `${host.hostId} ${host.online}`).sort(),
+    ...(removed ?? []).map((hostId) => `removed ${hostId}`).sort(),
+  ].join("\n");
 
 /** A typed setup code's runs allowed per host an hour (0091), since a fake host sets no limit. */
 export const MAX_PAIR_RUNS = 5;

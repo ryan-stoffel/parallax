@@ -132,6 +132,7 @@ beforeEach(() => {
   window.parallax = {
     onHostUpdate: () => () => {},
     onProfile: () => () => {},
+    onConnectNotice: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) =>

@@ -96,6 +96,13 @@ pub struct RelayRemoveParams {
 pub struct RelayHostsResult {
     /// The user's hosts on the relay.
     pub hosts: Vec<RelayHost>,
+    /// The relay ids of hosts that left the account, by Remove or by moving to another user, until
+    /// they register under this user again (PLX-1351). The only proof a host left: not being in
+    /// `hosts` proves nothing, since a relay that lost its data lists nothing. An older relay
+    /// leaves it out, which says nothing either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub removed: Option<Vec<String>>,
 }
 
 /// A host the signed-in user has on Parallax Relay.

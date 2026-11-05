@@ -56,6 +56,10 @@ const fake = vi.hoisted(() => {
     opened: [] as { runner: unknown; params: unknown }[],
     /** Whether a window is on screen. */
     visible: false,
+    /** Whether the OS says this computer has a network. */
+    online: true,
+    /** Whether the account's last refresh couldn't reach Clerk. */
+    clerkDown: false,
   };
 });
 vi.mock("electron", () => ({
@@ -73,6 +77,7 @@ vi.mock("electron", () => ({
       fake.handlers.set(channel, handler),
   },
   powerMonitor: { on: () => {} },
+  net: { isOnline: () => fake.online },
 }));
 vi.mock("./windows", () => ({
   broadcast: (channel: string, value: unknown) => {
@@ -155,6 +160,7 @@ function signedIn() {
       currentToken: () => relayToken,
       freshToken: async () => freshToken,
       onSignIn: (listener: () => void) => void listeners.push(listener),
+      clerkUnreachable: () => fake.clerkDown,
     },
     signIn: () => listeners.forEach((listener) => listener()),
   };
@@ -380,7 +386,8 @@ test("the account's computers are asked for on sign-in, focus, the network, Sett
       { hostId: studio, name: "studio", online: true, thisComputer: false },
       { hostId: buildBox, name: "macbook", online: true, thisComputer: true },
     ];
-    fake.answers.set("relay/hosts", () => (asked++, { result: { hosts } }));
+    let removed: string[] = [];
+    fake.answers.set("relay/hosts", () => (asked++, { result: { hosts, removed } }));
     const local = await start({}, account);
     // The local plxd connecting asks once.
     local.set(connected());
@@ -441,8 +448,11 @@ test("the account's computers are asked for on sign-in, focus, the network, Sett
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.retry).toHaveBeenCalled();
 
-    // One the account no longer lists is dropped.
+    // One the account no longer lists stays, and one the relay marks removed is dropped.
     hosts = hosts.slice(1);
+    await fake.handlers.get("parallax:discoverAccount")!();
+    expect(listed(studio)).toBeDefined();
+    removed = [studio];
     fake.handlers.get("parallax:discoverAccount")!();
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.disposed).toBe(true);
@@ -1019,13 +1029,14 @@ test("this computer can't remove itself", async () => {
   }
 });
 
-test("a computer removed while it couldn't hear stays off at its next start, unless its key or account changed", async () => {
+test("a computer the relay marks removed stays off at its next start; nothing else turns it off", async () => {
   vi.useFakeTimers();
   fake.answers.clear();
   try {
     const calls: string[] = [];
+    const list = (result: object | { error: object }) =>
+      fake.answers.set("relay/hosts", "error" in result ? result : { result });
     fake.answers.set("relay/id", { result: { hostId: buildBox } });
-    fake.answers.set("relay/hosts", { result: { hosts: [] } });
     fake.answers.set("access/get", accessState([]));
     fake.answers.set("host/settings/get", { result: { connect: false } });
     fake.answers.set("host/settings/set", (params: unknown) => {
@@ -1042,20 +1053,177 @@ test("a computer removed while it couldn't hear stays off at its next start, unl
       return signIn;
     };
 
-    // The same key and account, not listed: removed, so it stays off until a sign-in.
-    const signIn = await startWith({ hostId: buildBox, user: "user_1" });
+    const joined = { hostId: buildBox, user: "user_1" };
+
+    // Marked removed: it stays off until a sign-in.
+    list({ hosts: [], removed: [buildBox] });
+    const signIn = await startWith(joined);
     expect(calls).toEqual(['set {"relay":false}']);
     signIn();
     await vi.advanceTimersByTimeAsync(1);
     expect(calls.at(-1)).toBe("register");
     rmSync(fake.userData, { recursive: true, force: true });
 
-    // Another account or another key never joined, so it just registers.
+    // A failed list, a list with no mark for it, and an older relay's list prove nothing either
+    // way: no setting changes, and it doesn't put itself back on the account.
+    list({ hosts: [], removed: [studio] });
+    await startWith(joined);
+    expect(calls).toEqual([]);
+    rmSync(fake.userData, { recursive: true, force: true });
+    list({ error: { code: -32000, message: "down", data: { kind: "relayUnreachable" } } });
+    await startWith(joined);
+    expect(calls).toEqual([]);
+    rmSync(fake.userData, { recursive: true, force: true });
+    list({ hosts: [] });
+    await startWith(joined);
+    expect(calls).toEqual([]);
+    rmSync(fake.userData, { recursive: true, force: true });
+
+    // On an older relay, a key or account that never joined registers.
     await startWith({ hostId: buildBox, user: "user_2" });
     expect(calls).toEqual(["register"]);
     rmSync(fake.userData, { recursive: true, force: true });
     await startWith({ hostId: studio, user: "user_1" });
     expect(calls).toEqual(["register"]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a joined key that isn't listed or marked waits for one click, with no setting changed", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const calls: string[] = [];
+    let hosts: object[] = [];
+    fake.answers.set("relay/id", { result: { hostId: buildBox } });
+    fake.answers.set("relay/hosts", () => ({ result: { hosts, removed: [] } }));
+    fake.answers.set("access/get", accessState([]));
+    fake.answers.set("host/settings/get", { result: { connect: false } });
+    fake.answers.set("host/settings/set", () => (calls.push("set"), { result: {} }));
+    fake.answers.set("relay/register", () => {
+      calls.push("register");
+      hosts = [{ hostId: buildBox, name: "me", online: true, thisComputer: true }];
+      return { result: {} };
+    });
+    const { account } = signedIn();
+    const joinedRelay = { hostId: buildBox, user: "user_1" };
+    const local = await start({ joinedRelay }, account);
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    const discover = fake.handlers.get("parallax:discoverAccount")!;
+    await discover();
+    await discover();
+    expect(calls).toEqual([]);
+    expect(fake.sent.get("parallax:connectNotice")).toBe("notListed");
+
+    expect(await fake.handlers.get("parallax:registerRelay")!()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(["register"]);
+    expect(fake.sent.get("parallax:connectNotice")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("an outage says what's down and changes no setting; a list naming nothing keeps every computer", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const saved = { hostId: buildBox, name: "box", routes: ["192.168.1.20:7341"] };
+    const { account } = signedIn();
+    fake.answers.set("access/get", accessState([]));
+    const local = await start({ accounts: [saved] }, account);
+    fake.answers.set("relay/hosts", { result: { hosts: [], removed: [] } });
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    fake.answers.set("relay/hosts", {
+      error: { code: -32000, message: "down", data: { kind: "relayUnreachable" } },
+    });
+    const box = fake.made.find((c) => c.options.account === "box")!;
+    const file = path.join(fake.userData, "settings.json");
+    const before = readFileSync(file, "utf8");
+    const discover = fake.handlers.get("parallax:discoverAccount")!;
+
+    // The relay is down, and two reads in a row say so.
+    await discover();
+    expect(fake.sent.get("parallax:connectNotice")).toBeUndefined();
+    await discover();
+    expect(fake.sent.get("parallax:connectNotice")).toBe("relay");
+    expect(await fake.handlers.get("parallax:connectNotice")!()).toBe("relay");
+
+    // Answering ends it, and an empty list, as from a relay that lost its data, drops nothing.
+    fake.answers.set("relay/hosts", { result: { hosts: [], removed: [] } });
+    await discover();
+    expect(fake.sent.get("parallax:connectNotice")).toBeNull();
+    expect(box.disposed).toBe(false);
+    expect(readFileSync(file, "utf8")).toBe(before);
+
+    // With no network, a failed read is no outage.
+    fake.online = false;
+    fake.answers.set("relay/hosts", {
+      error: { code: -32000, message: "down", data: { kind: "relayUnreachable" } },
+    });
+    await discover();
+    await discover();
+    expect(fake.sent.get("parallax:connectNotice")).toBeNull();
+    fake.online = true;
+
+    // Clerk is down: no token, and what's asked of it says so instead of asking to sign in.
+    fake.clerkDown = true;
+    account.accessToken = async () => undefined as unknown as string;
+    await discover();
+    await discover();
+    expect(fake.sent.get("parallax:connectNotice")).toBe("clerk");
+    expect(await fake.handlers.get("parallax:relayHosts")!()).toMatch(/can't reach Clerk/);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(box.disposed).toBe(false);
+    fake.clerkDown = false;
+
+    // Marked removed by the relay is the one thing that drops a computer. The timer's read notices
+    // the mark alone, with `hosts` the same as before.
+    account.accessToken = async () => relayToken;
+    fake.answers.set("relay/hosts", { result: { hosts: [], removed: [] } });
+    await discover();
+    fake.visible = true;
+    fake.answers.set("relay/hosts", { result: { hosts: [], removed: [buildBox] } });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(box.disposed).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8")).accounts).toEqual([]);
+  } finally {
+    fake.visible = false;
+    vi.useRealTimers();
+    fake.online = true;
+    fake.clerkDown = false;
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("signing in as another account forgets the last one's computers, and the same account's stay", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const saved = { hostId: buildBox, name: "box", routes: ["192.168.1.20:7341"] };
+    fake.answers.set("access/get", accessState([]));
+    fake.answers.set("relay/hosts", { result: { hosts: [] } });
+    const startAs = async (user: string) => {
+      const { account, signIn } = signedIn();
+      await start({ accounts: [saved], joinedRelay: { hostId: studio, user } }, account);
+      return signIn;
+    };
+    const accounts = () =>
+      JSON.parse(readFileSync(path.join(fake.userData, "settings.json"), "utf8")).accounts;
+
+    (await startAs("user_1"))();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(accounts()).toEqual([saved]);
+    rmSync(fake.userData, { recursive: true, force: true });
+
+    (await startAs("user_2"))();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(accounts()).toEqual([]);
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });

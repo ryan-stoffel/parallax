@@ -6,6 +6,10 @@ import {
   countPairRun,
   lacks,
   mergeListed,
+  outageOf,
+  joinedNotListed,
+  listedKey,
+  NoticeWatch,
   parseSignIn,
   RECHECK_MS,
   Routes,
@@ -133,6 +137,7 @@ test("the account's list adds and drops computers, keeping what this app learned
       { hostId: other, name: "build-box", online: false, thisComputer: false },
       { hostId: "me", name: "macbook", online: true, thisComputer: true },
     ],
+    [gone],
   );
   expect(changed).toBe(true);
   expect(accounts).toEqual([kept, { hostId: other, name: "build-box", routes: [] }]);
@@ -142,6 +147,55 @@ test("the account's list adds and drops computers, keeping what this app learned
       { hostId: other, name: "build-box", online: true, thisComputer: false },
     ]).changed,
   ).toBe(false);
+});
+
+test("a list missing a saved computer keeps it, whole, as only `removed` drops one", () => {
+  const saved = [{ hostId: studio, name: "studio", routes: ["192.168.1.20:7341"] }];
+  for (const removed of [undefined, [], ["tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE"]])
+    expect(mergeListed(saved, [], removed)).toEqual({ accounts: saved, changed: false });
+  expect(mergeListed(saved, [], [studio])).toEqual({ accounts: [], changed: true });
+});
+
+test("an outage shows after two failed reads, follows what's down, and ends on the next answer", () => {
+  const shown: unknown[] = [];
+  const watch: NoticeWatch<"relay" | "clerk"> = new NoticeWatch(() => shown.push(watch.current));
+  watch.read("relay");
+  expect(shown).toEqual([]);
+  watch.read(undefined);
+  watch.read("relay");
+  expect(shown).toEqual([]);
+  watch.read("relay");
+  expect(shown).toEqual(["relay"]);
+  watch.read("relay");
+  watch.read("clerk");
+  expect(shown).toEqual(["relay", "clerk"]);
+  watch.read(undefined);
+  expect(shown).toEqual(["relay", "clerk", undefined]);
+  expect(watch.current).toBeUndefined();
+});
+
+test("the list's key changes when only `removed` does", () => {
+  const hosts = [{ hostId: studio, name: "studio", online: true, thisComputer: false }];
+  expect(listedKey({ hosts, removed: [] })).toBe(listedKey({ hosts }));
+  expect(listedKey({ hosts, removed: ["gone"] })).not.toBe(listedKey({ hosts, removed: [] }));
+});
+
+test("only the key and account that joined can be missing from the list, unless marked", () => {
+  const joined = { hostId: studio, user: "user_1" };
+  const listed = [{ hostId: studio, name: "studio", online: true, thisComputer: true }];
+  expect(joinedNotListed({ hosts: [] }, joined, "user_1")).toBe(true);
+  expect(joinedNotListed({ hosts: [], removed: [] }, joined, "user_1")).toBe(true);
+  expect(joinedNotListed({ hosts: [], removed: [studio] }, joined, "user_1")).toBe(false);
+  expect(joinedNotListed({ hosts: listed }, joined, "user_1")).toBe(false);
+  expect(joinedNotListed({ hosts: [] }, joined, "user_2")).toBe(false);
+  expect(joinedNotListed({ hosts: [] }, undefined, "user_1")).toBe(false);
+});
+
+test("only plxd's outage kinds count as an outage", () => {
+  expect(outageOf({ data: { kind: "relayUnreachable" } })).toBe("relay");
+  expect(outageOf({ data: { kind: "clerkUnreachable" } })).toBe("clerk");
+  expect(outageOf({ data: { kind: "idConflict" } })).toBeUndefined();
+  expect(outageOf({})).toBeUndefined();
 });
 
 test("a computer takes 5 typed codes an hour", () => {

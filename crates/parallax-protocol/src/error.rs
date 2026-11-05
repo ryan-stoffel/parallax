@@ -155,6 +155,11 @@ pub enum ErrorKind {
     /// (0057). The message names them. Fetching the repository there gets them. The
     /// repository's refs didn't change.
     BundleMissingCommits,
+    /// `relay/hosts` couldn't reach Parallax Relay, or it answered with a server error (PLX-1351).
+    RelayUnreachable,
+    /// Parallax Relay answered that it can't read Clerk's keys, so no sign-in can be checked
+    /// (PLX-1351).
+    ClerkUnreachable,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

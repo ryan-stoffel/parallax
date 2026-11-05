@@ -564,6 +564,11 @@ export interface ParallaxBridge {
    */
   onProfile(listener: (profile: Profile | null) => void): () => void;
   /**
+   * Calls `listener` with what the app says about Parallax Connect, or null, now and on every change
+   * (PLX-1351). Returns the unsubscribe function.
+   */
+  onConnectNotice(listener: (notice: ConnectNotice | null) => void): () => void;
+  /**
    * Opens Clerk's sign-in page in the system browser, or its sign-up page if `create`. Settles once
    * the browser signs the app in, another sign-in replaces it, or it times out. Resolves to an
    * error for people, or undefined.
@@ -594,6 +599,11 @@ export type StorageItem = { id: StorageItemId; name: string; folder: string; byt
  * The signed-in Parallax account, as the app shows it. `name` is the first and last name joined,
  * or empty. `picture` is a data: URL.
  */
+/** What's down for Parallax Connect: Parallax Relay, or Clerk, its sign-in service (PLX-1351). */
+export type Outage = "relay" | "clerk";
+/** What the app says about Parallax Connect: an outage, or that the relay lacks this computer. */
+export type ConnectNotice = Outage | "notListed";
+
 export type Profile = {
   name: string;
   firstName: string;

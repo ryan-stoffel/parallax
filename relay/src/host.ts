@@ -253,8 +253,8 @@ export class HostRelay extends DurableObject<Env> {
       this.closeHost(4409, "moved to another user");
       await this.closeStreams(hostId, 4409, "moved to another user");
       this.tickets.clear();
-      // The host no longer counts against its old user's slots.
-      await this.env.USERS.get(this.env.USERS.idFromName(before.user)).release(hostId);
+      // The host no longer counts against its old user's slots, and has left their account.
+      await this.env.USERS.get(this.env.USERS.idFromName(before.user)).left(hostId);
     }
     const clean = typeof name === "string" ? name.replace(/\p{Cc}/gu, "").trim().slice(0, 64) : "";
     await this.ctx.storage.put<Owner>("owner", { user, hostId, jwk, name: clean });

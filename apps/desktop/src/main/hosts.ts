@@ -1,4 +1,4 @@
-import { app, ipcMain, powerMonitor, type WebContents } from "electron";
+import { app, ipcMain, net, powerMonitor, type WebContents } from "electron";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -15,6 +15,7 @@ import {
   type CliKind,
   type DeviceStreamParams,
   type RelayHost,
+  type RelayHostsResult,
   type RemoteSessionsResult,
 } from "../protocol/generated/protocol";
 import {
@@ -30,6 +31,8 @@ import {
   withheldMethods,
   type RendererMethod,
   type RpcResponse,
+  type ConnectNotice,
+  type Outage,
   type SavedHost,
   type SetupCode,
   type SshHost,
@@ -47,6 +50,10 @@ import {
   parseSignIn,
   relayIdOf,
   Routes,
+  joinedNotListed,
+  listedKey,
+  NoticeWatch,
+  outageOf,
   tokenSubject,
   unionLists,
   type SavedAccount,
@@ -198,6 +205,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   }, LOOK_MS).unref();
   // Signing in registers every computer this app is connected to (PLX-1146).
   account?.onSignIn(() => {
+    forgetOtherAccount();
     for (const [hostId, connection] of connections)
       if (connection.state.status === "connected") void joinRelay(hostId, true);
     // The account's computers, which a sign-in to another account changes (0091).
@@ -263,6 +271,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // Settings > Connections and Add computer ask for the account's computers when they open, and
   // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
+  ipcMain.handle("parallax:connectNotice", () => connectNotice());
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
@@ -1094,6 +1103,12 @@ function relayEnv(): Record<string, string> | undefined {
   return token ? { PLXD_RELAY_TOKEN: token } : undefined;
 }
 
+/** Why there's no token for the account, for people. */
+const noToken = () =>
+  account?.clerkUnreachable()
+    ? "Parallax can't reach Clerk, its sign-in service. Try again once it's back."
+    : "Sign in to Parallax from Profile in the sidebar first.";
+
 /**
  * `window.parallax.relayHosts` and `removeRelayHost`: the signed-in account's hosts on Parallax
  * Relay, after removing `remove` if given (PLX-652). Main sends the account's token to plxd, which
@@ -1105,7 +1120,7 @@ async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
     if (failed) return failed;
   }
   const token = await account?.accessToken();
-  if (!token) return "Sign in to Parallax from Profile in the sidebar first.";
+  if (!token) return noToken();
   const answer = await connections.get("local")?.request("relay/hosts", { token });
   if (!answer) return "Parallax isn't connected to this computer's plxd.";
   return "error" in answer ? answer.error.message : answer.result.hosts;
@@ -1117,13 +1132,15 @@ async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
  */
 async function registerRelay(): Promise<string | undefined> {
   const token = await account?.accessToken();
-  if (!token) return "Sign in to Parallax from Profile in the sidebar first.";
+  if (!token) return noToken();
   const answer = await connections.get("local")?.request("relay/register", { token });
   if (!answer) return "Parallax isn't connected to this computer's plxd.";
   if ("error" in answer) return answer.error.message;
   const own = await connections.get("local")?.request("relay/id", {});
   const user = tokenSubject(token);
   if (own && "result" in own && user) keepJoined(own.result.hostId, user);
+  // Ends the `notListed` notice now, rather than at the next look.
+  void discoverAccounts();
   return undefined;
 }
 
@@ -1134,6 +1151,13 @@ async function registerRelay(): Promise<string | undefined> {
  * this one's posts it, so the token never leaves this computer. With it goes the token's Clerk
  * user id, which that plxd records as its account (0091): without one, it refuses every account
  * sign-in. Quiet when signed out, for any other kind of host, and for a plxd too old to sign.
+ *
+ * This computer's own registration reads the list first, unless a sign-in asked for it (0091,
+ * PLX-1351). `removed` naming its key means the user removed it from another computer while it
+ * couldn't hear, so its `relay` goes off, and only a sign-in or a setup brings it back. A key that
+ * joined and isn't listed may have been removed before the relay kept marks, or the relay may have
+ * lost its data. Nothing here can tell, so it never registers by itself and changes no setting:
+ * `notListed` offers the one click that does (`registerRelay`). A key that never joined registers.
  */
 async function joinRelay(hostId: string, signingIn = false): Promise<void> {
   if (hostId !== "local" && !hostId.startsWith("tailnet:")) return;
@@ -1144,15 +1168,16 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
     const own = await local.request("relay/id", {});
     const hostId = "result" in own ? own.result.hostId : undefined;
     const user = tokenSubject(token);
-    // This key joined this account and isn't listed: the user removed this computer from another
-    // one while it couldn't hear (PLX-1312). It stays off until they sign in or set it up again.
-    const { joinedRelay } = settings;
-    if (!signingIn && hostId && joinedRelay?.hostId === hostId && joinedRelay.user === user) {
-      const listed = await local.request("relay/hosts", { token });
-      if ("result" in listed && !listed.result.hosts.some((host) => host.hostId === hostId)) {
+    if (!signingIn && hostId) {
+      const answer = await local.request("relay/hosts", { token });
+      const list = "result" in answer ? answer.result : undefined;
+      if (list?.removed?.includes(hostId)) {
         await local.request("host/settings/set", { relay: false });
         return;
       }
+      const { joinedRelay } = settings;
+      const joinedHere = joinedRelay?.hostId === hostId && joinedRelay.user === user;
+      if (joinedHere && !list?.hosts.some((host) => host.hostId === hostId)) return;
     }
     const joined = await local.request("relay/register", { token });
     if ("result" in joined && hostId && user) keepJoined(hostId, user);
@@ -1165,6 +1190,19 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
     ?.request("relay/sign", { tokenHash, ...(userId && { userId }) });
   if (signed && "result" in signed)
     await local.request("relay/register", { token, signed: signed.result });
+}
+
+/**
+ * A sign-in as another account than the one that joined: its computers aren't this account's. The
+ * list can't drop them, as not being listed proves nothing (PLX-1351).
+ */
+function forgetOtherAccount(): void {
+  const token = account?.currentToken();
+  const user = token && tokenSubject(token);
+  const joined = settings.joinedRelay?.user;
+  if (!user || !joined || joined === user || !savedAccounts().length) return;
+  for (const saved of savedAccounts()) dropAccountConnection(accountId(saved.hostId));
+  keepAccounts([]);
 }
 
 /** Remembers which key and account joined the relay, in memory even when it can't be written. */
@@ -1621,14 +1659,14 @@ async function removeDevice(hostId: unknown): Promise<string | undefined> {
 /**
  * Ends account computer `relayId`'s association with the account (PLX-1312): removes it from the
  * relay, turns its `relay` off when it answers, so it stops reconnecting, then forgets it here and
- * on every computer this app reaches. Other apps drop it the next time they read the list, and its
- * own app stays off the account at its next start (`joinRelay`). Setting it up again takes its
- * code, as a new computer does. If the relay refuses, nothing changes. This computer can't remove
- * itself. Resolves to why not, for people.
+ * on every computer this app reaches. The relay marks it `removed` (PLX-1351): other apps drop it
+ * the next time they read the list, and its own app turns its `relay` off at its next start
+ * (`joinRelay`). Setting it up again takes its code, as a new computer does. If the relay refuses,
+ * nothing changes. This computer can't remove itself. Resolves to why not, for people.
  */
 async function removeFromAccount(relayId: string): Promise<string | undefined> {
   const token = await account?.accessToken();
-  if (!token) return "Sign in to Parallax from Profile in the sidebar first.";
+  if (!token) return noToken();
   const local = connections.get("local");
   if (local?.state.status !== "connected")
     return "Parallax isn't connected to this computer's plxd.";
@@ -1752,6 +1790,45 @@ function dropAccountConnection(id: string): void {
 /** How often the account's computers are asked for while a window is on screen. */
 const LOOK_MS = 15_000;
 
+/** What the app says about Parallax Connect (PLX-1351): an outage first, as it hides the rest. */
+const connectNotice = (): ConnectNotice | null =>
+  outageWatch.current ?? notListedWatch.current ?? null;
+const showNotice = () => broadcast("parallax:connectNotice", connectNotice());
+/** Reads of the account's list that failed. */
+const outageWatch = new NoticeWatch<Outage>(showNotice);
+/** Reads of the account's list that lack this computer's key, with no mark that it was removed. */
+const notListedWatch = new NoticeWatch<"notListed">(showNotice);
+
+/**
+ * The account's list from the local plxd, or undefined when it can't be read. A failure here never
+ * changes anything saved, and direct routes keep being dialed. It only says what's down. With no
+ * network at all, nothing is. Only reads with a plxd to ask count as reads.
+ */
+async function readAccountList(): Promise<RelayHostsResult | undefined> {
+  const token = await account?.accessToken();
+  if (!token) {
+    const unreachable = account?.clerkUnreachable();
+    outageWatch.read(net.isOnline() && unreachable ? "clerk" : undefined);
+    // Signed out, so no account to be on. With Clerk down, it's unknown, so it stays as it was.
+    if (!unreachable) notListedWatch.read(undefined);
+    return undefined;
+  }
+  const local = connections.get("local");
+  if (local?.state.status !== "connected") return undefined;
+  const answer = await local.request("relay/hosts", { token });
+  if ("error" in answer) {
+    outageWatch.read(net.isOnline() ? outageOf(answer.error) : undefined);
+    return undefined;
+  }
+  outageWatch.read(undefined);
+  notListedWatch.read(
+    joinedNotListed(answer.result, settings.joinedRelay, tokenSubject(token))
+      ? "notListed"
+      : undefined,
+  );
+  return answer.result;
+}
+
 /**
  * Asks the local plxd for the account's computers (`relay/hosts`), keeps them, and connects to
  * each, reviving any that stopped. Runs on a sign-in, the network coming back or changing, focus,
@@ -1760,19 +1837,15 @@ const LOOK_MS = 15_000;
  * open, since the user is waiting on that computer.
  */
 const discoverAccounts = coalesced(async () => {
-  const token = await account?.accessToken();
-  const local = connections.get("local");
-  if (!token || local?.state.status !== "connected") return;
-  const answer = await local.request("relay/hosts", { token });
-  if ("error" in answer) return;
+  const list = await readAccountList();
+  if (!list) return;
   // Remove used to only hide a computer here (PLX-1312), so one saved that way finishes leaving.
   for (const saved of savedAccounts().filter((a) => a.removed))
-    if (!answer.result.hosts.some((h) => h.hostId === saved.hostId))
-      await forgetComputer(saved.hostId);
+    if (!list.hosts.some((h) => h.hostId === saved.hostId)) await forgetComputer(saved.hostId);
     else if (!(await removeFromAccount(saved.hostId)))
-      answer.result.hosts = answer.result.hosts.filter((h) => h.hostId !== saved.hostId);
-  lastListed = listedKey(answer.result.hosts);
-  const { accounts, changed } = mergeListed(savedAccounts(), answer.result.hosts);
+      list.hosts = list.hosts.filter((h) => h.hostId !== saved.hostId);
+  lastListed = listedKey(list);
+  const { accounts, changed } = mergeListed(savedAccounts(), list.hosts, list.removed);
   if (changed) {
     for (const old of savedAccounts())
       if (!accounts.some((a) => a.hostId === old.hostId))
@@ -1780,8 +1853,7 @@ const discoverAccounts = coalesced(async () => {
     keepAccounts(accounts);
   }
   offlineAccounts.clear();
-  for (const each of answer.result.hosts)
-    if (!each.online) offlineAccounts.add(accountId(each.hostId));
+  for (const each of list.hosts) if (!each.online) offlineAccounts.add(accountId(each.hostId));
   for (const each of accounts) addAccountConnection(each);
   // A new computer that was offline may answer now.
   for (const [id, access] of accountAccess)
@@ -1789,13 +1861,6 @@ const discoverAccounts = coalesced(async () => {
       void askForCode(id);
   broadcast("parallax:devices", deviceHosts());
 });
-
-/** Which computers the account lists and which are online, to notice a change. */
-const listedKey = (hosts: RelayHost[]) =>
-  hosts
-    .map((host) => `${host.hostId} ${host.online}`)
-    .sort()
-    .join("\n");
 
 /** The account's computers as discovery last saw them. */
 let lastListed: string | undefined;
@@ -1807,12 +1872,8 @@ let lastListed: string | undefined;
  * The only other dial is the probe of a new computer that's online but hasn't answered yet.
  */
 async function lookForNewComputers(): Promise<void> {
-  const token = await account?.accessToken();
-  const local = connections.get("local");
-  if (!token || local?.state.status !== "connected") return;
-  const answer = await local.request("relay/hosts", { token });
-  if ("result" in answer && listedKey(answer.result.hosts) !== lastListed)
-    return void discoverAccounts();
+  const list = await readAccountList();
+  if (list && listedKey(list) !== lastListed) return void discoverAccounts();
   // Online on the relay can come before its listener answers, and nothing changes in the list when
   // it starts to, so a computer waiting for that is probed again.
   for (const [id, access] of accountAccess)
@@ -1977,7 +2038,7 @@ async function signIn(id: string): Promise<void> {
   if (!token)
     return setAccess(id, {
       step: "ask",
-      why: "Sign in to Parallax from Profile in the sidebar first.",
+      why: noToken(),
     });
   const relayToken = await account?.accessToken();
   const child = spawn(
@@ -2294,8 +2355,7 @@ async function turnOnReach(hostId: unknown): Promise<string | undefined> {
       ? connections.get(hostId)
       : undefined;
   if (host?.state.status !== "connected") return "Parallax can't reach that computer right now.";
-  if (!(await account?.accessToken()))
-    return "Sign in to Parallax from Profile in the sidebar first.";
+  if (!(await account?.accessToken())) return noToken();
   await joinRelay(hostId as string);
   const answer = await host.request("host/settings/set", { relay: true, remote: true });
   if ("error" in answer) return `Parallax couldn't turn it on there: ${answer.error.message}`;
