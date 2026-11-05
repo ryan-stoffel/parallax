@@ -272,7 +272,8 @@ jobs:
     needs: [plan, build]
     if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # Up to six gh calls, each of which gh-retry can stretch past three minutes.
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -342,7 +343,8 @@ jobs:
     needs: [plan, probe]
     if: ${{ !cancelled() && needs.plan.outputs.build == 'true' && needs.plan.outputs.channel == 'nightly' && needs.plan.outputs.dry_run != '1' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # Two gh calls, each of which gh-retry can stretch past three minutes.
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
