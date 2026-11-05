@@ -2336,6 +2336,7 @@ export function App() {
                     ? undefined
                     : "Update Parallax on this host to see a thread's changes.")
                 }
+                reviewScopes={connected && "reviewScopes" in connection.capabilities}
                 onCompose={(text) => {
                   // The chat is under an expanded panel.
                   setPanelExpanded(false);

@@ -230,6 +230,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "orchestratorPlacement",
     "orchestratorTasks",
     "providerUpdates",
+    "reviewScopes",
     "providers",
     "pullRequests",
     "queue",
@@ -1662,6 +1663,29 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "orchestration/threadRuns": (p) => ({ runs: turnsOf(p.threadId) }),
   "orchestration/getTurnDiff": (p) => ({ diff: p.from === 0 ? UPDATER_PATCH : "" }),
   "orchestration/getFullThreadDiff": () => ({ diff: UPDATER_PATCH }),
+  "git/reviewCommits": () => ({
+    hasBase: true,
+    commits: [
+      {
+        sha: "a41c09d2e3f40000000000000000000000000000",
+        subject: "Follow the channel a build was built for",
+        author: "Ryan Stoffel",
+        committedAt: new Date(Date.now() - 600_000).toISOString(),
+      },
+      {
+        sha: "9f3b2217aa010000000000000000000000000000",
+        subject: "Read the channel from the build's metadata",
+        author: "Ryan Stoffel",
+        committedAt: new Date(Date.now() - 1_800_000).toISOString(),
+      },
+    ],
+  }),
+  "git/reviewDiff": (p) => ({
+    diff:
+      p.scope.kind === "uncommitted"
+        ? UPDATER_PATCH.split("diff --git").slice(0, 2).join("diff --git")
+        : UPDATER_PATCH,
+  }),
   "queue/list": () => ({ messages: [] }),
 
   // Computer use (PLX-897): plxd has Accessibility but not Screen Recording yet, and Notes is

@@ -122,6 +122,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("projectPlacement".to_owned(), serde_json::Map::new()),
             ("projectTasks".to_owned(), serde_json::Map::new()),
             ("providerUpdates".to_owned(), serde_json::Map::new()),
+            ("reviewScopes".to_owned(), serde_json::Map::new()),
             ("providers".to_owned(), serde_json::Map::new()),
             (
                 "promptImages".to_owned(),

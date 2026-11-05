@@ -495,6 +495,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         OrchestrationThreadRuns => |p| crate::checkpoints::thread_runs(daemon, p),
         OrchestrationGetTurnDiff => |p| crate::checkpoints::turn_diff(daemon, p),
         OrchestrationGetFullThreadDiff => |p| crate::checkpoints::full_thread_diff(daemon, p),
+        GitReviewCommits => |p| crate::checkpoints::review_commits(daemon, p),
+        GitReviewDiff => |p| crate::checkpoints::review_diff(daemon, p),
         BundlePrepare => |p| bundle::prepare(daemon, p),
         BundleRead => |p| bundle::read(daemon, p),
         BundleDrop => |p| ready(Ok(bundle::drop_bundle(daemon, &p))),

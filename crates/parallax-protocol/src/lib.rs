@@ -195,7 +195,8 @@ pub use memory::{
 };
 pub use orchestration::{
     CheckpointFile, CheckpointStatus, DispatchMode, DispatchResult, FullThreadDiffParams,
-    MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, OrchestrationCommand, RunWaiting, ShellSnapshot,
+    MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, OrchestrationCommand, ReviewCommit, ReviewCommitsParams,
+    ReviewCommitsResult, ReviewDiffParams, ReviewScope, RunWaiting, ShellSnapshot,
     SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
     ThreadHistoryParams, ThreadHistoryResult, ThreadRun, ThreadRunStatus, ThreadRunsParams,
     ThreadRunsResult, ThreadSnapshot, TurnCheckpoint, TurnDiffParams, TurnDiffResult,

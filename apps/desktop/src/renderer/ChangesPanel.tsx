@@ -1,7 +1,7 @@
 import { GitCompare, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { ThreadRun } from "../protocol/generated/protocol";
+import type { ReviewCommitsResult, ThreadRun } from "../protocol/generated/protocol";
 import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { ChangesDiff } from "./ChangesDiff";
@@ -20,6 +20,9 @@ const turnsOf = (runs: ThreadRun[]) =>
 
 const ready = (r: ThreadRun) => r.checkpoint?.status === "ready";
 
+/** What the view shows: a turn by ordinal, every turn, or what git says of the thread's branch. */
+type Scope = number | "all" | "branch" | "uncommitted" | `commit:${string}`;
+
 /** Why Claude can't go back to the end of turn `r`, in plxd's words, or nothing when it can. */
 const cursorRefusal = (r: ThreadRun, sessionId: string | undefined) =>
   !r.cursor
@@ -30,7 +33,8 @@ const cursorRefusal = (r: ThreadRun, sessionId: string | undefined) =>
 
 /**
  * The side panel's Changes view (0062): the open thread's diff across every turn, or one turn's,
- * from the checkpoints plxd captures as each turn ends. A turn's Edit from here reverts the thread
+ * from the checkpoints plxd captures as each turn ends, and with `reviewScopes` its branch against
+ * its base, its uncommitted changes, or one of its commits (PLX-694). A turn's Edit from here reverts the thread
  * to before it, as T3 Code's does, keeping or restoring its files, and puts its message back in
  * the composer through `onCompose`. `prompt` is the first turn's message, which plxd keeps with
  * the thread. `version` changes when a checkpoint is captured or the thread reverted, which reloads
@@ -51,6 +55,7 @@ export function ChangesPanel({
   request,
   onRequestShown,
   unavailable,
+  reviewScopes,
   onCompose,
 }: {
   hostId: string;
@@ -63,6 +68,8 @@ export function ChangesPanel({
   request?: ChangesRequest;
   onRequestShown?: () => void;
   unavailable?: string;
+  /** Whether plxd has `git/reviewCommits` and `git/reviewDiff`. */
+  reviewScopes?: boolean;
   onCompose: (text: string) => void;
 }) {
   const providers = useProviders(hostId);
@@ -70,9 +77,10 @@ export function ChangesPanel({
     providers?.providers.find((p) => p.instance.id === backend)?.instance.kind ?? backend;
   const connectedNow = useConnectedNow(hostId);
   const [runs, setRuns] = useState<ThreadRun[] | { error: string }>();
-  // The turn shown by its ordinal, or every turn.
+  // The turn shown by its ordinal, every turn, or a git scope.
   const mine = request?.runId === runId ? request : undefined;
-  const [shownTurn, setShownTurn] = useState<number | "all">(mine?.turn ?? "all");
+  const [shownTurn, setShownTurn] = useState<Scope>(mine?.turn ?? "all");
+  const [review, setReview] = useState<ReviewCommitsResult>();
   const [asked, setAsked] = useState(mine);
   if (mine && mine !== asked) {
     setAsked(mine);
@@ -116,19 +124,45 @@ export function ChangesPanel({
 
   const turns = Array.isArray(runs) ? turnsOf(runs) : [];
   const latest = turns.findLast(ready)?.ordinal;
-  const turn = shownTurn === "all" ? undefined : turns.find((t) => t.ordinal === shownTurn);
+  const turn =
+    typeof shownTurn === "number" ? turns.find((t) => t.ordinal === shownTurn) : undefined;
   // A turn a revert undid falls back to every turn.
   const ordinal = turn && ready(turn) ? turn.ordinal! : undefined;
+  // With no turn to show yet, a thread's branch still has its changes.
+  const gitScope =
+    typeof shownTurn === "string" && shownTurn !== "all"
+      ? shownTurn
+      : shownTurn === "all" && latest === undefined && review?.hasBase
+        ? "branch"
+        : undefined;
+
+  // A turn ending can add a commit, so each checkpoint reads them again.
+  useEffect(() => {
+    if (!reviewScopes || unavailable || !connectedNow) return;
+    let stale = false;
+    void window.parallax.request(hostId, "git/reviewCommits", { threadId: runId }).then((a) => {
+      if (!stale && "result" in a) setReview(a.result);
+    });
+    return () => {
+      stale = true;
+    };
+  }, [hostId, runId, reviewScopes, unavailable, version, connectedNow]);
 
   useEffect(() => {
-    if (latest === undefined) return setShown(undefined);
+    if (!gitScope && latest === undefined) return setShown(undefined);
     if (!connectedNow) return;
     let stale = false;
-    const answer =
-      ordinal === undefined
+    const answer = gitScope
+      ? window.parallax.request(hostId, "git/reviewDiff", {
+          threadId: runId,
+          scope: gitScope.startsWith("commit:")
+            ? { kind: "commit", sha: gitScope.slice("commit:".length) }
+            : { kind: gitScope as "branch" | "uncommitted" },
+        })
+      : ordinal === undefined
         ? window.parallax.request(hostId, "orchestration/getFullThreadDiff", {
             threadId: runId,
-            to: latest,
+            to: latest!,
           })
         : window.parallax.request(hostId, "orchestration/getTurnDiff", {
             threadId: runId,
@@ -141,7 +175,7 @@ export function ChangesPanel({
     return () => {
       stale = true;
     };
-  }, [hostId, runId, latest, ordinal, connectedNow]);
+  }, [hostId, runId, latest, ordinal, gitScope, version, connectedNow]);
 
   const previous = turn ? turns[turns.indexOf(turn) - 1] : undefined;
   const refusal =
@@ -157,7 +191,7 @@ export function ChangesPanel({
 
   if (unavailable) return <Empty title="Changes aren't available" hint={unavailable} />;
   if (runs && "error" in runs) return <Empty title="Couldn't load the changes" hint={runs.error} />;
-  if (runs && latest === undefined)
+  if (runs && latest === undefined && !review?.hasBase && !gitScope)
     return <Empty title="No changes yet" hint="Edits from this thread show up here for review." />;
 
   // Edit from here goes back to the turn before this one, or the thread's start.
@@ -185,10 +219,16 @@ export function ChangesPanel({
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="flex min-w-0 flex-1">
           <Picker
-            label="Turn"
-            value={String(ordinal ?? "all")}
-            onChange={(v) => setShownTurn(v === "all" ? "all" : Number(v))}
+            label="Show"
+            value={gitScope ?? String(ordinal ?? "all")}
+            onChange={(v) => setShownTurn(/^\d+$/.test(v) ? Number(v) : (v as Scope))}
             options={[
+              ...(review?.hasBase ? [{ value: "branch", label: "Changes" }] : []),
+              ...(reviewScopes ? [{ value: "uncommitted", label: "Uncommitted" }] : []),
+              ...(review?.commits ?? []).map((c) => ({
+                value: `commit:${c.sha}`,
+                label: `${c.sha.slice(0, 7)} ${c.subject}`,
+              })),
               { value: "all", label: "All turns" },
               ...turns.filter(ready).map((t) => ({
                 value: String(t.ordinal),
@@ -221,10 +261,10 @@ export function ChangesPanel({
       )}
       {shown && "diff" in shown && (
         <ChangesDiff
-          key={`${latest}/${ordinal ?? "all"}`}
+          key={`${latest}/${gitScope ?? ordinal ?? "all"}`}
           diff={shown.diff}
           truncated={shown.truncated}
-          focus={asked?.turn === ordinal ? asked : undefined}
+          focus={!gitScope && asked?.turn === ordinal ? asked : undefined}
         />
       )}
       <ConfirmDialog

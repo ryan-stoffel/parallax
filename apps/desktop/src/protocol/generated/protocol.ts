@@ -1110,6 +1110,17 @@ export type ParallaxRequests = {
 	 */
 	"orchestration/getFullThreadDiff": { params: FullThreadDiffParams, result: TurnDiffResult },
 	/**
+	 * `git/reviewCommits`: a thread's commits since its base, for the Changes view. Gated on
+	 * the `reviewScopes` capability, like `git/reviewDiff`.
+	 */
+	"git/reviewCommits": { params: ReviewCommitsParams, result: ReviewCommitsResult },
+	/**
+	 * `git/reviewDiff`: a thread's branch against its base, its uncommitted changes, or one
+	 * commit, as a diff. Fails with `invalidParams` when the thread has no folder of its own,
+	 * no base for the branch, or no such commit.
+	 */
+	"git/reviewDiff": { params: ReviewDiffParams, result: TurnDiffResult },
+	/**
 	 * `bundle/prepare`: bundles a run's branch, pinned to its tip, for the home plxd to read
 	 * (0057). Gated on the `peerGit` capability, like every `bundle/*` method and
 	 * `git/startMerge`. Fails with `bundleTooLarge` over 64 MiB.
@@ -1361,6 +1372,8 @@ export const REQUEST_METHODS = [
 	"orchestration/threadRuns",
 	"orchestration/getTurnDiff",
 	"orchestration/getFullThreadDiff",
+	"git/reviewCommits",
+	"git/reviewDiff",
 	"bundle/prepare",
 	"bundle/read",
 	"bundle/drop",
@@ -12376,7 +12389,7 @@ export type TurnDiffParams = {
 };
 
 /**
- * Result of `orchestration/getTurnDiff` and `orchestration/getFullThreadDiff`.
+ * Result of `orchestration/getTurnDiff`, `orchestration/getFullThreadDiff`, and `git/reviewDiff`.
  */
 export type TurnDiffResult = {
 	/**
@@ -12405,6 +12418,77 @@ export type FullThreadDiffParams = {
 	 * As [`TurnDiffParams::ignore_whitespace`].
 	 */
 	ignoreWhitespace?: boolean,
+};
+
+/**
+ * Params of `git/reviewCommits`.
+ */
+export type ReviewCommitsParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+};
+
+/**
+ * Result of `git/reviewCommits`.
+ */
+export type ReviewCommitsResult = {
+	/**
+	 * Whether the thread's folder has a base to compare its branch with. Without one, it has
+	 * only uncommitted changes to show.
+	 */
+	hasBase: boolean,
+	/**
+	 * The newest 100 commits since the base, newest first.
+	 */
+	commits: Array<ReviewCommit>,
+};
+
+/**
+ * A commit of a thread's branch, for review.
+ */
+export type ReviewCommit = {
+	/**
+	 * Its full hash.
+	 */
+	sha: string,
+	/**
+	 * Its message's first line.
+	 */
+	subject: string,
+	/**
+	 * Its author's name.
+	 */
+	author: string,
+	/**
+	 * When it was committed, in RFC 3339.
+	 */
+	committedAt: string,
+};
+
+/**
+ * Params of `git/reviewDiff`.
+ */
+export type ReviewDiffParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * What it compares.
+	 */
+	scope: ReviewScope,
+};
+
+/**
+ * What `git/reviewDiff` compares in a thread's folder.
+ */
+export type ReviewScope = { "kind": "branch" } | { "kind": "uncommitted" } | { "kind": "commit",
+	/**
+	 * Its hash.
+	 */
+	sha: string,
 };
 
 /**

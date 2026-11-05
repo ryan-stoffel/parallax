@@ -1,13 +1,14 @@
 //! Per-turn checkpoints, their diffs, and revert (0062), on the fake CLI in a real repository.
 
 use parallax_protocol::methods::{
-    OrchestrationDispatch, OrchestrationGetFullThreadDiff, OrchestrationGetTurnDiff,
-    OrchestrationThreadRuns, ThreadStart,
+    GitReviewCommits, GitReviewDiff, OrchestrationDispatch, OrchestrationGetFullThreadDiff,
+    OrchestrationGetTurnDiff, OrchestrationThreadRuns, ThreadStart,
 };
 use parallax_protocol::{
     CheckpointFile, CheckpointStatus, DispatchMode, ErrorKind, EventsEventParams,
-    FullThreadDiffParams, OrchestrationCommand, ParallaxEvent, RunId, ThreadRunStatus,
-    ThreadRunsParams, TurnCheckpoint, TurnDiffParams, TurnId,
+    FullThreadDiffParams, OrchestrationCommand, ParallaxEvent, ReviewCommitsParams,
+    ReviewDiffParams, ReviewScope, RunId, ThreadRunStatus, ThreadRunsParams, TurnCheckpoint,
+    TurnDiffParams, TurnId,
 };
 use plxd::backend::fake::Step;
 
@@ -447,5 +448,83 @@ async fn reverting_files_commits_the_restored_branch_and_accept_uses_it() {
     assert_eq!(
         std::fs::read_to_string(path.join("README.md")).unwrap(),
         "hello\n"
+    );
+}
+
+/// The Changes view's scopes (PLX-694): the branch against its base, uncommitted changes with
+/// untracked files, and one commit, in a thread's real worktree.
+#[tokio::test]
+async fn a_thread_s_branch_uncommitted_changes_and_commits_are_reviewable() {
+    let host = Host::start(fake(vec![
+        init("review-1"),
+        write("a.txt", "one\n"),
+        end_turn("Turn 1."),
+    ]));
+    let path = real_repo(host.work.path(), "review");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(repo.id))).await;
+    let started = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Add a"))
+        .await
+        .unwrap()
+        .run;
+    let (thread, folder) = (started.id, started.worktree_path.unwrap());
+    let folder = std::path::Path::new(&folder);
+    checkpointed(&mut runs, thread, 1).await;
+
+    let review = async |client: &mut Conn, scope| {
+        client
+            .call::<GitReviewDiff>(ReviewDiffParams {
+                thread_id: thread,
+                scope,
+            })
+            .await
+            .unwrap()
+            .diff
+    };
+    let branch = review(&mut client, ReviewScope::Branch).await;
+    assert!(branch.contains("+one"), "the turn's commit: {branch}");
+
+    let listed = client
+        .call::<GitReviewCommits>(ReviewCommitsParams { thread_id: thread })
+        .await
+        .unwrap();
+    assert!(listed.has_base);
+    assert_eq!(listed.commits.len(), 1);
+    let one = review(
+        &mut client,
+        ReviewScope::Commit {
+            sha: listed.commits[0].sha.clone(),
+        },
+    )
+    .await;
+    assert!(one.contains("+one"), "that commit alone: {one}");
+
+    client
+        .call::<GitReviewDiff>(ReviewDiffParams {
+            thread_id: thread,
+            scope: ReviewScope::Commit {
+                sha: "--output=/tmp/x".to_owned(),
+            },
+        })
+        .await
+        .expect_err("a flag isn't a commit's hash");
+
+    // Nothing is uncommitted once the turn has committed, until a file changes by hand.
+    assert_eq!(review(&mut client, ReviewScope::Uncommitted).await, "");
+    std::fs::write(folder.join("untracked.txt"), "new\n").unwrap();
+    let uncommitted = review(&mut client, ReviewScope::Uncommitted).await;
+    assert!(uncommitted.contains("+new"), "untracked too: {uncommitted}");
+    let index = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(folder)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&index.stdout).trim(),
+        "?? untracked.txt",
+        "the real index isn't touched"
     );
 }
