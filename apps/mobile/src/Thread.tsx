@@ -527,8 +527,8 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   }, [runId]);
   const updatedAt = run?.updatedAt;
   useEffect(() => {
-    if (connected && thread && updatedAt) void computer.view.update(runId, { seen: true });
-  }, [connected, updatedAt, runId, !!thread]);
+    if (computer?.connectedNow && thread && updatedAt) void computer.view.update(runId, { seen: true });
+  }, [computer?.connectedNow, updatedAt, runId, !!thread]);
 
   const working = isRunning(transcript.run?.status) && !transcript.turnDone;
 

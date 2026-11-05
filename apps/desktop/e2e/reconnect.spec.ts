@@ -183,6 +183,58 @@ test("a short drop changes nothing on screen, and one that stays down shows afte
   );
 });
 
+test("a view opened during a hidden drop loads once the connection is back (PLX-1375)", async () => {
+  const { app, page } = await startStreaming();
+  const real = await app.evaluate(() => {
+    const path = process.env["PLXD_PATH"]!;
+    process.env["PLXD_PATH"] = "/usr/bin/false";
+    return path;
+  });
+  const [attach] = execFileSync("pgrep", ["-P", String(app.process().pid!), "-f", "attach"], {
+    encoding: "utf8",
+  })
+    .split("\n")
+    .map(Number)
+    .filter((pid) => pid > 1);
+  process.kill(attach!, "SIGKILL");
+  await expect.poll(state, { intervals: [20] }).not.toBe("connected");
+
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Storage", exact: true }).click();
+  await app.evaluate((_, path) => void (process.env["PLXD_PATH"] = path), real);
+  await expect.poll(state, { timeout: 20_000 }).toBe("connected");
+
+  await expect(settings.getByText(/\d+ archived threads?/)).toBeVisible();
+  await expect(settings.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("Lost connection to")).toHaveCount(0);
+
+  // A short drop with the loaded page open: it reads again, with nothing changing on the way.
+  await page.evaluate(`(() => {
+    const seen = new Set();
+    globalThis.seen = seen;
+    const words = ["Not connected", "not connected", "Counting", "Reconnecting", "Disconnected"];
+    const look = () => {
+      const text = document.body.innerText;
+      for (const word of words) if (text.includes(word)) seen.add(word);
+      requestAnimationFrame(look);
+    };
+    look();
+  })()`);
+  const [again] = execFileSync("pgrep", ["-P", String(app.process().pid!), "-f", "attach"], {
+    encoding: "utf8",
+  })
+    .split("\n")
+    .map(Number)
+    .filter((pid) => pid > 1);
+  process.kill(again!, "SIGKILL");
+  await expect.poll(state, { intervals: [20] }).not.toBe("connected");
+  await expect.poll(state, { intervals: [20] }).toBe("connected");
+  await expect(settings.getByText(/\d+ archived threads?/)).toBeVisible();
+  expect(await page.evaluate(`[...globalThis.seen]`)).toEqual([]);
+});
+
 test("a killed app's plxd serve exits, and its agent with it (PLX-990)", async () => {
   const { app, dataDir } = await startStreaming();
   const serve = servePids(dataDir).at(-1)!;

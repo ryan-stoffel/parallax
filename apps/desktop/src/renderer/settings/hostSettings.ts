@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { HostSettings, HostSettingsSetParams } from "../../protocol/generated/protocol";
-import { useConnections } from "../ConnectionStatus";
+import { useConnections, useRealConnections } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import type { Host } from "../hosts";
 import { notify } from "../notifications";
@@ -17,14 +17,17 @@ export function useHostSettings(targets: Host[]) {
     const state = connections[i];
     return state?.status === "connected" ? [{ host, capabilities: state.capabilities }] : [];
   });
-  const key = connected.map((c) => c.host.id).join("\n");
+  // Read by the real connections, each time one comes back. What's read stays while one is away, so
+  // a short reconnect doesn't empty the page.
+  const real = useRealConnections(targets.map((h) => h.id));
+  const up = targets.filter((_, i) => real[i]?.status === "connected");
+  const key = up.map((host) => host.id).join("\n");
   const [settings, setSettings] = useState<Record<string, HostSettings>>({});
   const [error, setError] = useState<string>();
   useEffect(() => {
-    setSettings({});
     setError(undefined);
     let stale = false;
-    for (const { host } of connected)
+    for (const host of up)
       void window.parallax.request(host.id, "host/settings/get", {}).then((answer) => {
         if (stale) return;
         if ("error" in answer) setError(`${host.name}: ${describeError(answer.error)}`);

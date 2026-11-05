@@ -108,8 +108,8 @@ export function ProvidersPage({ m }: { m: Computer }) {
   const [adding, setAdding] = useState(false);
   const supported = can(m, "providers");
   useEffect(() => {
-    if (supported) void load(id).then(setError);
-  }, [id, supported]);
+    if (supported && m.connectedNow) void load(id).then(setError);
+  }, [id, supported, m.connectedNow]);
 
   if (!supported) return <Section><Note>Update plxd on this computer to manage its providers here.</Note></Section>;
   const list = listed?.providers;

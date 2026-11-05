@@ -353,13 +353,14 @@ export function PullRequestList() {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<PrFilters>(defaultFilters);
   const connected = new Set(computers.filter((m) => m.connected).map((m) => m.machine.id));
-  const key = entries.map((e) => `${e.url}@${connected.has(e.hostId)}`).join();
+  const up = new Set(computers.filter((m) => m.connectedNow).map((m) => m.machine.id));
+  const key = entries.map((e) => `${e.url}@${up.has(e.hostId)}`).join();
 
   const load = useCallback(
     async (all: boolean) => {
       await Promise.all(
         entries
-          .filter((e) => connected.has(e.hostId) && (all || !reads.has(e.url)))
+          .filter((e) => up.has(e.hostId) && (all || !reads.has(e.url)))
           .map(async (e) => {
             const pr = await view(e);
             if (typeof pr === "string") setErrors((x) => ({ ...x, [e.url]: pr }));
@@ -770,6 +771,7 @@ export function PullRequestScreen({
   const [focus, setFocus] = useState<string>();
   const [acting, setActing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const connectedNow = !!computer?.connectedNow;
   const connected = !!computer?.connected;
   const open = pr?.state === "open";
 
@@ -782,8 +784,8 @@ export function PullRequestScreen({
     }
   }, [hostId, runId, url]);
   useEffect(() => {
-    if (connected) void load();
-  }, [connected, load]);
+    if (connectedNow) void load();
+  }, [connectedNow, load]);
 
   function act(action: PrAction, label: string, destructive = false) {
     Alert.alert(`${label}?`, pr ? `${pr.repo} #${pr.number}` : undefined, [

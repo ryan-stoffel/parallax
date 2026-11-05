@@ -20,7 +20,7 @@ import {
 } from "../../preload/bridge";
 import { NewComputerDialog } from "../AccountPrompts";
 import { CONNECT_NOTICE_TEXT, setUpAgain } from "../alarms";
-import { statusLabel, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useConnection } from "../ConnectionStatus";
 import { accessLabel, ConnectWizard, SetupCodeDialog } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, useConnect, useHosts } from "../hosts";
@@ -179,8 +179,10 @@ type Health = {
 
 function useHealth(hostId: string, connected: boolean): Health | undefined {
   const [health, setHealth] = useState<Health>();
+  const connectedNow = useConnectedNow(hostId);
   useEffect(() => {
     if (!connected) return setHealth(undefined);
+    if (!connectedNow) return;
     let live = true;
     const check = async () => {
       const started = performance.now();
@@ -198,7 +200,7 @@ function useHealth(hostId: string, connected: boolean): Health | undefined {
       live = false;
       clearInterval(timer);
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, connectedNow]);
   return health;
 }
 
@@ -208,8 +210,10 @@ function useHealth(hostId: string, connected: boolean): Health | undefined {
  */
 function useTailnetOnly(hostId: string, connected: boolean) {
   const [only, setOnly] = useState(false);
+  const connectedNow = useConnectedNow(hostId);
   useEffect(() => {
     if (!connected || !hostId.startsWith("tailnet:")) return setOnly(false);
+    if (!connectedNow) return;
     let live = true;
     void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
       if (live && "result" in answer)
@@ -218,7 +222,7 @@ function useTailnetOnly(hostId: string, connected: boolean) {
     return () => {
       live = false;
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, connectedNow]);
   return [only, setOnly] as const;
 }
 

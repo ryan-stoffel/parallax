@@ -8,6 +8,7 @@
 import { File } from "expo-file-system";
 
 import type { ConnectionState, ParallaxBridge } from "../../desktop/src/preload/bridge";
+import { forgetConnection } from "../../desktop/src/renderer/ConnectionStatus";
 import { WebHost } from "../../desktop/src/renderer/webBridge";
 import { privateFile, type PinnedSocket } from "../modules/pinned-tls";
 import type { AccountHosts, Gate } from "./accountHosts";
@@ -112,6 +113,9 @@ export class Fleet {
 
   /** Drops `id`'s connection. Its WebHost keeps no timers once its socket is gone. */
   remove(id: string): void {
+    // First, so a close that says something shows at once, and a close that says nothing leaves no
+    // grace running for the next connection.
+    forgetConnection(id);
     const host = this.hosts.get(id);
     this.hosts.delete(id);
     host?.close();

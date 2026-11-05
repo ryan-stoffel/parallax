@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
 import { locale } from "./locale";
 import { hourCycle } from "./prefs";
 import { capitalize, dollars, duration } from "./usageStats";
@@ -32,8 +33,9 @@ export function useUsage(
   connected: boolean,
 ): ReadonlyMap<string, AccountUsage> | undefined {
   const [usage, setUsage] = useState<ReadonlyMap<string, AccountUsage>>();
+  const connectedNow = useConnectedNow(hostId);
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || !connectedNow) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // After each answer rather than on an interval, so a slow host never has two in flight.
@@ -49,7 +51,7 @@ export function useUsage(
       stopped = true;
       clearTimeout(timer);
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, connectedNow]);
   return usage;
 }
 

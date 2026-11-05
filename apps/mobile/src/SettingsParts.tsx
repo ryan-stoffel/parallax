@@ -170,7 +170,7 @@ export function useHostSettings(m: Computer) {
   const [error, setError] = useState<string>();
   // Read once the computer connects, and again after each reconnect.
   useEffect(() => {
-    if (!m.connected) return;
+    if (!m.connectedNow) return;
     let live = true;
     void window.parallax.request(id, "host/settings/get", {}).then((answer) => {
       if (!live) return;
@@ -180,7 +180,7 @@ export function useHostSettings(m: Computer) {
     return () => {
       live = false;
     };
-  }, [id, m.connected]);
+  }, [id, m.connectedNow]);
   const set = async (change: HostSettingsSetParams, title: string) => {
     const before = settings;
     setSettings((s) => s && { ...s, ...change });

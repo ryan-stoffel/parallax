@@ -11,6 +11,7 @@ import type { RpcError } from "../../desktop/src/preload/bridge";
 import type { AgentEntry } from "../../desktop/src/protocol/generated/protocol";
 import { describeError } from "../../desktop/src/renderer/errors";
 import { FileCard, kindOf } from "./FileCard";
+import { useComputer } from "./fleet";
 import { GlassButton } from "./Glass";
 import type { Screens } from "./nav";
 import { inOrder, join, linesOf, nameOf, parentOf, textOf } from "./threadFilesLogic";
@@ -69,15 +70,19 @@ export function ThreadFilesScreen({ route }: NativeStackScreenProps<Screens, "Th
   const [loaded, setLoaded] = useState<{ at: At; shown: Shown }>();
   // Read each time it opens, so going back shows the agent's latest files.
   useEffect(() => {
-    let live = true;
     list.current?.scrollToOffset({ offset: 0, animated: false });
+  }, [at]);
+  const connectedNow = !!useComputer(hostId)?.connectedNow;
+  useEffect(() => {
+    if (!connectedNow) return;
+    let live = true;
     void (at.file ? readFile : listFolder)(hostId, runId, at.path)
       .catch((e: unknown): Shown => ({ error: e instanceof Error ? e.message : String(e) }))
       .then((shown) => live && setLoaded({ at, shown }));
     return () => {
       live = false;
     };
-  }, [at]);
+  }, [at, connectedNow]);
 
   const shown = loaded?.at === at ? loaded.shown : undefined;
   const data: (AgentEntry | string)[] = !shown ? [] : "entries" in shown ? shown.entries : "lines" in shown ? shown.lines : [];

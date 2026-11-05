@@ -4,6 +4,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { dayLabel, locale } from "./locale";
 import { clockOptions } from "./prefs";
@@ -34,12 +35,16 @@ export function useOrchestratorContext(
 ): OrchestratorContext {
   const [files, setFiles] = useState<ContextFile[]>([]);
   const [error, setError] = useState<string>();
+  const connectedNow = useConnectedNow(hostId);
 
   useEffect(() => {
     // Another orchestrator's files, or why they failed, never show under this one.
     setFiles([]);
     setError(undefined);
-    if (!connected) return;
+  }, [hostId, orchestrator, connected]);
+
+  useEffect(() => {
+    if (!connected || !connectedNow) return;
     let stopped = false;
     let unsubscribe = () => {};
 
@@ -76,7 +81,7 @@ export function useOrchestratorContext(
       stopped = true;
       unsubscribe();
     };
-  }, [hostId, orchestrator, connected]);
+  }, [hostId, orchestrator, connected, connectedNow]);
 
   return { files, error };
 }

@@ -5,7 +5,7 @@ import type { Orchestrator, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat, CheckoutLabel, PinnedApprovals, TranscriptView } from "./AgentChat";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
-import { offlineReason, useConnection } from "./ConnectionStatus";
+import { offlineReason, useConnectedNow, useConnection } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { describeError } from "./errors";
 import { imageCaps } from "./images";
@@ -57,6 +57,7 @@ export function OrchestratorChat({
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
+  const connectedNow = useConnectedNow(hostId);
   // The first message's run id, reused when it's sent again after failing (0007).
   const [runId] = useState(uuidv7);
   // The messages sent while the orchestrator starts, the first one first, shown as on their way.
@@ -71,13 +72,13 @@ export function OrchestratorChat({
   const { answers, answer, dismiss } = useAnswers(hostId);
   const asked = useMemo(() => queueOf(others ?? [], answers), [others, answers]);
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || !connectedNow) return;
     let live = true;
     void defaultBackend(hostId, "orchestrator").then((b) => live && setBackend(b));
     return () => {
       live = false;
     };
-  }, [hostId, connected, settingsClosed]);
+  }, [hostId, connected, connectedNow, settingsClosed]);
 
   // On a plxd with an integration branch, the picker sets the base branch new children's work is
   // cut from (0045). The orchestrator's checkout keeps its branch: nothing switches it yet.

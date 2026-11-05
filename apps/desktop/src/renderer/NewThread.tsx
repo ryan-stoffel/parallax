@@ -7,7 +7,7 @@ import { parseProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
 import type { CloneAsk } from "./clone";
 import { Composer } from "./Composer";
-import { useConnection } from "./ConnectionStatus";
+import { useConnectedNow, useConnection } from "./ConnectionStatus";
 import { drafts, isEmpty, type ComposerContents } from "./drafts";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
@@ -146,9 +146,10 @@ export function NewThread({
   const [read, setRead] = useState(() =>
     workerBackends.has(hostId) ? { hostId, backend: workerBackends.get(hostId) } : undefined,
   );
+  const connectedNow = useConnectedNow(hostId);
   const backend = read?.backend;
   useEffect(() => {
-    if (!runOptions) return;
+    if (!runOptions || !connectedNow) return;
     let live = true;
     void defaultBackend(hostId, "worker").then((b) => {
       workerBackends.set(hostId, b);
@@ -157,7 +158,7 @@ export function NewThread({
     return () => {
       live = false;
     };
-  }, [hostId, runOptions, settingsClosed]);
+  }, [hostId, runOptions, connectedNow, settingsClosed]);
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   // Open while the host needs an account for the failed start.

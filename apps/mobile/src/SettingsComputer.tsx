@@ -95,8 +95,8 @@ function AccountsPage({ m }: { m: Computer }) {
   }, [id]);
   // Again once the computer connects, as the desktop reloads a host's settings.
   useEffect(() => {
-    if (m.connected) void load();
-  }, [load, m.connected]);
+    if (m.connectedNow) void load();
+  }, [load, m.connectedNow]);
 
   const choose = async (role: Role, key: string) => {
     const option = options?.find((o) => choiceKey(o.account) === key);
@@ -302,8 +302,8 @@ function SchedulesPage({ m }: { m: Computer }) {
     }
   }, [id]);
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && m.connectedNow) void load();
+  }, [supported, m.connectedNow, load]);
 
   const act = async (task: ScheduledTask, action: "pause" | "run" | "delete") => {
     setBusy(task.id);
@@ -414,8 +414,8 @@ function SourceControlPage({ m }: { m: Computer }) {
     }
   }, [id]);
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && m.connectedNow) void load();
+  }, [supported, m.connectedNow, load]);
   // The row moves on by itself once the install ends or the browser approves the code.
   const waiting = !!status?.installing || !!status?.signingIn;
   useEffect(() => {
@@ -546,8 +546,8 @@ function ComputerUsePage({ m }: { m: Computer }) {
     [id],
   );
   useEffect(() => {
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && m.connectedNow) void load();
+  }, [supported, m.connectedNow, load]);
   // Turned on in System Settings, a permission shows here without a refresh.
   const missing = !!status && !(status.accessibility && status.screenRecording);
   useEffect(() => {
@@ -659,7 +659,9 @@ function ScriptsPage({ m }: { m: Computer }) {
     setSaved(undefined);
     setFile(undefined);
     setError(undefined);
-    if (!supported || !repoKey) return;
+  }, [id, supported, repoKey]);
+  useEffect(() => {
+    if (!supported || !repoKey || !m.connectedNow) return;
     let live = true;
     void window.parallax.request(id, "repo/scripts", { repo: repoKey }).then((answer) => {
       if (!live) return;
@@ -671,7 +673,7 @@ function ScriptsPage({ m }: { m: Computer }) {
     return () => {
       live = false;
     };
-  }, [id, supported, repoKey]);
+  }, [id, supported, repoKey, m.connectedNow]);
 
   if (!supported)
     return (

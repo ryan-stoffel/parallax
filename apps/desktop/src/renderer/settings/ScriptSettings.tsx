@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { RepoScript } from "../../protocol/generated/protocol";
-import { useConnection } from "../ConnectionStatus";
+import { useConnectedNow, useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { notify } from "../notifications";
 import { field, primaryButton, quietButton, Section, settingRow, Switch } from "./parts";
@@ -24,6 +24,7 @@ export function RepoScripts({
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && "setupScripts" in connection.capabilities;
+  const connectedNow = useConnectedNow(hostId);
   const [saved, setSaved] = useState<RepoScript[]>();
   const [scripts, setScripts] = useState<RepoScript[]>([]);
   const [file, setFile] = useState<{ scripts: RepoScript[]; error?: string }>();
@@ -42,8 +43,8 @@ export function RepoScripts({
     setSaved(undefined);
     setFile(undefined);
     setError(undefined);
-    if (supported) void load();
-  }, [supported, load]);
+    if (supported && connectedNow) void load();
+  }, [supported, connectedNow, load]);
 
   const save = async () => {
     setBusy(true);

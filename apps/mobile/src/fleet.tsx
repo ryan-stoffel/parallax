@@ -17,7 +17,7 @@ import {
 import { Alert, AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
-import { useConnections } from "../../desktop/src/renderer/ConnectionStatus";
+import { useConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
@@ -37,7 +37,10 @@ const LOOK_MS = 15_000;
 export interface Computer {
   machine: Machine;
   state: ConnectionState;
+  /** Shown as connected, which a short reconnect doesn't change. */
   connected: boolean;
+  /** Really connected now. Loading and syncing go by this, and run again when it comes back. */
+  connectedNow: boolean;
   view: ThreadsView;
   outbox: Outbox;
   /** Why an account's computer isn't connecting, until it's set up or approved. */
@@ -389,12 +392,14 @@ export function FleetProvider({
     setViews((v) => ({ ...v, [id]: view })),
   ).current;
 
-  const list: Computer[] = setup.machines.map((machine) => {
+  const real = useRealConnections(setup.machines.map((m) => m.id));
+  const list: Computer[] = setup.machines.map((machine, i) => {
     const state = states[machine.id] ?? { status: "connecting" };
     return {
       machine,
       state,
       connected: state.status === "connected",
+      connectedNow: real[i]?.status === "connected",
       view: views[machine.id] ?? idleThreads,
       outbox: outbox(machine.id),
       // Asking stopped: a computer waiting to be set up says why.

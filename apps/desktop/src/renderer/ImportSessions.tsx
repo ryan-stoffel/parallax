@@ -22,7 +22,7 @@ import {
 
 import type { ImportSource, ImportableSession } from "../protocol/generated/protocol";
 import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
-import { useConnection, useConnections } from "./ConnectionStatus";
+import { useConnectedNow, useConnection, useConnections } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts } from "./hosts";
 import { notify } from "./notifications";
@@ -69,6 +69,7 @@ function useImport(capability: "threadImport" | "chatImport", hostId = localId, 
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && capability in connection.capabilities;
+  const connectedNow = useConnectedNow(hostId);
   const local = hostId === localId;
   const why =
     connection?.status === "failed"
@@ -80,8 +81,8 @@ function useImport(capability: "threadImport" | "chatImport", hostId = localId, 
         : undefined;
   useEffect(() => {
     // The agents imports run on: listed here, as Settings > Threads may be the first to need them.
-    if (supported) void loadProviders(hostId);
-  }, [supported, hostId]);
+    if (supported && connectedNow) void loadProviders(hostId);
+  }, [supported, connectedNow, hostId]);
   return { supported, why, providers: useProviders(hostId)?.providers };
 }
 
@@ -104,6 +105,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
   const [hostId, setHostId] = useState(localId);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const { supported, why, providers } = useImport("threadImport", host.id, host.name);
+  const connectedNow = useConnectedNow(host.id);
   const connection = useConnection(host.id);
   const remoteSupported =
     supported &&
@@ -164,8 +166,10 @@ export function ImportSessions({ className = "" }: { className?: string }) {
     setProblem(undefined);
     setLoading(false);
     setChecking(false);
-    if (supported) void load();
-  }, [host.id, supported, load]);
+  }, [host.id]);
+  useEffect(() => {
+    if (supported && connectedNow) void load();
+  }, [supported, connectedNow, load]);
 
   const where = host.id === localId ? "this computer" : host.name;
   const bar = (

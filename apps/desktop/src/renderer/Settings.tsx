@@ -24,7 +24,7 @@ import {
 } from "../protocol/generated/protocol";
 import { AddProviderDialog } from "./AddProviderDialog";
 import type { SettingsSection } from "./App";
-import { statusLabel, useConnection } from "./ConnectionStatus";
+import { statusLabel, useConnectedNow, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
 import { loadHubs, useHubs } from "./hubs";
@@ -338,6 +338,7 @@ function HostProviders({
 function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
+  const connectedNow = useConnectedNow(host.id);
   const [detected, setDetected] = useState<DetectedCli[]>();
   const [checkedAt, setCheckedAt] = useState<string>();
   const [keys, setKeys] = useState<KeyAccount[]>();
@@ -378,8 +379,8 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
     [host.id],
   );
   useEffect(() => {
-    if (connected) void load("accounts/list");
-  }, [connected, load]);
+    if (connectedNow) void load("accounts/list");
+  }, [connectedNow, load]);
 
   const current = detected?.find((c) => c.cli === selected) ?? detected?.[0];
 
@@ -738,6 +739,7 @@ function HostInstances({
   const linkOn = useProvidersLinked();
   const connection = useConnection(host.id);
   const hubsOn = connection?.status === "connected" && "hubs" in connection.capabilities;
+  const connectedNow = useConnectedNow(host.id);
   const hubs = useHubs(host.id);
   const hosts = useHosts();
   const [addingHub, setAddingHub] = useState(false);
@@ -766,6 +768,7 @@ function HostInstances({
     return "error" in answer ? accountsError(answer.error) : undefined;
   }, [host.id]);
   useEffect(() => {
+    if (!connectedNow) return;
     let live = true;
     void Promise.all([
       loadProviders(host.id),
@@ -779,7 +782,7 @@ function HostInstances({
     return () => {
       live = false;
     };
-  }, [host.id, loadKeys, hubsOn]);
+  }, [host.id, loadKeys, hubsOn, connectedNow]);
   const refresh = async () => {
     setChecking(true);
     const errors = await Promise.all([

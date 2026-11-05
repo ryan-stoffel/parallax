@@ -38,6 +38,7 @@ beforeEach(() => {
     platform: "darwin",
     request,
     connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities: {} }),
+    onConnectionState: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 

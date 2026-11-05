@@ -12,7 +12,7 @@ import type {
   PullRequest,
   ThreadNaming,
 } from "../protocol/generated/protocol";
-import { useConnection } from "./ConnectionStatus";
+import { useConnectedNow, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { icons } from "./icons";
 import { newThreadPrefs, type NewThreadPrefs } from "./prefs";
@@ -85,6 +85,7 @@ export function usePullRequests(
   poll = true,
 ): PullRequests {
   const [read, setRead] = useState<Readonly<Record<string, Linked>>>({});
+  const connectedNow = useConnectedNow(hostId);
   const connection = useConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const watch = !!capabilities && "prWatch" in capabilities;
@@ -152,8 +153,9 @@ export function usePullRequests(
   );
   const key = urls.join("\n");
   useEffect(() => {
+    if (!connectedNow) return;
     for (const url of key ? key.split("\n") : []) void refresh(url);
-  }, [key, refresh]);
+  }, [key, refresh, connectedNow]);
   // A merged or closed one won't change much, so only the rest are polled, sooner while checks run.
   const live = urls.filter(
     (url) => !["merged", "closed"].includes(read[`${runId} ${url}`]?.pr?.state ?? ""),
@@ -181,21 +183,21 @@ export function usePullRequests(
     [refresh],
   );
   useEffect(() => {
-    if (!fast || !poll) return;
+    if (!fast || !poll || !connectedNow) return;
     const timer = setInterval(() => readAgain(fast), RUNNING_POLL_MS);
     return () => clearInterval(timer);
-  }, [fast, poll, readAgain]);
+  }, [fast, poll, connectedNow, readAgain]);
   useEffect(() => {
-    if (!slow || !poll) return;
+    if (!slow || !poll || !connectedNow) return;
     const timer = setInterval(() => readAgain(slow), POLL_MS);
     return () => clearInterval(timer);
-  }, [slow, poll, readAgain]);
+  }, [slow, poll, connectedNow, readAgain]);
   // Focus reads again only the ones not read within RUNNING_POLL_MS, as of the focus.
   const latest = useRef(read);
   latest.current = read;
   const all = live.join("\n");
   useEffect(() => {
-    if (!poll) return;
+    if (!poll || !connectedNow) return;
     const stale = (url: string) => {
       const at = latest.current[`${runId} ${url}`]?.at;
       return !at || Date.now() - Date.parse(at) >= RUNNING_POLL_MS;
@@ -203,7 +205,7 @@ export function usePullRequests(
     const focus = () => readAgain(all.split("\n").filter(stale).join("\n"));
     window.addEventListener("focus", focus);
     return () => window.removeEventListener("focus", focus);
-  }, [all, poll, readAgain, runId]);
+  }, [all, poll, connectedNow, readAgain, runId]);
   return {
     urls,
     get: (url) => read[`${runId} ${url}`],

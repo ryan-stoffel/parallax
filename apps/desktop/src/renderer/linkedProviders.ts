@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { useConnections } from "./ConnectionStatus";
+import { useRealConnections } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { canRun } from "./models";
@@ -235,7 +235,8 @@ export async function removeEverywhere(hostId: string, id: string) {
 
 /** Keeps track of the computers `hosts` can reach, and brings each in line as it connects. */
 export function useProviderLink(hosts: Host[]) {
-  const states = useConnections(hosts.map((h) => h.id));
+  // Real, so a computer in a short drop is out of the next change, and caught up once it's back.
+  const states = useRealConnections(hosts.map((h) => h.id));
   useEffect(() => {
     const ready = hosts.filter((_, i) => {
       const state = states[i];
