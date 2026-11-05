@@ -1,12 +1,15 @@
 // @ts-check
 // plx's argument handling: what each command line runs, or the usage error it gets.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { main } from "../src/cli.mjs";
+import { lineReader, main } from "../src/cli.mjs";
 
 /**
  * Runs `argv` with deps that only record what `connect` would reach, and resolves to the exit
@@ -31,7 +34,7 @@ async function run(argv) {
 }
 
 test("connect's subcommands dispatch, with --no-browser passed through", async () => {
-  for (const argv of [["connect"], ["connect", "approve"], ["connect", "status"], ["connect", "unlink"], ["connect", "remove"], ["connect", "add", "ryan@box.local"]])
+  for (const argv of [["connect"], ["connect", "approve"], ["connect", "status"], ["connect", "status", "--json"], ["connect", "unlink"], ["connect", "remove"], ["connect", "add", "ryan@box.local"]])
     assert.equal((await run(argv)).code, "dispatched", argv.join(" "));
   assert.equal((await run(["connect", "--no-browser"])).noBrowser, true);
   assert.equal((await run(["connect"])).noBrowser, false);
@@ -69,12 +72,75 @@ test("bad command lines get a usage error and exit 2", async () => {
     [["connect", "add", "--", "-oProxyCommand=sh"], "-oProxyCommand=sh isn't an ssh destination."],
     [["connect", "--channel", "beta"], "--channel is stable or nightly, not beta."],
     [["connect", "add", "box", "--port", "ssh"], "--port is a number, not ssh."],
+    [["connect", "--json"], "--json goes with connect status only."],
     [["frobnicate"], "Unknown command: frobnicate"],
   ];
   for (const [argv, message] of cases) assert.deepEqual(await run(argv), { code: 2, error: message, noBrowser: undefined }, argv.join(" "));
   const unknownFlag = await run(["connect", "--browser"]);
   assert.equal(unknownFlag.code, 2);
   assert.match(unknownFlag.error ?? "", /Unknown option '--browser'/);
+});
+
+test("piped questions get a line each, keep lines read ahead, and reject once input ends", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const ask = lineReader(input, output);
+  input.write("one\ntwo\n");
+  assert.equal(await ask("first?"), "one");
+  assert.equal(await ask("second?"), "two");
+  const third = ask("third?");
+  input.end("three");
+  assert.equal(await third, "three");
+  await assert.rejects(ask("fourth?"), /Input ended/);
+  await assert.rejects(ask("fifth?"), /Input ended/);
+  assert.equal(output.read().toString(), "first?\nsecond?\nthird?\nfourth?\n");
+});
+
+/**
+ * Runs `script` in a new Node with no terminal, its HOME a throwaway folder, and resolves to its
+ * exit code and stdout. `stdin` is a pipe left open, or "ignore" for an input that's already ended.
+ * @param {string} script
+ * @param {"pipe" | "ignore"} stdin
+ */
+function noTerminal(script, stdin) {
+  const home = mkdtempSync(path.join(tmpdir(), "plx-cli-"));
+  assert.ok(home.startsWith(tmpdir()));
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+    stdio: [stdin, "pipe", "inherit"],
+    // Clerk at an address nothing answers, so no real sign-in can start from here.
+    env: { ...process.env, HOME: home, USERPROFILE: home, PLX_CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from("127.0.0.1:1$").toString("base64")}` },
+  });
+  child.stdin?.write("the answer\n");
+  let stdout = "";
+  child.stdout?.on("data", (chunk) => (stdout += chunk));
+  return new Promise((resolve) => {
+    child.once("close", (code) => {
+      child.stdin?.destroy();
+      rmSync(home, { recursive: true, force: true });
+      resolve({ code, stdout });
+    });
+  });
+}
+
+test("plx exits on its own with stdin still open, once nothing is asking", { timeout: 30_000 }, async () => {
+  const cli = new URL("../src/cli.mjs", import.meta.url).href;
+  const script = `import { lineReader } from ${JSON.stringify(cli)}; console.log("got", await lineReader(process.stdin, process.stdout)("q?"));`;
+  assert.deepEqual(await noTerminal(script, "pipe"), { code: 0, stdout: "q?\ngot the answer\n" });
+});
+
+test("plx connect with no terminal prints the link, skips the browser, and exits 1 at end of input", { timeout: 30_000 }, async () => {
+  const cli = new URL("../src/cli.mjs", import.meta.url).href;
+  // Only sign-in is real. The rest fails, so this can't install anything or reach a real plxd.
+  const script = `import { main, realDeps } from ${JSON.stringify(cli)};
+    const never = async () => { throw new Error("got past sign-in"); };
+    const deps = (noBrowser) => ({ ...realDeps(noBrowser), release: async () => ({ tag_name: "v1", prerelease: true, assets: [] }), details: never, install: never, plxd: never });
+    main(["connect"], deps).then((code) => { process.exitCode = code; });`;
+  const { code, stdout } = /** @type {{ code: number, stdout: string }} */ (await noTerminal(script, "ignore"));
+  assert.equal(code, 1, stdout);
+  assert.match(stdout, /^ {2}https:\/\/127\.0\.0\.1:1\/oauth\/authorize\S+$/m);
+  assert.match(stdout, /^Paste the code it shows: $/m);
+  assert.match(stdout, /^✗ No code was entered before input ended\./m);
+  assert.doesNotMatch(stdout, /Opened your browser|got past sign-in/);
 });
 
 test("the bin runs main, and --version prints plx-cli's version", () => {
