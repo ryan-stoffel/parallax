@@ -114,8 +114,15 @@ export class StreamRelay extends DurableObject<Env> {
     await this.ctx.storage.put("armed", armed);
   }
 
+  /** Whether plxd's end is here, which the host's object asks when plxd reconnects. A deploy ends
+   *  this object's sockets with no close to report. */
+  async hostJoined() {
+    return !!this.side("host");
+  }
+
   /** Closes both ends, as the host's object asks when its budget is spent, it's removed, or plxd
-   *  reconnected. The host's object has already let the stream go, so nothing is reported. */
+   *  reconnected without this stream. The host's object has already let the stream go, so nothing
+   *  is reported. */
   async close(code: number, reason: string) {
     this.reported = true;
     for (const ws of this.ctx.getWebSockets()) this.shut(ws, code, reason);

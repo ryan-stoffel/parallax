@@ -5,6 +5,8 @@
 //! Runs only when `relay/scripts/e2e.mjs` starts a relay and passes its URL and a Clerk token in
 //! `PLXD_TEST_RELAY_URL` and `PLXD_TEST_RELAY_TOKEN`. Elsewhere it passes without doing anything.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use parallax_protocol::jsonrpc::Message;
@@ -22,7 +24,9 @@ use parallax_protocol::{
 };
 use plxd::{relay, remote};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
 use tokio::time::{Instant, sleep};
 
 use crate::agents::fake;
@@ -83,7 +87,16 @@ async fn signing_in_turns_the_relay_on_unless_its_user_turned_it_off() {
 
 /// The relay status once `done` says so.
 async fn relay_status(client: &mut Client, done: impl Fn(&RelayStatus) -> bool) -> RelayStatus {
-    let deadline = Instant::now() + PATIENCE;
+    relay_status_within(client, done, PATIENCE).await
+}
+
+/// The relay status once `done` says so, within `patience`.
+async fn relay_status_within(
+    client: &mut Client,
+    done: impl Fn(&RelayStatus) -> bool,
+    patience: Duration,
+) -> RelayStatus {
+    let deadline = Instant::now() + patience;
     loop {
         let sessions = client
             .call::<RemoteSessions>(RemoteSessionsParams {})
@@ -657,5 +670,258 @@ async fn connecting_through_the_relay_stays_within_its_budget() {
             "{path} is {value:.1}, over its {budget}"
         );
     }
+    server.stop().await;
+}
+
+/// A proxy between plxd and the local relay that fails links the ways a network does: it cuts
+/// plxd's control connection alone, refuses new ones, or silences every connection, leaving them
+/// open. A client goes to the relay directly, so only plxd's link fails.
+struct Proxy {
+    url: String,
+    shared: Arc<ProxyShared>,
+}
+
+#[derive(Default)]
+struct ProxyShared {
+    /// How many control connections plxd has opened.
+    controls: AtomicUsize,
+    refusing: AtomicBool,
+    silent: AtomicBool,
+    cut: Notify,
+}
+
+impl Proxy {
+    async fn start(relay: &str) -> Self {
+        let relay = relay.strip_prefix("http://").unwrap().to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let shared = Arc::new(ProxyShared::default());
+        let carrying = Arc::clone(&shared);
+        tokio::spawn(async move {
+            while let Ok((plxd, _)) = listener.accept().await {
+                tokio::spawn(carry(plxd, relay.clone(), Arc::clone(&carrying)));
+            }
+        });
+        Self { url, shared }
+    }
+
+    fn controls(&self) -> usize {
+        self.shared.controls.load(Ordering::SeqCst)
+    }
+
+    /// Waits for plxd to open another control connection after the `seen` it had.
+    async fn control_after(&self, seen: usize) {
+        let deadline = Instant::now() + Duration::from_mins(2);
+        while self.controls() <= seen {
+            assert!(Instant::now() < deadline, "plxd never opened another");
+            sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
+
+/// One connection through a [`Proxy`]. Its request's first line says whether it's the control
+/// connection. While silent, bytes wait in the socket's buffers, as they would being retransmitted.
+async fn carry(plxd: TcpStream, relay: String, shared: Arc<ProxyShared>) {
+    let mut head = [0; 512];
+    let control = loop {
+        let Ok(peeked) = plxd.peek(&mut head).await else {
+            return;
+        };
+        let text = String::from_utf8_lossy(&head[..peeked]);
+        if let Some((line, _)) = text.split_once("\r\n") {
+            break line.contains("/host ");
+        }
+        sleep(Duration::from_millis(1)).await;
+    };
+    if control {
+        shared.controls.fetch_add(1, Ordering::SeqCst);
+        if shared.refusing.load(Ordering::SeqCst) {
+            return;
+        }
+    }
+    let Ok(relay) = TcpStream::connect(relay).await else {
+        return;
+    };
+    let (mut plxd_in, mut plxd_out) = plxd.into_split();
+    let (mut relay_in, mut relay_out) = relay.into_split();
+    let cut = shared.cut.notified();
+    tokio::select! {
+        () = cut, if control => {}
+        () = one_way(&mut plxd_in, &mut relay_out, &shared) => {}
+        () = one_way(&mut relay_in, &mut plxd_out, &shared) => {}
+    }
+}
+
+async fn one_way(from: &mut OwnedReadHalf, to: &mut OwnedWriteHalf, shared: &ProxyShared) {
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        while shared.silent.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(20)).await;
+        }
+        let Ok(read @ 1..) = from.read(&mut buffer).await else {
+            return;
+        };
+        while shared.silent.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(20)).await;
+        }
+        if to.write_all(&buffer[..read]).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// A computer with `remote` on, online through `proxy`: the server, its client, and its host id.
+async fn online_through(
+    dir: &std::path::Path,
+    proxy: &Proxy,
+    token: &str,
+) -> (InProcess, Client, String) {
+    let port = free_port();
+    let mut config = InProcess::config(dir);
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    config.relay_url.clone_from(&proxy.url);
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let registered = client.call::<RelayRegister>(RelayRegisterParams {
+        token: token.to_owned(),
+        signed: None,
+    });
+    registered.await.unwrap();
+    let status = relay_status(&mut client, |s| s.connected).await;
+    let hook_url = status.hook_url.unwrap();
+    let host_id = hook_url.rsplit('/').next().unwrap().to_owned();
+    (server, client, host_id)
+}
+
+/// How long plxd's control connection may take to notice a silent link: two of its 15 s pings, and
+/// some room for a busy test machine.
+const SILENCE_NOTICED: Duration = Duration::from_secs(35);
+
+#[tokio::test]
+async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_is_noticed() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+    ) else {
+        return;
+    };
+    let proxy = Proxy::start(&url).await;
+    let dir = temp_dir();
+    let (server, mut client, host_id) = online_through(dir.path(), &proxy, &token).await;
+    relay::sign_in(url.clone(), token.clone());
+    let route = format!("relay:{host_id}");
+    let code = new_code(&mut client).await;
+    let phone = temp_dir();
+    let routes = std::slice::from_ref(&route);
+    let paired = remote::pair(routes, &code, "phone", phone.path())
+        .await
+        .unwrap();
+    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+        .await
+        .unwrap();
+    assert_eq!(dialed.route, route);
+    let mut app = App::bridged(dialed.socket);
+    assert!(app.initialize().await["result"].is_object());
+    assert!(answers(&mut app).await);
+
+    // The control connection drops, and stays down for a while: the client's connection is the
+    // same one all through, answering, or `answers` fails.
+    proxy.shared.refusing.store(true, Ordering::SeqCst);
+    let seen = proxy.controls();
+    proxy.shared.cut.notify_waiters();
+    relay_status(&mut client, |s| !s.connected).await;
+    let down = Instant::now();
+    while down.elapsed() < Duration::from_secs(4) {
+        assert!(answers(&mut app).await, "the stream ended with control");
+        sleep(Duration::from_millis(100)).await;
+    }
+    proxy.control_after(seen).await;
+    proxy.shared.refusing.store(false, Ordering::SeqCst);
+    relay_status(&mut client, |s| s.connected).await;
+    assert!(answers(&mut app).await, "the relay closed a stream it kept");
+
+    // A new client still gets in, with the kept spare or a new one.
+    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+        .await
+        .unwrap();
+    let mut second = App::bridged(dialed.socket);
+    assert!(second.initialize().await["result"].is_object());
+    assert!(answers(&mut app).await);
+
+    // A link gone silent: plxd finds out from its pings, with no close to tell it.
+    proxy.shared.silent.store(true, Ordering::SeqCst);
+    let silent = Instant::now();
+    relay_status_within(&mut client, |s| !s.connected, SILENCE_NOTICED).await;
+    eprintln!("a silent link was noticed in {:?}", silent.elapsed());
+    proxy.shared.silent.store(false, Ordering::SeqCst);
+    relay_status_within(&mut client, |s| s.connected, SILENCE_NOTICED).await;
+    server.stop().await;
+}
+
+/// How many more connections reach a host over `route` before the relay refuses one, each kept
+/// open. Each finishes TLS, since plxd's listener closes a connection that waits too long for it.
+async fn open_until_refused(
+    route: &str,
+    paired: &remote::Paired,
+    phone: &std::path::Path,
+    open: &mut Vec<remote::Dialed>,
+) -> usize {
+    let before = open.len();
+    let routes = [route.to_owned()];
+    while let Ok(dialed) = remote::dial(&routes, &paired.fingerprint, phone).await {
+        open.push(dialed);
+    }
+    open.len() - before
+}
+
+#[tokio::test]
+async fn the_stream_cap_counts_right_across_a_control_drop() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+    ) else {
+        return;
+    };
+    let proxy = Proxy::start(&url).await;
+    let dir = temp_dir();
+    let (server, mut client, host_id) = online_through(dir.path(), &proxy, &token).await;
+    relay::sign_in(url.clone(), token.clone());
+    let route = format!("relay:{host_id}");
+    let code = new_code(&mut client).await;
+    let phone = temp_dir();
+    let routes = std::slice::from_ref(&route);
+    let paired = remote::pair(routes, &code, "phone", phone.path())
+        .await
+        .unwrap();
+    let mut open = Vec::new();
+    let more = async |open: &mut Vec<remote::Dialed>| {
+        open_until_refused(&route, &paired, phone.path(), open).await
+    };
+    // Pairing's own stream frees its place soon after it ends.
+    let deadline = Instant::now() + PATIENCE;
+    while open.len() < 16 {
+        assert!(Instant::now() < deadline, "only {} opened", open.len());
+        more(&mut open).await;
+    }
+    assert_eq!(more(&mut open).await, 0, "the cap is 16");
+
+    let seen = proxy.controls();
+    proxy.shared.cut.notify_waiters();
+    proxy.control_after(seen).await;
+    relay_status(&mut client, |s| s.connected).await;
+    assert_eq!(more(&mut open).await, 0, "all 16 stayed");
+
+    // Two go, and their places free, however many reconnects came between.
+    open.truncate(14);
+    let deadline = Instant::now() + PATIENCE;
+    while open.len() < 16 {
+        assert!(Instant::now() < deadline, "only {} opened", open.len());
+        more(&mut open).await;
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(more(&mut open).await, 0, "only those two freed");
     server.stop().await;
 }

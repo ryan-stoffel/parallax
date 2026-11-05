@@ -113,6 +113,10 @@ const TIME_HEADER = "x-parallax-relay-time";
 /** The header plxd's proof comes in: `<milliseconds>.<signature>`. */
 export const PROOF_HEADER = "x-parallax-host-proof";
 
+/** The header plxd lists the streams it still holds in, comma-separated, on opening its control
+ *  socket. A plxd from before PLX-1419 sends none, as its streams end with its last connection. */
+export const STREAMS_HEADER = "x-parallax-host-streams";
+
 /** A webhook URL's key: the SHA-256 of its raw `<hookId>/<token>`, as plxd lists it. */
 export const hookKey = (hookId: string, token: string) => sha256(`${hookId}/${token}`);
 
@@ -198,17 +202,45 @@ export class HostRelay extends DurableObject<Env> {
     return stream;
   }
 
-  /** Closes every open stream's object and forgets them. */
-  private async closeStreams(hostId: string, code: number, reason: string) {
+  /** Closes the objects of the open streams `ids` names, every one when it's not given, and forgets
+   *  them. */
+  private async closeStreams(hostId: string, code: number, reason: string, ids?: string[]) {
     const streams = await this.streams();
-    await this.ctx.storage.delete("streams");
+    const closing = ids ?? Object.keys(streams);
+    for (const id of closing) delete streams[id];
+    if (closing.length) await this.ctx.storage.put<Streams>("streams", streams);
     await Promise.all(
-      Object.keys(streams).map((id) =>
+      closing.map((id) =>
         streamObject(this.env, hostId, id)
           ?.close(code, reason)
           .catch((error) => logError("host.closeStreams", this.context(), error)),
       ),
     );
+  }
+
+  /**
+   * Settles which streams plxd's new control connection starts with, and answers how many stayed.
+   * Each stream has its own socket, so it can outlive a control connection. One stays only if plxd
+   * lists it in `held` and its object still has plxd's end: after a deploy, a stream's close may
+   * never have arrived, and plxd may not have noticed its socket go. Each stream costs its object
+   * a wake here, as closing it does. No list is a plxd whose streams ended with its last connection.
+   */
+  private async settleStreams(hostId: string, held: string | null) {
+    const ids = Object.keys(await this.streams());
+    const listed = new Set(held?.split(","));
+    const stays = await Promise.all(
+      ids.map(async (id) => {
+        if (!listed.has(id)) return false;
+        const joined = streamObject(this.env, hostId, id)?.hostJoined();
+        return joined?.catch((error) => {
+          logError("host.settleStreams", this.context(), error);
+          return false;
+        });
+      }),
+    );
+    const gone = ids.filter((_, index) => !stays[index]);
+    await this.closeStreams(hostId, 1000, "the host reconnected", gone);
+    return ids.length - gone.length;
   }
 
   private owner() {
@@ -383,7 +415,8 @@ export class HostRelay extends DurableObject<Env> {
     return logged(
       "host.fetch",
       () => this.context(),
-      () => this.hostSocket(request.headers.get(PROOF_HEADER) ?? ""),
+      () =>
+        this.hostSocket(request.headers.get(PROOF_HEADER) ?? "", request.headers.get(STREAMS_HEADER)),
     );
   }
 
@@ -392,9 +425,9 @@ export class HostRelay extends DurableObject<Env> {
    * key. The relay takes it only within [`PROOF_PAST`] and [`PROOF_FUTURE`] of its own clock and
    * newer than the last one it took, so a proof works once. No socket opens without one, so
    * strangers who know the host id, which is in every webhook URL, have nothing to hold open or
-   * push out.
+   * push out. `held` lists the streams plxd still holds, for [`settleStreams`].
    */
-  private async hostSocket(proof: string) {
+  private async hostSocket(proof: string, held: string | null) {
     const owner = await this.owner();
     if (!owner) return json(404, { error: "not_registered" });
     const [at = "", signature = ""] = proof.split(".");
@@ -419,15 +452,14 @@ export class HostRelay extends DurableObject<Env> {
       .getWebSockets("host")
       .filter((ws) => ws.readyState === WebSocket.OPEN).length;
     this.closeHost(4409, "replaced");
-    // plxd's streams end with its control connection, so a new one starts with none open, even
-    // when the old ones' close never arrived, as after a deploy.
-    await this.closeStreams(owner.hostId, 1000, "the host reconnected");
+    const kept = await this.settleStreams(owner.hostId, held);
     const [client, server] = Object.values(new WebSocketPair());
     // The second tag names the host in this socket's log lines, with no storage read to fail.
     this.ctx.acceptWebSocket(server!, ["host", short(owner.hostId)]);
     logEvent("host_connected", {
       ...this.context(server!),
       open_before: openBefore,
+      streams_kept: kept,
       since_last_ms: last ? now - last : null,
     });
     server!.send(JSON.stringify({ t: "ready" }));

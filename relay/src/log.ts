@@ -10,6 +10,8 @@
  *   relay never heard that its old connection died, so it died outside the object.
  * - `host_connected` with `open_before: 0` and no `socket_closed` before it: the object lost its
  *   sockets with no handler run, as a reset or a deploy does.
+ * - `streams_kept` on `host_connected`: the streams that lived through this reconnect. Zero after a
+ *   deploy, and with a plxd from before PLX-1419, which ends them itself.
  */
 
 /** Writes one line. Callers pass only ids from [`short`] and text from [`scrub`]. */

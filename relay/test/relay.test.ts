@@ -475,7 +475,7 @@ describe("streams", () => {
     expect(await kept(listed.object)).toBe(0);
   });
 
-  it("forgets the streams of plxd's last control connection when it reconnects", async () => {
+  it("closes every stream when a plxd from before PLX-1419 reconnects with no list", async () => {
     const { host, token, control } = await online();
     const client = opened(await connect(host, token));
     const open = JSON.parse((await control.next()) as string) as Open;
@@ -485,6 +485,55 @@ describe("streams", () => {
     await again.next();
     expect(await client.closed).toBe(1000);
     expect(await openStreams(host)).toEqual({});
+  });
+
+  it("keeps through a reconnect only the streams plxd lists whose objects still have its end", async () => {
+    const { host, token, control } = await online();
+    const joined = async () => {
+      const client = opened(await connect(host, token));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, open));
+      await client.next();
+      await side.next();
+      return { client, open, side };
+    };
+    const [kept, unlisted] = [await joined(), await joined()];
+    // Listed, but its object has no end of plxd's, as after a deploy.
+    const lost = opened(await connect(host, token));
+    const { stream: lostId } = JSON.parse((await control.next()) as string) as Open;
+    const { control: again } = await connectHost(host, [kept.open.stream, lostId]);
+    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready" });
+    expect(await unlisted.client.closed).toBe(1000);
+    expect(await lost.closed).toBe(1000);
+    expect(Object.keys(await openStreams(host))).toEqual([kept.open.stream]);
+
+    kept.client.ws.send(new Uint8Array([7]));
+    expect(new Uint8Array((await kept.side.next()) as ArrayBuffer)).toEqual(new Uint8Array([7]));
+    kept.side.ws.send(new Uint8Array([8]));
+    expect(new Uint8Array((await kept.client.next()) as ArrayBuffer)).toEqual(new Uint8Array([8]));
+
+    // Its count carries on: what it carried reports to the host's object as it closes, which also
+    // frees its place.
+    kept.client.ws.close(1000);
+    await expect.poll(() => openStreams(host)).toEqual({});
+    const usage = (await (await call("/v1/hosts", { token })).json()) as {
+      hosts: { usage: { bytes: number } }[];
+    };
+    expect(usage.hosts[0]!.usage.bytes).toBe(2 * MIN_FRAME_BYTES);
+  });
+
+  it("keeps the spare plxd still holds, so the next client needs nothing from plxd", async () => {
+    const { host, token, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, spare));
+    const { control: again } = await connectHost(host, [spare.stream]);
+    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready" });
+    expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
+    const client = opened(await connect(host, token));
+    expect(await client.next()).toBe("ready");
+    expect(await side.next()).toBe("ready");
+    expect(await openStreams(host)).toEqual({ [spare.stream]: {} });
   });
 });
 
@@ -826,6 +875,28 @@ describe("cost ceilings", () => {
     opened(await connect(host, token));
     const over = await connect(host, token);
     expect(over instanceof Response && over.status).toBe(429);
+    expect(Object.keys(await openStreams(host))).toHaveLength(MAX_STREAMS);
+  });
+
+  it("cap a host's open streams at 16 across a reconnect, and free only those plxd no longer holds", async () => {
+    const { host, token, control } = await online();
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_STREAMS; i++) {
+      opened(await connect(host, token));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      opened(await join(host, open));
+      ids.push(open.stream);
+    }
+    const { control: all } = await connectHost(host, ids);
+    await all.next();
+    const over = await connect(host, token);
+    expect(over instanceof Response && over.status).toBe(429);
+    expect(Object.keys(await openStreams(host))).toHaveLength(MAX_STREAMS);
+
+    const { control: fewer } = await connectHost(host, ids.slice(1));
+    await fewer.next();
+    expect(Object.keys(await openStreams(host))).toHaveLength(MAX_STREAMS - 1);
+    opened(await connect(host, token));
     expect(Object.keys(await openStreams(host))).toHaveLength(MAX_STREAMS);
   });
 
