@@ -252,3 +252,31 @@ test("a search finds files anywhere in the folder and opens one", async () => {
   await click(found[0]);
   expect(openTabs()).toEqual(["main.rs"]);
 });
+
+test("closing a tab whose edits can't land brings the Files view to the front to ask", async () => {
+  const store = openFilesOf("local", "run-1");
+  store.writable = true;
+  const id = store.open("README.md");
+  const show = vi.fn();
+  await render(
+    <ul aria-label="Open views">
+      <FileTabs
+        store={store}
+        id="side-panel-tab-F"
+        roomy={false}
+        current={false}
+        show={show}
+        close={() => {}}
+        icon={Folder}
+      />
+    </ul>,
+  );
+  request.mockImplementationOnce(
+    async () => ({ logId: "log-1", error: { code: -32603, message: "disk full" } }) as never,
+  );
+  store.edited(id, () => "mine\n");
+  await act(() => store.askClose(id));
+  await settle();
+  expect(store.get().closing).toBe(id);
+  expect(show).toHaveBeenCalled();
+});
