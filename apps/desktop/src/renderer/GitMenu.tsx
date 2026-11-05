@@ -15,7 +15,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, GitStatus, RepoId } from "../protocol/generated/protocol";
-import { useConnection } from "./ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "./ConnectionStatus";
 import { describeError, githubProblem } from "./errors";
 import { titleOf } from "./threads";
 import { isRunning } from "./transcript";
@@ -131,7 +131,8 @@ export function GitMenu({
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  const connection = useConnection(hostId);
+  const connectedNow = useConnectedNow(hostId);
+  const connection = useShownConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const able =
     !!capabilities && (run ? "git" in capabilities : !!repo && "repoGitStatus" in capabilities);
@@ -173,13 +174,15 @@ export function GitMenu({
     setStatus(undefined);
     setError(undefined);
     setDiagnostic(undefined);
-    if (!able) return;
+  }, [able, load, runStatus, commit]);
+  useEffect(() => {
+    if (!able || !connectedNow) return;
     let live = true;
     void load(() => live);
     return () => {
       live = false;
     };
-  }, [able, load, runStatus, commit]);
+  }, [able, load, runStatus, commit, connectedNow]);
 
   if (!able) return null;
   const { why, main } = run

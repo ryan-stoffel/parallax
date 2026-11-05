@@ -489,7 +489,7 @@ export function Composer({
   const [stored, setRead] = useState<{ hostId: string; backend?: string }>();
   const read = stored?.hostId === hostId ? stored : undefined;
   const standard = read?.backend;
-  const connected = !!computer?.connected;
+  const connected = !!computer?.shownConnected;
   const connectedNow = !!computer?.connectedNow;
   useEffect(() => {
     if (!onStart || !hostId || !connectedNow) return;

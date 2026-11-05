@@ -352,7 +352,7 @@ export function PullRequestList() {
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<PrFilters>(defaultFilters);
-  const connected = new Set(computers.filter((m) => m.connected).map((m) => m.machine.id));
+  const connected = new Set(computers.filter((m) => m.shownConnected).map((m) => m.machine.id));
   const up = new Set(computers.filter((m) => m.connectedNow).map((m) => m.machine.id));
   const key = entries.map((e) => `${e.url}@${up.has(e.hostId)}`).join();
 
@@ -772,7 +772,7 @@ export function PullRequestScreen({
   const [acting, setActing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const connectedNow = !!computer?.connectedNow;
-  const connected = !!computer?.connected;
+  const connected = !!computer?.shownConnected;
   const open = pr?.state === "open";
 
   const load = useCallback(async () => {

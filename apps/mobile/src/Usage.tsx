@@ -86,7 +86,7 @@ export function UsageScreen() {
   const [daily, setDaily] = useState<Record<string, Daily>>({});
   const [limits, setLimits] = useState<Record<string, LimitsAnswer>>({});
 
-  const connected = computers.filter((m) => m.connected);
+  const connected = computers.filter((m) => m.shownConnected);
   const connectedKey = connected.map((m) => m.machine.id).join();
   // What's asked goes by the real connections, each time one comes back.
   const up = computers.filter((m) => m.connectedNow);
@@ -273,10 +273,10 @@ function History({
   const [by, setBy] = useState<BreakdownBy>("model");
   const answer = (id: string) => daily[`${id} ${since}`];
   const { days, sessions, answered } = gather(
-    computers.filter((m) => m.connected).map((m) => m.machine.id),
+    computers.filter((m) => m.shownConnected).map((m) => m.machine.id),
     answer,
   );
-  const waiting = computers.some((m) => m.connected && !answer(m.machine.id));
+  const waiting = computers.some((m) => m.shownConnected && !answer(m.machine.id));
   // The last frame with usage, shown dimmed while another range loads, so nothing jumps.
   const held = useRef<Frame>(undefined);
   const frame: Frame | undefined = answered > 0 ? { range, span, days, sessions } : undefined;

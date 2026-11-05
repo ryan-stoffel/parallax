@@ -142,7 +142,7 @@ const back = ({ navigation }: { navigation: { goBack: () => void } }): NativeSta
 });
 
 /** Whether `m`'s threads are known now. A list still loading would look like every run starting over. */
-const current = (m: Computer) => m.connected && !m.view.loading;
+const current = (m: Computer) => m.connectedNow && !m.view.loading;
 
 /**
  * Posts `alert` for a thread, unless its switch is off or it's out of sight now, such as on a

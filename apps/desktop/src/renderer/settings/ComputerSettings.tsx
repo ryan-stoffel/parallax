@@ -2,7 +2,7 @@ import { AppWindowMac, Eye, LoaderCircle, MousePointerClick, ShieldCheck } from 
 import { useCallback, useEffect, useState, type ComponentType, type SVGProps } from "react";
 
 import type { ComputerStatus } from "../../protocol/generated/protocol";
-import { statusLabel, useConnectedNow, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId } from "../hosts";
 import { notify } from "../notifications";
@@ -18,7 +18,7 @@ const POLL_MS = 2000;
  * `computerUse`.
  */
 export function ComputerSettings() {
-  const connection = useConnection(localId);
+  const connection = useShownConnection(localId);
   const connected = connection?.status === "connected";
   const supported = connected && "computerUse" in connection.capabilities;
   const connectedNow = useConnectedNow(localId);

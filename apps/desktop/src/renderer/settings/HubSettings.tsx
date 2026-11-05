@@ -2,7 +2,7 @@ import { Bot, Check, LoaderCircle, Network, Plus, Trash2, X } from "lucide-react
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { Hub, HubAccount, HubService } from "../../protocol/generated/protocol";
-import { useConnections } from "../ConnectionStatus";
+import { useShownConnections } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import {
   HUB_DOCS,
@@ -64,7 +64,7 @@ export function hubStatus(hub: Hub): string {
 
 /** The hosts among `hosts` that are connected to a plxd with `hubs`. */
 function useHubHosts(hosts: Host[]): Host[] {
-  const states = useConnections(hosts.map((h) => h.id));
+  const states = useShownConnections(hosts.map((h) => h.id));
   return hosts.filter((_, i) => {
     const state = states[i];
     return state?.status === "connected" && "hubs" in state.capabilities;
@@ -636,7 +636,7 @@ export function HubPane({
   const [problem, setProblem] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [connection] = useConnections([hostId]);
+  const [connection] = useShownConnections([hostId]);
   const manage =
     hub.hasManagementKey &&
     connection?.status === "connected" &&

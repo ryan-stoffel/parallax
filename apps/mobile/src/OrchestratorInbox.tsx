@@ -78,7 +78,7 @@ export function OrchestratorInboxScreen({ route }: NativeStackScreenProps<Screen
   const computer = useComputer(hostId);
   const state = computer?.view.state;
   const capabilities = computer?.view.capabilities ?? {};
-  const connected = !!computer?.connected;
+  const connected = !!computer?.shownConnected;
   const { items, questions, seen, answer } = useInbox(
     hostId,
     orchestrator,

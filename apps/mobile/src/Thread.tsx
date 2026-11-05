@@ -505,7 +505,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const headerHeight = useHeaderHeight();
   const computer = useComputer(hostId);
   const { drafts } = useFleet();
-  const connected = !!computer?.connected;
+  const connected = !!computer?.shownConnected;
   const { transcript, error, sent, queue, cancel, held, background, watching, runs, older, loadOlder } = useAgentRun(hostId, runId, connected);
   const [draft, setDraft] = useState(drafts.get(runId) ?? "");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
@@ -561,7 +561,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                 label: "Thread",
                 inline: true,
                 items: [
-                  ...(computer?.connected && "files" in (computer.view.capabilities ?? {})
+                  ...(computer?.shownConnected && "files" in (computer.view.capabilities ?? {})
                     ? [
                         {
                           type: "action" as const,

@@ -3,7 +3,8 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { ConnectionState } from "../preload/bridge";
 import { ReconnectGrace } from "./reconnectGrace";
 
-// Every host's connection state as clients show it, shared by all views, so a view that changes
+// Every host's connection state as clients show it (`useShownConnection`), for status and what it
+// enables, shared by all views, so a view that changes
 // host reads the new host's state on its first render rather than showing it as connecting until
 // IPC answers. A reconnect stays hidden here for a few seconds (`ReconnectGrace`), so what loads or
 // syncs goes by `real`, through `useConnectedNow` and `useRealConnections`. Kept only while something
@@ -56,8 +57,12 @@ function ask(hostId: string) {
   );
 }
 
-/** A host's connection state as shown, kept current. Undefined until the first answer for it. */
-export function useConnection(hostId: string): ConnectionState | undefined {
+/**
+ * A host's connection state as shown, kept current. Undefined until the first answer for it. For
+ * status and what it enables only: a load or sync that reads it won't run again after a short
+ * reconnect, so those go by `useConnectedNow`.
+ */
+export function useShownConnection(hostId: string): ConnectionState | undefined {
   const state = useSyncExternalStore(subscribe, () => states.get(hostId));
   // On every mount too, since the state may have changed while nothing listened.
   useEffect(() => ask(hostId), [hostId]);
@@ -75,7 +80,7 @@ export function useConnectedNow(hostId: string): boolean {
 }
 
 /** Each of `hostIds`' connection states as shown, in order, kept current. */
-export const useConnections = (hostIds: string[]) => useListed(states, hostIds);
+export const useShownConnections = (hostIds: string[]) => useListed(states, hostIds);
 
 /** Each of `hostIds`' real connection states, in order, for syncing, as `useConnectedNow` says. */
 export const useRealConnections = (hostIds: string[]) => useListed(real, hostIds);
@@ -103,7 +108,7 @@ function useListed(
 /**
  * Hears each change to any host's state as shown, for what reports a drop rather than renders it.
  * Returns the unsubscribe function. A host nothing has asked about yet shows its drop at once, so
- * pass its id to `useConnections` too.
+ * pass its id to `useShownConnections` too.
  */
 export function onConnectionShown(
   listener: (hostId: string, state: ConnectionState) => void,
@@ -167,7 +172,7 @@ export function statusLabel(state: ConnectionState): string {
  * by itself. The tail of attach's (and ssh's) stderr is only in the tooltip.
  */
 export function ConnectionStatus({ hostId }: { hostId: string }) {
-  const state = useConnection(hostId);
+  const state = useShownConnection(hostId);
   if (!state || state.status === "connected") return null;
 
   const failed = state.status === "failed";

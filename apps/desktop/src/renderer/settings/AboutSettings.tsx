@@ -11,7 +11,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 
 import { useCopy } from "../AgentChat";
-import { useConnectedNow, useConnection } from "../ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId } from "../hosts";
 import { GitHubStarIcon, KoFiLogo, ParallaxMark } from "../logos";
 import { IconButton, searchField, Segmented } from "../ui";
@@ -40,7 +40,7 @@ export function AboutSettings() {
   const [credits, setCredits] = useState<"code" | "fonts" | "artwork" | "models">();
   const [version, setVersion] = useState<string>();
   const [os, setOs] = useState<string>();
-  const connection = useConnection(localId);
+  const connection = useShownConnection(localId);
   const connectedNow = useConnectedNow(localId);
   useEffect(() => void window.parallax.version().then(setVersion), []);
   useEffect(() => {

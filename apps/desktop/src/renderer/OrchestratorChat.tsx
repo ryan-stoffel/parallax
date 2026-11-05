@@ -5,7 +5,7 @@ import type { Orchestrator, PromptImage } from "../protocol/generated/protocol";
 import { AgentChat, CheckoutLabel, PinnedApprovals, TranscriptView } from "./AgentChat";
 import { queueOf, useAnswers, type Asked } from "./Approval";
 import { Composer, tabItem } from "./Composer";
-import { offlineReason, useConnectedNow, useConnection } from "./ConnectionStatus";
+import { offlineReason, useConnectedNow, useShownConnection } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { describeError } from "./errors";
 import { imageCaps } from "./images";
@@ -55,7 +55,7 @@ export function OrchestratorChat({
   /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
   settingsClosed?: number;
 }) {
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   const connectedNow = useConnectedNow(hostId);
   // The first message's run id, reused when it's sent again after failing (0007).

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { useConnection } from "./ConnectionStatus";
+import { useShownConnection } from "./ConnectionStatus";
 import { download, load, type DocRef } from "./documents";
 import { isVideo } from "./transcript";
 
@@ -11,7 +11,7 @@ import { isVideo } from "./transcript";
  * it whole as before. Undefined for a video until the host's capabilities are known.
  */
 export function useStreamUrl(hostId: string, doc: DocRef): string | null | undefined {
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   // Kept through a reconnect, so a video that's playing stays.
   const [known, setKnown] = useState<{ hostId: string; chunks: boolean }>();
   useEffect(() => {

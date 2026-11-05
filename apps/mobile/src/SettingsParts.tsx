@@ -139,7 +139,7 @@ export function ComputerPicker({ m, onChange }: { m: Computer; onChange: (id: st
       <Row
         leading={<DeviceIcon name={m.machine.name} size={18} color={c.mutedForeground} />}
         title={m.machine.name}
-        detail={m.connected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
+        detail={m.shownConnected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
         last
         onPress={more ? () => setOpen(true) : undefined}
         right={more ? <Icon icon={ChevronsUpDown} size={16} color={c.faintForeground} /> : undefined}
@@ -151,7 +151,7 @@ export function ComputerPicker({ m, onChange }: { m: Computer; onChange: (id: st
         options={computers.map((x) => ({
           value: x.machine.id,
           label: x.machine.name,
-          description: x.connected ? "Connected" : "Not connected",
+          description: x.shownConnected ? "Connected" : "Not connected",
         }))}
         onChoose={onChange}
         onClose={() => setOpen(false)}

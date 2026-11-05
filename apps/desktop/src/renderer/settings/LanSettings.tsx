@@ -6,7 +6,7 @@ import type {
   RemotePairResult,
   RemoteSessionsResult,
 } from "../../protocol/generated/protocol";
-import { statusLabel, useConnectedNow, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId, useConnect, useHosts, type Host } from "../hosts";
 import { dismiss, notify } from "../notifications";
 import {
@@ -43,7 +43,7 @@ const GRANTS =
  * an address, then the code.
  */
 export function LanSettings() {
-  const local = useConnection(localId);
+  const local = useShownConnection(localId);
   const connected = local?.status === "connected";
   const connectedNow = useConnectedNow(localId);
   const connect = useConnect();
@@ -472,7 +472,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
 
 /** A computer this app paired with: its connection, its routes in order, and Remove. */
 function LanComputer({ computer }: { computer: Host }) {
-  const state = useConnection(computer.id);
+  const state = useShownConnection(computer.id);
   const remove = async () => {
     const failed = await window.parallax.removeHost(computer.id);
     if (failed) notify({ tone: "error", title: `Couldn't remove ${computer.name}`, body: failed });

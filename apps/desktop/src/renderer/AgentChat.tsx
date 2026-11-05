@@ -77,7 +77,7 @@ import {
 import { duration, useSeconds } from "./AttentionMark";
 import { CiteSelection, type Citation } from "./Cite";
 import { Composer, listCommands, tabItem, type ComposerProps, type Unanswered } from "./Composer";
-import { offlineReason, useConnection } from "./ConnectionStatus";
+import { offlineReason, useShownConnection } from "./ConnectionStatus";
 import { isEmpty, threadDrafts, type ComposerContents } from "./drafts";
 import { dismiss as dismissNotice, notify } from "./notifications";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
@@ -366,7 +366,7 @@ export function AgentChat({
   /** Only the selected split tile owns voice input and the Fn hold gesture. */
   voiceFocused?: boolean;
 }) {
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
   const queueEnabled = connected && "queue" in connection.capabilities;

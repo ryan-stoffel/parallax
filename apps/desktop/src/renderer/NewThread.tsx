@@ -7,7 +7,7 @@ import { parseProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
 import type { CloneAsk } from "./clone";
 import { Composer } from "./Composer";
-import { useConnectedNow, useConnection } from "./ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "./ConnectionStatus";
 import { drafts, isEmpty, type ComposerContents } from "./drafts";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
@@ -159,7 +159,7 @@ export function NewThread({
       live = false;
     };
   }, [hostId, runOptions, connectedNow, settingsClosed]);
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   // Open while the host needs an account for the failed start.
   const [choices, setChoices] = useState<AccountOption[]>();

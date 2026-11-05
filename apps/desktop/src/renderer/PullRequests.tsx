@@ -12,7 +12,7 @@ import type {
   PullRequest,
   ThreadNaming,
 } from "../protocol/generated/protocol";
-import { useConnectedNow, useConnection } from "./ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { icons } from "./icons";
 import { newThreadPrefs, type NewThreadPrefs } from "./prefs";
@@ -86,7 +86,7 @@ export function usePullRequests(
 ): PullRequests {
   const [read, setRead] = useState<Readonly<Record<string, Linked>>>({});
   const connectedNow = useConnectedNow(hostId);
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const watch = !!capabilities && "prWatch" in capabilities;
   const actions = !!capabilities && "prActions" in capabilities;

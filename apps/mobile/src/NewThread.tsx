@@ -259,12 +259,12 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
                 detail={[
                   repo && homeless(repo.path),
                   computer.machine.id === defaultId && "Default",
-                  !computer.connected && "Offline",
+                  !computer.shownConnected && "Offline",
                 ]
                   .filter(Boolean)
                   .join(" · ")}
                 label={`${picked ?? "No repo"} on ${computer.machine.name}`}
-                disabled={!computer.connected}
+                disabled={!computer.shownConnected}
                 last={i === places.length - 1}
                 onPress={() => pickComputer(computer.machine.id, repo?.id ?? noRepo)}
               />
@@ -303,7 +303,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
   }, [navigation]);
 
   async function start({ text, images, options }: Start) {
-    if (!computer?.connected) return `${name} isn't connected.`;
+    if (!computer?.shownConnected) return `${name} isn't connected.`;
     const runId = uuidv7();
     const at = repo ? groupId : noRepo;
     const failed = await computer.view.start({

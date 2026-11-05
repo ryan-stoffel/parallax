@@ -234,7 +234,7 @@ export function ProviderScreen({ route, navigation }: NativeStackScreenProps<Set
     return (
       <Page>
         <Section>
-          <Note>{m?.connected === false ? "Not connected" : "This provider isn't on the computer anymore."}</Note>
+          <Note>{m?.shownConnected === false ? "Not connected" : "This provider isn't on the computer anymore."}</Note>
         </Section>
       </Page>
     );

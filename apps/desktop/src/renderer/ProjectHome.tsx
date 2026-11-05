@@ -17,7 +17,7 @@ import type { Repo } from "../protocol/generated/protocol";
 import { close, Footer } from "./AddDialog";
 import { activeAt, attentionOf } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
-import { useConnection } from "./ConnectionStatus";
+import { useShownConnection } from "./ConnectionStatus";
 import type { FavoriteAction } from "./Favorites";
 import { FileCard } from "./FileCard";
 import { notify } from "./notifications";
@@ -576,7 +576,7 @@ function Files({ hostId, project, view }: { hostId: string; project: Repo; view:
   const input = useRef<HTMLInputElement>(null);
   const [adding, setAdding] = useState(false);
   const [over, setOver] = useState(false);
-  const caps = uploadBytes(useConnection(hostId));
+  const caps = uploadBytes(useShownConnection(hostId));
   const files = project.files ?? [];
   const save = async (next: string[]) => {
     const failed = await view.updateRepo(project.id, { files: next });

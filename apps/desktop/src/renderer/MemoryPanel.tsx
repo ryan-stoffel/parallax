@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { outlineButton, quietButton } from "./Approval";
+import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { dayLabel } from "./locale";
 import { dismiss, notify } from "./notifications";
@@ -198,8 +199,10 @@ function useMemory(hostId: string, orchestrator: string | undefined, repo: strin
   const [error, setError] = useState<string>();
   // Bumped to list and subscribe again: after a change here, or a `resync`.
   const [generation, setGeneration] = useState(0);
+  const connectedNow = useConnectedNow(hostId);
 
   useEffect(() => {
+    if (!connectedNow) return;
     let stopped = false;
     const unsubscribes: (() => void)[] = [];
     const scopes = scopesOf(orchestrator, repo);
@@ -214,6 +217,7 @@ function useMemory(hostId: string, orchestrator: string | undefined, repo: strin
         listed.push(...answer.result.files.map((f) => ({ ...f, scope: scopes[i]! })));
       }
       setFiles(listed);
+      setError(undefined);
       setError(undefined);
     };
     // Subscribes after `agent/list`'s `seq`, as ContextPanel does, since `memory/list` has none.
@@ -244,7 +248,7 @@ function useMemory(hostId: string, orchestrator: string | undefined, repo: strin
       stopped = true;
       for (const unsubscribe of unsubscribes) unsubscribe();
     };
-  }, [hostId, orchestrator, repo, generation]);
+  }, [hostId, orchestrator, repo, generation, connectedNow]);
 
   return { files, error, reload: () => setGeneration((g) => g + 1) };
 }

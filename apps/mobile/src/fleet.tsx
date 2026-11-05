@@ -17,7 +17,7 @@ import {
 import { Alert, AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
-import { useConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
+import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
@@ -37,8 +37,8 @@ const LOOK_MS = 15_000;
 export interface Computer {
   machine: Machine;
   state: ConnectionState;
-  /** Shown as connected, which a short reconnect doesn't change. */
-  connected: boolean;
+  /** For showing status only: a short reconnect doesn't change it. Load and sync by `connectedNow`. */
+  shownConnected: boolean;
   /** Really connected now. Loading and syncing go by this, and run again when it comes back. */
   connectedNow: boolean;
   view: ThreadsView;
@@ -163,7 +163,7 @@ export function FleetProvider({
 }) {
   const [setup, setSetup] = useState(initial);
   // As shown, so a short reconnect stays out of sight. The outbox goes by the real state.
-  const shown = useConnections(setup.machines.map((m) => m.id));
+  const shown = useShownConnections(setup.machines.map((m) => m.id));
   const states: Record<string, ConnectionState | undefined> = Object.fromEntries(
     setup.machines.map((m, i) => [m.id, shown[i]]),
   );
@@ -398,7 +398,7 @@ export function FleetProvider({
     return {
       machine,
       state,
-      connected: state.status === "connected",
+      shownConnected: state.status === "connected",
       connectedNow: real[i]?.status === "connected",
       view: views[machine.id] ?? idleThreads,
       outbox: outbox(machine.id),

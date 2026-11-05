@@ -61,9 +61,9 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
     ),
     defaultId,
   );
-  const loading = computers.some((m) => m.connected && m.view.loading);
+  const loading = computers.some((m) => m.shownConnected && m.view.loading);
   const makers = computers
-    .filter((m) => m.connected && "projects" in m.view.capabilities)
+    .filter((m) => m.shownConnected && "projects" in m.view.capabilities)
     .sort((a, b) => Number(b.machine.id === defaultId) - Number(a.machine.id === defaultId));
 
   async function make(computer: Computer, name: string) {

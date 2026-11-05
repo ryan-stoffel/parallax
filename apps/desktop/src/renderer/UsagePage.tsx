@@ -20,7 +20,7 @@ import {
   type UsageLimitWindow,
   type UsageSessions,
 } from "../protocol/generated/protocol";
-import { statusLabel, useConnectedNow, useConnection } from "./ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
@@ -92,7 +92,7 @@ function usageError(error: RpcError): string {
 }
 
 /** A host that isn't answering: its status, or undefined once it's connected. */
-function hostStatus(connection: ReturnType<typeof useConnection>): string | undefined {
+function hostStatus(connection: ReturnType<typeof useShownConnection>): string | undefined {
   if (connection?.status === "connected") return undefined;
   return connection ? statusLabel(connection) : "Connecting…";
 }
@@ -291,7 +291,7 @@ function HostUsageLoader({
   onLoad: (hostId: string, state?: Loaded) => void;
   track: Track;
 }) {
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const connected = connection?.status === "connected";
   const connectedNow = useConnectedNow(host.id);
   const [answer, setAnswer] = useState<{ since: string; value: UsageDailyResult | RpcError }>();
@@ -1214,7 +1214,7 @@ function HostLimitsLoader({
   track: Track;
   onLoad: (hostId: string, answer?: HostAnswer) => void;
 }) {
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const connected = connection?.status === "connected";
   const { limits, error } = useLimits(host.id, useConnectedNow(host.id), refresh, track);
   const keys = useKeys(host.id, connected, refresh);

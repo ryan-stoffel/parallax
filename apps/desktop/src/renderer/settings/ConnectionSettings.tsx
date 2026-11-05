@@ -2,7 +2,7 @@ import { Plus, Server } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
 import { olderVersion, type ConnectionError, type ConnectionState } from "../../preload/bridge";
-import { statusLabel, useConnection } from "../ConnectionStatus";
+import { statusLabel, useShownConnection } from "../ConnectionStatus";
 import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
 import { ConnectSettings } from "./ConnectSettings";
@@ -141,7 +141,7 @@ function RemoteHost({
   onEdit: () => void;
   onRemove: () => void;
 }) {
-  const state = useConnection(host.id);
+  const state = useShownConnection(host.id);
   const [signingIn, setSigningIn] = useState(false);
   const fix = plxdFix(state, appVersion);
   const [installing, setInstalling] = useState(false);

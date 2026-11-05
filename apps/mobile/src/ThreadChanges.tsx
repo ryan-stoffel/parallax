@@ -108,10 +108,9 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
   const turn = choices.find((t) => t.ordinal === shownTurn);
   const ordinal = turn?.ordinal;
 
+  useEffect(() => setShown(undefined), [hostId, runId, latest, ordinal]);
   useEffect(() => {
-    if (unavailable || !computer?.connectedNow) return;
-    setShown(undefined);
-    if (latest === undefined) return;
+    if (unavailable || !computer?.connectedNow || latest === undefined) return;
     let live = true;
     const answer =
       ordinal === undefined

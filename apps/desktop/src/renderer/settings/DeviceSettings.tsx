@@ -8,7 +8,7 @@ import type {
   DevicePlatformState,
   DeviceStateResult,
 } from "../../protocol/generated/protocol";
-import { statusLabel, useConnectedNow, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
 import { AndroidLogo, AppleLogo } from "../logos";
@@ -103,7 +103,7 @@ function PlatformLogo({ state }: { state: DevicePlatformState }) {
 /** One computer's hub, source, and devices. */
 function HostDevices({ host }: { host: Host }) {
   const hostId = host.id;
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && "devices" in connection.capabilities;
   const connectedNow = useConnectedNow(hostId);

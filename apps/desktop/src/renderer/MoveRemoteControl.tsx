@@ -19,7 +19,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { DeviceHost } from "../preload/bridge";
 import type { ImportableSession, RemoteControlOrigin } from "../protocol/generated/protocol";
 import { NewComputerDialog } from "./AccountPrompts";
-import { statusLabel, useConnection, useConnections } from "./ConnectionStatus";
+import { statusLabel, useShownConnection, useShownConnections } from "./ConnectionStatus";
 import { accessLabel, ConnectWizard } from "./ConnectWizard";
 import { DeviceIcon } from "./DeviceIcon";
 import { describeError } from "./errors";
@@ -99,7 +99,7 @@ export function MoveRemoteControl({
   const connect = useConnect();
   const profile = useProfile();
   const hosts = useHosts();
-  const states = useConnections(hosts.map((h) => h.id));
+  const states = useShownConnections(hosts.map((h) => h.id));
   // The latest hosts, states, and sign-in, for steps that run across renders.
   const now = useRef({ hosts, states, profile });
   now.current = { hosts, states, profile };
@@ -543,7 +543,7 @@ function ComputerRow({
   onMove: () => void;
   onEnterCode: () => void;
 }) {
-  const state = useConnection(device.id);
+  const state = useShownConnection(device.id);
   const connected = state?.status === "connected";
   const status = connected
     ? "Connected"

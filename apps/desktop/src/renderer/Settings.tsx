@@ -24,7 +24,7 @@ import {
 } from "../protocol/generated/protocol";
 import { AddProviderDialog } from "./AddProviderDialog";
 import type { SettingsSection } from "./App";
-import { statusLabel, useConnectedNow, useConnection } from "./ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { useHosts, type Host } from "./hosts";
 import { loadHubs, useHubs } from "./hubs";
@@ -322,7 +322,7 @@ function HostProviders({
   picker: ReactNode;
   focus?: { anchor: string };
 }) {
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   return connection?.status === "connected" && "providers" in connection.capabilities ? (
     <HostInstances host={host} picker={picker} focus={focus} />
   ) : (
@@ -336,7 +336,7 @@ function HostProviders({
  * period and limits are kept live.
  */
 function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const connected = connection?.status === "connected";
   const connectedNow = useConnectedNow(host.id);
   const [detected, setDetected] = useState<DetectedCli[]>();
@@ -737,7 +737,7 @@ function HostInstances({
 }) {
   const providers = useProviders(host.id);
   const linkOn = useProvidersLinked();
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const hubsOn = connection?.status === "connected" && "hubs" in connection.capabilities;
   const connectedNow = useConnectedNow(host.id);
   const hubs = useHubs(host.id);

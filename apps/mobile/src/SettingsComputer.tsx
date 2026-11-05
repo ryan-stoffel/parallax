@@ -6,7 +6,7 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import { ArrowUpRight, Copy, Download, KeyRound, Plus, RefreshCw, ShieldCheck } from "lucide-react-native";
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { Alert, Linking, Switch, View } from "react-native";
 
 import type {
@@ -655,6 +655,7 @@ function ScriptsPage({ m }: { m: Computer }) {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const repoKey = repo?.id;
+  const edited = useRef(false);
   useEffect(() => {
     setSaved(undefined);
     setFile(undefined);
@@ -667,7 +668,8 @@ function ScriptsPage({ m }: { m: Computer }) {
       if (!live) return;
       if ("error" in answer) return setError(describeError(answer.error));
       setSaved(answer.result.scripts);
-      setScripts(answer.result.scripts);
+      // Edits waiting for Save stay, as a reconnect reads these again.
+      if (!edited.current) setScripts(answer.result.scripts);
       setFile({ scripts: answer.result.fileScripts ?? [], error: answer.result.fileError });
     });
     return () => {
@@ -697,6 +699,7 @@ function ScriptsPage({ m }: { m: Computer }) {
   };
   const edit = (i: number, change: Partial<RepoScript>) => setScripts(scripts.map((s, j) => (j === i ? { ...s, ...change } : s)));
   const dirty = JSON.stringify(scripts) !== JSON.stringify(saved);
+  edited.current = saved !== undefined && dirty;
 
   return (
     <>
@@ -1033,7 +1036,7 @@ export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenP
       {page === "threads" && <NewThreadsSection />}
       {page === "connections" && <PhoneConnections />}
       <ComputerPicker m={m} onChange={(next) => navigation.setParams({ id: next })} />
-      {m.connected ? (
+      {m.shownConnected ? (
         <Body key={id} m={m} />
       ) : (
         <Section>

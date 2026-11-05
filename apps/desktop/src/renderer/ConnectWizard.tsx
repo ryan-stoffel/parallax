@@ -11,7 +11,7 @@ import {
   useHoldCodePrompts,
   useSetupCode,
 } from "./AccountPrompts";
-import { statusLabel, useConnection } from "./ConnectionStatus";
+import { statusLabel, useShownConnection } from "./ConnectionStatus";
 import { DeviceIcon } from "./DeviceIcon";
 import { useProfile } from "./profile";
 import { primaryButton, quietButton } from "./settings/parts";
@@ -323,7 +323,7 @@ function ComputerRow({
   onEnterCode: () => void;
   onConnected: () => void;
 }) {
-  const state = useConnection(device.id);
+  const state = useShownConnection(device.id);
   const { access } = device;
   const up = !access && state?.status === "connected";
   useEffect(() => {

@@ -35,7 +35,7 @@ import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
 import { ClaudeLogo } from "./logos";
 import type { Asked } from "./Approval";
-import { offlineReason, useConnection, useForgetRemoved } from "./ConnectionStatus";
+import { offlineReason, useShownConnection, useForgetRemoved } from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
 import { useInbox } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
@@ -399,7 +399,7 @@ export function App() {
     if (revealFile) setRevealFile(undefined);
   }, [revealFile]);
 
-  const connection = useConnection(host.id);
+  const connection = useShownConnection(host.id);
   const connected = connection?.status === "connected";
   // Runs started here forward their permission requests, only to a plxd that takes the flag.
   const approvals = connected && "approvals" in connection.capabilities;
@@ -430,7 +430,7 @@ export function App() {
   // The computer New thread opens on: Settings > Threads' while it's listed and connected, else
   // the open one. Mod+N's picker lists its repositories first.
   const startPref = newThreadPrefs.use().host;
-  const startConnected = useConnection(startPref)?.status === "connected";
+  const startConnected = useShownConnection(startPref)?.status === "connected";
   const start = (startConnected && hosts.find((h) => h.id === startPref)) || host;
   const startState = (views[start.id] ?? idleThreads).state;
   const startGroups = start.id === host.id ? groups : groupThreads(startState);
@@ -2199,7 +2199,7 @@ function HostLoader({
   onView: (hostId: string, view: ThreadsView) => void;
   onNeedsYou: (hostId: string, orchestratorId: string, item: InboxItem) => void;
 }) {
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const view = useThreads(
     hostId,

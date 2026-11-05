@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { Orchestrator, RepoRef } from "../../protocol/generated/protocol";
-import { useConnection } from "../ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
 import { autonomyLevels } from "../OrchestratorPermission";
@@ -166,7 +166,7 @@ function NewOrchestrators() {
 }
 
 /** One orchestrator's settings, each behind the capability that takes it. */
-function OrchestratorPane({
+export function OrchestratorPane({
   hostId,
   orchestrator,
   view,
@@ -175,13 +175,14 @@ function OrchestratorPane({
   orchestrator: Orchestrator;
   view: ThreadsView;
 }) {
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : {};
   const [refs, setRefs] = useState<RepoRef[]>();
   const repoId = view.state.repos.find((r) => r.path === orchestrator.repoPath)?.id;
   const canRef = "integrationBranch" in capabilities && "repoRefs" in capabilities;
+  const connectedNow = useConnectedNow(hostId);
   useEffect(() => {
-    if (!canRef || !repoId) return;
+    if (!canRef || !repoId || !connectedNow) return;
     let stale = false;
     void window.parallax.request(hostId, "repo/refs", { repo: repoId }).then((answer) => {
       if (!stale && "result" in answer) setRefs(answer.result.refs);
@@ -189,7 +190,7 @@ function OrchestratorPane({
     return () => {
       stale = true;
     };
-  }, [hostId, canRef, repoId]);
+  }, [hostId, canRef, repoId, connectedNow]);
 
   type Change = Parameters<ThreadsView["updateOrchestrator"]>[1];
   const save = async (change: Change) => {

@@ -1,7 +1,7 @@
 import { ArrowDownUp, ListFilter } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
-import { useConnection } from "./ConnectionStatus";
+import { useShownConnection } from "./ConnectionStatus";
 import { icons } from "./icons";
 import { PrRow } from "./pr/parts";
 import { PullRequestView, usePullRequests, type Linked } from "./PullRequests";
@@ -273,7 +273,7 @@ function OpenPullRequest({
   onCompose: (text: string, send: boolean) => void;
   onSetUpGithub: () => void;
 }) {
-  const connection = useConnection(entry.hostId);
+  const connection = useShownConnection(entry.hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
   const prs = usePullRequests(
     entry.hostId,

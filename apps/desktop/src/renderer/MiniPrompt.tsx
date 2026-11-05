@@ -2,7 +2,7 @@ import { ArrowUp, Check, ChevronDown, LoaderCircle } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
-import { useConnection } from "./ConnectionStatus";
+import { useShownConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { changeMessage } from "./MemoryPanel";
 import { isNew } from "./catalog";
@@ -29,7 +29,7 @@ export function MiniPrompt({
   orchestratorRun?: AgentRun;
   large?: boolean;
 }) {
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   const sendModel = connected && "sendModel" in connection.capabilities;
   // With `sendAccount`, the orchestrator can move to another provider that runs one.

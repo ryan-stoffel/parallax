@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { ScheduledTask } from "../../protocol/generated/protocol";
-import { useConnectedNow, useConnection } from "../ConnectionStatus";
+import { useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
@@ -44,9 +44,9 @@ export function ScheduleSettings() {
 }
 
 /** One computer's tasks, under its name where `named`. */
-function HostTasks({ host, named }: { host: Host; named: boolean }) {
+export function HostTasks({ host, named }: { host: Host; named: boolean }) {
   const hostId = host.id;
-  const connection = useConnection(hostId);
+  const connection = useShownConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && "schedules" in connection.capabilities;
   const connectedNow = useConnectedNow(hostId);
@@ -65,6 +65,8 @@ function HostTasks({ host, named }: { host: Host; named: boolean }) {
   useEffect(() => {
     setTasks(undefined);
     setError(undefined);
+  }, [supported, hostId]);
+  useEffect(() => {
     if (supported && connectedNow) void load();
   }, [supported, connectedNow, load]);
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { HostSettings, HostSettingsSetParams } from "../../protocol/generated/protocol";
-import { useConnections, useRealConnections } from "../ConnectionStatus";
+import { useShownConnections, useRealConnections } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import type { Host } from "../hosts";
 import { notify } from "../notifications";
@@ -12,7 +12,7 @@ import { notify } from "../notifications";
  * setting across them, and `set` changes it on each, saying which one refused.
  */
 export function useHostSettings(targets: Host[]) {
-  const connections = useConnections(targets.map((h) => h.id));
+  const connections = useShownConnections(targets.map((h) => h.id));
   const connected = targets.flatMap((host, i) => {
     const state = connections[i];
     return state?.status === "connected" ? [{ host, capabilities: state.capabilities }] : [];

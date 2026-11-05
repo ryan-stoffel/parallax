@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
-import { useConnections, useForgetRemoved } from "./ConnectionStatus";
+import { useShownConnections, useForgetRemoved } from "./ConnectionStatus";
 import { RECONNECT_GRACE_MS } from "./reconnectGrace";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -23,7 +23,7 @@ let shown: (ConnectionState | undefined)[];
 
 // As the phone's fleet reads its computers, and the desktop forgets a removed host.
 function Hosts({ hosts }: { hosts: { id: string }[] }) {
-  shown = useConnections(hosts.map((host) => host.id));
+  shown = useShownConnections(hosts.map((host) => host.id));
   useForgetRemoved(hosts);
   return null;
 }

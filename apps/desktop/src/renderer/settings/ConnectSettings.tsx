@@ -20,7 +20,7 @@ import {
 } from "../../preload/bridge";
 import { NewComputerDialog } from "../AccountPrompts";
 import { CONNECT_NOTICE_TEXT, setUpAgain } from "../alarms";
-import { statusLabel, useConnectedNow, useConnection } from "../ConnectionStatus";
+import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { accessLabel, ConnectWizard, SetupCodeDialog } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, useConnect, useHosts } from "../hosts";
@@ -257,7 +257,7 @@ function DeviceCard({
   /** Opens the code dialog, for a new account computer. */
   onEnterCode?: () => void;
 }) {
-  const state = useConnection(device.id);
+  const state = useShownConnection(device.id);
   const connected = enabled && state?.status === "connected";
   const health = useHealth(device.id, connected);
   const [tailnetOnly, setTailnetOnly] = useTailnetOnly(device.id, connected);
