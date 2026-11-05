@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { pickAsset, pickRelease, withSha256 } from "../src/releases.mjs";
+import { pickAsset, pickRelease, supportsRelay, withSha256 } from "../src/releases.mjs";
 
 /** Each asset's GitHub digest, made up from its name. @param {string} name */
 const digest = (name) => `sha256:${Buffer.from(name).toString("hex").padEnd(64, "0").slice(0, 64)}`;
@@ -38,6 +38,13 @@ const releases = [release("v2610.1.1-nightly", true, [], true), newestNightly, s
 test("picks the newest non-draft release of each channel", () => {
   assert.equal(pickRelease(releases, "nightly"), newestNightly);
   assert.equal(pickRelease(releases, "stable"), stable);
+});
+
+test("a release supports the relay from the first build that has it", () => {
+  for (const tag of ["v2610.13019.13940-nightly", "v2610.13019.13940", "v2610.13019.13941-nightly", "v2611.10423.14450-nightly", "v2611.10423.14450"])
+    assert.equal(supportsRelay(tag), true, tag);
+  for (const tag of ["v2610.13015.14706-nightly", "v2610.10118.11324", "v2609.3017.503-nightly", "v0.6.1"])
+    assert.equal(supportsRelay(tag), false, tag);
 });
 
 test("picks each OS's installer, or plxd alone when headless", () => {

@@ -37,6 +37,27 @@ test("connect's subcommands dispatch, with --no-browser passed through", async (
   assert.equal((await run(["connect"])).noBrowser, false);
 });
 
+test("the channel is nightly unless --channel says otherwise", async () => {
+  /** @type {string[]} */
+  const channels = [];
+  const release = async (/** @type {string} */ channel) => {
+    channels.push(channel);
+    throw new Error("stop");
+  };
+  const deps = () => /** @type {import("../src/connect.mjs").Deps} */ (/** @type {unknown} */ ({ release }));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["connect"], deps);
+    await main(["connect", "--channel", "stable"], deps);
+    // As the setup scripts pass it, followed by the user's own.
+    await main(["connect", "--channel", "nightly", "--channel", "stable"], deps);
+  } finally {
+    console.log = log;
+  }
+  assert.deepEqual(channels, ["nightly", "stable", "stable"]);
+});
+
 test("bad command lines get a usage error and exit 2", async () => {
   /** @type {[string[], string][]} */
   const cases = [

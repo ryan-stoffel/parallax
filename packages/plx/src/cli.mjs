@@ -34,7 +34,7 @@ Tailscale (until the release after this one):
   plx setup                          Install Parallax on this computer and connect it
 
 Options:
-  --channel stable|nightly   Which release to install (default: stable)
+  --channel stable|nightly   Which release to install (default: nightly)
   --no-browser               Sign in on any device and paste the code here, rather than in a
                              browser on this computer. Automatic over SSH and without a display
   --user <user>              The SSH user for add (default: ssh's own)
@@ -75,6 +75,7 @@ const realDeps = (noBrowser) => ({
       open: openBrowser,
       prompt,
     }),
+  release: (channel) => connect.findRelease(channel),
   details: readDetails,
   install: connect.install,
   plxd: (runner, os) => attach(runner.attach(os)),
@@ -101,7 +102,8 @@ export async function main(argv, deps = realDeps) {
   const { values, positionals } = args;
   if (values.help) return print(HELP);
   if (values.version) return print(VERSION);
-  const channel = values.channel ?? "stable";
+  // Parallax has no stable release yet, so nightly is what works.
+  const channel = values.channel ?? "nightly";
   if (channel !== "stable" && channel !== "nightly") return usage(`--channel is stable or nightly, not ${channel}.`);
   if (values.port !== undefined && !/^\d+$/.test(values.port)) return usage(`--port is a number, not ${values.port}.`);
   /** @type {import("./tailscale-setup.mjs").Options} */

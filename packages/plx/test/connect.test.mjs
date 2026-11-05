@@ -31,10 +31,11 @@ function fakes(state = {}, answers = []) {
   let signIns = 0;
   /** @type {import("../src/connect.mjs").Deps} */
   const deps = {
+    release: async () => ({ tag_name: "v2611.10423.14450-nightly", prerelease: true, assets: [] }),
     signIn: async () => (signIns++, "good-token"),
     // Never runs this computer's real shell: Windows PowerShell can stall on its first start.
     details: async (_runner, os) => ({ os, arch: "arm64", label: "Test", version: "1" }),
-    install: async (_runner, target, name, channel) => void installed.push(`${name} ${target.os} ${channel}`),
+    install: async (_runner, target, name, _release, channel) => void installed.push(`${name} ${target.os} ${channel}`),
     plxd: async () => attach(spawn(process.execPath, [FAKE], { stdio: ["pipe", "pipe", "inherit"], env })),
     prompt: async (question) => (asked.push(question), answers.shift() ?? ""),
     routes: async () => ["192.168.1.20", "relay:tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE"],
@@ -89,6 +90,48 @@ test("connect signs in, installs, registers, turns relay and remote on, and ends
   assert.match(out, /^ {2}482 911$/m);
   assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   fake.done();
+});
+
+test("connect and add stop before sign-in, naming the fix, when the release can't reach the relay", async () => {
+  const oldStable = { tag_name: "v2610.10118.11324", prerelease: false, assets: [] };
+  /** @type {[import("../src/releases.mjs").Release[], RegExp][]} */
+  const cases = [
+    [[oldStable], /✗ The newest stable release, v2610\.10118\.11324, is too old for Parallax Relay\. Run again with --channel nightly\./],
+    [[], /✗ Parallax has no stable release yet\. Run again with --channel nightly\./],
+  ];
+  for (const [list, message] of cases) {
+    const fake = fakes();
+    fake.deps.release = (channel) => connect.findRelease(channel, async () => list);
+    const stable = { channel: /** @type {const} */ ("stable") };
+    for (const run of [() => connect.connect(stable, fake.deps), () => connect.add("box.local", stable, fake.deps)]) {
+      const { code, out } = await printed(run);
+      assert.equal(code, 1, out);
+      assert.match(out, message);
+    }
+    assert.equal(fake.signIns(), 0);
+    assert.deepEqual(fake.installed, []);
+    fake.done();
+  }
+});
+
+test("install downloads the given release's plxd, and fails when it has none for the OS", async () => {
+  const name = "parallax-plxd-1.0.0-nightly-linux-x64";
+  const asset = { name, browser_download_url: `https://dl/${name}`, digest: `sha256:${"a".repeat(64)}` };
+  const release = { tag_name: "v1.0.0-nightly", prerelease: true, assets: [asset] };
+  /** @type {string[]} */
+  const scripts = [];
+  const runner = /** @type {import("../src/run.mjs").Runner} */ (
+    /** @type {unknown} */ ({ script: async (/** @type {string} */ _shell, /** @type {string} */ script) => (scripts.push(script), { code: 0, stdout: "" }) })
+  );
+  const target = (/** @type {"linux" | "windows"} */ os) => ({ os, arch: /** @type {const} */ ("x64"), label: os, version: "1" });
+  const found = await printed(async () => (await connect.install(runner, target("linux"), "box", release, "nightly"), 0));
+  assert.match(found.out, /✓ Installed plxd 1\.0\.0-nightly/);
+  assert.match(scripts[0] ?? "", /https:\/\/dl\/parallax-plxd-1\.0\.0-nightly-linux-x64/);
+  await printed(async () => {
+    await assert.rejects(connect.install(runner, target("windows"), "box", release, "nightly"));
+    return 0;
+  });
+  assert.equal(scripts.length, 1);
 });
 
 test("a setup code that lapses is replaced, and the next one is shown", async () => {

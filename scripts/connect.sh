@@ -71,4 +71,6 @@ fi
 NPM_CONFIG_UPDATE_NOTIFIER=false
 export NPM_CONFIG_UPDATE_NOTIFIER
 
-exec npx -y plx-cli@latest connect "$@" </dev/tty
+# Named because this script can reach users before a plx-cli that defaults to nightly does. The
+# last --channel wins, so one given to this script overrides it.
+exec npx -y plx-cli@latest connect --channel nightly "$@" </dev/tty

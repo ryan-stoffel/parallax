@@ -69,6 +69,16 @@ export function pickRelease(releases, channel) {
   throw new Error("Parallax has no nightly release.");
 }
 
+/** The first release whose plxd has what `plx connect` calls, from PLX-1161's merge (0091). */
+const RELAY_SINCE = "v2610.13019.13940";
+
+/**
+ * Whether a release has that plxd, from its tag. Versions rise with commit time on both channels
+ * (0030), and comparing their numbers also places older tags that have fewer digits.
+ * @param {string} tag
+ */
+export const supportsRelay = (tag) => tag.localeCompare(RELAY_SINCE, "en", { numeric: true }) >= 0;
+
 /**
  * The asset in `release` for `os` and `arch`: the dmg on macOS (arm64 only) and the NSIS exe on
  * Windows, or with `headless`, plxd by itself (`parallax-plxd-<v>-mac-arm64`,

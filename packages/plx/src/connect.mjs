@@ -5,12 +5,14 @@
 
 import https from "node:https";
 
-import { findInstaller, localOs, sshTarget, step, StepFailed } from "./install.mjs";
+import { localOs, sshTarget, step, StepFailed } from "./install.mjs";
+import { fetchReleases, pickAsset, pickRelease, supportsRelay, withSha256 } from "./releases.mjs";
 import { localRunner, sshRunner } from "./run.mjs";
 import { installScript, REMOTE_PORT } from "./scripts.mjs";
 
 /** @typedef {import("./plxd.mjs").Plxd} Plxd */
 /** @typedef {import("./releases.mjs").Channel} Channel */
+/** @typedef {import("./releases.mjs").Release} Release */
 /** @typedef {import("./run.mjs").Runner} Runner */
 /** @typedef {import("./releases.mjs").Os} Os */
 /** @typedef {import("./detect.mjs").Target} Target */
@@ -18,11 +20,12 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
 /**
  * What the commands reach outside this process, so tests can fake each.
  * @typedef {object} Deps
+ * @property {(channel: Channel) => Promise<Release>} release Finds the release to install.
  * @property {() => Promise<string>} signIn Signs in and resolves to a Clerk access token.
  * @property {(runner: Runner, os: Os) => Promise<Target>} details Finds the OS details of the
  *   computer `runner` reaches.
- * @property {(runner: Runner, target: Target, name: string, channel: Channel) => Promise<void>} install
- *   Installs plxd with its login service on `target` through `runner`.
+ * @property {(runner: Runner, target: Target, name: string, release: Release, channel: Channel) => Promise<void>} install
+ *   Installs `release`'s plxd with its login service on `target` through `runner`.
  * @property {(runner: Runner, os: Os) => Promise<Plxd>} plxd Opens `plxd attach` through
  *   `runner` on an `os` computer.
  * @property {(question: string) => Promise<string>} prompt Asks the user for a line.
@@ -73,8 +76,8 @@ async function withPlxd(deps, body, runner = localRunner(), os = localOs() ?? "l
 }
 
 /**
- * `plx connect`: signs in, installs plxd with its login service here, and links it. Resolves to
- * the exit code.
+ * `plx connect`: finds the release, signs in, installs plxd with its login service here, and links
+ * it. Resolves to the exit code.
  * @param {Options} options
  * @param {Deps} deps
  */
@@ -83,12 +86,13 @@ export function connect(options, deps) {
   return exitCode(async () => {
     const os = localOs();
     if (!os) throw new Error(`Parallax doesn't run on ${process.platform}.`);
+    const release = await deps.release(options.channel);
     const token = await step("Signing in to Parallax", async () => [`Signed in to Parallax Connect`, await deps.signIn()]);
     const target = await step("Finding this computer's OS", async () => {
       const target = await deps.details(runner, os);
       return [`${target.label}: ${target.version} (${target.arch})`, target];
     });
-    await deps.install(runner, target, "this computer", options.channel);
+    await deps.install(runner, target, "this computer", release, options.channel);
     await withPlxd(
       deps,
       async (plxd) => {
@@ -103,7 +107,8 @@ export function connect(options, deps) {
 
 /**
  * `plx connect add <ssh destination>`: the same setup on another computer over ssh, with the
- * sign-in shown here. The only path that uses ssh, and only once.
+ * sign-in shown here. The only path that uses ssh, and only once. ssh comes after the sign-in so a
+ * slow one doesn't outlast its shared connection and ask for the password again.
  * @param {string} destination `[user@]host`, as ssh takes it.
  * @param {Options} options
  * @param {Deps} deps
@@ -112,9 +117,10 @@ export function add(destination, options, deps) {
   const target = options.user ? `${options.user}@${destination}` : destination;
   const runner = sshRunner(target, { port: options.port });
   return exitCode(async () => {
+    const release = await deps.release(options.channel);
     const token = await step("Signing in to Parallax", async () => [`Signed in to Parallax Connect`, await deps.signIn()]);
-    const details = await sshTarget(runner, destination, target, "npx plx-cli connect");
-    await deps.install(runner, details, destination, options.channel);
+    const details = await sshTarget(runner, destination, target, `npx plx-cli connect --channel ${options.channel}`);
+    await deps.install(runner, details, destination, release, options.channel);
     await withPlxd(
       deps,
       async (plxd) => {
@@ -128,15 +134,34 @@ export function add(destination, options, deps) {
 }
 
 /**
- * Installs plxd alone, with its login service, through `runner` (0072).
+ * The newest release of `channel`, or a failed step that names the fix when there's none or it's
+ * older than the relay. Runs before sign-in, so nobody signs in to a setup that can't finish.
+ * @param {Channel} channel
+ * @param {() => Promise<Release[]>} [releases]
+ * @returns {Promise<Release>}
+ */
+export function findRelease(channel, releases = fetchReleases) {
+  return step(`Finding the newest ${channel} release`, async () => {
+    const release = pickRelease(await releases(), channel);
+    if (!supportsRelay(release.tag_name)) {
+      const fix = channel === "stable" ? "Run again with --channel nightly." : "Try again once a newer nightly is out.";
+      throw new Error(`The newest ${channel} release, ${release.tag_name}, is too old for Parallax Relay. ${fix}`);
+    }
+    return [`Parallax ${release.tag_name.replace(/^v/, "")} supports Parallax Relay`, release];
+  });
+}
+
+/**
+ * Installs `release`'s plxd alone, with its login service, through `runner` (0072).
  * @param {Runner} runner
  * @param {Target} target
  * @param {string} name
+ * @param {Release} release
  * @param {Channel} channel
  */
-export async function install(runner, target, name, channel) {
-  const installer = await findInstaller(target, channel, true);
+export async function install(runner, target, name, release, channel) {
   await step(`Installing plxd on ${name}`, async () => {
+    const installer = await withSha256(pickAsset(release, target.os, target.arch, true));
     const script = installScript(target.os, installer, channel, true, false);
     const { code, stdout } = await runner.script(target.os === "windows" ? "powershell" : "sh", script, true);
     // Its steps only matter when it fails, or when it warns.
