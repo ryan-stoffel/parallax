@@ -218,8 +218,13 @@ export function FileTabs({
 }: {
   store: OpenFiles;
 } & Parameters<FilesTabs>[0]) {
-  const { tabs, active, home } = useSyncExternalStore(store.subscribe, store.get);
+  const { tabs, active, home, closing } = useSyncExternalStore(store.subscribe, store.get);
   const fileShown = current && active !== undefined && !home;
+  // A close that asks first asks in the Files view, so it comes to the front.
+  useEffect(() => {
+    if (closing !== undefined && !current) show();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- on a new question only
+  }, [closing]);
   const menu = useRef<HTMLDivElement>(null);
   const [target, setTarget] = useState<OpenFile>();
   const choose = (action: (tab: OpenFile) => void) => () => {
