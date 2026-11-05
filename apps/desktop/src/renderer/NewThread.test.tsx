@@ -508,6 +508,31 @@ describe("with plxd's run options", () => {
     expect(retry!["runId"]).not.toBe(refused!["runId"]);
   });
 
+  test("Diagnose a problem opens a New thread on Full access with the doctor's prompt", async () => {
+    await renderApp();
+    act(
+      () =>
+        void window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", metaKey: true })),
+    );
+    await settle();
+    const row = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((o) =>
+      o.textContent?.startsWith("Diagnose a problem"),
+    );
+    await act(async () => row?.click());
+    await settle();
+
+    expect(control("Access: Full access")).not.toBeNull();
+    expect(document.querySelector("main .ProseMirror")?.textContent).toContain(
+      "npx -y plx-cli@latest doctor",
+    );
+    expect(composer().contains(document.activeElement)).toBe(true);
+    await send();
+    expect(calls("thread/start")[0]).toMatchObject({
+      permission: "bypass",
+      prompt: expect.stringContaining("What went wrong:"),
+    });
+  });
+
   test("New Thread starts on the repository's own defaults (Settings > Projects)", async () => {
     answers["thread/start"] = (p) => started(p);
     setRepoPrefs(localId, parallax.id, {

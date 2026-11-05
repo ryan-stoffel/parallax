@@ -12,8 +12,8 @@ errors. Everything machine-specific lives there, not here.
 
 ## 1. Ask what went wrong
 
-Your first message asks the user to describe the problem in their own words, and to paste
-screenshots into this session if they have any. Ask follow-up questions when the description is
+Unless the user already described it, your first message asks them to describe the problem in their
+own words, and to paste screenshots into this session if they have any. Ask follow-up questions when the description is
 vague: which thread or project, what they clicked, what they expected, what they saw, and when.
 Good repro steps are the most valuable thing you can get.
 
@@ -169,7 +169,8 @@ menu; plxd in `~/.parallax-plxd` is updated by the app. For a computer set up wi
 Present what you found and let the user choose: fix it now, file an issue, both, or neither. For a
 fix, propose the exact commands, say what each does, and run them only with the user's approval.
 Prefer configuration and service fixes. Anything that stops plxd stops every running agent's turn:
-say so first.
+say so first. If you are in a Parallax thread, started by Diagnose a problem, plxd runs you too: give
+the user the steps to restart it, and never stop it yourself.
 
 Don't patch Parallax's source as a fix. A good issue with strong repro steps helps every user; a
 local patch helps one computer until the next update. If the user insists on preparing a fix pull

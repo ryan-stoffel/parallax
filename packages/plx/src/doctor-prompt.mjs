@@ -37,7 +37,7 @@ log errors) are in the context file:
 
     ${contextFile}
 
-Follow the playbook below, starting by asking the user what went wrong.
+Follow the playbook below, starting by asking the user what went wrong, unless they already said.
 
 ---
 

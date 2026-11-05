@@ -55,6 +55,8 @@ It asks the running plxd for its version, health, and agents, then checks:
 
 For each failed check it can fix, it asks first: it starts plxd or runs an agent's own sign-in. Then it writes `context.md` (this computer's facts and the results) and `prompt.md` (the [playbook](src/doctor-playbook.md)) to `doctor/<time>/` in the data folder. It offers to open Claude Code or Codex on them, as T3 Code's `t3 triage` does. The agent asks what went wrong, reads the logs and the store, checks Parallax's source and issues, and helps you file an issue with the `via-doctor` template. It posts only after you approve the text. Without either agent, the doctor prints the two files' paths to paste into any agent.
 
+In the app, **Diagnose a problem** in the command menu opens a new thread that runs this command. It opens on Full access, which its prompt says and the model menu shows, since the sandbox blocks plxd's data folder.
+
 ## Requirements
 
 - Node 20 or newer on the computer that runs plx, unless the Parallax app or Add a computer's command brings it.
