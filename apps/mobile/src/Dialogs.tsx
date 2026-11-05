@@ -98,7 +98,7 @@ function DialogCard({ dialog }: { dialog: Exclude<Dialog, { kind: "menu" }> }) {
   const preferred = [...dialog.buttons].reverse().find((b) => b.style !== "cancel" && b.style !== "destructive");
 
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", (e) => setLifted(e.endCoordinates.height / 2));
+    const show = Keyboard.addListener("keyboardWillShow", (e) => setLifted(e.endCoordinates.height));
     const hide = Keyboard.addListener("keyboardWillHide", () => setLifted(0));
     return () => {
       show.remove();
@@ -119,7 +119,7 @@ function DialogCard({ dialog }: { dialog: Exclude<Dialog, { kind: "menu" }> }) {
             styles.card,
             {
               width: Math.min(width - 48, 340),
-              maxHeight: height - insets.top - insets.bottom - 32 - lifted * 2,
+              maxHeight: height - insets.top - Math.max(insets.bottom, lifted) - 32,
               backgroundColor: c.surface,
               borderColor: c.border,
             },
