@@ -29,9 +29,10 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    CheckpointFile, CheckpointStatus, ErrorKind, FullThreadDiffParams, ParallaxEvent, RunId,
-    ScopeId, ThreadRun, ThreadRunStatus, ThreadRunsParams, ThreadRunsResult, TurnCheckpoint,
-    TurnDiffParams, TurnDiffResult, TurnId,
+    CheckpointFile, CheckpointStatus, ErrorKind, FullThreadDiffParams, ParallaxEvent,
+    ReviewCommitsParams, ReviewCommitsResult, ReviewDiffParams, ReviewScope, RunId, ScopeId,
+    ThreadRun, ThreadRunStatus, ThreadRunsParams, ThreadRunsResult, TurnCheckpoint, TurnDiffParams,
+    TurnDiffResult, TurnId,
 };
 use parallax_store::Store;
 use tokio_util::sync::CancellationToken;
@@ -383,6 +384,90 @@ pub(crate) async fn turn_diff(
                 "thread {thread_id}'s checkpoints for runs {from} to {to} can't be diffed: {error}"
             ))
         })?;
+    Ok(TurnDiffResult { diff, truncated })
+}
+
+/// Thread `thread_id`'s folder, for `git/review*`.
+async fn review_folder(daemon: &Daemon, thread_id: RunId) -> Result<(Folder, Uuid), ErrorObject> {
+    let thread = Uuid::from(thread_id);
+    let found = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| folder(db, thread))
+        .await?;
+    let folder = found.ok_or_else(|| {
+        ErrorObject::invalid_params(format!(
+            "thread {thread_id} has no folder of its own to review"
+        ))
+    })?;
+    Ok((folder, thread))
+}
+
+/// `git/reviewCommits` (PLX-694): the thread's commits since its base.
+pub(crate) async fn review_commits(
+    daemon: &Daemon,
+    params: ReviewCommitsParams,
+) -> Result<ReviewCommitsResult, ErrorObject> {
+    let (folder, _) = review_folder(daemon, params.thread_id).await?;
+    let git = daemon.agents.worktrees();
+    let Some(base) = git
+        .review_base(folder.run_folder(), folder.base.as_deref())
+        .await
+    else {
+        return Ok(ReviewCommitsResult {
+            has_base: false,
+            commits: Vec::new(),
+        });
+    };
+    let commits = git
+        .review_commits(folder.run_folder(), &base)
+        .await
+        .map_err(|error| ErrorObject::invalid_params(error.to_string()))?;
+    Ok(ReviewCommitsResult {
+        has_base: true,
+        commits,
+    })
+}
+
+/// `git/reviewDiff` (PLX-694): the thread's branch against its base, its uncommitted changes, or
+/// one commit.
+pub(crate) async fn review_diff(
+    daemon: &Daemon,
+    params: ReviewDiffParams,
+) -> Result<TurnDiffResult, ErrorObject> {
+    let (folder, thread) = review_folder(daemon, params.thread_id).await?;
+    let git = daemon.agents.worktrees();
+    let run = folder.run_folder();
+    let patch = DiffFormat::Patch {
+        ignore_whitespace: false,
+    };
+    let answer = match &params.scope {
+        ReviewScope::Branch => {
+            let base = git
+                .review_base(run, folder.base.as_deref())
+                .await
+                .ok_or_else(|| ErrorObject::invalid_params("this thread's branch has no base"))?;
+            git.diff_checkpoints(run, &base, "HEAD", patch, MAX_DIFF_BYTES)
+                .await
+        }
+        ReviewScope::Uncommitted => {
+            let reference = format!("refs/parallax/review/{thread}/{}", Uuid::now_v7());
+            git.review_uncommitted(run, &reference, MAX_DIFF_BYTES)
+                .await
+        }
+        ReviewScope::Commit { sha } => {
+            // Only a commit's hash reaches git's argv, never a flag or a range.
+            if sha.len() < 7 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(ErrorObject::invalid_params(format!(
+                    "{sha:?} is not a commit's hash"
+                )));
+            }
+            git.diff_checkpoints(run, &format!("{sha}^"), sha, patch, MAX_DIFF_BYTES)
+                .await
+        }
+    };
+    let (diff, truncated) = answer.map_err(|error| {
+        ErrorObject::invalid_params(format!("this thread's changes can't be read: {error}"))
+    })?;
     Ok(TurnDiffResult { diff, truncated })
 }
 

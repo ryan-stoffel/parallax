@@ -144,5 +144,40 @@
         "restoreFiles": true
       }
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 90,
+    "method": "git/reviewCommits",
+    "params": { "threadId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 90,
+    "result": {
+      "hasBase": true,
+      "commits": [
+        {
+          "sha": "a41c09d2e3f4a41c09d2e3f4a41c09d2e3f4a41c",
+          "subject": "Follow the channel a build was built for",
+          "author": "Ryan Stoffel",
+          "committedAt": "2026-10-09T12:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 91,
+    "method": "git/reviewDiff",
+    "params": {
+      "threadId": "01a0d6c2-2a3b-7c4d-8e5f-6a7b8c9d0e03",
+      "scope": { "kind": "commit", "sha": "a41c09d2e3f4a41c09d2e3f4a41c09d2e3f4a41c" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 91,
+    "result": { "diff": "diff --git a/a.txt b/a.txt\n" }
   }
 ]
