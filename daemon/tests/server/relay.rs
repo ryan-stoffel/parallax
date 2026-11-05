@@ -7,16 +7,18 @@
 
 use std::time::Duration;
 
+use parallax_protocol::jsonrpc::Message;
 use parallax_protocol::methods::{
-    AccessGet, AccessMerge, AccessRemove, HostSettingsGet, HostSettingsSet, OrchestratorCreate,
-    RelayHosts, RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
-    ScheduleSave,
+    AccessGet, AccessMerge, AccessRemove, HostAnnounceUpdate, HostSettingsGet, HostSettingsSet,
+    OrchestratorCreate, RelayHosts, RelayRegister, RelayRemove, RelaySign, RemoteRevoke,
+    RemoteSessions, ScheduleList, ScheduleSave,
 };
 use parallax_protocol::{
-    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice, HostSettingsGetParams,
-    HostSettingsSetParams, RelayHostsParams, RelayRegisterParams, RelayRemoveParams,
-    RelaySignParams, RelayStatus, RemoteRevokeParams, RemoteSessionsParams, Schedule,
-    ScheduleListParams, ScheduleSaveParams, SignatureEncoding, WebhookSignature,
+    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice,
+    HostAnnounceUpdateParams, HostSettingsGetParams, HostSettingsSetParams, RelayHostsParams,
+    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelayStatus, RemoteRevokeParams,
+    RemoteSessionsParams, Schedule, ScheduleListParams, ScheduleSaveParams, SignatureEncoding,
+    WebhookSignature,
 };
 use plxd::{relay, remote};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -224,6 +226,20 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
     assert!(
         matches!(forged, Err(remote::Error::WrongHost)),
         "{forged:?}"
+    );
+
+    // Word of a restart for an update gets through the relay too (PLX-1418).
+    let mut announcing = Client::ready(&server.socket).await;
+    announcing
+        .send::<HostAnnounceUpdate>(HostAnnounceUpdateParams {})
+        .await;
+    let told = app.next().await;
+    assert!(told.contains(r#""method":"host/updating""#), "{told}");
+    // This test's own client hears it too, as its next message.
+    let heard = client.next().await;
+    assert!(
+        matches!(&heard, Some(Message::Notification(n)) if n.method == "host/updating"),
+        "{heard:?}"
     );
 
     // A webhook's public URL is the relay's, and plxd checks its signature.

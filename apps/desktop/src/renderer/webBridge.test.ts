@@ -1,10 +1,41 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
 
 import { ErrorCodes, PROTOCOL_VERSION } from "../protocol/generated/protocol";
-import { INTERNAL_ERROR, INVALID_PARAMS, PROTOCOL_VERSION as WEB_PROTOCOL } from "./webBridge";
+import { UPDATE_NOTICE_MS } from "../protocol/updateNotice";
+import {
+  INTERNAL_ERROR,
+  INVALID_PARAMS,
+  PROTOCOL_VERSION as WEB_PROTOCOL,
+  WebHost,
+} from "./webBridge";
+
+test("a drop after host/updating says updating until the notice runs out, as the phone reads it", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("window", globalThis);
+  try {
+    const socket = { send: () => {}, close: () => {} } as unknown as WebSocket;
+    const host = new WebHost(async () => socket);
+    await host.connect();
+    const receive = (message: unknown) =>
+      socket.onmessage!({ data: JSON.stringify(message) } as MessageEvent);
+    // One it doesn't know does nothing.
+    receive({ jsonrpc: "2.0", method: "host/fromTheFuture", params: {} });
+    receive({ jsonrpc: "2.0", method: "host/updating", params: {} });
+    socket.onclose!({} as CloseEvent);
+    expect(host.state).toEqual(expect.objectContaining({ status: "failed", updating: true }));
+    vi.advanceTimersByTime(UPDATE_NOTICE_MS - 1);
+    expect(host.state.updating).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(host.state.updating).toBeUndefined();
+    host.close();
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
 
 // webBridge.ts copies these so the web chunk shares no module with the app's.
 test("the web bridge's protocol constants match the generated protocol", () => {

@@ -6,7 +6,8 @@
 //! before it writes any event, and it takes events from the event log through each
 //! subscription's cursor rather than from a queue of its own, so a subscriber that lags reads from
 //! the log until it catches up. A subscriber that falls behind the log's retention ends with
-//! `events/resync` when its client declared `resyncNotice`; otherwise the connection closes.
+//! `events/resync` when its client declared `resyncNotice`; otherwise the connection closes. Before
+//! plxd restarts for an update, the writer sends `host/updating` once `initialize` is answered.
 //!
 //! When the client closes its side, or the server starts shutting down, the reader stops, and the
 //! connection closes once every request it read has been answered. When the client is gone, has
@@ -28,11 +29,12 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::legacy;
 use parallax_protocol::methods::{
-    CancelRequest, DeviceClose, DeviceSend, EventsEvent, EventsResync, Initialize,
+    CancelRequest, DeviceClose, DeviceSend, EventsEvent, EventsResync, HostUpdating, Initialize,
     NotificationMethod, RequestMethod, TerminalDetach, TerminalResize, TerminalWrite,
 };
 use parallax_protocol::{
-    ErrorKind, EventsResyncParams, TerminalKey, TerminalResizeParams, TerminalWriteParams,
+    ErrorKind, EventsResyncParams, HostUpdatingParams, TerminalKey, TerminalResizeParams,
+    TerminalWriteParams,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -88,6 +90,7 @@ pub(crate) async fn serve<S>(
         FramedWrite::new(write, FrameCodec::new()),
         queue,
         Arc::clone(&daemon.log),
+        daemon.self_update.update_notice.clone(),
         closing,
         stall,
     );
@@ -452,13 +455,14 @@ async fn run_writer<W: AsyncWrite + Unpin>(
     sink: FramedWrite<W, FrameCodec>,
     queue: mpsc::Receiver<Reply>,
     log: Arc<EventLog>,
+    update_notice: CancellationToken,
     closing: CancellationToken,
     stall: Stall,
 ) {
     tokio::select! {
         biased;
         () = closing.cancelled() => {}
-        written = write_loop(sink, queue, &log, &stall) => {
+        written = write_loop(sink, queue, &log, &update_notice, &stall) => {
             if let Err(error) = written {
                 debug!(%error, "writing failed");
             }
@@ -539,14 +543,23 @@ async fn write_loop<W: AsyncWrite + Unpin>(
     mut sink: FramedWrite<W, FrameCodec>,
     mut queue: mpsc::Receiver<Reply>,
     log: &EventLog,
+    update_notice: &CancellationToken,
     stall: &Stall,
 ) -> Result<(), FrameError> {
     let mut appended = log.watch();
     let mut cursors = Cursors::default();
     let mut resync_notice = false;
+    let mut initialized = false;
+    let mut told_of_update = false;
     loop {
+        if initialized && !told_of_update && update_notice.is_cancelled() {
+            told_of_update = true;
+            let updating = Notification::new::<HostUpdating>(HostUpdatingParams {});
+            stall.guard(sink.feed(updating)).await?;
+        }
         match queue.try_recv() {
             Ok(reply) => {
+                initialized |= matches!(reply, Reply::Initialized { .. });
                 stall
                     .guard(send_reply(
                         &mut sink,
@@ -588,8 +601,12 @@ async fn write_loop<W: AsyncWrite + Unpin>(
         // FramedWrite is a Sink for every serializable item, so flush and close name one.
         stall.guard(SinkExt::<Response>::flush(&mut sink)).await?;
         tokio::select! {
+            // First, so a shutdown closing the queue right after it can't lose the notice.
+            biased;
+            () = update_notice.cancelled(), if initialized && !told_of_update => {}
             reply = queue.recv() => match reply {
                 Some(reply) => {
+                    initialized |= matches!(reply, Reply::Initialized { .. });
                     stall
                         .guard(send_reply(&mut sink, reply, &mut cursors, &mut resync_notice))
                         .await?;

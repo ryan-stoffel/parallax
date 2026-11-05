@@ -61,6 +61,21 @@ test("a connection still down when the grace ends shows its latest real state", 
   expect(shown.get("a")).toEqual(failed(true));
 });
 
+test("a restart for an update shows at once as that, not as its failure", () => {
+  const { grace, shown } = setup();
+  grace.hear("a", connected());
+  grace.hear("a", {
+    status: "failed",
+    error: { reason: "exited", message: "gone" },
+    retrying: true,
+    updating: true,
+  });
+  expect(shown.get("a")).toEqual({ status: "connecting", updating: true });
+  // What the connection says when its notice runs out shows at once, with no second grace.
+  grace.hear("a", failed(true));
+  expect(shown.get("a")).toEqual(failed(true));
+});
+
 test("a first connect shows at once", () => {
   const { grace, log } = setup();
   grace.hear("a", connecting);

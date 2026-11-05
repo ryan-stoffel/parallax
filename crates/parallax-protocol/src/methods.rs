@@ -59,55 +59,55 @@ use crate::{
     EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams,
     GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
-    HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult, HostReadUploadParams,
-    HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
-    HostUpdateParams, HostUpdateResult, HostUploadParams, HostUploadResult, HostVersionParams,
-    HostVersionResult, HubAccountRemoveParams, HubAccountSetEnabledParams, HubSignIn,
-    HubSignInCallbackParams, HubSignInParams, HubSignInStateParams, HubSignInStatus,
-    HubsListParams, HubsListResult, HubsRemoveParams, HubsSaveParams, InboxListParams,
-    InboxListResult, InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult,
-    LandApproveParams, LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams,
-    MemoryDeleteResult, MemoryListParams, MemoryListResult, MemoryProposeParams,
-    MemoryProposeResult, MemoryReadParams, MemoryReadResult, MemorySyncListParams,
-    MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult, MemoryWriteParams,
-    MemoryWriteResult, OrchestrationCommand, OrchestratorCreateParams, OrchestratorCreateResult,
-    OrchestratorDeleteParams, OrchestratorDeleteResult, OrchestratorFreshParams,
-    OrchestratorFromThreadsParams, OrchestratorFromThreadsResult, OrchestratorListParams,
-    OrchestratorListResult, OrchestratorStartParams, OrchestratorUpdateParams,
-    OrchestratorUpdateResult, PrActParams, PrDiffResult, PrGuideParams, PrGuideResult,
-    PrMergeWhenReadyParams, PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams,
-    PrWatchesResult, PrWriteParams, PrWriteResult, PreviewCallParams, PreviewCallResult,
-    PreviewFrameParams, PreviewFrameResult, PreviewInputParams, PreviewInputResult,
-    PreviewListParams, PreviewListResult, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, PromptImage, ProvidersListParams,
-    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
-    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
-    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
-    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
-    QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
-    RelayIdParams, RelayIdResult, RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams,
-    RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult,
-    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
-    RepoCloneParams, RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams,
-    RepoFilesResult, RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoLogoParams,
-    RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
-    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
-    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
-    ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
-    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
-    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
-    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
-    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
-    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
-    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
-    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
-    ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
-    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
-    TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
-    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
-    UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
+    HostAnnounceUpdateParams, HostAnnounceUpdateResult, HostFoldersParams, HostFoldersResult,
+    HostHealthParams, HostHealthResult, HostReadUploadParams, HostReadUploadResult, HostSettings,
+    HostSettingsGetParams, HostSettingsSetParams, HostUpdateParams, HostUpdateResult,
+    HostUpdatingParams, HostUploadParams, HostUploadResult, HostVersionParams, HostVersionResult,
+    HubAccountRemoveParams, HubAccountSetEnabledParams, HubSignIn, HubSignInCallbackParams,
+    HubSignInParams, HubSignInStateParams, HubSignInStatus, HubsListParams, HubsListResult,
+    HubsRemoveParams, HubsSaveParams, InboxListParams, InboxListResult, InboxSeenParams,
+    InboxSeenResult, InitializeParams, InitializeResult, LandApproveParams, LandQueueParams,
+    LandResult, LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams,
+    MemoryListResult, MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
+    MemorySyncListParams, MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult,
+    MemoryWriteParams, MemoryWriteResult, OrchestrationCommand, OrchestratorCreateParams,
+    OrchestratorCreateResult, OrchestratorDeleteParams, OrchestratorDeleteResult,
+    OrchestratorFreshParams, OrchestratorFromThreadsParams, OrchestratorFromThreadsResult,
+    OrchestratorListParams, OrchestratorListResult, OrchestratorStartParams,
+    OrchestratorUpdateParams, OrchestratorUpdateResult, PrActParams, PrDiffResult, PrGuideParams,
+    PrGuideResult, PrMergeWhenReadyParams, PrStatusResult, PrViewParams, PrWatchResult,
+    PrWatchesParams, PrWatchesResult, PrWriteParams, PrWriteResult, PreviewCallParams,
+    PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInputParams,
+    PreviewInputResult, PreviewListParams, PreviewListResult, ProjectCreateParams,
+    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, PromptImage,
+    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
+    ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
+    PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
+    QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
+    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams,
+    RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams, RelayPushKeyResult,
+    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams,
+    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
+    RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
+    RepoCloneProgressResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
+    RepoGrepResult, RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult,
+    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams,
+    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
+    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
+    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
+    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
+    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
+    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
+    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
+    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
+    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
+    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
+    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams,
+    ThreadSetProjectResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
+    UsageLimitsResult, UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
     UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
 };
 use crate::{
@@ -244,6 +244,10 @@ method_table! {
         /// release's SHA-256, and restarts into it once no agent's turn is running, or at once
         /// with `now`. It never downgrades. Gated on the `hostUpdate` capability (PLX-700, decision 0066).
         HostUpdate = "host/update": HostUpdateParams => HostUpdateResult;
+        /// `host/announceUpdate`: sends `host/updating` on every connection, for a restart that
+        /// doesn't start here. A newer plxd's `service install --replace` sends it to the plxd
+        /// it's about to stop (PLX-1418).
+        HostAnnounceUpdate = "host/announceUpdate": HostAnnounceUpdateParams => HostAnnounceUpdateResult;
         /// `host/folders`: the folders in a folder on the host, for adding a repository there
         /// (PLX-769). Gated on the `hostFolders` capability.
         HostFolders = "host/folders": HostFoldersParams => HostFoldersResult;
@@ -897,6 +901,10 @@ method_table! {
         /// `events/resync`: plxd ended a subscription that fell behind, and the connection
         /// stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
         EventsResync = "events/resync": EventsResyncParams;
+        /// `host/updating`: plxd is about to restart for an update, so a client can say so rather
+        /// than report an outage. plxd sends it once on every connection, after `initialize` is
+        /// answered. A client that doesn't know it ignores it (PLX-1418).
+        HostUpdating = "host/updating": HostUpdatingParams;
         /// `terminal/write`: input for a terminal, in the order sent. The client sends it.
         TerminalWrite = "terminal/write": TerminalWriteParams;
         /// `terminal/resize`: a terminal's new size. The client sends it.

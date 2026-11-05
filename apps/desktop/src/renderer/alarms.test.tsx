@@ -72,6 +72,38 @@ test("a drop raises no notice until its grace ends, and none at all if it reconn
   }
 });
 
+test("a restart for an update raises no notice unless it isn't back in time", async () => {
+  const connected: ConnectionState = {
+    status: "connected",
+    plxd: "1",
+    protocol: 1,
+    capabilities: {},
+  };
+  const down: ConnectionState = {
+    status: "failed",
+    error: { reason: "exited", message: "gone" },
+    retrying: true,
+  };
+  let changed: (hostId: string, state: ConnectionState) => void = () => {};
+  const parallax: Partial<ParallaxBridge> = {
+    connectionState: async () => connected,
+    onConnectionState: (listener) => ((changed = listener), () => {}),
+  };
+  Object.assign(window, { parallax });
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  await act(async () => root!.render(<Alarms />));
+  const mini = hosts[0]!.id;
+
+  await act(async () => changed(mini, { ...down, updating: true }));
+  await act(async () => changed(mini, connected));
+  expect(document.body.textContent).not.toContain("Lost connection to mac-mini");
+  expect(document.body.textContent).not.toContain("Reconnected to mac-mini");
+
+  await act(async () => changed(mini, { ...down, updating: true }));
+  await act(async () => changed(mini, down));
+  expect(document.body.textContent).toContain("Lost connection to mac-mini");
+});
+
 test("an account computer refused for want of a session raises no error, and another host's refusal does", async () => {
   let changed: (hostId: string, state: ConnectionState) => void = () => {};
   const parallax: Partial<ParallaxBridge> = {

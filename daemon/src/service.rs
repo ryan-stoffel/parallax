@@ -32,8 +32,10 @@ use std::time::Instant;
 use parallax_protocol::jsonrpc::{Message, Request};
 #[cfg(unix)]
 use parallax_protocol::methods::Initialize;
+use parallax_protocol::methods::{HostAnnounceUpdate, HostVersion};
 #[cfg(unix)]
 use parallax_protocol::{ClientInfo, InitializeParams, ProtocolRange};
+use parallax_protocol::{HostAnnounceUpdateParams, HostVersionParams};
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process};
 
@@ -309,9 +311,37 @@ fn prepare_install(
             data_dir: data_dir.root().to_owned(),
         });
     }
+    if replace {
+        announce_update(data_dir);
+    }
     crate::server::prepare_data_dir(data_dir.root())?;
     prepare_log_dir(data_dir)?;
     Ok((current_exe()?, outside))
+}
+
+/// Tells the plxd on `data_dir`, which `install --replace` is about to stop, when that's an update:
+/// its version isn't this one's. Best effort: a plxd from before `host/announceUpdate` refuses it,
+/// and there may be no plxd at all, and neither should keep the service from being replaced.
+fn announce_update(data_dir: &DataDir) {
+    let (Ok(socket), Ok(runtime)) = (
+        data_dir.socket_path(),
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build(),
+    ) else {
+        return;
+    };
+    let plxd = crate::peer::Plxd::local(socket.path);
+    let announced = async {
+        let running = plxd.call::<HostVersion>(HostVersionParams {}).await?;
+        if running.plxd != crate::version() {
+            plxd.call::<HostAnnounceUpdate>(HostAnnounceUpdateParams {})
+                .await?;
+        }
+        Ok::<_, String>(())
+    };
+    // The timeout is made inside the runtime, which its timer needs.
+    let _ = runtime.block_on(async { tokio::time::timeout(PROBE_TIMEOUT, announced).await });
 }
 
 /// Stops the `serve` holding `data_dir`'s lock, which `install --replace` hands over to the

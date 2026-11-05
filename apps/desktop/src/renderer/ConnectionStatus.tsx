@@ -1,7 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
-import { ReconnectGrace } from "./reconnectGrace";
+import { ReconnectGrace, shownState } from "./reconnectGrace";
 
 // Every host's connection state as clients show it (`useShownConnection`), for status and what it
 // enables, shared by all views, so a view that changes
@@ -49,7 +49,7 @@ function ask(hostId: string) {
   window.parallax.connectionState(hostId).then(
     (state) => {
       if (listeners.size === 0 || states.has(hostId)) return;
-      states.set(hostId, state);
+      states.set(hostId, shownState(state));
       real.set(hostId, state);
       changed();
     },
@@ -145,9 +145,11 @@ export function useForgetRemoved(hosts: { id: string }[]) {
 export const offlineReason = (state?: ConnectionState) =>
   state?.status === "connected"
     ? undefined
-    : state?.status === "failed"
-      ? "Disconnected from plxd"
-      : "Connecting to plxd…";
+    : state?.updating
+      ? "plxd is restarting for an update…"
+      : state?.status === "failed"
+        ? "Disconnected from plxd"
+        : "Connecting to plxd…";
 
 /** A small dot in the state's color: green, pulsing amber, or red. */
 export function StatusDot({ state }: { state: ConnectionState | undefined }) {
@@ -162,14 +164,16 @@ export function StatusDot({ state }: { state: ConnectionState | undefined }) {
 /** The state in a word or two. */
 export function statusLabel(state: ConnectionState): string {
   if (state.status === "connected") return "Connected";
+  if (state.updating) return "Updating…";
   if (state.status === "connecting") return "Connecting…";
   return state.retrying ? "Reconnecting…" : "Disconnected";
 }
 
 /**
  * A quiet status line for the sidebar's footer, for the open host, shown only while it isn't
- * connected: a dot and a word while connecting; on failure, why, and Retry once it stops retrying
- * by itself. The tail of attach's (and ssh's) stderr is only in the tooltip.
+ * connected: a dot and a word while connecting; why while plxd restarts for an update; on failure,
+ * why, and Retry once it stops retrying by itself. The tail of attach's (and ssh's) stderr is only
+ * in the tooltip.
  */
 export function ConnectionStatus({ hostId }: { hostId: string }) {
   const state = useShownConnection(hostId);
@@ -200,6 +204,9 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
         <p title={state.error.stderr} className="mt-0.5 line-clamp-4 pl-6 text-faint-foreground">
           {state.error.message}
         </p>
+      )}
+      {state.updating && (
+        <p className="mt-0.5 pl-6 text-faint-foreground">{offlineReason(state)}</p>
       )}
     </div>
   );

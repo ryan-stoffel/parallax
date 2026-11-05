@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import { PROTOCOL_VERSION } from "../protocol/generated/protocol";
+import { UPDATE_NOTICE_MS } from "../protocol/updateNotice";
 import type {
   ConnectionError,
   ConnectionState,
@@ -399,6 +400,64 @@ test("events/resync ends only its subscription, and the connection stays up", ()
   expect(other).toHaveBeenCalledWith(expect.objectContaining({ type: "event" }));
   expect(other).not.toHaveBeenCalledWith({ type: "resync" });
   expect(state()?.status).toBe("connected");
+  expect(children).toHaveLength(1);
+});
+
+test("a drop after host/updating says updating until it's back, with its status still real", () => {
+  connect();
+  child().handshake();
+  child().reply({ method: "host/updating", params: {} });
+  expect(state()).toEqual(expect.objectContaining({ status: "connected" }));
+  child().emit("close", 0, null);
+  expect(state()).toEqual(expect.objectContaining({ status: "failed", updating: true }));
+  vi.advanceTimersByTime(1000);
+  expect(state()).toEqual({ status: "connecting", updating: true });
+  child().handshake();
+  expect(state()?.status).toBe("connected");
+  expect(state()?.updating).toBeUndefined();
+  // That notice is spent, so the next drop is an ordinary one.
+  child().emit("close", 0, null);
+  expect(state()?.updating).toBeUndefined();
+});
+
+test("a plxd not back within the notice shows its real state", () => {
+  connect();
+  child().handshake();
+  child().reply({ method: "host/updating", params: {} });
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(UPDATE_NOTICE_MS - 1);
+  expect(state()?.updating).toBe(true);
+  vi.advanceTimersByTime(1);
+  expect(state()?.updating).toBeUndefined();
+  expect(state()?.status).not.toBe("connected");
+});
+
+test("a notice that runs out while still connected sends no state", () => {
+  connect();
+  child().handshake();
+  child().reply({ method: "host/updating", params: {} });
+  const before = states.length;
+  for (let waited = 0; waited < UPDATE_NOTICE_MS; waited += 30_000) {
+    vi.advanceTimersByTime(30_000);
+    const health = child().request("host/health");
+    child().reply({ id: health.id, result: { uptimeSeconds: 1, store: "ok", runningAgents: 0 } });
+  }
+  expect(states).toHaveLength(before);
+});
+
+test("a drop with no notice, as from an older plxd, doesn't say updating", () => {
+  connect();
+  child().handshake();
+  child().emit("close", 0, null);
+  expect(state()?.updating).toBeUndefined();
+});
+
+test("an unknown notification changes nothing", () => {
+  connect();
+  child().handshake();
+  const before = states.length;
+  child().reply({ method: "host/fromTheFuture", params: { anything: 1 } });
+  expect(states).toHaveLength(before);
   expect(children).toHaveLength(1);
 });
 

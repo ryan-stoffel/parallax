@@ -62,7 +62,7 @@ function status(m: Computer): string {
   if (m.gate?.kind === "setup") return "New computer · Needs setup";
   if (m.gate?.kind === "waiting") return `Waiting for approval · ${formatCode(m.gate.code)}`;
   if (m.gate?.kind === "refused") return sentence(m.gate.message);
-  if (restarting(m.machine.id, m.connectedNow)) return "Updating…";
+  if (m.state.updating || restarting(m.machine.id, m.connectedNow)) return "Updating…";
   if (m.state.status === "connected") return `Connected · Parallax ${m.state.plxd}`;
   if (m.state.status === "failed") return m.state.error.message;
   return "Connecting…";
@@ -464,7 +464,8 @@ const pageIcons: Partial<Record<SettingsPage, LucideIcon>> = {
 export function ComputerScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "Computer">) {
   const c = useColors();
   const m = useComputer(route.params.id);
-  const updating = useRestarting(route.params.id, !!m?.connectedNow);
+  const restartingNow = useRestarting(route.params.id, !!m?.connectedNow);
+  const updating = restartingNow || !!m?.state.updating;
   const { defaultId, setDefault, remove, setUp } = useFleet();
   useEffect(() => navigation.setOptions({ title: m?.machine.name ?? "Computer" }), [m?.machine.name]);
   if (!m) return null;

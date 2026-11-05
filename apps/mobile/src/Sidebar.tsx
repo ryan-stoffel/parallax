@@ -750,7 +750,11 @@ export function Sidebar() {
                   <Icon icon={Lucide.WifiOff} size={13} color={c.faintForeground} />
                   <T faint numberOfLines={1} style={{ fontSize: 13, flexShrink: 1 }}>
                     {offline.map((m) => m.machine.name).join(", ")}{" "}
-                    {offline.every((m) => m.state.status === "connecting") ? "connecting…" : "offline"}
+                    {offline.every((m) => m.state.updating)
+                      ? "updating…"
+                      : offline.every((m) => m.state.status === "connecting")
+                        ? "connecting…"
+                        : "offline"}
                   </T>
                 </View>
               )}

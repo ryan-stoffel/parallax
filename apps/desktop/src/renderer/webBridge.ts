@@ -42,6 +42,7 @@ import {
   requestToLegacy,
   resultFromLegacy,
 } from "../protocol/legacyNames";
+import { UpdateNotice } from "../protocol/updateNotice";
 
 // The generated protocol's, copied so this chunk shares nothing with the app's (webBridge.test.ts).
 export const PROTOCOL_VERSION = 1;
@@ -212,6 +213,9 @@ export class WebHost {
   private readonly pending = new Map<number, Pending>();
   private readonly subscriptions = new Set<Subscription>();
   private readonly watches = new Set<Watch>();
+  private readonly updateNotice = new UpdateNotice(() => {
+    if (this.state.updating) this.setState(this.state);
+  });
   /** The terminals opened, by the id the renderer gave, which is plxd's `terminalId` too. */
   readonly terminals = new Map<string, TerminalOpenParams>();
   /** Who shows each terminal, by its id. */
@@ -364,6 +368,7 @@ export class WebHost {
   /** Ends the connection for good, as the mobile app does for a computer it removes. */
   close(): void {
     this.closed = true;
+    this.updateNotice.stop();
     clearTimeout(this.retryTimer);
     if (this.socket) this.end("The connection was closed.");
   }
@@ -492,6 +497,7 @@ export class WebHost {
   }
 
   private notified(method: string, params: unknown): void {
+    if (method === "host/updating") return this.updateNotice.heard();
     if (method === "device/data") {
       const { streamId, data, text } = params as DeviceDataParams;
       const bytes = () => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
@@ -578,8 +584,8 @@ export class WebHost {
   }
 
   private setState(state: ConnectionState): void {
-    this.state = state;
-    for (const listener of this.stateListeners) listener(LOCAL, state);
+    this.state = this.updateNotice.mark(state);
+    for (const listener of this.stateListeners) listener(LOCAL, this.state);
   }
 }
 

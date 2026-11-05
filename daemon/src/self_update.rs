@@ -69,6 +69,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long plxd waits after answering before it restarts, so the answer reaches the client.
 const ANSWER_GRACE: Duration = Duration::from_secs(1);
 
+/// How long plxd waits after telling its connections it's restarting for an update, so what a relay
+/// pipe holds goes out before plxd exits.
+const NOTICE_GRACE: Duration = Duration::from_millis(500);
+
 /// How often a restart waiting for running agents checks on them.
 const RUNS_POLL: Duration = Duration::from_secs(5);
 
@@ -134,6 +138,9 @@ pub(crate) struct SelfUpdate {
     state: Mutex<State>,
     /// Cancelled to shut `serve` down for a handover; `Server::run` watches it.
     pub restart: CancellationToken,
+    /// Cancelled when plxd is about to restart for an update; each connection's writer watches it
+    /// and sends `host/updating`.
+    pub update_notice: CancellationToken,
     /// Whether plxd restarts after installing. Off in tests, which never restart anything.
     handover: bool,
 }
@@ -167,6 +174,7 @@ impl SelfUpdate {
             current: crate::version().to_owned(),
             state: Mutex::default(),
             restart: CancellationToken::new(),
+            update_notice: CancellationToken::new(),
             handover: true,
         }
     }
@@ -190,8 +198,16 @@ impl SelfUpdate {
             current: current.to_owned(),
             state: Mutex::default(),
             restart: CancellationToken::new(),
+            update_notice: CancellationToken::new(),
             handover: false,
         }
+    }
+
+    /// `host/announceUpdate`, and the start of a handover: tells every connection plxd is about to
+    /// restart for an update, and gives that time to go out.
+    pub(crate) async fn announce(&self) {
+        self.update_notice.cancel();
+        tokio::time::sleep(NOTICE_GRACE).await;
     }
 
     /// `host/update`: installs `version` and schedules the handover, or says why not.
@@ -655,6 +671,7 @@ async fn handover_when_idle(daemon: Arc<Daemon>) {
     )
 )]
 async fn hand_over(daemon: &Arc<Daemon>, program: PathBuf) {
+    daemon.self_update.announce().await;
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     let handover = match service_handover(daemon, &program).await {
         // The service manager stops this plxd now.

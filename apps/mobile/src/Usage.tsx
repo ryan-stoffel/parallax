@@ -62,6 +62,7 @@ const LIMITS_POLL_MS = 60_000;
 /** A computer that isn't answering: its status, as the desktop words it, or undefined once connected. */
 function statusOf(state: ConnectionState): string | undefined {
   if (state.status === "connected") return undefined;
+  if (state.updating) return "Updating…";
   if (state.status === "connecting") return "Connecting…";
   return state.retrying ? "Reconnecting…" : "Disconnected";
 }

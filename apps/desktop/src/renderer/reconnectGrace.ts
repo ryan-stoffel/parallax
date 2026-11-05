@@ -8,10 +8,18 @@ import type { ConnectionState } from "../preload/bridge";
 export const RECONNECT_GRACE_MS = 5_000;
 
 /**
+ * `state` as views show it. One saying plxd is restarting for an update shows only that, not the
+ * error its connection got meanwhile.
+ */
+export const shownState = (state: ConnectionState): ConnectionState =>
+  state.updating ? { status: "connecting", updating: true } : state;
+
+/**
  * What to show for each host's connection, so a short reconnect doesn't read as an outage. A host
  * showing as connected keeps showing so for `RECONNECT_GRACE_MS` while it reconnects, then shows
- * its real state. Anything else shows at once: a first connect, a host already down, and a failure
- * that can't come back by itself, such as a refused session or a closed connection.
+ * its real state. Anything else shows at once: a first connect, a host already down, a failure
+ * that can't come back by itself, such as a refused session or a closed connection, and a restart
+ * plxd said is for an update.
  *
  * This is for display only. Requests still go by the real state, so one sent meanwhile fails or
  * waits as it would without this.
@@ -31,9 +39,9 @@ export class ReconnectGrace {
   hear(hostId: string, state: ConnectionState): void {
     const comingBack =
       state.status === "connecting" || (state.status === "failed" && state.retrying);
-    if (!comingBack || this.shown(hostId)?.status !== "connected") {
+    if (!comingBack || state.updating || this.shown(hostId)?.status !== "connected") {
       this.forget(hostId);
-      return this.show(hostId, state);
+      return this.show(hostId, shownState(state));
     }
     const held = this.held.get(hostId);
     if (held) {

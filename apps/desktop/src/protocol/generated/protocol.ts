@@ -44,6 +44,12 @@ export type ParallaxRequests = {
 	 */
 	"host/update": { params: HostUpdateParams, result: HostUpdateResult },
 	/**
+	 * `host/announceUpdate`: sends `host/updating` on every connection, for a restart that
+	 * doesn't start here. A newer plxd's `service install --replace` sends it to the plxd
+	 * it's about to stop (PLX-1418).
+	 */
+	"host/announceUpdate": { params: HostAnnounceUpdateParams, result: HostAnnounceUpdateResult },
+	/**
 	 * `host/folders`: the folders in a folder on the host, for adding a repository there
 	 * (PLX-769). Gated on the `hostFolders` capability.
 	 */
@@ -1111,6 +1117,7 @@ export const REQUEST_METHODS = [
 	"host/health",
 	"host/version",
 	"host/update",
+	"host/announceUpdate",
 	"host/folders",
 	"host/upload",
 	"host/readUpload",
@@ -1338,6 +1345,12 @@ export type ParallaxNotifications = {
 	 * stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
 	 */
 	"events/resync": EventsResyncParams,
+	/**
+	 * `host/updating`: plxd is about to restart for an update, so a client can say so rather
+	 * than report an outage. plxd sends it once on every connection, after `initialize` is
+	 * answered. A client that doesn't know it ignores it (PLX-1418).
+	 */
+	"host/updating": HostUpdatingParams,
 	/**
 	 * `terminal/write`: input for a terminal, in the order sent. The client sends it.
 	 */
@@ -1624,6 +1637,16 @@ export type HostUpdateResult = {
  * A newer plxd may send values that are not listed here. Treat those as unknown.
  */
 export type HostUpdateRestart = "now" | "afterRuns" | "upToDate";
+
+/**
+ * Params of `host/announceUpdate`.
+ */
+export type HostAnnounceUpdateParams = Record<symbol, never>;
+
+/**
+ * Result of `host/announceUpdate`: plxd told its connections, and had time to send it.
+ */
+export type HostAnnounceUpdateResult = Record<symbol, never>;
 
 /**
  * Params of `host/folders`, behind the `hostFolders` capability (PLX-769): the folders in a
@@ -11907,6 +11930,11 @@ export type EventsResyncParams = {
 	 */
 	subscription: SubscriptionId,
 };
+
+/**
+ * Params of `host/updating`. It says nothing but that plxd is about to restart for an update.
+ */
+export type HostUpdatingParams = Record<symbol, never>;
 
 /**
  * Params of `terminal/write`: what's typed into a terminal.

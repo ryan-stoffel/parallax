@@ -234,6 +234,10 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         HostHealth => |p| ready(Ok(host::health(context, p))),
         HostVersion => |p| ready(Ok(host::version(context, p))),
         HostUpdate => |p| daemon.self_update.update(daemon, p),
+        HostAnnounceUpdate => |_| async {
+            daemon.self_update.announce().await;
+            Ok(parallax_protocol::HostAnnounceUpdateResult {})
+        },
         HostFolders => |p| host::folders(context, p),
         HostUpload => |p| host::upload(context, p),
         HostReadUpload => |p| host::read_upload(context, p),

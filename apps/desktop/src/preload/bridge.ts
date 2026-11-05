@@ -862,6 +862,7 @@ export const withheldMethods = [
   "agent/wait",
   "context/write",
   "host/update",
+  "host/announceUpdate",
   "land/approve",
   "land/queue",
   "land/sendBack",
@@ -945,12 +946,22 @@ export type HostUpdateEvent =
   /** `error` says why, for people. */
   | { hostId: string; status: "failed"; error: string };
 
+/**
+ * `updating`: plxd said it's restarting for an update, and this connection is waiting for it, for
+ * at most `UPDATE_NOTICE_MS`. For display only. See `UpdateNotice`.
+ */
 export type ConnectionState =
-  | { status: "connecting" }
+  | { status: "connecting"; updating?: boolean }
   /** `capabilities` are what plxd's `initialize` advertised, such as `runOptions`. */
-  | { status: "connected"; plxd: string; protocol: number; capabilities: Capabilities }
+  | {
+      status: "connected";
+      plxd: string;
+      protocol: number;
+      capabilities: Capabilities;
+      updating?: undefined;
+    }
   /** `retrying` is false once only `retry` can bring it back. */
-  | { status: "failed"; error: ConnectionError; retrying: boolean };
+  | { status: "failed"; error: ConnectionError; retrying: boolean; updating?: boolean };
 
 export type ConnectionError = {
   /**
