@@ -710,14 +710,14 @@ describe("the Load Balancer in New Thread (0101)", () => {
     expect(calls("host/health").length).toBeGreaterThan(0);
     act(() => loadBalancer.set({ on: true, preferences: {}, leftOut: [box.id] }));
     await held.answer();
-    expect(runsOn()).toMatch(/^Runs on: This Mac, Load Balancer/);
+    expect(runsOn()).toMatch(/^Runs on: This Mac, picked by the Load Balancer/);
   });
 
   test("the New thread picker balances while the open computer isn't the start computer", async () => {
     loadBalancer.set({ on: true, preferences: {}, leftOut: [box.id] });
     answers["host/health"] = () => healthy(8);
     await renderApp();
-    expect(runsOn()).toMatch(/^Runs on: This Mac, Load Balancer/);
+    expect(runsOn()).toMatch(/^Runs on: This Mac, picked by the Load Balancer/);
     // By hand onto the other computer, as a thread it placed there would leave the app.
     await pick("box");
     await settle();
@@ -731,7 +731,7 @@ describe("the Load Balancer in New Thread (0101)", () => {
     await act(async () => row.click());
     await settle();
     // Back on the start computer, placed anew rather than kept there as a pick on purpose.
-    expect(runsOn()).toMatch(/^Runs on: This Mac, Load Balancer/);
+    expect(runsOn()).toMatch(/^Runs on: This Mac, picked by the Load Balancer/);
   });
 });
 

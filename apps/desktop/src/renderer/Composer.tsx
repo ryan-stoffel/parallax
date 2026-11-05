@@ -1498,7 +1498,12 @@ export function Composer({
         key: `remote:${o.relayId}/${id}`,
         label: look.title,
         icon: <look.Logo aria-hidden />,
-        where: o.host.name,
+        where: (
+          <>
+            {hostIcon(o.host)}
+            {o.host.name}
+          </>
+        ),
         meta: look.age,
         group: "Threads",
         pick: () =>

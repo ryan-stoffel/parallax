@@ -62,19 +62,34 @@ export const connection = (host: Host) =>
 /** Past this many computers, the menu adds a search box. */
 const searchFrom = 7;
 
+/** The Load Balancer's mark beside the computer it picked, in the menu and the bar. */
+function Picked() {
+  return (
+    <span
+      title="Picked by the Load Balancer"
+      className="inline-flex shrink-0 text-faint-foreground"
+    >
+      <Scale aria-hidden className="size-3.5!" />
+      <span className="sr-only">, picked by the Load Balancer</span>
+    </span>
+  );
+}
+
 /**
  * A computer's row: its icon with a dot for whether it's connected, its name, and how it's reached,
- * unless that's Parallax Connect, which most computers are.
+ * unless that's Parallax Connect, which most computers are. `picked` when the Load Balancer chose it.
  */
 function HostOption({
   host,
   checked,
+  picked,
   missing,
   why,
   onClick,
 }: {
   host: Host;
   checked: boolean;
+  picked?: boolean;
   missing?: string;
   /** Why the Load Balancer didn't pick it. */
   why?: string;
@@ -106,6 +121,7 @@ function HostOption({
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         {/* Both cut off with "…" when long, how it connects first. */}
         <span className={`truncate ${offline ? "text-muted-foreground" : ""}`}>{host.name}</span>
+        {picked && <Picked />}
         <span className="shrink-[4] truncate text-meta text-faint-foreground">{note}</span>
       </span>
       {missing && (
@@ -132,9 +148,10 @@ function HostOption({
  * repository, which say picking them clones it. `busy` while the picked computer is set up, which
  * the button shows with a spinner. Each computer shows whether it's connected, the list scrolls,
  * and past a handful of computers a search box filters them. With `balancer`, the Load Balancer
- * (0101) leads the list: `on` while it holds the choice, as the one selected row, naming its pick,
+ * (0101) is on: `on` while it holds the choice, which marks its pick, `checking` while it chooses,
  * and `none` when no computer could take the thread. `why` says why it passed over each computer,
- * `problem` what it couldn't do, and `onSettings` opens its setting.
+ * and `problem`, in a quiet line, what it couldn't do, with `onSettings` opening its setting. After
+ * a manual pick, a last row gives the choice back to it (`onChoose`).
  */
 export function RunTargetMenu({
   hosts,
@@ -172,26 +189,27 @@ export function RunTargetMenu({
   const searchable = hosts.length >= searchFrom;
   const q = query.trim().toLowerCase();
   const shown = q ? hosts.filter((h) => h.name.toLowerCase().includes(q)) : hosts;
-  // While it has no pick, what the bar says is the Load Balancer, not the computer the draft is on.
+  // While it has no pick, the bar says so, not the computer the draft is on.
   const chosen = balancer?.checking
-    ? "Load Balancer"
+    ? "Choosing a computer…"
     : balancer?.none
       ? "Pick a computer"
       : host.name;
+  const picked = !!balancer?.on && !balancer.checking && !balancer.none;
   return (
     <>
       <button
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={`Runs on: ${chosen}${balancer?.on ? ", Load Balancer" : ""}${workspace ? `, ${workspace.label}` : ""}`}
+        aria-label={`Runs on: ${chosen}${picked ? ", picked by the Load Balancer" : ""}${workspace ? `, ${workspace.label}` : ""}`}
         aria-busy={busy}
         title={
           balancer?.checking
-            ? "The Load Balancer is checking your computers"
+            ? "The Load Balancer is choosing a computer"
             : balancer?.none
               ? balancer.problem
-              : balancer?.on
+              : picked
                 ? `${host.name}, picked by the Load Balancer`
                 : host.name
         }
@@ -199,12 +217,13 @@ export function RunTargetMenu({
       >
         {busy ? (
           <LoaderCircle aria-hidden className="animate-spin" />
-        ) : balancer?.on ? (
-          <Scale aria-hidden className={balancer.none ? "text-warning" : undefined} />
+        ) : balancer?.none ? (
+          <Scale aria-hidden className="text-warning" />
         ) : (
           hostIcon(host)
         )}
         <span className="composer-host truncate">{chosen}</span>
+        {picked && !busy && <Scale aria-hidden className="size-3.5! text-faint-foreground" />}
         {workspace && (
           <span className="composer-detail flex shrink-0 items-center gap-1.5">
             <span aria-hidden className="text-faint-foreground">
@@ -242,46 +261,49 @@ export function RunTargetMenu({
           <p aria-hidden className={menuHeading}>
             Computer
           </p>
-          {balancer && (
-            <>
-              <MenuOption
-                option={{
-                  value: "balancer",
-                  label: "Load Balancer",
-                  icon: <Scale />,
-                  hint: balancer.checking
-                    ? "Checking…"
-                    : balancer.on && !balancer.none && !busy
-                      ? host.name
-                      : undefined,
-                  description: balancer.problem,
-                }}
-                checked={balancer.on}
-                onClick={balancer.onChoose}
-              />
-              {balancer.onSettings && (
-                <button
-                  type="button"
-                  onClick={balancer.onSettings}
-                  className="mb-1 ml-8 rounded-sm text-left text-meta text-accent hover:underline"
-                >
-                  Choose computers
-                </button>
-              )}
-            </>
-          )}
           <div className="max-h-72 overflow-y-auto">
             {shown.map((h) => (
               <HostOption
                 key={h.id}
                 host={h}
-                checked={h === host && !balancer?.on}
+                checked={h === host && !balancer?.checking && !balancer?.none}
+                picked={picked && h === host}
                 missing={missing?.hostIds.has(h.id) ? missing.repo : undefined}
                 why={balancer?.on && !missing?.hostIds.has(h.id) ? balancer.why?.[h.id] : undefined}
                 onClick={() => onHostChange(h.id)}
               />
             ))}
           </div>
+          {balancer && !balancer.on && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={balancer.onChoose}
+              className={`${menuItem} text-muted-foreground hover:text-foreground`}
+            >
+              <span className="grid h-5 place-items-center">
+                <Scale aria-hidden />
+              </span>
+              Let the Load Balancer choose
+            </button>
+          )}
+          {(balancer?.checking || balancer?.problem) && (
+            <p className="px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
+              {balancer.checking ? "Choosing a computer…" : balancer.problem}
+              {balancer.onSettings && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    onClick={balancer.onSettings}
+                    className="rounded-sm text-accent hover:underline"
+                  >
+                    Choose computers
+                  </button>
+                </>
+              )}
+            </p>
+          )}
           {shown.length === 0 && (
             <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
           )}

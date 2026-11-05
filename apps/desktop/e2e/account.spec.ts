@@ -427,12 +427,14 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
   // leaves one computer that can take the thread, and it may be too busy to, when it says so.
   await page.getByRole("switch", { name: "Balance new threads across my computers" }).click();
   await page.getByRole("switch", { name: "Balance new threads onto studio" }).click();
+  const often = "How often build-box takes new threads";
+  await page.getByRole("button", { name: new RegExp(`^${often}`) }).click();
   await page
-    .getByRole("group", { name: "How often build-box takes new threads" })
-    .getByText("Prefer")
+    .getByRole("menu", { name: often })
+    .getByRole("menuitemradio", { name: "Prefer" })
     .click();
   // Its summary comes from the same scoring: studio is left out.
-  const summary = page.getByRole("region", { name: "Load Balancer" }).locator("p");
+  const summary = page.getByRole("region", { name: "Load Balancer" }).locator("[aria-live]");
   await expect(summary).toHaveText(/Next thread goes to build-box|No computer can take/);
   await page.getByRole("button", { name: "Close settings" }).click();
 
@@ -442,14 +444,16 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
     .getByRole("dialog", { name: "New thread in" })
     .getByRole("option", { name: /^No repo/ })
     .click();
-  const onBox = page.getByRole("button", { name: /^Runs on: build-box, Load Balancer/ });
-  const none = page.getByRole("button", { name: /^Runs on: Pick a computer, Load Balancer/ });
+  const onBox = page.getByRole("button", {
+    name: /^Runs on: build-box, picked by the Load Balancer/,
+  });
+  const none = page.getByRole("button", { name: /^Runs on: Pick a computer/ });
   // A busy machine can take its full 6 s to check.
   const checked = { timeout: 15_000 };
   await expect(onBox.or(none)).toBeVisible(checked);
   // A manual pick can still be one left out, and holds.
   const runsOn = page.getByRole("button", { name: /^Runs on:/ });
-  const balancer = page.getByRole("menuitemradio", { name: /^Load Balancer/ });
+  const balancer = page.getByRole("menuitem", { name: "Let the Load Balancer choose" });
   const studio = page.getByRole("menuitemradio", { name: /^studio/ });
   const onStudio = page.getByRole("button", { name: "Runs on: studio", exact: true });
   await runsOn.click();
@@ -522,7 +526,9 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
     .getByRole("dialog", { name: "New thread in" })
     .getByRole("option", { name: /^No repo/ })
     .click();
-  const staysHere = page.getByRole("button", { name: /^Runs on: studio, Load Balancer/ });
+  const staysHere = page.getByRole("button", {
+    name: /^Runs on: studio, picked by the Load Balancer/,
+  });
   await expect(staysHere.or(none)).toBeVisible(checked);
   await runsOn.click();
   // A machine too busy to answer in time leaves it out as well.

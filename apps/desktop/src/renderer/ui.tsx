@@ -171,8 +171,7 @@ export const segment =
 
 /**
  * A row of radios drawn as one segmented control, named by `label`. Disabled, it stays in place
- * but can't be changed. With `wrap`, options that don't fit take another line. `small` fits a row
- * with other things on it, with no outline of its own.
+ * but can't be changed. With `wrap`, options that don't fit take another line.
  */
 export function Segmented<T extends string>({
   label,
@@ -181,7 +180,6 @@ export function Segmented<T extends string>({
   onChange,
   disabled,
   wrap,
-  small,
 }: {
   label: string;
   options: { value: T; name: ReactNode; disabled?: boolean; title?: string }[];
@@ -189,7 +187,6 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   disabled?: boolean;
   wrap?: boolean;
-  small?: boolean;
 }) {
   // Its own radio group, even when another control on the page has the same label.
   const name = useId();
@@ -197,13 +194,13 @@ export function Segmented<T extends string>({
     <fieldset
       aria-label={label}
       disabled={disabled}
-      className={`flex gap-0.5 rounded-lg disabled:pointer-events-none disabled:opacity-50 ${small ? "" : "border border-border p-0.5"} ${wrap ? "min-w-0 flex-wrap" : "shrink-0"}`}
+      className={`flex gap-0.5 rounded-lg border border-border p-0.5 disabled:pointer-events-none disabled:opacity-50 ${wrap ? "min-w-0 flex-wrap" : "shrink-0"}`}
     >
       {options.map((o) => (
         <label
           key={o.value}
           title={o.title}
-          className={`${segment} ${small ? "px-2! py-0.5! text-meta!" : ""} ${o.disabled ? "opacity-40 hover:text-muted-foreground" : ""}`}
+          className={`${segment} ${o.disabled ? "opacity-40 hover:text-muted-foreground" : ""}`}
         >
           <input
             type="radio"
