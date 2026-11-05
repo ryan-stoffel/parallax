@@ -294,6 +294,9 @@ function findBar(view: EditorView): Panel {
   };
 }
 
+/** Where each view sends its cursor, since a state moves between views. */
+const cursorReports = new WeakMap<EditorView, (state: EditorState) => void>();
+
 const language = new Compartment();
 const wrapping = new Compartment();
 const editing = new Compartment();
@@ -330,12 +333,14 @@ export default function CodeEditor({
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | undefined>(undefined);
   const shown = useRef<number | undefined>(undefined);
-  // The latest of what the extensions, made once, read.
-  const latest = useRef({ store, onCursor, id: file.id });
-  latest.current = { store, onCursor, id: file.id };
   const lang = useRef<string | undefined>(undefined);
+  const reportCursor = useRef<(state: EditorState) => void>(() => {});
+  reportCursor.current = (state) =>
+    onCursor({ ...cursorOf(state), ...(lang.current && { language: lang.current }) });
 
-  const stateFor = (text: string, canEdit: boolean) =>
+  // A state outlives this component, kept in `store`, so it holds only its own tab and store, and
+  // reaches whichever component shows it through its view.
+  const stateFor = (id: number, text: string, canEdit: boolean) =>
     EditorState.create({
       doc: text,
       extensions: [
@@ -372,7 +377,7 @@ export default function CodeEditor({
             key: "Mod-s",
             preventDefault: true,
             run: () => {
-              void latest.current.store.save(latest.current.id);
+              void store.save(id);
               return true;
             },
           },
@@ -389,13 +394,10 @@ export default function CodeEditor({
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !update.transactions.some((tr) => tr.annotation(fromDisk))) {
             const { state } = update;
-            latest.current.store.edited(latest.current.id, () => state.doc.toString());
+            store.edited(id, () => state.doc.toString());
           }
           if (update.docChanged || update.selectionSet)
-            latest.current.onCursor({
-              ...cursorOf(update.state),
-              ...(lang.current && { language: lang.current }),
-            });
+            cursorReports.get(update.view)?.(update.state);
         }),
       ],
     });
@@ -403,6 +405,7 @@ export default function CodeEditor({
   // The view, for as long as a text tab is on screen.
   useEffect(() => {
     const created = new EditorView({ parent: host.current! });
+    cursorReports.set(created, (state) => reportCursor.current(state));
     view.current = created;
     return () => {
       if (shown.current !== undefined) store.keep(shown.current, created.state);
@@ -439,7 +442,7 @@ export default function CodeEditor({
     if (shown.current !== undefined) store.keep(shown.current, current.state);
     shown.current = file.id;
     current.setState(
-      (store.kept(file.id) as EditorState | undefined) ?? stateFor(body.text, canEdit),
+      (store.kept(file.id) as EditorState | undefined) ?? stateFor(file.id, body.text, canEdit),
     );
     current.dispatch({
       effects: [wrapping.reconfigure(wrapped(wrap)), editing.reconfigure(editable(canEdit))],
@@ -478,7 +481,9 @@ export default function CodeEditor({
   // A reload from disk.
   const reloads = body?.reloads ?? 0;
   useEffect(() => {
-    if (view.current && body && shown.current === file.id) takeFromDisk(view.current, body.text);
+    // Only a reload changes the count, and it drops edits first. A tab with edits is one shown again.
+    if (view.current && body && shown.current === file.id && !store.unsaved(file.id))
+      takeFromDisk(view.current, body.text);
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- only a reload replaces the text
   }, [reloads]);
 
