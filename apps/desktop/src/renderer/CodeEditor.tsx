@@ -108,9 +108,16 @@ const indentGuides = ViewPlugin.fromClass(
       const builder = new RangeSetBuilder<Decoration>();
       const mark = Decoration.mark({ class: "cm-indent" });
       const tab = view.state.tabSize;
+      // A long line can span two visible ranges, and each line is decorated once.
+      let done = 0;
       for (const { from, to } of view.visibleRanges) {
         for (let at = from; at <= to;) {
           const line = view.state.doc.lineAt(at);
+          if (line.number <= done) {
+            at = line.to + 1;
+            continue;
+          }
+          done = line.number;
           const lead = /^[ \t]*/.exec(line.text)![0];
           // A wrapped line's rest hangs under its own indent, two columns in, as VS Code's does.
           let columns = 2;

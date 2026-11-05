@@ -510,7 +510,7 @@ export function FilesPanel({
   };
   // Narrow, the Files tab shows the tree and a file's tab the file. Wide, the tree sits beside.
   const fileOnScreen = !!file && !home;
-  const treeOnScreen = beside ? treeBeside : !fileOnScreen;
+  const treeOnScreen = beside ? treeBeside || !fileOnScreen : !fileOnScreen;
   /** Down and Up move through the tree's visible rows, and Left from a closed row goes to its folder. */
   const onTreeKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("button[data-row]")];
