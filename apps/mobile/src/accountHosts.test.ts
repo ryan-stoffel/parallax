@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { commitment, REQUEST_LIFETIME_MS } from "./access";
+import { commitment, lacks, REQUEST_LIFETIME_MS } from "./access";
 import { AccountHosts, Denied, listHosts, relayProblem } from "./accountHosts";
 import { base64url } from "./pairing";
+import { keeper } from "./setup";
 
 /** Each host's bridge port, and how it answers a path. A rejected answer is a lost connection. */
 type Answer = { status: number; json?: object } | Error;
@@ -19,6 +20,10 @@ vi.mock("expo-secure-store", () => ({
   deleteItemAsync: async (key: string) => void net.store.delete(key),
 }));
 vi.mock("./push", () => ({ RELAY_URL: "https://relay.test" }));
+vi.mock("./host", async (original) => ({
+  ...(await original<typeof import("./host")>()),
+  spakePair: async () => ({ accessToken: "session" }),
+}));
 vi.mock("../modules/pinned-tls", () => ({
   PinnedSocket: class {},
   randomBytes: (count: number) => crypto.getRandomValues(new Uint8Array(count)),
@@ -65,9 +70,191 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-test("a restriction learned from a computer outlives that computer going offline, and a relaunch", async () => {
-  const none = { approvedClients: [], removedClients: [], approvedHosts: [] };
+const none = { approvedClients: [], removedClients: [], approvedHosts: [] };
+/** The entry for `id` in what `absorb` answers. */
+const of = <T extends { id: string }>(all: T[], id: string) => all.find((each) => each.id === id)!;
+/** A fake computer's lists: an attacker's key and host, the user's desktop removed, and `hosts`. */
+const fakeLists = (...hosts: string[]) => ({
+  ...none,
+  approvedClients: ["attacker"],
+  removedClients: ["desktop"],
+  approvedHosts: ["attacker-host", ...hosts],
+});
+
+test("a fake computer the phone trusts with no tap adds nothing to a real one", async () => {
+  // The relay lists "fake", which answers the phone's own request as if allowed: no tap, no prompt.
+  net.answers["fake"] = holding(() => session);
   const accounts = await load();
+  await accounts.ask("fake", [], () => {});
+  expect(accounts.trusts("fake")).toBe(true);
+
+  const fake = { id: "fake", lists: fakeLists("real") };
+  await accounts.absorb([fake]);
+  expect(accounts.trusts("real")).toBe(true);
+
+  // The phone's request at the real computer is allowed on the user's desktop: it's approved there.
+  net.answers["real"] = () => session;
+  await accounts.ask("real", [], () => {});
+  expect(accounts.sessions).toContain("real");
+
+  const real = { id: "real", lists: { ...none, approvedClients: ["desktop"], approvedHosts: ["real"] } };
+  const { union } = of(await accounts.absorb([real, fake]), "real");
+  expect(union).toEqual(real.lists);
+  expect(lacks(real.lists, union)).toBe(false);
+});
+
+test("a phone from before this kept no proof, so a fake computer it trusts adds nothing either", async () => {
+  net.store.set(
+    "account-hosts",
+    JSON.stringify({
+      key: base64url(new Uint8Array(32).fill(1)),
+      sessions: { real: "sr", fake: "sf" },
+      trusted: ["real", "fake"],
+      books: {},
+    }),
+  );
+  const accounts = await load();
+  const real = { id: "real", lists: { ...none, approvedHosts: ["real"] } };
+  const { union } = of(await accounts.absorb([real, { id: "fake", lists: fakeLists("real") }]), "real");
+  expect(lacks(real.lists, union)).toBe(false);
+});
+
+test("two fakes that list each other, and a real one, still add nothing to it", async () => {
+  const accounts = await load();
+  const real = { id: "real", lists: { ...none, approvedHosts: ["real"] } };
+  const known = await accounts.absorb([
+    real,
+    { id: "fake1", lists: fakeLists("fake1", "fake2", "real") },
+    { id: "fake2", lists: { ...fakeLists("fake1", "fake2", "real"), approvedClients: ["attacker2"] } },
+  ]);
+  expect(lacks(real.lists, of(known, "real").union)).toBe(false);
+  // What's copied among them stays among them.
+  expect(of(known, "fake1").union.approvedClients).toContain("attacker2");
+});
+
+test("a fake computer can't restrict a real one, here or on any other device", async () => {
+  net.answers["fake"] = holding(() => session);
+  const accounts = await load();
+  await accounts.ask("fake", [], () => {});
+  const real = { id: "real", lists: { ...none, approvedHosts: ["real", "other"] } };
+  const other = { id: "other", lists: { ...none, approvedClients: ["desktop"], approvedHosts: ["real", "other"] } };
+  const known = await accounts.absorb([real, other, { id: "fake", lists: { ...none, allowedHosts: ["real"] } }]);
+
+  expect(accounts.allowed).toEqual([]);
+  expect(of(known, "real").union.allowedHosts).toBeUndefined();
+  expect(of(known, "other").union.allowedHosts).toBeUndefined();
+  // And it doesn't stop the real one's lists reaching the other.
+  expect(of(known, "real").union.approvedClients).toEqual(["desktop"]);
+});
+
+test("real computers approved from another device still sync, with no tap and nothing marked", async () => {
+  // Allowed on the desktop, whose merge put the phone's key and both ids on both computers.
+  net.answers["a"] = holding(() => session);
+  net.answers["b"] = () => session;
+  const accounts = await load();
+  await accounts.ask("a", [], () => {});
+
+  const hosts = ["a", "b"];
+  const a = { id: "a", lists: { ...none, approvedClients: ["phone", "desktop", "new"], approvedHosts: hosts } };
+  await accounts.absorb([a]);
+  expect(accounts.trusts("b")).toBe(true);
+  await accounts.ask("b", [], () => {});
+
+  const b = {
+    id: "b",
+    lists: { approvedClients: ["phone", "desktop"], removedClients: ["gone"], approvedHosts: hosts },
+  };
+  const known = await accounts.absorb([a, b]);
+  expect(of(known, "b").union.approvedClients).toEqual(["desktop", "new", "phone"]);
+  expect(of(known, "a").union.removedClients).toEqual(["gone"]);
+  expect(lacks(b.lists, of(known, "b").union)).toBe(true);
+  expect(lacks(a.lists, of(known, "a").union)).toBe(true);
+  expect(accounts.allowed).toEqual([]);
+  expect(of(known, "a").union.allowedHosts).toBeUndefined();
+});
+
+test("a computer set up with a typed code gives lists to every computer, and vouches for those it lists", async () => {
+  net.answers["typed"] = () => session;
+  const accounts = await load();
+  await accounts.setup("typed", [], "123456");
+
+  const typed = { id: "typed", lists: { ...none, approvedClients: ["phone"], approvedHosts: ["listed"] } };
+  const listed = { id: "listed", lists: { ...none, approvedClients: ["desktop"] } };
+  const known = await accounts.absorb([
+    typed,
+    listed,
+    { id: "fake", lists: fakeLists("typed") },
+    { id: "other", lists: none },
+  ]);
+
+  // The other computer takes the typed one's lists, its id, and those of the computer it lists.
+  const { union } = of(known, "other");
+  expect(union.approvedClients).toEqual(["desktop", "phone"]);
+  expect(union.approvedHosts).toEqual(["listed", "typed"]);
+  // A computer that lists the typed one doesn't get to add to it.
+  expect(of(known, "typed").union.approvedClients).not.toContain("attacker");
+  expect(of(known, "typed").union.approvedHosts).not.toContain("fake");
+});
+
+test("a typed code on a computer that first signed in with no tap counts from then on", async () => {
+  net.answers["a"] = holding(() => session);
+  const accounts = await load();
+  await accounts.ask("a", [], () => {});
+  const a = { id: "a", lists: { ...none, approvedClients: ["k"] } };
+  const other = { id: "other", lists: none };
+  expect(of(await accounts.absorb([a, other]), "other").union.approvedClients).toEqual([]);
+
+  await accounts.setup("a", [], "123456");
+  expect(of(await accounts.absorb([a, other]), "other").union.approvedClients).toEqual(["k"]);
+});
+
+test("a computer paired on the LAN gives lists to every computer, and isn't named as a host", async () => {
+  const accounts = await load();
+  const paired = { id: "paired-abc", paired: true, lists: { ...none, approvedClients: ["k"], allowedHosts: ["tapped"] } };
+  const { union } = of(await accounts.absorb([paired, { id: "other", lists: none }]), "other");
+  expect(union.approvedClients).toEqual(["k"]);
+  expect(union.approvedHosts).toEqual([]);
+  expect(accounts.allowed).toEqual(["tapped"]);
+});
+
+test("a fake computer whose id starts with paired- proves nothing, even with a real pairing's id", async () => {
+  const accounts = await load();
+  const machines = [
+    { id: "paired-abc", name: "paired", paired: {} as never },
+    { id: "account:paired-abc", name: "fake", account: { hostId: "paired-abc", routes: [] } },
+    { id: "account:paired-fake", name: "fake", account: { hostId: "paired-fake", routes: [] } },
+    { id: "account:real", name: "real", account: { hostId: "real", routes: [] } },
+  ];
+  const real = { ...none, approvedHosts: ["real"] };
+  const known = await accounts.absorb([
+    ...keeper(machines, "account:real", real),
+    ...keeper(machines, "paired-abc", { ...none, approvedClients: ["k"] }),
+    ...keeper(machines, "account:paired-abc", { ...fakeLists("real"), allowedHosts: ["real"] }),
+    ...keeper(machines, "account:paired-fake", { ...fakeLists("real"), allowedHosts: ["real"] }),
+  ]);
+  const { union } = of(known, "real");
+  // The real pairing's list counts, and neither fake's does.
+  expect(union).toEqual({ ...real, approvedClients: ["k"] });
+  expect(accounts.allowed).toEqual([]);
+});
+
+test("a malformed answer to access/get is no list, and the others still count", async () => {
+  const accounts = await load();
+  const machines = [{ id: "account:real", name: "real", account: { hostId: "real", routes: [] } }];
+  for (const malformed of [{}, null, [], "lists", { ...none, approvedHosts: [1] }, { ...none, allowedHosts: "real" }])
+    expect(keeper(machines, "account:fake", malformed)).toEqual([]);
+
+  const known = await accounts.absorb([
+    ...keeper(machines, "account:fake", {}),
+    ...keeper(machines, "account:real", { ...none, approvedHosts: ["new"] }),
+  ]);
+  expect(known.map((each) => each.id)).toEqual(["real"]);
+  expect(accounts.trusts("new")).toBe(true);
+});
+
+test("a restriction a proved computer states outlives it going offline, and a relaunch", async () => {
+  const accounts = await load();
+  await accounts.setup("real", [], "123456");
   // The real computer is online, and says "fake" was added with Allow on another device.
   await accounts.absorb([
     { id: "real", lists: { ...none, allowedHosts: ["fake"] } },
@@ -76,16 +263,27 @@ test("a restriction learned from a computer outlives that computer going offline
   expect(accounts.trusts("fake")).toBe(true);
   expect(accounts.allowed).toEqual(["fake"]);
 
-  // Relaunched, with it offline: the fake one lists an attacker's key and host, to no effect.
+  // Relaunched, with it offline: the fake one's key and host go nowhere, even on a computer that
+  // an older client told of it.
   const later = await load();
-  const union = await later.absorb([
-    { id: "other", lists: none },
+  const known = await later.absorb([
+    { id: "other", lists: { ...none, approvedHosts: ["fake"] } },
     { id: "fake", lists: { ...none, approvedClients: ["attacker"], approvedHosts: ["attacker-host"] } },
   ]);
+  const { union } = of(known, "other");
   expect(union.approvedClients).not.toContain("attacker");
   expect(union.approvedHosts).not.toContain("attacker-host");
   expect(union.allowedHosts).toEqual(["fake"]);
   expect(later.trusts("attacker-host")).toBe(false);
+});
+
+test("a restriction another computer states counts for that computer, and isn't kept", async () => {
+  const accounts = await load();
+  const real = { id: "real", lists: { ...none, approvedHosts: ["clicked"], allowedHosts: ["clicked"] } };
+  const clicked = { id: "clicked", lists: { ...none, approvedClients: ["attacker"] } };
+  const { union } = of(await accounts.absorb([real, clicked]), "real");
+  expect(union.approvedClients).toEqual([]);
+  expect(accounts.allowed).toEqual([]);
 });
 
 test("comparing takes no session before Allow, even from a host that offers one", async () => {
@@ -268,6 +466,7 @@ test("forgetting a computer ends its session, trust, and request, and keeps its 
       key: base64url(new Uint8Array(32).fill(1)),
       sessions: { a: "sa", b: "sb" },
       trusted: ["a", "b"],
+      proved: ["a", "b"],
       books: { a: kept, b: other },
     }),
   );
@@ -280,6 +479,7 @@ test("forgetting a computer ends its session, trust, and request, and keeps its 
   expect(accounts.asked("a")).toBe(false);
   const saved = JSON.parse(net.store.get("account-hosts")!);
   expect(saved.sessions).toEqual({ b: "sb" });
+  expect(saved.proved).toEqual(["b"]);
   expect(saved.books).toEqual({ a: { requests: [1], setupRuns: [2] }, b: other });
 });
 

@@ -128,27 +128,71 @@ export interface Lists {
   allowedHosts?: string[];
 }
 
+const strings = (value: unknown) =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
 /**
- * Which of `known` this phone takes lists from (0091). A computer added with Allow alone may be a
- * fake one the user clicked through, so it gets lists but gives none: nothing it says reaches the
- * user's other computers. `allowed` is those this phone allowed itself. Marks count only from a
- * computer that isn't marked itself, so a fake one can't demote the real ones.
+ * `result`, a computer's answer to `access/get`, as lists, or undefined when it's malformed, as a
+ * fake computer's can be. An older plxd leaves out `allowedHosts`.
  */
-export function listSources<T extends { id: string; lists: Lists }>(known: T[], allowed: string[]): T[] {
-  const marked = new Set(allowed);
-  for (let size = -1; size !== marked.size; ) {
-    size = marked.size;
-    for (const each of known)
-      if (!marked.has(each.id)) for (const id of each.lists.allowedHosts ?? []) marked.add(id);
-  }
-  return known.filter((each) => !marked.has(each.id));
+export function asLists(result: unknown): Lists | undefined {
+  const lists = (result ?? {}) as Record<keyof Lists, unknown>;
+  const whole =
+    strings(lists.approvedClients) &&
+    strings(lists.removedClients) &&
+    strings(lists.approvedHosts) &&
+    (lists.allowedHosts === undefined || strings(lists.allowedHosts));
+  return whole ? (lists as unknown as Lists) : undefined;
 }
 
 /**
- * Every host's lists in one, with `hosts` (the ones this phone has sessions with) approved too,
- * and `allowed` (those it allowed itself) marked. A key removed anywhere ends up removed and not
- * approved, so the lists merge with no clock. A marked computer stays out of `approvedHosts`, the
- * only list an older client or plxd reads, so neither takes it for one the user verified.
+ * A connected computer's lists, under the id its connection pins. `paired` says the connection is a
+ * LAN pairing, by the phone's own record of it: the relay picks a listed computer's id, so no id
+ * can show that.
+ */
+export interface Known {
+  id: string;
+  lists: Lists;
+  paired?: boolean;
+}
+
+/**
+ * Which of `known` may add to `target`'s lists (0091): `target` itself, the computers its own list
+ * vouches for, following their lists, and those this phone proved: `proved`, with a typed code, and
+ * those `paired` on the LAN with one. A phone can't tell a fake computer that signed it in with no
+ * tap from a real one approved on another device, so each computer's list decides what it accepts:
+ * nothing real lists a fake one, so a fake's keys, removals, and host ids reach only fakes. A
+ * computer marked by one of these, or in `allowed` (the marks this phone keeps), takes lists and
+ * adds none, as it may be a fake one the user clicked through.
+ */
+export function sourcesFor<T extends Known>(
+  target: T,
+  known: T[],
+  proved: string[],
+  allowed: string[],
+): T[] {
+  const marked = new Set(allowed);
+  // Each new mark starts the walk again, as a marked computer may have vouched for another.
+  for (;;) {
+    const vouched = new Set([target.id, ...proved]);
+    const adds = (each: T) =>
+      each === target || ((each.paired || vouched.has(each.id)) && !marked.has(each.id));
+    for (let size = -1; size !== vouched.size; ) {
+      size = vouched.size;
+      for (const each of known.filter(adds)) for (const id of each.lists.approvedHosts) vouched.add(id);
+    }
+    const sources = known.filter(adds);
+    const before = marked.size;
+    for (const each of sources) for (const id of each.lists.allowedHosts ?? []) marked.add(id);
+    if (marked.size === before) return sources;
+  }
+}
+
+/**
+ * Every host's lists in one, with `hosts` (the ones this phone proved) approved too, and `allowed`
+ * (the marks it keeps) marked. A key removed anywhere ends up removed and not approved, so the
+ * lists merge with no clock. A marked computer stays out of `approvedHosts`, the only list an older
+ * client or plxd reads, so neither takes it for one the user verified.
  */
 export function merged(all: Lists[], hosts: string[], allowed: string[] = []): Lists {
   const removed = new Set(all.flatMap((l) => l.removedClients));

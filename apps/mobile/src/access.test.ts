@@ -8,11 +8,11 @@ import {
   keptValue,
   lacks,
   Limited,
-  listSources,
   merged,
   newRequest,
   REQUEST_LIFETIME_MS,
   setupRun,
+  sourcesFor,
 } from "./access";
 import { WrongHost } from "./routes";
 
@@ -48,26 +48,44 @@ test("at most 5 new requests and 5 setup runs a host an hour", () => {
   expect(setupRun(runs, 60 * 60_000 + 5).setupRuns).toHaveLength(1);
 });
 
-test("a computer added with Allow alone gives no lists, and can't demote a real one", () => {
-  const lists = (allowedHosts: string[], approvedClients: string[] = []) => ({
-    approvedClients,
-    removedClients: [],
-    approvedHosts: [],
-    allowedHosts,
-  });
-  const real = { id: "real", lists: lists([]) };
-  const fake = { id: "fake", lists: lists(["real"], ["attacker"]) };
-  const sources = listSources([real, fake], ["fake"]);
-  expect(sources).toEqual([real]);
-  const union = merged(sources.map((s) => s.lists), ["real", "fake"], ["fake"]);
-  expect(union.approvedClients).toEqual([]);
-  expect(union.allowedHosts).toEqual(["fake"]);
-  // An older client reads only this list, so a restricted computer stays out of it.
-  expect(union.approvedHosts).toEqual(["real"]);
-  expect(lacks(real.lists, union)).toBe(true);
-  // A mark from a real computer counts on a phone that didn't allow it itself.
-  const marked = { id: "real", lists: lists(["fake"]) };
-  expect(listSources([marked, fake], [])).toEqual([marked]);
+const hostLists = (approvedHosts: string[], allowedHosts: string[] = []) => ({
+  approvedClients: [],
+  removedClients: [],
+  approvedHosts,
+  allowedHosts,
+});
+
+test("a computer adds to another's lists only if that one's list vouches for it, or it's proved", () => {
+  const a = { id: "a", lists: hostLists(["b"]) };
+  const b = { id: "b", lists: hostLists(["c"]) };
+  const c = { id: "c", lists: hostLists(["a"]) };
+  const fake = { id: "fake", lists: hostLists(["a", "b", "c", "fake"]) };
+  const known = [a, b, c, fake];
+
+  // Following the lists from `a`: `b`, then `c`. The fake lists them all, and none lists it.
+  expect(sourcesFor(a, known, [], [])).toEqual([a, b, c]);
+  // The fake's own list decides for the fake, and only for it.
+  expect(sourcesFor(fake, known, [], [])).toEqual(known);
+  // A computer this phone proved counts for all, and vouches for those it lists.
+  const alone = { id: "alone", lists: hostLists([]) };
+  expect(sourcesFor(alone, [alone, a, b, fake], ["a"], [])).toEqual([alone, a, b]);
+});
+
+test("a marked computer adds to no lists, even if listed or proved, and keeps its own", () => {
+  const a = { id: "a", lists: hostLists(["clicked", "b"]) };
+  const b = { id: "b", lists: hostLists([], ["clicked"]) };
+  const clicked = { id: "clicked", lists: hostLists(["c"]) };
+  const c = { id: "c", lists: hostLists([]) };
+  // `b` marks it, and `a` lists `b`, so what it lists counts for nothing.
+  expect(sourcesFor(a, [a, b, clicked, c], [], [])).toEqual([a, b]);
+  // Marked here, and typed later: still marked.
+  expect(sourcesFor(c, [c, clicked], ["clicked"], ["clicked"])).toEqual([c]);
+  expect(sourcesFor(clicked, [c, clicked], [], ["clicked"])).toContain(clicked);
+
+  // An older client reads only `approvedHosts`, so a marked computer stays out of it.
+  const union = merged([a.lists, b.lists], ["a", "clicked"], ["clicked"]);
+  expect(union.approvedHosts).toEqual(["a", "b"]);
+  expect(union.allowedHosts).toEqual(["clicked"]);
 });
 
 test("lists merge with removal winning, and a host lacking any entry gets a merge", () => {

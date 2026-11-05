@@ -15,11 +15,12 @@ import {
   emptyBook,
   forgetRequest,
   keptValue,
-  listSources,
   merged,
   newRequest,
   setupRun,
+  sourcesFor,
   type HostBook,
+  type Known,
   type Lists,
 } from "./access";
 import type { RelayUsage } from "../../desktop/src/protocol/generated/protocol";
@@ -65,8 +66,14 @@ interface Stored {
   sessions: Record<string, string>;
   /** The hosts this phone uses: approved with its own code, or listed by one it uses. */
   trusted: string[];
-  /** Those added with Allow alone, here or as a computer it uses said, which it takes no lists from. */
+  /** Those added with Allow alone, here or as a proved computer said, which add to no lists. */
   allowed?: string[];
+  /**
+   * Those set up with a code typed here, the only ones this phone itself knows are real. One that
+   * signed it in with no tap may be a fake one the relay listed. A phone from before this field
+   * has none, as it kept no record of how it came to trust a computer.
+   */
+  proved?: string[];
   books: Record<string, HostBook>;
   /** Why this phone stopped asking on its own, until the user asks again. */
   askingStopped?: string;
@@ -168,9 +175,13 @@ export class AccountHosts {
     return Object.keys(this.stored.sessions).filter((id) => this.trusts(id));
   }
 
-  /** The hosts added with Allow alone, here or as a computer it uses said, kept for good. */
+  /** The hosts added with Allow alone, here or as a proved computer said, kept for good. */
   get allowed() {
     return this.stored.allowed ?? [];
+  }
+
+  private get proved() {
+    return this.stored.proved ?? [];
   }
 
   /** Whether this phone uses `hostId`: approved with its own code, or listed by a host it uses. */
@@ -223,21 +234,34 @@ export class AccountHosts {
   }
 
   /**
-   * Takes in the lists of the computers this phone reaches: the union to copy back to them, and it
-   * trusts the hosts that union lists. Restrictions are kept here with that trust, in one write, as
-   * the computer that told this phone of one may be offline next time.
+   * Takes in the lists of the computers this phone reaches: each one's `union` to copy back to it,
+   * by `sourcesFor`, and it trusts the hosts any of them lists. That trust only lets this phone use
+   * a host, and a fake one gains nothing on a real computer from it. A LAN pairing proves a computer
+   * as a typed code does. A proved computer's restrictions are kept here with that trust, in one
+   * write, as it may be offline next time. Another computer's aren't, as a fake one could then
+   * restrict a real one, and those count only for the computer that holds them.
    */
-  async absorb(known: { id: string; lists: Lists }[]): Promise<Lists> {
-    const sources = listSources(known, this.allowed);
-    const union = merged(sources.map((s) => s.lists), this.sessions, this.allowed);
-    const marks = union.allowedHosts ?? [];
-    const trusted = [...new Set([...this.stored.trusted, ...union.approvedHosts, ...marks])];
+  async absorb<T extends Known>(known: T[]): Promise<(T & { union: Lists })[]> {
+    const marks = known
+      .filter((each) => (each.paired || this.proved.includes(each.id)) && !this.allowed.includes(each.id))
+      .flatMap((each) => each.lists.allowedHosts ?? []);
     const allowed = [...new Set([...this.allowed, ...marks])];
+    const listed = known
+      .filter((each) => !allowed.includes(each.id))
+      .flatMap((each) => [...each.lists.approvedHosts, ...(each.lists.allowedHosts ?? [])]);
+    const trusted = [...new Set([...this.stored.trusted, ...listed])];
     if (trusted.length !== this.stored.trusted.length || allowed.length !== this.allowed.length) {
       this.stored = { ...this.stored, trusted, allowed };
       await this.save();
     }
-    return union;
+    return known.map((each) => ({
+      ...each,
+      union: merged(
+        sourcesFor(each, known, this.proved, allowed).map((source) => source.lists),
+        this.proved,
+        allowed,
+      ),
+    }));
   }
 
   /**
@@ -252,6 +276,7 @@ export class AccountHosts {
       ...this.stored,
       sessions: Object.fromEntries(Object.entries(sessions).filter(([id]) => !held.includes(id))),
       trusted: trusted.filter((id) => !held.includes(id)),
+      proved: this.proved.filter((id) => !held.includes(id)),
       books: Object.fromEntries(
         Object.entries(books).map(([id, book]) => [id, held.includes(id) ? forgetRequest(book) : book]),
       ),
@@ -518,17 +543,24 @@ export class AccountHosts {
   /**
    * Keeps the session in `answer`, and trusts its host when the user approved it with a code on
    * this phone: typed it, or matched it on another device. That ends any other request and any
-   * stop, since it covers every computer. `tapped` marks one the user allowed with a tap on its
-   * code alone, which this phone takes no lists from.
+   * stop, since it covers every computer. `how` says what the user did here: `tapped` marks one
+   * allowed with a tap on its code alone, which adds to no lists, and `typed` proves one set up with
+   * its typed code. Without it, the phone can't tell who approved it, or if anyone did.
    */
-  private async approved(hostId: string, answer: Record<string, unknown>, byCode: boolean, tapped = false) {
+  private async approved(
+    hostId: string,
+    answer: Record<string, unknown>,
+    byCode: boolean,
+    how?: "tapped" | "typed",
+  ) {
     const session = String(answer["accessToken"] ?? "");
     if (!session) throw new Error("That computer sent no session.");
     const { trusted, books, allowed = [] } = this.stored;
     this.stored = {
       ...this.stored,
       sessions: { ...this.stored.sessions, [hostId]: session },
-      ...(tapped && !allowed.includes(hostId) && { allowed: [...allowed, hostId] }),
+      ...(how === "tapped" && !allowed.includes(hostId) && { allowed: [...allowed, hostId] }),
+      ...(how === "typed" && !this.proved.includes(hostId) && { proved: [...this.proved, hostId] }),
       ...(byCode && {
         trusted: trusted.includes(hostId) ? trusted : [...trusted, hostId],
         books: Object.fromEntries(Object.entries(books).map(([id, book]) => [id, forgetRequest(book)])),
@@ -583,7 +615,7 @@ export class AccountHosts {
       for (;;) {
         const step = await Promise.race([this.approval(at, { request }, true), allowedHere]);
         if ("session" in step) {
-          await this.approved(hostId, step.session, true, tapped);
+          await this.approved(hostId, step.session, true, tapped ? "tapped" : undefined);
           return;
         }
       }
@@ -598,7 +630,7 @@ export class AccountHosts {
   /**
    * Compares codes with new computer `hostId`, which nothing vouches for, so it may be one the relay
    * made up. It takes no session until `decide` says the user allowed the code, and then marks the
-   * computer `allowed`, so this phone takes no lists from it. Without the Allow it asks nothing more
+   * computer `allowed`, so it adds to no lists. Without the Allow it asks nothing more
    * of the host, which withdraws the request. `onConfirm` says the computer must confirm too, as its
    * setup named no device. Rejects when it's denied or lapses, with a message for people.
    */
@@ -621,7 +653,7 @@ export class AccountHosts {
       let step = await this.approval(at, { request, allow: true });
       if ("pending" in step) onConfirm();
       while (!("session" in step)) step = await this.approval(at, { request }, true);
-      await this.approved(hostId, step.session, true, true);
+      await this.approved(hostId, step.session, true, "tapped");
     } catch (e) {
       if (e instanceof Denied) await this.setBook(hostId, forgetRequest(this.book(hostId)));
       throw e;
@@ -646,7 +678,7 @@ export class AccountHosts {
           throw new Error(at.problem() ?? e.message);
         },
       );
-      await this.approved(hostId, finished, true);
+      await this.approved(hostId, finished, true, "typed");
     } finally {
       at.close();
     }
