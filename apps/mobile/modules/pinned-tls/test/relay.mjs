@@ -125,6 +125,11 @@ const relay = createServer((socket) => {
     const plxd = connect(hosts[hostKey], "127.0.0.1", () => socket.write(frame(1, Buffer.from("ready"))));
     let first = true;
     frames(socket, (opcode, payload) => {
+      // Host `replaced` loses its stream as the real relay ends one, with a code and reason.
+      if (hostKey === "replaced" && opcode === 2) {
+        const close = Buffer.concat([Buffer.from([4409 >> 8, 4409 & 255]), Buffer.from("replaced")]);
+        return socket.end(frame(8, close));
+      }
       if (opcode === 2) {
         if (first) firstBytes.push(payload[0]);
         first = false;
@@ -141,6 +146,7 @@ const relay = createServer((socket) => {
   });
 });
 const relayPort = await listen(relay);
+hosts.replaced = hosts[hostId];
 
 const binary = join(scratch, "relay-test");
 execFileSync("swiftc", [

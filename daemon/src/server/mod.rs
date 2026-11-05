@@ -295,6 +295,8 @@ impl Shutdown {
 /// What every connection shares.
 pub(crate) struct Daemon {
     pub started: Instant,
+    /// Identifies this run of plxd to clients, in `initialize`'s `startId`.
+    pub start_id: String,
     pub log: Arc<EventLog>,
     pub store: StoreHandle,
     /// A read-only connection to the same store on a thread of its own, for lists, search, and
@@ -487,6 +489,7 @@ impl Server {
             .unwrap_or_else(|| Arc::new(TailscaleCli::new(launcher.clone())));
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
+            start_id: uuid::Uuid::new_v4().to_string(),
             log: store.log(),
             store,
             reader,
@@ -848,7 +851,9 @@ impl Accepted<'_> {
                     false,
                     false,
                 );
-                self.connections.spawn(serve.instrument(span));
+                self.connections.spawn(
+                    async move { serve.await.log(connection::Route::Local) }.instrument(span),
+                );
             }
             Peer::Other(peer) => {
                 warn!(parent: &span, %peer, "refused a connection from another user");
@@ -905,6 +910,7 @@ impl Daemon {
         let providers = Providers::load(dir, Arc::clone(&keys), &launcher, &backends);
         Arc::new(Self {
             started: Instant::now(),
+            start_id: uuid::Uuid::new_v4().to_string(),
             log: store.log(),
             store,
             reader,

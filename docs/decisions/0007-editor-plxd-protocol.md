@@ -55,7 +55,7 @@ The editor and `plxd` need one protocol, whether `plxd` runs on this Mac or on a
 
 - **`initialize` comes first**, and anything sent before it fails with `notInitialized`.
   - It sends `protocol: {min, max}`, `client: {name, version, machineId?}`, and `capabilities`.
-  - It returns `protocol`, `plxd` (the release version), `logId`, `capabilities`, and `maxFrameBytes`.
+  - It returns `protocol`, `plxd` (the release version), `startId` (new each time plxd starts), `logId`, `capabilities`, and `maxFrameBytes`.
   - `capabilities` is an object map such as `{"agents": {}}`, as in LSP and MCP.
   - The map, the version fields, and the `incompatibleProtocol` error never change shape.
 - **`protocol` is an integer, starting at 1.**

@@ -13,6 +13,8 @@
 //! connection closes once every request it read has been answered. When the client is gone, has
 //! been silent too long, stops reading what plxd writes, or sends an oversized frame, the
 //! connection closes at once and its requests are cancelled.
+//!
+//! Each connection's end gets one line in `plxd.log`, whose format [`Closed::log`] documents.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -52,10 +54,128 @@ use crate::methods::{self, Context, Cursors, Delivery, Reply, Session, read_only
 
 type InFlight = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
-/// Serves one connection until it closes. `closing` closes it at once; `stop_reading` stops
-/// reading and closes it after the requests already read are answered. `over_connect` says it
-/// came through Parallax Connect's listener and its `whois` check ([`Context::over_connect`]).
-/// `read_only` says its device is limited to reads ([`Context::read_only`]).
+/// How a client reached plxd. An SSH client comes through `plxd attach` and the socket, so it's
+/// [`Route::Local`] here. Its desktop's own log says `ssh`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Local,
+    Lan,
+    Tailnet,
+    Relay,
+}
+
+impl Route {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Lan => "lan",
+            Self::Tailnet => "tailnet",
+            Self::Relay => "relay",
+        }
+    }
+}
+
+/// Why a connection ended, as [`Closed::log`] writes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reason {
+    /// The client closed its side cleanly: EOF, or a WebSocket close frame on the remote listener.
+    ClientClosed,
+    /// A remote client's transport ended without a WebSocket close frame.
+    TransportClosed,
+    /// Reading from the client failed.
+    ReadError,
+    /// Writing to the client failed.
+    WriteError,
+    /// A write made no progress until it timed out.
+    ClientStoppedReading,
+    /// Nothing arrived for `idle_timeout`.
+    IdleTimeout,
+    /// The client sent a frame over the limit.
+    OversizedFrame,
+    /// A subscriber without `resyncNotice` fell behind the event log's retention.
+    SubscriberBehind,
+    /// plxd is stopping. The lines before it say why, and the next `listening` has its version.
+    Shutdown,
+    /// plxd closed it while running: a revoked session, or the remote setting going off.
+    HostClosed,
+    /// The `relay` setting went off, which ends its streams.
+    RelayOff,
+    /// The relay closed the stream for its own reason, in `close_code` and `close_reason`.
+    RelayClosed,
+}
+
+impl Reason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientClosed => "client_closed",
+            Self::TransportClosed => "transport_closed",
+            Self::ReadError => "read_error",
+            Self::WriteError => "write_error",
+            Self::ClientStoppedReading => "client_stopped_reading",
+            Self::IdleTimeout => "idle_timeout",
+            Self::OversizedFrame => "oversized_frame",
+            Self::SubscriberBehind => "subscriber_behind",
+            Self::Shutdown => "shutdown",
+            Self::HostClosed => "host_closed",
+            Self::RelayOff => "relay_off",
+            Self::RelayClosed => "relay_closed",
+        }
+    }
+}
+
+/// A connection that ended and why. The listener that accepted it adds what only it knows, then
+/// calls [`Closed::log`].
+#[derive(Debug)]
+pub(crate) struct Closed {
+    pub(crate) session: Option<Session>,
+    pub(crate) reason: Reason,
+    /// The transport's error, when there was one. Never holds request data.
+    pub(crate) error: Option<String>,
+    /// The relay's close code and reason for this stream, on [`Route::Relay`].
+    pub(crate) close_code: Option<u16>,
+    pub(crate) close_reason: Option<String>,
+    pub(crate) lived: Duration,
+}
+
+impl Closed {
+    /// Writes the connection's one line. Counting client disconnects by reason and route reads
+    /// it, so its message and field names are stable:
+    ///
+    /// ```text
+    /// client disconnected route=relay reason=relay_closed lived_ms=660123 close_code=4409 close_reason="replaced" error="..." client="parallax" protocol=1
+    /// ```
+    ///
+    /// `grep 'client disconnected' plxd.log`. `route` is a [`Route`] and `reason` a [`Reason`].
+    /// `close_code`, `close_reason`, and `error` appear only when there's one. A connection that
+    /// ended before `initialize` is no client session, so it logs at debug instead. Client text is
+    /// quoted and cut by [`untrusted`], and no field holds a token.
+    pub(crate) fn log(&self, route: Route) {
+        let Some(session) = &self.session else {
+            return debug!(
+                route = %route.as_str(),
+                reason = %self.reason.as_str(),
+                "disconnected before initialize"
+            );
+        };
+        info!(
+            route = %route.as_str(),
+            reason = %self.reason.as_str(),
+            lived_ms = u64::try_from(self.lived.as_millis()).unwrap_or(u64::MAX),
+            close_code = self.close_code,
+            close_reason = self.close_reason.as_deref(),
+            error = self.error.as_deref(),
+            client = ?untrusted(&session.client.name),
+            protocol = session.protocol,
+            "client disconnected"
+        );
+    }
+}
+
+/// Serves one connection until it closes, and says why it did. `closing` closes it at once;
+/// `stop_reading` stops reading and closes it after the requests already read are answered.
+/// `over_connect` says it came through Parallax Connect's listener and its `whois` check
+/// ([`Context::over_connect`]). `read_only` says its device is limited to reads
+/// ([`Context::read_only`]).
 pub(crate) async fn serve<S>(
     stream: S,
     daemon: Arc<Daemon>,
@@ -63,9 +183,11 @@ pub(crate) async fn serve<S>(
     closing: CancellationToken,
     over_connect: bool,
     read_only: bool,
-) where
+) -> Closed
+where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
+    let started = Instant::now();
     let (read, write) = tokio::io::split(stream);
     let (replies, queue) = mpsc::channel(daemon.limits.outbound_queue);
     let reader = Reader {
@@ -81,6 +203,8 @@ pub(crate) async fn serve<S>(
         closing: closing.clone(),
         over_connect,
         read_only,
+        reason: Reason::HostClosed,
+        error: None,
     };
     let stall = Stall {
         timeout: daemon.limits.idle_timeout,
@@ -95,15 +219,23 @@ pub(crate) async fn serve<S>(
         stall,
     );
     debug!("connected");
-    let (session, ()) = tokio::join!(reader.run(), writer);
-    if let Some(session) = session {
-        info!(
-            client = ?untrusted(&session.client.name),
-            protocol = session.protocol,
-            "disconnected"
-        );
-    } else {
-        debug!("disconnected before initialize");
+    let ((session, read_reason, read_error), written) = tokio::join!(reader.run(), writer);
+    // The reader sees only `closing` when the writer gave up first, so the writer knows why.
+    let (reason, error) = match written {
+        Some((reason, error)) if read_reason == Reason::HostClosed => (reason, error),
+        _ => (read_reason, read_error),
+    };
+    Closed {
+        session,
+        reason: if reason == Reason::HostClosed && stop_reading.is_cancelled() {
+            Reason::Shutdown
+        } else {
+            reason
+        },
+        error,
+        close_code: None,
+        close_reason: None,
+        lived: started.elapsed(),
     }
 }
 
@@ -129,10 +261,13 @@ struct Reader<S> {
     closing: CancellationToken,
     over_connect: bool,
     read_only: bool,
+    /// Why reading stopped. [`Reason::HostClosed`] until something else ends it.
+    reason: Reason,
+    error: Option<String>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
-    async fn run(mut self) -> Option<Session> {
+    async fn run(mut self) -> (Option<Session>, Reason, Option<String>) {
         let end = self.read().await;
         self.stopped_reading.cancel();
         match end {
@@ -144,7 +279,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             cancel.cancel();
         }
         self.handlers.shutdown().await;
-        self.session.take()
+        (self.session.take(), self.reason, self.error.take())
     }
 
     async fn read(&mut self) -> End {
@@ -154,13 +289,17 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             let next = tokio::select! {
                 biased;
                 () = self.closing.cancelled() => return End::Close,
-                () = self.stop_reading.cancelled() => return End::Drain,
+                () = self.stop_reading.cancelled() => {
+                    self.reason = Reason::Shutdown;
+                    return End::Drain;
+                }
                 Some(joined) = self.handlers.join_next() => {
                     log_join(joined);
                     continue;
                 }
                 () = time::sleep_until(deadline) => {
                     info!(?idle, "closing a connection that has been silent too long");
+                    self.reason = Reason::IdleTimeout;
                     return End::Close;
                 }
                 next = self.frames.next() => next,
@@ -169,6 +308,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             let frame = match next {
                 None => {
                     debug!("the client closed its side");
+                    self.reason = Reason::ClientClosed;
                     return End::Drain;
                 }
                 Some(Ok(frame)) => frame,
@@ -177,10 +317,13 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
                         max_frame_bytes,
                         "closing a connection that sent an oversized frame"
                     );
+                    self.reason = Reason::OversizedFrame;
                     return End::Close;
                 }
                 Some(Err(error)) => {
                     debug!(%error, "reading failed");
+                    self.reason = Reason::ReadError;
+                    self.error = Some(error.to_string());
                     return End::Close;
                 }
             };
@@ -458,17 +601,22 @@ async fn run_writer<W: AsyncWrite + Unpin>(
     update_notice: CancellationToken,
     closing: CancellationToken,
     stall: Stall,
-) {
-    tokio::select! {
+) -> Option<(Reason, Option<String>)> {
+    let ended = tokio::select! {
         biased;
-        () = closing.cancelled() => {}
-        written = write_loop(sink, queue, &log, &update_notice, &stall) => {
-            if let Err(error) = written {
+        () = closing.cancelled() => None,
+        written = write_loop(sink, queue, &log, &update_notice, &stall) => match written {
+            Ok(behind) => behind.then_some((Reason::SubscriberBehind, None)),
+            Err(error) => {
                 debug!(%error, "writing failed");
+                let stalled = matches!(&error, FrameError::Io(io) if io.kind() == io::ErrorKind::TimedOut);
+                let reason = if stalled { Reason::ClientStoppedReading } else { Reason::WriteError };
+                Some((reason, Some(error.to_string())))
             }
         }
-    }
+    };
     closing.cancel();
+    ended
 }
 
 /// When a write that makes no progress gives up: after `timeout`, or [`SHUTDOWN_WRITE_TIMEOUT`]
@@ -539,13 +687,14 @@ fn in_names(mut reply: Reply, method: Option<&str>) -> Reply {
     reply
 }
 
+/// Writes until the connection ends. True means it closed because a subscriber fell behind.
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut sink: FramedWrite<W, FrameCodec>,
     mut queue: mpsc::Receiver<Reply>,
     log: &EventLog,
     update_notice: &CancellationToken,
     stall: &Stall,
-) -> Result<(), FrameError> {
+) -> Result<bool, FrameError> {
     let mut appended = log.watch();
     let mut cursors = Cursors::default();
     let mut resync_notice = false;
@@ -595,7 +744,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
                     %subscription,
                     "a subscriber fell behind the event log's retention; closing the connection so it resubscribes"
                 );
-                return Ok(());
+                return Ok(true);
             }
         }
         // FramedWrite is a Sink for every serializable item, so flush and close name one.
@@ -618,7 +767,8 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             },
         }
     }
-    stall.guard(SinkExt::<Response>::close(&mut sink)).await
+    stall.guard(SinkExt::<Response>::close(&mut sink)).await?;
+    Ok(false)
 }
 
 async fn send_reply<W: AsyncWrite + Unpin>(
@@ -711,7 +861,7 @@ mod tests {
     use tokio_util::codec::FramedRead;
     use tokio_util::sync::CancellationToken;
 
-    use super::serve;
+    use super::{Closed, Reason, serve};
     use crate::server::Daemon;
 
     const PATIENCE: Duration = Duration::from_secs(10);
@@ -800,6 +950,46 @@ mod tests {
             .await
             .expect("a message or the end")?;
         Some(Message::from_frame(&frame.ok()?).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_connection_says_why_it_ended() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = daemon(dir.path(), 5);
+        let start = |daemon: &Arc<Daemon>| {
+            let (client, server) = tokio::io::duplex(1024);
+            let (stop, closing) = (CancellationToken::new(), CancellationToken::new());
+            let serve = tokio::spawn(serve(
+                server,
+                Arc::clone(daemon),
+                stop.clone(),
+                closing.clone(),
+                false,
+                false,
+            ));
+            (client, stop, closing, serve)
+        };
+        let ended = async |serve: tokio::task::JoinHandle<Closed>| {
+            timeout(PATIENCE, serve).await.unwrap().unwrap().reason
+        };
+
+        let (client, _stop, _closing, serve) = start(&daemon);
+        drop(client);
+        assert_eq!(ended(serve).await, Reason::ClientClosed);
+
+        let (_client, stop, _closing, serve) = start(&daemon);
+        stop.cancel();
+        assert_eq!(ended(serve).await, Reason::Shutdown);
+
+        let (_client, _stop, closing, serve) = start(&daemon);
+        closing.cancel();
+        assert_eq!(ended(serve).await, Reason::HostClosed);
+
+        // An abort during a shutdown is the shutdown.
+        let (_client, stop, closing, serve) = start(&daemon);
+        closing.cancel();
+        stop.cancel();
+        assert_eq!(ended(serve).await, Reason::Shutdown);
     }
 
     #[tokio::test]

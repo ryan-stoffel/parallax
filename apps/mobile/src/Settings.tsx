@@ -9,7 +9,9 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import {
   Bot,
+  Activity,
   Bug,
+  Copy,
   CalendarClock,
   ChartNoAxesColumn,
   ChevronRight,
@@ -43,6 +45,8 @@ import { restarting, useRestarting } from "./computerUpdate";
 import { ComputerVersion } from "./ComputerVersion";
 import { showAlert } from "./dialogStore";
 import { useComputer, useFleet, type Computer } from "./fleet";
+import * as Clipboard from "expo-clipboard";
+import { connectionLogText } from "./connectionLog";
 import { useNav, type PhonePage, type SettingsScreens } from "./nav";
 import { pairedId } from "./machines";
 import { AddInstructions } from "./Onboarding";
@@ -412,9 +416,30 @@ export function PhoneConnections() {
   );
 }
 
+/** This phone's connection events (connectionLog.ts), newest first, to read or copy. */
+export function ConnectionLogScreen() {
+  const c = useColors();
+  const text = connectionLogText();
+  return (
+    <ScrollView
+      style={{ backgroundColor: c.background }}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ padding: 16, gap: 24, paddingBottom: 40 }}
+    >
+      <Section>
+        <Row icon={Copy} title="Copy log" last onPress={() => void Clipboard.setStringAsync(text)} />
+      </Section>
+      <T mono muted selectable style={{ fontSize: 12 }}>
+        {text.split("\n").reverse().join("\n") || "No connection events yet."}
+      </T>
+    </ScrollView>
+  );
+}
+
 /** About, from the Settings sheet's info button: the version, and Parallax on GitHub. */
 export function AboutScreen() {
   const c = useColors();
+  const nav = useNav();
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
@@ -429,7 +454,8 @@ export function AboutScreen() {
         </T>
       </View>
       <Section>
-        <Row icon={Info} title="Version" detail={versionName()} last />
+        <Row icon={Info} title="Version" detail={versionName()} />
+        <Row icon={Activity} title="Connection log" chevron last onPress={() => nav.navigate("ConnectionLog")} />
       </Section>
       <Section>
         <Row

@@ -25,6 +25,7 @@ const native = requireNativeModule<{
   open(id: string, url: string, pin: string, headers: Record<string, string>): void;
   relayOpen(id: string, url: string, token: string): Promise<number>;
   relayRefused(id: string): number | null;
+  relayClosedWith(id: string): { relay_code?: number; relay_reason?: string } | null;
   relayClose(id: string): void;
   authorize(url: string): Promise<string>;
   appVersion(): { version: string; build: string };
@@ -76,11 +77,16 @@ export function onNetwork(listener: () => void): () => void {
   return () => subscription.remove();
 }
 
+/** How the relay closed a stream, in the connection log's names (`protocol/connectionLog.ts`). */
+export type RelayEnd = { relay_code?: number; relay_reason?: string };
+
 /** A loopback port whose every connection is a stream to one host through Parallax Relay. */
 export interface RelayBridge {
   port: number;
   /** The relay's HTTP status when it last refused a stream, such as 503 while the host is offline. */
   refused(): number | undefined;
+  /** How the relay last closed a stream of this bridge, if it sent a close frame. */
+  closedWith(): RelayEnd | undefined;
   close(): void;
 }
 
@@ -98,6 +104,7 @@ export async function openRelay(url: string, token: string): Promise<RelayBridge
   return {
     port,
     refused: () => native.relayRefused(id) ?? undefined,
+    closedWith: () => native.relayClosedWith(id) ?? undefined,
     close: () => native.relayClose(id),
   };
 }
@@ -135,6 +142,8 @@ export class PinnedSocket {
   refusedWith?: number;
   /** Runs once when the socket closes, either end closing it, such as to close its relay bridge. */
   onEnd?: () => void;
+  /** How the relay closed the stream under it, once it ended. */
+  relayEnd?: RelayEnd;
   private readonly id = String(++nextId);
   private opened?: () => void;
   private closed?: () => void;

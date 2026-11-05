@@ -75,9 +75,11 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span, warn};
 
+use super::connection::{Closed, Reason, Route};
 use super::tailnet::{Check, Checks, Serving};
 use super::{ACCEPT_BACKOFF, Daemon, connection};
 use crate::agents::store_error;
+use crate::relay::{RelayStream, StreamEnd};
 use crate::remote::{self, Descriptor, HostKey};
 
 /// How long a pairing code works, as 0065 has it.
@@ -1333,19 +1335,82 @@ async fn serve_socket(
     let socket =
         WebSocketStream::from_raw_socket(stream, Role::Server, Some(remote::websocket_config()))
             .await;
+    let relay_stream = daemon.relay.joined(peer);
     let (local, plain) = tokio::io::duplex(64 * 1024);
     let (local_in, local_out) = tokio::io::split(local);
     let serve = connection::serve(plain, daemon, stop_reading, closing, false, read_only);
-    let ((), pumped) = tokio::join!(serve, pump(socket, local_in, local_out));
+    let (mut closed, (pumped, socket_end)) = tokio::join!(serve, pump(socket, local_in, local_out));
     if let Err(error) = pumped {
         debug!(%peer, %error, "a remote WebSocket failed");
+    }
+    explain(&mut closed, socket_end, relay_stream.as_deref());
+    closed.log(route_of(peer.ip(), relay_stream.is_some()));
+}
+
+/// Which route a connection to the remote listener came over. A relay stream comes from plxd
+/// itself, so only its registration tells it from a client on this computer.
+fn route_of(ip: IpAddr, relay_stream: bool) -> Route {
+    if relay_stream {
+        return Route::Relay;
+    }
+    match ip.to_canonical() {
+        ip if ip.is_loopback() => Route::Local,
+        IpAddr::V4(v4) if matches!(v4.octets(), [100, b, ..] if b & 0xc0 == 64) => Route::Tailnet,
+        _ => Route::Lan,
+    }
+}
+
+/// How a remote client's WebSocket ended, when it ended before plxd closed it.
+#[derive(Debug)]
+enum SocketEnd {
+    /// The client sent a close frame.
+    Closed,
+    /// The transport ended with no close frame.
+    Ended,
+    Failed(String),
+}
+
+/// Says why a remote connection ended. [`pump`] ends the connection's input however the WebSocket
+/// ended, so to [`connection::serve`] each of these is the client closing.
+fn explain(closed: &mut Closed, socket_end: Option<SocketEnd>, relay_stream: Option<&RelayStream>) {
+    if closed.reason != Reason::ClientClosed {
+        return;
+    }
+    match socket_end {
+        Some(SocketEnd::Closed) => return,
+        Some(SocketEnd::Failed(error)) => closed.error = Some(error),
+        Some(SocketEnd::Ended) | None => {}
+    }
+    closed.reason = Reason::TransportClosed;
+    let Some(stream) = relay_stream else {
+        return;
+    };
+    match stream.end() {
+        Some(StreamEnd::Closed { code, reason }) => {
+            // The relay ends a stream with this when the client's end of it goes.
+            if !(code == Some(1000) && reason == "closed") {
+                closed.reason = Reason::RelayClosed;
+            }
+            closed.close_code = code;
+            closed.close_reason = Some(reason);
+        }
+        Some(StreamEnd::Failed(error)) => closed.error = Some(error),
+        None => {}
+    }
+    // Last, since plxd's own close of the stream can look like any of these.
+    if stream.relay_off() {
+        closed.reason = Reason::RelayOff;
     }
 }
 
 /// Carries frames from `socket` to the connection as lines, and its lines back as frames, until
 /// the connection closes. A client's close ends what the connection reads, so it still answers
-/// what it read.
-async fn pump<S, I, O>(socket: WebSocketStream<S>, local_in: I, mut local_out: O) -> io::Result<()>
+/// what it read. Answers with how the socket ended, if it did first.
+async fn pump<S, I, O>(
+    socket: WebSocketStream<S>,
+    local_in: I,
+    mut local_out: O,
+) -> (io::Result<()>, Option<SocketEnd>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
     I: AsyncRead + Unpin,
@@ -1353,17 +1418,26 @@ where
 {
     let (mut sink, mut frames) = socket.split();
     let incoming = async {
+        let mut end = SocketEnd::Ended;
         while let Some(frame) = frames.next().await {
             match frame {
                 Ok(Message::Text(text)) => {
                     local_out.write_all(text.as_bytes()).await?;
                     local_out.write_all(b"\n").await?;
                 }
-                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(Message::Close(_)) => {
+                    end = SocketEnd::Closed;
+                    break;
+                }
+                Err(error) => {
+                    end = SocketEnd::Failed(error.to_string());
+                    break;
+                }
                 Ok(_) => {}
             }
         }
-        local_out.shutdown().await
+        local_out.shutdown().await?;
+        Ok::<_, io::Error>(end)
     };
     let outgoing = async {
         let mut lines = tokio::io::BufReader::new(local_in).lines();
@@ -1377,13 +1451,15 @@ where
     };
     tokio::pin!(incoming, outgoing);
     let mut receiving = true;
+    let mut socket_end = None;
     loop {
         tokio::select! {
-            done = &mut outgoing => return done,
+            done = &mut outgoing => return (done, socket_end),
             done = &mut incoming, if receiving => {
                 receiving = false;
-                if let Err(error) = done {
-                    debug!(%error, "could not end a remote connection's input");
+                match done {
+                    Ok(end) => socket_end = Some(end),
+                    Err(error) => debug!(%error, "could not end a remote connection's input"),
                 }
             }
         }
@@ -1655,9 +1731,102 @@ pub(crate) async fn host_name(daemon: &Daemon) -> String {
 
 #[cfg(test)]
 mod tests {
-    use tokio::io::AsyncWriteExt as _;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use super::{MAX_HOOK_BYTES, read_request};
+    use tokio::io::AsyncWriteExt as _;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{
+        Closed, MAX_HOOK_BYTES, Reason, RelayStream, Route, SocketEnd, StreamEnd, explain,
+        read_request, route_of,
+    };
+
+    #[test]
+    fn a_remote_connection_routes_by_its_peer_and_registration() {
+        let route = |ip: &str, relay| route_of(ip.parse().unwrap(), relay);
+        assert_eq!(route("127.0.0.1", true), Route::Relay);
+        assert_eq!(route("127.0.0.1", false), Route::Local);
+        assert_eq!(route("::ffff:127.0.0.1", false), Route::Local);
+        assert_eq!(route("192.168.1.5", false), Route::Lan);
+        assert_eq!(route("100.64.0.7", false), Route::Tailnet);
+        assert_eq!(route("100.128.0.7", false), Route::Lan);
+    }
+
+    /// How a connection that read EOF is explained, with what it knows and the stream's end.
+    fn explained(
+        socket_end: Option<SocketEnd>,
+        relay: Option<(Option<StreamEnd>, bool)>,
+        reason: Reason,
+    ) -> Closed {
+        let mut closed = Closed {
+            session: None,
+            reason,
+            error: None,
+            close_code: None,
+            close_reason: None,
+            lived: Duration::ZERO,
+        };
+        let stream = relay.map(|(end, relay_off)| {
+            let stop = CancellationToken::new();
+            if relay_off {
+                stop.cancel();
+            }
+            RelayStream {
+                stop,
+                end: Arc::new(std::sync::Mutex::new(end)),
+            }
+        });
+        explain(&mut closed, socket_end, stream.as_ref());
+        closed
+    }
+
+    #[test]
+    fn eof_from_the_pump_is_explained_by_how_the_socket_and_stream_ended() {
+        let closed = |code, reason: &str| StreamEnd::Closed {
+            code,
+            reason: reason.to_owned(),
+        };
+        let eof = Reason::ClientClosed;
+        let ended = Some(SocketEnd::Ended);
+
+        // A close frame is the client closing, whatever else is true.
+        let clean = explained(Some(SocketEnd::Closed), Some((None, true)), eof);
+        assert_eq!(clean.reason, Reason::ClientClosed);
+        // No close frame, off the relay.
+        assert_eq!(explained(None, None, eof).reason, Reason::TransportClosed);
+        // The relay ends a stream this way when its client goes.
+        let gone = explained(
+            ended,
+            Some((Some(closed(Some(1000), "closed")), false)),
+            eof,
+        );
+        assert_eq!(gone.reason, Reason::TransportClosed);
+        assert_eq!(gone.close_code, Some(1000));
+        // The relay's own reasons.
+        let code = explained(
+            Some(SocketEnd::Ended),
+            Some((Some(closed(Some(4429), "daily limit")), false)),
+            eof,
+        );
+        assert_eq!(code.reason, Reason::RelayClosed);
+        assert_eq!(code.close_code, Some(4429));
+        assert_eq!(code.close_reason.as_deref(), Some("daily limit"));
+        let reconnected = closed(Some(1000), "the host reconnected");
+        let host = explained(
+            Some(SocketEnd::Ended),
+            Some((Some(reconnected.clone()), false)),
+            eof,
+        );
+        assert_eq!(host.reason, Reason::RelayClosed);
+        // `relay` going off explains the rest, and keeps the code that came with it.
+        let off = explained(Some(SocketEnd::Ended), Some((Some(reconnected), true)), eof);
+        assert_eq!(off.reason, Reason::RelayOff);
+        assert_eq!(off.close_code, Some(1000));
+        // A reason plxd already knows stays.
+        let down = explained(None, Some((None, true)), Reason::Shutdown);
+        assert_eq!(down.reason, Reason::Shutdown);
+    }
 
     #[test]
     fn routes_go_lan_then_tailscale_then_the_relay_each_once() {

@@ -125,9 +125,12 @@ export async function pair(route: string, code: string, label: string): Promise<
 
 /**
  * Opens `/ws` on the first of the host's routes that answers with its certificate, with a 30 s
- * ticket for the session, as the web client's `openSocket` does.
+ * ticket for the session, as the web client's `openSocket` does. `onRoute` hears the route it used.
  */
-export async function pairedSocket(saved: Saved): Promise<WebSocket | { error: string }> {
+export async function pairedSocket(
+  saved: Saved,
+  onRoute?: (route: string) => void,
+): Promise<WebSocket | { error: string }> {
   const secret = fromBase64url(saved.key);
   let error = `Couldn't reach ${saved.name}. Check that it's on and on this network.`;
   for (const route of saved.routes) {
@@ -144,6 +147,7 @@ export async function pairedSocket(saved: Saved): Promise<WebSocket | { error: s
     if (!answer) continue;
     const body = JSON.parse(answer.body || "{}") as { ticket?: string; error?: string };
     if (body.ticket) {
+      onRoute?.(route);
       const socket = new PinnedSocket(
         `wss://${withPort(route)}/ws?wsTicket=${body.ticket}`,
         saved.fingerprint,

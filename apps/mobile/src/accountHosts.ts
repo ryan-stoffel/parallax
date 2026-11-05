@@ -34,6 +34,7 @@ import { base64url, fromBase64url, newDpopSecret, proof, thumbprint } from "./pa
 import { RELAY_URL } from "./push";
 import { inOrder, routesAhead, type RouteChoices } from "../../desktop/src/preload/routeList";
 import { isRelay, ordered, race, usable, withPort, worthChecking, WrongHost } from "./routes";
+import type { RelayEnd } from "../modules/pinned-tls";
 
 const KEY = "account-hosts";
 
@@ -102,6 +103,8 @@ interface Endpoint {
   close(): void;
   /** Why a request through it failed, for people, when the relay refused the stream. */
   problem(): string | undefined;
+  /** How the relay last closed a stream through it, for the connection log. */
+  relayEnd(): RelayEnd | undefined;
 }
 
 /** A host's descriptor (`/.well-known/parallax`), and the certificate's fingerprint. */
@@ -416,7 +419,14 @@ export class AccountHosts {
     const pin = `key:${hostId}`;
     if (!isRelay(route)) {
       const base = `https://${withPort(route)}`;
-      return { route, base, pin, close: () => {}, problem: () => undefined };
+      return {
+        route,
+        base,
+        pin,
+        close: () => {},
+        problem: () => undefined,
+        relayEnd: () => undefined,
+      };
     }
     const token = await this.token();
     if (!token) throw new Error("Sign in to reach your computers through Parallax Relay.");
@@ -428,6 +438,7 @@ export class AccountHosts {
       pin,
       close: bridge.close,
       problem: () => relayProblem(bridge.refused(), lastUsage.get(hostId)),
+      relayEnd: bridge.closedWith,
     };
   }
 
@@ -522,7 +533,11 @@ export class AccountHosts {
     const { at, described } = found;
     learn(described.routes, described.name);
     const opened = (socket: PinnedSocket) => {
-      socket.onEnd = at.close;
+      socket.onEnd = () => {
+        // Read first: closing the bridge forgets it.
+        socket.relayEnd = at.relayEnd();
+        at.close();
+      };
       return { socket, route: at.route };
     };
     try {

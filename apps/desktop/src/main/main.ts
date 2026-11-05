@@ -9,6 +9,7 @@ import {
   nativeImage,
   nativeTheme,
   net,
+  powerMonitor,
   protocol,
   screen,
   session,
@@ -104,6 +105,8 @@ import {
   terminalName,
   writeTerminalApp,
 } from "./terminalApp";
+import { logLine } from "../protocol/connectionLog";
+import { startConnectionLog, writeConnectionLine } from "./connectionLogFile";
 import { startStorage } from "./storage";
 import { startTelemetry } from "./telemetry";
 import { isNightly, startUpdater } from "./updater";
@@ -910,6 +913,11 @@ ipcMain.on("parallax:zoomed", (event, zoom: unknown) => {
 void app.whenReady().then(async () => {
   if (secondCopy) return;
   if (!devServerUrl) await serveAppScheme();
+  startConnectionLog(path.join(app.getPath("userData"), "logs"));
+  // So a disconnect a sleep caused can be told from the rest.
+  const logPower = (event: string) => writeConnectionLine(logLine(Date.now(), "power", { event }));
+  powerMonitor.on("suspend", () => logPower("suspend"));
+  powerMonitor.on("resume", () => logPower("resume"));
   startVoice();
   protocol.handle("plx-render", (request) => renderPage(request.url));
   protocol.handle("plx-file", (request) => streamFile(request.url, request.headers.get("range")));

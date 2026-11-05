@@ -51,8 +51,8 @@ class FakeChild extends EventEmitter {
   request(method: string) {
     return this.sent.findLast((message) => message.method === method)!;
   }
-  handshake(logId = "log-1") {
-    this.reply({ id: this.request("initialize").id, result: { ...initialized, logId } });
+  handshake(logId = "log-1", startId?: string) {
+    this.reply({ id: this.request("initialize").id, result: { ...initialized, logId, startId } });
   }
 }
 
@@ -213,6 +213,70 @@ test("the local upgrade asks a compatible plxd for its running agents", async ()
   child().reply({ id: child().request("initialize").id, error: incompatible });
   expect(agents).toBeUndefined();
   old.dispose();
+});
+
+test("logs each disconnect's reason, route, relay close, and downtime", () => {
+  const lines: string[] = [];
+  const connection = new Connection({
+    command: () => ["/bin/plxd", "dial"],
+    account: "mini",
+    clientVersion: "0.0.1",
+    onState: (next) => states.push(next),
+    writeLog: (line) => lines.push(line.slice(25)),
+    spawn: () => {
+      children.push(new FakeChild());
+      return child() as unknown as ChildProcessWithoutNullStreams;
+    },
+  });
+  const up = (route: string, startId = "run-1") => {
+    child().stderr.emit("data", Buffer.from(`plxd dial: connected over ${route}\n`));
+    child().handshake("log-1", startId);
+  };
+  connection.start();
+  up("relay:abc123");
+  expect(lines.at(-1)).toBe(`client_connect host=mini route=relay plxd=0.1.0 attempts=1`);
+
+  // The relay closed the stream, and plxd dial said so before it exited.
+  vi.advanceTimersByTime(5_000);
+  const ended = `plxd dial: relay stream ended code=4409 reason="replaced"\n`;
+  child().stderr.emit("data", Buffer.from(ended));
+  child().emit("close", 1, null);
+  expect(lines.at(-1)).toBe(
+    `client_disconnect host=mini route=relay reason=transport_closed lived_ms=5000 exit=1 relay_code=4409 relay_reason=replaced`,
+  );
+
+  // Back on the LAN a second later, to a plxd that restarted meanwhile.
+  vi.advanceTimersByTime(1_000);
+  up("192.168.1.5:7341", "run-2");
+  expect(lines.at(-1)).toBe(
+    `client_connect host=mini route=lan plxd=0.1.0 attempts=1 down_ms=1000 last_reason=transport_closed plxd_restarted=true`,
+  );
+
+  // A close reason that reads like a route is no route.
+  child().stderr.emit(
+    "data",
+    Buffer.from(`plxd dial: relay stream ended code=1 reason="connected over 127.0.0.1"\n`),
+  );
+
+  // Silent past the liveness timer.
+  vi.advanceTimersByTime(30_000 + 10_000);
+  expect(lines.at(-1)).toContain("route=lan reason=liveness_timeout lived_ms=40000");
+
+  // No token, route address, or relay id reaches a line.
+  expect(lines.join("\n")).not.toMatch(/abc123|192\.168/);
+
+  // The app moving it to a better route, then closing it, each say so once it's up.
+  vi.advanceTimersByTime(1_000);
+  up("relay:abc123");
+  connection.reconnect();
+  expect(lines.at(-1)).toContain("reason=better_route");
+  up("192.168.1.5:7341");
+  connection.reconnect("new_device_key");
+  expect(lines.at(-1)).toContain("reason=new_device_key");
+  up("192.168.1.5:7341");
+  connection.dispose();
+  expect(lines.at(-1)).toContain("reason=app_closed");
+  expect(lines.filter((line) => line.startsWith("client_disconnect"))).toHaveLength(5);
 });
 
 test("handshakes, then heartbeats, and reconnects when plxd goes silent", () => {

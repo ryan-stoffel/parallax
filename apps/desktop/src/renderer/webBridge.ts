@@ -43,6 +43,7 @@ import {
   resultFromLegacy,
 } from "../protocol/legacyNames";
 import { UpdateNotice } from "../protocol/updateNotice";
+import type { ConnectionLog, DisconnectReason } from "../protocol/connectionLog";
 
 // The generated protocol's, copied so this chunk shares nothing with the app's (webBridge.test.ts).
 export const PROTOCOL_VERSION = 1;
@@ -223,17 +224,20 @@ export class WebHost {
   /** Who gets each device stream's messages (PLX-886), by its id. */
   readonly deviceStreams = new Map<string, (message: DeviceStreamMessage) => void>();
 
+  /** `log` keeps its connection events: the mobile app's Connection log. A browser has none. */
   constructor(
     private readonly open: OpenSocket,
     private readonly signedOut = async () => {
       await forget();
       location.reload();
     },
+    private readonly log?: ConnectionLog,
   ) {}
 
   async connect(): Promise<void> {
     if (this.closed) return;
     clearTimeout(this.retryTimer);
+    this.log?.attempt();
     this.setState({ status: "connecting" });
     const socket = await this.open();
     // Closed while it opened: the socket it got goes too.
@@ -253,7 +257,7 @@ export class WebHost {
       this.receive(String(event.data));
     };
     socket.onclose = () => {
-      if (socket === this.socket) this.end("The connection to Parallax ended.");
+      if (socket === this.socket) this.end("The connection to Parallax ended.", "transport_closed");
     };
     socket.onopen = () => {
       const capabilities = { resyncNotice: {}, [CLIENT_CAPABILITY]: {} };
@@ -261,7 +265,8 @@ export class WebHost {
       const protocol = { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION };
       this.send("initialize", { protocol, client, capabilities }, (response) => {
         if (socket !== this.socket) return;
-        if ("error" in response) return this.end(`initialize failed: ${response.error.message}`);
+        if ("error" in response)
+          return this.end(`initialize failed: ${response.error.message}`, "protocol_error");
         this.initialized(response.result as InitializeResult);
       });
     };
@@ -360,7 +365,7 @@ export class WebHost {
     if (this.state.status !== "connected") return;
     this.send("host/health", {});
     this.livenessTimer ??= window.setTimeout(
-      () => this.end("Parallax stopped answering."),
+      () => this.end("Parallax stopped answering.", "liveness_timeout"),
       LIVENESS_MS,
     );
   }
@@ -370,7 +375,7 @@ export class WebHost {
     this.closed = true;
     this.updateNotice.stop();
     clearTimeout(this.retryTimer);
-    if (this.socket) this.end("The connection was closed.");
+    if (this.socket) this.end("The connection was closed.", "app_closed");
   }
 
   /** Reconnects now if the connection failed. */
@@ -429,6 +434,7 @@ export class WebHost {
     const capabilities = this.legacy
       ? capabilitiesFromLegacy(result.capabilities)
       : result.capabilities;
+    this.log?.connected(plxd, result.startId);
     this.setState({ status: "connected", plxd, protocol, capabilities });
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
     for (const watch of this.watches) this.sendWatch(watch);
@@ -549,7 +555,8 @@ export class WebHost {
   }
 
   /** Drops the socket, then reconnects with backoff: 1 s, doubling, up to 10 s. */
-  private end(message: string): void {
+  private end(message: string, reason: DisconnectReason): void {
+    this.log?.disconnected(reason);
     const socket = this.socket;
     this.socket = undefined;
     socket?.close();

@@ -88,4 +88,14 @@ check(
   "\(String(describing: offline.refused))")
 offline.close()
 
+// The relay closes a stream with its own code: the bridge keeps it for the connection log.
+let (replaced, replacedPort) = bridge("/v1/hosts/replaced/connect", token: token)
+_ = get(replacedPort, pin: "key:\(hostId)")
+let close = replaced.closedWith
+check(
+  "the relay's close code and reason are kept",
+  close?["relay_code"] as? Int == 4409 && close?["relay_reason"] as? String == "replaced",
+  "\(String(describing: close))")
+replaced.close()
+
 exit(failed ? 1 : 0)

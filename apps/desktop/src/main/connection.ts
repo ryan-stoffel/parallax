@@ -45,6 +45,14 @@ import {
   resultFromLegacy,
 } from "../protocol/legacyNames";
 import { UpdateNotice } from "../protocol/updateNotice";
+import {
+  ConnectionLog,
+  relayEnd,
+  routeKind,
+  type DisconnectReason,
+  type LogFields,
+} from "../protocol/connectionLog";
+import { writeConnectionLine } from "./connectionLogFile";
 import { RpcClient } from "./rpc";
 
 // 0007's client rules.
@@ -202,6 +210,19 @@ export type ConnectionOptions = {
     args: string[],
     env?: Record<string, string>,
   ) => ChildProcessWithoutNullStreams;
+  /** Takes the connection log's lines (`protocol/connectionLog.ts`). Tests pass a fake. */
+  writeLog?: (line: string) => void;
+};
+
+/** The log's name for why a connection ended with `error`. */
+const disconnectReason: Record<ConnectionError["reason"], DisconnectReason> = {
+  unresponsive: "liveness_timeout",
+  exited: "transport_closed",
+  protocolError: "protocol_error",
+  notFound: "not_found",
+  incompatibleProtocol: "incompatible_protocol",
+  sshSetup: "ssh_setup",
+  refused: "refused",
 };
 
 type Subscription = {
@@ -259,12 +280,28 @@ export class Connection {
   /** The device streams this connection opened (PLX-886), by plxd's id for each. */
   private readonly deviceStreams = new Map<string, (message: DeviceStreamMessage) => void>();
   private readonly reconnectWaiters = new Set<() => void>();
+  private readonly log: ConnectionLog;
 
   private readonly updateNotice = new UpdateNotice(() => {
     if (this.state.updating) this.setState(this.state);
   });
 
-  constructor(private readonly options: ConnectionOptions) {}
+  constructor(private readonly options: ConnectionOptions) {
+    const { destination, device, lan, account } = options;
+    this.log = new ConnectionLog(
+      options.writeLog ?? writeConnectionLine,
+      destination ?? device ?? lan ?? account ?? "local",
+      this.startingRoute(),
+    );
+  }
+
+  /** The route's kind before `plxd dial` says, which it does only for a LAN or account computer. */
+  private startingRoute(): string {
+    const { destination, device, lan, account } = this.options;
+    if (destination !== undefined) return "ssh";
+    if (device !== undefined) return "tailnet";
+    return lan !== undefined || account !== undefined ? "unknown" : "local";
+  }
 
   start(): void {
     this.connect();
@@ -279,9 +316,11 @@ export class Connection {
 
   /**
    * Ends the current attempt or connection and connects again now, as when a better route answers
-   * (0091). Subscriptions, watches, and shells carry over as after any reconnect.
+   * (0091). Subscriptions, watches, and shells carry over as after any reconnect. `reason` is what
+   * the connection log calls it.
    */
-  reconnect(): void {
+  reconnect(reason: DisconnectReason = "better_route"): void {
+    this.log.disconnected(reason);
     this.teardown();
     this.failures = 0;
     this.connect();
@@ -296,6 +335,7 @@ export class Connection {
     this.subscriptions.clear();
     const watches = [...this.watches];
     this.watches.clear();
+    this.log.disconnected("app_closed");
     this.teardown();
     const error = { code: ErrorCodes.InternalError, message: "The connection to this host closed" };
     for (const watch of watches) watch.listener({ type: "error", error });
@@ -522,6 +562,8 @@ export class Connection {
       });
     }
     const { destination } = this.options;
+    this.log.attempt();
+    this.log.route = this.startingRoute();
     this.setState({ status: "connecting" });
 
     const child = (this.options.spawn ?? spawnAttach)(file, args, this.options.env?.());
@@ -559,6 +601,7 @@ export class Connection {
         : /^plxd dial: connected over (\S+)\n/m.exec(stderr)?.[1];
       if (route && child === this.child) {
         routeHeard = true;
+        if (this.options.device === undefined) this.log.route = routeKind(route);
         this.options.onRoute?.(route);
       }
     });
@@ -594,6 +637,7 @@ export class Connection {
             this.options.lan,
             this.options.account,
           ),
+          { exit: code ?? undefined, signal: signal ?? undefined, ...relayEnd(stderr) },
         );
     });
 
@@ -650,6 +694,7 @@ export class Connection {
     this.legacy = isLegacy(result.capabilities);
     this.failures = 0;
     this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
+    this.log.connected(result.plxd, result.startId);
     this.setState({
       status: "connected",
       plxd: result.plxd,
@@ -797,13 +842,17 @@ export class Connection {
     subscription.listener(message);
   }
 
-  /** Ends the current connection, then retries with backoff unless the error needs the user. */
-  private end(error: ConnectionError): void {
+  /**
+   * Ends the current connection, then retries with backoff unless the error needs the user.
+   * `detail` is what the connection log adds, such as how `plxd dial` said the relay closed.
+   */
+  private end(error: ConnectionError, detail?: LogFields): void {
     // Replacing serve closes attach. Wait for the service operation to finish before reconnecting.
     if (this.preparing) {
       this.preparationError = error;
       return;
     }
+    this.log.disconnected(disconnectReason[error.reason], detail);
     this.teardown();
     this.fail(error);
   }

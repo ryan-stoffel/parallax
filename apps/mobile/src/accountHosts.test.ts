@@ -36,7 +36,12 @@ vi.mock("../modules/pinned-tls", () => ({
   openRelay: async (url: string) => {
     const hostId = url.split("/").at(-2)!;
     net.ports.push(hostId);
-    return { port: net.ports.length - 1, close: () => {}, refused: () => undefined };
+    return {
+      port: net.ports.length - 1,
+      close: () => {},
+      refused: () => undefined,
+      closedWith: () => undefined,
+    };
   },
   request: async (url: string, _method: string, headers: object, body: object | undefined, pin: string) => {
     const { hostname, port, pathname } = new URL(url);
