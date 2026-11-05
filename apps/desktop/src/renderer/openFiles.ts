@@ -99,6 +99,8 @@ type Run = {
   kept?: unknown;
   /** Whether it's a link, which shows its target and isn't edited. */
   link: boolean;
+  /** The last `jump` the editor went to, so a tab shown again doesn't go there again. */
+  jumped: number;
 };
 
 function encode(text: string): string {
@@ -195,13 +197,14 @@ export class OpenFiles {
       return open.id;
     }
     const id = this.nextId++;
-    this.runs.set(id, { edits: 0, saved: 0, epoch: 0, link });
+    this.runs.set(id, { edits: 0, saved: 0, epoch: 0, link, jumped: 0 });
     const file: OpenFile = {
       id,
       path,
       body: { kind: "loading" },
       save: "saved",
-      view: lastMarkdownView(),
+      // Going to a line needs the text on screen.
+      view: line && lastMarkdownView() === "preview" ? "code" : lastMarkdownView(),
       transient,
       ...(line && { jump: { line, count: 1 } }),
     };
@@ -225,7 +228,20 @@ export class OpenFiles {
   /** Puts the cursor on `line` and scrolls to it. */
   goTo(id: number, line: number) {
     const file = this.find(id);
-    if (file) this.change(id, { jump: { line, count: (file.jump?.count ?? 0) + 1 } });
+    if (!file) return;
+    this.change(id, {
+      jump: { line, count: (file.jump?.count ?? 0) + 1 },
+      ...(file.view === "preview" && { view: "code" }),
+    });
+  }
+
+  /** The line tab `id`'s editor should go to now: each `goTo` once, however often it's shown. */
+  takeJump(id: number): number | undefined {
+    const run = this.runs.get(id);
+    const jump = this.find(id)?.jump;
+    if (!run || !jump || jump.count <= run.jumped) return undefined;
+    run.jumped = jump.count;
+    return jump.line;
   }
 
   private forget(file: OpenFile) {
@@ -489,8 +505,12 @@ export class OpenFiles {
     if (!file) return;
     if (file.compare !== undefined) return this.change(id, { compare: undefined });
     const body = await this.read(file.path, this.runs.get(id)?.link ?? false, 0);
-    // Gone from disk is nothing to compare with: all of it shows as added.
-    this.change(id, { compare: body.kind === "text" ? body.text : "" });
+    // Gone from disk is nothing to compare with: all of it shows as added. A comparison needs the
+    // text on screen.
+    this.change(id, {
+      compare: body.kind === "text" ? body.text : "",
+      ...(file.view === "preview" && { view: "code" }),
+    });
   }
 
   /** Saves every open edit under `path`, as a rename or delete of it needs first. */

@@ -631,12 +631,13 @@ export default function CodeEditor({
     view.current?.dispatch({ effects: comparing.reconfigure(comparedTo(file.compare)) });
   }, [file.id, file.compare]);
 
-  // Going to a line, once for each time it's asked.
+  // Going to a line, once for each time it's asked, not again each time the tab is shown.
   const jump = file.jump;
   useEffect(() => {
     const current = view.current;
-    if (!current || !jump || !body) return;
-    const line = current.state.doc.line(Math.min(jump.line, current.state.doc.lines));
+    const to = current && body ? store.takeJump(file.id) : undefined;
+    if (!current || !to) return;
+    const line = current.state.doc.line(Math.min(to, current.state.doc.lines));
     current.dispatch({
       selection: EditorSelection.cursor(line.from),
       effects: EditorView.scrollIntoView(line.from, { y: "center" }),
