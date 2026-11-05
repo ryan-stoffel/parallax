@@ -20,6 +20,7 @@ import {
   CircleX,
   Clock,
   Ellipsis,
+  ExternalLink,
   FileDiff,
   FileText,
   GitBranch,
@@ -27,19 +28,20 @@ import {
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Link,
   MessageSquare,
   MessageSquareText,
   Check,
+  Share as ShareIcon,
   TriangleAlert,
   UserCheck,
   UserX,
   X,
+  Zap,
 } from "lucide-react-native";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
-  ActionSheetIOS,
   ActivityIndicator,
-  Alert,
   FlatList,
   Linking,
   Pressable,
@@ -54,6 +56,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { PrAction, PrCheck, PullRequest } from "../../desktop/src/protocol/generated/protocol";
 import { githubText } from "../../desktop/src/renderer/github";
 import { numberOf, type PrEntry } from "../../desktop/src/renderer/pullRequestSearch";
+import { showAlert, showMenu } from "./dialogStore";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { GlassButton } from "./Glass";
 import { ago, useNav, type Screens } from "./nav";
@@ -88,7 +91,7 @@ import {
   type PrFilters,
 } from "./pullRequestLogic";
 import { font } from "./theme";
-import { Icon, Markdown, T, useColors } from "./ui";
+import { Empty, Icon, Markdown, T, useColors } from "./ui";
 
 /** Each linked pull request once, newest thread first. */
 function entriesOf(computers: Computer[]): PrEntry[] {
@@ -122,25 +125,18 @@ async function view(e: Pick<PrEntry, "hostId" | "runId" | "url">): Promise<PullR
 /** Opens a pull request's link menu, for a row's long press: open it on GitHub or copy its link. */
 function linkMenu(url: string) {
   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  ActionSheetIOS.showActionSheetWithOptions(
-    { title: `#${numberOf(url)} · ${repoOf(url)}`, options: ["Open on GitHub", "Copy link", "Cancel"], cancelButtonIndex: 2 },
-    (i) => {
-      if (i === 0) void Linking.openURL(url);
-      if (i === 1) void Clipboard.setStringAsync(url).then(() => Haptics.selectionAsync());
-    },
+  showMenu(
+    [
+      { label: "Open on GitHub", icon: ExternalLink, onPress: () => void Linking.openURL(url) },
+      { label: "Copy link", icon: Link, onPress: () => void Clipboard.setStringAsync(url) },
+    ],
+    `#${numberOf(url)} · ${repoOf(url)}`,
   );
 }
 
-/** Asks for one of `options` in an action sheet, the current one checked, as a filter chip's menu. */
+/** Asks for one of `options` in a menu, the current one checked, as a filter chip's menu. */
 function choose<V>(title: string, options: { value: V; label: string }[], current: V, pick: (v: V) => void) {
-  ActionSheetIOS.showActionSheetWithOptions(
-    {
-      title,
-      options: [...options.map((o) => (o.value === current ? `${o.label} ✓` : o.label)), "Cancel"],
-      cancelButtonIndex: options.length,
-    },
-    (i) => i < options.length && pick(options[i]!.value),
-  );
+  showMenu(options.map((o) => ({ label: o.label, checked: o.value === current, onPress: () => pick(o.value) })), title);
 }
 
 const states: { value: PrFilters["state"]; label: string }[] = [
@@ -314,25 +310,15 @@ function PrRow({ entry, pr, error, offline }: { entry: PrEntry; pr?: PullRequest
   );
 }
 
-/** The list's empty state, as T3's: a mark, a title, a line under it, and a way out when narrowed. */
-function Empty({ title, note, onClear }: { title: string; note: string; onClear?: () => void }) {
-  const c = useColors();
-  const card = useCard();
+/** Nothing to list, with a way out when a search or filter narrowed it. */
+function NoPullRequests({ title, note, onClear }: { title: string; note: string; onClear?: () => void }) {
   return (
-    <View style={styles.empty}>
-      <View style={[styles.emptyMark, { backgroundColor: card }]}>
-        <Icon icon={GitPullRequest} size={26} color={c.faintForeground} />
-      </View>
-      <T style={{ fontSize: 17, lineHeight: 22, fontWeight: "700", textAlign: "center" }}>{title}</T>
-      <T muted style={{ textAlign: "center" }}>
-        {note}
-      </T>
-      {onClear && (
-        <View style={{ marginTop: 8 }}>
-          <GlassChip label="Clear search and filters" icon={X} onPress={onClear} />
-        </View>
-      )}
-    </View>
+    <Empty
+      icon={GitPullRequest}
+      title={title}
+      note={note}
+      action={onClear && <GlassChip label="Clear search and filters" icon={X} onPress={onClear} />}
+    />
   );
 }
 
@@ -423,13 +409,13 @@ export function PullRequestList() {
       )}
       ListEmptyComponent={
         !entries.length ? (
-          <Empty title="No pull requests yet" note="A pull request a thread opens or links shows up here." />
+          <NoPullRequests title="No pull requests yet" note="A pull request a thread opens or links shows up here." />
         ) : query.trim() ? (
-          <Empty title="No results" note={`No pull requests match "${query.trim()}".`} onClear={clear} />
+          <NoPullRequests title="No results" note={`No pull requests match "${query.trim()}".`} onClear={clear} />
         ) : narrowed ? (
-          <Empty title="Nothing matches" note="Try other filters, or clear them." onClear={clear} />
+          <NoPullRequests title="Nothing matches" note="Try other filters, or clear them." onClear={clear} />
         ) : (
-          <Empty title="No open pull requests" note="Merged and closed ones are under the State filter." />
+          <NoPullRequests title="No open pull requests" note="Merged and closed ones are under the State filter." />
         )
       }
       ListFooterComponent={
@@ -638,12 +624,13 @@ function MergeControls({
     );
   const options = () => {
     const auto = pr.autoMerge ? "Turn off auto-merge" : "Turn on auto-merge";
-    const labels = [...(Object.keys(methodLabels) as Method[]).map((m) => (m === method ? `${methodLabels[m]} ✓` : methodLabels[m])), auto, "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions({ title: "Merge options", options: labels, cancelButtonIndex: 3 }, (i) => {
-      if (i === 0) setMethod("squash");
-      if (i === 1) setMethod("merge");
-      if (i === 2) act(pr.autoMerge ? "disableAutoMerge" : "autoMerge", auto);
-    });
+    showMenu(
+      [
+        ...(Object.keys(methodLabels) as Method[]).map((m) => ({ label: methodLabels[m], checked: m === method, onPress: () => setMethod(m) })),
+        { label: auto, icon: Zap, onPress: () => act(pr.autoMerge ? "disableAutoMerge" : "autoMerge", auto) },
+      ],
+      "Merge options",
+    );
   };
   return (
     <View style={{ padding: 12, gap: 8 }}>
@@ -788,7 +775,7 @@ export function PullRequestScreen({
   }, [connectedNow, load]);
 
   function act(action: PrAction, label: string, destructive = false) {
-    Alert.alert(`${label}?`, pr ? `${pr.repo} #${pr.number}` : undefined, [
+    showAlert(`${label}?`, pr ? `${pr.repo} #${pr.number}` : undefined, [
       { text: "Cancel", style: "cancel" },
       {
         text: label,
@@ -797,7 +784,7 @@ export function PullRequestScreen({
           setActing(true);
           const answer = await window.parallax.request(hostId, "pr/act", { runId, url, action });
           setActing(false);
-          if ("error" in answer) return Alert.alert(`Couldn't ${label.toLowerCase()}`, answer.error.message);
+          if ("error" in answer) return showAlert(`Couldn't ${label.toLowerCase()}`, answer.error.message);
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           reads.set(url, answer.result);
           setPr(answer.result);
@@ -808,28 +795,25 @@ export function PullRequestScreen({
 
   /** The header's menu: open, copy, or share its link, and close it while it's open. */
   function more() {
-    const options = ["Open on GitHub", "Copy link", "Share…", ...(open ? ["Close pull request"] : []), "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, destructiveButtonIndex: open ? 3 : undefined },
-      (i) => {
-        if (i === 0) void Linking.openURL(url);
-        if (i === 1) void Clipboard.setStringAsync(url).then(() => Haptics.selectionAsync());
-        if (i === 2) void Share.share({ url });
-        if (i === 3 && open) act("close", "Close pull request", true);
-      },
-    );
+    showMenu([
+      { label: "Open on GitHub", icon: ExternalLink, onPress: () => void Linking.openURL(url) },
+      { label: "Copy link", icon: Link, onPress: () => void Clipboard.setStringAsync(url) },
+      { label: "Share…", icon: ShareIcon, onPress: () => void Share.share({ url }) },
+      ...(open ? [{ label: "Close pull request", icon: GitPullRequestClosed, destructive: true, onPress: () => act("close", "Close pull request", true) }] : []),
+    ]);
   }
 
   /** The state's menu, as T3's: turn a draft ready or back, or close it. */
   function stateMenu() {
     if (!pr || !open) return;
-    const options = [pr.draft ? "Ready for review" : "Convert to draft", "Close pull request", "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { title: "Pull request status", options, cancelButtonIndex: 2, destructiveButtonIndex: 1 },
-      (i) => {
-        if (i === 0) act(pr.draft ? "ready" : "draft", pr.draft ? "Mark ready for review" : "Convert to draft");
-        if (i === 1) act("close", "Close pull request", true);
-      },
+    showMenu(
+      [
+        pr.draft
+          ? { label: "Ready for review", icon: GitPullRequest, onPress: () => act("ready", "Mark ready for review") }
+          : { label: "Convert to draft", icon: GitPullRequestDraft, onPress: () => act("draft", "Convert to draft") },
+        { label: "Close pull request", icon: GitPullRequestClosed, destructive: true, onPress: () => act("close", "Close pull request", true) },
+      ],
+      "Pull request status",
     );
   }
 
@@ -1064,8 +1048,6 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", gap: 12, paddingLeft: 16 },
   rowBody: { flex: 1, gap: 4, paddingVertical: 10, paddingRight: 16, borderBottomWidth: StyleSheet.hairlineWidth },
   badge: { position: "absolute", right: -4, bottom: -4, width: 14, height: 14, borderRadius: 7, alignItems: "center", justifyContent: "center" },
-  empty: { alignItems: "center", gap: 8, paddingTop: 72, paddingHorizontal: 40 },
-  emptyMark: { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", marginBottom: 6 },
   branch: { fontFamily: font.mono, fontSize: 12, lineHeight: 16 },
   state: { minHeight: 30, gap: 6, paddingHorizontal: 12, borderRadius: 15 },
   split: { flexDirection: "row", borderRadius: 12, overflow: "hidden" },

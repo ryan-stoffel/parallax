@@ -31,6 +31,7 @@ import { ProviderLogo } from "./logos";
 import { useOffers } from "./offers";
 import type { Screens } from "./nav";
 import { threadProject } from "./Projects";
+import { homeless } from "./Sidebar";
 import { RepoIcon } from "./RepoIcon";
 import { DeviceIcon, Row, Section, T, useColors } from "./ui";
 
@@ -65,6 +66,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
     title: string,
     value: string | undefined,
     last = false,
+    path = false,
   ) => {
     if (!value) return null;
     const lucide = typeof icon === "function" || (typeof icon === "object" && icon !== null && "render" in icon);
@@ -75,6 +77,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
         leading={lucide ? undefined : <View style={{ width: 18, alignItems: "center" }}>{icon as React.ReactNode}</View>}
         title={title}
         detail={value}
+        path={path}
         last={last}
         onPress={() => copy(value)}
       />
@@ -106,7 +109,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
             onPress={project.choose}
           />
         )}
-        {row(run?.worktreePath ? FolderGit2 : FolderOpen, run?.worktreePath ? "Worktree" : "Folder", run?.worktreePath ?? repo?.path)}
+        {row(run?.worktreePath ? FolderGit2 : FolderOpen, run?.worktreePath ? "Worktree" : "Folder", homeless(run?.worktreePath ?? repo?.path ?? ""), false, true)}
         {row(GitBranch, "Branch", run?.branch, true)}
       </Section>
       <Section title="Agent">

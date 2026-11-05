@@ -7,7 +7,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import { ArrowUpRight, Copy, Download, KeyRound, Plus, RefreshCw, ShieldCheck } from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState, type ComponentType } from "react";
-import { Alert, Linking, Switch, View } from "react-native";
+import { Linking, Switch, View } from "react-native";
 
 import type {
   AccountsDefaultsGetResult,
@@ -36,6 +36,7 @@ import {
 import { isRepository } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Choices } from "./Choices";
+import { showAlert, showPrompt } from "./dialogStore";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { ago, type SettingsScreens } from "./nav";
 import { useRemoteSessions } from "./remoteSessions";
@@ -49,7 +50,7 @@ import { font } from "./theme";
 /** Asks for one line of text, resolving to it, or undefined when cancelled. */
 const ask = (title: string, message?: string, secure = false) =>
   new Promise<string | undefined>((done) =>
-    Alert.prompt(
+    showPrompt(
       title,
       message,
       [
@@ -62,7 +63,7 @@ const ask = (title: string, message?: string, secure = false) =>
 
 /** Asks before something that can't be undone, then does it. */
 const confirm = (title: string, message: string, action: string, run: () => void) =>
-  Alert.alert(title, message, [
+  showAlert(title, message, [
     { text: "Cancel", style: "cancel" },
     { text: action, style: "destructive", onPress: run },
   ]);
@@ -334,7 +335,7 @@ function SchedulesPage({ m }: { m: Computer }) {
     void load();
   };
   const menu = (task: ScheduledTask) =>
-    Alert.alert(task.title, task.prompt, [
+    showAlert(task.title, task.prompt, [
       ...(task.schedule.type !== "webhook" ? [{ text: "Run now", onPress: () => void act(task, "run") }] : []),
       { text: "Delete", style: "destructive" as const, onPress: () => void act(task, "delete") },
       { text: "Cancel", style: "cancel" as const },

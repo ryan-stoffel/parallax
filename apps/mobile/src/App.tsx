@@ -29,6 +29,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AccountProvider, SignIn, useAccount } from "./Account";
 import { AccountHosts } from "./accountHosts";
 import { AccountScreen } from "./AccountScreen";
+import { Dialogs } from "./Dialogs";
 import { useFleet, FleetProvider, type Computer } from "./fleet";
 import { GlassButton, SidebarIcon } from "./Glass";
 import { loadSetup, saveSetup, type Setup } from "./machines";
@@ -565,6 +566,7 @@ export default function App() {
       <SafeAreaProvider>
         <AccountProvider>
           <Gate />
+          <Dialogs />
         </AccountProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

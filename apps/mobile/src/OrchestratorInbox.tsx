@@ -7,17 +7,18 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { LucideIcon } from "lucide-react-native";
 import { Circle, CircleAlert, CircleCheck, Lightbulb, MessageCircleQuestion, Scale } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
-import { Alert, View } from "react-native";
+import { View } from "react-native";
 
 import type { InboxItem } from "../../desktop/src/protocol/generated/protocol";
 import { questionOf, useInbox } from "../../desktop/src/renderer/Inbox";
 import { titleOf } from "../../desktop/src/renderer/threads";
+import { showAlert } from "./dialogStore";
 import { useComputer } from "./fleet";
 import { inboxSections, readByOpening, waitsOnUser } from "./inboxLogic";
 import { ago, useShow, type Screens } from "./nav";
-import { Input, Page } from "./SettingsParts";
+import { Page } from "./SettingsParts";
 import type { Colors } from "./theme";
-import { Button, Row, Section, T, useColors } from "./ui";
+import { Button, Input, Row, Section, T, useColors } from "./ui";
 
 /** Each kind's word, icon, and color. */
 const looks = (c: Colors): Record<string, { label: string; icon: LucideIcon; color: string }> => ({
@@ -45,7 +46,7 @@ function QuestionBox({
     setBusy(true);
     const failed = await onAnswer(answer.trim());
     setBusy(false);
-    if (failed) Alert.alert("Couldn't send your answer", failed);
+    if (failed) showAlert("Couldn't send your answer", failed);
     else setText("");
   }
   return (

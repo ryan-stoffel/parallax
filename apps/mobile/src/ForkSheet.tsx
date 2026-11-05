@@ -1,12 +1,13 @@
 // Forking a thread (0050), from its latest turn, as a sheet: keep its model, or pick another of the
 // computer's, which may be another provider's. Choosing one forks it, and opens the fork.
-import { Alert } from "react-native";
+import {  } from "react-native";
 
 import type { AgentRun } from "../../desktop/src/protocol/generated/protocol";
 import { forkError } from "../../desktop/src/renderer/errors";
 import { forkChoiceOf } from "../../desktop/src/renderer/threads";
 import { isRunning } from "../../desktop/src/renderer/transcript";
 import { Choices, type Choice } from "./Choices";
+import { showAlert } from "./dialogStore";
 import type { Computer } from "./fleet";
 import { useOffers } from "./offers";
 
@@ -44,7 +45,7 @@ export function ForkSheet({
     const other = others.find(({ model }) => `${model.provider}/${model.id}` === value);
     const forked = await computer.view.fork(run.id, undefined, other ? forkChoiceOf(other.model, run) : {});
     if (typeof forked === "string") onForked(forked);
-    else Alert.alert("Couldn't fork the thread", forkError(forked, isRunning(run.status)));
+    else showAlert("Couldn't fork the thread", forkError(forked, isRunning(run.status)));
   };
   return (
     <Choices

@@ -15,7 +15,7 @@ import { OrchestratorGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
 import { agentsLine, canOrchestrate } from "./orchestratorLogic";
 import { marks, matchesAll, wordsOf } from "./searchText";
 import { entriesOf, orchestratorsOf, useStartOrchestrator, when, type Entry, type ProjectEntry } from "./Sidebar";
-import { AttentionBadge, Icon, T, useColors } from "./ui";
+import { AttentionBadge, Empty, Icon, T, useColors } from "./ui";
 
 const RECENT = 8;
 
@@ -161,13 +161,13 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
         }}
         ListEmptyComponent={
           words.length ? (
-            <Empty icon={SearchIcon} title={`No results for “${query.trim()}”`}>
-              Search by a thread's title, repository, branch, or computer.
-            </Empty>
+            <Empty
+              icon={SearchIcon}
+              title={`No results for “${query.trim()}”`}
+              note="Search by a thread's title, repository, branch, or computer."
+            />
           ) : (
-            <Empty icon={MessagesSquare} title="No threads yet">
-              Threads you start show up here.
-            </Empty>
+            <Empty icon={MessagesSquare} title="No threads yet" note="Threads you start show up here." />
           )
         }
       />
@@ -231,23 +231,6 @@ function Marked({ text, words, muted, style }: { text: string; words: string[]; 
 }
 
 /** What the list shows with nothing in it. */
-function Empty({ icon, title, children }: { icon: LucideIcon; title: string; children: string }) {
-  const c = useColors();
-  return (
-    <View style={styles.empty}>
-      <View style={[styles.emptyIcon, { backgroundColor: c.selected }]}>
-        <Icon icon={icon} size={22} color={c.mutedForeground} />
-      </View>
-      <T medium style={{ fontSize: 16, textAlign: "center" }}>
-        {title}
-      </T>
-      <T muted style={{ fontSize: 14, textAlign: "center" }}>
-        {children}
-      </T>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   // Padding, not margins: the sheet sizes the list by this view's frame.
   top: { paddingTop: 22, paddingBottom: 6, paddingHorizontal: 16 },
@@ -259,6 +242,4 @@ const styles = StyleSheet.create({
   icon: { width: 36, height: 36, borderRadius: 10, borderCurve: "continuous", alignItems: "center", justifyContent: "center", overflow: "hidden" },
   line: { flexDirection: "row", alignItems: "center", gap: 6 },
   small: { fontSize: 13, lineHeight: 18 },
-  empty: { alignItems: "center", gap: 8, paddingTop: 72, paddingHorizontal: 40 },
-  emptyIcon: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", marginBottom: 4 },
 });

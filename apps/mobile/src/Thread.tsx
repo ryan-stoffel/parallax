@@ -14,7 +14,6 @@ import type { LucideIcon } from "lucide-react-native";
 import { Check, ChevronRight, Copy, FoldVertical, Hand, KeyRound, MessageCircleQuestion, RotateCcw, WifiOff } from "lucide-react-native";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
-  Alert,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -43,6 +42,7 @@ import {
 import { useAgentRun } from "../../desktop/src/renderer/useAgentRun";
 import type { ThreadRun } from "../../desktop/src/protocol/generated/protocol";
 import { Composer } from "./Composer";
+import { showAlert, showPrompt } from "./dialogStore";
 import { TurnChanges } from "./Diff";
 import { counts, editRows } from "./diffLogic";
 import { FileCard, openLinked } from "./FileCard";
@@ -533,7 +533,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const working = isRunning(transcript.run?.status) && !transcript.turnDone;
 
   const rename = () =>
-    Alert.prompt("Rename thread", undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title);
+    showPrompt("Rename thread", undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title);
   const archive = () => {
     void computer?.view.archive(runId, !thread?.archived);
     // The main view has no back stack, so an archived thread gives way to a new one.
@@ -561,16 +561,6 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                 label: "Thread",
                 inline: true,
                 items: [
-                  ...(computer?.shownConnected && "files" in (computer.view.capabilities ?? {})
-                    ? [
-                        {
-                          type: "action" as const,
-                          label: "Files",
-                          icon: symbol("folder"),
-                          onPress: () => navigation.navigate("ThreadFiles", { hostId, runId }),
-                        },
-                      ]
-                    : []),
                   {
                     type: "action",
                     label: "Thread details",
@@ -583,6 +573,16 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                     icon: symbol("plus.forwardslash.minus"),
                     onPress: () => navigation.navigate("ThreadChanges", { hostId, runId }),
                   },
+                  ...(computer?.shownConnected && "files" in (computer.view.capabilities ?? {})
+                    ? [
+                        {
+                          type: "action" as const,
+                          label: "Files",
+                          icon: symbol("folder"),
+                          onPress: () => navigation.navigate("ThreadFiles", { hostId, runId }),
+                        },
+                      ]
+                    : []),
                   ...prs.map((url) => ({
                     type: "action" as const,
                     label: `Pull request #${url.split("/").pop()}`,
@@ -718,7 +718,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
       key: unanswered.key,
       edit: () =>
         void cancel(true).then((failed) =>
-          failed ? Alert.alert("Couldn't stop the thread", failed) : changeDraft(unanswered.text),
+          failed ? showAlert("Couldn't stop the thread", failed) : changeDraft(unanswered.text),
         ),
     },
   };

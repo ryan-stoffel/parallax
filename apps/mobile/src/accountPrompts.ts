@@ -1,9 +1,10 @@
 // The dialogs of approving devices and computers for account sign-in (0091): iOS's own alerts.
 
-import { Alert } from "react-native";
+import {  } from "react-native";
 
 import { Limited } from "./access";
 import { Denied, type AccountHosts, type Listed } from "./accountHosts";
+import { showAlert, showPrompt } from "./dialogStore";
 import { askEach, type Asked } from "./setup";
 
 /** A 6-digit code as both ends show it: `482 915`. */
@@ -14,13 +15,13 @@ export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)
  * `onAsk`, approving this phone from a device that already uses it.
  */
 export function askSetupCode(name: string, onCode: (code: string) => void, onAsk?: () => void) {
-  Alert.prompt(
+  showPrompt(
     `Set up ${name}`,
     "Type the 6-digit code from Show setup code in its Settings > Connections, or from plx connect.",
     [
       { text: "Cancel", style: "cancel" },
       ...(onAsk ? [{ text: "Approve from Another Device", onPress: onAsk }] : []),
-      { text: "Set Up", isPreferred: true, onPress: (code?: string) => onCode((code ?? "").replace(/\D/g, "")) },
+      { text: "Set Up", onPress: (code?: string) => onCode((code ?? "").replace(/\D/g, "")) },
     ],
     "plain-text",
     "",
@@ -39,7 +40,7 @@ export function setUpComputer(
   handlers: { onWaiting: (code: string) => void; done: () => void; failed: (message: string) => void },
 ) {
   const failed = (e: unknown) => {
-    Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
+    showAlert(`Couldn't set up ${name}`, (e as Error).message);
     handlers.failed((e as Error).message);
   };
   askSetupCode(
@@ -72,9 +73,9 @@ export function enterSetupCode(
     askSetupCode(name, (code) => {
       const failed = (e: unknown) => {
         handlers.ended();
-        Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
+        showAlert(`Couldn't set up ${name}`, (e as Error).message);
       };
-      if (code.length !== 6) return Alert.alert(`Couldn't set up ${name}`, "The code has 6 digits.");
+      if (code.length !== 6) return showAlert(`Couldn't set up ${name}`, "The code has 6 digits.");
       handlers.started();
       accounts.setup(hostId, [], code).then(() => {
         handlers.ended();
@@ -82,7 +83,7 @@ export function enterSetupCode(
       }, failed);
     });
   if (computers.length === 1) return enter(computers[0]!);
-  Alert.alert("Which computer shows the code?", undefined, [
+  showAlert("Which computer shows the code?", undefined, [
     ...computers.map((computer) => ({ text: computer.name, onPress: () => enter(computer) })),
     { text: "Cancel", style: "cancel" as const },
   ]);
@@ -116,20 +117,21 @@ export async function allowThisPhone(
 
 /** This phone's own request to use `name`, waiting on another device that shows `code`. */
 export function showWaiting(name: string, code: string) {
-  Alert.alert(
+  showAlert(
     "Approve this phone",
     `On a computer or phone that already uses ${name}, allow this iPhone. Both show ${formatCode(code)}.`,
+    [{ text: "OK" }],
   );
 }
 
 /** Another device asks to use the user's computers: "Allow <device>? <code>". */
 export function confirmDevice(device: string, code: string, onAllow: () => void, onDeny: () => void) {
-  Alert.alert(
+  showAlert(
     `Allow ${device}?`,
     `${formatCode(code)}\n\nAllow it only if ${device} shows the same code. It gets full control of your computers.`,
     [
       { text: "Deny", style: "destructive", onPress: onDeny },
-      { text: "Allow", isPreferred: true, onPress: onAllow },
+      { text: "Allow", onPress: onAllow },
     ],
   );
 }

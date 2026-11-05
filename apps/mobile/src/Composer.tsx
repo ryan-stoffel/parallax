@@ -27,7 +27,6 @@ import {
 } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
-  Alert,
   Image,
   Keyboard,
   Linking,
@@ -65,6 +64,7 @@ import { defaultBackend } from "../../desktop/src/renderer/settings/shared";
 import type { ThreadStart } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { AttachSheet } from "./AttachSheet";
+import { showAlert } from "./dialogStore";
 import { EffortSlider } from "./EffortSlider";
 import type { Computer } from "./fleet";
 import { GlassButton } from "./Glass";
@@ -571,7 +571,7 @@ export function Composer({
     };
     try {
       if (camera && !(await ImagePicker.requestCameraPermissionsAsync()).granted)
-        return Alert.alert("Camera is off for Parallax", "Allow it in Settings to take a photo for your message.", [
+        return showAlert("Camera is off for Parallax", "Allow it in Settings to take a photo for your message.", [
           { text: "Not now", style: "cancel" },
           { text: "Open Settings", onPress: () => void Linking.openSettings() },
         ]);

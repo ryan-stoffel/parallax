@@ -53,7 +53,7 @@ export function Choices<V extends string>({
         {options.map((o) => [
           o.section && (
             <T key={`s${o.section}`} muted style={styles.section}>
-              {o.section.toUpperCase()}
+              {o.section}
             </T>
           ),
           <Pressable
@@ -90,5 +90,5 @@ export function Choices<V extends string>({
 const styles = StyleSheet.create({
   head: { height: 24, marginBottom: 6 },
   choice: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingVertical: 12 },
-  section: { fontSize: 12, letterSpacing: 0.4, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 },
+  section: { fontSize: 13, lineHeight: 18, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 },
 });

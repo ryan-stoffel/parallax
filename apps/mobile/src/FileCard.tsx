@@ -19,10 +19,11 @@ import {
   Presentation,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 import Svg, { Circle, Path, Rect } from "react-native-svg";
 
 import { preview } from "../modules/pinned-tls";
+import { showAlert } from "./dialogStore";
 import type { Colors } from "./theme";
 import { Icon, T, useColors } from "./ui";
 
@@ -128,7 +129,7 @@ async function openFile(source: FileSource, onProgress?: (share: number) => void
   try {
     await preview(await download(source, onProgress));
   } catch (error) {
-    Alert.alert(`Couldn't open ${source.name}`, error instanceof Error ? error.message : String(error));
+    showAlert(`Couldn't open ${source.name}`, error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -357,10 +358,10 @@ export async function openLinked(hostId: string, runId: string, path: string): P
   try {
     const inside = inFolder(path, isAbsolute(path) ? await threadFolder(hostId, runId) : undefined);
     if (inside === undefined)
-      return Alert.alert("Couldn't open the file", "This file is outside the thread's folder, so it can't be opened here.");
+      return showAlert("Couldn't open the file", "This file is outside the thread's folder, so it can't be opened here.");
     await openFile({ hostId, runId, path: inside, name: inside.slice(inside.lastIndexOf("/") + 1) });
   } catch (error) {
-    Alert.alert("Couldn't open the file", error instanceof Error ? error.message : String(error));
+    showAlert("Couldn't open the file", error instanceof Error ? error.message : String(error));
   }
 }
 

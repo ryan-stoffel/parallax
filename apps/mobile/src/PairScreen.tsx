@@ -6,14 +6,13 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
 
 import { discover } from "../modules/pinned-tls";
 import { pair, type Saved } from "./host";
 import { font } from "./theme";
-import { Button, Mark, T, useColors } from "./ui";
+import { Button, Input, Mark, T, useColors } from "./ui";
 
 export function Pairing({
   onPaired,
@@ -51,10 +50,6 @@ export function Pairing({
     }
   }
 
-  const input = [
-    styles.input,
-    { color: c.foreground, borderColor: c.border, backgroundColor: c.surface },
-  ];
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
@@ -109,28 +104,22 @@ export function Pairing({
         ))}
       </View>
 
-      <TextInput
+      <Input
         accessibilityLabel="Address"
         placeholder="Address, such as 192.168.1.20"
-        placeholderTextColor={c.faintForeground}
         value={route}
         onChangeText={setRoute}
-        autoCapitalize="none"
-        autoCorrect={false}
         keyboardType="numbers-and-punctuation"
-        style={input}
       />
-      <TextInput
+      <Input
         accessibilityLabel="Code"
         placeholder="7KQ-4M2"
-        placeholderTextColor={c.faintForeground}
         onChangeText={setCode}
         autoCapitalize="characters"
-        autoCorrect={false}
         textContentType="oneTimeCode"
         returnKeyType="go"
         onSubmitEditing={() => void submit()}
-        style={[input, styles.code]}
+        style={styles.code}
       />
       <Button
         label={busy ? "Pairing…" : "Pair"}
@@ -155,13 +144,5 @@ const styles = StyleSheet.create({
   section: { gap: 8, marginTop: 8 },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   host: { borderWidth: 1, borderRadius: 12, padding: 12 },
-  input: {
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontFamily: font.regular,
-    fontSize: 16,
-  },
   code: { fontFamily: font.mono, fontSize: 20, letterSpacing: 4 },
 });

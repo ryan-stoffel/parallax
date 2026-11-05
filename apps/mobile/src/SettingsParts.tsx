@@ -3,8 +3,8 @@
 // settings, rows for a switch, a select, a text field, and a line of text, a row's text action,
 // and failures as alerts.
 import { ChevronsUpDown } from "lucide-react-native";
-import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
-import { Alert, ScrollView, StyleSheet, Switch, TextInput, View } from "react-native";
+import { useEffect, useState, type ReactNode } from "react";
+import { ScrollView, StyleSheet, Switch, View } from "react-native";
 
 import type { RpcError } from "../../desktop/src/preload/bridge";
 import type {
@@ -13,13 +13,13 @@ import type {
 } from "../../desktop/src/protocol/generated/protocol";
 import { describeError } from "../../desktop/src/renderer/errors";
 import { Choices, type Choice } from "./Choices";
+import { showAlert } from "./dialogStore";
 import { useFleet, type Computer } from "./fleet";
-import { font } from "./theme";
-import { DeviceIcon, Icon, Row, T, useColors } from "./ui";
+import { DeviceIcon, Icon, Input, Row, T, useColors } from "./ui";
 
 /** Says what couldn't be done, and why. */
 export const fail = (title: string, why: RpcError | string) =>
-  Alert.alert(title, typeof why === "string" ? why : describeError(why));
+  showAlert(title, typeof why === "string" ? why : describeError(why));
 
 /** Whether a connected computer's plxd has `capability`. */
 export const can = (m: Computer, capability: string) =>
@@ -305,38 +305,10 @@ export function Field({
   );
 }
 
-/** A text box with no title, for forms: a key, a label, a name. */
-export function Input(props: ComponentProps<typeof TextInput> & { mono?: boolean }) {
-  const c = useColors();
-  return (
-    <TextInput
-      placeholderTextColor={c.faintForeground}
-      autoCapitalize="none"
-      autoCorrect={false}
-      spellCheck={false}
-      {...props}
-      style={[
-        styles.input,
-        { color: c.foreground, backgroundColor: c.code, borderColor: c.border },
-        props.mono && { fontFamily: font.mono, fontSize: 13 },
-        props.style,
-      ]}
-    />
-  );
-}
-
 const styles = StyleSheet.create({
   label: { fontSize: 13, lineHeight: 18, paddingHorizontal: 4 },
   card: { borderRadius: 14, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
   footer: { fontSize: 12, lineHeight: 17, paddingHorizontal: 4 },
   select: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: 170 },
   block: { paddingHorizontal: 16, paddingVertical: 11 },
-  input: {
-    marginTop: 4,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 15,
-  },
 });
