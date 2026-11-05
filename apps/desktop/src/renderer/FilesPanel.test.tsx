@@ -5,8 +5,11 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentEntry } from "../protocol/generated/protocol";
+import { Folder } from "lucide-react";
+
+import { FileTabs } from "./FileEditor";
 import { FilesPanel } from "./FilesPanel";
-import { resetOpenFiles } from "./openFiles";
+import { openFilesOf, resetOpenFiles } from "./openFiles";
 
 // CodeMirror needs layout that happy-dom doesn't have. Its saving is `openFiles`', tested there.
 vi.mock("./CodeEditor", () => ({
@@ -144,42 +147,64 @@ const row = (name: string) =>
   [...document.querySelectorAll<HTMLElement>('[role="treeitem"] button')].find(
     (b) => b.textContent === name,
   );
-const openTabs = () => [...document.querySelectorAll('[role="tab"]')].map((t) => t.textContent);
+/** The view with its tabs as the side panel draws them, in front. */
+const withTabs = (panel: ReactNode) => (
+  <>
+    <ul aria-label="Open views">
+      <FileTabs
+        store={openFilesOf("local", "run-1")}
+        id="side-panel-tab-F"
+        roomy={false}
+        current
+        show={() => {}}
+        close={() => {}}
+        icon={Folder}
+      />
+    </ul>
+    {panel}
+  </>
+);
+const tabButtons = () =>
+  [...document.querySelectorAll<HTMLElement>('ul[aria-label="Open views"] button[title]')].filter(
+    (b) => !b.title.startsWith("Close"),
+  );
+const openTabs = () => tabButtons().map((t) => t.textContent);
+const shownTab = () =>
+  tabButtons().find((b) => b.getAttribute("aria-current") === "true")?.textContent;
+const filesTab = () => document.getElementById("side-panel-tab-F");
 
 test("a click opens a preview tab that the next click replaces, and a double-click keeps it", async () => {
-  await render(<FilesPanel hostId="local" runId="run-1" writable />);
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" writable />));
   await click(row("README.md"));
   await vi.dynamicImportSettled();
   await settle();
   expect(openTabs()).toEqual(["README.md"]);
   expect(document.querySelector('[data-testid="editor"]')?.textContent).toBe("README.md");
 
-  // Narrow, the tree opens over the file from the button beside the tabs.
+  // Narrow, the Files tab shows the tree, and a file's tab the file.
   expect(row("src")).toBeUndefined();
-  await click(button("Show files"));
+  await click(filesTab());
   await click(row("src"));
   await click(row("main.rs"));
   expect(openTabs()).toEqual(["main.rs"]);
 
-  await click(button("Show files"));
+  await click(filesTab());
   const readme = row("README.md")!;
   await act(async () => readme.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
   await settle();
   expect(openTabs()).toEqual(["main.rs", "README.md"]);
-  expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe(
-    "README.md",
-  );
+  expect(shownTab()).toBe("README.md");
 
   await click(button("Close README.md"));
   await settle();
   expect(openTabs()).toEqual(["main.rs"]);
-  expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("main.rs");
+  expect(shownTab()).toBe("main.rs");
 });
 
 test("a file renamed in the tree stays open under its new name", async () => {
-  await render(<FilesPanel hostId="local" runId="run-1" editable writable />);
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" editable writable />));
   await click(row("README.md"));
-  await click(button("Show files"));
+  await click(filesTab());
   await click(button("Actions for README.md"));
   await click(menuItem("Rename"));
   await type("INTRO.md", "Enter");
@@ -188,18 +213,17 @@ test("a file renamed in the tree stays open under its new name", async () => {
     from: "README.md",
     to: "INTRO.md",
   });
-  await click(button("Hide files"));
   expect(openTabs()).toEqual(["INTRO.md"]);
 });
 
 test("a command menu reveal opens its file once, and coming back doesn't open it again", async () => {
   const reveal = { path: "src/main.rs" };
-  await render(<FilesPanel hostId="local" runId="run-1" reveal={reveal} />);
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" reveal={reveal} />));
   expect(openTabs()).toEqual(["main.rs"]);
   expect(request).toHaveBeenCalledWith("local", "agent/files", { runId: "run-1", path: "src" });
   await click(button("Close main.rs"));
   unmount();
-  await render(<FilesPanel hostId="local" runId="run-1" reveal={reveal} />);
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" reveal={reveal} />));
   expect(openTabs()).toEqual([]);
 });
 
@@ -208,7 +232,7 @@ test("a search finds files anywhere in the folder and opens one", async () => {
     logId: "log-1",
     result: { entries: folders[""], truncated: false },
   }));
-  await render(<FilesPanel hostId="local" runId="run-1" />);
+  await render(withTabs(<FilesPanel hostId="local" runId="run-1" />));
   request.mockImplementationOnce(
     async () =>
       ({

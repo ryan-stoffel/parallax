@@ -37,7 +37,9 @@ import { ChildStrip } from "./ChildStrip";
 import { ClaudeLogo } from "./logos";
 import type { Asked } from "./Approval";
 import { offlineReason, useShownConnection, useForgetRemoved } from "./ConnectionStatus";
+import { FileTabs } from "./FileEditor";
 import { FilesPanel } from "./FilesPanel";
+import { openFilesOf } from "./openFiles";
 import { useInbox } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
 import { NewThread } from "./NewThread";
@@ -2064,6 +2066,11 @@ export function App() {
           showDevice={showDevice}
           showOrchestrator={showHome}
           showFiles={showFiles}
+          filesTabs={
+            filesRunId
+              ? (tab) => <FileTabs store={openFilesOf(host.id, filesRunId)} {...tab} />
+              : undefined
+          }
           device={(shown) => (
             <DevicePanel
               hostId={host.id}
