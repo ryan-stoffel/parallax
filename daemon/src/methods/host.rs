@@ -234,8 +234,8 @@ pub(crate) fn initialize(
 /// and the HTTPS listener. `remoteWeb` (PLX-651): `remoteWeb` in `host/settings`, and the web
 /// client and browser pairing the HTTPS listener serves while it's on. `relay` (PLX-652, 0068):
 /// `relay` in `host/settings`, `relay/register`, `relay/hosts`, `relay/remove`, and `relay` in
-/// `remote/sessions`. `relay/sign` (PLX-1146) came later, so an older plxd with `relay` answers it
-/// as an unknown method. `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener
+/// `remote/sessions`. `relay/sign` (PLX-1146) and `relay/check` (PLX-1356) came later, so an older
+/// plxd with `relay` answers them as an unknown method. `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener
 /// serves. `prWatch` (0063): `pr/watch`, `pr/unwatch`, `pr/watches`, `pr/status` (PLX-837),
 /// `pr/failureLog` (PLX-1019), `pr/uploadMedia` (PLX-1020), `pr/sharedDiff` (PLX-1021), and
 /// `pr/write` and `pr/mergeWhenReady` (PLX-1022).

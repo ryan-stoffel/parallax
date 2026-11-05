@@ -12,6 +12,7 @@ import type {
   ThreadSnapshot,
   ParallaxRequests,
   ProviderKind,
+  RelayCheckResult,
   RelayHost,
   RemoteSessionsResult,
 } from "../protocol/generated/protocol";
@@ -408,6 +409,12 @@ export interface ParallaxBridge {
   relayHosts(): Promise<RelayHost[] | string>;
   /** Removes one of the account's hosts from the relay, freeing its place, and answers the rest. */
   removeRelayHost(hostId: string): Promise<RelayHost[] | string>;
+  /**
+   * Whether a real stream through the relay reaches this computer, and if not, which part failed
+   * (PLX-1356), or why it couldn't run, for people. Main sends the account's token to plxd, so it
+   * checks the sign-in too.
+   */
+  checkRelay(): Promise<RelayCheckResult | string>;
 
   /** Parallax Connect here (0056). Calls `listener` now and on every change. Returns the unsubscribe function. */
   onConnect(listener: (state: ConnectState) => void): () => void;
@@ -883,6 +890,7 @@ export const withheldMethods = [
   "relay/register",
   "relay/sign",
   "relay/hosts",
+  "relay/check",
   "relay/remove",
   // Only a phone's notification service extension needs it (0100).
   "relay/pushKey",

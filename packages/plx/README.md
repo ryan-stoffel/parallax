@@ -19,7 +19,7 @@ Every download is checked against the SHA-256 its GitHub release reports, and pl
 | `plx connect` | Signs in, installs plxd here, registers it with the relay, and turns on `relay` and `remote`. Once it's online, Parallax on your other device shows a 6-digit code, and so does plx. Allow it there if they match. With the command from that device's Add computer, which names it with `--device`, that's all. Otherwise you also press Enter here. No device at hand? plx also shows a setup code to type on a signed-in device. plx says when a device joined, and exits. |
 | `plx connect add <ssh destination>` | The same on another computer over SSH, with the sign-in here. |
 | `plx connect approve` | Approves a device waiting to sign in, once its code matches, or shows a new code to type on a device. |
-| `plx connect status [--json]` | Prints the account, host id, relay state, and routes. See [Scripts](#scripts) for `--json`. |
+| `plx connect status [--json]` | Prints the account, host id, relay state, and routes, then opens a real stream through the relay back to this computer and says whether sign-in, the relay, the listener, or the stream failed, and what to do. It exits 0 either way. plx holds no token, so a Clerk sign-in is checked only in Settings. See [Scripts](#scripts) for `--json`. |
 | `plx connect unlink` | Turns the relay off here and keeps the registration, so the host id and webhook URLs stay. Signed-in devices keep their sessions until removed in Settings. |
 | `plx connect remove` | Signs in again and removes this computer from your account. |
 | `plx doctor` | Checks Parallax on this computer and hands what's left to your coding agent. See [Doctor](#doctor). |
@@ -65,6 +65,8 @@ Lines starting with `→`, `✓`, or `✗` are progress for people. Their wordin
 
 `plx connect status --json` prints one object, and these field names are stable. It exits 0 whenever plxd answered, connected or not. When plxd doesn't answer, stdout is empty, the reason goes to stderr, and it exits 1.
 
+Each `plx connect status` that gets as far as the stream spends one of this computer's 30 stream opens a minute, in text or with `--json`, and every client on this computer shares them. So poll `--json` slowly, no more than once a minute.
+
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `account` | string or null | The Parallax account's user id, or null when not signed in. |
@@ -78,6 +80,12 @@ Lines starting with `→`, `✓`, or `✗` are progress for people. Their wordin
 | `routes` | string array | Where clients can reach this computer, best first. Empty unless it's listening. |
 | `approvedDevices` | number | How many devices are approved. |
 | `waitingDevice` | string or null | The name of a device waiting for approval. |
+| `check.ok` | boolean | Whether a real stream through the relay reached this computer. |
+| `check.failed` | string or null | The first part that failed: `signIn`, `relay`, `listener`, or `stream`. Null when it passed, or when plxd couldn't run the check. |
+| `check.problem` | string or null | What went wrong, for people. |
+| `check.fix` | string or null | What to do about it, for people. |
+| `check.roundTripMs` | number or null | How long the stream took, when it passed. |
+| `check.diagnostics` | string or null | The result as text for a bug report. It holds no token, ticket, session, or user id. |
 
 ## Doctor
 

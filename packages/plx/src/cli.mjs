@@ -22,7 +22,8 @@ Usage:
   plx connect add <ssh destination>  The same on another computer over SSH, signing in here
   plx connect approve                Approve a device waiting to sign in, or show a new code
                                      for one to type
-  plx connect status [--json]        Show the account, host id, relay state, and routes
+  plx connect status [--json]        Show the account, host id, relay state, and routes, and
+                                     check a real connection through the relay
   plx connect unlink                 Turn Parallax Relay off here, keeping the registration
   plx connect remove                 Sign in again and remove this computer from your account
   plx doctor                         Check Parallax on this computer, fix what it can, and hand

@@ -10,7 +10,8 @@
  *   waits there on its spare stream, and the stream's own Durable Object ([`StreamRelay`]) passes
  *   binary frames between the two. The client runs TLS to plxd's pinned certificate inside them
  *   (0065), so the relay carries only ciphertext. Clients from before 0091 get a ticket first
- *   (`POST /v1/hosts/<id>/tickets`) and open `/connect?ticket=<ticket>`.
+ *   (`POST /v1/hosts/<id>/tickets`) and open `/connect?ticket=<ticket>`. plxd's connection check
+ *   gets a ticket to itself over its WebSocket and opens the same URL (PLX-1356).
  * - `/v1/hooks/<id>/<hookId>/<token>` goes to plxd over its WebSocket, or is held while it's away.
  * - A plxd's statement that a device is removed goes, unread and unkept, to its user's other online
  *   plxds over their WebSockets, and they check its signature (0091).

@@ -2,10 +2,13 @@ import { ChevronRight, Plus, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type {
+  RelayCheckPart,
+  RelayCheckResult,
   RelayHost,
   RemotePairResult,
   RemoteSessionsResult,
 } from "../../protocol/generated/protocol";
+import { useCopy } from "../AgentChat";
 import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId, useConnect, useHosts, type Host } from "../hosts";
 import { dismiss, notify } from "../notifications";
@@ -32,13 +35,81 @@ const GRANTS =
 const READ_ONLY_FOR_GOOD =
   "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.";
 
+/** How the connection check names a part. */
+const CHECK_PARTS: Record<RelayCheckPart, string> = {
+  signIn: "Sign-in",
+  relay: "Relay",
+  listener: "Listener",
+  stream: "Stream",
+};
+
+/**
+ * Check connection (PLX-1356): opens a real stream through the relay back to this computer, shows
+ * which part failed and what to do, and copies a report with no secret in it. It runs only when
+ * asked, since each run counts against the relay's streams a minute.
+ */
+function ConnectionCheck() {
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<RelayCheckResult | string>();
+  const [copied, copy] = useCopy();
+  const run = async () => {
+    setChecking(true);
+    setResult(await window.parallax.checkRelay());
+    setChecking(false);
+  };
+  const report = typeof result === "object" ? result : undefined;
+  return (
+    <Row
+      title="Check connection"
+      description={
+        <>
+          Opens a real connection through the relay back to this computer.
+          {checking ? (
+            <span role="status" className="mt-1 block text-foreground">
+              Checking…
+            </span>
+          ) : typeof result === "string" ? (
+            <span role="status" className="mt-1 block text-foreground">
+              {result}
+            </span>
+          ) : report?.failed ? (
+            <span role="status" className="mt-1 block text-foreground">
+              {CHECK_PARTS[report.failed]} failed. {report.problem} {report.fix}
+            </span>
+          ) : report ? (
+            <span role="status" className="mt-1 block text-foreground">
+              Working. The connection took {report.roundTripMs} ms.
+            </span>
+          ) : null}
+        </>
+      }
+    >
+      <div className="flex items-center gap-2">
+        {report && !checking && (
+          <button type="button" className={quietButton} onClick={() => copy(report.diagnostics)}>
+            {copied ? "Copied" : "Copy diagnostics"}
+          </button>
+        )}
+        <button
+          type="button"
+          className={quietButton}
+          disabled={checking}
+          onClick={() => void run()}
+        >
+          Check
+        </button>
+      </div>
+    </Row>
+  );
+}
+
 /**
  * Settings > Connections' sections on how computers reach this one. Reach from anywhere, the local
  * plxd's `relay`, registers it with Parallax Relay and keeps it connected there, for phone
  * notifications and, with pairing on, reach from anywhere, and lists the account's computers on the
  * relay, each with Remove (PLX-652). Shown with pairing off too, since signing in turns it on
- * (PLX-1146). Beside it, Tailscale also finds the tailnet's devices (0056), until Tailscale is only
- * a route. Same network (PLX-641, 0065): its switch, `remote`, has plxd listen for paired computers
+ * (PLX-1146). While it's on, Check connection proves the path (PLX-1356). Beside it, Tailscale
+ * also finds the tailnet's devices (0056), until Tailscale is only a route. Same network (PLX-641, 0065): its switch, `remote`, has plxd listen for paired computers
  * over HTTPS with its own pinned certificate, and Open in a browser, its `remoteWeb`, also serves
  * the app there for a browser to pair with (PLX-651). Pair a device shows a short one-time code
  * while this computer advertises itself by name over mDNS, and the computers paired with this one
@@ -194,6 +265,7 @@ export function LanSettings() {
             />
           </Row>
         )}
+        {relay && <ConnectionCheck />}
         <Row
           title="Tailscale"
           description="Also find the computers on your Tailscale network that run Parallax Connect."

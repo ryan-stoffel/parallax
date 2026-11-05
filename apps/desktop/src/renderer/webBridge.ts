@@ -678,6 +678,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     registerRelay: async () => NOT_HERE,
     relayHosts: async () => NOT_HERE,
     removeRelayHost: async () => NOT_HERE,
+    checkRelay: async () => NOT_HERE,
 
     onConnect: (listener) => (listener({ icon: "laptop", channel: "stable" }), () => {}),
     setConnect: async () => NOT_HERE,

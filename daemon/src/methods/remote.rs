@@ -1,16 +1,16 @@
 //! `remote/pair`, `remote/sessions`, and `remote/revoke` (PLX-641, 0065): pairing codes and the
 //! sessions of clients paired with this host. And `relay/register`, `relay/sign` (PLX-1146),
-//! `relay/hosts`, `relay/remove` (PLX-652, 0068), and `relay/pushKey` (0100). And `relay/id` and
-//! `access/*` (0091): who may sign in with the account.
+//! `relay/hosts`, `relay/remove` (PLX-652, 0068), `relay/check` (PLX-1356), and `relay/pushKey`
+//! (0100). And `relay/id` and `access/*` (0091): who may sign in with the account.
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
     AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
-    AccessState, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
-    RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams,
-    RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams,
-    RemoteSessionsParams, RemoteSessionsResult,
+    AccessState, RelayCheckParams, RelayCheckResult, RelayHostsParams, RelayHostsResult,
+    RelayIdParams, RelayIdResult, RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams,
+    RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult,
+    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -209,6 +209,15 @@ pub(crate) async fn relay_hosts(
     params: RelayHostsParams,
 ) -> Result<RelayHostsResult, ErrorObject> {
     crate::relay::hosts(&context.daemon, &params.token).await
+}
+
+/// `relay/check`: a real stream through the relay back to this host, and what failed if it didn't
+/// get there. Failing is its answer, so it has no error of its own.
+pub(crate) async fn relay_check(
+    context: &Context,
+    params: RelayCheckParams,
+) -> Result<RelayCheckResult, ErrorObject> {
+    Ok(crate::relay::check::run(&context.daemon, params.token.as_deref()).await)
 }
 
 /// `relay/remove`: removes one of the user's hosts from the relay, and answers with the rest.

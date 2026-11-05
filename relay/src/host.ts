@@ -353,7 +353,10 @@ export class HostRelay extends DurableObject<Env> {
     return (await this.admit(user)) ?? this.take();
   }
 
-  /** A ticket for one stream to this host, for its own user only. Clients from before 0091. */
+  /**
+   * A ticket for one stream to this host, for its own user only. Clients from before 0091, and
+   * plxd's own connection check, which asks over its control socket (PLX-1356).
+   */
   async ticket(user: string): Promise<Refusal | { ticket: string }> {
     const refused = await this.admit(user);
     if (refused) return refused;
@@ -465,7 +468,8 @@ export class HostRelay extends DurableObject<Env> {
       streams_kept: kept,
       since_last_ms: last ? now - last : null,
     });
-    server!.send(JSON.stringify({ t: "ready" }));
+    // `check` says this relay answers plxd's connection check, which an older one ignores.
+    server!.send(JSON.stringify({ t: "ready", check: true }));
     this.ctx.waitUntil(
       logged(
         "host.deliverHeld",
@@ -495,8 +499,8 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, a request
-   *  for a spare stream, word that plxd's end of a stream is gone, or a device's removal for its
-   *  user's other hosts. */
+   *  for a spare stream, word that plxd's end of a stream is gone, a device's removal for its user's
+   *  other hosts, or its connection check. */
   private async fromHost(message: string | ArrayBuffer) {
     const parsed = typeof message === "string" ? parse(message) : undefined;
     if (parsed?.t === "hook" && typeof parsed.id === "string") {
@@ -553,6 +557,15 @@ export class HostRelay extends DurableObject<Env> {
             .catch((error) => logError("host.tellRemoved", this.context(), error)),
         ),
       );
+    } else if (parsed?.t === "check") {
+      // plxd's connection check (PLX-1356): a ticket for a stream back to itself, as its owner's
+      // client would get one. This socket already proved the host's key, and plxd opens the stream
+      // the way a client does, so the check crosses the same path.
+      const owner = await this.owner();
+      if (!owner) return;
+      const answer = await this.ticket(owner.user);
+      const reply = "error" in answer ? { error: answer.error } : answer;
+      this.host()?.send(JSON.stringify({ t: "check", ...reply }));
     }
   }
 

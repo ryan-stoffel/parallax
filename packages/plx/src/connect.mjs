@@ -385,6 +385,57 @@ export function remove(deps) {
 }
 
 /**
+ * plxd's connection check (PLX-1356): a real stream through the relay back to this computer.
+ * plx holds no token, so plxd proves itself with its key, and a sign-in isn't tested beyond the
+ * relay accepting that key. A plxd with no `relay/check` is reported as a problem like any other.
+ * @param {Plxd} plxd
+ */
+async function readCheck(plxd) {
+  try {
+    const { failed, problem, fix, roundTripMs, diagnostics } = await plxd.call("relay/check");
+    return {
+      ok: !failed,
+      /** @type {"signIn" | "relay" | "listener" | "stream" | null} */
+      failed: failed ?? null,
+      /** @type {string | null} */
+      problem: problem ?? null,
+      /** @type {string | null} */
+      fix: fix ?? null,
+      /** @type {number | null} */
+      roundTripMs: roundTripMs ?? null,
+      /** @type {string | null} */
+      diagnostics: diagnostics ?? null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      failed: null,
+      problem: `plxd couldn't run the check: ${error instanceof Error ? error.message : String(error)}`,
+      fix: "Run plx connect to update plxd.",
+      roundTripMs: null,
+      diagnostics: null,
+    };
+  }
+}
+
+/** How the check reads in `plx connect status`. */
+const PART_NAMES = { signIn: "sign-in", relay: "the relay", listener: "the listener", stream: "the stream" };
+
+/**
+ * The rows `plx connect status` shows for the check.
+ * @param {Awaited<ReturnType<typeof readCheck>>} check
+ * @returns {[string, string][]}
+ */
+function checkRows({ ok, failed, problem, fix, roundTripMs }) {
+  if (ok) return [["Connection check", `passed: a stream through the relay took ${roundTripMs} ms`]];
+  const where = failed ? `failed at ${PART_NAMES[failed]}` : "couldn't run";
+  return [
+    ["Connection check", `${where}: ${problem}`],
+    ["What to do", fix ?? ""],
+  ];
+}
+
+/**
  * What `plx connect status` reports. `--json` prints this object, so its field names stay stable
  * (see the README).
  * @param {Plxd} plxd
@@ -420,12 +471,14 @@ async function readStatus(plxd, deps) {
     approvedDevices: access.approvedClients.length,
     /** @type {string | null} */
     waitingDevice: access.pending?.name ?? null,
+    check: await readCheck(plxd),
   };
 }
 
 /**
- * `plx connect status`: the account, host id, relay state, and routes. With `json`, stdout gets
- * only that object, and a failure goes to stderr.
+ * `plx connect status`: the account, host id, relay state, routes, and whether a real stream
+ * through the relay reaches this computer. With `json`, stdout gets only that object, and a failure
+ * goes to stderr.
  * @param {Deps} deps
  * @param {boolean} [json]
  */
@@ -437,7 +490,7 @@ export function status(deps, json = false) {
       (error) => (console.error(`✗ ${error instanceof Error ? error.message : String(error)}`), 1),
     );
   return exitCode(async () => {
-    const { account, hostId, relay, remote, routes, approvedDevices, waitingDevice } = await read();
+    const { account, hostId, relay, remote, routes, approvedDevices, waitingDevice, check } = await read();
     const rows = [
       ["Account", account ?? "not signed in (run plx connect)"],
       ["Host id", hostId],
@@ -445,6 +498,7 @@ export function status(deps, json = false) {
       ["Reach from anywhere", !remote.on ? "off" : remote.listening ? "on, listening" : `on, not listening${remote.problem ? `: ${remote.problem}` : ""}`],
       ["Routes", routes.length ? routes.join(", ") : "none"],
       ["Approved devices", String(approvedDevices)],
+      ...checkRows(check),
     ];
     const width = Math.max(...rows.map(([label]) => label?.length ?? 0));
     for (const [label, value] of rows) console.log(`${(label ?? "").padEnd(width)}  ${value}`);

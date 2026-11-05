@@ -79,6 +79,58 @@ pub struct RelayHostsParams {
     pub token: String,
 }
 
+/// Params of `relay/check` (PLX-1356).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCheckParams {
+    /// The user's Clerk session token, which also checks the sign-in. plxd sends it to the relay
+    /// and keeps nothing of it. Without one, as plxd keeps none, the sign-in check is whether the
+    /// relay accepts this host's key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub token: Option<String>,
+}
+
+/// A part of the path a client's connection takes through Parallax Relay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum RelayCheckPart {
+    /// The account: the Clerk token, or this host's registration.
+    SignIn,
+    /// plxd's connection to the relay, and the relay being new enough to check.
+    Relay,
+    /// plxd's remote listener.
+    Listener,
+    /// A stream through the relay, back to the listener.
+    Stream,
+}
+
+/// Result of `relay/check` (PLX-1356): whether a real stream through the relay reached this host's
+/// listener, with TLS pinned to its own host id, and if not, the first part that failed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCheckResult {
+    /// The first part that failed. The parts after it weren't checked. None when all passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub failed: Option<RelayCheckPart>,
+    /// What went wrong, for people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<String>,
+    /// What to do about it, for people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fix: Option<String>,
+    /// How long the stream took, from asking the relay to reading the listener's answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub round_trip_ms: Option<u64>,
+    /// This result as text to paste into a bug report. It holds no token, ticket, session, or user
+    /// id, and only the start of the host id.
+    pub diagnostics: String,
+}
+
 /// Params of `relay/remove`: removes one of the signed-in user's hosts from Parallax Relay,
 /// which frees its place: an account holds 10.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]

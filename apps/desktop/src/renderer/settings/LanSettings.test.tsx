@@ -4,7 +4,11 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge, SavedHost } from "../../preload/bridge";
-import type { RemoteSession, RemoteSessionsResult } from "../../protocol/generated/protocol";
+import type {
+  RelayCheckResult,
+  RemoteSession,
+  RemoteSessionsResult,
+} from "../../protocol/generated/protocol";
 import { Notifications } from "../notifications";
 import { LanSettings } from "./LanSettings";
 
@@ -167,6 +171,41 @@ test("making a device read-only asks first, says it's for good, and a failure sa
   // Nothing offers to undo it, only Revoke.
   expect(button("Make read-only")).toBeUndefined();
   expect(button("Revoke")).toBeDefined();
+});
+
+test("Check connection names the part that failed and copies the report", async () => {
+  relay = true;
+  const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  const checkRelay = vi.fn(async (): Promise<RelayCheckResult | string> => ({
+    failed: "listener",
+    problem: "The listener is off.",
+    fix: "Turn it on.",
+    diagnostics: "Result: failed at listener",
+  }));
+  window.parallax.checkRelay = checkRelay;
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(<LanSettings />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+  expect(button("Copy diagnostics")).toBeUndefined();
+
+  await click(button("Check"));
+  expect(document.body.textContent).toContain("Listener failed. The listener is off. Turn it on.");
+  await click(button("Copy diagnostics"));
+  expect(writeText).toHaveBeenCalledWith("Result: failed at listener");
+
+  checkRelay.mockResolvedValueOnce({ roundTripMs: 42, diagnostics: "Result: passed" });
+  await click(button("Check"));
+  expect(document.body.textContent).toContain("Working. The connection took 42 ms.");
+
+  // Signed out, or plxd out of reach: only the reason, and nothing to copy.
+  checkRelay.mockResolvedValueOnce("Sign in first.");
+  await click(button("Check"));
+  expect(document.body.textContent).toContain("Sign in first.");
+  expect(button("Copy diagnostics")).toBeUndefined();
 });
 
 test("Reach from anywhere registers this computer with the relay before turning it on", async () => {

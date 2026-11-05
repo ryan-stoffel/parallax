@@ -1047,6 +1047,21 @@ pub async fn open_pinned(
     route: &str,
     pin: &Pin,
 ) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
+    let stream: crate::relay::Stream = if let Some(host_id) = route.strip_prefix(RELAY_ROUTE) {
+        Box::new(crate::relay::open_stream(host_id).await?)
+    } else {
+        let tcp = TcpStream::connect(with_port(route)).await?;
+        let _ = tcp.set_nodelay(true);
+        Box::new(tcp)
+    };
+    tls_over(stream, pin).await
+}
+
+/// TLS over `stream` to the certificate `pin` accepts, and the fingerprint it presented.
+async fn tls_over(
+    stream: crate::relay::Stream,
+    pin: &Pin,
+) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
     let provider = provider();
     let seen = Arc::new(Mutex::new(None));
     let verifier = Pinned {
@@ -1060,13 +1075,6 @@ pub async fn open_pinned(
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
-    let stream: crate::relay::Stream = if let Some(host_id) = route.strip_prefix(RELAY_ROUTE) {
-        Box::new(crate::relay::open_stream(host_id).await?)
-    } else {
-        let tcp = TcpStream::connect(with_port(route)).await?;
-        let _ = tcp.set_nodelay(true);
-        Box::new(tcp)
-    };
     let name = ServerName::try_from("parallax").expect("a DNS name");
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
         .connect(name, stream)
@@ -1101,6 +1109,20 @@ async fn request(
 ) -> Result<(u16, Vec<u8>), Error> {
     let (tls, _) = open_pinned(route, pin).await?;
     send(tls, route, method, path, headers, body).await
+}
+
+/// The [`Descriptor`] of the host at the end of `stream`, over TLS to the certificate `pin`
+/// accepts: the connection check's proof that a request got there and an answer got back.
+pub(crate) async fn read_descriptor(
+    stream: crate::relay::Stream,
+    pin: &Pin,
+) -> Result<Descriptor, Error> {
+    let (tls, _) = tls_over(stream, pin).await?;
+    let path = "/.well-known/parallax";
+    match send(tls, "parallax", "GET", path, &[], None).await? {
+        (200, body) => json(&body),
+        (status, _) => Err(Error::Protocol(format!("plxd answered {status}"))),
+    }
 }
 
 /// One HTTPS request over `tls`, a connection that presented the pinned certificate.
