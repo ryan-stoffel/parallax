@@ -525,10 +525,20 @@ export function fileKind(path: string): (typeof FILE_KINDS)[number] {
   const name = path.slice(path.lastIndexOf("/") + 1);
   if (/(^|\/)generated\//i.test(path) || /(\.lockb?|-lock\.(json|yaml)|^go\.sum)$/.test(name))
     return "Generated";
-  if (/(^|\/)(__mocks__|mocks?|fixtures?|samples|testdata)\//i.test(path) || /mock/i.test(name))
+  if (
+    /(^|\/)(__mocks__|__snapshots__|mocks?|fixtures?|samples|testdata)\//i.test(path) ||
+    /mock/i.test(name) ||
+    name.endsWith(".snap")
+  )
     return "Mocks";
   if (/\.(md|mdx|rst)$/i.test(name) || /(^|\/)docs\//i.test(path)) return "Docs";
-  if (/(^|\/)(tests?|__tests__|e2e|spec)\//i.test(path) || /[._-](test|spec)\.\w+$/i.test(name))
+  if (
+    /(^|\/)(tests?|__tests__|e2e|specs?)\//i.test(path) ||
+    /[._-](test|spec)\.\w+$/i.test(name) ||
+    /^(test_.+\.py|conftest\.py)$/.test(name) ||
+    // Case-sensitive: `FooTest.java` is a test class, `Latest.java` is not.
+    /(Tests?|Spec)\.(java|kt|kts|scala|groovy|cs|php|swift)$/.test(name)
+  )
     return "Tests";
   return "Code";
 }
@@ -550,6 +560,20 @@ export function lineBreakdown(
   other.additions = Math.max(0, pr.additions - rows.reduce((n, r) => n + r.additions, 0));
   other.deletions = Math.max(0, pr.deletions - rows.reduce((n, r) => n + r.deletions, 0));
   return rows.filter((r) => r.additions || r.deletions);
+}
+
+/** `files`' lines by kind of file, each kind with any, for a diff's bar. */
+export function kindsOf(
+  files: readonly { path: string; added: number; removed: number }[],
+): { kind: string; added: number; removed: number }[] {
+  return FILE_KINDS.map((kind) => {
+    const mine = files.filter((f) => fileKind(f.path) === kind);
+    return {
+      kind,
+      added: mine.reduce((n, f) => n + f.added, 0),
+      removed: mine.reduce((n, f) => n + f.removed, 0),
+    };
+  }).filter((r) => r.added || r.removed);
 }
 
 /**
