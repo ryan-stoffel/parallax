@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -39,21 +39,25 @@ test("a Windows host's folder opens in PowerShell", () => {
   );
 });
 
-test("the script reaches the host's shell in a folder with any name, and removes itself", () => {
-  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "parallax-remote-open-")));
-  const folder = path.join(dir, `it's a $HOME; folder`);
-  mkdirSync(folder);
-  // Runs on "the host" what ssh would hand its login shell: the last argument.
-  const ssh = path.join(dir, "fake ssh");
-  writeFileSync(ssh, `#!/bin/sh\nfor last; do :; done\nexec sh -c "$last"\n`, { mode: 0o700 });
-  const script = path.join(dir, "open.command");
-  writeFileSync(script, selfDeletingScript(sshShellCommand(ssh, "me@host", folder)), {
-    mode: 0o700,
-  });
-  // The "shell" prints where it started.
-  const shell = path.join(dir, "shell");
-  writeFileSync(shell, "#!/bin/sh\npwd\n", { mode: 0o700 });
-  const out = execFileSync(script, { env: { ...process.env, SHELL: shell }, encoding: "utf8" });
-  expect(out.trim()).toBe(folder);
-  expect(() => execFileSync("test", ["!", "-e", script])).not.toThrow();
-});
+// Only macOS runs the script.
+test.skipIf(process.platform === "win32")(
+  "the script reaches the host's shell in a folder with any name, and removes itself",
+  () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "parallax-remote-open-")));
+    const folder = path.join(dir, `it's a $HOME; folder`);
+    mkdirSync(folder);
+    // Runs on "the host" what ssh would hand its login shell: the last argument.
+    const ssh = path.join(dir, "fake ssh");
+    writeFileSync(ssh, `#!/bin/sh\nfor last; do :; done\nexec sh -c "$last"\n`, { mode: 0o700 });
+    const script = path.join(dir, "open.command");
+    writeFileSync(script, selfDeletingScript(sshShellCommand(ssh, "me@host", folder)), {
+      mode: 0o700,
+    });
+    // The "shell" prints where it started.
+    const shell = path.join(dir, "shell");
+    writeFileSync(shell, "#!/bin/sh\npwd\n", { mode: 0o700 });
+    const out = execFileSync(script, { env: { ...process.env, SHELL: shell }, encoding: "utf8" });
+    expect(out.trim()).toBe(folder);
+    expect(existsSync(script)).toBe(false);
+  },
+);
