@@ -97,7 +97,8 @@ function outboxFor(host: () => Fleet, id: string): Outbox {
     saved,
     send,
     (messages) => file.write(JSON.stringify(messages)),
-    (m, error) => showAlert("Message not sent", `“${m.text}”: ${error.message}`),
+    // A dialog, not a notice: the saved copy is gone, so this is the last sight of what was typed.
+    (m, error) => showAlert("Message not sent", `“${m.text}”: ${error.message}`, [{ text: "OK" }]),
   );
   async function send(m: Outgoing): Promise<Sent> {
     const connection = host().hosts.get(id);

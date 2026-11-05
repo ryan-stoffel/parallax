@@ -87,7 +87,8 @@ function Scrim({ onPress, opacity }: { onPress?: () => void; opacity: number }) 
 /** A confirmation or a prompt, in a card over the dim. Two buttons sit side by side, more stack. */
 function DialogCard({ dialog }: { dialog: Exclude<Dialog, { kind: "menu" }> }) {
   const c = useColors();
-  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const [value, setValue] = useState(dialog.kind === "prompt" ? dialog.value : "");
   const [lifted, setLifted] = useState(0);
   const cancel = dialog.buttons.find((b) => b.style === "cancel");
@@ -114,14 +115,25 @@ function DialogCard({ dialog }: { dialog: Exclude<Dialog, { kind: "menu" }> }) {
           entering={ZoomIn.springify().damping(22).stiffness(320).mass(0.7)}
           exiting={FadeOut.duration(120)}
           accessibilityRole="alert"
-          style={[styles.card, { width: Math.min(width - 48, 340), backgroundColor: c.surface, borderColor: c.border }]}
+          style={[
+            styles.card,
+            {
+              width: Math.min(width - 48, 340),
+              maxHeight: height - insets.top - insets.bottom - 32 - lifted * 2,
+              backgroundColor: c.surface,
+              borderColor: c.border,
+            },
+          ]}
         >
-          <T style={styles.title}>{dialog.title}</T>
-          {!!dialog.message && (
-            <T muted style={styles.message}>
-              {dialog.message}
-            </T>
-          )}
+          {/* Text of any length scrolls, so the buttons stay on screen. */}
+          <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={{ gap: 8 }} alwaysBounceVertical={false}>
+            <T style={styles.title}>{dialog.title}</T>
+            {!!dialog.message && (
+              <T muted style={styles.message}>
+                {dialog.message}
+              </T>
+            )}
+          </ScrollView>
           {dialog.kind === "prompt" && (
             <Input
               autoFocus

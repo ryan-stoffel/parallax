@@ -76,7 +76,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
         icon={lucide ? (icon as LucideIcon) : undefined}
         leading={lucide ? undefined : <View style={{ width: 18, alignItems: "center" }}>{icon as React.ReactNode}</View>}
         title={title}
-        detail={value}
+        detail={path ? homeless(value) : value}
         path={path}
         last={last}
         onPress={() => copy(value)}
@@ -109,7 +109,7 @@ export function ThreadDetailsScreen({ route, navigation }: NativeStackScreenProp
             onPress={project.choose}
           />
         )}
-        {row(run?.worktreePath ? FolderGit2 : FolderOpen, run?.worktreePath ? "Worktree" : "Folder", homeless(run?.worktreePath ?? repo?.path ?? ""), false, true)}
+        {row(run?.worktreePath ? FolderGit2 : FolderOpen, run?.worktreePath ? "Worktree" : "Folder", run?.worktreePath ?? repo?.path, false, true)}
         {row(GitBranch, "Branch", run?.branch, true)}
       </Section>
       <Section title="Agent">
