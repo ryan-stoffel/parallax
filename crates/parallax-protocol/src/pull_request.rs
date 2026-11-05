@@ -667,6 +667,10 @@ pub struct PullRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pending_review_id: Option<String>,
+    /// Whether the signed-in user can commit suggestions to its head branch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub can_apply_suggestions: bool,
 }
 
 /// Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's
@@ -776,6 +780,16 @@ pub enum PrWrite {
     DiscardReview {
         /// The pending review's id, as `pr/view` gives it.
         review_id: String,
+    },
+    /// Commits review comments' suggestions to the head branch as one commit, and resolves their
+    /// threads.
+    ApplySuggestions {
+        /// The comments' node ids. A comment's first suggestion applies.
+        comment_ids: Vec<String>,
+        /// The commit's message.
+        message: String,
+        /// The head commit these were read from: refused if the branch has moved since.
+        head_sha: String,
     },
     /// Marks a file viewed by the signed-in reviewer, or takes that back.
     SetFileViewed {

@@ -59,6 +59,36 @@ pub(crate) async fn write(
     }
     // Bodies go through a file, so a long one fits any platform's argument limit.
     let mut file = tempfile::NamedTempFile::new().map_err(ErrorObject::internal_error)?;
+    if let PrWrite::ApplySuggestions {
+        comment_ids,
+        message,
+        head_sha,
+    } = &write
+    {
+        let deadline = Instant::now() + BUDGET;
+        tokio::time::timeout_at(
+            deadline,
+            suggestions::apply(
+                daemon,
+                &url,
+                comment_ids,
+                message,
+                head_sha,
+                file.path(),
+                deadline,
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(PrError::Gh(format!(
+                "GitHub didn't answer within {BUDGET:?}; the commit may have gone through, so \
+                 look at the pull request before trying again"
+            )))
+        })
+        .map_err(|error| crate::agents::pr_error(&error))?;
+        crate::pr_watch::forget_read(daemon, &url);
+        return Ok(PrWriteResult { url });
+    }
     let (steps, body) = commands(&url, write, file.path()).map_err(ErrorObject::invalid_params)?;
     if let Some(body) = body {
         file.write_all(body.as_bytes())
@@ -654,6 +684,8 @@ fn review_commands(
         _ => Err("unknown pull request write".to_owned()),
     }
 }
+
+mod suggestions;
 
 #[cfg(test)]
 mod tests;

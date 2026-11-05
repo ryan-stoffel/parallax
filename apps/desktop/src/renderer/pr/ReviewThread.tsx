@@ -5,7 +5,7 @@ import { useSticky } from "../sticky";
 import { Badge, Button, IconButton } from "../ui";
 import { GithubMarkdown } from "./GithubMarkdown";
 import type { ThreadView } from "./model";
-import { Suggestion } from "./Suggestion";
+import { Suggestion, type SuggestionActions, SuggestionButtons } from "./Suggestion";
 import { linesUnderThread, splitSuggestions } from "./suggestions";
 import { ago } from "./parts";
 
@@ -25,6 +25,7 @@ export function ReviewThread({
   onResolve,
   onEdit,
   onDelete,
+  suggestions,
 }: {
   thread: ThreadView;
   repo: string;
@@ -35,6 +36,7 @@ export function ReviewThread({
   onResolve?: () => Promise<boolean>;
   onEdit?: (commentId: string, body: string) => Promise<boolean>;
   onDelete?: (commentId: string) => Promise<boolean>;
+  suggestions?: SuggestionActions;
 }) {
   const [reply, setReply] = useSticky(`prReply/${thread.id ?? thread.url}`, "");
   const [sending, setSending] = useState<"reply" | "resolve">();
@@ -77,6 +79,7 @@ export function ReviewThread({
             onOpen={onOpen}
             onEdit={onEdit}
             onDelete={onDelete}
+            suggestions={suggestions}
           />
         ))}
       </ol>
@@ -134,6 +137,7 @@ function ThreadComment({
   onOpen,
   onEdit,
   onDelete,
+  suggestions,
 }: {
   comment: ThreadView["comments"][number];
   thread: ThreadView;
@@ -141,6 +145,7 @@ function ThreadComment({
   onOpen: (url: string) => void;
   onEdit?: (commentId: string, body: string) => Promise<boolean>;
   onDelete?: (commentId: string) => Promise<boolean>;
+  suggestions?: SuggestionActions;
 }) {
   // `undefined` while not editing. Kept by comment, so a scroll away doesn't lose it.
   const [draft, setDraft] = useSticky<string | undefined>(`prEdit/${c.id}`, undefined);
@@ -156,6 +161,9 @@ function ThreadComment({
     if (body && (await act(() => onEdit!(c.id!, body)))) setDraft(undefined);
   };
   const mine = c.pending && c.id;
+  const parts = splitSuggestions(c.body);
+  // A commit applies a comment's first suggestion, as GitHub's own does.
+  const first = parts.findIndex((part) => "suggestion" in part);
   return (
     <li>
       <div className="flex min-h-6 items-center gap-1.5 text-meta">
@@ -217,7 +225,7 @@ function ThreadComment({
         </form>
       ) : (
         <div className="mt-1 flex flex-col gap-2 text-body [&_.markdown]:text-body">
-          {splitSuggestions(c.body).map((part, i) =>
+          {parts.map((part, i) =>
             "markdown" in part ? (
               <GithubMarkdown key={i} text={part.markdown} repo={repo} onOpen={onOpen} />
             ) : (
@@ -229,7 +237,11 @@ function ThreadComment({
                 )}
                 after={part.suggestion}
                 start={thread.startLine ?? thread.line ?? 1}
-              />
+              >
+                {i === first && suggestions && c.id && !c.pending && (
+                  <SuggestionButtons commentId={c.id} thread={thread} actions={suggestions} />
+                )}
+              </Suggestion>
             ),
           )}
         </div>

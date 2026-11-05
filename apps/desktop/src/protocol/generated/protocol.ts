@@ -7582,6 +7582,10 @@ export type PullRequest = {
 	 * The signed-in reviewer's pending review, started here or on GitHub.
 	 */
 	pendingReviewId?: string,
+	/**
+	 * Whether the signed-in user can commit suggestions to its head branch.
+	 */
+	canApplySuggestions?: boolean,
 };
 
 /**
@@ -10748,7 +10752,19 @@ export type PrWrite = { "kind": "comment",
 	/**
 	 * The pending review's id, as `pr/view` gives it.
 	 */
-	reviewId: string, } | { "kind": "setFileViewed",
+	reviewId: string, } | { "kind": "applySuggestions",
+	/**
+	 * The comments' node ids. A comment's first suggestion applies.
+	 */
+	commentIds: Array<string>,
+	/**
+	 * The commit's message.
+	 */
+	message: string,
+	/**
+	 * The head commit these were read from: refused if the branch has moved since.
+	 */
+	headSha: string, } | { "kind": "setFileViewed",
 	/**
 	 * The pull request's node id, as `pr/view` gives it.
 	 */
