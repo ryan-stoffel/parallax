@@ -174,7 +174,8 @@ release notes and recent commits that touch the relevant code.
 
 If the user is behind and the fix likely shipped, say so plainly. The app updates itself from its
 menu; plxd in `~/.parallax-plxd` is updated by the app. For a computer set up with plx,
-`npx plx-cli connect` installs the newest release again (add `--channel nightly` for a nightly).
+`npx plx-cli connect --channel <nightly or stable>`, matching what they run, installs the newest
+release again.
 
 ## 9. Offer outcomes
 
