@@ -1013,7 +1013,7 @@ export function Composer({
   const recalled = useRef<number>(undefined);
   const [pickedModel, setModel] = useState<Model>();
   const [pickedEffort, setEffort] = useState<AgentEffort>();
-  const [pickedPermission, setPermission] = useState<AgentPermission>();
+  const [pickedPermission, setPermission] = useState(initial?.permission);
   const [pickedContext, setContext] = useState<number>();
   const [pickedFast, setFast] = useState<boolean>();
   // A new thread's composer starts from Settings > General's defaults. An orchestrator
@@ -1839,8 +1839,21 @@ export function Composer({
     if (!contents) return;
     contents.current = uploading
       ? { text: "", doc: { type: "doc" }, images: [], files: [], threads: [] }
-      : { text, doc: editor.getJSON(), images, files, threads };
-  }, [contents, editor, text, images, files, threads, uploading]);
+      : {
+          text,
+          doc: editor.getJSON(),
+          images,
+          files,
+          threads,
+          ...(newThread && { permission: pickedPermission }),
+        };
+  }, [contents, editor, text, images, files, threads, uploading, newThread, pickedPermission]);
+
+  // A draft New Thread reopens or seeds goes on where its text ends.
+  const startsWithDraft = useRef(newThread && !!initial);
+  useEffect(() => {
+    if (startsWithDraft.current) editor.commands.focus("end");
+  }, [editor]);
 
   // Run ids are the host's own, so attached threads don't follow a New Thread draft to another
   // computer.

@@ -11,6 +11,7 @@ import {
   Palette,
   Settings as SettingsIcon,
   SquareDashed,
+  Stethoscope,
   SquarePen,
   SunMoon,
   TextSearch,
@@ -43,7 +44,7 @@ import { NewThread } from "./NewThread";
 import { DevicePanel } from "./DevicePanel";
 import { DocumentView } from "./DocumentView";
 import type { DocRef } from "./documents";
-import { freshDraftId } from "./drafts";
+import { doctorDraft, drafts, freshDraftId } from "./drafts";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import {
@@ -1061,6 +1062,19 @@ export function App() {
       icon: <FolderPlus />,
       command: "newOrchestrator",
       run: () => picker.current?.open("orchestrator"),
+    },
+    {
+      id: "diagnose",
+      label: "Diagnose a problem",
+      text: "Diagnose a problem",
+      keywords: "doctor triage bug report issue logs",
+      hint: `An agent looks into it with full access${listed.length > 1 ? ` on ${host.name}` : ""}`,
+      icon: <Stethoscope />,
+      run: () => {
+        const draft = doctorDraft(host.id, noRepo);
+        drafts.put(draft);
+        openOnHost(host.id, { kind: "new", groupId: noRepo, draft: draft.id });
+      },
     },
     {
       id: "addRepo",
