@@ -20,7 +20,7 @@ import { createNativeStackNavigator, type NativeStackNavigationOptions } from "@
 import * as Haptics from "expo-haptics";
 import { ChevronLeft, Info, X } from "lucide-react-native";
 import { useContext, useEffect, useRef, useState } from "react";
-import { Linking, StatusBar, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
+import { AppState, Linking, StatusBar, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
 import { Drawer, useDrawerProgress } from "react-native-drawer-layout";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated";
@@ -40,7 +40,16 @@ import { Loading, Onboarding } from "./Onboarding";
 import { ProjectInstructionsScreen, ProjectList, ProjectScreen } from "./Projects";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
 import { holdAlerts, phaseOf, type Alert } from "./alerts";
-import { lastReply, notify, onOpened, registerWithRelay, setNotifiesFor } from "./push";
+import {
+  applySealedPushes,
+  lastReply,
+  notify,
+  onOpened,
+  registerWithRelay,
+  setNotifiesFor,
+  showThreadStatus,
+} from "./push";
+import { threadStatus } from "./threadStatus";
 import { LightboxHost } from "./Lightbox";
 import { OrchestratorInboxScreen } from "./OrchestratorInbox";
 import { getPrefs } from "./prefs";
@@ -181,6 +190,20 @@ function Alerts() {
       alerts.see(m.machine.id, t.id, phaseOf(state.runs[t.id], asks, t.id in state.waiting));
     }
   }
+
+  const status = threadStatus(computers);
+  const statusKey = JSON.stringify(status);
+  useEffect(() => showThreadStatus(status), [statusKey]);
+  // Coming to the front too: the extension may have changed what's kept while the app was away.
+  const latestStatus = useRef(status);
+  latestStatus.current = status;
+  useEffect(() => {
+    const listener = AppState.addEventListener("change", (next) => {
+      if (next === "active") showThreadStatus(latestStatus.current);
+    });
+    return () => listener.remove();
+  }, []);
+  useEffect(() => applySealedPushes(), []);
 
   useEffect(() => () => alerts.clear(), [alerts]);
   useEffect(() => {

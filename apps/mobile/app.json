@@ -20,7 +20,8 @@
         "NSBonjourServices": [
           "_parallax._tcp"
         ],
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSSupportsLiveActivities": true
       },
       "buildNumber": "12"
     },
@@ -43,6 +44,7 @@
       ],
       "expo-notifications",
       "./plugins/withNotificationService",
+      "./plugins/withThreadWidget",
       [
         "expo-image-picker",
         {

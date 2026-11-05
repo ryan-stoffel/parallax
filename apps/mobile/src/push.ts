@@ -8,14 +8,17 @@
 // the notification service extension (plugins/notification-service) opens them into the
 // notification, or leaves the fixed text if it can't (0100). Both name one event alike, so iOS
 // shows one of them, and a push doesn't show in front for a thread the app notifies about itself.
-// Tapping either opens the thread.
+// Tapping either opens the thread. The extension also keeps what opens for the widget and the Live
+// Activity, and the app does that here for the threads it sees and for a push it gets in front.
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 
 import type { HostResponse } from "../../desktop/src/preload/bridge";
 import type { RelayPushKeyResult } from "../../desktop/src/protocol/generated/protocol";
+import { ThreadStatus } from "../modules/thread-status";
 import { lastReplyIn, type Alert } from "./alerts";
+import type { ThreadStatusUpdate } from "./threadStatus";
 
 /** Parallax Relay (0068). */
 export const RELAY_URL = "https://relay.parallax.codes";
@@ -83,23 +86,53 @@ export async function lastReply(hostId: string, runId: string): Promise<string |
   }
 }
 
+/** The keychain group this app shares with its extensions (`plugins/extensionTarget.js`). */
+function sharedGroup(): string | undefined {
+  const { appleTeamId, bundleIdentifier } = Constants.expoConfig?.ios ?? {};
+  return appleTeamId && bundleIdentifier ? `${appleTeamId}.${bundleIdentifier}.pushKeys` : undefined;
+}
+
+/** Tells the widget and the Live Activity what the app sees (`threadStatus` in threadStatus.ts). */
+export function showThreadStatus({ seen, connected }: ThreadStatusUpdate) {
+  const group = sharedGroup();
+  // With no computer known now there's no news, and a sync would mark the Live Activity as current.
+  if (group && connected.length > 0)
+    void ThreadStatus.sync(JSON.stringify(seen), connected, group).catch(() => {});
+}
+
+/** Takes thread names and push keys off this phone, for signing out, and ends the Live Activity. */
+export async function forgetThreadStatus(): Promise<void> {
+  const group = sharedGroup();
+  if (group) await ThreadStatus.signOut(group).catch(() => {});
+}
+
+/** Gives the widget and the Live Activity each sealed push that comes while the app is in front. */
+export function applySealedPushes(): () => void {
+  const subscription = Notifications.addNotificationReceivedListener((n) => {
+    const data = n.request.content.data as { sealed?: string };
+    const group = sharedGroup();
+    if (data.sealed && group) void ThreadStatus.applyPush(data, group).catch(() => {});
+  });
+  return () => subscription.remove();
+}
+
 /**
  * Keeps the push key of the computer behind `request` under its relay id, which its pushes carry,
- * in the keychain group this app shares with its notification service extension
- * (`plugins/withNotificationService.js`), which reads it while the phone is locked. One that fails
- * leaves the fixed text until the next connection.
+ * in the keychain group this app shares with its extensions, where the notification service
+ * extension reads it while the phone is locked. One that fails leaves the fixed text until the next
+ * connection.
  */
 export async function savePushKey(
   request: (method: "relay/pushKey", params: object) => Promise<HostResponse<unknown>>,
 ): Promise<void> {
-  const { appleTeamId, bundleIdentifier } = Constants.expoConfig?.ios ?? {};
-  if (!appleTeamId || !bundleIdentifier) return;
+  const group = sharedGroup();
+  if (!group) return;
   const answer = await request("relay/pushKey", {}).catch(() => undefined);
   if (!answer || "error" in answer) return;
   const { hostId, key } = answer.result as RelayPushKeyResult;
   await SecureStore.setItemAsync(hostId, key, {
     keychainService: "pushKeys",
-    accessGroup: `${appleTeamId}.${bundleIdentifier}.pushKeys`,
+    accessGroup: group,
     keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
   }).catch(() => {});
 }

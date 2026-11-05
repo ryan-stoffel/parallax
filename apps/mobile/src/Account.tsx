@@ -21,7 +21,9 @@ import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { authorize } from "../modules/pinned-tls";
 import { keychain } from "./host";
+import { ClerkError, refreshOrSignOut } from "./clerkSession";
 import { base64url } from "./pairing";
+import { forgetThreadStatus } from "./push";
 import { UserRound } from "lucide-react-native";
 
 import { initials } from "../../desktop/src/renderer/attention";
@@ -57,16 +59,6 @@ interface User {
 interface Session {
   refreshToken: string;
   user: User;
-}
-
-/** A failed call to Clerk. `revoked` when Clerk refused the refresh token itself. */
-class ClerkError extends Error {
-  constructor(
-    message: string,
-    readonly revoked = false,
-  ) {
-    super(message);
-  }
 }
 
 async function token(params: Record<string, string>) {
@@ -120,11 +112,19 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     latest.current.access = access;
   };
 
-  const save = async (next: Session | null) => {
+  const save = async (next: Session) => {
     latest.current.session = next;
     setSession(next);
-    if (next) await SecureStore.setItemAsync(KEY, JSON.stringify(next), keychain);
-    else await SecureStore.deleteItemAsync(KEY, keychain);
+    await SecureStore.setItemAsync(KEY, JSON.stringify(next), keychain);
+  };
+
+  /** The only way a session ends here, so the account's thread names and push keys always go too. */
+  const endSession = async () => {
+    setAccess(undefined);
+    latest.current.session = null;
+    setSession(null);
+    await SecureStore.deleteItemAsync(KEY, keychain);
+    await forgetThreadStatus();
   };
 
   useEffect(() => {
@@ -185,8 +185,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
     async signOut() {
       const held = session;
-      setAccess(undefined);
-      await save(null);
+      await endSession();
       // Revokes this phone's refresh token only: other devices stay signed in.
       if (held)
         await fetch(`${API}/oauth/token/revoke`, {
@@ -207,18 +206,14 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     const { access, session } = latest.current;
     if (!fresh && access && access.expiresAt - 60_000 > Date.now()) return access.token;
     if (!session) return undefined;
-    try {
+    return refreshOrSignOut(async () => {
       const answer = await token({ grant_type: "refresh_token", refresh_token: session.refreshToken });
       setAccess(answer.access);
       // Each refresh also refreshes the profile, so a sign-in from before the picture gets it.
       const user = await userinfo(answer.access.token).catch(() => session.user);
       await save({ user, refreshToken: answer.refreshToken ?? session.refreshToken });
       return answer.access.token;
-    } catch (e) {
-      // Revoked, such as by signing out everywhere: signed out here too.
-      if (e instanceof ClerkError && e.revoked) await save(null);
-      return undefined;
-    }
+    }, endSession);
   }
   return <AccountContext value={value}>{children}</AccountContext>;
 }
