@@ -177,7 +177,8 @@ export async function redeem(clerk, { code, verifier, redirectUri }) {
  * @property {boolean} browser Whether to open a browser here, from `canOpenBrowser`.
  * @property {string} codePage The pasted sign-in's redirect URI.
  * @property {(url: string) => Promise<boolean>} open Opens `url` in a browser here.
- * @property {(question: string) => Promise<string>} prompt Asks the user for a line.
+ * @property {(question: string) => Promise<string>} prompt Asks the user for a line, and rejects
+ *   when input ends first.
  * @property {number} [timeoutMs] How long the loopback sign-in waits.
  * @property {(ms: number) => Promise<unknown>} [sleep] Waits between device grant polls. Unlike connect's unref'd sleep, this one keeps plx running.
  */
@@ -316,7 +317,11 @@ async function signInElsewhere({ clerk, codePage, prompt }) {
   const url = authorizeUrl(clerk, { redirectUri: codePage, state: randomBytes(16).toString("base64url"), verifier });
   console.log(`Open this link in a browser on any device, sign in, and allow this computer:\n\n  ${url}\n`);
   for (let tries = 1; ; ) {
-    const code = (await prompt("Paste the code it shows: ")).trim();
+    // It rejects once input ends: nothing more can arrive, so this fails rather than waiting on.
+    const answer = await prompt("Paste the code it shows: ").catch(() => {
+      throw new Error("No code was entered before input ended. Run it again in a terminal, or send the code on stdin.");
+    });
+    const code = answer.trim();
     // An empty line isn't an answer: a stray Enter, such as one copied with the command, waits on.
     if (!code) continue;
     tries++;

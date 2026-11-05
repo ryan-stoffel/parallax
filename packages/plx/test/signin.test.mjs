@@ -3,9 +3,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { setTimeout as wait } from "node:timers/promises";
 
+import { lineReader } from "../src/cli.mjs";
 import { canOpenBrowser, codePage, signIn } from "../src/signin.mjs";
 
 /**
@@ -93,6 +95,56 @@ test("an empty line at the code prompt waits for the code, and doesn't use up a 
       }),
     );
     assert.equal(token, "token-1");
+  } finally {
+    fake.close();
+  }
+});
+
+test("end of input at the code prompt, even after an empty line, fails saying no code was entered", async () => {
+  const fake = await fakeClerk();
+  const input = new PassThrough();
+  input.end("\n");
+  const ask = lineReader(input, new PassThrough());
+  try {
+    await assert.rejects(
+      quietly(() =>
+        signIn({
+          clerk: fake.clerk,
+          browser: false,
+          codePage: "https://relay.example/connect/code",
+          open: async () => assert.fail("no browser opens in the paste flow"),
+          prompt: ask,
+        }),
+      ),
+      /^Error: No code was entered before input ended\./,
+    );
+    assert.equal(fake.grants.length, 0);
+  } finally {
+    fake.close();
+  }
+});
+
+test("piped codes redeem like pasted ones, however the lines arrive", async () => {
+  const fake = await fakeClerk();
+  const input = new PassThrough();
+  // One chunk, so the reader holds the second code while the first is refused.
+  input.end("bad-code\ngood-code\n");
+  const ask = lineReader(input, new PassThrough());
+  try {
+    const { token } = await quietly((printed) =>
+      signIn({
+        clerk: fake.clerk,
+        browser: false,
+        codePage: "https://relay.example/connect/code",
+        open: async () => assert.fail("no browser opens in the paste flow"),
+        prompt: (question) => {
+          fake.authorize(/(http\S+\/oauth\/authorize\S+)/.exec(printed())?.[1] ?? "");
+          return ask(question);
+        },
+      }),
+    );
+    assert.equal(token, "token-1");
+    assert.deepEqual(fake.grants.map((grant) => grant.get("code")), ["bad-code", "good-code"]);
   } finally {
     fake.close();
   }
@@ -377,14 +429,15 @@ for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceCl
   test(`the paste flow takes over, with no error shown, when ${name}`, async () => {
     const fake = await fakeDeviceClerk(options);
     let out = "";
+    // A prompt that rejects is input ending, so reaching it fails the way the paste flow does.
     await assert.rejects(
       quietly((printed) =>
         signInWithout(fake, async () => {
           out = printed();
-          throw new Error("reached the paste prompt");
+          throw new Error("Input ended.");
         }),
       ),
-      /reached the paste prompt/,
+      /No code was entered before input ended/,
     );
     fake.close();
     assert.match(out, /\/oauth\/authorize\?/);

@@ -3,7 +3,8 @@
 # reads this file as text, so the execution policy that blocks script files doesn't apply, in cmd or
 # in PowerShell. Keep that form: Defender blocks `[scriptblock]::Create((irm ...))` as malicious.
 # It uses Node.js 20 or newer if that's here, or else downloads Node.js to
-# %USERPROFILE%\.parallax-plxd\node and checks it against nodejs.org's SHA-256 list.
+# %USERPROFILE%\.parallax-plxd\node and checks it against nodejs.org's SHA-256 list. With no
+# terminal it still runs, for a script to set up a computer: see plx's README.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -52,6 +53,15 @@ function Connect-Parallax {
   $env:NPM_CONFIG_UPDATE_NOTIFIER = 'false'
   # Named because this script can reach users before a plx-cli that defaults to nightly does. The
   # last --channel wins, so one given to Connect-Parallax overrides it.
-  & npx.cmd -y plx-cli@latest connect --channel nightly @args
+  # Found first, under 'Stop': past here a missing npx would leave nothing to fail the exit code.
+  $npx = (Get-Command npx.cmd).Source
+  # When a caller captures stderr, Windows PowerShell makes each of a command's stderr lines an
+  # error, and 'Stop' would end setup at npm's first warning.
+  $ErrorActionPreference = 'Continue'
+  # With no terminal, plx-cli before 0.7.0 would exit 0 at end of input with nothing signed in, so
+  # npx fails rather than run one. A hyphen range, because cmd runs npx.cmd and takes > and ^ as its
+  # own. Its spaces make PowerShell quote it, and npx.cmd passes the quotes on.
+  $plx = if ([Console]::IsInputRedirected) { 'plx-cli@0.7.0 - 99' } else { 'plx-cli@latest' }
+  & $npx -y $plx connect --channel nightly @args
   exit $LASTEXITCODE
 }

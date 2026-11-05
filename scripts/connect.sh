@@ -3,6 +3,7 @@
 # Add a computer's command does (`curl ... | sh`). It uses Node.js 20 or newer if that's here, or
 # else downloads Node.js to ~/.parallax-plxd/node and checks it against nodejs.org's SHA-256 list.
 # Some distros' Node.js packages ship no npx, so that counts as not having it.
+# With no terminal it still runs, for a script to set up a computer: see plx's README.
 set -eu
 
 node_is_new_enough() {
@@ -53,13 +54,6 @@ download_node() {
   trap - EXIT INT TERM
 }
 
-# This script arrives on stdin, so plx reads the sign-in code from the terminal instead. With no
-# terminal there's nowhere to paste it, and plx would stop at the prompt with nothing done.
-if ! (: </dev/tty) 2>/dev/null; then
-  echo "Parallax's setup needs a terminal for its sign-in. Over ssh, run it with ssh -t." >&2
-  exit 1
-fi
-
 if ! node_is_new_enough; then
   node_dir=$HOME/.parallax-plxd/node
   [ -x "$node_dir/bin/node" ] || download_node "$node_dir"
@@ -73,4 +67,11 @@ export NPM_CONFIG_UPDATE_NOTIFIER
 
 # Named because this script can reach users before a plx-cli that defaults to nightly does. The
 # last --channel wins, so one given to this script overrides it.
-exec npx -y plx-cli@latest connect --channel nightly "$@" </dev/tty
+# This script can arrive on stdin, so plx reads from the terminal when there is one.
+if (: </dev/tty) 2>/dev/null; then
+  exec npx -y plx-cli@latest connect --channel nightly "$@" </dev/tty
+fi
+# With none, plx keeps this stdin: a code piped in, or the end of a `curl | sh` script, which it
+# reports as a failure. plx-cli before 0.7.0 would exit 0 there with nothing signed in, so npx
+# fails rather than run one.
+exec npx -y 'plx-cli@>=0.7.0' connect --channel nightly "$@"

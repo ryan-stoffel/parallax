@@ -31,6 +31,7 @@ function fakes(state = {}, answers = []) {
   let signIns = 0;
   /** @type {import("../src/connect.mjs").Deps} */
   const deps = {
+    terminal: true,
     release: async () => ({ tag_name: "v2611.10423.14450-nightly", prerelease: true, assets: [] }),
     signIn: async () => (signIns++, "good-token"),
     // Never runs this computer's real shell: Windows PowerShell can stall on its first start.
@@ -90,6 +91,22 @@ test("connect signs in, installs, registers, turns relay and remote on, and ends
   assert.match(out, /^ {2}482 911$/m);
   assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   fake.done();
+});
+
+test("with no terminal, connect and approve print one setup code and exit 0 without waiting for a device", async () => {
+  const fake = fakes({ pairAfterCodes: 99 });
+  fake.deps.terminal = false;
+  const setup = await printed(() => connect.connect(options, fake.deps));
+  assert.equal(setup.code, 0, setup.out);
+  assert.match(setup.out, /✓ studio is online on Parallax Connect/);
+  assert.match(setup.out, /^Setup code: 482911 \(works until \S+\)\./m);
+  const later = fakes({ remote: true, pairAfterCodes: 99 });
+  later.deps.terminal = false;
+  const approve = await printed(() => connect.approve(later.deps));
+  assert.equal(approve.code, 0, approve.out);
+  assert.match(approve.out, /^Setup code: 482911 /m);
+  fake.done();
+  later.done();
 });
 
 test("connect and add stop before sign-in, naming the fix, when the release can't reach the relay", async () => {
@@ -208,6 +225,18 @@ test("approve keeps plxd's connection open while the prompt waits longer than pl
   fake.done();
 });
 
+test("approve fails and decides nothing when input ends at its prompt", async () => {
+  const pending = { id: "r1", name: "Pixel", code: "12345" };
+  const fake = fakes({ pending });
+  fake.deps.terminal = false;
+  fake.deps.prompt = () => Promise.reject(new Error("Input ended before an answer."));
+  const { code, out } = await printed(() => connect.approve(fake.deps));
+  assert.equal(code, 1, out);
+  assert.match(out, /✗ Input ended before an answer\./);
+  assert.deepEqual(fake.calls(), ["access/get {}"]);
+  fake.done();
+});
+
 test("approve denies with n", async () => {
   const fake = fakes({ relay: true, remote: true, registered: true, pending }, ["n"]);
   const { code, out } = await printed(() => connect.approve(fake.deps));
@@ -263,6 +292,46 @@ test("status prints the account, host id, relay state, and routes", async () => 
   assert.match(offline.out, /^Account +not signed in/m);
   assert.match(offline.out, /^Relay +off$/m);
   assert.match(offline.out, /^Routes +none$/m);
+  fake.done();
+  off.done();
+});
+
+test("status --json prints the documented fields, and a failure leaves stdout empty", async () => {
+  const fake = fakes({ relay: true, remote: true, registered: true, connects: false });
+  const on = await printed(() => connect.status(fake.deps, true));
+  assert.equal(on.code, 0, on.out);
+  assert.deepEqual(JSON.parse(on.out), {
+    account: "user_2abc",
+    hostId: "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+    relay: { on: true, connected: false, problem: "Couldn't reach Parallax Relay." },
+    remote: { on: true, listening: true, problem: null },
+    routes: ["192.168.1.20", "relay:tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE"],
+    approvedDevices: 1,
+    waitingDevice: null,
+  });
+
+  const off = fakes({});
+  assert.deepEqual(JSON.parse((await printed(() => connect.status(off.deps, true))).out), {
+    account: null,
+    hostId: "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+    relay: { on: false, connected: false, problem: null },
+    remote: { on: false, listening: false, problem: null },
+    routes: [],
+    approvedDevices: 1,
+    waitingDevice: null,
+  });
+
+  fake.deps.plxd = () => Promise.reject(new Error("Couldn't start plxd: not found"));
+  const errors = /** @type {string[]} */ ([]);
+  const error = console.error;
+  console.error = (/** @type {string} */ line) => void errors.push(line);
+  try {
+    const failed = await printed(() => connect.status(fake.deps, true));
+    assert.deepEqual(failed, { code: 1, out: "" });
+    assert.deepEqual(errors, ["✗ Couldn't start plxd: not found"]);
+  } finally {
+    console.error = error;
+  }
   fake.done();
   off.done();
 });

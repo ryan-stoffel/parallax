@@ -21,6 +21,8 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
  * What the commands reach outside this process, so tests can fake each.
  * @typedef {object} Deps
  * @property {(channel: Channel) => Promise<Release>} release Finds the release to install.
+ * @property {boolean} terminal Whether stdin is a terminal. Without one, nobody is there to answer
+ *   or to wait, so setup ends at a printed code.
  * @property {() => Promise<string>} signIn Signs in and resolves to a Clerk access token.
  * @property {(runner: Runner, os: Os) => Promise<Target>} details Finds the OS details of the
  *   computer `runner` reaches.
@@ -58,6 +60,15 @@ async function exitCode(body) {
 }
 
 /**
+ * The sign-in step, resolving to the access token. A failure goes to stderr, so a script that reads
+ * stderr sees why it stopped.
+ * @param {Deps} deps
+ * @param {string} done The ✓ line's text.
+ * @returns {Promise<string>}
+ */
+const signInStep = (deps, done) => step("Signing in to Parallax", async () => [done, await deps.signIn()], console.error);
+
+/**
  * Runs `body` with plxd open through `runner` on an `os` computer, this one by default, closing
  * it after.
  * @template T
@@ -87,7 +98,7 @@ export function connect(options, deps) {
     const os = localOs();
     if (!os) throw new Error(`Parallax doesn't run on ${process.platform}.`);
     const release = await deps.release(options.channel);
-    const token = await step("Signing in to Parallax", async () => [`Signed in to Parallax Connect`, await deps.signIn()]);
+    const token = await signInStep(deps, "Signed in to Parallax Connect");
     const target = await step("Finding this computer's OS", async () => {
       const target = await deps.details(runner, os);
       return [`${target.label}: ${target.version} (${target.arch})`, target];
@@ -118,7 +129,7 @@ export function add(destination, options, deps) {
   const runner = sshRunner(target, { port: options.port });
   return exitCode(async () => {
     const release = await deps.release(options.channel);
-    const token = await step("Signing in to Parallax", async () => [`Signed in to Parallax Connect`, await deps.signIn()]);
+    const token = await signInStep(deps, "Signed in to Parallax Connect");
     const details = await sshTarget(runner, destination, target, `npx plx-cli connect --channel ${options.channel}`);
     await deps.install(runner, details, destination, release, options.channel);
     await withPlxd(
@@ -214,6 +225,12 @@ async function link(plxd, token, deps) {
  * @param {string[]} [others] The account's other computers, to say where the code goes.
  */
 async function approveNewDevice(plxd, deps, others = []) {
+  // plxd keeps the code after plx exits, so a script ends here rather than waiting on a person.
+  if (!deps.terminal) {
+    const { code, expiresAt } = await plxd.call("access/setupCode");
+    console.log(`Setup code: ${code} (works until ${expiresAt}). Type it in Parallax on a signed-in device. plx connect approve shows a new one.`);
+    return;
+  }
   const where = others.length === 1 ? others[0] : "your other computer";
   console.log(`\nParallax on ${where} asks for this code when you go back to it. Type it there.`);
   for (;;) {
@@ -285,7 +302,7 @@ export function unlink(deps) {
 export function remove(deps) {
   return exitCode(() =>
     withPlxd(deps, async (plxd) => {
-      const token = await step("Signing in to Parallax", async () => [`Signed in`, await deps.signIn()]);
+      const token = await signInStep(deps, "Signed in");
       await step("Removing this computer from your account", async () => {
         const { hostId } = await plxd.call("relay/id");
         await plxd.call("relay/remove", { token, hostId });
@@ -297,38 +314,71 @@ export function remove(deps) {
 }
 
 /**
- * `plx connect status`: the account, host id, relay state, and routes.
+ * What `plx connect status` reports. `--json` prints this object, so its field names stay stable
+ * (see the README).
+ * @param {Plxd} plxd
  * @param {Deps} deps
  */
-export function status(deps) {
-  return exitCode(() =>
-    withPlxd(deps, async (plxd) => {
-      const [{ hostId }, access, settings, sessions] = await Promise.all([
-        plxd.call("relay/id"),
-        plxd.call("access/get"),
-        plxd.call("host/settings/get"),
-        plxd.call("remote/sessions"),
-      ]);
-      const relay = !settings.relay
-        ? "off"
-        : sessions.relay?.connected
-          ? "on, connected"
-          : `on, not connected${sessions.relay?.problem ? `: ${sessions.relay.problem}` : ""}`;
-      const remote = !settings.remote ? "off" : sessions.listening ? "on, listening" : `on, not listening${sessions.problem ? `: ${sessions.problem}` : ""}`;
-      const routes = sessions.listening ? await deps.routes().catch(() => []) : [];
-      const rows = [
-        ["Account", access.account ?? "not signed in (run plx connect)"],
-        ["Host id", hostId],
-        ["Relay", relay],
-        ["Reach from anywhere", remote],
-        ["Routes", routes.length ? routes.join(", ") : "none"],
-        ["Approved devices", String(access.approvedClients.length)],
-      ];
-      const width = Math.max(...rows.map(([label]) => label?.length ?? 0));
-      for (const [label, value] of rows) console.log(`${(label ?? "").padEnd(width)}  ${value}`);
-      if (access.pending) console.log(`\n${access.pending.name} is waiting for approval. Run plx connect approve.`);
-    }),
-  );
+async function readStatus(plxd, deps) {
+  const [{ hostId }, access, settings, sessions] = await Promise.all([
+    plxd.call("relay/id"),
+    plxd.call("access/get"),
+    plxd.call("host/settings/get"),
+    plxd.call("remote/sessions"),
+  ]);
+  return {
+    /** @type {string | null} */
+    account: access.account ?? null,
+    /** @type {string} */
+    hostId,
+    relay: {
+      on: settings.relay === true,
+      connected: sessions.relay?.connected === true,
+      /** @type {string | null} */
+      problem: sessions.relay?.problem ?? null,
+    },
+    remote: {
+      on: settings.remote === true,
+      listening: sessions.listening === true,
+      /** @type {string | null} */
+      problem: sessions.problem ?? null,
+    },
+    /** @type {string[]} */
+    routes: sessions.listening ? await deps.routes().catch(() => []) : [],
+    /** @type {number} */
+    approvedDevices: access.approvedClients.length,
+    /** @type {string | null} */
+    waitingDevice: access.pending?.name ?? null,
+  };
+}
+
+/**
+ * `plx connect status`: the account, host id, relay state, and routes. With `json`, stdout gets
+ * only that object, and a failure goes to stderr.
+ * @param {Deps} deps
+ * @param {boolean} [json]
+ */
+export function status(deps, json = false) {
+  const read = () => withPlxd(deps, (plxd) => readStatus(plxd, deps));
+  if (json)
+    return read().then(
+      (report) => (console.log(JSON.stringify(report, null, 2)), 0),
+      (error) => (console.error(`✗ ${error instanceof Error ? error.message : String(error)}`), 1),
+    );
+  return exitCode(async () => {
+    const { account, hostId, relay, remote, routes, approvedDevices, waitingDevice } = await read();
+    const rows = [
+      ["Account", account ?? "not signed in (run plx connect)"],
+      ["Host id", hostId],
+      ["Relay", !relay.on ? "off" : relay.connected ? "on, connected" : `on, not connected${relay.problem ? `: ${relay.problem}` : ""}`],
+      ["Reach from anywhere", !remote.on ? "off" : remote.listening ? "on, listening" : `on, not listening${remote.problem ? `: ${remote.problem}` : ""}`],
+      ["Routes", routes.length ? routes.join(", ") : "none"],
+      ["Approved devices", String(approvedDevices)],
+    ];
+    const width = Math.max(...rows.map(([label]) => label?.length ?? 0));
+    for (const [label, value] of rows) console.log(`${(label ?? "").padEnd(width)}  ${value}`);
+    if (waitingDevice) console.log(`\n${waitingDevice} is waiting for approval. Run plx connect approve.`);
+  });
 }
 
 /**

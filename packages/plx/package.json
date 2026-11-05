@@ -1,6 +1,6 @@
 {
   "name": "plx-cli",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Parallax's command line: set up a computer for Parallax Connect with one sign-in.",
   "license": "Apache-2.0",
   "type": "module",

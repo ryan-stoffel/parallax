@@ -18,16 +18,17 @@ export class StepFailed extends Error {}
  * @template T
  * @param {string} title
  * @param {() => Promise<[string, T]>} run Resolves to the ✓ line's text and the step's value.
+ * @param {(line: string) => void} [report] Prints the ✗ line, to stdout by default.
  * @returns {Promise<T>}
  */
-export async function step(title, run) {
+export async function step(title, run, report = console.log) {
   console.log(`→ ${title}`);
   try {
     const [done, value] = await run();
     console.log(`✓ ${done}`);
     return value;
   } catch (error) {
-    console.log(`✗ ${error instanceof Error ? error.message : String(error)}`);
+    report(`✗ ${error instanceof Error ? error.message : String(error)}`);
     throw new StepFailed();
   }
 }

@@ -19,7 +19,7 @@ Every download is checked against the SHA-256 its GitHub release reports, and pl
 | `plx connect` | Signs in, installs plxd here, registers it with the relay, and turns on `relay` and `remote`. Once it's online it shows a 6-digit code. Parallax on your other computer asks for it, and once you type it there, plx says so and exits. |
 | `plx connect add <ssh destination>` | The same on another computer over SSH, with the sign-in here. |
 | `plx connect approve` | Approves a device waiting to sign in, once its code matches, or shows a new code to type on a device. |
-| `plx connect status` | Prints the account, host id, relay state, and routes. |
+| `plx connect status [--json]` | Prints the account, host id, relay state, and routes. See [Scripts](#scripts) for `--json`. |
 | `plx connect unlink` | Turns the relay off here and keeps the registration, so the host id and webhook URLs stay. Signed-in devices keep their sessions until removed in Settings. |
 | `plx connect remove` | Signs in again and removes this computer from your account. |
 | `plx doctor` | Checks Parallax on this computer and hands what's left to your coding agent. See [Doctor](#doctor). |
@@ -29,15 +29,54 @@ Until the release after this one, the Tailscale commands stay: `plx devices [--j
 Options:
 
 - `--channel stable|nightly`: which release to install (default `nightly`). `plx connect` stops before sign-in when that release is older than Parallax Relay, and says what to run instead.
-- `--no-browser`: sign in on any device, with a link and a short code printed here. This is automatic over SSH and on Linux without a display.
+- `--no-browser`: sign in on any device, with a link and a short code printed here. This is automatic over SSH, on Linux without a display, and with no terminal.
 - `--user <user>` and `--port <port>`: the SSH user and port for `add`.
 - `--headless`: install plxd alone, without the app, for the Tailscale `add` and `setup`. `connect` always installs plxd alone.
 - `--dry-run`: print the Tailscale steps and install script without installing anything.
+- `--json`: print `plx devices` or `plx connect status` as JSON.
 - `--agent claude|codex` and `--model <model>`: the agent `doctor` hands off to, without asking, and its model.
 
 ## Sign-in
 
 `plx connect` uses the Parallax app's Clerk OAuth application. With a browser on this computer, sign-in uses PKCE and returns to a listener on 127.0.0.1. Otherwise plx uses Clerk's device authorization grant: it prints a link and a short code, you approve on any device, and plx carries on by itself. The code is useless without the device code plx holds. If the grant isn't available to the OAuth application, plx prints a link instead, and you paste the code `relay.parallax.codes/connect/code` shows, which works only with the verifier plx holds. The token goes to plxd once, to register, and nothing keeps it.
+
+## Scripts
+
+`plx connect`, `scripts/connect.sh`, and `scripts/connect.ps1` run with no terminal, which for plx means stdin isn't one. With no terminal, both scripts need plx-cli 0.7.0 or newer on npm, and fail without it.
+
+On Windows, don't start `powershell.exe` with `DETACHED_PROCESS` (Node's `detached`). It exits 0 without running anything, so nothing of `connect.ps1` runs and the exit code means nothing. Use a hidden console (`CREATE_NO_WINDOW`, Node's `windowsHide`). Going through `cmd` also runs it and passes on the exit code, but PowerShell gets a new console as its stdin there, so the script takes that for a terminal.
+
+- No browser opens. plx prints the sign-in link and a short code, each on its own indented line. Approve on any device and plx carries on, with nothing needed on stdin. When the code expires first, it exits 1.
+- If the grant isn't available to the OAuth application, plx prints the link alone and reads the code from stdin, one line per try, up to 3 tries. When input ends first, it says no code was entered and exits 1. `curl ... | sh` leaves nothing on stdin, so to pipe a code in, download `connect.sh` and run it with `sh connect.sh < codes`.
+- Once the computer is online, plx prints one setup code and exits 0, rather than waiting for a device. plxd keeps the code for 10 minutes, and `plx connect approve` shows a new one.
+- `plx connect approve` with a device waiting reads its answer from stdin too. When input ends first, it exits 1 and neither approves nor denies.
+
+Read these from stdout, along with the exit code: 0 when it worked, 1 when it failed, and 2 for a bad command line.
+
+| Line | Meaning |
+| --- | --- |
+| `  https://...` | The sign-in link. |
+| `  Code: ABCD-EFGH` | The short code to approve at that link. |
+| `Paste the code it shows: ` | plx is waiting for a line on stdin. |
+| `Setup code: 482911 (works until 2026-11-04T12:00:00Z). ...` | The code to type in Parallax on a signed-in device, and when it stops working. |
+
+Lines starting with `→`, `✓`, or `✗` are progress for people. Their wording can change, and the symbols may not survive a Windows console's encoding, so don't test for them. When sign-in fails, its `✗` line, with the reason, goes to stderr.
+
+`plx connect status --json` prints one object, and these field names are stable. It exits 0 whenever plxd answered, connected or not. When plxd doesn't answer, stdout is empty, the reason goes to stderr, and it exits 1.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `account` | string or null | The Parallax account's user id, or null when not signed in. |
+| `hostId` | string | This computer's host id. |
+| `relay.on` | boolean | The `relay` setting. |
+| `relay.connected` | boolean | Whether plxd is connected to the relay. |
+| `relay.problem` | string or null | Why it isn't connected, for people. |
+| `remote.on` | boolean | The `remote` setting, Reach from anywhere. |
+| `remote.listening` | boolean | Whether plxd's remote listener is bound. |
+| `remote.problem` | string or null | Why it isn't listening, for people. |
+| `routes` | string array | Where clients can reach this computer, best first. Empty unless it's listening. |
+| `approvedDevices` | number | How many devices are approved. |
+| `waitingDevice` | string or null | The name of a device waiting for approval. |
 
 ## Doctor
 

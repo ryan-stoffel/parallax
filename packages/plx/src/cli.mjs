@@ -22,7 +22,7 @@ Usage:
   plx connect add <ssh destination>  The same on another computer over SSH, signing in here
   plx connect approve                Approve a device waiting to sign in, or show a new code
                                      for one to type
-  plx connect status                 Show the account, host id, relay state, and routes
+  plx connect status [--json]        Show the account, host id, relay state, and routes
   plx connect unlink                 Turn Parallax Relay off here, keeping the registration
   plx connect remove                 Sign in again and remove this computer from your account
   plx doctor                         Check Parallax on this computer, fix what it can, and hand
@@ -35,14 +35,15 @@ Tailscale (until the release after this one):
 
 Options:
   --channel stable|nightly   Which release to install (default: nightly)
-  --no-browser               Sign in on any device and paste the code here, rather than in a
-                             browser on this computer. Automatic over SSH and without a display
+  --no-browser               Sign in on any device, with a link and a short code printed here,
+                             rather than in a browser on this computer. Automatic over SSH,
+                             without a display, and with no terminal
   --user <user>              The SSH user for add (default: ssh's own)
   --port <port>              The SSH port for add
   --headless                 Install plxd alone, without the app, for the Tailscale add and setup
                              (Linux always gets plxd alone; connect always installs plxd alone)
   --dry-run                  Print the Tailscale steps and install script without installing
-  --json                     Print devices as JSON
+  --json                     Print devices or connect status as JSON
   --agent claude|codex       The agent doctor hands off to, without asking
   --model <model>            The model doctor's agent uses (default: the agent's own)
   -h, --help                 Show this help
@@ -50,27 +51,68 @@ Options:
 
 const CONNECT_COMMANDS = new Set(["add", "approve", "status", "unlink", "remove"]);
 
-/** Asks for a line on the terminal. @param {string} question */
-async function prompt(question) {
-  const lines = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await lines.question(question);
-  } finally {
-    lines.close();
-  }
+/**
+ * Makes the function that asks a question and resolves to the next line of `input`, or rejects
+ * once input ends, since no answer can come. Piped input keeps one interface for the run, paused
+ * between questions so plx can exit: a new one would lose the lines the last one read ahead and
+ * never hear of an end that already passed. A terminal gets one per question, since an open one
+ * holds raw mode, where Ctrl-C wouldn't stop plx.
+ * @param {NodeJS.ReadableStream & { isTTY?: boolean }} input
+ * @param {NodeJS.WritableStream & { isTTY?: boolean }} output
+ * @returns {(question: string) => Promise<string>}
+ */
+export function lineReader(input, output) {
+  const terminal = input.isTTY === true;
+  /** @type {{ reader: import("node:readline/promises").Interface, lines: AsyncIterator<string> } | undefined} */
+  let open;
+  let ended = false;
+  // Piped input can end with answers still queued, and Node 24's pause and resume throw once closed.
+  let closed = false;
+  return async (question) => {
+    if (ended) throw new Error("Input ended before an answer.");
+    if (!open) {
+      const reader = createInterface({ input, output, terminal: terminal && output.isTTY === true });
+      reader.once("close", () => (closed = true));
+      open = { reader, lines: reader[Symbol.asyncIterator]() };
+    } else if (!closed) open.reader.resume();
+    const { reader, lines } = open;
+    // Piped, the question gets its own line, so a script reads whole lines.
+    if (terminal) {
+      reader.setPrompt(question);
+      reader.prompt();
+    } else output.write(`${question}\n`);
+    const { done, value } = await lines.next();
+    if (done) {
+      ended = true;
+      throw new Error("Input ended before an answer.");
+    }
+    if (terminal) {
+      reader.close();
+      open = undefined;
+    } else if (!closed) reader.pause();
+    return value;
+  };
 }
 
+/** @type {((question: string) => Promise<string>) | undefined} */
+let stdinReader;
+
+/** Asks on stdin, which is only touched once something asks. @param {string} question */
+const prompt = (question) => (stdinReader ??= lineReader(process.stdin, process.stdout))(question);
+
 /**
- * What `plx connect` reaches: Clerk through the browser or a pasted code, plxd over `plxd
- * attach`, and the terminal.
+ * What `plx connect` reaches: Clerk through the browser, the device grant, or a pasted code, plxd
+ * over `plxd attach`, and stdin. With no terminal the browser stays closed: a script's sign-in is a
+ * link it passes on, which works from any device.
  * @param {boolean} noBrowser
  * @returns {import("./connect.mjs").Deps}
  */
-const realDeps = (noBrowser) => ({
+export const realDeps = (noBrowser) => ({
+  terminal: process.stdin.isTTY === true,
   signIn: () =>
     signIn({
       clerk: clerkOf(process.env),
-      browser: canOpenBrowser(process.env, process.platform, noBrowser),
+      browser: canOpenBrowser(process.env, process.platform, noBrowser || process.stdin.isTTY !== true),
       codePage: codePage(process.env),
       open: openBrowser,
       prompt,
@@ -121,6 +163,7 @@ export async function main(argv, deps = realDeps) {
       if (sub === "add" && (more.length !== 1 || !destination)) return usage("connect add takes one ssh destination.");
       // ssh would read a destination starting with - as an option.
       if (sub === "add" && !/^[^\s-]\S*$/.test(destination ?? "")) return usage(`${destination} isn't an ssh destination.`);
+      if (values.json && sub !== "status") return usage("--json goes with connect status only.");
       const connectDeps = deps(values["no-browser"] === true);
       switch (sub) {
         case undefined:
@@ -130,7 +173,7 @@ export async function main(argv, deps = realDeps) {
         case "approve":
           return connect.approve(connectDeps);
         case "status":
-          return connect.status(connectDeps);
+          return connect.status(connectDeps, values.json === true);
         case "unlink":
           return connect.unlink(connectDeps);
         default:
