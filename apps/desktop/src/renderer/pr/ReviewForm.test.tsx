@@ -6,6 +6,7 @@ import { expect, test, vi } from "vite-plus/test";
 import type { PrWrite } from "../../protocol/generated/protocol";
 import { CommentBox } from "./CommentBox";
 import { ReviewForm } from "./ReviewForm";
+import { ReviewThread } from "./ReviewThread";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -108,4 +109,24 @@ test("a comment box scrolled away keeps its lines locked while it holds text", a
   expect(onText).toHaveBeenLastCalledWith(true);
   await act(async () => mounted.unmount());
   expect(onText).toHaveBeenLastCalledWith(true);
+});
+
+test("a thread folds when it's resolved, and opens again when it's reopened", async () => {
+  const root = document.createElement("div");
+  const mounted = createRoot(root);
+  const thread = (resolved: boolean) => (
+    <ReviewThread
+      bare
+      repo="o/r"
+      onOpen={() => {}}
+      thread={{ id: "T1", resolved, comments: [{ author: "a", body: "the body" }] }}
+    />
+  );
+  await act(async () => mounted.render(thread(false)));
+  expect(root.querySelector("ol")).not.toBeNull();
+  await act(async () => mounted.render(thread(true)));
+  expect(root.querySelector("ol")).toBeNull();
+  expect(root.textContent).toContain("Resolved");
+  await act(async () => mounted.render(thread(false)));
+  expect(root.querySelector("ol")).not.toBeNull();
 });

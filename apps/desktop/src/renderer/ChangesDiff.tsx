@@ -237,9 +237,11 @@ export function ChangesDiff({
   const kinds = useMemo(() => kindsOf(files), [files]);
   const added = files.reduce((n, f) => n + f.added, 0);
   const removed = files.reduce((n, f) => n + f.removed, 0);
-  const allShut = files.length > 0 && files.every((f) => shut(f.path));
+  // A viewed file stays folded until it's unticked, which writes to GitHub, so these leave it be.
+  const foldable = files.filter((f) => !viewed?.has(f.path));
+  const allShut = foldable.length > 0 && foldable.every((f) => folded.has(f.path));
   const foldAll = () => {
-    setFolded(allShut ? new Set() : new Set(files.map((f) => f.path)));
+    setFolded(allShut ? new Set() : new Set(foldable.map((f) => f.path)));
     virtualizer.measure();
   };
   const toggle = (path: string) => {
@@ -303,7 +305,11 @@ export function ChangesDiff({
   // The header of the file at the top, once its own header has scrolled off.
   const offset = virtualizer.scrollOffset ?? 0;
   const scrolled = offset > SCROLLED_PAST;
-  useEffect(() => onScrolled?.(scrolled), [scrolled, onScrolled]);
+  useEffect(() => {
+    onScrolled?.(scrolled);
+    // Gone, it isn't scrolled, as when Commits takes its place.
+    return () => onScrolled?.(false);
+  }, [scrolled, onScrolled]);
   const topItem = virtualizer.getVirtualItems().find((item) => item.end > offset);
   const topRow = topItem && rows[topItem.index];
   const stuck = topRow && !(topRow.header && topItem.start >= offset) ? topRow.file : undefined;
@@ -456,6 +462,7 @@ export function ChangesDiff({
               narrow={narrow}
               onLayout={setLayout}
               allShut={allShut}
+              canFold={foldable.length > 0}
               onFoldAll={foldAll}
             />
           ) : (
@@ -484,6 +491,7 @@ export function ChangesDiff({
               <IconButton
                 size="sm"
                 label={allShut ? "Expand all files" : "Collapse all files"}
+                disabled={foldable.length === 0}
                 onClick={foldAll}
               >
                 {allShut ? <icons.expandAll aria-hidden /> : <icons.collapseAll aria-hidden />}
@@ -629,12 +637,14 @@ function DiffOptions({
   narrow,
   onLayout,
   allShut,
+  canFold,
   onFoldAll,
 }: {
   layout: DiffLayout;
   narrow: boolean;
   onLayout: (layout: DiffLayout) => void;
   allShut: boolean;
+  canFold: boolean;
   onFoldAll: () => void;
 }) {
   const id = useId();
@@ -669,6 +679,7 @@ function DiffOptions({
           }}
           role="menuitemcheckbox"
           checked={false}
+          disabled={!canFold}
           onClick={onFoldAll}
         />
       </Menu>
