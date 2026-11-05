@@ -37,7 +37,7 @@ Options:
 
 ## Sign-in
 
-`plx connect` uses the Parallax app's Clerk OAuth application. With a browser on this computer, sign-in uses PKCE and returns to a listener on 127.0.0.1. Otherwise plx uses Clerk's device authorization grant: it prints a link and a short code, you approve on any device, and plx carries on by itself. The code is useless without the device code plx holds. If the OAuth application doesn't have that grant, plx prints a link instead, and you paste the code `relay.parallax.codes/connect/code` shows, which works only with the verifier plx holds. The token goes to plxd once, to register, and nothing keeps it.
+`plx connect` uses the Parallax app's Clerk OAuth application. With a browser on this computer, sign-in uses PKCE and returns to a listener on 127.0.0.1. Otherwise plx uses Clerk's device authorization grant: it prints a link and a short code, you approve on any device, and plx carries on by itself. The code is useless without the device code plx holds. If the grant isn't available to the OAuth application, plx prints a link instead, and you paste the code `relay.parallax.codes/connect/code` shows, which works only with the verifier plx holds. The token goes to plxd once, to register, and nothing keeps it.
 
 ## Doctor
 

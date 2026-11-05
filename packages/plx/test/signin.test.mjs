@@ -21,8 +21,10 @@ async function fakeClerk() {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
+      // Discovery lists no device grant, so a sign-in with no browser pastes.
+      if (req.url === "/.well-known/oauth-authorization-server") return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
       const grant = new URLSearchParams(body);
-      if (req.url === "/oauth/token") grants.push(grant);
+      grants.push(grant);
       const verified = createHash("sha256").update(grant.get("code_verifier") ?? "").digest("base64url") === challenge;
       const ok = req.url === "/oauth/token" && grant.get("code") === "good-code" && verified && grant.get("client_id") === "client";
       res.writeHead(ok ? 200 : 400, { "content-type": "application/json" });
@@ -191,9 +193,9 @@ const CLERK_REFUSAL = "The requested OAuth 2.0 Client does not have the 'urn:iet
  * than the current interval counts as `early` and gets `slow_down`, as a real server answers it.
  * Each other poll takes the next of `polls`: an OAuth error, `token`, `drop` (the connection
  * breaks), or `503`. `metadata` and `device` replace what discovery and the device endpoint answer.
- * @param {{ polls?: string[], metadata?: unknown, device?: Record<string, unknown>, deviceStatus?: number }} [options]
+ * @param {{ polls?: string[], metadata?: unknown, discoveryStatus?: number, device?: Record<string, unknown>, deviceStatus?: number }} [options]
  */
-async function fakeDeviceClerk({ polls = [], metadata, device, deviceStatus = 200 } = {}) {
+async function fakeDeviceClerk({ polls = [], metadata, discoveryStatus = 200, device, deviceStatus = 200 } = {}) {
   /** @type {URLSearchParams[]} */
   const deviceRequests = [];
   /** @type {URLSearchParams[]} */
@@ -220,7 +222,7 @@ async function fakeDeviceClerk({ polls = [], metadata, device, deviceStatus = 20
     req.on("end", () => {
       const params = new URLSearchParams(text);
       if (req.url === "/.well-known/oauth-authorization-server") {
-        return json(200, metadata ?? { device_authorization_endpoint: `${api}/oauth/device_authorization`, token_endpoint: `${api}/oauth/token`, grant_types_supported: ["authorization_code", DEVICE_GRANT] });
+        return json(discoveryStatus, metadata ?? { device_authorization_endpoint: `${api}/oauth/device_authorization`, token_endpoint: `${api}/oauth/token`, grant_types_supported: ["authorization_code", DEVICE_GRANT] });
       }
       if (req.url === "/oauth/device_authorization") {
         deviceRequests.push(params);
@@ -348,7 +350,6 @@ for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceCl
   ["the device endpoint refuses this OAuth application", { deviceStatus: 400, device: { error: "invalid_grant", error_description: CLERK_REFUSAL } }],
   ["discovery doesn't list the device endpoint", { metadata: { token_endpoint: "https://clerk.example/oauth/token", grant_types_supported: [DEVICE_GRANT] } }],
   ["discovery doesn't list the grant", { metadata: { device_authorization_endpoint: "https://clerk.example/oauth/device_authorization", token_endpoint: "https://clerk.example/oauth/token", grant_types_supported: ["authorization_code"] } }],
-  ["the device endpoint's answer is missing its code", { device: { verification_uri: "https://clerk.example/oauth/device", expires_in: 600 } }],
 ])) {
   test(`the paste flow takes over, with no error shown, when ${name}`, async () => {
     const fake = await fakeDeviceClerk(options);
@@ -369,15 +370,21 @@ for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceCl
   });
 }
 
-test("the paste flow takes over when Clerk can't be reached", async () => {
+for (const [name, options, message] of /** @type {[string, Parameters<typeof fakeDeviceClerk>[0], RegExp][]} */ ([
+  ["refuses the scope", { deviceStatus: 400, device: { error: "invalid_scope", error_description: "The requested scope is invalid" } }, /Clerk didn't start the sign-in: The requested scope is invalid\./],
+  ["answers invalid_grant with a server error", { deviceStatus: 500, device: { error: "invalid_grant" } }, /Clerk didn't start the sign-in: invalid_grant\./],
+  ["answers without a code", { device: { verification_uri: "https://clerk.example/oauth/device", expires_in: 600 } }, /Clerk didn't start the sign-in: it answered 200\./],
+  ["fails its discovery document", { discoveryStatus: 503 }, /its discovery document answered 503/],
+])) {
+  test(`the sign-in stops with the reason, rather than pasting, when Clerk ${name}`, async () => {
+    const fake = await fakeDeviceClerk(options);
+    await assert.rejects(quietly(() => signInWithout(fake)), message);
+    fake.close();
+  });
+}
+
+test("the sign-in stops with the reason, rather than pasting, when Clerk can't be reached", async () => {
   const fake = await fakeDeviceClerk();
   fake.close();
-  await assert.rejects(
-    quietly(() =>
-      signInWithout(fake, async () => {
-        throw new Error("reached the paste prompt");
-      }),
-    ),
-    /reached the paste prompt/,
-  );
+  await assert.rejects(quietly(() => signInWithout(fake)), /Couldn't reach Clerk/);
 });

@@ -206,45 +206,47 @@ export async function signIn(options) {
  */
 
 /**
- * Asks Clerk for a device code, or resolves to undefined when this sign-in has to use the paste
- * flow. Clerk's discovery document only says the instance offers the grant. Whether this OAuth
- * application has it shows when the device endpoint answers: it refuses one that doesn't. Any
- * failure here is the same answer, since the user has seen nothing yet and the paste flow works
- * without the grant.
+ * Asks Clerk for a device code, or resolves to undefined when the grant isn't available, so this
+ * sign-in has to use the paste flow: discovery doesn't list it, or the device endpoint answers 400
+ * `invalid_grant`, as Clerk does for an OAuth application without it. Discovery only says the
+ * instance offers the grant, so it can't settle this alone. Any other failure rejects, since it
+ * would most likely stop the paste flow too.
  * @param {Clerk} clerk
  * @returns {Promise<DeviceGrant | undefined>}
  */
 async function startDeviceGrant(clerk) {
-  try {
-    const found = await fetch(`${clerk.api}/.well-known/oauth-authorization-server`, { signal: AbortSignal.timeout(5_000) });
-    const metadata = /** @type {Record<string, unknown>} */ (await found.json());
-    const endpoint = metadata["device_authorization_endpoint"];
-    const tokenEndpoint = metadata["token_endpoint"];
-    const grants = metadata["grant_types_supported"];
-    if (typeof endpoint !== "string" || typeof tokenEndpoint !== "string") return undefined;
-    if (!Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) return undefined;
-    const res = await fetch(endpoint, {
-      method: "POST",
-      body: new URLSearchParams({ client_id: clerk.clientId, scope: SCOPES }),
-      signal: AbortSignal.timeout(5_000),
+  /** @param {string} url @param {RequestInit} [init] */
+  const request = (url, init) =>
+    fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }).catch(() => {
+      throw new Error("Couldn't reach Clerk to sign in. Check this computer's network and run it again.");
     });
-    const body = /** @type {Record<string, unknown>} */ (await res.json());
-    const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUri, verification_uri_complete: complete, expires_in: expiresIn, interval } = body;
-    if (!res.ok || typeof deviceCode !== "string" || typeof userCode !== "string" || typeof verificationUri !== "string" || typeof expiresIn !== "number") return undefined;
-    return {
-      tokenEndpoint,
-      clientId: clerk.clientId,
-      deviceCode,
-      userCode,
-      verificationUri,
-      ...(typeof complete === "string" ? { verificationUriComplete: complete } : {}),
-      expiresIn,
-      // RFC 8628 3.2: 5 seconds when the server names none.
-      interval: typeof interval === "number" && interval > 0 ? interval : 5,
-    };
-  } catch {
-    return undefined;
+  const found = await request(`${clerk.api}/.well-known/oauth-authorization-server`);
+  const metadata = /** @type {Record<string, unknown> | undefined} */ (await found.json().catch(() => undefined));
+  if (!found.ok || !metadata) throw new Error(`Clerk didn't start the sign-in: its discovery document answered ${found.status}.`);
+  const endpoint = metadata["device_authorization_endpoint"];
+  const tokenEndpoint = metadata["token_endpoint"];
+  const grants = metadata["grant_types_supported"];
+  if (typeof endpoint !== "string" || typeof tokenEndpoint !== "string") return undefined;
+  if (!Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) return undefined;
+  const res = await request(endpoint, { method: "POST", body: new URLSearchParams({ client_id: clerk.clientId, scope: SCOPES }) });
+  const body = /** @type {Record<string, unknown>} */ (await res.json().catch(() => ({})));
+  if (res.status === 400 && body["error"] === "invalid_grant") return undefined;
+  const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUri, verification_uri_complete: complete, expires_in: expiresIn, interval } = body;
+  if (!res.ok || typeof deviceCode !== "string" || typeof userCode !== "string" || typeof verificationUri !== "string" || typeof expiresIn !== "number") {
+    const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");
+    throw new Error(`Clerk didn't start the sign-in: ${why ?? `it answered ${res.status}`}.`);
   }
+  return {
+    tokenEndpoint,
+    clientId: clerk.clientId,
+    deviceCode,
+    userCode,
+    verificationUri,
+    ...(typeof complete === "string" ? { verificationUriComplete: complete } : {}),
+    expiresIn,
+    // RFC 8628 3.2: 5 seconds when the server names none.
+    interval: typeof interval === "number" && interval > 0 ? interval : 5,
+  };
 }
 
 /**
@@ -266,8 +268,10 @@ async function finishDeviceGrant(device, { sleep = wait }) {
   const deadline = Date.now() + expiresIn * 1000;
   let { interval } = device;
   for (;;) {
-    await sleep(Math.max(0, Math.min(interval * 1000, deadline - Date.now())));
-    if (Date.now() >= deadline) throw expired;
+    // Decided before the wait: a timer can wake a millisecond early and poll a code already gone.
+    const left = deadline - Date.now();
+    await sleep(Math.max(0, Math.min(interval * 1000, left)));
+    if (interval * 1000 >= left) throw expired;
     /** @type {Response} */
     let res;
     try {
