@@ -815,6 +815,8 @@ export const withheldMethods = [
   "relay/sign",
   "relay/hosts",
   "relay/remove",
+  // Only a phone's notification service extension needs it (0100).
+  "relay/pushKey",
   // Who may sign in to the user's computers (0091): only main approves, merges, and pairs, from
   // the prompts it shows, so a renderer can't let a device in.
   "relay/id",

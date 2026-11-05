@@ -6,13 +6,14 @@ use std::path::Path;
 
 use parallax_protocol::methods::{
     AccessApprove, AccessDeny, AccessForgetHost, AccessGet, AccessMerge, AccessRemove,
-    AccessSetupCode, HostSettingsSet, RelayId, RelayRegister, RelaySign, RemoteRevoke,
-    RemoteSessions,
+    AccessSetupCode, HostSettingsSet, RelayId, RelayPushKey, RelayRegister, RelaySign,
+    RemoteRevoke, RemoteSessions,
 };
 use parallax_protocol::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
     AccessRequestParams, AccessSetupCodeParams, HostSettingsSetParams, RelayIdParams,
-    RelayRegisterParams, RelaySignParams, RemoteRevokeParams, RemoteSessionsParams,
+    RelayPushKeyParams, RelayRegisterParams, RelaySignParams, RemoteRevokeParams,
+    RemoteSessionsParams,
 };
 use plxd::remote::{self, SignIn};
 use ring::rand::SystemRandom;
@@ -218,6 +219,24 @@ async fn forgetting_a_computer_drops_its_approval_and_this_computers_session_for
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn the_push_key_is_32_bytes_under_the_hosts_relay_id() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (_server, mut client, _, host_id) = host(dir.path(), &issuer).await;
+    let first = client
+        .call::<RelayPushKey>(RelayPushKeyParams {})
+        .await
+        .unwrap();
+    assert_eq!(first.host_id, host_id);
+    assert_eq!(remote::base64url_decode(&first.key).unwrap().len(), 32);
+    let again = client
+        .call::<RelayPushKey>(RelayPushKeyParams {})
+        .await
+        .unwrap();
+    assert_eq!(again.key, first.key);
 }
 
 #[tokio::test]

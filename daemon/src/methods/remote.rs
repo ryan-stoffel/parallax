@@ -1,15 +1,16 @@
 //! `remote/pair`, `remote/sessions`, and `remote/revoke` (PLX-641, 0065): pairing codes and the
 //! sessions of clients paired with this host. And `relay/register`, `relay/sign` (PLX-1146),
-//! `relay/hosts`, and `relay/remove` (PLX-652, 0068). And `relay/id` and `access/*` (0091): who
-//! may sign in with the account.
+//! `relay/hosts`, `relay/remove` (PLX-652, 0068), and `relay/pushKey` (0100). And `relay/id` and
+//! `access/*` (0091): who may sign in with the account.
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
     AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
-    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayRegisterParams,
-    RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult,
-    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
+    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams,
+    RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
+    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
+    RemoteSessionsResult,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -85,6 +86,26 @@ pub(crate) async fn relay_id(
     Ok(RelayIdResult {
         host_id: key.host_id(),
         routes: remote::routes(&context.daemon).await,
+    })
+}
+
+/// `relay/pushKey`: this host's relay id and the key it seals pushes with (0100). A session that
+/// can read threads can read what the key opens, so any session may ask.
+pub(crate) async fn relay_push_key(
+    context: &Context,
+    _: RelayPushKeyParams,
+) -> Result<RelayPushKeyResult, ErrorObject> {
+    let daemon = &context.daemon;
+    let internal = |e: std::io::Error| ErrorObject::internal_error(e.to_string());
+    let host_key = remote::host_key(daemon).await.map_err(internal)?;
+    let data_dir = daemon.data_dir.root().to_owned();
+    let push_key = tokio::task::spawn_blocking(move || crate::remote::push_key(&data_dir))
+        .await
+        .map_err(ErrorObject::internal_error)?
+        .map_err(internal)?;
+    Ok(RelayPushKeyResult {
+        host_id: host_key.host_id(),
+        key: crate::remote::base64url(&push_key),
     })
 }
 

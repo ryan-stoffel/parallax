@@ -12,7 +12,7 @@ import {
 } from "../src/host";
 import { type Env, network } from "../src/index";
 import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay } from "../src/stream";
-import { sendApns } from "../src/push";
+import { apnsPayload, MAX_SEALED, sendApns } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
   call,
@@ -651,6 +651,28 @@ describe("push", () => {
     expect(sent!.device).toBe(mine);
     expect(sent!.notification).toMatchObject({ run: "run-1", state: "needsYou" });
     expect(await outbox("user_b")).toEqual([]);
+  });
+
+  it("carries `sealed` unread to the extension, and drops one past the cap", async () => {
+    const { control } = await online("user_c");
+    const device = "d".repeat(64);
+    await call("/v1/devices", { method: "POST", token: await session("user_c"), body: JSON.stringify({ token: device }) });
+    const sealed = "not-base64!".repeat(10);
+    control.ws.send(JSON.stringify({ t: "push", run: "run-1", state: "done", sealed }));
+    control.ws.send(JSON.stringify({ t: "push", run: "run-2", state: "done", sealed: "x".repeat(MAX_SEALED + 1) }));
+    const outbox = () => runInDurableObject(users.get(users.idFromName("user_c")), (account: UserAccount) => account.outbox);
+    await expect.poll(outbox).toHaveLength(2);
+    const [opened, plain] = await outbox();
+    expect(opened!.notification.sealed).toBe(sealed);
+    expect(plain!.notification.run).toBe("run-2");
+    expect(plain!.notification.sealed).toBeUndefined();
+
+    const payload = apnsPayload(opened!.notification);
+    expect(payload.aps["mutable-content"]).toBe(1);
+    expect(payload.aps.alert.body).toBe("A thread finished.");
+    expect(payload.body.sealed).toBe(sealed);
+    // Without it the extension doesn't wake.
+    expect(apnsPayload(plain!.notification).aps).not.toHaveProperty("mutable-content");
   });
 
   it("signs with the APNs key and falls back to sandbox for a development build's token", async () => {

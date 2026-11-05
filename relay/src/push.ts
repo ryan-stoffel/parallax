@@ -1,8 +1,20 @@
 import { base64url } from "./crypto";
 import type { Env } from "./index";
 
-/** What plxd says about a run. No thread content: the relay never sees any. */
-export type Notification = { hostId: string; run: string; state: "needsYou" | "done" | "failed" };
+/**
+ * What plxd says about a run. `sealed` is the thread's title and the start of its reply, encrypted
+ * with a key only the user's phones hold (0100): the relay never decodes it, and never logs it.
+ */
+export type Notification = {
+  hostId: string;
+  run: string;
+  state: "needsYou" | "done" | "failed";
+  sealed?: string;
+};
+
+/** The longest `sealed` the relay carries. plxd's longest fits (`daemon/src/relay/seal.rs`), and
+ *  this leaves the APNs payload well under its 4 KB. */
+export const MAX_SEALED = 2400;
 
 const TEXT: Record<Notification["state"], string> = {
   needsYou: "A thread needs you.",
@@ -21,7 +33,8 @@ const TOKEN_AGE = 45 * 60_000;
 
 /**
  * The APNs payload for `notification`. expo-notifications gives the app a remote push's `body` as
- * its data, from which it opens the run.
+ * its data, from which it opens the run. With `sealed`, `mutable-content` wakes the phone's
+ * notification service extension to open it, and the fixed text stands if that can't.
  */
 export function apnsPayload(notification: Notification) {
   return {
@@ -29,6 +42,7 @@ export function apnsPayload(notification: Notification) {
       alert: { title: "Parallax", body: TEXT[notification.state] },
       sound: "default",
       "thread-id": notification.hostId,
+      ...(notification.sealed && { "mutable-content": 1 }),
     },
     body: notification,
   };
@@ -61,11 +75,11 @@ export async function sendApns(
   notification: Notification,
   send: typeof fetch = fetch,
 ): Promise<"sent" | "gone" | "failed" | "stubbed"> {
-  const payload = JSON.stringify(apnsPayload(notification));
   if (!env.APNS_KEY || !env.APNS_KEY_ID || !env.APNS_TEAM_ID) {
-    console.log("apns (stub)", device.slice(0, 8), payload);
+    console.log("apns (stub)", device.slice(0, 8), notification.run, notification.state);
     return "stubbed";
   }
+  const payload = JSON.stringify(apnsPayload(notification));
   const token = await providerToken(env);
   for (const server of SERVERS) {
     const answer = await send(`${server}/3/device/${device}`, {

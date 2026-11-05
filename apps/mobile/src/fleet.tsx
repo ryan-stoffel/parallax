@@ -26,6 +26,7 @@ import { allowThisPhone, confirmDevice, setUpComputer, showWaiting } from "./acc
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
+import { savePushKey } from "./push";
 import { toAsk } from "./setup";
 
 /** How often the account's computers are listed while the app is in front. */
@@ -345,6 +346,9 @@ export function FleetProvider({
       if (state.status !== "connected") return;
       void outboxes.get(id)?.drain();
       if (id.startsWith("account:")) gate(id, undefined);
+      if ("relayPushKey" in state.capabilities) {
+        void savePushKey((method, params) => fleet.hosts.get(id)!.request(method, params));
+      }
       if ("accountAccess" in state.capabilities) {
         watchAccess(id);
         void share();

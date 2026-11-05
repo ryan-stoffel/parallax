@@ -9,6 +9,7 @@
     "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
     "ios": {
       "bundleIdentifier": "dev.parallax.mobile",
+      "appleTeamId": "9D3GQSX699",
       "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
       "supportsTablet": false,
       "infoPlist": {
@@ -41,6 +42,7 @@
         }
       ],
       "expo-notifications",
+      "./plugins/withNotificationService",
       [
         "expo-image-picker",
         {

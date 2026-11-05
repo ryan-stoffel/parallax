@@ -1,6 +1,6 @@
 # 0068: Parallax Relay passes plxd's own TLS between a client and its host, so it never reads a thread
 
-- Status: accepted; replaces [0065](0065-remote-reach.md)'s relay section, and uses [0067](0067-clerk-accounts.md)'s accounts
+- Status: accepted; replaces [0065](0065-remote-reach.md)'s relay section, and uses [0067](0067-clerk-accounts.md)'s accounts; [0100](0100-encrypted-push.md) amends its Push section
 - Date: 2026-10-11
 - Issue: PLX-652, for PLX-653
 
@@ -47,7 +47,7 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 
 ### Push
 
-- plxd tells the relay when a run asks for approval (`needsYou`), at once, and when it has stayed finished with nothing left to wait on (`done`) or failed (`failed`) for 30 seconds, with the run id only. A turn that ends while the agent still waits on background work or a watched pull request isn't done until the last wait clears (PLX-1145), and a run that goes again or starts waiting within the 30 seconds sends nothing (PLX-1337). The hold outlives a reconnect, but not a restart of plxd, and what happens while no socket is open isn't pushed later. The relay sends the user's registered iOS devices a fixed text per state, with the host and run ids for the app to open, and `<run>:<state>` as the APNs collapse id, which the app's own notification reuses so one replaces the other. No title or text from a thread.
+- plxd tells the relay when a run asks for approval (`needsYou`), at once, and when it has stayed finished with nothing left to wait on (`done`) or failed (`failed`) for 30 seconds, with the run id and, since [0100](0100-encrypted-push.md), the thread's title and the start of its reply sealed with a key the relay never gets. A turn that ends while the agent still waits on background work or a watched pull request isn't done until the last wait clears (PLX-1145), and a run that goes again or starts waiting within the 30 seconds sends nothing (PLX-1337). The hold outlives a reconnect, but not a restart of plxd, and what happens while no socket is open isn't pushed later. The relay sends the user's registered iOS devices a fixed text per state, with the host and run ids for the app to open, and `<run>:<state>` as the APNs collapse id, which the app's own notification reuses so one replaces the other. No title or text from a thread that the relay or Apple can read: the phone's notification service extension opens the sealed ones, and the fixed text stands if it can't.
 - Devices register at `POST /v1/devices` with an APNs token, which the app does at each launch. The relay signs with an APNs auth key held as Worker secrets and tries production, then sandbox for a development build's token. A token Apple no longer knows is dropped. Without the secrets it only logs (PLX-984). FCM waits for Android.
 
 ### Deploy

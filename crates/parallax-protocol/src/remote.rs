@@ -196,6 +196,22 @@ pub struct RelayIdResult {
     pub routes: Vec<String>,
 }
 
+/// Params of `relay/pushKey`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayPushKeyParams {}
+
+/// Result of `relay/pushKey` (0100): the key this host seals a push's title and text with, for a
+/// phone's notification service extension to open.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayPushKeyResult {
+    /// The relay id its pushes carry, which the phone keeps the key under.
+    pub host_id: String,
+    /// 32 random bytes, for AES-256-GCM, in base64url.
+    pub key: String,
+}
+
 /// Params of `access/get`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
