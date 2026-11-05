@@ -9,8 +9,8 @@ use super::{
 };
 use crate::pr_write::Refusal;
 use parallax_protocol::{
-    PrCheckState, PrCommentKind, PrDiffSide, PrMergeMethod, PrMergeState, PrReviewDecision,
-    PrReviewState, PrState, PrStatusCheck, PrStatusFile, PrStatusThread,
+    PrCheckState, PrCommentKind, PrDiffSide, PrFileViewed, PrMergeMethod, PrMergeState,
+    PrReviewDecision, PrReviewState, PrState, PrStatusCheck, PrStatusFile, PrStatusThread,
 };
 
 fn start() -> Timestamp {
@@ -718,7 +718,7 @@ const FULL: &str = r#"{"data": {
       "repository": {
         "mergeCommitAllowed": false, "squashMergeAllowed": true, "rebaseMergeAllowed": true,
         "pullRequest": {
-          "number": 7, "url": "https://github.com/me/app/pull/7", "title": "Add a thing",
+          "id": "PR_9", "number": 7, "url": "https://github.com/me/app/pull/7", "title": "Add a thing",
           "body": "Adds it.", "state": "OPEN", "isDraft": false,
           "createdAt": "2026-10-09T09:00:00Z", "updatedAt": "2026-10-09T10:09:00Z",
           "closedAt": null, "mergedAt": null, "mergedBy": null,
@@ -735,7 +735,12 @@ const FULL: &str = r#"{"data": {
             {"requestedReviewer": {"name": "docs"}},
             {"requestedReviewer": null}
           ]},
-          "files": {"nodes": [{"path": "src/main.rs", "additions": 3, "deletions": 1}]},
+          "files": {"nodes": [
+            {"path": "src/main.rs", "additions": 3, "deletions": 1, "viewerViewedState": "DISMISSED"},
+            {"path": "src/lib.rs", "additions": 1, "deletions": 0, "viewerViewedState": "VIEWED"},
+            {"path": "README.md", "additions": 1, "deletions": 0, "viewerViewedState": "UNVIEWED"},
+            {"path": "new.md", "additions": 1, "deletions": 0}
+          ]},
           "history": {"nodes": [
             {"commit": {"oid": "abc1234def", "messageHeadline": "feat: a thing",
               "committedDate": "2026-10-09T09:58:00Z",
@@ -882,6 +887,22 @@ fn pr_view_s_checks_carry_whether_required_and_their_run_and_job() {
         Some("2026-10-09T10:02:00Z".parse().unwrap())
     );
     assert_eq!(pr.checks_state, Some(PrCheckState::Failed));
+}
+
+#[test]
+fn pr_view_says_which_files_the_reviewer_viewed() {
+    let pr = full();
+    let viewed: Vec<_> = pr.files.iter().map(|file| file.viewed).collect();
+    assert_eq!(
+        viewed,
+        [
+            Some(PrFileViewed::Dismissed),
+            Some(PrFileViewed::Viewed),
+            Some(PrFileViewed::Unviewed),
+            None,
+        ]
+    );
+    assert_eq!(pr.node_id.as_deref(), Some("PR_9"));
 }
 
 #[test]

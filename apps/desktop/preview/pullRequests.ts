@@ -4,6 +4,7 @@
 import type {
   PrAction,
   PrCheck,
+  PrFile,
   PrGuide,
   PrReviewThread,
   PrStatusResult,
@@ -96,9 +97,14 @@ function checksOf(n: number): PrCheck[] {
   ];
 }
 
-const files = [
+const files: PrFile[] = [
   { path: "apps/desktop/src/main/updater.ts", additions: 42, deletions: 18 },
-  { path: "apps/desktop/src/main/updater.test.ts", additions: 36, deletions: 2 },
+  {
+    path: "apps/desktop/src/main/updater.test.ts",
+    additions: 36,
+    deletions: 2,
+    viewed: "dismissed",
+  },
   { path: "apps/desktop/electron-builder.yml", additions: 3, deletions: 1 },
   { path: "docs/decisions/0028-release-channels.md", additions: 6, deletions: 0 },
 ];
@@ -166,6 +172,7 @@ function view(url: string): PullRequest {
     files,
     headSha: "a41c09d2e3f4",
     reviewThreads: number === 588 ? reviewThreads : [],
+    nodeId: `PR_${number}`,
     body: number === 588 ? body : "Copy-only change. No behavior moves.",
     comments: [
       {
@@ -438,6 +445,12 @@ export const pullRequestHandlers = {
     const pr = view(p.url);
     const w = p.write;
     if (w.kind === "replyToThread" && w.resolve) resolved.add(p.url);
+    if (w.kind === "setFileViewed")
+      merge(pr.number, {
+        files: pr.files?.map((f) =>
+          f.path === w.path ? { ...f, viewed: w.viewed ? "viewed" : "unviewed" } : f,
+        ),
+      });
     if (
       w.kind === "comment" ||
       (w.kind === "review" && w.body) ||

@@ -75,5 +75,19 @@
     "jsonrpc": "2.0",
     "id": 5,
     "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917", "watching": true, "wasWatching": false }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "setFileViewed", "pullRequestId": "PR_1", "path": "src/main.rs", "viewed": true }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
   }
 ]
