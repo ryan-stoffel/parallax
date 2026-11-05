@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { ConnectNotice, ConnectionState, Profile } from "../preload/bridge";
 import type { AgentRun, InboxItem, Thread } from "../protocol/generated/protocol";
 import { attentionOf, type Attention } from "./attention";
+import { onConnectionShown, useConnections } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
 import { dismiss, notify, type Notice } from "./notifications";
@@ -197,6 +198,8 @@ export function useThreadAlarms(
  */
 export function useConnectionAlarms(hosts: Host[]) {
   const names = useRef(hosts);
+  // Known here, so a host's drop waits out its grace, and a reconnect in time is no news.
+  useConnections(hosts.map((h) => h.id));
   // Each host's last state. Main connects hosts before the window listens, so each host's
   // current state is read too, unless a change has come by then.
   const last = useRef(new Map<string, ConnectionState>());
@@ -213,7 +216,7 @@ export function useConnectionAlarms(hosts: Host[]) {
   useEffect(() => {
     // Hosts with a lost or failed notice up, which connecting replaces.
     const troubled = new Set<string>();
-    return window.parallax.onConnectionState((hostId, state) => {
+    return onConnectionShown((hostId, state) => {
       const before = last.current.get(hostId);
       last.current.set(hostId, state);
       const name = names.current.find((h) => h.id === hostId)?.name ?? "a host";

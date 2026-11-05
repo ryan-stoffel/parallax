@@ -1,40 +1,59 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
+import { ReconnectGrace } from "./reconnectGrace";
 
-// Every host's last known state, shared by all views, so a view that changes host reads the new
-// host's state on its first render rather than showing it as connecting until IPC answers. Kept
-// only while something listens, since a state nobody hears about can go stale.
+// Every host's connection state as clients show it, shared by all views, so a view that changes
+// host reads the new host's state on its first render rather than showing it as connecting until
+// IPC answers. A reconnect stays hidden here for a few seconds (`ReconnectGrace`), so what needs
+// the truth, such as whether a request can go now, asks `window.parallax` instead. Kept only while
+// something listens, since a state nobody hears about can go stale.
 const states = new Map<string, ConnectionState>();
 const listeners = new Set<() => void>();
+const changeListeners = new Set<(hostId: string, state: ConnectionState) => void>();
 let stopListening: (() => void) | undefined;
-const put = (hostId: string, state: ConnectionState) => {
-  states.set(hostId, state);
+const changed = () => {
   for (const listener of listeners) listener();
 };
+const grace = new ReconnectGrace(
+  (hostId) => states.get(hostId),
+  (hostId, state) => {
+    states.set(hostId, state);
+    changed();
+    for (const listener of changeListeners) listener(hostId, state);
+  },
+);
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  stopListening ??= window.parallax.onConnectionState(put);
+  stopListening ??= window.parallax.onConnectionState((hostId, state) => grace.hear(hostId, state));
   return () => {
     listeners.delete(listener);
     if (listeners.size > 0) return;
     stopListening?.();
     stopListening = undefined;
+    grace.clear();
     states.clear();
   };
 }
 
-/** A host's connection state, kept current. Undefined until the first answer for this host. */
+/** Asks for `hostId`'s state, unless it's known already, in which case every change was heard. */
+function ask(hostId: string) {
+  // It rejects only for a host just removed, whose views are going away.
+  window.parallax.connectionState(hostId).then(
+    (state) => {
+      if (listeners.size === 0 || states.has(hostId)) return;
+      states.set(hostId, state);
+      changed();
+    },
+    () => {},
+  );
+}
+
+/** A host's connection state as shown, kept current. Undefined until the first answer for it. */
 export function useConnection(hostId: string): ConnectionState | undefined {
   const state = useSyncExternalStore(subscribe, () => states.get(hostId));
-  useEffect(() => {
-    // Asked on every mount too, since the state may have changed while nothing listened. It
-    // rejects only for a host just removed, whose views are going away.
-    window.parallax.connectionState(hostId).then(
-      (next) => put(hostId, next),
-      () => {},
-    );
-  }, [hostId]);
+  // On every mount too, since the state may have changed while nothing listened.
+  useEffect(() => ask(hostId), [hostId]);
   return state;
 }
 
@@ -51,13 +70,41 @@ export function useConnections(hostIds: string[]): (ConnectionState | undefined)
   const listed = useSyncExternalStore(subscribe, read);
   const key = hostIds.join("\n");
   useEffect(() => {
-    for (const id of key.split("\n"))
-      window.parallax.connectionState(id).then(
-        (next) => put(id, next),
-        () => {},
-      );
+    for (const id of key.split("\n")) ask(id);
   }, [key]);
   return listed;
+}
+
+/**
+ * Hears each change to any host's state as shown, for what reports a drop rather than renders it.
+ * Returns the unsubscribe function. A host nothing has asked about yet shows its drop at once, so
+ * pass its id to `useConnections` too.
+ */
+export function onConnectionShown(
+  listener: (hostId: string, state: ConnectionState) => void,
+): () => void {
+  const stop = subscribe(() => {});
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+    stop();
+  };
+}
+
+/**
+ * Forgets each host that leaves `hosts`, so adding it back is a first connect, shown as it happens.
+ * Main says nothing when it drops a host's connection, as for a device turned off.
+ */
+export function useForgetRemoved(hosts: { id: string }[]) {
+  const before = useRef(hosts);
+  useEffect(() => {
+    for (const { id } of before.current) {
+      if (hosts.some((host) => host.id === id)) continue;
+      grace.forget(id);
+      if (states.delete(id)) changed();
+    }
+    before.current = hosts;
+  }, [hosts]);
 }
 
 /** Why a host's chat is off while it isn't connected, or undefined once it is. */

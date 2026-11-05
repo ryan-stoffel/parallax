@@ -35,7 +35,7 @@ import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
 import { ClaudeLogo } from "./logos";
 import type { Asked } from "./Approval";
-import { offlineReason, useConnection } from "./ConnectionStatus";
+import { offlineReason, useConnection, useForgetRemoved } from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
 import { useInbox } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
@@ -726,6 +726,7 @@ export function App() {
   useSnoozeAlarms(listed, openHostThread);
   useThreadAlarms(listed, openHostThread, settings ? [] : panes.map((id) => `${host.id}/${id}`));
   useConnectionAlarms(hosts);
+  useForgetRemoved(hosts);
   useOutdatedAlarms(listed);
   useHostUpdateAlarms(hosts);
   useAccountAlarms();

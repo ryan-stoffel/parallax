@@ -17,6 +17,7 @@ import {
 import { Alert, AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
+import { useConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
@@ -158,7 +159,11 @@ export function FleetProvider({
   children: ReactNode;
 }) {
   const [setup, setSetup] = useState(initial);
-  const [states, setStates] = useState<Record<string, ConnectionState>>({});
+  // As shown, so a short reconnect stays out of sight. The outbox goes by the real state.
+  const shown = useConnections(setup.machines.map((m) => m.id));
+  const states: Record<string, ConnectionState | undefined> = Object.fromEntries(
+    setup.machines.map((m, i) => [m.id, shown[i]]),
+  );
   const [views, setViews] = useState<Record<string, ThreadsView>>({});
   const [gates, setGates] = useState<Record<string, Gate | undefined>>({});
   const [listed, setListed] = useState<Listed[]>([]);
@@ -342,7 +347,6 @@ export function FleetProvider({
 
   useEffect(() => {
     const listener = window.parallax.onConnectionState((id, state) => {
-      setStates((s) => ({ ...s, [id]: state }));
       if (state.status !== "connected") return;
       void outboxes.get(id)?.drain();
       if (id.startsWith("account:")) gate(id, undefined);
