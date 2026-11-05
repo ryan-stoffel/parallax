@@ -383,6 +383,9 @@ export class HostRelay extends DurableObject<Env> {
     if (spare) {
       streams[spare] = {};
       await this.ctx.storage.put<Streams>("streams", streams);
+      await streamObject(this.env, owner.hostId, spare)
+        ?.taken()
+        .catch((error) => logError("host.take", this.context(), error));
       return { stream: spare };
     }
     if (Object.keys(streams).length >= MAX_STREAMS)
@@ -492,7 +495,8 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, a request
-   *  for a spare stream, or a device's removal for its user's other hosts. */
+   *  for a spare stream, word that plxd's end of a stream is gone, or a device's removal for its
+   *  user's other hosts. */
   private async fromHost(message: string | ArrayBuffer) {
     const parsed = typeof message === "string" ? parse(message) : undefined;
     if (parsed?.t === "hook" && typeof parsed.id === "string") {
@@ -527,6 +531,14 @@ export class HostRelay extends DurableObject<Env> {
       for (const id of Object.keys(streams)) if (streams[id]?.spare) delete streams[id];
       await this.ctx.storage.put<Streams>("streams", streams);
       if (Object.keys(streams).length < MAX_STREAMS) await this.newStream(owner.hostId, true);
+    } else if (parsed?.t === "gone" && typeof parsed.stream === "string") {
+      // plxd says this whenever a stream ends, so it's usually already forgotten. Only an id in
+      // this host's own record counts, so the message can't reach another host's stream.
+      const owner = await this.owner();
+      if (owner && Object.hasOwn(await this.streams(), parsed.stream))
+        await streamObject(this.env, owner.hostId, parsed.stream)
+          ?.hostGone()
+          .catch((error) => logError("host.gone", this.context(), error));
     } else if (parsed?.t === "removed" && typeof parsed.statement === "string") {
       const statement = parsed.statement;
       const owner = await this.owner();

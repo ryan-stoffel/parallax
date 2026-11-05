@@ -674,8 +674,8 @@ async fn connecting_through_the_relay_stays_within_its_budget() {
 }
 
 /// A proxy between plxd and the local relay that fails links the ways a network does: it cuts
-/// plxd's control connection alone, refuses new ones, or silences every connection, leaving them
-/// open. A client goes to the relay directly, so only plxd's link fails.
+/// plxd's control connection alone, refuses new ones, or silences connections, leaving them open.
+/// A client goes to the relay directly, so only plxd's link fails.
 struct Proxy {
     url: String,
     shared: Arc<ProxyShared>,
@@ -687,6 +687,10 @@ struct ProxyShared {
     controls: AtomicUsize,
     refusing: AtomicBool,
     silent: AtomicBool,
+    /// How many connections plxd has opened of any kind.
+    connections: AtomicUsize,
+    /// Streams among the first this many connections are silent, and any opened after aren't.
+    silent_streams: AtomicUsize,
     cut: Notify,
 }
 
@@ -722,6 +726,7 @@ impl Proxy {
 /// One connection through a [`Proxy`]. Its request's first line says whether it's the control
 /// connection. While silent, bytes wait in the socket's buffers, as they would being retransmitted.
 async fn carry(plxd: TcpStream, relay: String, shared: Arc<ProxyShared>) {
+    let number = shared.connections.fetch_add(1, Ordering::SeqCst);
     let mut head = [0; 512];
     let control = loop {
         let Ok(peeked) = plxd.peek(&mut head).await else {
@@ -745,23 +750,27 @@ async fn carry(plxd: TcpStream, relay: String, shared: Arc<ProxyShared>) {
     let (mut plxd_in, mut plxd_out) = plxd.into_split();
     let (mut relay_in, mut relay_out) = relay.into_split();
     let cut = shared.cut.notified();
+    let silent = || {
+        shared.silent.load(Ordering::SeqCst)
+            || (!control && number < shared.silent_streams.load(Ordering::SeqCst))
+    };
     tokio::select! {
         () = cut, if control => {}
-        () = one_way(&mut plxd_in, &mut relay_out, &shared) => {}
-        () = one_way(&mut relay_in, &mut plxd_out, &shared) => {}
+        () = one_way(&mut plxd_in, &mut relay_out, &silent) => {}
+        () = one_way(&mut relay_in, &mut plxd_out, &silent) => {}
     }
 }
 
-async fn one_way(from: &mut OwnedReadHalf, to: &mut OwnedWriteHalf, shared: &ProxyShared) {
+async fn one_way(from: &mut OwnedReadHalf, to: &mut OwnedWriteHalf, silent: &impl Fn() -> bool) {
     let mut buffer = vec![0; 64 * 1024];
     loop {
-        while shared.silent.load(Ordering::SeqCst) {
+        while silent() {
             sleep(Duration::from_millis(20)).await;
         }
         let Ok(read @ 1..) = from.read(&mut buffer).await else {
             return;
         };
-        while shared.silent.load(Ordering::SeqCst) {
+        while silent() {
             sleep(Duration::from_millis(20)).await;
         }
         if to.write_all(&buffer[..read]).await.is_err() {
@@ -858,6 +867,80 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     eprintln!("a silent link was noticed in {:?}", silent.elapsed());
     proxy.shared.silent.store(false, Ordering::SeqCst);
     relay_status_within(&mut client, |s| s.connected, SILENCE_NOTICED).await;
+    server.stop().await;
+}
+
+/// How long after a control connection fails plxd must have given up on a dead stream, and the
+/// client must have heard: plxd's 10 s check, and some room for a busy test machine.
+const DEAD_STREAM_TOLD: Duration = Duration::from_secs(13);
+
+#[tokio::test]
+async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_spare() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+    ) else {
+        return;
+    };
+    let proxy = Proxy::start(&url).await;
+    let dir = temp_dir();
+    let (server, mut client, host_id) = online_through(dir.path(), &proxy, &token).await;
+    relay::sign_in(url.clone(), token.clone());
+    let route = format!("relay:{host_id}");
+    let code = new_code(&mut client).await;
+    let phone = temp_dir();
+    let routes = std::slice::from_ref(&route);
+    let paired = remote::pair(routes, &code, "phone", phone.path())
+        .await
+        .unwrap();
+    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+        .await
+        .unwrap();
+    let mut app = App::bridged(dialed.socket);
+    assert!(app.initialize().await["result"].is_object());
+    assert!(answers(&mut app).await);
+    // plxd asks for the next spare and joins it once the last is taken.
+    sleep(Duration::from_secs(1)).await;
+
+    // Every link plxd has to a stream dies, the spare's too, with no close for the relay to see.
+    // The control connection fails, and a new one comes up at once.
+    let connections = proxy.shared.connections.load(Ordering::SeqCst);
+    proxy
+        .shared
+        .silent_streams
+        .store(connections, Ordering::SeqCst);
+    let seen = proxy.controls();
+    let failed = Instant::now();
+    proxy.shared.cut.notify_waiters();
+    proxy.control_after(seen).await;
+    relay_status(&mut client, |s| s.connected).await;
+
+    // A redial right now gets a working stream, not the dead spare it would wait 10 s on.
+    let redial = Instant::now();
+    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+        .await
+        .unwrap();
+    let mut second = App::bridged(dialed.socket);
+    assert!(second.initialize().await["result"].is_object());
+    assert!(answers(&mut second).await);
+    eprintln!("a redial after the failure took {:?}", redial.elapsed());
+    assert!(
+        redial.elapsed() < Duration::from_secs(5),
+        "got the dead spare"
+    );
+
+    // The first client hears that plxd gave up on its stream, with no heartbeat of its own.
+    assert!(
+        app.closes_within(DEAD_STREAM_TOLD).await,
+        "the client was never told"
+    );
+    eprintln!("the client was told after {:?}", failed.elapsed());
+    assert!(
+        failed.elapsed() <= DEAD_STREAM_TOLD,
+        "{:?}",
+        failed.elapsed()
+    );
+    assert!(answers(&mut second).await, "the new stream ended too");
     server.stop().await;
 }
 

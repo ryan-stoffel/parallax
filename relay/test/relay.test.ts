@@ -334,6 +334,54 @@ describe("streams", () => {
     await expect.poll(() => openStreams(host)).toEqual({});
   });
 
+  it("closes a spare taken for a client that never arrives, which frees its place, and not one that does", async () => {
+    const user = `user_${crypto.randomUUID()}`;
+    const { host, token, control } = await online(user);
+    const spare = async () => {
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      return { open, side: opened(await join(host, open)) };
+    };
+    const stuck = await spare();
+    // What the Worker does for a client, which here hangs up before it reaches the stream.
+    await hosts.get(hosts.idFromName(host.id)).open(user);
+    expect(await openStreams(host)).toEqual({ [stuck.open.stream]: {} });
+    expect(await runDurableObjectAlarm(streamObject(stuck.open.stream))).toBe(true);
+    expect(await stuck.side.closed).toBe(4408);
+    await expect.poll(() => openStreams(host)).toEqual({});
+
+    const taken = await spare();
+    opened(await connect(host, token));
+    expect(await taken.side.next()).toBe("ready");
+    expect(await runDurableObjectAlarm(streamObject(taken.open.stream))).toBe(false);
+  });
+
+  it("closes a stream plxd says is gone, counting its frames, and only plxd's own", async () => {
+    const { host, token, control } = await online();
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, open));
+    await client.next();
+    await side.next();
+    client.ws.send(new Uint8Array([1]));
+    await side.next();
+
+    // Another host naming it, and a name no stream has, end nothing.
+    const { control: other } = await online();
+    other.ws.send(JSON.stringify({ t: "gone", stream: open.stream }));
+    control.ws.send(JSON.stringify({ t: "gone", stream: "__proto__" }));
+    client.ws.send(new Uint8Array([2]));
+    await side.next();
+
+    control.ws.send(JSON.stringify({ t: "gone", stream: open.stream }));
+    expect(await client.closed).toBe(1000);
+    await expect.poll(() => openStreams(host)).toEqual({});
+    const traffic = await runInDurableObject(hosts.get(hosts.idFromName(host.id)), (_: HostRelay, state) =>
+      state.storage.get<{ bytes: number }>("traffic"),
+    );
+    expect(traffic?.bytes).toBe(2 * MIN_FRAME_BYTES);
+  });
+
   it("drops a stream's report alarm once an 8 MiB report drains it, and when it closes", async () => {
     const { host, token, control } = await online();
     const pair = async () => {
