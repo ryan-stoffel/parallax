@@ -3,7 +3,8 @@ set -eu
 
 # The emulator's half of the phone app's Android check (PLX-1370), once android-build has built it
 # and with an emulator running: the real app and pinned-tls on the emulator against a fake-backend
-# plxd (PLXD_PATH) and Parallax Relay under `wrangler dev` (apps/mobile/e2e/android.mjs). Screenshots
+# plxd (PLXD_PATH) and Parallax Relay under `wrangler dev` (apps/mobile/e2e/android.mjs). A failed
+# test fails this. A failed app drive leaves ui-drive-failed.txt for the job to report. Screenshots
 # go in ANDROID_E2E_OUT.
 cd "$(dirname "$0")/../../apps/mobile"
 set -x

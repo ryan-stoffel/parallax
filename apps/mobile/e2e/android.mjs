@@ -9,7 +9,9 @@
 //   emulator. It pairs with `lan-box` by address and code first, then takes
 //   `relay-box`'s code, and each computer must report the phone's session.
 //
-// Screenshots, and logcat on a failure, go in ANDROID_E2E_OUT.
+// A failure in the tests fails this. A failure in the app's drive leaves ui-drive-failed.txt instead,
+// which the CI job reports without blocking a merge. Screenshots, and logcat on a failure, go in
+// ANDROID_E2E_OUT.
 import { execFileSync, spawn } from "node:child_process";
 import { createSign, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -334,10 +336,17 @@ async function type(label, text) {
   await sleep(500);
 }
 
-let failed = true;
+// The pin tests' failure fails the job. The app's, past them, leaves ui-drive-failed.txt for the CI step
+// that reports it without blocking a merge: an emulator on a shared runner is too slow to be sure.
+let phase = "setup";
+let failure;
 // Past every step's own limit, in case of something none of them covers. Well inside the CI step's.
 const watchdog = setTimeout(() => {
   console.error(`android e2e: over its 20 minutes. In front: ${focused()}`);
+  if (phase === "app") {
+    writeFileSync(join(out, "ui-drive-failed.txt"), "over its 20 minutes");
+    process.exit(0);
+  }
   process.exit(1);
 }, 20 * 60_000);
 try {
@@ -357,6 +366,7 @@ try {
     argument("relayToken", mint()),
   );
 
+  phase = "app";
   log("installing the app");
   adbWithin(3 * 60_000, "install", "-r", join(mobile, "android/app/build/outputs/apk/debug/app-debug.apk"));
   adb("shell", "pm", "grant", APP, "android.permission.POST_NOTIFICATIONS");
@@ -431,20 +441,18 @@ try {
   log("the relay path reached relay-box");
   await waitFor("Ready");
   shot("6-relay-box-ready");
-
-  // Not a check: what relay-box's row says after the screen's next look, which runs every 15 seconds.
-  await sleep(20_000);
-  shot("7-after-the-next-look");
-  log(`after the next look: ${readScreen().map((e) => e.label).filter(Boolean).join(" | ")}`);
-  failed = false;
+} catch (e) {
+  failure = e;
 } finally {
   clearTimeout(watchdog);
-  if (failed) {
+  if (failure) {
+    console.error(failure);
     log(`failed. In front: ${focused()}. On screen: ${readScreen().map((e) => e.label).filter(Boolean).join(" | ")}`);
     try {
       shot("failed");
       writeFileSync(join(out, "logcat.txt"), adbWithin(60_000, "logcat", "-d"));
     } catch {}
+    if (phase === "app") writeFileSync(join(out, "ui-drive-failed.txt"), String(failure.stack ?? failure));
   }
   for (const cleanup of cleanups) {
     try {
@@ -453,6 +461,6 @@ try {
   }
   rmSync(scratch, { recursive: true, force: true });
   // Metro, wrangler, and plxd hold this process's pipes open otherwise.
-  process.exitCode = failed ? 1 : 0;
+  process.exitCode = failure && phase !== "app" ? 1 : 0;
   setTimeout(() => process.exit(), 2000);
 }

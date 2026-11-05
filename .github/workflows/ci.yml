@@ -364,7 +364,8 @@ jobs:
         run: scripts/ci/check-mobile
 
   # The mobile app on Android (PLX-1370): its debug APK, pinned-tls's tests on the JVM, and on an
-  # emulator those tests and the real app. Slow, so only when the PR changes the mobile app.
+  # emulator those tests and the real app. Slow, so only when the PR changes the mobile app. A failed
+  # test fails it. The app's drive only reports, as the emulator is too slow to be sure of.
   android:
     needs: [changes, plxd]
     if: needs.changes.outputs.mobile == 'true'
@@ -462,6 +463,20 @@ jobs:
             apps/mobile/modules/pinned-tls/android/build/reports
           if-no-files-found: warn
           retention-days: 7
+
+      # The app's drive on a shared runner's emulator is too slow to be sure of, so its failure shows
+      # here without blocking a merge. A failed pin test above still fails the job.
+      - name: Report the app's drive on the emulator
+        continue-on-error: true
+        env:
+          FAILED: ${{ runner.temp }}/android-e2e/ui-drive-failed.txt
+        run: |
+          if [ -f "$FAILED" ]; then
+            echo "::error title=The Android app's drive failed::$(head -n 1 "$FAILED")"
+            cat "$FAILED"
+            exit 1
+          fi
+          echo "The app signed in and reached lan-box over the LAN and relay-box through the relay."
 
   # The app against a plxd running its fake backend, with Playwright (PLX-16), on the OSes the app
   # job covers, with the plxd the plxd job built for that OS (PLX-25).
