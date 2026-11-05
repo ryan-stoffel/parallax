@@ -108,6 +108,8 @@ export function useFind({
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // The code editor finds in its own file.
+      if ((e.target as Element | null)?.closest?.(".cm-editor")) return;
       if (appShortcut(e) === "find") {
         setOpen(true);
         input.current?.focus();

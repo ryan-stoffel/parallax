@@ -215,6 +215,8 @@ export function githubRefs(text: string, repo: string): RefPart[] {
 export const rehypeGithubRefs =
   ({ repo }: { repo: string }) =>
   (tree: Parent) => {
+    // A file in the Files view isn't in a pull request, so its text has no references to link.
+    if (!repo) return;
     const visit = (parent: Parent) => {
       parent.children = parent.children.flatMap((node): Node[] => {
         if (node.type === "element") {
