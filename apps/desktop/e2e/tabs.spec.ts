@@ -42,7 +42,7 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   };
 
   // New thread alone has no tab. A pane's only tab starts at its card's left edge, and among others
-  // a tab starts further in.
+  // a tab starts further in, except on Linux, whose tabs have no curves to make room for.
   await expect(tabs).toHaveCount(0);
   await start("First");
   const flush = async () => {
@@ -53,7 +53,7 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
   await expect.poll(flush).toBe(true);
   await page.getByRole("button", { name: "New tab" }).click();
   await expect(tabs).toHaveText(["First", "New thread"]);
-  await expect.poll(flush).toBe(false);
+  await expect.poll(flush).toBe(process.platform === "linux");
   await start("Second");
   await expect(tabs).toHaveText(["First", "Second"]);
 

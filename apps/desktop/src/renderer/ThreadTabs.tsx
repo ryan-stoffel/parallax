@@ -33,9 +33,9 @@ const accepted = [tabDragType, threadDragType];
  * the focused pane among several, that outline is brighter. A tab drags along the tabs or to another pane's
  * to move there, or over the window to land where its preview shows (SplitTiles.tsx). A sidebar thread dropped here gets a tab where it
  * lands, which a bar shows. The shown tab always has its close button, and another shows one under the
- * pointer, over its title. A middle click closes a tab too. With `flush`, for a pane's only tab when
- * nothing comes before it in the row, the tab starts at its card's left edge and top left corner, as
- * one shape with the card, and curves into the card on its right alone.
+ * pointer, over its title. A middle click closes a tab too. With `flush`, for a pane's only tab (or
+ * any pane's on Linux) when nothing comes before it in the row, the first tab starts at its card's
+ * left edge and top left corner, as one shape with the card, and curves into the card on its right alone.
  */
 export function ThreadTabs({
   tabs,
