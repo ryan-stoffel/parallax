@@ -678,6 +678,9 @@ async fn a_removal_from_the_relay_counts_only_when_an_approved_computer_signed_i
     let routes = [route.clone()];
     let approved = remote::DpopKey::generate();
     let stranger = remote::DpopKey::generate();
+    // Added with Allow alone: one kept only as restricted, and one a merge left in both lists.
+    let restricted = remote::DpopKey::generate();
+    let in_both = remote::DpopKey::generate();
     let (phone, tablet) = (temp_dir(), temp_dir());
     let phone_key = thumbprint(phone.path());
     let tablet_key = thumbprint(tablet.path());
@@ -685,10 +688,14 @@ async fn a_removal_from_the_relay_counts_only_when_an_approved_computer_signed_i
         .call::<AccessMerge>(AccessMergeParams {
             approved_clients: vec![phone_key.clone(), tablet_key.clone()],
             removed_clients: Vec::new(),
-            approved_hosts: vec![approved.thumbprint()],
+            approved_hosts: vec![approved.thumbprint(), in_both.thumbprint()],
+            allowed_hosts: vec![restricted.thumbprint(), in_both.thumbprint()],
         })
         .await
         .unwrap();
+    let lists = access(&mut client).await;
+    assert!(lists.approved_hosts.contains(&in_both.thumbprint()));
+    assert!(lists.allowed_hosts.contains(&in_both.thumbprint()));
     for (dir, name) in [(&phone, "phone"), (&tablet, "tablet")] {
         let signed_in = sign_in(&issuer, &routes, &host_id, USER, name, dir.path()).await;
         assert!(matches!(signed_in, Ok((_, SignIn::Approved { .. }))));
@@ -702,9 +709,12 @@ async fn a_removal_from_the_relay_counts_only_when_an_approved_computer_signed_i
     };
     let one = |key: &str| vec![key.to_owned()];
 
-    // What a relay could make: signed by a host of its own, by an approved computer for another
-    // account, an approved computer's with another key swapped in, too long, and not one at all.
+    // What a relay could make: signed by a host of its own, by a fake computer the user allowed, by
+    // an approved computer for another account, an approved computer's with another key swapped
+    // in, too long, and not one at all.
     tell(remote::signed_removal(&stranger, USER, &one(&phone_key))).await;
+    tell(remote::signed_removal(&restricted, USER, &one(&phone_key))).await;
+    tell(remote::signed_removal(&in_both, USER, &one(&phone_key))).await;
     tell(remote::signed_removal(
         &approved,
         "user_2",

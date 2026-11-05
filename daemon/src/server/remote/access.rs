@@ -637,7 +637,8 @@ pub(crate) async fn remove(
 /// A removal the relay passed on from another host: applied as [`remove`] applies one, and not
 /// passed on, when its signature checks out for this host's account and this host approved its
 /// signer. The relay holds no approved host's key, so it can't make one, and replaying a real one
-/// changes nothing.
+/// changes nothing. A computer added with Allow alone may be a fake one the user clicked through,
+/// so it gives no removals, even with its id in `approved_hosts` too, which merges can leave.
 pub(crate) async fn receive_removal(daemon: &Daemon, statement: &str) {
     let Some(account) = account(daemon).await else {
         return;
@@ -652,7 +653,7 @@ pub(crate) async fn receive_removal(daemon: &Daemon, statement: &str) {
     let Ok(known) = lists(daemon).await else {
         return;
     };
-    if !known.approved_hosts.contains(&signer) {
+    if !known.approved_hosts.contains(&signer) || known.allowed_hosts.contains(&signer) {
         debug!(%signer, "ignored a device's removal signed by a computer not approved here");
         return;
     }

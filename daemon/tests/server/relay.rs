@@ -437,8 +437,8 @@ async fn removing_a_device_on_one_computer_cuts_it_off_on_the_others_within_seco
     let tablet_key = crate::account::thumbprint(tablet.path());
     let lists = AccessMergeParams {
         approved_clients: vec![phone_key.clone(), tablet_key.clone()],
-        removed_clients: Vec::new(),
         approved_hosts: vec![a_id.clone(), b_id.clone(), c_id.clone()],
+        ..AccessMergeParams::default()
     };
     for client in [&mut a, &mut b, &mut c] {
         client.call::<AccessMerge>(lists.clone()).await.unwrap();
@@ -449,7 +449,7 @@ async fn removing_a_device_on_one_computer_cuts_it_off_on_the_others_within_seco
             id.to_owned(),
             crate::account::token(&issuer, E2E_USER),
         );
-        async move { remote::sign_in(&[route], &id, &token, name, &dir).await }
+        async move { remote::sign_in(&[route], &id, &token, name, false, &dir).await }
     };
     for (route, id) in [(&a_route, &a_id), (&b_route, &b_id), (&c_route, &c_id)] {
         for (dir, name) in [(&phone, "phone"), (&tablet, "tablet")] {
