@@ -31,6 +31,11 @@ test("hands other platforms' terminals the command with their own flag", () => {
   const args = (platform: NodeJS.Platform, app: string) =>
     terminalRunCommand(platform, app, ["ssh", "host"], "unused").args;
   expect(args("win32", "C:\\Windows\\wt.exe")).toEqual(["ssh", "host"]);
+  // Windows Terminal would read a bare `;` as its next command.
+  expect(terminalRunCommand("win32", "C:\\wt.exe", ["ssh", "a;calc"], "unused").args).toEqual([
+    "ssh",
+    "a\\;calc",
+  ]);
   expect(args("linux", "/usr/bin/gnome-terminal")).toEqual(["--", "ssh", "host"]);
   expect(args("linux", "/usr/bin/wezterm")).toEqual(["start", "--", "ssh", "host"]);
   expect(args("linux", "/usr/bin/xterm")).toEqual(["-e", "ssh", "host"]);

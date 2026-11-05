@@ -90,7 +90,11 @@ export function terminalRunCommand(
       file: "/usr/bin/open",
       args: macEFlag.has(name) ? ["-na", app, "--args", "-e", script] : ["-a", app, script],
     };
-  return { file: app, args: [...(commandFlags[name] ?? ["-e"]), ...command] };
+  // Windows Terminal reads `;` as the start of its next command, even inside an argument, so a
+  // folder's name could otherwise run something here.
+  const windowsTerminal = name === "wt.exe" || name === "windowsterminal.exe";
+  const args = windowsTerminal ? command.map((arg) => arg.replaceAll(";", "\\;")) : command;
+  return { file: app, args: [...(commandFlags[name] ?? ["-e"]), ...args] };
 }
 
 /** Known terminal apps only, found in the platform's app folders and PATH. */

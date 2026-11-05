@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Code, FolderOpen, SquareTerminal } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import type { OpenApp, OpenTarget, TerminalApp } from "../preload/bridge";
 import cursorIcon from "./assets/cursor.svg";
@@ -272,58 +273,63 @@ export function OpenMenu({
           <icons.edit aria-hidden className="opacity-0 group-hover/ssh:opacity-100" />
         </button>
       )}
-      <Dialog
-        ref={destinationDialog}
-        aria-label="SSH destination"
-        onClose={() => {
-          pending.current = undefined;
-        }}
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void saveDestination();
+      {/* In the body, since the Open shortcut can ask while the panel or this row is hidden, where
+          a modal would block the window unseen. */}
+      {createPortal(
+        <Dialog
+          ref={destinationDialog}
+          aria-label="SSH destination"
+          onClose={() => {
+            pending.current = undefined;
           }}
         >
-          <div className="px-5 pt-4 pb-3">
-            <h2 className="text-reading font-semibold">SSH destination for {hostName}</h2>
-            <p className="mt-0.5 text-body text-muted-foreground">
-              Where editors and terminals reach it, using your ssh config and keys. The computer
-              needs SSH turned on, called Remote Login on a Mac. Leave it empty to use the address
-              Parallax finds.
-            </p>
-          </div>
-          <div className="px-5 pb-4">
-            <input
-              aria-label="SSH destination"
-              // The native attribute, so showModal focuses the field.
-              ref={(el) => el?.setAttribute("autofocus", "")}
-              placeholder="me@mac-mini"
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                setDestinationError(undefined);
-              }}
-              spellCheck={false}
-              autoComplete="off"
-              className="w-full rounded-lg border border-border bg-transparent px-3 py-1.5 text-body placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
-            />
-            {destinationError && (
-              <p role="alert" className="mt-1.5 text-meta text-danger">
-                {destinationError}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveDestination();
+            }}
+          >
+            <div className="px-5 pt-4 pb-3">
+              <h2 className="text-reading font-semibold">SSH destination for {hostName}</h2>
+              <p className="mt-0.5 text-body text-muted-foreground">
+                Where editors and terminals reach it, using your ssh config and keys. The computer
+                needs SSH turned on, called Remote Login on a Mac. Leave it empty to use the address
+                Parallax finds.
               </p>
-            )}
-          </div>
-          <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
-            <Button type="button" onClick={() => destinationDialog.current?.close()}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary">
-              Save
-            </Button>
-          </div>
-        </form>
-      </Dialog>
+            </div>
+            <div className="px-5 pb-4">
+              <input
+                aria-label="SSH destination"
+                // The native attribute, so showModal focuses the field.
+                ref={(el) => el?.setAttribute("autofocus", "")}
+                placeholder="me@mac-mini"
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setDestinationError(undefined);
+                }}
+                spellCheck={false}
+                autoComplete="off"
+                className="w-full rounded-lg border border-border bg-transparent px-3 py-1.5 text-body placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
+              />
+              {destinationError && (
+                <p role="alert" className="mt-1.5 text-meta text-danger">
+                  {destinationError}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
+              <Button type="button" onClick={() => destinationDialog.current?.close()}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary">
+                Save
+              </Button>
+            </div>
+          </form>
+        </Dialog>,
+        document.body,
+      )}
     </>
   );
 }

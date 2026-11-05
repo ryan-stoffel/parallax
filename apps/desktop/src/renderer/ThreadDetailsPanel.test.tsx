@@ -143,7 +143,7 @@ test("a destination saved after being asked for still opens what asked", async (
     await later(0);
   });
   expect(opened).toEqual([undefined]);
-  const dialog = body.querySelector<HTMLDialogElement>('dialog[aria-label="SSH destination"]')!;
+  const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="SSH destination"]')!;
   const input = dialog.querySelector("input")!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
@@ -163,6 +163,59 @@ test("a destination saved after being asked for still opens what asked", async (
     await later(0);
   });
   expect(opened).toEqual([undefined, "me@mini"]);
+});
+
+test("a card takes the place of the one it's dropped on, in either direction", () => {
+  const order = () => {
+    const at = { git: 0, prs: 0, context: 0, lineage: 0 };
+    function Probe() {
+      const { position } = useThreadDetailsPrefs();
+      for (const card of ["git", "prs", "context", "lineage"] as const) at[card] = position(card);
+      return null;
+    }
+    show(<Probe />).remove();
+    return (Object.keys(at) as (keyof typeof at)[]).sort((a, b) => at[a] - at[b]);
+  };
+  act(() => moveCard("git", "prs"));
+  expect(order()).toEqual(["prs", "git", "context", "lineage"]);
+  act(() => moveCard("prs", "lineage"));
+  expect(order()).toEqual(["git", "context", "lineage", "prs"]);
+  act(() => moveCard("prs", "git"));
+  expect(order()).toEqual(["prs", "git", "context", "lineage"]);
+});
+
+test("the destination dialog isn't inside the panel, which can be hidden when it asks", () => {
+  show(
+    <ThreadDetails mode="hidden" host={{ id: "lan:x", name: "mini" }} folder="/Users/me/repo" />,
+  );
+  const dialog = document.querySelector('dialog[aria-label="SSH destination"]')!;
+  expect(dialog.closest("[hidden]")).toBeNull();
+  expect(dialog.closest("aside")).toBeNull();
+});
+
+test("a Remote Control thread still has the customize button", () => {
+  const body = show(
+    <ThreadDetails
+      mode="docked"
+      host={{ id: "local", name: "macbook" }}
+      remoteControl={{ session: undefined }}
+    />,
+  );
+  expect(body.querySelector('[aria-label="Customize Thread details"]')).not.toBeNull();
+});
+
+test("a close from an earlier render doesn't reopen a panel the user closed since", () => {
+  let hook!: ReturnType<typeof useThreadDetails>;
+  function Probe() {
+    hook = useThreadDetails("a");
+    return null;
+  }
+  show(<Probe />);
+  act(() => hook.toggle());
+  const fromWhenItWasOpen = hook.close;
+  act(() => hook.close());
+  act(() => fromWhenItWasOpen());
+  expect(hook.mode).toBe("hidden");
 });
 
 test("close hides the panel for its thread, and only when it's shown", () => {

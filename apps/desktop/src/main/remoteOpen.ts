@@ -3,10 +3,14 @@ import { isDeviceAddress, isSshUser } from "./connect";
 // Open in on another computer (PLX-1343): the parts that need no Electron. Editors reach it with
 // their Remote SSH, and terminals with an ssh session started in the thread's folder.
 
-/** The account whose home holds `folder`: `me` for /Users/me/x, /home/me/x, or C:\Users\me\x. */
+/**
+ * The account whose home holds `folder`: `me` for /Users/me/x, /home/me/x, or C:\Users\me\x, and
+ * `root` for /root/x. Shared and Public are folders in those places, not accounts.
+ */
 export function folderUser(folder: string): string | undefined {
+  if (/^\/root(\/|$)/.test(folder)) return "root";
   const user = /^(?:\/Users\/|\/home\/|[a-z]:\\Users\\)([^/\\]+)/i.exec(folder)?.[1];
-  return isSshUser(user) ? user : undefined;
+  return isSshUser(user) && !/^(shared|public)$/i.test(user) ? user : undefined;
 }
 
 /**

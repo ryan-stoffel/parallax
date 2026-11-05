@@ -70,12 +70,14 @@ export const toggleItem = (item: ThreadDetailsItemId) =>
 export const toggleCollapsed = (card: ThreadDetailsCardId) =>
   prefs.set({ ...prefs.get(), collapsed: toggled(prefs.get().collapsed, card) });
 
-/** Puts `moved` right before `before`. */
-export function moveCard(moved: ThreadDetailsCardId, before: ThreadDetailsCardId) {
-  if (moved === before) return;
+/** Puts `moved` in `target`'s place, whichever way it travels, so any card can go first or last. */
+export function moveCard(moved: ThreadDetailsCardId, target: ThreadDetailsCardId) {
+  if (moved === target) return;
   const current = prefs.get();
-  const order = [...new Set([...current.order, ...CARD_ORDER])].filter((card) => card !== moved);
-  order.splice(order.indexOf(before), 0, moved);
+  const order = [...new Set([...current.order, ...CARD_ORDER])];
+  const place = order.indexOf(target);
+  order.splice(order.indexOf(moved), 1);
+  order.splice(place, 0, moved);
   prefs.set({ ...current, order });
 }
 

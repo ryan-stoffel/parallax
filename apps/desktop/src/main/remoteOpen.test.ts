@@ -17,6 +17,9 @@ test("reads the user from a home folder on any OS", () => {
   expect(folderUser("/Users/ryan-stoffel/Developer/x")).toBe("ryan-stoffel");
   expect(folderUser("/home/me/x")).toBe("me");
   expect(folderUser("C:\\Users\\me\\x")).toBe("me");
+  expect(folderUser("/root/x")).toBe("root");
+  expect(folderUser("/rooted/x")).toBeUndefined();
+  expect(folderUser("/Users/Shared/x")).toBeUndefined();
   expect(folderUser("/srv/app")).toBeUndefined();
   expect(folderUser("/Users/bad name/x")).toBeUndefined();
 });

@@ -93,10 +93,14 @@ export function useThreadDetails(key: string) {
       localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(next));
       return next;
     });
-  // Hides it for `key`'s thread, as when what it opened takes over.
-  const close = () => {
-    if (open.includes(key)) toggle();
-  };
+  // Hides it for `key`'s thread, as when what it opened takes over. Never shows it, even called
+  // from a render before the user closed it, as when Create PR finishes.
+  const close = () =>
+    setOpen((was) => {
+      const next = was.filter((other) => other !== key);
+      localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(next));
+      return next;
+    });
   const isOpen = (which: string) => open.includes(which);
   const mode: ThreadDetailsMode = !open.includes(key) ? "hidden" : narrow ? "floating" : "docked";
   return { mode, toggle, close, isOpen, ref };
@@ -301,8 +305,9 @@ export function ThreadDetails({
         {lineage && (
           <LineageSection {...lineage} hidden={!shows("lineage")} visible={mode !== "hidden"} />
         )}
-        {/* The sliders sit in the first row. With that row off, this is how to get it back. */}
-        {!shows("environment") && (
+        {/* The sliders sit in the first row. With that row off or a Remote Control thread's in its
+            place, they go here. */}
+        {(remoteControl || !shows("environment")) && (
           <div style={{ order: 99 }} className="flex justify-end">
             {customizeButton}
           </div>
