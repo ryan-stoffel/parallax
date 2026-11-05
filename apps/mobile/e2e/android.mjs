@@ -206,7 +206,10 @@ function gradle(...args) {
   });
 }
 
-/** The screen's elements now: each one's text or description, whether it's a text field, and its center. */
+/**
+ * The screen's elements now: each one's text, description, whether it's a text field, and its center.
+ * An empty field reports its placeholder as its text, so `label` alone can hide what it's labelled.
+ */
 function screen() {
   const xml = adbWithin(20_000, "exec-out", "uiautomator", "dump", "/dev/tty").toString();
   return [...xml.matchAll(/<node [^>]*?>/g)].map(([node]) => {
@@ -214,6 +217,7 @@ function screen() {
     const [, x1, y1, x2, y2] = attribute("bounds").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/) ?? [];
     return {
       label: attribute("text") || attribute("content-desc"),
+      description: attribute("content-desc"),
       field: attribute("class") === "android.widget.EditText",
       x: (Number(x1) + Number(x2)) >> 1,
       y: (Number(y1) + Number(y2)) >> 1,
@@ -231,7 +235,9 @@ const shot = (name) => writeFileSync(join(out, `${name}.png`), adb("exec-out", "
 async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [], field = false } = {}) {
   const matches = (element) =>
     (!field || element.field) &&
-    (typeof wanted === "string" ? element.label === wanted : wanted.test(element.label));
+    [element.label, element.description].some((label) =>
+      typeof wanted === "string" ? label === wanted : wanted.test(label),
+    );
   log(`waiting for ${wanted} on screen, up to ${timeoutMs / 1000}s`);
   const deadline = Date.now() + timeoutMs;
   let last = [];
@@ -288,10 +294,11 @@ const phoneSession = (box) =>
     return false;
   }, 120_000);
 
-/** Types `text` into the field labelled `label`, and waits to see it there. */
+/** Replaces what's in the field labelled `label` with `text`, and waits to see it there. */
 async function type(label, text) {
   await tap(label, { field: true });
   await sleep(500);
+  adb("shell", "input", "keyevent", "KEYCODE_MOVE_END", ...Array(40).fill("KEYCODE_DEL"));
   adb("shell", "input", "text", text);
   await waitFor(text, { field: true, timeoutMs: 15_000 });
 }
@@ -371,22 +378,26 @@ try {
   await phoneSession(relayBox);
   shot("3-relay-box-connected");
 
-  // A computer paired on the LAN, by its address and code.
-  await tap(/^Pair a computer on this/);
+  // A computer paired on the LAN, by its address and code. It advertises over mDNS once it has a
+  // code. When the phone's look ends, one computer found fills the address: its real one, which is
+  // blocked here, so 10.0.2.2 replaces it.
   const { code: pairing } = await lanBox.call("remote/pair");
+  await tap(/^Pair a computer on this/);
+  await waitFor("Look again");
+  shot("4-found-on-this-network");
   await type("Address", `${RUNNER}:${lanBox.port}`);
   await type("Code", pairing.replaceAll("-", ""));
   adb("shell", "input", "keyevent", "111"); // Puts the keyboard away, off the button.
-  shot("4-pair-lan-box");
+  shot("5-pair-lan-box");
   await tap("Pair");
   await phoneSession(lanBox);
   await waitFor("lan-box");
-  shot("5-computers");
+  shot("6-computers");
 
   await tap("Continue");
   await tap("Not now");
   await waitFor("Open sidebar");
-  shot("6-main");
+  shot("7-main");
   failed = false;
 } finally {
   clearTimeout(watchdog);
