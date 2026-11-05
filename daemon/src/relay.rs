@@ -16,9 +16,11 @@
 //! - It tells the account's other online hosts when a device is removed here, in a statement signed
 //!   by its host key, and takes theirs ([`crate::server::remote::access::receive_removal`], 0091).
 //!
-//! It reconnects with jittered exponential backoff and polls nothing. Idle, it sends one ping a
-//! minute, which the relay answers without waking, to keep Cloudflare's idle timer from closing
-//! the socket.
+//! It reconnects with jittered exponential backoff, and at once after a wake or a change of network
+//! ([`Link`]). Clients' streams each have their own socket, so they stay open through a reconnect
+//! (PLX-1419): plxd lists the ones it holds when it reconnects, and the relay closes the rest. It
+//! pings every socket, which the relay answers without waking, to notice a silently dead link and
+//! to keep Cloudflare's idle timer from closing it.
 //!
 //! A client reaches a host over a `relay:<hostId>` route: [`open_stream`] is the byte stream its
 //! TLS runs over, opened with the Clerk session [`sign_in`] keeps in its `Authorization` header.
@@ -26,9 +28,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -41,8 +43,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream};
 use tokio::net::TcpStream;
-use tokio::sync::{Notify, mpsc};
-use tokio::time::{self, Instant};
+use tokio::sync::{Notify, mpsc, watch};
+use tokio::time::{self, Instant, MissedTickBehavior};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
@@ -61,8 +63,24 @@ pub const DEFAULT_URL: &str = "https://relay.parallax.codes";
 /// The most plxd corrects its clock by from the relay's: a day, in milliseconds.
 const MAX_CLOCK_OFFSET_MS: i64 = 24 * 60 * 60 * 1000;
 
-/// How often plxd pings the relay. Cloudflare closes a WebSocket idle for 100 s.
-const PING: Duration = Duration::from_mins(1);
+/// How often plxd pings the relay over its control socket, with the text the relay's object answers
+/// without waking. Unanswered until the next one ends the connection, so a silent link is noticed
+/// within two of these, and a false alarm costs only a reconnect. Cloudflare closes a WebSocket
+/// idle for 100 s.
+const PING: Duration = Duration::from_secs(15);
+/// How often plxd's end of a client's stream sends a protocol ping, which Cloudflare's runtime
+/// answers without waking the stream's object or charging for it. Slower than [`PING`], since ending
+/// a working stream is what a client would see, and its answer can queue behind a transfer.
+const STREAM_PING: Duration = Duration::from_secs(30);
+/// How long a stream has to answer a ping after a wake or a change of network.
+const STREAM_CHECK: Duration = Duration::from_secs(10);
+/// The longest one stream frame may take to send before the link counts as dead. A ping can't tell
+/// while a send is stuck, since the socket's writes go in order.
+const STREAM_SEND: Duration = Duration::from_mins(1);
+/// How often [`Link`] looks for a wake or a change of network. Each look stays on this computer.
+const LINK_CHECK: Duration = Duration::from_secs(5);
+/// How far past [`LINK_CHECK`] the wall clock must jump between looks to count as a wake.
+const LINK_JUMP: Duration = Duration::from_secs(20);
 /// How long a run must stay finished or failed before its push goes (PLX-1337): an agent that
 /// goes again within it wasn't done. The phone holds its own notification as long (`HOLD_MS`).
 const HOLD: Duration = Duration::from_secs(30);
@@ -85,6 +103,10 @@ const PROOF_HEADER: &str = "x-parallax-host-proof";
 
 /// The header the relay's time comes back in when it refuses a proof for its time.
 const TIME_HEADER: &str = "x-parallax-relay-time";
+
+/// The header plxd lists the streams it still holds in when it opens its control socket, as
+/// relay/src/host.ts has it. A relay from before PLX-1419 ignores it and closes them all.
+const STREAMS_HEADER: &str = "x-parallax-host-streams";
 
 /// What plxd signs to register under the user of a Clerk token with SHA-256 `token_hash`.
 fn register_message(host_id: &str, token_hash: &str) -> String {
@@ -377,28 +399,85 @@ async fn upgrade(
     Ok(socket)
 }
 
+/// When plxd's end of a stream pings, and whether the stream has answered. The stream's own socket
+/// is all that tells plxd it's gone, since a stream outlives the control connection.
+struct Keepalive {
+    tick: time::Interval,
+    heard: Arc<AtomicBool>,
+    /// Marked after a wake or a change of network, when a stream may have died with the link.
+    check: watch::Receiver<()>,
+}
+
+impl Keepalive {
+    fn new(check: watch::Receiver<()>) -> Self {
+        let mut tick = time::interval_at(Instant::now() + STREAM_PING, STREAM_PING);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Self {
+            tick,
+            heard: Arc::new(AtomicBool::new(true)),
+            check,
+        }
+    }
+
+    /// Waits until the next ping should go. Fails if the last one went unanswered. Cancel safe.
+    async fn due(&mut self) -> io::Result<()> {
+        tokio::select! {
+            _ = self.tick.tick() => {
+                if self.heard.swap(false, Ordering::Relaxed) {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, "the stream stopped answering"))
+                }
+            }
+            Ok(()) = self.check.changed() => {
+                self.heard.store(false, Ordering::Relaxed);
+                self.tick.reset_after(STREAM_CHECK);
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Joins a WebSocket's binary frames to a byte stream: what's written to the answer goes out in
-/// frames, and frames come out of it. Either side's end ends both.
-fn pipe(socket: WebSocketStream<Stream>) -> DuplexStream {
+/// frames, and frames come out of it. Either side's end ends both, as does `keepalive` finding the
+/// socket dead. A client has its own heartbeat, so needs none.
+fn pipe(socket: WebSocketStream<Stream>, mut keepalive: Option<Keepalive>) -> DuplexStream {
     let (ours, theirs) = tokio::io::duplex(64 * 1024);
     tokio::spawn(async move {
         let (mut sink, mut frames) = socket.split();
         let (mut reader, mut writer) = tokio::io::split(theirs);
+        let heard = keepalive.as_ref().map(|k| Arc::clone(&k.heard));
         let outgoing = async {
             let mut buffer = vec![0; 16 * 1024];
             loop {
-                let read = reader.read(&mut buffer).await?;
-                if read == 0 {
-                    break;
-                }
-                let frame = Message::binary(buffer[..read].to_vec());
-                sink.send(frame).await.map_err(io::Error::other)?;
+                let due = async {
+                    match &mut keepalive {
+                        Some(keepalive) => keepalive.due().await,
+                        None => std::future::pending().await,
+                    }
+                };
+                let frame = tokio::select! {
+                    read = reader.read(&mut buffer) => match read? {
+                        0 => break,
+                        read => Message::binary(buffer[..read].to_vec()),
+                    },
+                    due = due => {
+                        due?;
+                        Message::Ping(tungstenite::Bytes::new())
+                    }
+                };
+                time::timeout(STREAM_SEND, sink.send(frame))
+                    .await?
+                    .map_err(io::Error::other)?;
             }
             let _ = sink.close().await;
             Ok::<_, io::Error>(())
         };
         let incoming = async {
             while let Some(frame) = frames.next().await {
+                if let Some(heard) = &heard {
+                    heard.store(true, Ordering::Relaxed);
+                }
                 match frame.map_err(io::Error::other)? {
                     Message::Binary(bytes) => writer.write_all(&bytes).await?,
                     Message::Close(_) => break,
@@ -449,7 +528,7 @@ async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream
     };
     // The relay says so once the host joined the stream.
     match socket.next().await {
-        Some(Ok(Message::Text(text))) if text.as_str() == "ready" => Ok(pipe(socket)),
+        Some(Ok(Message::Text(text))) if text.as_str() == "ready" => Ok(pipe(socket, None)),
         _ => Err(Error::Protocol(
             "the host didn't join the relay's stream".to_owned(),
         )),
@@ -794,6 +873,161 @@ enum Ended {
     Stopped,
     /// `relay` turned off.
     Off,
+    /// The computer woke or changed networks, so the link may be dead.
+    Moved,
+}
+
+/// The addresses this computer would reach the internet from now, IPv4 then IPv6. None when it has
+/// no route. Connecting a UDP socket only picks the route, and sends nothing.
+type Outward = (Option<IpAddr>, Option<IpAddr>);
+
+fn outward() -> Outward {
+    let from = |bind: &str, to: &str| {
+        let socket = std::net::UdpSocket::bind(bind).ok()?;
+        socket.connect(to).ok()?;
+        Some(socket.local_addr().ok()?.ip())
+    };
+    (
+        from("0.0.0.0:0", "1.1.1.1:443"),
+        from("[::]:0", "[2606:4700:4700::1111]:443"),
+    )
+}
+
+/// Whether the wall clock's jump from `before` to `now` means the computer slept. Timers on macOS
+/// and Linux stop in sleep, so only the wall clock shows it. A clock set forward looks the same,
+/// and costs a reconnect.
+fn slept(before: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(before)
+        .is_ok_and(|gap| gap >= LINK_CHECK + LINK_JUMP)
+}
+
+/// Notices a wake or a change of network, the same way on every OS: with the wall clock and the
+/// route to the internet, looked at every [`LINK_CHECK`], which sends nothing and needs no OS hook.
+struct Link {
+    tick: time::Interval,
+    wall: SystemTime,
+    outward: Outward,
+    /// [`outward`], other than in tests.
+    look: Box<dyn Fn() -> Outward + Send>,
+}
+
+impl Link {
+    fn new(look: Box<dyn Fn() -> Outward + Send>) -> Self {
+        let mut tick = time::interval_at(Instant::now() + LINK_CHECK, LINK_CHECK);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Self {
+            tick,
+            wall: SystemTime::now(),
+            outward: look(),
+            look,
+        }
+    }
+
+    /// Starts from how things are now, for a new connection: it's on whatever link there is, and
+    /// nothing looked while `relay` was off or the handshake ran.
+    fn start_over(&mut self) {
+        self.wall = SystemTime::now();
+        self.outward = (self.look)();
+    }
+
+    /// Waits for the computer to wake or change networks. Cancel safe.
+    async fn changed(&mut self) {
+        loop {
+            self.tick.tick().await;
+            let (wall, outward) = (SystemTime::now(), (self.look)());
+            let woke = slept(self.wall, wall);
+            let moved = outward != self.outward;
+            self.wall = wall;
+            self.outward = outward;
+            if woke || moved {
+                info!(woke, moved, "the link to the relay may have changed");
+                return;
+            }
+        }
+    }
+}
+
+/// The spare stream (0091), asked for while `remote` is on.
+struct Spare {
+    stop: CancellationToken,
+    /// Whether the relay announced it. One it didn't by the end of a connection never will.
+    opened: bool,
+}
+
+/// The ids of the streams plxd holds, shared with each stream's task.
+type Held = Arc<Mutex<BTreeSet<String>>>;
+
+/// What the control socket's [`STREAMS_HEADER`] says.
+fn listed(held: &Held) -> String {
+    let held = held.lock().unwrap_or_else(PoisonError::into_inner);
+    held.iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// A stream's place in [`Held`], while its task runs.
+struct Holding {
+    held: Held,
+    id: String,
+}
+
+impl Holding {
+    fn new(held: Held, id: &str) -> Self {
+        held.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_owned());
+        Self {
+            held,
+            id: id.to_owned(),
+        }
+    }
+}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+    }
+}
+
+/// The clients' streams plxd holds. They outlive a control connection (PLX-1419), and end when
+/// `relay` turns off, plxd stops, or their own sockets do.
+struct Streams {
+    stop: CancellationToken,
+    held: Held,
+    check: watch::Sender<()>,
+    spare: Option<Spare>,
+    /// Told when the spare stream is taken or ends.
+    spare_done: mpsc::Sender<()>,
+    spare_ended: mpsc::Receiver<()>,
+}
+
+impl Streams {
+    fn new(stop: &CancellationToken) -> Self {
+        let (spare_done, spare_ended) = mpsc::channel(4);
+        Self {
+            stop: stop.child_token(),
+            held: Held::default(),
+            check: watch::channel(()).0,
+            spare: None,
+            spare_done,
+            spare_ended,
+        }
+    }
+
+    /// Asks every stream to answer a ping soon, as it may have died with the link.
+    fn check(&self) {
+        self.check.send_replace(());
+    }
+}
+
+impl Drop for Streams {
+    fn drop(&mut self) {
+        self.stop.cancel();
+    }
 }
 
 /// Keeps plxd connected to the relay while `relay` is on, until `stop`.
@@ -801,22 +1035,30 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let relay = &daemon.relay;
     let mut failures = 0_u32;
     let mut pushes = Pushes::new(daemon.log.head());
+    let mut streams = Streams::new(&stop);
+    let mut link = Link::new(Box::new(outward));
     loop {
         if !wanted(&daemon).await {
             relay.set(Status::default());
             // Unlinked: a new device's request waiting for approval goes too (0091).
             daemon.remote.access.clear();
+            streams = Streams::new(&stop);
             tokio::select! {
                 () = stop.cancelled() => return,
                 () = relay.changed.notified() => continue,
             }
         }
         let started = Instant::now();
-        let ended = connected(&daemon, &stop, &mut pushes).await;
+        let ended = connected(&daemon, &stop, &mut pushes, &mut streams, &mut link).await;
         let wait = match ended {
             Ok(Ended::Stopped) => return,
             Ok(Ended::Off) => {
                 pushes.holds.clear();
+                continue;
+            }
+            Ok(Ended::Moved) => {
+                failures = 0;
+                streams.check();
                 continue;
             }
             // Waits for `relay/register` here, or tries again on backoff, since another computer
@@ -846,6 +1088,10 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
         tokio::select! {
             () = stop.cancelled() => return,
             () = relay.changed.notified() => failures = 0,
+            () = link.changed() => {
+                failures = 0;
+                streams.check();
+            }
             () = time::sleep(wait.unwrap_or_default()), if wait.is_some() => {}
         }
     }
@@ -869,6 +1115,8 @@ async fn connected(
     daemon: &Arc<Daemon>,
     stop: &CancellationToken,
     pushes: &mut Pushes,
+    streams: &mut Streams,
+    link: &mut Link,
 ) -> Result<Ended, Error> {
     let key = signer(daemon).await?;
     let host_id = key.thumbprint();
@@ -876,12 +1124,15 @@ async fn connected(
     // The time in milliseconds, signed: the relay takes each proof once, from 5 minutes behind its
     // clock to 30 s ahead, so there's no challenge to wait on and no pending socket a stranger can
     // push out. Signed by the relay's clock once it said this one is off.
+    let held = &streams.held;
     let handshake = |at: i64| {
         let signature = key.sign(host_message(&host_id, at).as_bytes());
         let proof = format!("{at}.{}", remote::base64url(&signature));
         let path = format!("/v1/hosts/{host_id}/host");
+        let listed = listed(held);
         async move {
-            let mut socket = websocket(url, &path, &[(PROOF_HEADER, &proof)]).await?;
+            let headers = [(PROOF_HEADER, proof.as_str()), (STREAMS_HEADER, &listed)];
+            let mut socket = websocket(url, &path, &headers).await?;
             if next_json(&mut socket).await?["t"] != "ready" {
                 return Err(Error::Protocol(
                     "the relay didn't accept the host key".to_owned(),
@@ -924,7 +1175,7 @@ async fn connected(
         connected: Some(host_id.clone()),
         problem: None,
     });
-    let ended = serve(daemon, socket, &host_id, stop, pushes).await;
+    let ended = serve(daemon, socket, &host_id, stop, pushes, streams, link).await;
     daemon.relay.set(Status::default());
     ended
 }
@@ -1034,13 +1285,12 @@ async fn serve(
     host_id: &str,
     stop: &CancellationToken,
     pushes: &mut Pushes,
+    streams: &mut Streams,
+    link: &mut Link,
 ) -> Result<Ended, Error> {
     let (mut sink, mut frames) = socket.split();
     let (replies, mut answered) = mpsc::channel::<String>(16);
     let removals = removal_queue(daemon);
-    // The streams close with this connection.
-    let streams = stop.child_token();
-    let _streams = streams.clone().drop_guard();
     let remote = &daemon.remote;
     let local = SocketAddr::new(
         remote.address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -1048,10 +1298,13 @@ async fn serve(
     );
     let mut events = daemon.log.watch();
     pushes.catch_up(&daemon.log, Instant::now());
-    // The spare stream (0091): asked for while `remote` is on, and again once it's taken or ends.
-    let (spare_done, mut spare_ended) = mpsc::channel::<()>(4);
-    let mut spare: Option<CancellationToken> = None;
+    link.start_over();
+    // A spare asked for on the last connection that the relay didn't announce never will be.
+    if streams.spare.as_ref().is_some_and(|spare| !spare.opened) {
+        streams.spare = None;
+    }
     let mut ping = time::interval_at(Instant::now() + PING, PING);
+    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut heard = true;
     let failed = |error: tungstenite::Error| Error::Protocol(error.to_string());
     // The webhook URLs this plxd serves, so the relay refuses the rest for free.
@@ -1064,16 +1317,19 @@ async fn serve(
     daemon.relay.sent_removals(&[]);
     loop {
         // `remote` on with no spare asks for one; `remote` off closes it.
-        match (serving(daemon).await, &spare) {
+        match (serving(daemon).await, &streams.spare) {
             (true, None) => {
-                spare = Some(streams.child_token());
+                streams.spare = Some(Spare {
+                    stop: streams.stop.child_token(),
+                    opened: false,
+                });
                 sink.send(Message::text(r#"{"t":"spare"}"#))
                     .await
                     .map_err(failed)?;
             }
-            (false, Some(open)) => {
-                open.cancel();
-                spare = None;
+            (false, Some(spare)) => {
+                spare.stop.cancel();
+                streams.spare = None;
             }
             _ => {}
         }
@@ -1089,7 +1345,8 @@ async fn serve(
                     return Ok(Ended::Off);
                 }
             }
-            Some(()) = spare_ended.recv() => spare = None,
+            Some(()) = streams.spare_ended.recv() => streams.spare = None,
+            () = link.changed() => return Ok(Ended::Moved),
             _ = ping.tick() => {
                 if !heard {
                     return Err(Error::Protocol("the relay stopped answering".to_owned()));
@@ -1139,13 +1396,16 @@ async fn serve(
                         if message["t"] == "open" && serving(daemon).await {
                             let url = daemon.relay.url.clone();
                             let host_id = host_id.to_owned();
-                            let joined = match (&spare, message["spare"] == true) {
-                                (Some(open), true) => Some((open.clone(), spare_done.clone())),
-                                _ => None,
+                            let (stop, done) = match &mut streams.spare {
+                                Some(spare) if message["spare"] == true => {
+                                    spare.opened = true;
+                                    (spare.stop.clone(), Some(streams.spare_done.clone()))
+                                }
+                                _ => (streams.stop.clone(), None),
                             };
-                            let stop = joined.as_ref().map_or_else(|| streams.clone(), |(open, _)| open.clone());
-                            let done = joined.map(|(_, done)| done);
-                            tokio::spawn(stream(url, host_id, message, local, stop, done));
+                            let held = Arc::clone(&streams.held);
+                            let check = streams.check.subscribe();
+                            tokio::spawn(stream(url, host_id, message, local, stop, done, (held, check)));
                         } else if message["t"] == "removed"
                             && let Some(statement) = message["statement"].as_str()
                         {
@@ -1175,6 +1435,7 @@ async fn serve(
 /// Joins a client's stream, which the relay announced with `message`, to the remote listener at
 /// `local`, until either ends or `stop`. The spare stream, with `spare` to say when it's taken or
 /// ended, waits for the relay's `ready`, sent when a client joins it, before it dials `local`.
+/// `held` lists it while this runs, and `check` asks it to prove it's alive.
 async fn stream(
     url: String,
     host_id: String,
@@ -1182,6 +1443,7 @@ async fn stream(
     local: SocketAddr,
     stop: CancellationToken,
     spare: Option<mpsc::Sender<()>>,
+    (held, check): (Held, watch::Receiver<()>),
 ) {
     let id = message["stream"].as_str().unwrap_or_default();
     let token = message["token"].as_str().unwrap_or_default();
@@ -1195,16 +1457,28 @@ async fn stream(
     if !plain(id, b"-") || !plain(token, b"-_") {
         return warn!("the relay announced a stream with a bad id or token");
     }
+    let holding = Holding::new(held, id);
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
     let mut unused = spare.clone();
     let joined = async {
         let mut socket = websocket(&url, &path, &[]).await?;
+        let mut keepalive = Keepalive::new(check);
         if spare.is_some() {
             loop {
-                match socket.next().await {
-                    Some(Ok(Message::Text(text))) if text.as_str() == "ready" => break,
-                    Some(Ok(_)) => {}
-                    _ => return Err(Error::Protocol("the spare stream closed".to_owned())),
+                tokio::select! {
+                    frame = socket.next() => {
+                        keepalive.heard.store(true, Ordering::Relaxed);
+                        match frame {
+                            Some(Ok(Message::Text(text))) if text.as_str() == "ready" => break,
+                            Some(Ok(_)) => {}
+                            _ => return Err(Error::Protocol("the spare stream closed".to_owned())),
+                        }
+                    }
+                    due = keepalive.due() => {
+                        due?;
+                        let ping = socket.send(Message::Ping(tungstenite::Bytes::new()));
+                        ping.await.map_err(|error| Error::Protocol(error.to_string()))?;
+                    }
                 }
             }
             // Taken: the next client gets a new spare.
@@ -1214,7 +1488,7 @@ async fn stream(
         }
         let mut tcp = TcpStream::connect(local).await?;
         let _ = tcp.set_nodelay(true);
-        let mut piped = pipe(socket);
+        let mut piped = pipe(socket, Some(keepalive));
         tokio::io::copy_bidirectional(&mut piped, &mut tcp).await?;
         Ok::<_, Error>(())
     };
@@ -1224,12 +1498,14 @@ async fn stream(
             debug!(%error, "a relay stream ended");
         }
     }
+    drop(holding);
     // A spare that ended before a client took it is asked for again, after a pause so a relay
-    // that keeps refusing it isn't asked in a loop.
-    if let Some(done) = unused {
-        if !stop.is_cancelled() {
-            time::sleep(FIRST_BACKOFF).await;
-        }
+    // that keeps refusing it isn't asked in a loop. One that was stopped is already forgotten, and
+    // saying so could clear the spare after it.
+    if let Some(done) = unused
+        && !stop.is_cancelled()
+    {
+        time::sleep(FIRST_BACKOFF).await;
         let _ = done.send(()).await;
     }
 }
@@ -1790,6 +2066,168 @@ mod tests {
         )
     }
 
+    /// What outlasts a connection in `serve`, on a computer that never moves.
+    fn lasting(stop: &CancellationToken) -> (Streams, Link) {
+        (Streams::new(stop), Link::new(Box::new(|| (None, None))))
+    }
+
+    /// The relay's next frame other than a ping, which it answers as its object does.
+    async fn next_frame(relay: &mut WebSocketStream<Stream>) -> Value {
+        loop {
+            let frame = relay.next().await.expect("a frame").unwrap();
+            if frame.to_text().is_ok_and(|text| text == "ping") {
+                relay.send(Message::text("pong")).await.unwrap();
+            } else {
+                return serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            }
+        }
+    }
+
+    /// A stream's plxd end and the relay's, joined by `pipe`, with `check` to ask for a ping now.
+    async fn piped() -> (DuplexStream, WebSocketStream<Stream>, watch::Sender<()>) {
+        let (plxd, relay) = socket().await;
+        let (check, watched) = watch::channel(());
+        (pipe(plxd, Some(Keepalive::new(watched))), relay, check)
+    }
+
+    /// Reads `relay` for `time`, as the runtime does: a ping gets a pong. Answers how many came.
+    async fn answer_pings(relay: &mut WebSocketStream<Stream>, time: Duration) -> usize {
+        let mut pings = 0;
+        let _ = time::timeout(time, async {
+            while let Some(Ok(frame)) = relay.next().await {
+                pings += usize::from(frame.is_ping());
+                // tungstenite queues the pong; a flush sends it.
+                relay.flush().await.unwrap();
+            }
+        })
+        .await;
+        pings
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stream_that_answers_stays_and_one_that_stops_ends_within_two_pings() {
+        let (mut plxd, mut relay, _check) = piped().await;
+        assert_eq!(answer_pings(&mut relay, STREAM_PING * 5 / 2).await, 2);
+        plxd.write_all(b"hi").await.unwrap();
+        plxd.flush().await.unwrap();
+        assert_eq!(relay.next().await.unwrap().unwrap().into_data(), &b"hi"[..]);
+
+        // Silent now. `relay` stays open, as a socket on a dead link does.
+        let started = Instant::now();
+        let mut read = [0; 1];
+        assert!(!matches!(plxd.read(&mut read).await, Ok(read) if read > 0));
+        assert!(
+            started.elapsed() <= STREAM_PING * 2,
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_check_gives_a_stream_little_time_to_answer() {
+        let (mut plxd, mut relay, check) = piped().await;
+        check.send_replace(());
+        assert_eq!(answer_pings(&mut relay, STREAM_CHECK / 2).await, 1);
+        // It answered, so it lives on.
+        assert_eq!(answer_pings(&mut relay, STREAM_CHECK).await, 1);
+
+        check.send_replace(());
+        let started = Instant::now();
+        let mut read = [0; 1];
+        assert!(!matches!(plxd.read(&mut read).await, Ok(read) if read > 0));
+        assert!(started.elapsed() <= STREAM_CHECK, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn only_a_big_jump_of_the_wall_clock_counts_as_a_wake() {
+        let before = SystemTime::now();
+        assert!(!slept(before, before + LINK_CHECK));
+        assert!(!slept(
+            before,
+            before + LINK_CHECK + LINK_JUMP - Duration::from_secs(1)
+        ));
+        assert!(slept(before, before + LINK_CHECK + LINK_JUMP));
+        assert!(!slept(before, before - Duration::from_hours(1)), "set back");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_new_route_to_the_internet_ends_the_connection_and_leaves_its_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        let mut pushes = Pushes::new(daemon.log.head());
+        let source = Arc::new(Mutex::new(None));
+        let looked = Arc::clone(&source);
+        let mut link = Link::new(Box::new(move || (*looked.lock().unwrap(), None)));
+        let mut streams = Streams::new(&stop);
+        let holding = Holding::new(Arc::clone(&streams.held), "kept");
+        let (plxd, mut relay) = socket().await;
+        let serving = serve(
+            &daemon,
+            plxd,
+            "host",
+            &stop,
+            &mut pushes,
+            &mut streams,
+            &mut link,
+        );
+        let (ended, ()) = tokio::join!(serving, async {
+            assert_eq!(next_frame(&mut relay).await["t"], "hooks");
+            *source.lock().unwrap() = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+            // Held open, so only the change can end it.
+            let _ = time::timeout(LINK_CHECK * 2, relay.next()).await;
+        });
+        assert!(matches!(ended, Ok(Ended::Moved)));
+        assert!(
+            !streams.stop.is_cancelled(),
+            "streams outlive the connection"
+        );
+        assert_eq!(listed(&streams.held), "kept");
+        drop(holding);
+        assert_eq!(listed(&streams.held), "");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_spare_the_relay_never_announced_is_forgotten_and_an_announced_one_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        let mut pushes = Pushes::new(daemon.log.head());
+        let (mut streams, mut link) = lasting(&stop);
+        daemon
+            .store
+            .run(&stop, |db| db.set_remote(true).map_err(|e| store_error(&e)))
+            .await
+            .unwrap();
+        let mut connect = async |streams: &mut Streams, asks: bool| {
+            let (plxd, mut relay) = socket().await;
+            let serving = serve(
+                &daemon,
+                plxd,
+                "host",
+                &stop,
+                &mut pushes,
+                streams,
+                &mut link,
+            );
+            let (ended, ()) = tokio::join!(serving, async move {
+                assert_eq!(next_frame(&mut relay).await["t"], "hooks");
+                if asks {
+                    assert_eq!(next_frame(&mut relay).await["t"], "spare");
+                }
+                drop(relay);
+            });
+            assert!(ended.is_err());
+        };
+        connect(&mut streams, true).await;
+        // Asked for, and the socket dropped first, so the next connection asks again.
+        connect(&mut streams, true).await;
+        // Announced, so it's the spare still: the next connection doesn't ask.
+        streams.spare.as_mut().unwrap().opened = true;
+        connect(&mut streams, false).await;
+        assert!(streams.spare.is_some());
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_held_push_goes_out_on_the_next_connection_when_its_hold_ends() {
         let dir = tempfile::tempdir().unwrap();
@@ -1797,6 +2235,7 @@ mod tests {
         let stop = CancellationToken::new();
         let run = RunId::generate();
         let mut pushes = Pushes::new(daemon.log.head());
+        let (mut streams, mut link) = lasting(&stop);
         daemon.log.append_in_memory(
             jiff::Timestamp::now(),
             None,
@@ -1811,22 +2250,41 @@ mod tests {
         // The socket drops long before the hold ends.
         let (plxd, mut relay) = socket().await;
         let (ended, ()) = tokio::join!(
-            serve(&daemon, plxd, "host", &stop, &mut pushes),
+            serve(
+                &daemon,
+                plxd,
+                "host",
+                &stop,
+                &mut pushes,
+                &mut streams,
+                &mut link
+            ),
             async move { assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks") }
         );
         assert!(ended.is_err());
         assert!(finished.elapsed() < HOLD);
 
         let (plxd, mut relay) = socket().await;
-        let (ended, ()) = tokio::join!(serve(&daemon, plxd, "host", &stop, &mut pushes), async {
-            assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
-            let push = next_json(&mut relay).await.unwrap();
-            assert_eq!(push["t"], "push");
-            assert_eq!(push["run"], run.to_string());
-            assert_eq!(push["state"], "done");
-            assert!(finished.elapsed() >= HOLD);
-            stop.cancel();
-        });
+        let (ended, ()) = tokio::join!(
+            serve(
+                &daemon,
+                plxd,
+                "host",
+                &stop,
+                &mut pushes,
+                &mut streams,
+                &mut link
+            ),
+            async {
+                assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
+                let push = next_frame(&mut relay).await;
+                assert_eq!(push["t"], "push");
+                assert_eq!(push["run"], run.to_string());
+                assert_eq!(push["state"], "done");
+                assert!(finished.elapsed() >= HOLD);
+                stop.cancel();
+            }
+        );
         assert!(matches!(ended, Ok(Ended::Stopped)));
         assert_eq!(pushes.next_due(), None);
     }
@@ -1910,6 +2368,7 @@ mod tests {
         };
         let (f, asking) = (Fixture::new(), Fixture::new());
         let mut pushes = Pushes::new(daemon.log.head());
+        let (mut streams, mut link) = lasting(&stop);
         for _ in 0..16 {
             append(f.completed());
             pushes.read(&daemon.log, Instant::now());
@@ -1917,13 +2376,21 @@ mod tests {
             let (plxd, mut relay) = socket().await;
             let (running, approval) = (f.status("running"), asking.approval());
             let (ended, ()) = tokio::join!(
-                serve(&daemon, plxd, "host", &stop, &mut pushes),
+                serve(
+                    &daemon,
+                    plxd,
+                    "host",
+                    &stop,
+                    &mut pushes,
+                    &mut streams,
+                    &mut link
+                ),
                 async move {
                     assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
                     append(running);
                     append(approval);
                     time::advance(HOLD).await;
-                    let push = next_json(&mut relay).await.unwrap();
+                    let push = next_frame(&mut relay).await;
                     assert_eq!(push["state"], "needsYou");
                 }
             );
@@ -1975,33 +2442,45 @@ mod tests {
             std::slice::from_ref(&tablet),
         ));
         let mut pushes = Pushes::new(daemon.log.head());
+        let (mut streams, mut link) = lasting(&stop);
         let (plxd, mut relay) = socket().await;
-        let (ended, ()) = tokio::join!(serve(&daemon, plxd, "host", &stop, &mut pushes), async {
-            assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
-            let metrics = tokio::runtime::Handle::current().metrics();
-            let mut most = 0;
-            for sent in 0..2000 {
-                let flood = if sent % 100 == 0 { &huge } else { &forged };
-                relay.send(Message::text(flood.as_str())).await.unwrap();
-                most = most.max(metrics.num_alive_tasks());
-            }
-            assert!(most <= 2, "{most} tasks were alive at once");
-            let removed = |state: &parallax_protocol::AccessState, key: &str| {
-                state.removed_clients.iter().any(|k| k == key)
-            };
-            let deadline = Instant::now() + Duration::from_secs(20);
-            loop {
-                relay.send(Message::text(real.as_str())).await.unwrap();
-                let state = access::state(&daemon, None, &stop).await.unwrap();
-                if removed(&state, &tablet) {
-                    assert!(!removed(&state, &phone), "the flood changed nothing");
-                    break;
+        let (ended, ()) = tokio::join!(
+            serve(
+                &daemon,
+                plxd,
+                "host",
+                &stop,
+                &mut pushes,
+                &mut streams,
+                &mut link
+            ),
+            async {
+                assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
+                let metrics = tokio::runtime::Handle::current().metrics();
+                let mut most = 0;
+                for sent in 0..2000 {
+                    let flood = if sent % 100 == 0 { &huge } else { &forged };
+                    relay.send(Message::text(flood.as_str())).await.unwrap();
+                    most = most.max(metrics.num_alive_tasks());
                 }
-                assert!(Instant::now() < deadline, "the real one never landed");
-                time::sleep(Duration::from_millis(10)).await;
+                assert!(most <= 2, "{most} tasks were alive at once");
+                let removed = |state: &parallax_protocol::AccessState, key: &str| {
+                    state.removed_clients.iter().any(|k| k == key)
+                };
+                let deadline = Instant::now() + Duration::from_secs(20);
+                loop {
+                    relay.send(Message::text(real.as_str())).await.unwrap();
+                    let state = access::state(&daemon, None, &stop).await.unwrap();
+                    if removed(&state, &tablet) {
+                        assert!(!removed(&state, &phone), "the flood changed nothing");
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "the real one never landed");
+                    time::sleep(Duration::from_millis(10)).await;
+                }
+                drop(relay);
             }
-            drop(relay);
-        });
+        );
         assert!(ended.is_err());
     }
 

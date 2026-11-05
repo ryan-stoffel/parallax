@@ -2,7 +2,7 @@ import { SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 
 import { base64url, type HostJwk, sha256, thumbprint } from "../src/crypto";
-import { hostMessage, PROOF_HEADER, registerMessage } from "../src/host";
+import { hostMessage, PROOF_HEADER, registerMessage, STREAMS_HEADER } from "../src/host";
 import type { Env } from "../src/index";
 
 export const BASE = "https://relay.test";
@@ -131,14 +131,17 @@ export async function hostProof(host: Host, signer: Host = host, at?: number) {
   return `${time}.${await signer.sign(hostMessage(host.id, time))}`;
 }
 
-/** Opens plxd's control socket with `proof`: the socket, or the refusal. */
-export function hostSocket(host: Host, proof: string) {
-  return socket(`/v1/hosts/${host.id}/host`, { [PROOF_HEADER]: proof });
+/** Opens plxd's control socket with `proof`: the socket, or the refusal. `held` lists the streams
+ *  plxd still holds, and a plxd from before PLX-1419 lists none. */
+export function hostSocket(host: Host, proof: string, held?: string[]) {
+  const headers: Record<string, string> = { [PROOF_HEADER]: proof };
+  if (held) headers[STREAMS_HEADER] = held.join(",");
+  return socket(`/v1/hosts/${host.id}/host`, headers);
 }
 
 /** plxd's control socket, opened with a fresh proof. */
-export async function connectHost(host: Host) {
-  return { control: opened(await hostSocket(host, await hostProof(host))) };
+export async function connectHost(host: Host, held?: string[]) {
+  return { control: opened(await hostSocket(host, await hostProof(host), held)) };
 }
 
 /** A hook frame as plxd reads it: its head and raw body. */
