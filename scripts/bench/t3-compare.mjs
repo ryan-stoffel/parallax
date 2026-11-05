@@ -21,6 +21,7 @@
 // relay's Worker and stream objects, not a stream to a computer (PLX-1385).
 //
 // Nothing printed or written holds a token or ticket, and the tunnel's name stays out of the results.
+// A failure or crash at any point still signs out, stops T3, and removes the temporary home.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -151,9 +152,15 @@ function ticket(base, token) {
     const sent = https.request(url, { method: "POST", agent: false, headers }, (response) => {
       let body = "";
       response.on("data", (chunk) => (body += chunk));
-      response.on("end", () =>
-        response.statusCode === 200 ? resolve(JSON.parse(body).ticket) : reject(new Error(`the ticket answered ${response.statusCode}`)),
-      );
+      response.on("end", () => {
+        if (response.statusCode !== 200) return reject(new Error(`the ticket answered ${response.statusCode}`));
+        // JSON.parse's error quotes the text it read, which could be part of a ticket.
+        try {
+          resolve(JSON.parse(body).ticket);
+        } catch {
+          reject(new Error("the ticket's answer wasn't JSON"));
+        }
+      });
     });
     sent.on("error", reject);
     sent.end();
@@ -171,12 +178,18 @@ function open(base, wsTicket) {
   const waiting = new Map();
   let nextId = 1;
   socket.addEventListener("message", ({ data }) => {
-    for (const message of [JSON.parse(data)].flat()) {
-      if (message._tag === "Ping") socket.send(JSON.stringify({ _tag: "Pong" }));
-      const answer = waiting.get(message.requestId);
-      if (!answer) continue;
-      if (message._tag === "Chunk") socket.send(JSON.stringify({ _tag: "Ack", requestId: message.requestId }));
-      answer(message);
+    try {
+      for (const message of [JSON.parse(data)].flat()) {
+        if (message._tag === "Ping") socket.send(JSON.stringify({ _tag: "Pong" }));
+        const answer = waiting.get(message.requestId);
+        if (!answer) continue;
+        if (message._tag === "Chunk") socket.send(JSON.stringify({ _tag: "Ack", requestId: message.requestId }));
+        answer(message);
+      }
+    } catch {
+      // A frame this can't read fails whatever is waiting, with nothing from the frame in the error.
+      for (const answer of waiting.values()) answer({ _tag: "Exit" });
+      socket.close();
     }
   });
   const call = (tag, onMessage) => {
@@ -249,8 +262,13 @@ async function measure(base, token) {
 let server;
 let t3;
 let linked = false;
-/** Unlinks while the server still runs, so its tunnel stops, then stops the server and removes what this made. */
-async function cleanUp() {
+let cleaning;
+/** Unlinks while the server still runs, so its tunnel stops, then stops the server and removes what this made. Runs once. */
+function cleanUp() {
+  cleaning ??= unlinkAndStop();
+  return cleaning;
+}
+async function unlinkAndStop() {
   if (linked && t3) {
     linked = false;
     // Logout exits 0 even when the relay refused, so its words are the only sign the computer left.
@@ -270,6 +288,14 @@ async function cleanUp() {
 }
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => cleanUp().finally(() => process.exit(130)));
+}
+// Anything thrown outside the try below, as in an event handler, still signs out and stops T3. Only
+// the error's name is printed, since its message can quote what a server sent.
+for (const event of ["uncaughtException", "unhandledRejection"]) {
+  process.on(event, (error) => {
+    console.error(`t3-compare crashed (${error?.name ?? "unknown error"}), so it's cleaning up and stopping.`);
+    cleanUp().finally(() => process.exit(1));
+  });
 }
 
 let failed = false;
@@ -292,7 +318,16 @@ try {
   secrets.add(token);
 
   console.log(`Timing T3 ${version} through its tunnel: ${options.connects} connects, ${options.trips} round trips...`);
-  const results = { at: new Date().toISOString(), t3Version: version, route: "this computer, Cloudflare tunnel, this computer", ...(await measure(base, token)) };
+  const results = {
+    at: new Date().toISOString(),
+    t3Version: version,
+    route: "this computer, Cloudflare tunnel, this computer",
+    caveats: [
+      "Both ends of the tunnel are on this computer, so a slow network counts twice.",
+      "A connect skips the relay call a client makes to get its first session.",
+    ],
+    ...(await measure(base, token)),
+  };
   console.log(JSON.stringify(results, null, 2));
   if (options.out) writeFileSync(options.out, `${JSON.stringify(results)}\n`, { flag: "a" });
 } catch (error) {
@@ -303,6 +338,9 @@ try {
 }
 
 console.log("\nParallax relay:");
+if (!process.env.PROBE_CLERK_REFRESH_TOKEN) {
+  console.log("No PROBE_CLERK_REFRESH_TOKEN, so these times stop at the relay's Worker and stream objects. They time no stream to a computer, so they aren't comparable with T3's numbers (PLX-1385).");
+}
 const probeFile = join(dirname(fileURLToPath(import.meta.url)), "relay-probe.mjs");
 const outDir = mkdtempSync(join(tmpdir(), "t3-compare-probe-"));
 try {
