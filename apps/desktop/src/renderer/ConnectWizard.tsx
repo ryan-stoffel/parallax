@@ -31,15 +31,17 @@ const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop
  * reads its script as text, which the execution policy doesn't stop, from cmd or PowerShell. Keep
  * that form: Defender blocks `[scriptblock]::Create((irm ...))` as malicious.
  */
-export const connectCommand = (channel: "stable" | "nightly", os: "unix" | "windows") => {
-  const flag = channel === "nightly" ? " --channel nightly" : "";
-  return os === "windows"
-    ? `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax${flag}"`
-    : `curl -fsSL ${SCRIPTS}/connect.sh | sh${flag && ` -s --${flag}`}`;
-};
+export const connectCommand = (channel: "stable" | "nightly", os: "unix" | "windows") =>
+  os === "windows"
+    ? `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax --channel ${channel}"`
+    : `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- --channel ${channel}`;
 
-/** Where the app is downloaded. */
-const DOWNLOAD_URL = "https://github.com/ryan-stoffel/parallax/releases/latest";
+/**
+ * Where this channel's app is downloaded. GitHub's `latest` only means stable, and its release list
+ * starts with the newest nightly.
+ */
+export const downloadUrl = (channel: "stable" | "nightly") =>
+  `https://github.com/ryan-stoffel/parallax/releases${channel === "stable" ? "/latest" : ""}`;
 
 /** How often Add a computer asks the account for its computers while it's open (0091). */
 const LOOK_MS = 5_000;
@@ -209,7 +211,7 @@ function Setup({ channel }: { channel: "stable" | "nightly" }) {
       {path === "app" ? (
         <ol className="rounded-lg border border-border">
           <Step n={1} title="Install Parallax">
-            <a href={DOWNLOAD_URL} target="_blank" rel="noreferrer" className="underline">
+            <a href={downloadUrl(channel)} target="_blank" rel="noreferrer" className="underline">
               Download it
             </a>{" "}
             for macOS, Windows, or Linux.

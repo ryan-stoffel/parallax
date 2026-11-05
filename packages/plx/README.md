@@ -5,10 +5,10 @@ Parallax's command line. `plx connect` sets a computer up for [Parallax](https:/
 It publishes as `plx-cli`, with a `plx` command, until the `plx` name on npm is Parallax's.
 
 ```sh
-npx plx-cli connect
+npx plx-cli connect --channel nightly
 ```
 
-In Windows PowerShell, use `npx.cmd`. On a computer without Node.js, use the commands in the Parallax app's Add a computer dialog, which bring it along.
+Parallax ships only nightlies for now. plx-cli 0.6.1 on npm still defaults to stable, so the command names the channel. In Windows PowerShell, use `npx.cmd`. On a computer without Node.js, use the commands in the Parallax app's Add a computer dialog, which bring it along.
 
 Every download is checked against the SHA-256 its GitHub release reports, and plx refuses one that doesn't match or has none. plxd goes in `~/.parallax-plxd` (`%USERPROFILE%\.parallax-plxd` on Windows), and its login service runs it from there. On Linux, `~/.local/bin/plxd` links to it.
 
@@ -28,7 +28,7 @@ Until the release after this one, the Tailscale commands stay: `plx devices [--j
 
 Options:
 
-- `--channel stable|nightly`: which release to install (default `stable`).
+- `--channel stable|nightly`: which release to install (default `nightly`). `plx connect` stops before sign-in when that release is older than Parallax Relay, and says what to run instead.
 - `--no-browser`: sign in on any device and paste the code here. This is automatic over SSH and on Linux without a display.
 - `--user <user>` and `--port <port>`: the SSH user and port for `add`.
 - `--headless`: install plxd alone, without the app, for the Tailscale `add` and `setup`. `connect` always installs plxd alone.

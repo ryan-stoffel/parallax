@@ -80,7 +80,7 @@ function relayProblem(status: number | undefined): string | undefined {
   if (status === 503) return "That computer is offline or asleep.";
   if (status === 429) return "Too many connections to that computer this minute. Try again shortly.";
   if (status === 401 || status === 403) return "Parallax Relay didn't take this phone's sign-in.";
-  if (status === 404) return "Parallax Relay doesn't know that computer. Run plx connect on it.";
+  if (status === 404) return "Parallax Relay doesn't know that computer. Run npx plx-cli connect --channel nightly on it.";
   return `Parallax Relay refused the connection (${status}).`;
 }
 

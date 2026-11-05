@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { DeviceHost, ParallaxBridge } from "../preload/bridge";
 import { AccountPrompts } from "./AccountPrompts";
-import { connectCommand, ConnectWizard, SetupCodeDialog } from "./ConnectWizard";
+import { connectCommand, ConnectWizard, downloadUrl, SetupCodeDialog } from "./ConnectWizard";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLDialogElement.prototype.showModal = function () {
@@ -106,16 +106,24 @@ test("with no dialog open the prompt asks for the code on its own, then confirms
 
 test("the terminal path gives a command for each OS that needs nothing installed", () => {
   const scripts = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts";
-  expect(connectCommand("stable", "unix")).toBe(`curl -fsSL ${scripts}/connect.sh | sh`);
+  expect(connectCommand("stable", "unix")).toBe(
+    `curl -fsSL ${scripts}/connect.sh | sh -s -- --channel stable`,
+  );
   expect(connectCommand("nightly", "unix")).toBe(
     `curl -fsSL ${scripts}/connect.sh | sh -s -- --channel nightly`,
   );
   expect(connectCommand("stable", "windows")).toBe(
-    `powershell -c "irm ${scripts}/connect.ps1 | iex; Connect-Parallax"`,
+    `powershell -c "irm ${scripts}/connect.ps1 | iex; Connect-Parallax --channel stable"`,
   );
   expect(connectCommand("nightly", "windows")).toBe(
     `powershell -c "irm ${scripts}/connect.ps1 | iex; Connect-Parallax --channel nightly"`,
   );
+});
+
+test("the download link follows the app's channel", () => {
+  const releases = "https://github.com/ryan-stoffel/parallax/releases";
+  expect(downloadUrl("nightly")).toBe(releases);
+  expect(downloadUrl("stable")).toBe(`${releases}/latest`);
 });
 
 test("it asks for a new computer's code itself, then says it's connected", async () => {

@@ -50,6 +50,8 @@ function Connect-Parallax {
 
   # npm's upgrade notice would read as something to do.
   $env:NPM_CONFIG_UPDATE_NOTIFIER = 'false'
-  & npx.cmd -y plx-cli@latest connect @args
+  # Named because this script can reach users before a plx-cli that defaults to nightly does. The
+  # last --channel wins, so one given to Connect-Parallax overrides it.
+  & npx.cmd -y plx-cli@latest connect --channel nightly @args
   exit $LASTEXITCODE
 }
