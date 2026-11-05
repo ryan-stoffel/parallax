@@ -60,7 +60,7 @@ Read these from stdout, along with the exit code: 0 when it worked, 1 when it fa
 | `Paste the code it shows: ` | plx is waiting for a line on stdin. |
 | `Setup code: 482911 (works until 2026-11-04T12:00:00Z). ...` | The code to type in Parallax on a signed-in device, and when it stops working. |
 
-Lines starting with `→`, `✓`, or `✗` are progress for people. Their wording can change, and the symbols may not survive a Windows console's encoding, so don't test for them.
+Lines starting with `→`, `✓`, or `✗` are progress for people. Their wording can change, and the symbols may not survive a Windows console's encoding, so don't test for them. When sign-in fails, its `✗` line, with the reason, goes to stderr.
 
 `plx connect status --json` prints one object, and these field names are stable. It exits 0 whenever plxd answered, connected or not. When plxd doesn't answer, stdout is empty, the reason goes to stderr, and it exits 1.
 

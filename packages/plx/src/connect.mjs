@@ -60,6 +60,15 @@ async function exitCode(body) {
 }
 
 /**
+ * The sign-in step, resolving to the access token. A failure goes to stderr, so a script that reads
+ * stderr sees why it stopped.
+ * @param {Deps} deps
+ * @param {string} done The ✓ line's text.
+ * @returns {Promise<string>}
+ */
+const signInStep = (deps, done) => step("Signing in to Parallax", async () => [done, await deps.signIn()], console.error);
+
+/**
  * Runs `body` with plxd open through `runner` on an `os` computer, this one by default, closing
  * it after.
  * @template T
@@ -89,7 +98,7 @@ export function connect(options, deps) {
     const os = localOs();
     if (!os) throw new Error(`Parallax doesn't run on ${process.platform}.`);
     const release = await deps.release(options.channel);
-    const token = await step("Signing in to Parallax", async () => [`Signed in to Parallax Connect`, await deps.signIn()]);
+    const token = await signInStep(deps, "Signed in to Parallax Connect");
     const target = await step("Finding this computer's OS", async () => {
       const target = await deps.details(runner, os);
       return [`${target.label}: ${target.version} (${target.arch})`, target];
@@ -120,7 +129,7 @@ export function add(destination, options, deps) {
   const runner = sshRunner(target, { port: options.port });
   return exitCode(async () => {
     const release = await deps.release(options.channel);
-    const token = await step("Signing in to Parallax", async () => [`Signed in to Parallax Connect`, await deps.signIn()]);
+    const token = await signInStep(deps, "Signed in to Parallax Connect");
     const details = await sshTarget(runner, destination, target, `npx plx-cli connect --channel ${options.channel}`);
     await deps.install(runner, details, destination, release, options.channel);
     await withPlxd(
@@ -293,7 +302,7 @@ export function unlink(deps) {
 export function remove(deps) {
   return exitCode(() =>
     withPlxd(deps, async (plxd) => {
-      const token = await step("Signing in to Parallax", async () => [`Signed in`, await deps.signIn()]);
+      const token = await signInStep(deps, "Signed in");
       await step("Removing this computer from your account", async () => {
         const { hostId } = await plxd.call("relay/id");
         await plxd.call("relay/remove", { token, hostId });

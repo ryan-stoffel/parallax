@@ -98,7 +98,7 @@ test("piped questions get a line each, keep lines read ahead, and reject once in
 
 /**
  * Runs `script` in a new Node with no terminal, its HOME a throwaway folder, and resolves to its
- * exit code and stdout. `stdin` is a pipe left open, or "ignore" for an input that's already ended.
+ * exit code, stdout, and stderr. `stdin` is a pipe left open, or "ignore" for an input that's already ended.
  * @param {string} script
  * @param {"pipe" | "ignore"} stdin
  */
@@ -106,18 +106,20 @@ function noTerminal(script, stdin) {
   const home = mkdtempSync(path.join(tmpdir(), "plx-cli-"));
   assert.ok(home.startsWith(tmpdir()));
   const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
-    stdio: [stdin, "pipe", "inherit"],
+    stdio: [stdin, "pipe", "pipe"],
     // Clerk at an address nothing answers, so no real sign-in can start from here.
     env: { ...process.env, HOME: home, USERPROFILE: home, PLX_CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from("127.0.0.1:1$").toString("base64")}` },
   });
   child.stdin?.write("the answer\n");
   let stdout = "";
   child.stdout?.on("data", (chunk) => (stdout += chunk));
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => (stderr += chunk));
   return new Promise((resolve) => {
     child.once("close", (code) => {
       child.stdin?.destroy();
       rmSync(home, { recursive: true, force: true });
-      resolve({ code, stdout });
+      resolve({ code, stdout, stderr });
     });
   });
 }
@@ -125,7 +127,8 @@ function noTerminal(script, stdin) {
 test("plx exits on its own with stdin still open, once nothing is asking", { timeout: 30_000 }, async () => {
   const cli = new URL("../src/cli.mjs", import.meta.url).href;
   const script = `import { lineReader } from ${JSON.stringify(cli)}; console.log("got", await lineReader(process.stdin, process.stdout)("q?"));`;
-  assert.deepEqual(await noTerminal(script, "pipe"), { code: 0, stdout: "q?\ngot the answer\n" });
+  const { code, stdout } = /** @type {{ code: number, stdout: string }} */ (await noTerminal(script, "pipe"));
+  assert.deepEqual({ code, stdout }, { code: 0, stdout: "q?\ngot the answer\n" });
 });
 
 /**
@@ -143,22 +146,33 @@ function connectScript(clerk) {
     main(["connect"], deps).then((code) => { process.exitCode = code; });`;
 }
 
-test("plx connect with no terminal and no device grant prints the link, skips the browser, and exits 1 at end of input", { timeout: 30_000 }, async () => {
+test("plx connect with no terminal and no device grant prints the link, skips the browser, and exits 1 at end of input, saying why on stderr", { timeout: 30_000 }, async () => {
   const script = connectScript(`() => ({ token_endpoint: "unused" })`);
-  const { code, stdout } = /** @type {{ code: number, stdout: string }} */ (await noTerminal(script, "ignore"));
+  const { code, stdout, stderr } = /** @type {{ code: number, stdout: string, stderr: string }} */ (await noTerminal(script, "ignore"));
   assert.equal(code, 1, stdout);
   assert.match(stdout, /^ {2}https:\/\/127\.0\.0\.1:1\/oauth\/authorize\S+$/m);
   assert.match(stdout, /^Paste the code it shows: $/m);
-  assert.match(stdout, /^✗ No code was entered before input ended\./m);
-  assert.doesNotMatch(stdout, /Opened your browser|got past sign-in/);
+  assert.match(stderr, /^✗ No code was entered before input ended\./m);
+  assert.doesNotMatch(stdout, /Opened your browser|got past sign-in|No code was entered/);
+});
+
+/** A Clerk with the device grant, whose token endpoint answers `token`, a JSON object. @param {string} token */
+const deviceClerk = (token) => `(url) => {
+  if (url.endsWith("/.well-known/oauth-authorization-server")) return { device_authorization_endpoint: "https://clerk.example/device", token_endpoint: "https://clerk.example/token", grant_types_supported: ["urn:ietf:params:oauth:grant-type:device_code"] };
+  if (url.endsWith("/device")) return { device_code: "secret", user_code: "ABCD-EFGH", verification_uri: "https://clerk.example/activate", expires_in: 60, interval: 1 };
+  return ${token};
+}`;
+
+test("a denied device grant exits 1 and says why on stderr", { timeout: 30_000 }, async () => {
+  const script = connectScript(deviceClerk(`{ error: "access_denied" }`));
+  const { code, stdout, stderr } = /** @type {{ code: number, stdout: string, stderr: string }} */ (await noTerminal(script, "ignore"));
+  assert.equal(code, 1, stdout);
+  assert.match(stderr, /^✗ The sign-in was denied\./m);
+  assert.doesNotMatch(stdout, /denied|got past sign-in/);
 });
 
 test("plx connect with no terminal and the device grant signs in with nothing on stdin", { timeout: 30_000 }, async () => {
-  const script = connectScript(`(url) => {
-    if (url.endsWith("/.well-known/oauth-authorization-server")) return { device_authorization_endpoint: "https://clerk.example/device", token_endpoint: "https://clerk.example/token", grant_types_supported: ["urn:ietf:params:oauth:grant-type:device_code"] };
-    if (url.endsWith("/device")) return { device_code: "secret", user_code: "ABCD-EFGH", verification_uri: "https://clerk.example/activate", expires_in: 60, interval: 1 };
-    return { access_token: "token" };
-  }`);
+  const script = connectScript(deviceClerk(`{ access_token: "token" }`));
   const { code, stdout } = /** @type {{ code: number, stdout: string }} */ (await noTerminal(script, "ignore"));
   // The stub fails right after sign-in, which is how far this run goes.
   assert.equal(code, 1, stdout);
