@@ -8,13 +8,15 @@
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    HostSettingsGet, HostSettingsSet, OrchestratorCreate, RelayHosts, RelayRegister, RelayRemove,
-    RelaySign, RemoteSessions, ScheduleList, ScheduleSave,
+    AccessGet, AccessMerge, AccessRemove, HostSettingsGet, HostSettingsSet, OrchestratorCreate,
+    RelayHosts, RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
+    ScheduleSave,
 };
 use parallax_protocol::{
-    AccountChoice, HostSettingsGetParams, HostSettingsSetParams, RelayHostsParams,
-    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelayStatus, RemoteSessionsParams,
-    Schedule, ScheduleListParams, ScheduleSaveParams, SignatureEncoding, WebhookSignature,
+    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice, HostSettingsGetParams,
+    HostSettingsSetParams, RelayHostsParams, RelayRegisterParams, RelayRemoveParams,
+    RelaySignParams, RelayStatus, RemoteRevokeParams, RemoteSessionsParams, Schedule,
+    ScheduleListParams, ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
 use plxd::{relay, remote};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -23,7 +25,7 @@ use tokio::time::{Instant, sleep};
 
 use crate::agents::fake;
 use crate::connect::free_port;
-use crate::remote::{App, LOOPBACK, new_code, open, set_remote, wait_listening};
+use crate::remote::{App, LOOPBACK, new_code, open, open_account, set_remote, wait_listening};
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 use crate::thread_tools::Keys;
 
@@ -357,6 +359,190 @@ async fn another_computer_registers_with_its_signature_alone() {
         host_id: signed.host_id,
     });
     removed.await.unwrap();
+}
+
+/// A computer on the account of `token`, connected to the relay at `url`, whose plxd takes tokens
+/// from the Clerk at `issuer`: the server, its client, and its route and host id.
+async fn computer(
+    dir: &std::path::Path,
+    issuer: &str,
+    url: &str,
+    token: &str,
+) -> (InProcess, Client, String, String) {
+    let port = free_port();
+    let server = InProcess::start(crate::account::config(dir, issuer, url, port));
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let registered = client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token.to_owned(),
+            signed: None,
+        })
+        .await;
+    assert!(registered.is_ok(), "{registered:?}");
+    let status = relay_status(&mut client, |s| s.connected).await;
+    let hook_url = status.hook_url.unwrap();
+    let host_id = hook_url.rsplit('/').next().unwrap().to_owned();
+    (server, client, format!("127.0.0.1:{port}"), host_id)
+}
+
+/// Whether `key` is on `client`'s computer's removed list within 5 seconds.
+async fn learns_removed(client: &mut Client, key: &str) -> bool {
+    let deadline = Instant::now() + REMOVAL_ARRIVES;
+    while Instant::now() < deadline {
+        let state = client.call::<AccessGet>(AccessGetParams::default()).await;
+        if state.unwrap().removed_clients.iter().any(|k| k == key) {
+            return true;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
+/// A live connection to a computer, as a device holds one, that answers a request.
+async fn answers(app: &mut App) -> bool {
+    app.send(r#"{"jsonrpc":"2.0","id":9,"method":"host/health","params":{}}"#)
+        .await;
+    app.next().await.contains(r#""result""#)
+}
+
+/// The account of the token `relay/scripts/e2e.mjs` passes, as plxd takes tokens from the test's Clerk.
+const E2E_USER: &str = "user_e2e";
+
+/// How soon a removal reaches an online computer.
+const REMOVAL_ARRIVES: Duration = Duration::from_secs(5);
+
+#[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one removal told step by step")]
+async fn removing_a_device_on_one_computer_cuts_it_off_on_the_others_within_seconds() {
+    let (Ok(url), Ok(relay_token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+    ) else {
+        return;
+    };
+    let issuer = crate::account::clerk().await;
+    let dirs = [temp_dir(), temp_dir(), temp_dir(), temp_dir()];
+    let (a_server, mut a, a_route, a_id) =
+        computer(dirs[0].path(), &issuer, &url, &relay_token).await;
+    let (b_server, mut b, b_route, b_id) =
+        computer(dirs[1].path(), &issuer, &url, &relay_token).await;
+    let (c_server, mut c, c_route, c_id) =
+        computer(dirs[2].path(), &issuer, &url, &relay_token).await;
+    // On the account by the relay's list, so it gets statements, but no client approved it.
+    let (d_server, mut d, _, _) = computer(dirs[3].path(), &issuer, &url, &relay_token).await;
+    let (phone, tablet) = (temp_dir(), temp_dir());
+    let phone_key = crate::account::thumbprint(phone.path());
+    let tablet_key = crate::account::thumbprint(tablet.path());
+    let lists = AccessMergeParams {
+        approved_clients: vec![phone_key.clone(), tablet_key.clone()],
+        removed_clients: Vec::new(),
+        approved_hosts: vec![a_id.clone(), b_id.clone(), c_id.clone()],
+    };
+    for client in [&mut a, &mut b, &mut c] {
+        client.call::<AccessMerge>(lists.clone()).await.unwrap();
+    }
+    let sign_in = |route: &str, id: &str, name: &'static str, dir: std::path::PathBuf| {
+        let (route, id, token) = (
+            route.to_owned(),
+            id.to_owned(),
+            crate::account::token(&issuer, E2E_USER),
+        );
+        async move { remote::sign_in(&[route], &id, &token, name, &dir).await }
+    };
+    for (route, id) in [(&a_route, &a_id), (&b_route, &b_id), (&c_route, &c_id)] {
+        for (dir, name) in [(&phone, "phone"), (&tablet, "tablet")] {
+            let signed_in = sign_in(route, id, name, dir.path().to_owned()).await;
+            assert!(
+                matches!(signed_in, Ok((_, remote::SignIn::Approved { .. }))),
+                "{signed_in:?}"
+            );
+        }
+    }
+    let live = |route: &String, id: &String, dir: &std::path::Path| {
+        let (routes, id, dir) = (vec![route.clone()], id.clone(), dir.to_owned());
+        async move {
+            let mut app = open_account(&routes, &id, &dir).await.unwrap();
+            assert!(app.initialize().await["result"].is_object());
+            app
+        }
+    };
+    let mut phone_on_b = live(&b_route, &b_id, phone.path()).await;
+    let mut phone_on_c = live(&c_route, &c_id, phone.path()).await;
+
+    // A computer the relay lists that no client approved says the phone is removed. Nobody listens.
+    d.call::<AccessRemove>(AccessRemoveParams {
+        thumbprint: phone_key.clone(),
+    })
+    .await
+    .unwrap();
+    sleep(Duration::from_secs(1)).await;
+    assert!(answers(&mut phone_on_b).await, "not approved, so ignored");
+    assert!(answers(&mut phone_on_c).await, "not approved, so ignored");
+
+    // Removing it in A's Settings, with no client connected to B or C, closes it there.
+    let started = Instant::now();
+    let sessions = a.call::<RemoteSessions>(RemoteSessionsParams {}).await;
+    let session = sessions.unwrap().sessions;
+    let session = session.iter().find(|s| s.name == "phone").unwrap();
+    a.call::<RemoteRevoke>(RemoteRevokeParams {
+        id: session.id.clone(),
+    })
+    .await
+    .unwrap();
+    assert!(phone_on_b.closes().await);
+    assert!(phone_on_c.closes().await);
+    let took = started.elapsed();
+    assert!(took < REMOVAL_ARRIVES, "took {took:?}");
+    println!("a removal closed the sessions on two other computers in {took:?}");
+    for (route, id, client) in [(&b_route, &b_id, &mut b), (&c_route, &c_id, &mut c)] {
+        assert!(learns_removed(client, &phone_key).await);
+        let routes = std::slice::from_ref(route);
+        let dialed = open_account(routes, id, phone.path()).await;
+        assert!(matches!(dialed, Err(remote::Error::Refused)));
+        let signed_in = sign_in(route, id, "phone", phone.path().to_owned()).await;
+        assert!(matches!(signed_in, Err(remote::Error::Refused)));
+    }
+
+    // C goes offline, so it hears nothing and its session stays, until a client catches it up.
+    let mut tablet_on_c = live(&c_route, &c_id, tablet.path()).await;
+    set_relay(&mut c, false).await;
+    relay_status(&mut c, |s| !s.connected).await;
+    a.call::<AccessRemove>(AccessRemoveParams {
+        thumbprint: tablet_key.clone(),
+    })
+    .await
+    .unwrap();
+    assert!(learns_removed(&mut b, &tablet_key).await);
+    assert!(!learns_removed(&mut c, &tablet_key).await);
+    assert!(answers(&mut tablet_on_c).await, "offline: not told yet");
+    set_relay(&mut c, true).await;
+    relay_status(&mut c, |s| s.connected).await;
+    c.call::<AccessMerge>(AccessMergeParams {
+        removed_clients: vec![tablet_key.clone()],
+        ..AccessMergeParams::default()
+    })
+    .await
+    .unwrap();
+    assert!(tablet_on_c.closes().await);
+
+    // A removal made while A's own connection is down goes when it's back.
+    let watch = remote::DpopKey::generate().thumbprint();
+    set_relay(&mut a, false).await;
+    relay_status(&mut a, |s| !s.connected).await;
+    a.call::<AccessRemove>(AccessRemoveParams {
+        thumbprint: watch.clone(),
+    })
+    .await
+    .unwrap();
+    set_relay(&mut a, true).await;
+    relay_status(&mut a, |s| s.connected).await;
+    assert!(learns_removed(&mut b, &watch).await);
+
+    for server in [a_server, b_server, c_server, d_server] {
+        server.stop().await;
+    }
 }
 
 /// How many connections the relay benchmark times.

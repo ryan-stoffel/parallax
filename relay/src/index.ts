@@ -12,6 +12,8 @@
  *   (0065), so the relay carries only ciphertext. Clients from before 0091 get a ticket first
  *   (`POST /v1/hosts/<id>/tickets`) and open `/connect?ticket=<ticket>`.
  * - `/v1/hooks/<id>/<hookId>/<token>` goes to plxd over its WebSocket, or is held while it's away.
+ * - A plxd's statement that a device is removed goes, unread and unkept, to its user's other online
+ *   plxds over their WebSockets, and they check its signature (0091).
  * - A user removes a host of theirs with `DELETE /v1/hosts/<id>`, which frees its slot and lists it
  *   as `removed` in `GET /v1/hosts` until it registers under them again (PLX-1351).
  * - Mobile devices register for push at `/v1/devices`.

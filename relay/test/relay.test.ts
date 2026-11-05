@@ -8,6 +8,7 @@ import {
   LIMITS,
   MAX_DAILY_BYTES,
   MAX_HOOK_BYTES,
+  MAX_REMOVAL,
   MAX_STREAMS,
 } from "../src/host";
 import worker, { type Env, network } from "../src/index";
@@ -683,6 +684,55 @@ describe("rate limits", () => {
     for (let i = 2; i < LIMITS.hostConnect; i++) await (await connectHost(host)).control.next();
     const over = await hostSocket(host, await hostProof(host));
     expect(over instanceof Response && over.status).toBe(429);
+  });
+});
+
+describe("a device's removal", () => {
+  /** Whether nothing arrives on `control` for a moment. Its last read: it holds the next message. */
+  const silent = (control: Socket) =>
+    Promise.race([
+      control.next().then(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 200)),
+    ]);
+
+  it("goes as sent to its user's other online hosts only, and is kept for none", async () => {
+    const user = `user_${crypto.randomUUID()}`;
+    const from = await online(user);
+    const peer = await online(user);
+    const stranger = await online();
+    const away = await newHost();
+    expect((await register(away, from.token)).status).toBe(200);
+
+    from.control.ws.send(JSON.stringify({ t: "removed", statement: "opaque" }));
+    expect(JSON.parse((await peer.control.next()) as string)).toEqual({
+      t: "removed",
+      statement: "opaque",
+    });
+    expect(await silent(from.control)).toBe(true);
+    expect(await silent(stranger.control)).toBe(true);
+
+    const { control } = await connectHost(away);
+    expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready" });
+    expect(await silent(control)).toBe(true);
+  });
+
+  it("drops a statement past its size or rate", async () => {
+    const user = `user_${crypto.randomUUID()}`;
+    const from = await online(user);
+    const peer = await online(user);
+    const send = (statement: unknown) =>
+      from.control.ws.send(JSON.stringify({ t: "removed", statement }));
+
+    send("x".repeat(MAX_REMOVAL + 1));
+    send(7);
+    send("first");
+    expect(JSON.parse((await peer.control.next()) as string).statement).toBe("first");
+
+    for (let sent = 1; sent < LIMITS.removals; sent++) send(String(sent));
+    for (let sent = 1; sent < LIMITS.removals; sent++)
+      expect(JSON.parse((await peer.control.next()) as string).statement).toBe(String(sent));
+    send("over");
+    expect(await silent(peer.control)).toBe(true);
   });
 });
 

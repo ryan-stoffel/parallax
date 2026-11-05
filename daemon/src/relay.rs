@@ -13,6 +13,8 @@
 //!   fires once.
 //! - It tells the relay when a run needs the user, finishes, or fails, for push, with the thread's
 //!   title and the start of its reply sealed with a key only the user's phones get ([`seal`], 0100).
+//! - It tells the account's other online hosts when a device is removed here, in a statement signed
+//!   by its host key, and takes theirs ([`crate::server::remote::access::receive_removal`], 0091).
 //!
 //! It reconnects with jittered exponential backoff and polls nothing. Idle, it sends one ping a
 //! minute, which the relay answers without waking, to keep Cloudflare's idle timer from closing
@@ -21,7 +23,7 @@
 //! A client reaches a host over a `relay:<hostId>` route: [`open_stream`] is the byte stream its
 //! TLS runs over, opened with the Clerk session [`sign_in`] keeps in its `Authorization` header.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -485,6 +487,11 @@ pub(crate) struct Relay {
     /// refused a proof for its time. Proofs are signed by the relay's clock from then on.
     clock_offset: AtomicI64,
     status: Mutex<Status>,
+    /// The keys removed here that the account's other hosts haven't been told of. Each stays until
+    /// it's sent, so a socket that's down sends it on the next.
+    removals: Mutex<BTreeSet<String>>,
+    /// Wakes the connection to send [`Relay::removals`].
+    removed: Notify,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -502,6 +509,35 @@ impl Relay {
             hooks_changed: Notify::new(),
             clock_offset: AtomicI64::new(0),
             status: Mutex::default(),
+            removals: Mutex::default(),
+            removed: Notify::new(),
+        }
+    }
+
+    /// Tells the account's other online hosts, on this connection or the next, that `key` is
+    /// removed.
+    pub(crate) fn tell_removed(&self, key: String) {
+        self.removals
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key);
+        self.removed.notify_one();
+    }
+
+    /// The keys the next removal statement names.
+    fn waiting_removals(&self) -> Vec<String> {
+        let waiting = self.removals.lock().unwrap_or_else(PoisonError::into_inner);
+        waiting.iter().take(MAX_REMOVALS).cloned().collect()
+    }
+
+    /// Stops waiting to tell of `keys`, and wakes the connection for any others.
+    fn sent_removals(&self, keys: &[String]) {
+        let mut waiting = self.removals.lock().unwrap_or_else(PoisonError::into_inner);
+        for key in keys {
+            waiting.remove(key);
+        }
+        if !waiting.is_empty() {
+            self.removed.notify_one();
         }
     }
 
@@ -893,6 +929,27 @@ async fn connected(
     ended
 }
 
+/// How many keys one removal statement names, which keeps it well under
+/// [`remote::MAX_REMOVAL_BYTES`].
+const MAX_REMOVALS: usize = 100;
+
+/// The next removal statement to send, with the keys it names. None with nothing waiting. With no
+/// account to sign for, the keys are dropped, and other computers learn of them from a client.
+async fn next_removal(daemon: &Daemon) -> Option<(Vec<String>, Message)> {
+    let keys = daemon.relay.waiting_removals();
+    if keys.is_empty() {
+        return None;
+    }
+    let Some(account) = crate::server::remote::access::account(daemon).await else {
+        daemon.relay.sent_removals(&keys);
+        return None;
+    };
+    let key = signer(daemon).await.ok()?;
+    let statement = remote::signed_removal(&key, &account, &keys);
+    let message = json!({ "t": "removed", "statement": statement });
+    Some((keys, Message::text(message.to_string())))
+}
+
 /// Milliseconds since the epoch, by this computer's clock.
 fn now_ms() -> i64 {
     let since = std::time::SystemTime::now()
@@ -966,6 +1023,8 @@ async fn serve(
         Message::text(json!({ "t": "hooks", "keys": keys }).to_string())
     };
     sink.send(hooks().await).await.map_err(failed)?;
+    // Any removal the last connection didn't send.
+    daemon.relay.removed.notify_one();
     loop {
         // `remote` on with no spare asks for one; `remote` off closes it.
         match (serving(daemon).await, &spare) {
@@ -1005,6 +1064,12 @@ async fn serve(
             () = daemon.relay.hooks_changed.notified() => {
                 sink.send(hooks().await).await.map_err(failed)?;
             }
+            () = daemon.relay.removed.notified() => {
+                if let Some((keys, removal)) = next_removal(daemon).await {
+                    sink.send(removal).await.map_err(failed)?;
+                    daemon.relay.sent_removals(&keys);
+                }
+            }
             Ok(()) = events.changed() => {
                 for (run, state) in pushes.read(&daemon.log, Instant::now()) {
                     let push = message(daemon, host_id, run, state).await;
@@ -1039,6 +1104,15 @@ async fn serve(
                             let stop = joined.as_ref().map_or_else(|| streams.clone(), |(open, _)| open.clone());
                             let done = joined.map(|(_, done)| done);
                             tokio::spawn(stream(url, host_id, message, local, stop, done));
+                        } else if message["t"] == "removed"
+                            && let Some(statement) = message["statement"].as_str()
+                        {
+                            let daemon = Arc::clone(daemon);
+                            let statement = statement.to_owned();
+                            tokio::spawn(async move {
+                                crate::server::remote::access::receive_removal(&daemon, &statement)
+                                    .await;
+                            });
                         }
                     }
                     Some(Ok(Message::Binary(frame))) => {

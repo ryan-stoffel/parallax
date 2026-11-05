@@ -630,6 +630,75 @@ pub fn now_seconds() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// The largest removal statement plxd sends or reads, as the relay caps it (0091).
+pub const MAX_REMOVAL_BYTES: usize = 8192;
+
+/// A statement of removed keys, as one host signs it for the account's other hosts (0091). The
+/// relay passes it on as an opaque string. Its signer is whoever holds the key in it, so a receiver
+/// asks whether it approved that host.
+#[derive(Serialize, Deserialize)]
+struct RemovalStatement {
+    x: String,
+    y: String,
+    removed: Vec<String>,
+    signature: String,
+}
+
+/// What a host signs: the keys `removed` are removed on `account`. Tagged so no other signature of
+/// the host key reads as one, and with no time, since a removed key stays removed and a replay
+/// changes nothing.
+fn removal_message(account: &str, removed: &[String]) -> String {
+    format!("parallax-access-removed\n{account}\n{}", removed.join("\n"))
+}
+
+/// A statement that `key`'s holder removed the keys `removed` on `account`.
+#[must_use]
+pub fn signed_removal(key: &DpopKey, account: &str, removed: &[String]) -> String {
+    let (x, y) = key.coordinates();
+    let signature = key.sign(removal_message(account, removed).as_bytes());
+    serde_json::to_string(&RemovalStatement {
+        x,
+        y,
+        removed: removed.to_vec(),
+        signature: base64url(&signature),
+    })
+    .unwrap_or_default()
+}
+
+/// The host id that signed `statement` for `account`, and the keys it says are removed.
+///
+/// # Errors
+///
+/// Why it doesn't check out, for the log.
+pub fn open_removal(statement: &str, account: &str) -> Result<(String, Vec<String>), &'static str> {
+    if statement.len() > MAX_REMOVAL_BYTES {
+        return Err("too long");
+    }
+    let statement: RemovalStatement =
+        serde_json::from_str(statement).map_err(|_| "not a removal statement")?;
+    if !statement.removed.iter().all(|key| is_host_id(key)) {
+        return Err("not key thumbprints");
+    }
+    let (Some(x), Some(y), Some(signature)) = (
+        base64url_decode(&statement.x),
+        base64url_decode(&statement.y),
+        base64url_decode(&statement.signature),
+    ) else {
+        return Err("bad base64url");
+    };
+    if x.len() != 32 || y.len() != 32 {
+        return Err("a bad public key");
+    }
+    let point = [&[4][..], &x, &y].concat();
+    signature::UnparsedPublicKey::new(&signature::ECDSA_P256_SHA256_FIXED, point)
+        .verify(
+            removal_message(account, &statement.removed).as_bytes(),
+            &signature,
+        )
+        .map_err(|_| "a bad signature")?;
+    Ok((thumbprint(&statement.x, &statement.y), statement.removed))
+}
+
 /// A `DPoP` proof that checked out: its key's thumbprint and its `jti`, for replay checks.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Proven {
