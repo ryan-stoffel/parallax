@@ -81,7 +81,10 @@ export function AccountPrompts() {
 
 /** Whether computer `d` is waiting on its code now and answers, so a screen can ask for it. */
 export const asksForCode = (d: Pick<DeviceHost, "access">) =>
-  (d.access?.step === "needsCode" && !d.access.offline) || d.access?.step === "pairing";
+  (d.access?.step === "needsCode" && !d.access.offline) ||
+  d.access?.step === "pairing" ||
+  d.access?.step === "compare" ||
+  d.access?.step === "confirm";
 
 /** A small modal, as the app's confirmations are, shown while it's mounted. */
 export function Modal({
@@ -144,11 +147,86 @@ export function useSetupCode(computer: Pick<DeviceHost, "id" | "access">, onPair
   return { code, setCode, busy, error, ready, submit };
 }
 
+/**
+ * A new computer's code to compare (0091), with Allow. The computer shows the same code, so a
+ * different one, or none, means something else is answering. Enter does nothing here, so a stray
+ * key press can't allow it. `onDone` runs once this device is in, and `onClosed` once it's denied.
+ */
+export function CompareCode({
+  computer,
+  onDone,
+  onClosed,
+  onType,
+}: {
+  computer: Pick<DeviceHost, "id" | "name" | "access">;
+  onDone: () => void;
+  onClosed: () => void;
+  /** Shows the typed setup code instead. */
+  onType: () => void;
+}) {
+  const [busy, setBusy] = useState<"allow" | "deny">();
+  const [error, setError] = useState<string>();
+  const access = computer.access;
+  if (access?.step !== "compare" && access?.step !== "confirm") return null;
+  const answer = async (allow: boolean) => {
+    setBusy(allow ? "allow" : "deny");
+    setError(undefined);
+    const failed = await window.parallax.answerCompare(computer.id, allow);
+    setBusy(undefined);
+    if (failed) setError(failed);
+    else if (allow) onDone();
+    else onClosed();
+  };
+  return (
+    <>
+      <p className="mt-1.5 text-body text-muted-foreground">
+        {access.step === "confirm"
+          ? `Press Enter in ${computer.name}'s terminal, or Allow in its Parallax, to finish.`
+          : `Allow it only if ${computer.name} shows this code, in its terminal or its Parallax. Another code, or none, means something else is answering.`}
+      </p>
+      <p
+        aria-label="Code"
+        className="mt-3 rounded-md border border-border py-2 text-center font-mono text-xl tracking-[0.3em] tabular-nums"
+      >
+        {spacedCode(access.code)}
+      </p>
+      {error && (
+        <p role="alert" className="mt-2 text-body text-danger">
+          {error}
+        </p>
+      )}
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <button type="button" className={`${quietButton} -ml-2.5 mr-auto`} onClick={onType}>
+          Type a code instead
+        </button>
+        <button
+          type="button"
+          className={quietButton}
+          disabled={busy === "deny"}
+          onClick={() => void answer(false)}
+        >
+          {busy === "deny" ? "Denying…" : "Deny"}
+        </button>
+        <button
+          type="button"
+          className={primaryButton}
+          disabled={!!busy || access.step === "confirm"}
+          onClick={() => void answer(true)}
+        >
+          {busy === "allow" || access.step === "confirm" ? "Waiting…" : "Allow"}
+        </button>
+      </div>
+    </>
+  );
+}
+
 /** The field for a setup code, what to type there, and where to find the code. */
 export function SetupCodeField({
+  id,
   name,
   form: { code, setCode, busy, error },
 }: {
+  id: string;
   name: string;
   form: ReturnType<typeof useSetupCode>;
 }) {
@@ -176,13 +254,21 @@ export function SetupCodeField({
       )}
       <p className="mt-2 text-meta text-faint-foreground">
         No code there? Run the setup command on {name} again, or in Parallax there, choose Show
-        setup code in Settings › Connections.
+        setup code in Settings › Connections.{" "}
+        <button
+          type="button"
+          className="underline"
+          disabled={busy}
+          onClick={() => void window.parallax.askAgain(id)}
+        >
+          Compare codes instead
+        </button>
       </p>
     </>
   );
 }
 
-/** A new computer on the account asks for its code (0091), in a dialog of its own. */
+/** A new computer on the account shows a code to allow, or asks for one typed (0091). */
 export function NewComputerDialog({
   computer,
   onClose,
@@ -194,14 +280,35 @@ export function NewComputerDialog({
   onAdded?: () => void;
 }) {
   const form = useSetupCode(computer, onAdded);
+  const [typing, setTyping] = useState(false);
+  const step = computer.access?.step;
+  const icon = (
+    <DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />
+  );
+  if (!typing && (step === "compare" || step === "confirm"))
+    return (
+      <Modal
+        title={`Add ${computer.name}?`}
+        icon={icon}
+        onClose={onClose}
+        onSubmit={(e) => e.preventDefault()}
+      >
+        <CompareCode
+          computer={computer}
+          onDone={onAdded}
+          onClosed={onClose}
+          onType={() => setTyping(true)}
+        />
+      </Modal>
+    );
   return (
     <Modal
       title={`Add ${computer.name}`}
-      icon={<DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />}
+      icon={icon}
       onClose={onClose}
       onSubmit={(e) => void form.submit(e)}
     >
-      <SetupCodeField name={computer.name} form={form} />
+      <SetupCodeField id={computer.id} name={computer.name} form={form} />
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" className={quietButton} onClick={onClose}>
           Cancel

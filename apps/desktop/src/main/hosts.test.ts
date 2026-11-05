@@ -515,8 +515,10 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
     // It answers with its key, so the dialog asks for its code.
     fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
     box.set(refused);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe"]);
+    await vi.advanceTimersByTimeAsync(20);
+    // It shows no code to compare here, so typing is what's left.
+    expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe", `--account=${buildBox}`]);
+    expect(fake.dials[1]?.args).toContain("--compare");
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
 
     const enter = (code: string) =>
@@ -524,7 +526,7 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
         string | undefined
       >;
     expect(await enter("12 34")).toBe("Enter the 6 digits it shows.");
-    expect(fake.dials).toHaveLength(1);
+    expect(fake.dials).toHaveLength(2);
 
     fake.dialOutput = { lines: [], code: 5 };
     const wrong = enter("482 913");
@@ -942,9 +944,72 @@ test("a new account computer that's offline or doesn't answer waits in Settings,
     // the timer probes it again, with no focus change, and the prompt appears on its own.
     fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
     fake.visible = true;
-    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.advanceTimersByTimeAsync(15_021);
     fake.visible = false;
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a new account computer's code is compared once, and one added by Allow is marked so no lists come from it", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const merged: unknown[] = [];
+    fake.answers.set("access/merge", (params: unknown) => (merged.push(params), { result: {} }));
+    fake.answers.set("access/get", accessState([]));
+    const local = await start(
+      { localName: "macbook", accounts: [{ hostId: buildBox, name: "build-box", routes: [] }] },
+      signedIn().account,
+    );
+    local.set(connected({ accountAccess: {} }));
+    const box = accountConnection(buildBox)!;
+    const pending = '{"status":"pending","request":"r1","code":"482913"}';
+    const approved = `{"status":"approved","name":"build-box","routes":["10.0.0.5:7341"]}`;
+
+    // A request that ends with no Allow leaves the typed code, and doesn't start another. The
+    // probe answers first, then the compare, each with its own output.
+    const runs = [
+      { lines: [`{"route":"relay:${buildBox}"}`], code: 0 },
+      { lines: [pending], code: 5 },
+    ];
+    fake.dialOutput = {
+      get lines() {
+        return (runs[0] ?? { lines: [] }).lines;
+      },
+      get code() {
+        return (runs.length > 1 ? runs.shift()! : (runs[0] ?? { code: 0 })).code;
+      },
+    };
+    box.set(refused);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(listed(buildBox)?.access).toEqual({ step: "compare", code: "482913" });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(listed(buildBox)?.access).toMatchObject({
+      step: "needsCode",
+      error: expect.stringContaining("Type the code"),
+    });
+    expect(merged).toEqual([]);
+    const dials = fake.dials.length;
+    box.set(refused);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fake.dials.filter((d) => d.args.includes("--compare"))).toHaveLength(1);
+    expect(fake.dials.length).toBeLessThanOrEqual(dials + 1);
+
+    // The user asks again: Allow gets a session, and the computer is marked.
+    fake.dialOutput = { lines: [pending, approved], code: 0 };
+    void fake.handlers.get("parallax:askAgain")!({}, `account:${buildBox}`);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(merged).toContainEqual({
+      approvedClients: [],
+      removedClients: [],
+      approvedHosts: [buildBox],
+      allowedHosts: [buildBox],
+    });
+    expect(box.retry).toHaveBeenCalled();
+    expect(listed(buildBox)?.access).toBeUndefined();
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });

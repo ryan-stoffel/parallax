@@ -1207,6 +1207,8 @@ pub enum SignIn {
         /// Its 6 digits.
         code: String,
     },
+    /// The user clicked Allow, and the host waits for its own screen to confirm too.
+    Confirm,
 }
 
 /// How long the host holds a call to `/api/auth/approval` with `wait` before it answers that the
@@ -1316,7 +1318,9 @@ fn client_value(
 /// Signs in to the `account:` host `host_id` at the first of `routes` that answers, with a fresh
 /// Clerk `token` (0091), as `name`. An approved [`device_key`] gets a session, saved for
 /// [`dial_account`]. Any other starts a request, or finds the one waiting, and both ends then show
-/// its code. Answers with the route that answered.
+/// its code. Answers with the route that answered. With `compare`, for a host nothing vouches for
+/// yet, one that answers with a session at once is refused and its session isn't saved, since it
+/// showed no code for the user to compare.
 ///
 /// # Errors
 ///
@@ -1328,6 +1332,7 @@ pub async fn sign_in(
     host_id: &str,
     token: &str,
     name: &str,
+    compare: bool,
     data_dir: &Path,
 ) -> Result<(String, SignIn), Error> {
     if !is_host_id(host_id) {
@@ -1336,7 +1341,7 @@ pub async fn sign_in(
     let key = device_key(data_dir)?;
     let mut last = Error::Protocol("no routes".to_owned());
     for route in routes {
-        let attempt = sign_in_at(route, host_id, token, name, data_dir, &key);
+        let attempt = sign_in_at(route, host_id, token, name, compare, data_dir, &key);
         match tokio::time::timeout(REQUEST_TIMEOUT, attempt).await {
             Ok(Ok(signed_in)) => return Ok((route.clone(), signed_in)),
             Ok(Err(error @ (Error::Refused | Error::WrongHost))) => return Err(error),
@@ -1352,6 +1357,7 @@ async fn sign_in_at(
     host_id: &str,
     token: &str,
     name: &str,
+    compare: bool,
     data_dir: &Path,
     key: &DpopKey,
 ) -> Result<SignIn, Error> {
@@ -1362,6 +1368,7 @@ async fn sign_in_at(
     let headers = [("DPoP", proof.as_str())];
     let (status, answer) = request(route, &pin, "POST", path, &headers, Some(&body)).await?;
     let answer: serde_json::Value = match status {
+        200 if compare => return Err(Error::Refused),
         200 => return approved(route, host_id, key, data_dir, &json(&answer)?),
         202 => json(&answer)?,
         401 | 403 | 429 => return Err(Error::Refused),
@@ -1378,6 +1385,9 @@ async fn sign_in_at(
     let step = json!({ "request": request_id, "value": base64url(&value) });
     let (status, answer) = approval_step(route, &pin, key, &step).await?;
     if status == 200 {
+        if compare {
+            return Err(Error::Refused);
+        }
         return approved(route, host_id, key, data_dir, &answer);
     }
     // Only now does the host show its value, which must be the one it committed to.
@@ -1463,6 +1473,41 @@ pub async fn await_approval(
             return approved(route, host_id, &key, data_dir, &answer);
         }
     }
+}
+
+/// Tells the `account:` host `host_id` that the user clicked Allow here on `request` (0091). The
+/// device named by the setup command gets its session. Any other gets [`SignIn::Confirm`]: the host
+/// takes no client's word alone, and [`await_approval`] waits for its own screen.
+///
+/// # Errors
+///
+/// [`Error::Refused`] when the request lapsed or was denied, or the network's error.
+pub async fn allow(
+    route: &str,
+    host_id: &str,
+    request: &str,
+    data_dir: &Path,
+) -> Result<SignIn, Error> {
+    let key = device_key(data_dir)?;
+    let pin = Pin::HostId(host_id.to_owned());
+    let body = json!({ "request": request, "allow": true });
+    let (status, answer) = approval_step(route, &pin, &key, &body).await?;
+    if status == 200 {
+        return approved(route, host_id, &key, data_dir, &answer);
+    }
+    Ok(SignIn::Confirm)
+}
+
+/// Drops this computer's own `request` at the `account:` host `host_id`, as the user clicked Deny,
+/// and forgets its value. A host out of reach is not an error: the request lapses there.
+pub async fn withdraw(route: &str, host_id: &str, request: &str, data_dir: &Path) {
+    let _ = fs::remove_file(committed_path(data_dir, host_id));
+    let Ok(key) = device_key(data_dir) else {
+        return;
+    };
+    let pin = Pin::HostId(host_id.to_owned());
+    let body = json!({ "request": request, "deny": true });
+    let _ = approval_step(route, &pin, &key, &body).await;
 }
 
 /// A host found over mDNS: its name and where it listens.

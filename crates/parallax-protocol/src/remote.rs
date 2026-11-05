@@ -262,6 +262,11 @@ pub struct AccessState {
     pub removed_clients: Vec<String>,
     /// The relay ids of the account's approved hosts.
     pub approved_hosts: Vec<String>,
+    /// Those of them added with Allow alone (0091): clients use them and copy lists to them, but
+    /// take no keys or host ids from them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub allowed_hosts: Vec<String>,
     /// A new device's request, while it waits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -305,6 +310,10 @@ pub struct AccessMergeParams {
     /// Approved host ids.
     #[serde(default)]
     pub approved_hosts: Vec<String>,
+    /// Host ids added with Allow alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub allowed_hosts: Vec<String>,
 }
 
 /// Params of `access/approve` and `access/deny`.
@@ -334,7 +343,13 @@ pub struct AccessForgetHostParams {
 /// Params of `access/setupCode`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct AccessSetupCodeParams {}
+pub struct AccessSetupCodeParams {
+    /// The `DPoP` key thumbprint of the device whose Add computer gave the setup command. While
+    /// the code lasts, that key's Allow is enough, and no other key's request is taken (0091).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device: Option<String>,
+}
 
 /// Result of `access/setupCode`: the code a new computer shows for a signed-in client to type
 /// (0091).

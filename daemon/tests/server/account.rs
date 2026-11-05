@@ -153,7 +153,24 @@ async fn sign_in(
     name: &str,
     dir: &Path,
 ) -> Result<(String, SignIn), remote::Error> {
-    remote::sign_in(routes, host_id, &token(issuer, user), name, dir).await
+    remote::sign_in(routes, host_id, &token(issuer, user), name, false, dir).await
+}
+
+/// [`sign_in`] with a new computer's code to compare, as its Allow dialog does: the request's id
+/// and code.
+async fn compare(
+    issuer: &str,
+    routes: &[String],
+    host_id: &str,
+    name: &str,
+    dir: &Path,
+) -> Result<(String, String, String), remote::Error> {
+    let token = token(issuer, USER);
+    let (route, signed_in) = remote::sign_in(routes, host_id, &token, name, true, dir).await?;
+    let SignIn::Pending { request, code } = signed_in else {
+        panic!("{signed_in:?}");
+    };
+    Ok((route, request, code))
 }
 
 /// `POST /api/auth/account` at `route` with `token`, from a new key: its status and why.
@@ -194,9 +211,11 @@ async fn forgetting_a_computer_drops_its_approval_and_this_computers_session_for
             approved_clients: Vec::new(),
             removed_clients: Vec::new(),
             approved_hosts: vec![OTHER.to_owned()],
+            allowed_hosts: vec![OTHER.to_owned()],
         })
         .await
         .unwrap();
+    assert_eq!(access(&mut client).await.allowed_hosts, [OTHER]);
     let saved = dir.path().join("remote-hosts");
     std::fs::create_dir_all(&saved).unwrap();
     std::fs::write(saved.join(OTHER), "{}").unwrap();
@@ -210,6 +229,7 @@ async fn forgetting_a_computer_drops_its_approval_and_this_computers_session_for
         .await
         .unwrap();
     assert!(state.approved_hosts.is_empty());
+    assert!(state.allowed_hosts.is_empty());
     assert_eq!(std::fs::read_dir(&saved).unwrap().count(), 0);
 
     // Doing it again, as a second computer's Remove would, changes nothing.
@@ -365,6 +385,118 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
 }
 
 #[tokio::test]
+async fn the_device_a_setup_command_names_needs_only_its_allow_and_a_caught_token_gets_nothing() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    let routes = [route];
+    let (laptop, attacker) = (temp_dir(), temp_dir());
+    client
+        .call::<AccessSetupCode>(AccessSetupCodeParams {
+            device: Some(thumbprint(laptop.path())),
+        })
+        .await
+        .unwrap();
+
+    // A valid token from any other key can't start a request, so it can't hold the slot either.
+    let caught = compare(&issuer, &routes, &host_id, "laptop", attacker.path()).await;
+    assert!(matches!(caught, Err(remote::Error::Refused)));
+    assert!(access(&mut client).await.pending.is_none());
+
+    // Both screens show one code, and the named key's Allow gets its session.
+    let (at, request, code) = compare(&issuer, &routes, &host_id, "laptop", laptop.path())
+        .await
+        .unwrap();
+    assert_eq!(access(&mut client).await.pending.unwrap().code, Some(code));
+    let allowed = remote::allow(&at, &host_id, &request, laptop.path())
+        .await
+        .unwrap();
+    assert!(matches!(allowed, SignIn::Approved { .. }), "{allowed:?}");
+    let state = access(&mut client).await;
+    assert_eq!(state.setup_approved.as_deref(), Some("laptop"));
+    assert_eq!(state.approved_clients, [thumbprint(laptop.path())]);
+    let mut app = crate::remote::open_account(&routes, &host_id, laptop.path())
+        .await
+        .unwrap();
+    assert!(app.initialize().await["result"].is_object());
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn with_a_bare_setup_command_allow_alone_gets_no_session_until_this_computer_confirms() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    let routes = [route];
+    let (laptop, attacker) = (temp_dir(), temp_dir());
+    client
+        .call::<AccessSetupCode>(AccessSetupCodeParams::default())
+        .await
+        .unwrap();
+
+    // An attacker that races the laptop can say Allow all it likes. The terminal shows its request.
+    let (at, request, code) = compare(&issuer, &routes, &host_id, "laptop", attacker.path())
+        .await
+        .unwrap();
+    let said = remote::allow(&at, &host_id, &request, attacker.path())
+        .await
+        .unwrap();
+    assert_eq!(said, SignIn::Confirm);
+    let state = access(&mut client).await;
+    assert!(state.approved_clients.is_empty());
+    assert_eq!(state.pending.unwrap().code, Some(code));
+    let raced = compare(&issuer, &routes, &host_id, "laptop", laptop.path()).await;
+    assert!(
+        matches!(raced, Err(remote::Error::Refused)),
+        "one at a time"
+    );
+
+    // The user sees a request they didn't make and denies it, which ends it for the attacker.
+    client
+        .call::<AccessDeny>(AccessRequestParams {
+            request: request.clone(),
+        })
+        .await
+        .unwrap();
+    let denied = remote::await_approval(&at, &host_id, &request, attacker.path()).await;
+    assert!(matches!(denied, Err(remote::Error::Refused)));
+
+    // The laptop's own request: Allow there, then Enter here.
+    let (at, request, _) = compare(&issuer, &routes, &host_id, "laptop", laptop.path())
+        .await
+        .unwrap();
+    let said = remote::allow(&at, &host_id, &request, laptop.path())
+        .await
+        .unwrap();
+    assert_eq!(said, SignIn::Confirm);
+    client
+        .call::<AccessApprove>(AccessRequestParams {
+            request: request.clone(),
+        })
+        .await
+        .unwrap();
+    let approved = remote::await_approval(&at, &host_id, &request, laptop.path())
+        .await
+        .unwrap();
+    assert!(matches!(approved, SignIn::Approved { .. }), "{approved:?}");
+
+    // A key already approved shows no code to compare, so comparing keeps no session from it.
+    remote::forget_host(laptop.path(), &host_id).unwrap();
+    let again = compare(&issuer, &routes, &host_id, "laptop", laptop.path()).await;
+    assert!(matches!(again, Err(remote::Error::Refused)));
+    let saved = crate::remote::open_account(&routes, &host_id, laptop.path()).await;
+    assert!(saved.is_err(), "no session was kept");
+
+    // A client's Deny drops its own request, so the slot doesn't wait out its 10 minutes.
+    let (at, request, _) = compare(&issuer, &routes, &host_id, "x", attacker.path())
+        .await
+        .unwrap();
+    remote::withdraw(&at, &host_id, &request, attacker.path()).await;
+    assert!(access(&mut client).await.pending.is_none());
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn a_setup_code_approves_the_device_that_types_it_within_five_runs_an_hour() {
     let issuer = clerk().await;
     let dir = temp_dir();
@@ -373,7 +505,7 @@ async fn a_setup_code_approves_the_device_that_types_it_within_five_runs_an_hour
     let laptop = temp_dir();
     let new_code = async |client: &mut Client| {
         let setup = client
-            .call::<AccessSetupCode>(AccessSetupCodeParams {})
+            .call::<AccessSetupCode>(AccessSetupCodeParams::default())
             .await
             .unwrap();
         assert_eq!(setup.code.len(), remote::DIGITS, "{}", setup.code);
@@ -514,7 +646,7 @@ async fn unlinking_drops_a_waiting_request_and_a_browser_cant_pair_with_a_setup_
         .await
         .unwrap();
     let code = client
-        .call::<AccessSetupCode>(AccessSetupCodeParams {})
+        .call::<AccessSetupCode>(AccessSetupCodeParams::default())
         .await
         .unwrap()
         .code;
@@ -608,7 +740,7 @@ async fn request_and_setup_limits_and_a_waiting_request_survive_a_restart() {
         .unwrap();
     // And five setup runs.
     let code = client
-        .call::<AccessSetupCode>(AccessSetupCodeParams {})
+        .call::<AccessSetupCode>(AccessSetupCodeParams::default())
         .await
         .unwrap()
         .code;
@@ -642,7 +774,7 @@ async fn request_and_setup_limits_and_a_waiting_request_survive_a_restart() {
         (429, "too many new devices asked this hour".to_owned())
     );
     let code = client
-        .call::<AccessSetupCode>(AccessSetupCodeParams {})
+        .call::<AccessSetupCode>(AccessSetupCodeParams::default())
         .await
         .unwrap()
         .code;

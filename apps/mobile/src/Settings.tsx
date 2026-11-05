@@ -526,7 +526,7 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
  */
 export function AddComputerScreen({ navigation }: NativeStackScreenProps<SettingsScreens, "AddComputer">) {
   const c = useColors();
-  const { add, discover } = useFleet();
+  const { add, deviceKey, discover } = useFleet();
   const [pairing, setPairing] = useState(false);
   // Back from the computer that ran it, the account lists it.
   useEffect(() => {
@@ -549,7 +549,7 @@ export function AddComputerScreen({ navigation }: NativeStackScreenProps<Setting
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: 40 }}
     >
-      <AddInstructions />
+      <AddInstructions device={deviceKey} />
       <Pressable accessibilityRole="button" onPress={() => setPairing(true)} style={{ alignSelf: "center", padding: 10 }}>
         <T style={{ fontSize: 14, color: c.accent }}>Pair a computer on this Wi‑Fi instead</T>
       </Pressable>

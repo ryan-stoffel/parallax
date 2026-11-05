@@ -41,6 +41,7 @@ function bridge(devices: () => DeviceHost[]) {
     onAccessRequests: () => () => {},
     onProfile: () => () => {},
     discoverAccount: vi.fn(async () => {}),
+    deviceKey: vi.fn(async () => undefined),
     enterSetupCode: vi.fn(async () => undefined),
     showSetupCode: vi.fn(async () => ({
       code: "482913",
@@ -117,6 +118,13 @@ test("the terminal path gives a command for each OS that needs nothing installed
   );
   expect(connectCommand("nightly", "windows")).toBe(
     `powershell -c "irm ${scripts}/connect.ps1 | iex; Connect-Parallax --channel nightly"`,
+  );
+  // A key can start with `-`, so it's one argument with its flag.
+  expect(connectCommand("stable", "unix", "-key")).toBe(
+    `curl -fsSL ${scripts}/connect.sh | sh -s -- --channel stable --device=-key`,
+  );
+  expect(connectCommand("nightly", "windows", "-key")).toBe(
+    `powershell -c "irm ${scripts}/connect.ps1 | iex; Connect-Parallax --channel nightly --device=-key"`,
   );
 });
 

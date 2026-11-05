@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { allowThisPhone, enterSetupCode, formatCode } from "./accountPrompts";
+import { allowThisPhone, enterSetupCode, formatCode, showWaiting } from "./accountPrompts";
 import type { Saved } from "./host";
 import { pairedId, withListed, type Machine, type Setup } from "./machines";
 import { computerStatus, toAsk } from "./setup";
@@ -21,12 +21,17 @@ const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop
 /**
  * The commands that add a computer to the account (0091 "Setup"), as the desktop's wizard shows
  * them, with nothing installed. Nightly, until a stable release has this flow (0091). Windows
- * Defender blocks other ways of running the script.
+ * Defender blocks other ways of running the script. `device` is this phone's key, which reaches the
+ * new computer only through the user, so that computer can take this phone's Allow alone. A key
+ * can start with `-`, so it's one `--device=`.
  */
-const CONNECT_COMMANDS = [
-  { os: "macOS or Linux", command: `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- --channel nightly` },
-  { os: "Windows", command: `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax --channel nightly"` },
-];
+const connectCommands = (device?: string) => {
+  const flags = `--channel nightly${device ? ` --device=${device}` : ""}`;
+  return [
+    { os: "macOS or Linux", command: `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- ${flags}` },
+    { os: "Windows", command: `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax ${flags}"` },
+  ];
+};
 
 /** How often this looks for the account's computers while it's open. */
 const LOOK_MS = 15_000;
@@ -66,11 +71,11 @@ function Step({
 }
 
 /** How to add a computer to the account: the command to run on it, and what follows. */
-export function AddInstructions() {
+export function AddInstructions({ device }: { device?: string }) {
   const c = useColors();
   return (
     <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }]}>
-      {CONNECT_COMMANDS.map(({ os, command }) => (
+      {connectCommands(device).map(({ os, command }) => (
         <View key={os} style={{ gap: 4 }}>
           <T muted style={{ fontSize: 14 }}>
             On {os}, run
@@ -81,7 +86,7 @@ export function AddInstructions() {
         </View>
       ))}
       <T muted style={{ fontSize: 14, lineHeight: 20 }}>
-        It signs in to your Parallax account, then shows a 6-digit code to enter in Parallax.
+        It signs in to your Parallax account, then shows a 6-digit code. Parallax here shows the same one to allow.
       </T>
     </View>
   );
@@ -145,6 +150,7 @@ export function Onboarding({
   const [stopped, setStopped] = useState(accounts?.askingStopped);
   const [unanswered, setUnanswered] = useState(false);
   const asking = useRef(false);
+  const shownCode = useRef<string | undefined>(undefined);
   const allowed = useRef(false);
   /** A typed code is running, or let this phone in: an answer to its request is no Allow then. */
   const typed = useRef(false);
@@ -154,9 +160,12 @@ export function Onboarding({
     const hosts = accounts ? toAsk(found, accounts.usesAny) : [];
     if (!accounts || !hosts.length || asking.current || accounts.askingStopped) return;
     asking.current = true;
-    const asked = await allowThisPhone(accounts, hosts, (hostId, code) =>
-      setGates((g) => ({ ...g, [hostId]: { kind: "waiting", code } })),
-    );
+    const asked = await allowThisPhone(accounts, hosts, (hostId, code, allow) => {
+      setGates((g) => ({ ...g, [hostId]: { kind: "waiting", code } }));
+      if (shownCode.current === code) return;
+      shownCode.current = code;
+      showWaiting(hosts.find((h) => h.hostId === hostId)?.name ?? "your computers", code, allow);
+    });
     asking.current = false;
     setStopped(accounts.askingStopped);
     setUnanswered(asked === "unreachable");
@@ -268,7 +277,7 @@ export function Onboarding({
             {paired.map((m) => (
               <ComputerRow key={m.id} listed={{ hostId: m.id, name: m.name, online: true }} />
             ))}
-            {!listed.length && !paired.length && <AddInstructions />}
+            {!listed.length && !paired.length && <AddInstructions device={accounts?.thumbprint} />}
             {waiting ? (
               <T muted style={{ fontSize: 14, lineHeight: 20 }}>
                 Open Parallax on one of your computers and allow this iPhone. Both show{" "}

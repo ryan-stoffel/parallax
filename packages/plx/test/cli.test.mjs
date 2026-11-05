@@ -81,6 +81,18 @@ test("bad command lines get a usage error and exit 2", async () => {
   assert.match(unknownFlag.error ?? "", /Unknown option '--browser'/);
 });
 
+test("a terminal's withdrawn question rejects, and the next question still gets its line", async () => {
+  const input = Object.assign(new PassThrough(), { isTTY: true });
+  const ask = lineReader(input, new PassThrough());
+  const asking = new AbortController();
+  const withdrawn = ask("first?", asking.signal);
+  asking.abort();
+  await assert.rejects(withdrawn, /withdrawn/);
+  const next = ask("second?");
+  input.write("yes\n");
+  assert.equal(await next, "yes");
+});
+
 test("piped questions get a line each, keep lines read ahead, and reject once input ends", async () => {
   const input = new PassThrough();
   const output = new PassThrough();

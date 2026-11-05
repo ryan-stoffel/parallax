@@ -55,9 +55,15 @@ export function useHosts(): Host[] {
       { id: localId, name: localName, ...(icon && { icon }) },
       ...saved,
       // A device turned off in Settings has no connection here, so it's left out, as is a new
-      // account computer until its code is typed (0091).
+      // account computer until its code is allowed or typed (0091).
       ...devices
-        .filter((d) => d.enabled && d.access?.step !== "needsCode")
+        .filter(
+          (d) =>
+            d.enabled &&
+            d.access?.step !== "needsCode" &&
+            d.access?.step !== "compare" &&
+            d.access?.step !== "confirm",
+        )
         .map(({ id, name, icon }) => ({ id, name, icon })),
     ],
     [saved, devices, localName, icon],

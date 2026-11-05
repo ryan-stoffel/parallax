@@ -5,6 +5,7 @@ import {
   coalesced,
   countPairRun,
   lacks,
+  listSources,
   mergeListed,
   outageOf,
   joinedNotListed,
@@ -217,8 +218,42 @@ test("a sign-in's lines read as pending with its code, then approved with direct
       `{"status":"approved","name":"studio","routes":["192.168.1.20:7341","relay:${studio}","-x"]}`,
     ),
   ).toEqual({ status: "approved", name: "studio", routes: ["192.168.1.20:7341"] });
+  expect(parseSignIn('{"status":"confirm"}')).toEqual({ status: "confirm" });
   expect(parseSignIn('{"status":"pending","request":"r1","code":"12"}')).toBeUndefined();
   expect(parseSignIn("plxd dial: connected over relay")).toBeUndefined();
+});
+
+test("a computer added with Allow alone gives no lists, and can't demote a real one", () => {
+  const lists = (allowedHosts: string[] = [], approvedClients: string[] = []) => ({
+    approvedClients,
+    removedClients: [],
+    approvedHosts: [],
+    allowedHosts,
+  });
+  const own = { relayId: "own", state: lists(["fake"]) };
+  const real = { relayId: "real", state: lists() };
+  // It tries to add its attacker's key, and to mark the real computer as added with Allow.
+  const fake = { relayId: "fake", state: lists(["real", "own"], ["attacker"]) };
+  const sources = listSources([own, real, fake], own);
+  expect(sources).toEqual([own, real]);
+  expect(
+    unionLists(
+      sources.map((s) => s.state),
+      ["own", "real", "fake"],
+    ),
+  ).toEqual({
+    approvedClients: [],
+    removedClients: [],
+    approvedHosts: ["fake", "own", "real"],
+    allowedHosts: ["fake"],
+  });
+  // Another device allowed it: a mark from a real computer counts here too.
+  const marked = { relayId: "real", state: lists(["fake"]) };
+  const here = { relayId: "own", state: lists() };
+  expect(listSources([here, marked, fake], here)).toEqual([here, marked]);
+  // This computer's own plxd is always read, though another device may have allowed it.
+  const self = { relayId: "own", state: lists(["own"]) };
+  expect(listSources([self], self)).toEqual([self]);
 });
 
 test("lists merge with removal winning, and only a host that lacks something is merged into", () => {

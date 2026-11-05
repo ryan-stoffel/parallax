@@ -62,6 +62,8 @@ interface Stored {
   sessions: Record<string, string>;
   /** The hosts this phone uses: approved with its own code, or listed by one it uses. */
   trusted: string[];
+  /** Those this phone allowed with a click alone, which it takes no lists from. */
+  allowed?: string[];
   books: Record<string, HostBook>;
   /** Why this phone stopped asking on its own, until the user asks again. */
   askingStopped?: string;
@@ -161,6 +163,11 @@ export class AccountHosts {
   /** The hosts this phone uses and has sessions with. */
   get sessions() {
     return Object.keys(this.stored.sessions).filter((id) => this.trusts(id));
+  }
+
+  /** The hosts this phone allowed with a click alone, which it takes no lists from. */
+  get allowed() {
+    return this.stored.allowed ?? [];
   }
 
   /** Whether this phone uses `hostId`: approved with its own code, or listed by a host it uses. */
@@ -492,15 +499,17 @@ export class AccountHosts {
   /**
    * Keeps the session in `answer`, and trusts its host when the user approved it with a code on
    * this phone: typed it, or matched it on another device. That ends any other request and any
-   * stop, since it covers every computer.
+   * stop, since it covers every computer. `tapped` marks one the user allowed with a tap on its
+   * code alone, which this phone takes no lists from.
    */
-  private async approved(hostId: string, answer: Record<string, unknown>, byCode: boolean) {
+  private async approved(hostId: string, answer: Record<string, unknown>, byCode: boolean, tapped = false) {
     const session = String(answer["accessToken"] ?? "");
     if (!session) throw new Error("That computer sent no session.");
-    const { trusted, books } = this.stored;
+    const { trusted, books, allowed = [] } = this.stored;
     this.stored = {
       ...this.stored,
       sessions: { ...this.stored.sessions, [hostId]: session },
+      ...(tapped && !allowed.includes(hostId) && { allowed: [...allowed, hostId] }),
       ...(byCode && {
         trusted: trusted.includes(hostId) ? trusted : [...trusted, hostId],
         books: Object.fromEntries(Object.entries(books).map(([id, book]) => [id, forgetRequest(book)])),
@@ -514,10 +523,18 @@ export class AccountHosts {
   /**
    * Asks to use `hostId` as a new device, because the user asked: signs in and starts a request,
    * or goes on with the one it kept. Resolves once approved, after `onCode` shows the code to
-   * match on another device. Rejects when it's denied or lapses, with a message for people, which
-   * ends that request: the user may ask again, which starts a new one, counted.
+   * match on another device, or on that computer's own screen. It's given `allow`, for the user's
+   * tap on that computer's code: the device its setup command named gets in on that alone, and any
+   * other gets `onConfirm`, as that computer must confirm too. Rejects when it's denied or lapses,
+   * with a message for people, which ends that request: the user may ask again, which starts a new
+   * one, counted.
    */
-  async ask(hostId: string, learned: string[], onCode: (code: string) => void): Promise<void> {
+  async ask(
+    hostId: string,
+    learned: string[],
+    onCode: (code: string, allow: () => void) => void,
+    onConfirm: () => void = () => {},
+  ): Promise<void> {
     const { at } = await this.first(hostId, ordered(hostId, learned));
     try {
       const signed = await this.signIn(at, hostId, true);
@@ -527,11 +544,27 @@ export class AccountHosts {
         throw new Denied("That computer already approved this phone. Run plx connect on it, and type the code it shows.");
       }
       if (signed.gate.kind !== "waiting" || !signed.request) throw new Error("That computer didn't start a request.");
-      onCode(signed.gate.code);
+      const request = signed.request;
+      let tapped = false;
+      let fromAllow: (session: Record<string, unknown>) => void = () => {};
+      const allowedHere = new Promise<{ session: Record<string, unknown> }>((resolve) => {
+        fromAllow = (session) => resolve({ session });
+      });
+      onCode(signed.gate.code, () => {
+        tapped = true;
+        // Either this call or the wait below gets the session, so losing here is no failure.
+        this.approval(at, { request, allow: true }).then(
+          (step) => {
+            if ("session" in step) fromAllow(step.session);
+            else if (step.pending["needsHost"]) onConfirm();
+          },
+          () => {},
+        );
+      });
       for (;;) {
-        const step = await this.approval(at, { request: signed.request }, true);
+        const step = await Promise.race([this.approval(at, { request }, true), allowedHere]);
         if ("session" in step) {
-          await this.approved(hostId, step.session, true);
+          await this.approved(hostId, step.session, true, tapped);
           return;
         }
       }

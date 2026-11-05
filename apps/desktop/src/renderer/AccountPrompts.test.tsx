@@ -38,6 +38,8 @@ async function render(devices: DeviceHost[], requests: AccessPrompt[]) {
       code === "482913" ? undefined : "That code is wrong, used, or expired.",
     ),
     answerAccess: vi.fn(async () => undefined),
+    answerCompare: vi.fn(async () => undefined),
+    askAgain: vi.fn(async () => {}),
   };
   window.parallax = parallax as Partial<ParallaxBridge> as ParallaxBridge;
   root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -55,6 +57,41 @@ const type = async (text: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
+
+test("a new computer's code takes a click on Allow, never Enter, and typing stays one click away", async () => {
+  const comparing: DeviceHost = { ...buildBox, access: { step: "compare", code: "482913" } };
+  const parallax = await render([comparing], []);
+  expect(dialog()?.textContent).toContain("482 913");
+  expect(dialog()?.textContent).toContain("Allow it only if build-box shows this code");
+  // Enter submits the form, which must not answer.
+  await act(async () => {
+    document
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  expect(parallax.answerCompare).not.toHaveBeenCalled();
+  await act(async () => button("Allow").click());
+  expect(parallax.answerCompare).toHaveBeenCalledWith(buildBox.id, true);
+});
+
+test("a new computer's code can be denied, or typed instead", async () => {
+  const comparing: DeviceHost = { ...buildBox, access: { step: "compare", code: "482913" } };
+  const parallax = await render([comparing], []);
+  await act(async () => button("Type a code instead").click());
+  expect(document.querySelector('input[aria-label="Code"]')).not.toBeNull();
+  await act(async () => root?.unmount());
+  document.body.innerHTML = "";
+  const again = await render([comparing], []);
+  await act(async () => button("Deny").click());
+  expect(again.answerCompare).toHaveBeenCalledWith(buildBox.id, false);
+  expect(parallax.answerCompare).not.toHaveBeenCalled();
+});
+
+test("after Allow, a bare setup command's computer says to confirm there", async () => {
+  await render([{ ...buildBox, access: { step: "confirm", code: "482913" } }], []);
+  expect(dialog()?.textContent).toContain("Press Enter in build-box's terminal");
+  expect(button("Waiting…").disabled).toBe(true);
+});
 
 test("a new computer's dialog takes its 6 digits once, clears a wrong code, and confirms the right one", async () => {
   const parallax = await render([buildBox], []);

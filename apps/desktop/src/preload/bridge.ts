@@ -456,8 +456,18 @@ export interface ParallaxBridge {
   showSetupCode(): Promise<SetupCode | string>;
   /** Calls `listener` with the name of the device that used this computer's setup code. */
   onSetupApproved(listener: (name: string) => void): () => void;
-  /** Asks account computer `hostId` again to approve this device, after a denial or a lapse. */
+  /**
+   * Asks account computer `hostId` again to approve this device, after a denial or a lapse, or,
+   * for a new computer, starts a new code to compare.
+   */
   askAgain(hostId: string): Promise<void>;
+  /**
+   * The user's answer to new computer `hostId`'s code to compare (0091). Allowing resolves once
+   * the computer lets this device in. Resolves to an error for people, or undefined.
+   */
+  answerCompare(hostId: string, allow: boolean): Promise<string | undefined>;
+  /** This device's key, which Add computer's command names, so its Allow alone is enough. */
+  deviceKey(): Promise<string | undefined>;
   /**
    * New devices asking to sign in to the user's computers, each with the code it shows (0091).
    * Calls `listener` now and on every change. Returns the unsubscribe function.
@@ -764,9 +774,9 @@ export type DeviceHost = {
 
 /**
  * Where this device's access to an account computer stands (0091), while it has no session there:
- * a new computer needs the code `plx connect` shows; a known one signs in, and may wait for one of
- * the user's devices to allow this one, showing the same code; a denied or lapsed request waits
- * for the user to ask again.
+ * a new computer shows a code to compare, or takes the setup code `plx connect` shows; a known one
+ * signs in, and may wait for one of the user's devices to allow this one, showing the same code; a
+ * denied or lapsed request waits for the user to ask again.
  */
 export type AccountAccess =
   /**
@@ -775,6 +785,10 @@ export type AccountAccess =
    */
   | { step: "needsCode"; error?: string; offline?: true }
   | { step: "pairing" }
+  /** A new computer's code, which the user allows here only if it shows the same. */
+  | { step: "compare"; code: string }
+  /** Allowed here, and waiting for that computer's own screen to confirm too. */
+  | { step: "confirm"; code: string }
   | { step: "signingIn" }
   | { step: "pending"; code: string }
   | { step: "ask"; why: string };

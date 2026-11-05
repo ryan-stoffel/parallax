@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { DeviceHost, SetupCode } from "../preload/bridge";
 import {
   asksForCode,
+  CompareCode,
   Modal,
   SetupCodeField,
   skipCodePrompt,
@@ -29,12 +30,20 @@ const SCRIPTS = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop
  * The command that adds a computer to the account (0091), for this app's channel. Each needs nothing
  * installed: its script brings Node.js when the computer has none, and runs `plx connect`. Windows
  * reads its script as text, which the execution policy doesn't stop, from cmd or PowerShell. Keep
- * that form: Defender blocks `[scriptblock]::Create((irm ...))` as malicious.
+ * that form: Defender blocks `[scriptblock]::Create((irm ...))` as malicious. `device` is this
+ * device's key, which reaches the new computer only through the user, never the relay, so that
+ * computer can take this device's Allow alone. A key can start with `-`, so it's one `--device=`.
  */
-export const connectCommand = (channel: "stable" | "nightly", os: "unix" | "windows") =>
-  os === "windows"
-    ? `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax --channel ${channel}"`
-    : `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- --channel ${channel}`;
+export const connectCommand = (
+  channel: "stable" | "nightly",
+  os: "unix" | "windows",
+  device?: string,
+) => {
+  const flags = `--channel ${channel}${device ? ` --device=${device}` : ""}`;
+  return os === "windows"
+    ? `powershell -c "irm ${SCRIPTS}/connect.ps1 | iex; Connect-Parallax ${flags}"`
+    : `curl -fsSL ${SCRIPTS}/connect.sh | sh -s -- ${flags}`;
+};
 
 /**
  * Where this channel's app is downloaded. GitHub's `latest` only means stable, and its release list
@@ -49,8 +58,8 @@ const LOOK_MS = 5_000;
 /**
  * Add a computer (0091), a modal dialog open while it's mounted. It says how to set the other
  * computer up, with the app or in a terminal, and asks the account for its computers every
- * `LOOK_MS`. A computer that wants its code asks for it here, and the dialog ends by showing the
- * computers that joined.
+ * `LOOK_MS`. A computer that shows a code to allow, or wants one typed, asks here, and the dialog
+ * ends by showing the computers that joined.
  */
 export function ConnectWizard({
   channel,
@@ -186,12 +195,17 @@ export function ConnectWizard({
 
 /** Whether an account computer's `access` says it hasn't joined yet, so the dialog is about it. */
 const isNew = (access: DeviceHost["access"]) =>
-  access?.step === "needsCode" || access?.step === "pairing";
+  access?.step === "needsCode" ||
+  access?.step === "pairing" ||
+  access?.step === "compare" ||
+  access?.step === "confirm";
 
 /** How to set the other computer up, with the app or in a terminal. */
 function Setup({ channel }: { channel: "stable" | "nightly" }) {
   const [path, setPath] = useState<"app" | "terminal">("app");
   const email = useProfile()?.email;
+  const [device, setDevice] = useState<string>();
+  useEffect(() => void window.parallax.deviceKey().then(setDevice), []);
   return (
     <>
       <p className="text-body text-muted-foreground">
@@ -220,21 +234,23 @@ function Setup({ channel }: { channel: "stable" | "nightly" }) {
             Use the same account{email && <>, {email}</>}.
           </Step>
           <Step n={3} title="Choose Show setup code">
-            It's in Settings › Connections there. Then type the code here.
+            It's in Settings › Connections there. Then allow the code it shows on both, or type it
+            here.
           </Step>
         </ol>
       ) : (
         <ol className="rounded-lg border border-border">
           <Step n={1} title="Run this there">
-            <Command label="macOS or Linux" command={connectCommand(channel, "unix")} />
-            <Command label="Windows" command={connectCommand(channel, "windows")} />
+            <Command label="macOS or Linux" command={connectCommand(channel, "unix", device)} />
+            <Command label="Windows" command={connectCommand(channel, "windows", device)} />
             Setup needs nothing installed, and works on a server or over SSH.
           </Step>
           <Step n={2} title="Sign in">
             In a browser there, or with a link it prints that opens on any device.
           </Step>
-          <Step n={3} title="Type its code here">
-            Parallax asks for it as soon as that computer is ready.
+          <Step n={3} title="Allow its code here">
+            Parallax shows a code as soon as that computer is ready. Allow it if that computer shows
+            the same.
           </Step>
         </ol>
       )}
@@ -255,7 +271,7 @@ function Finished() {
   );
 }
 
-/** A new computer's code, typed in the dialog. */
+/** A new computer's code in the dialog, to allow or to type. */
 function CodeStep({
   computer,
   onCancel,
@@ -266,13 +282,30 @@ function CodeStep({
   onPaired: () => void;
 }) {
   const form = useSetupCode(computer, onPaired);
+  const [typing, setTyping] = useState(false);
+  const step = computer.access?.step;
+  if (!typing && (step === "compare" || step === "confirm"))
+    return (
+      <div className="px-5 pb-4">
+        <h3 className="flex items-center gap-2 text-body font-medium">
+          <DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">Found {computer.name}</span>
+        </h3>
+        <CompareCode
+          computer={computer}
+          onDone={onPaired}
+          onClosed={onCancel}
+          onType={() => setTyping(true)}
+        />
+      </div>
+    );
   return (
     <form onSubmit={(e) => void form.submit(e)} className="px-5 pb-4">
       <h3 className="flex items-center gap-2 text-body font-medium">
         <DeviceIcon icon={computer.icon} className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 truncate">Found {computer.name}</span>
       </h3>
-      <SetupCodeField name={computer.name} form={form} />
+      <SetupCodeField id={computer.id} name={computer.name} form={form} />
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" className={quietButton} onClick={onCancel}>
           Not now
@@ -371,6 +404,10 @@ export function accessLabel({ access }: Pick<DeviceHost, "access">): string | un
     case "pairing":
     case "signingIn":
       return "Connecting…";
+    case "compare":
+      return `Allow it if it shows ${spacedCode(access.code)}`;
+    case "confirm":
+      return `Confirm it there · ${spacedCode(access.code)}`;
     case "pending":
       return `Allow this computer on another device · ${spacedCode(access.code)}`;
     case "ask":

@@ -12,7 +12,7 @@ export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)
 
 /**
  * A new computer's code dialog: the code `name` shows, in its Settings or `plx connect`, typed here, or, with
- * `onAsk`, approving this phone from a device that already uses it.
+ * `onAsk`, a code to compare with that computer or with a device that already uses it.
  */
 export function askSetupCode(name: string, onCode: (code: string) => void, onAsk?: () => void) {
   showPrompt(
@@ -20,7 +20,7 @@ export function askSetupCode(name: string, onCode: (code: string) => void, onAsk
     "Type the 6-digit code from Show setup code in its Settings > Connections, or from plx connect.",
     [
       { text: "Cancel", style: "cancel" },
-      ...(onAsk ? [{ text: "Approve from Another Device", onPress: onAsk }] : []),
+      ...(onAsk ? [{ text: "Compare Codes Instead", onPress: onAsk }] : []),
       { text: "Set Up", onPress: (code?: string) => onCode((code ?? "").replace(/\D/g, "")) },
     ],
     "plain-text",
@@ -51,10 +51,15 @@ export function setUpComputer(
     },
     () =>
       void accounts
-        .ask(hostId, routes, (code) => {
-          handlers.onWaiting(code);
-          showWaiting(name, code);
-        })
+        .ask(
+          hostId,
+          routes,
+          (code, allow) => {
+            handlers.onWaiting(code);
+            showWaiting(name, code, allow);
+          },
+          () => showConfirm(name),
+        )
         .then(handlers.done, failed),
   );
 }
@@ -99,12 +104,18 @@ export function enterSetupCode(
 export async function allowThisPhone(
   accounts: AccountHosts,
   hosts: Listed[],
-  onWaiting: (hostId: string, code: string) => void,
+  onWaiting: (hostId: string, code: string, allow: () => void) => void,
 ): Promise<Asked> {
   const asked = (host: Listed) => accounts.asked(host.hostId);
   return askEach(
     [...hosts.filter(asked), ...hosts.filter((host) => !asked(host))],
-    (host) => accounts.ask(host.hostId, [], (code) => onWaiting(host.hostId, code)),
+    (host) =>
+      accounts.ask(
+        host.hostId,
+        [],
+        (code, allow) => onWaiting(host.hostId, code, allow),
+        () => showConfirm(host.name),
+      ),
     // A phone that got in another way, as with a typed code, has no more to ask.
     (error, host) =>
       error instanceof Denied || error instanceof Limited || accounts.waiting(host.hostId) || accounts.usesAny,
@@ -115,13 +126,27 @@ export async function allowThisPhone(
   );
 }
 
-/** This phone's own request to use `name`, waiting on another device that shows `code`. */
-export function showWaiting(name: string, code: string) {
+/**
+ * This phone's own request to use `name`, waiting on another device that shows `code`, or on
+ * `name` itself while it's being set up, where `onAllow` takes the user's word that it shows the
+ * same.
+ */
+export function showWaiting(name: string, code: string, onAllow: () => void) {
   showAlert(
     "Approve this phone",
-    `On a computer or phone that already uses ${name}, allow this iPhone. Both show ${formatCode(code)}.`,
-    [{ text: "OK" }],
+    `${formatCode(code)}\n\nOn a computer or phone that already uses ${name}, allow this iPhone. If you're setting up ${name} and it shows this code, tap Allow.`,
+    [
+      { text: "Not Now", style: "cancel" },
+      { text: "Allow", onPress: onAllow },
+    ],
   );
+}
+
+/** The user allowed `name`'s code here, and `name` must confirm too, as its setup named no device. */
+export function showConfirm(name: string) {
+  showAlert("Confirm on that computer", `Press Enter in ${name}'s terminal, or Allow in its Parallax, to finish.`, [
+    { text: "OK" },
+  ]);
 }
 
 /** Another device asks to use the user's computers: "Allow <device>? <code>". */

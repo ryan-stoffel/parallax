@@ -22,7 +22,7 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
  * @typedef {object} Deps
  * @property {(channel: Channel) => Promise<Release>} release Finds the release to install.
  * @property {boolean} terminal Whether stdin is a terminal. Without one, nobody is there to answer
- *   or to wait, so setup ends at a printed code.
+ *   or to wait, so setup ends at a printed code, and approves no device from input.
  * @property {() => Promise<string>} signIn Signs in and resolves to a Clerk access token.
  * @property {(runner: Runner, os: Os) => Promise<Target>} details Finds the OS details of the
  *   computer `runner` reaches.
@@ -30,7 +30,8 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
  *   Installs `release`'s plxd with its login service on `target` through `runner`.
  * @property {(runner: Runner, os: Os) => Promise<Plxd>} plxd Opens `plxd attach` through
  *   `runner` on an `os` computer.
- * @property {(question: string) => Promise<string>} prompt Asks the user for a line.
+ * @property {(question: string, signal?: AbortSignal) => Promise<string>} prompt Asks the user for
+ *   a line, until `signal` aborts the question.
  * @property {() => Promise<string[]>} routes This computer's routes, from its listener.
  * @property {(ms: number) => Promise<void>} sleep
  */
@@ -40,6 +41,8 @@ import { installScript, REMOTE_PORT } from "./scripts.mjs";
  * @property {Channel} channel
  * @property {string} [user] The SSH user for `add`.
  * @property {string} [port] The SSH port for `add`.
+ * @property {string} [device] The `DPoP` key thumbprint of the device whose Allow is enough, from
+ *   its Add computer's command, which never crosses the relay (0091).
  */
 
 /** How long setup waits for plxd to reach the relay and listen. */
@@ -108,7 +111,7 @@ export function connect(options, deps) {
       deps,
       async (plxd) => {
         const others = await link(plxd, token, deps);
-        await approveNewDevice(plxd, deps, others);
+        await approveNewDevice(plxd, deps, others, options.device);
       },
       runner,
       os,
@@ -136,7 +139,7 @@ export function add(destination, options, deps) {
       deps,
       async (plxd) => {
         const others = await link(plxd, token, deps);
-        await approveNewDevice(plxd, deps, others);
+        await approveNewDevice(plxd, deps, others, options.device);
       },
       runner,
       details.os,
@@ -217,37 +220,105 @@ async function link(plxd, token, deps) {
   });
 }
 
+/** 6 digits as every screen shows them. @param {string} code */
+const spaced = (code) => `${code.slice(0, 3)} ${code.slice(3)}`;
+
 /**
- * Shows a setup code for a signed-in device to type, a new one each time one lapses, and waits
- * until a device pairs with it. Prints the device's name.
+ * Waits until a signed-in device joins, a new setup code each time one lapses, and prints its
+ * name. A device that asks shows its code here and there. The device named by `device` needs only
+ * its own Allow. Any other also needs Enter here, since nothing it holds tells it from a client
+ * with a caught token. With no terminal, it prints one setup code and ends, so with no device
+ * named, the code has to be typed.
  * @param {Plxd} plxd
  * @param {Deps} deps
- * @param {string[]} [others] The account's other computers, to say where the code goes.
+ * @param {string[]} [others] The account's other computers, to say where to look.
+ * @param {string} [device] The thumbprint of the device whose Allow is enough.
  */
-async function approveNewDevice(plxd, deps, others = []) {
-  // plxd keeps the code after plx exits, so a script ends here rather than waiting on a person.
+async function approveNewDevice(plxd, deps, others = [], device) {
+  // plxd keeps the code and the device it names after plx exits, so a script ends here rather than
+  // waiting on a person.
   if (!deps.terminal) {
-    const { code, expiresAt } = await plxd.call("access/setupCode");
-    console.log(`Setup code: ${code} (works until ${expiresAt}). Type it in Parallax on a signed-in device. plx connect approve shows a new one.`);
+    const { code, expiresAt } = await plxd.call("access/setupCode", device ? { device } : {});
+    const how = device ? "Allow it on the device that gave this command, or type it" : "Type it";
+    console.log(`Setup code: ${code} (works until ${expiresAt}). ${how} in Parallax on a signed-in device. plx connect approve shows a new one.`);
     return;
   }
   const where = others.length === 1 ? others[0] : "your other computer";
-  console.log(`\nParallax on ${where} asks for this code when you go back to it. Type it there.`);
+  console.log(`\nParallax on ${where} shows a code to compare when you go back to it.`);
   for (;;) {
-    const { code, expiresAt } = await plxd.call("access/setupCode");
-    console.log(`\n  ${code.slice(0, 3)} ${code.slice(3)}\n\nWaiting for you to type it (Ctrl-C to stop; plx connect approve shows a new code later).`);
-    let state = await plxd.call("access/get");
+    const { code, expiresAt } = await plxd.call("access/setupCode", device ? { device } : {});
+    console.log(`\nNo device at hand? Type ${spaced(code)} in Parallax on any signed-in device.`);
+    console.log("Waiting for a device (Ctrl-C to stop; plx connect approve picks this up later).");
     const lapses = deps.sleep(Math.max(0, Date.parse(expiresAt) - Date.now())).then(() => undefined);
-    while (!state.setupApproved) {
-      const changed = await Promise.race([plxd.call("access/get", { after: state.version }), lapses]);
-      if (!changed) break;
-      state = changed;
-    }
-    if (state.setupApproved) {
-      console.log(`✓ Added to Parallax from ${state.setupApproved}. You're done, and you can close this terminal.`);
+    const name = await waitForDevice(plxd, deps, device, lapses);
+    if (name) {
+      console.log(`✓ Added to Parallax from ${name}. You're done, and you can close this terminal.`);
       return;
     }
     console.log("The code lapsed. Here's a new one.");
+  }
+}
+
+/**
+ * Follows `access/get` until a device joins, and resolves to its name, or to undefined once
+ * `lapses` does. Shows each request that waits, by the name it gave and its code.
+ * @param {Plxd} plxd
+ * @param {Deps} deps
+ * @param {string | undefined} device
+ * @param {Promise<undefined>} lapses
+ * @returns {Promise<string | undefined>}
+ */
+async function waitForDevice(plxd, deps, device, lapses) {
+  let state = await plxd.call("access/get");
+  /** @type {string | undefined} The request shown. */
+  let shown;
+  /** @type {{ name: string, thumbprint: string } | undefined} Whose request was shown last. */
+  let asker;
+  /** @type {AbortController | undefined} */
+  let asking;
+  /** @type {Promise<{ answer: string }> | undefined} */
+  let answered;
+  try {
+    for (;;) {
+      if (state.setupApproved) return state.setupApproved;
+      // An approved device, or this computer's own app, allowed it.
+      if (asker && state.approvedClients.includes(asker.thumbprint)) return asker.name;
+      const pending = state.pending?.code ? state.pending : undefined;
+      if (pending?.id !== shown) {
+        asking?.abort();
+        asking = answered = undefined;
+        shown = pending?.id;
+        if (pending) {
+          asker = pending;
+          console.log(`\n${pending.name} asks to use this computer. It should show ${spaced(pending.code)}.`);
+          if (device) console.log("Allow it there if it shows the same code.");
+          else {
+            asking = new AbortController();
+            const question = "If it does, Allow it there and press Enter here. n denies: ";
+            // An abort leaves the question unanswered, which approves nothing.
+            answered = deps.prompt(question, asking.signal).then((answer) => ({ answer }), () => new Promise(() => {}));
+          }
+        }
+      }
+      const next = await Promise.race([plxd.call("access/get", { after: state.version }), lapses, ...(answered ? [answered] : [])]);
+      if (!next) return undefined;
+      if (!("answer" in next)) {
+        state = next;
+        continue;
+      }
+      asking = answered = undefined;
+      const request = shown;
+      if (["n", "no"].includes(next.answer.trim().toLowerCase())) {
+        await plxd.call("access/deny", { request });
+        console.log("✓ Denied it.");
+        state = await plxd.call("access/get");
+        continue;
+      }
+      await plxd.call("access/approve", { request });
+      return asker?.name;
+    }
+  } finally {
+    asking?.abort();
   }
 }
 
