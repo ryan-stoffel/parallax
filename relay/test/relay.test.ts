@@ -205,7 +205,30 @@ describe("one user can't reach another user's host", () => {
     const list = (await (await call("/v1/hosts", { token: intruder })).json()) as { hosts: unknown[] };
     expect(list.hosts).toEqual([]);
     const own = await call("/v1/hosts", { token: await session("user_listed") });
-    expect(await own.json()).toEqual({ hosts: [{ hostId: host.id, name: "Ryan's Mac", online: true }], removed: [] });
+    expect(await own.json()).toEqual({
+      hosts: [{ hostId: host.id, name: "Ryan's Mac", online: true, usage: expect.anything() }],
+      removed: [],
+    });
+  });
+
+  it("lists a host's bytes today, the limit, and the next 00:00 UTC, from nothing on a new day", async () => {
+    const { host, token } = await online();
+    const listedUsage = async () => {
+      const list = (await (await call("/v1/hosts", { token })).json()) as { hosts: { usage: object }[] };
+      return list.hosts[0]!.usage;
+    };
+    const saved = async (day: string) =>
+      runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (relay: HostRelay, state) => {
+        await state.storage.put("traffic", { day, bytes: 1_234 });
+        (relay as unknown as { traffic?: object }).traffic = undefined;
+      });
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const resetsAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+    await saved(today);
+    expect(await listedUsage()).toEqual({ bytes: 1_234, limit: MAX_DAILY_BYTES, resetsAt });
+    await saved(new Date(Date.parse(today) - 1).toISOString().slice(0, 10));
+    expect(await listedUsage()).toEqual({ bytes: 0, limit: MAX_DAILY_BYTES, resetsAt });
   });
 
   it("refuses a stream without a ticket, or with a used one", async () => {

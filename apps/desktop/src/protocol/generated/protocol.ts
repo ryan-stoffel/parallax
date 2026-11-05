@@ -8648,6 +8648,28 @@ export type RelayHost = {
 	 * Whether it is the plxd that answered: this computer.
 	 */
 	thisComputer: boolean,
+	/**
+	 * Its traffic against the relay's daily cap. An older relay leaves it out.
+	 */
+	usage?: RelayUsage,
+};
+
+/**
+ * A host's traffic through Parallax Relay today, as the relay counts it (PLX-1357).
+ */
+export type RelayUsage = {
+	/**
+	 * The bytes its streams carried this UTC day, both ways together.
+	 */
+	bytes: number,
+	/**
+	 * The bytes a day past which the relay refuses its streams.
+	 */
+	limit: number,
+	/**
+	 * When the count starts again, in milliseconds since the epoch: the next 00:00 UTC.
+	 */
+	resetsAt: number,
 };
 
 /**

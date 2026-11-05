@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { commitment, REQUEST_LIFETIME_MS } from "./access";
-import { AccountHosts, Denied, listHosts } from "./accountHosts";
+import { AccountHosts, Denied, listHosts, relayProblem } from "./accountHosts";
 import { base64url } from "./pairing";
 
 /** Each host's bridge port, and how it answers a path. A rejected answer is a lost connection. */
@@ -181,4 +181,14 @@ test("forgetting a computer ends its session, trust, and request, and keeps its 
   const saved = JSON.parse(net.store.get("account-hosts")!);
   expect(saved.sessions).toEqual({ b: "sb" });
   expect(saved.books).toEqual({ a: { requests: [1], setupRuns: [2] }, b: other });
+});
+
+test("a 429 says the cap once the account's list shows it spent, and a busy minute otherwise", () => {
+  const limit = 2 * 1024 ** 3;
+  const resetsAt = Date.UTC(2026, 10, 5);
+  const busy = "Too many connections to that computer this minute. Try again shortly.";
+  expect(relayProblem(429)).toBe(busy);
+  expect(relayProblem(429, { bytes: limit, limit, resetsAt })).toBe(busy);
+  const spent = relayProblem(429, { bytes: limit + 1, limit, resetsAt });
+  expect(spent).toMatch(/resets at .*still works over the LAN/);
 });

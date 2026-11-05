@@ -717,6 +717,7 @@ pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<RelayHostsResu
                 this_computer: own.as_deref() == Some(host_id.as_str()),
                 name: host["name"].as_str().unwrap_or_default().to_owned(),
                 online: host["online"].as_bool().unwrap_or(false),
+                usage: serde_json::from_value(host["usage"].clone()).ok(),
                 host_id,
             })
         })

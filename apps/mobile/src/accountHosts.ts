@@ -19,6 +19,8 @@ import {
   setupRun,
   type HostBook,
 } from "./access";
+import type { RelayUsage } from "../../desktop/src/protocol/generated/protocol";
+import { relayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { keychain, spakePair } from "./host";
 import { base64url, fromBase64url, newDpopSecret, proof, thumbprint } from "./pairing";
 import { RELAY_URL } from "./push";
@@ -34,6 +36,8 @@ export interface Listed {
   hostId: string;
   name: string;
   online: boolean;
+  /** Its traffic against the relay's daily cap. An older relay leaves it out. */
+  usage?: RelayUsage;
 }
 
 /** The relay's list: the account's hosts, and those marked as having left it. */
@@ -80,15 +84,31 @@ interface Described {
   fingerprint: string;
 }
 
-/** A message for people, for the relay's refusal of a stream. */
-function relayProblem(status: number | undefined): string | undefined {
+/** What to say about computer `name`'s traffic through Parallax Relay today, if anything. */
+export const relayCap = (name: string, usage: RelayUsage | undefined) =>
+  relayCapNotice(name, usage, (at) =>
+    new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+  );
+
+/**
+ * A message for people, for the relay's refusal of a stream. The relay answers 429 both for too
+ * many streams this minute and for a spent day, and the bridge sees only the status, so `usage`, as
+ * the account's list last said, tells them apart.
+ */
+export function relayProblem(status: number | undefined, usage?: RelayUsage): string | undefined {
   if (status === undefined) return undefined;
   if (status === 503) return "That computer is offline or asleep.";
-  if (status === 429) return "Too many connections to that computer this minute. Try again shortly.";
+  if (status === 429) {
+    const cap = relayCap("That computer", usage);
+    return cap?.reached ? cap.body : "Too many connections to that computer this minute. Try again shortly.";
+  }
   if (status === 401 || status === 403) return "Parallax Relay didn't take this phone's sign-in.";
   if (status === 404) return "Parallax Relay doesn't know that computer. Run npx plx-cli connect --channel nightly on it.";
   return `Parallax Relay refused the connection (${status}).`;
 }
+
+/** What the account's list last said of each host's cap, for a refusal of its stream. */
+const lastUsage = new Map<string, RelayUsage | undefined>();
 
 /**
  * The account's list, from Parallax Relay with the account's token, or undefined when the read
@@ -101,6 +121,7 @@ export async function listHosts(token: string): Promise<HostList | undefined> {
   if (!answer?.ok) return undefined;
   const body = (await answer.json().catch(() => undefined)) as Partial<HostList> | undefined;
   if (!Array.isArray(body?.hosts)) return undefined;
+  for (const host of body.hosts) lastUsage.set(host.hostId, host.usage);
   const removed = body.removed ?? [];
   return { hosts: body.hosts.filter((h) => !removed.includes(h.hostId)), removed };
 }
@@ -251,7 +272,7 @@ export class AccountHosts {
       base: `https://127.0.0.1:${bridge.port}`,
       pin,
       close: bridge.close,
-      problem: () => relayProblem(bridge.refused()),
+      problem: () => relayProblem(bridge.refused(), lastUsage.get(hostId)),
     };
   }
 

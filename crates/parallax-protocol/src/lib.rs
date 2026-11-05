@@ -237,7 +237,7 @@ pub use remote::{
     AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState, RelayHost,
     RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams,
     RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
-    RelayStatus, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession,
+    RelayStatus, RelayUsage, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession,
     RemoteSessionsParams, RemoteSessionsResult,
 };
 pub use remote_control::{

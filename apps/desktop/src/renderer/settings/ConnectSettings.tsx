@@ -9,7 +9,7 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import {
   DEVICE_ICONS,
@@ -18,8 +18,9 @@ import {
   type DeviceHost,
   type DeviceIcon as DeviceIconName,
 } from "../../preload/bridge";
+import type { RelayHost } from "../../protocol/generated/protocol";
 import { NewComputerDialog } from "../AccountPrompts";
-import { CONNECT_NOTICE_TEXT, setUpAgain } from "../alarms";
+import { CONNECT_NOTICE_TEXT, relayCapOf, setUpAgain } from "../alarms";
 import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { accessLabel, ConnectWizard, SetupCodeDialog } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
@@ -28,6 +29,27 @@ import { notify } from "../notifications";
 import { useProfile } from "../profile";
 import { menuItem, menuPanel } from "../ui";
 import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./parts";
+
+/** What's wrong with Parallax Connect, at the top of its section, with what to do about it. */
+function NoticeRow({
+  title,
+  body,
+  children,
+}: {
+  title: string;
+  body: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div role="status" className="flex items-center gap-4 border-b border-border px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-body font-medium">{title}</p>
+        <p className="text-meta text-muted-foreground">{body}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
 
 /**
  * Settings > Connections' Parallax Connect section (0091): this computer, then every other computer
@@ -50,6 +72,8 @@ export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () =
   useEffect(() => void window.parallax.discoverAccount(), []);
   const [notice, setNotice] = useState<ConnectNotice | null>(null);
   useEffect(() => window.parallax.onConnectNotice(setNotice), []);
+  const [relayUsage, setRelayUsage] = useState<RelayHost[]>([]);
+  useEffect(() => window.parallax.onRelayUsage(setRelayUsage), []);
   const local = hosts.find((h) => h.id === localId)!;
 
   const signIn = async () => {
@@ -78,18 +102,18 @@ export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () =
         }
       >
         {notice && (
-          <div role="status" className="flex items-center gap-4 border-b border-border px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-body font-medium">{CONNECT_NOTICE_TEXT[notice].title}</p>
-              <p className="text-meta text-muted-foreground">{CONNECT_NOTICE_TEXT[notice].body}</p>
-            </div>
+          <NoticeRow {...CONNECT_NOTICE_TEXT[notice]}>
             {notice === "notListed" && (
               <button type="button" onClick={() => void setUpAgain()} className={quietButton}>
                 Set up again
               </button>
             )}
-          </div>
+          </NoticeRow>
         )}
+        {relayUsage.map((host) => {
+          const cap = relayCapOf(host);
+          return cap && <NoticeRow key={host.hostId} title={cap.title} body={cap.body} />;
+        })}
         <ul aria-label="Computers" className="border-border not-last:border-b">
           <DeviceCard
             device={{

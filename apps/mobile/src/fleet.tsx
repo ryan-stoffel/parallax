@@ -20,9 +20,10 @@ import type { ConnectionState } from "../../desktop/src/preload/bridge";
 import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
+import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
-import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
+import { listHosts, relayCap, type AccountHosts, type Gate, type Listed } from "./accountHosts";
 import { allowThisPhone, confirmDevice, setUpComputer, showWaiting } from "./accountPrompts";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
@@ -45,6 +46,8 @@ export interface Computer {
   outbox: Outbox;
   /** Why an account's computer isn't connecting, until it's set up or approved. */
   gate?: Gate;
+  /** What to say about its traffic through Parallax Relay today, from 80% of the daily cap. */
+  cap?: RelayCapNotice;
 }
 
 interface FleetValue {
@@ -412,6 +415,7 @@ export function FleetProvider({
       outbox: outbox(machine.id),
       // Asking stopped: a computer waiting to be set up says why.
       gate: gates[machine.id]?.kind === "setup" && stopped ? { kind: "refused", message: stopped } : gates[machine.id],
+      cap: relayCap(machine.name, listed.find((l) => accountId(l.hostId) === machine.id)?.usage),
     };
   });
 

@@ -273,6 +273,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
   ipcMain.handle("parallax:connectNotice", () => connectNotice());
+  ipcMain.handle("parallax:relayUsage", () => relayUsage);
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
@@ -1867,6 +1868,16 @@ const outageWatch = new NoticeWatch<Outage>(showNotice);
 /** Reads of the account's list that lack this computer's key, with no mark that it was removed. */
 const notListedWatch = new NoticeWatch<"notListed">(showNotice);
 
+/** The account's computers whose last read said what they've used of the relay's daily cap. */
+let relayUsage: RelayHost[] = [];
+/** Tells the windows what the account's list says of each computer's cap, when that changed. */
+function showRelayUsage(hosts: RelayHost[]) {
+  const next = hosts.filter((host) => host.usage);
+  if (JSON.stringify(next) === JSON.stringify(relayUsage)) return;
+  relayUsage = next;
+  broadcast("parallax:relayUsage", relayUsage);
+}
+
 /**
  * The account's list from the local plxd, or undefined when it can't be read. A failure here never
  * changes anything saved, and direct routes keep being dialed. It only says what's down. With no
@@ -1878,7 +1889,10 @@ async function readAccountList(): Promise<RelayHostsResult | undefined> {
     const unreachable = account?.clerkUnreachable();
     outageWatch.read(net.isOnline() && unreachable ? "clerk" : undefined);
     // Signed out, so no account to be on. With Clerk down, it's unknown, so it stays as it was.
-    if (!unreachable) notListedWatch.read(undefined);
+    if (!unreachable) {
+      notListedWatch.read(undefined);
+      showRelayUsage([]);
+    }
     return undefined;
   }
   const local = connections.get("local");
@@ -1889,6 +1903,7 @@ async function readAccountList(): Promise<RelayHostsResult | undefined> {
     return undefined;
   }
   outageWatch.read(undefined);
+  showRelayUsage(answer.result.hosts);
   notListedWatch.read(
     joinedNotListed(answer.result, settings.joinedRelay, tokenSubject(token))
       ? "notListed"

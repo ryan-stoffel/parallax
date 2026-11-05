@@ -223,6 +223,7 @@ const bridge: ParallaxBridge = {
     return stop;
   },
   onConnectNotice: (listener) => follow("parallax:connectNotice", listener),
+  onRelayUsage: (listener) => follow("parallax:relayUsage", listener),
   signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),
   editProfile: (page) => ipcRenderer.invoke("parallax:editProfile", page),
   signOut: () => ipcRenderer.invoke("parallax:signOut"),

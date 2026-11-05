@@ -653,6 +653,7 @@ export function Sidebar() {
   const scopeLabel = scopes.find((s) => s.value === scope)?.label;
 
   const offline = computers.filter((m) => !m.shownConnected);
+  const capped = computers.flatMap((m) => m.cap ?? []);
   const loading = computers.some((m) => m.shownConnected && m.view.loading);
   const toggle = (title: string) =>
     setFolded((f) => {
@@ -723,7 +724,7 @@ export function Sidebar() {
           />
         }
         ListHeaderComponent={
-          scope !== "all" || offline.length > 0 ? (
+          scope !== "all" || offline.length > 0 || capped.length > 0 ? (
             <View style={styles.header}>
               {scope !== "all" && (
                 <View style={styles.line}>
@@ -749,6 +750,19 @@ export function Sidebar() {
                   </T>
                 </View>
               )}
+              {capped.map((cap) => (
+                <View key={cap.title} accessibilityRole="alert">
+                  <View style={styles.line}>
+                    <Icon icon={Lucide.Gauge} size={13} color={cap.reached ? c.danger : c.warning} />
+                    <T numberOfLines={1} style={{ fontSize: 13, flexShrink: 1 }}>
+                      {cap.title}
+                    </T>
+                  </View>
+                  <T faint style={styles.small}>
+                    {cap.body}
+                  </T>
+                </View>
+              ))}
             </View>
           ) : null
         }
