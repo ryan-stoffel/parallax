@@ -1,16 +1,22 @@
-import { PageTitle } from "./parts";
+import { threadTabs } from "../tabState";
+import { PageTitle, Row, Section, Switch } from "./parts";
 
-/**
- * Settings > Beta: features still taking shape, each off until turned on. None is in beta now: the
- * sidebar's layouts moved to Appearance › Sidebar (0094).
- */
+/** Settings > Beta: features still taking shape, each off until turned on. */
 export function BetaSettings() {
+  const tabs = threadTabs.use();
   return (
     <>
       <PageTitle title="Beta">
         Features still taking shape. Each is off until you turn it on.
       </PageTitle>
-      <p className="text-body text-muted-foreground">Nothing is in beta right now.</p>
+      <Section title="Window">
+        <Row
+          title="Tabs"
+          description="Threads open as tabs above each pane, drawn as cards. Off, each pane shows one thread under the classic top bar."
+        >
+          <Switch label="Use tabs" checked={tabs} onChange={(next) => threadTabs.set(next)} />
+        </Row>
+      </Section>
     </>
   );
 }

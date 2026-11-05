@@ -317,8 +317,8 @@ interface ThreadListProps {
   onNewThread: () => void;
   /** Tiles a thread beside the open one. */
   onOpenBeside: (threadId: string) => void;
-  /** Opens a thread in a new tab, or the tab it's already in. */
-  onOpenInTab: (hostId: string, threadId: string) => void;
+  /** Opens a thread in a new tab, or the tab it's already in. Absent with tabs off. */
+  onOpenInTab?: (hostId: string, threadId: string) => void;
 }
 
 /**
@@ -1236,7 +1236,9 @@ export function ThreadList({
         onRename={(title) => void rename(item, title)}
         onStartRename={() => setRenaming(item.key)}
         onDelete={() => askDelete(item)}
-        onOpenInTab={item.orchestration ? undefined : () => onOpenInTab(item.host.id, t.id)}
+        onOpenInTab={
+          item.orchestration || !onOpenInTab ? undefined : () => onOpenInTab(item.host.id, t.id)
+        }
         onOpenBeside={
           !item.orchestration &&
           item.host.id === host.id &&
@@ -1352,7 +1354,7 @@ export function ThreadList({
   const moving = movingKey === undefined ? undefined : byRun.get(movingKey);
   // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
   const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
-    ...(!i.orchestration
+    ...(!i.orchestration && onOpenInTab
       ? [
           {
             label: "Open in new tab",

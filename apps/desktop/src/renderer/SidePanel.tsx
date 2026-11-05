@@ -39,6 +39,7 @@ import { numberOf } from "./github";
 import { lookOf, type PullRequests } from "./PullRequests";
 import { isMedia } from "./transcript";
 import { IconButton, TopBar } from "./ui";
+import { threadTabs } from "./tabState";
 
 interface Surface {
   name: string;
@@ -275,6 +276,7 @@ export function SidePanel({
   /** A new request opens the Files view, as the command menu's file picks do (PLX-993). */
   showFiles?: object;
 }) {
+  const tabbed = threadTabs.use();
   // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
   // its scope showed, else the list.
   const [scopes, setScopes] = useState<Record<string, Scoped>>({});
@@ -524,7 +526,11 @@ export function SidePanel({
         pick(next);
       }}
       style={expanded ? undefined : { width }}
-      className={`pane-edge pane-card relative m-1.5 ml-0 flex min-w-0 flex-col overflow-clip rounded-prompt bg-pane ${expanded ? "flex-1" : "shrink-0"}`}
+      className={
+        tabbed
+          ? `pane-edge pane-card relative m-1.5 ml-0 flex min-w-0 flex-col overflow-clip rounded-prompt bg-pane ${expanded ? "flex-1" : "shrink-0"}`
+          : `relative flex min-w-0 flex-col bg-pane ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`
+      }
     >
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
       {/* While a browser tab is in front, the browser's theme paints the top bar and the browser, and

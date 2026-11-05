@@ -2,7 +2,8 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { close, launch, printFailure, type Launched } from "./launch";
 
-// The top bar's tabs in the built app, with real drags and the window's own keys (PLX-1289).
+// The top bar's tabs in the built app, with real drags and the window's own keys (PLX-1289), with
+// Settings › Beta's Tabs on.
 
 let launched: Launched | undefined;
 test.afterEach(async () => {
@@ -21,6 +22,8 @@ test("threads open in tabs, drag to reorder and tile, and close with the keyboar
     role: "worker",
     account: { kind: "subscription", backend: "fake" },
   })`);
+  // Tabs are a Beta setting, off until turned on.
+  await page.evaluate(`localStorage.setItem("parallax.beta.tabs", "true")`);
   await page.reload();
 
   const strips = page.getByRole("tablist", { name: "Open tabs" });

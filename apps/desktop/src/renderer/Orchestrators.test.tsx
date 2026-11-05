@@ -2,7 +2,7 @@
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vite-plus/test";
 
 import type {
   ConnectionState,
@@ -20,6 +20,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { threadTabs } from "./tabState";
 import { scopeStore } from "./scope";
 import { sectionsStore } from "./Sidebar";
 import { moreShown } from "./SidebarNav";
@@ -336,7 +337,7 @@ test("Create orchestrator names it after its repository, shows plxd's error, ret
   expect(retry).toEqual(first);
   expect(hostsOf("orchestrator/create")).toEqual(["local", "local"]);
   expect(dialog().open).toBe(false);
-  expect(crumbs()).toEqual(["parallax"]);
+  expect(crumbs()).toEqual(["This Mac", "parallax"]);
   expect(orchestratorRows()).toContain("parallax");
 });
 
@@ -780,7 +781,7 @@ test("a subagent's request is pinned in the orchestrator's chat by name, its row
   expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
 
   await click(pinnedButton("Open its chat"));
-  expect(crumbs()).toEqual(["ember", "Write the docs"]);
+  expect(crumbs()).toEqual(["This Mac", "ember", "Write the docs"]);
   // Its own chat pins it as its own.
   expect(pinned()!.textContent).not.toContain("Subagent:");
   await click(document.querySelector('[aria-label="Breadcrumb"] button'));
@@ -843,7 +844,7 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
   });
   await renderApp();
   await click(rowButton("ember"));
-  expect(crumbs()).toEqual(["ember"]);
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
   expect(menuItems("ember").map((b) => b.textContent)).toEqual([
     "Rename…",
     "Change icon…",
@@ -872,7 +873,7 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
     { orchestrator: "p-ember" },
   ]);
   expect(deleteDialog().open).toBe(false);
-  expect(crumbs()).toEqual([]);
+  expect(crumbs().at(-1)).toBe("New thread");
   expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
   expect(orchestratorRows()).toEqual(["photon"]);
 });
@@ -908,7 +909,7 @@ test("without orchestratorDelete there's no Delete…, and another client's orch
   await renderApp();
   expect(menuItem("ember", "Delete…")).toBeUndefined();
   await click(rowButton("ember"));
-  expect(crumbs()).toEqual(["ember"]);
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
 
   await act(async () =>
     deliver({
@@ -922,7 +923,7 @@ test("without orchestratorDelete there's no Delete…, and another client's orch
     }),
   );
   await settle();
-  expect(crumbs()).toEqual([]);
+  expect(crumbs().at(-1)).toBe("New thread");
   expect(orchestratorRows()).toEqual(["photon"]);
 });
 
@@ -980,7 +981,7 @@ test("Usage waits under More until Settings shows it in the head, and pinned Pro
   expect(project.querySelector("button[data-row]")!.textContent).toBe("ProjectEssays");
   expect(project.querySelector("[data-status]")!.textContent).toBe("");
   await click(project.querySelector("button[data-row]"));
-  expect(crumbs()).toEqual(["Essays"]);
+  expect(crumbs()).toEqual(["This Mac", "Essays"]);
 
   // A pinned orchestrator thread lists after the pinned Projects, out of its folder.
   await act(async () => pinnedProjects.set([...pinnedProjects.get(), "local/p-ember"]));
@@ -995,7 +996,7 @@ test("Usage waits under More until Settings shows it in the head, and pinned Pro
     ].map((t) => t.textContent),
   ).not.toContain("ember");
   await click(pinned().querySelector('li[data-kind="orchestrator"] button[data-row]'));
-  expect(crumbs()).toEqual(["ember"]);
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
 
   // The heading folds the section, and a card's pin unpins it.
   await click(pinned().querySelector("button[aria-expanded]"));
@@ -1121,8 +1122,8 @@ test("a Project is made from the Projects page, opens to New thread in it, and k
   await settle();
   const [made] = calls("project/create");
   expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
-  // A Project's page is the Project, so its tab names it and no crumb does.
-  expect(crumbs()).toEqual(["Essays"]);
+  // A Project's page is the Project, so its crumbs end there.
+  expect(crumbs()).toEqual(["This Mac", "Essays"]);
   // Its icon in the header opens the icon picker under it.
   const icon = document.querySelector<HTMLElement>('main button[aria-label="Change icon"]')!;
   await click(icon);
@@ -1277,7 +1278,9 @@ test("Thread details adds the open thread to a Project and takes it out", async 
   expect(details.querySelector('button[aria-label="Project: Essays"]')).toBeNull();
 });
 
-test("a Project's page that opens first keeps its tab", async () => {
+test("with Tabs on, a Project's page that opens first keeps its tab", async () => {
+  threadTabs.set(true);
+  onTestFinished(() => threadTabs.set(false));
   capabilities = { projects: {}, projectThreads: {}, projectContext: {} };
   answers["thread/list"] = () => ({
     result: {
@@ -1790,7 +1793,7 @@ test("shared orchestrator actions retain orchestration navigation, Project assig
   await click(item("Fresh session"));
   expect(calls("orchestrator/fresh")).toEqual([{ orchestrator: "p-ember" }]);
   await click(rowButton("ember"));
-  expect(crumbs()).toEqual(["ember"]);
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
   item = await threadMenu();
   await click(item("Delete…"));
   expect(deleteDialog().querySelector("h2")!.textContent).toBe("Delete this orchestrator?");

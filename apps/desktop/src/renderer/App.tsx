@@ -22,7 +22,15 @@ import {
   PanelLeftOpen,
   PanelRight,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type SetStateAction,
+} from "react";
 import { flushSync } from "react-dom";
 
 import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
@@ -144,6 +152,7 @@ import {
   moveTab,
   moveToZone,
   navigate,
+  oneTabEach,
   openBeside,
   openInTab,
   openInZone,
@@ -154,7 +163,9 @@ import {
   startWorkspace,
   stepTab,
   threadOf,
+  threadTabs,
   type ThreadTab,
+  type Workspace as Panes,
 } from "./tabState";
 import { draggedThread, tabDragType, threadDragType } from "./threadDrag";
 
@@ -246,8 +257,23 @@ export function App() {
   const hosts = useHosts();
   useProviderLink(hosts);
   // The window's panes and tabs (PLX-1289). The focused pane's shown tab holds the open host and
-  // selection.
-  const [workspace, setWorkspace] = useState(() => startWorkspace(localId));
+  // selection. With Settings › Beta's Tabs off, each pane holds one tab, so a view opened in it
+  // replaces what it showed.
+  const tabsOn = threadTabs.use();
+  const [workspace, setTabbedWorkspace] = useState(() => startWorkspace(localId));
+  const setWorkspace = useCallback(
+    (next: SetStateAction<Panes>) =>
+      setTabbedWorkspace((state) => {
+        const updated = typeof next === "function" ? next(state) : next;
+        return threadTabs.get() ? updated : oneTabEach(updated);
+      }),
+    [],
+  );
+  // Turning Tabs off keeps each pane's shown tab. The root's class scopes the classic CSS.
+  useEffect(() => {
+    if (!tabsOn) setWorkspace((state) => state);
+    document.documentElement.classList.toggle("tabs-beta", tabsOn);
+  }, [tabsOn, setWorkspace]);
   const { hostId, selection } = activeTab(workspace);
   // The open host, or this computer until a removed one's tabs close, below.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
@@ -789,11 +815,14 @@ export function App() {
     return lineage.chips[next]?.id;
   };
 
-  // The top right names only what leads elsewhere or isn't plain: the tab and sidebar say which thread
-  // and repository this is. Under a subagent, the orchestrator's crumb goes back to the orchestrator.
+  // With tabs, the top right names only what leads elsewhere or isn't plain: the tab and sidebar say
+  // which thread and repository this is. The classic top bar leads with the computer and the
+  // repository or orchestrator, whose crumb wears its sidebar icon; in a thread, the repository's opens
+  // New thread on it. Under a subagent, the orchestrator's crumb goes back to the orchestrator.
   let crumbs: Crumb[];
   if (orchestrator) {
     crumbs = [
+      ...(tabsOn ? [] : [{ label: host.name }]),
       {
         label: orchestrator.name,
         icon: <ProjectIcon icon={orchestrator.icon} />,
@@ -807,11 +836,29 @@ export function App() {
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
     // A Claude Remote Control thread runs on another computer, not this host (PLX-1140).
-    const where: Crumb[] =
+    const remote: Crumb[] =
       selection.kind === "thread" && remoteThread
         ? [{ label: "Remote Control", icon: <Cloud aria-hidden /> }]
         : [];
-    // A Project's page is the Project itself (0090), which its tab names.
+    // A thread added to a Project names the Project, and opens its page (0090).
+    const addedTo =
+      selection.kind === "thread" && openThread?.project
+        ? threads.state.repos.find((r) => r.id === openThread.project)
+        : undefined;
+    const where: Crumb[] = tabsOn
+      ? remote
+      : [
+          ...(remote.length ? remote : [{ label: host.name }]),
+          {
+            label: addedTo?.name ?? group.name,
+            icon: <RepoIcon repo={addedTo ?? threads.state.repos.find((r) => r.id === group.id)} />,
+            onClick:
+              selection.kind === "thread"
+                ? () => setSelection({ kind: "new", groupId: addedTo?.id ?? group.id })
+                : undefined,
+          },
+        ];
+    // A Project's page is the Project itself (0090), which its tab or crumb names.
     crumbs = selection.kind === "new" && group.project ? where : [...where, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
@@ -1221,15 +1268,15 @@ export function App() {
       } else if (command === "newOrchestrator") {
         if (!dialog) picker.current?.open("orchestrator");
       } else if (command === "newTab") {
-        if (dialog || settings) return;
+        if (!tabsOn || dialog || settings) return;
         setMainPage(undefined);
         newThread();
       } else if (command === "closeTab") {
         // With no tab in view to close, Close Window keeps its keys.
-        if (dialog || settings || mainPage || !closableTab) return;
+        if (!tabsOn || dialog || settings || mainPage || !closableTab) return;
         setWorkspace(closeTab(workspace, activeTab(workspace).id));
       } else if (command === "nextTab" || command === "previousTab") {
-        if (dialog || settings) return;
+        if (!tabsOn || dialog || settings) return;
         setWorkspace(stepTab(workspace, command === "nextTab" ? 1 : -1));
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
@@ -1452,9 +1499,9 @@ export function App() {
       </IconButton>
     </div>
   );
-  const topControls = (
+  // The top bar's buttons: in the top right card's row of tabs, or the classic top bar's right end.
+  const panelButtons = (
     <>
-      {trail.length > 0 && <Breadcrumb items={trail} tight />}
       {tiled && (
         <IconButton
           label={workspace.maximized ? "Restore tiles" : "Maximize thread"}
@@ -1489,6 +1536,12 @@ export function App() {
           <PanelRight />
         </IconButton>
       )}
+    </>
+  );
+  const topControls = (
+    <>
+      {trail.length > 0 && <Breadcrumb items={trail} tight />}
+      {panelButtons}
     </>
   );
   // The view of the focused pane's tab, when it isn't a thread.
@@ -1613,9 +1666,10 @@ export function App() {
       )
     );
 
-  // A full page, as one card on the window's background.
+  // A full page, as one card on the window's background, or with tabs off, the main pane itself.
   const pageCard =
     "pane-edge pane-card m-1.5 flex min-h-0 flex-1 flex-col overflow-clip rounded-prompt bg-pane";
+  const pagePlain = "flex min-h-0 flex-1 flex-col";
 
   const page = (
     <div className="flex h-full">
@@ -1727,7 +1781,7 @@ export function App() {
         />
       )}
       <Sidebar
-        history={sidebarOpen && historyButtons}
+        history={tabsOn && sidebarOpen && historyButtons}
         width={leftWidth}
         onResize={(width) => resizePanel(0, width)}
         open={sidebarOpen}
@@ -1760,20 +1814,30 @@ export function App() {
           addDialog={addDialog}
           onNewThread={() => picker.current?.open()}
           onOpenBeside={(threadId) => setWorkspace((state) => openBeside(state, host.id, threadId))}
-          onOpenInTab={(hostId, threadId) => {
-            setMainPage(undefined);
-            setSettings(null);
-            setWorkspace((state) => openInTab(state, hostId, threadId));
-          }}
+          onOpenInTab={
+            tabsOn
+              ? (hostId, threadId) => {
+                  setMainPage(undefined);
+                  setSettings(null);
+                  setWorkspace((state) => openInTab(state, hostId, threadId));
+                }
+              : undefined
+          }
         />
       </Sidebar>
 
-      <div className="relative flex min-w-0 flex-1 overflow-clip bg-pane-sidebar">
+      <div
+        className={`relative flex min-w-0 flex-1 overflow-clip ${tabsOn ? "bg-pane-sidebar" : "workspace-shell"}`}
+        data-sidebar-open={sidebarOpen}
+      >
         {/* An expanded side panel takes the main pane's place. */}
         <OpenDocumentContext value={openDoc}>
-          <main hidden={expanded} className="flex min-w-0 flex-1 flex-col">
+          <main
+            hidden={expanded}
+            className={`flex min-w-0 flex-1 flex-col ${tabsOn ? "" : "bg-pane"}`}
+          >
             {mainPage === "projects" ? (
-              <div className={pageCard}>
+              <div className={tabsOn ? pageCard : pagePlain}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <ProjectsPage
@@ -1789,13 +1853,13 @@ export function App() {
                 />
               </div>
             ) : mainPage === "usage" ? (
-              <div className={pageCard}>
+              <div className={tabsOn ? pageCard : pagePlain}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <UsagePage hosts={hosts} />
               </div>
             ) : mainPage === "pullRequests" ? (
-              <div className={pageCard}>
+              <div className={tabsOn ? pageCard : pagePlain}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <PullRequestsPage
@@ -1823,10 +1887,19 @@ export function App() {
               </div>
             ) : (
               <>
+                {!tabsOn && (
+                  <TopBar className={`@container ${topBarInset}`}>
+                    {showSidebar}
+                    <div className="-ml-1 flex shrink-0">{historyButtons}</div>
+                    <Breadcrumb items={crumbs} />
+                    <div className="ml-auto flex shrink-0 items-center gap-2">{panelButtons}</div>
+                  </TopBar>
+                )}
                 <div ref={details.ref} className="relative flex min-h-0 flex-1">
                   <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                    <div className="relative flex min-h-0 flex-1 p-[3px]">
+                    <div className={`relative flex min-h-0 flex-1 ${tabsOn ? "p-[3px]" : ""}`}>
                       <SplitTiles
+                        tabs={tabsOn}
                         focused={workspace.panes.indexOf(focusedPane(workspace))}
                         cuts={workspace.cuts}
                         onResize={(cuts) => setWorkspace((state) => ({ ...state, cuts }))}

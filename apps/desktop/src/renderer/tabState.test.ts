@@ -9,6 +9,7 @@ import {
   moveTab,
   moveToZone,
   navigate,
+  oneTabEach,
   openBeside,
   openInTab,
   openInZone,
@@ -264,4 +265,13 @@ test("stepping goes through every pane's tabs, wrapping around", () => {
   const state = openBeside(opened("a", "b"), "h", "c");
   expect(shape(stepTab(state, 1))).toEqual(["[a] b *", "[c]"]);
   expect(shape(stepTab(state, -1))).toEqual(["a [b] *", "[c]"]);
+});
+
+test("with tabs off, each pane keeps only the view it shows", () => {
+  const state = openBeside(opened("a", "b"), "h", "c");
+  expect(shape(oneTabEach(state))).toEqual(["[b]", "[c] *"]);
+  // New thread replaces the thread its pane showed.
+  const single = oneTabEach(navigate(oneTabEach(opened("a")), "h", { kind: "new" }));
+  expect(shape(single)).toEqual(["[new] *"]);
+  expect(oneTabEach(single)).toBe(single);
 });

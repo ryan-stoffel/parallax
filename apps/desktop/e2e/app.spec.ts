@@ -269,7 +269,7 @@ test("creates an orchestrator on a repository it adds, and opens it (PLX-166)", 
   await dialog.getByRole("button", { name: "Create orchestrator" }).click();
 
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole("tablist", { name: "Open tabs" })).toContainText("ember");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
   // The Projects page lists Projects only (0093); the Inbox sidebar lists the orchestrator as a
   // thread, finds it by its name, and its row goes back to it.
   await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
@@ -279,7 +279,7 @@ test("creates an orchestrator on a repository it adds, and opens it (PLX-166)", 
   await expect(rows).toHaveCount(1);
   await rows.locator("button[data-row]").click();
   await page.locator('#sidebar input[type="search"]').fill("");
-  await expect(page.getByRole("tablist", { name: "Open tabs" })).toContainText("ember");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
 });
 
 test("chats with the orchestrator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
@@ -390,7 +390,7 @@ test("shows the orchestrator's tasks in its side panel, opens their chats, and m
     .getByRole("region", { name: "Child thread" })
     .getByRole("button", { name: /^Open parent/ })
     .click();
-  await expect(crumbs).toBeHidden();
+  await expect(crumbs).not.toContainText("Tag the release");
   await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
   // Two wake-ups: one for the task's start (0043), and one for the stop.
