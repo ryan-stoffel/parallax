@@ -22,6 +22,10 @@
 //!
 //! A client reaches a host over a `relay:<hostId>` route: [`open_stream`] is the byte stream its
 //! TLS runs over, opened with the Clerk session [`sign_in`] keeps in its `Authorization` header.
+//!
+//! Every connection honors `HTTPS_PROXY` ([`proxy`]). The relay's TLS also trusts the OS's root
+//! certificates, so it works through a TLS-inspecting proxy, which then sees what the relay does
+//! and no more: clients' streams are still TLS to a pinned certificate. Clerk's doesn't ([`Roots`]).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
@@ -48,8 +52,10 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+mod proxy;
 mod seal;
 
+use self::proxy::Proxy;
 use crate::event_log::{Entry, EventLog};
 use crate::remote::{self, DpopKey, Error};
 use crate::server::Daemon;
@@ -139,8 +145,7 @@ impl Base {
             Some((host, port)) => (host, port.parse().map_err(|_| bad("a bad port"))?),
             None => (authority, default_port(tls)),
         };
-        let local = host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
-        if !tls && !local {
+        if !tls && !local_host(host) {
             return Err(bad("plain HTTP reaches only this computer"));
         }
         Ok(Self {
@@ -158,27 +163,88 @@ impl Base {
         }
     }
 
-    /// A connection to the relay: TLS checked against the Mozilla roots, or plain to loopback.
-    async fn connect(&self) -> io::Result<Stream> {
-        let tcp = TcpStream::connect((self.host.as_str(), self.port)).await?;
+    /// A connection to this host: through `HTTPS_PROXY` unless `NO_PROXY` names it or it's this
+    /// computer, with TLS checked against `roots`, or plain to loopback.
+    async fn connect(&self, roots: Roots) -> io::Result<Stream> {
+        let through = if local_host(&self.host) {
+            None
+        } else {
+            Proxy::from_env(&self.host, self.port)?
+        };
+        let tcp = match through {
+            Some(proxy) => proxy.tunnel(&self.host, self.port).await?,
+            None => TcpStream::connect((self.host.as_str(), self.port)).await?,
+        };
         let _ = tcp.set_nodelay(true);
         if !self.tls {
             return Ok(Box::new(tcp));
         }
-        let roots = rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        let config = match roots {
+            Roots::Mozilla => tls_config(mozilla_roots())?,
+            Roots::WithOs => relay_tls().await?,
         };
-        let config = rustls::ClientConfig::builder_with_provider(remote::provider())
-            .with_safe_default_protocol_versions()
-            .map_err(io::Error::other)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
         let name = ServerName::try_from(self.host.clone()).map_err(io::Error::other)?;
-        let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
+        let tls = tokio_rustls::TlsConnector::from(config)
             .connect(name, tcp)
             .await?;
         Ok(Box::new(tls))
     }
+}
+
+/// Which root certificates a connection's TLS is checked against (0091).
+#[derive(Clone, Copy, Debug)]
+enum Roots {
+    /// Mozilla's alone, for Clerk's keys: a proxy's certificate must not vouch for what checks
+    /// sign-ins.
+    Mozilla,
+    /// Mozilla's and the OS's, for the relay: a TLS-inspecting proxy's certificate may vouch for
+    /// the outer connection, since what matters inside it is TLS to a pinned certificate.
+    WithOs,
+}
+
+fn mozilla_roots() -> rustls::RootCertStore {
+    rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    }
+}
+
+fn tls_config(roots: rustls::RootCertStore) -> io::Result<Arc<rustls::ClientConfig>> {
+    let config = rustls::ClientConfig::builder_with_provider(remote::provider())
+        .with_safe_default_protocol_versions()
+        .map_err(io::Error::other)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(Arc::new(config))
+}
+
+/// The config for [`Roots::WithOs`], made once, since reading the OS's store can take a moment and
+/// reconnects shouldn't wait on it. A root added later counts once plxd restarts. `SSL_CERT_FILE`
+/// and `SSL_CERT_DIR` replace the OS's store when set. A store that can't be read leaves
+/// Mozilla's roots.
+async fn relay_tls() -> io::Result<Arc<rustls::ClientConfig>> {
+    static CONFIG: tokio::sync::OnceCell<Arc<rustls::ClientConfig>> =
+        tokio::sync::OnceCell::const_new();
+    let config = CONFIG.get_or_try_init(|| async {
+        let os = tokio::task::spawn_blocking(rustls_native_certs::load_native_certs)
+            .await
+            .map_err(io::Error::other)?;
+        for error in &os.errors {
+            warn!(%error, "could not read some of this computer's root certificates");
+        }
+        let mut roots = mozilla_roots();
+        let (added, ignored) = roots.add_parsable_certificates(os.certs);
+        info!(
+            added,
+            ignored, "read this computer's root certificates for the relay"
+        );
+        tls_config(roots)
+    });
+    config.await.cloned()
+}
+
+/// Whether `host` names this computer, which no proxy stands in front of.
+fn local_host(host: &str) -> bool {
+    host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// HTTPS's port, or HTTP's.
@@ -195,10 +261,10 @@ fn cant_reach(error: &Error) -> String {
 }
 
 /// A JSON `GET` of `path` at `url`, with no credential, such as Clerk's JWKS (0091): its status,
-/// JSON body, and `Cache-Control` `max-age`. HTTPS checked against the Mozilla roots, as the
-/// relay's own, or plain HTTP to this computer.
+/// JSON body, and `Cache-Control` `max-age`. HTTPS checked against [`Roots::Mozilla`], or plain
+/// HTTP to this computer.
 pub(crate) async fn get(url: &str, path: &str) -> Result<Answer, Error> {
-    request(url, "GET", path, None, None).await
+    request(url, Roots::Mozilla, "GET", path, None, None).await
 }
 
 /// An HTTP answer: its status, JSON body, and `Cache-Control` `max-age`.
@@ -212,20 +278,21 @@ async fn http(
     token: Option<&str>,
     body: Option<&Value>,
 ) -> Result<(u16, Value), Error> {
-    let (status, body, _) = request(url, method, path, token, body).await?;
+    let (status, body, _) = request(url, Roots::WithOs, method, path, token, body).await?;
     Ok((status, body))
 }
 
 /// One JSON request: its status, JSON body, and `Cache-Control` `max-age`.
 async fn request(
     url: &str,
+    roots: Roots,
     method: &str,
     path: &str,
     token: Option<&str>,
     body: Option<&Value>,
 ) -> Result<Answer, Error> {
     let base = Base::parse(url)?;
-    let mut stream = base.connect().await?;
+    let mut stream = base.connect(roots).await?;
     let body = body.map(ToString::to_string).unwrap_or_default();
     let authorization = token
         .map(|token| format!("Authorization: Bearer {token}\r\n"))
@@ -343,7 +410,10 @@ async fn upgrade(
 ) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     let base = Base::parse(url).map_err(|e| (None, e.into()))?;
-    let stream = base.connect().await.map_err(|e| (None, e.into()))?;
+    let stream = base
+        .connect(Roots::WithOs)
+        .await
+        .map_err(|e| (None, e.into()))?;
     let scheme = if base.tls { "wss" } else { "ws" };
     let address = format!("{scheme}://{}{path}", base.authority());
     let mut request = address
