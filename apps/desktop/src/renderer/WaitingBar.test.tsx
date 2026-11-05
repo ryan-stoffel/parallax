@@ -50,8 +50,9 @@ test("a watched pull request's number is a link in its state's color, beside Git
   expect(link.getAttribute("href")).toBe(merged);
   expect(link.querySelector("span span span")?.className).toContain("text-project-violet");
   expect(link.querySelector("svg")?.getAttribute("class")).toContain("text-foreground");
-  // Bare: the color is the number's text, with no background or box behind it.
-  expect(link.innerHTML).not.toMatch(/\bbg-/);
+  // The state's color is the number's text, over the same neutral fill as a thread's chip.
+  expect(link.querySelector('[class*="bg-foreground/"]')).not.toBeNull();
+  expect(link.innerHTML).not.toContain("bg-project-violet");
 });
 
 test("one not read yet shows neutral, and each has its own chip", () => {

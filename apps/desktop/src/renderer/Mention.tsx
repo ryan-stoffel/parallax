@@ -12,11 +12,11 @@ export const PullRequestsContext = createContext<Pick<PullRequests, "urls" | "ge
   undefined,
 );
 
-// Each kind of mention's colors: a skill in violet, a file in the accent, a thread or an image in
-// the text's own color, faintly filled and outlined, cited text outlined in the accent, and a pull
-// request bare, since its number takes its state's color.
+// Each kind of mention's colors: a skill in violet, a file in the accent, a thread, an image, or a
+// pull request faintly filled and outlined, and cited text outlined in the accent. A thread's and
+// an image's text is the text's own color, and a pull request's number takes its state's.
 const tones = {
-  pullRequest: "",
+  pullRequest: "bg-foreground/[0.06] ring-1 ring-foreground/10 ring-inset",
   skill: "bg-project-violet/12 text-project-violet",
   file: "bg-accent/10 text-foreground",
   thread: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
@@ -138,7 +138,7 @@ export function PullRequestChip({ url, pr }: { url: string; pr?: PullRequest }) 
       title={pr?.title ?? url}
       icon={<GitHubLogo className="text-foreground" />}
     >
-      <span className={`font-medium tabular-nums ${lookOf(pr).color}`}>#{numberOf(url)}</span>
+      <span className={`tabular-nums ${lookOf(pr).color}`}>#{numberOf(url)}</span>
     </Chip>
   );
 }
