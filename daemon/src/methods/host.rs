@@ -330,8 +330,9 @@ fn capabilities_advertised(orchestrator_computer: bool) -> Capabilities {
 /// The capabilities [`capabilities_advertised`] always advertises with no options.
 /// `accountHomes`: plxd expands `~/` in an account's home, makes the folder, and probes each
 /// account in its own home, so several accounts of one kind run apart (0088). `accountAccess`:
-/// `relay/id`, `access/*`, and account sign-in on the remote listener (0091). `relayPushKey` (0100):
-/// `relay/pushKey`.
+/// `relay/id`, `access/*`, and account sign-in on the remote listener (0091). `readOnlyDevices`
+/// (PLX-1364): `access/setReadOnly`, and a read-only device is refused what isn't a read.
+/// `relayPushKey` (0100): `relay/pushKey`.
 const PLAIN_CAPABILITIES: &[&str] = &[
     "accountAccess",
     "accountHomes",
@@ -398,6 +399,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "pullRequests",
     "questions",
     "queue",
+    "readOnlyDevices",
     "relay",
     "relayPushKey",
     "remote",

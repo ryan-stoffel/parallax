@@ -1315,12 +1315,13 @@ async fn serve_socket(
     let session = session.clone();
     // Watched before the session is checked, so a revoke that lands in between still closes it.
     let closing = daemon.remote.watch(&session, closing);
-    // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off.
-    if !session_open(&daemon, &session).await {
+    // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off. A
+    // device made read-only after this has the connection closed too, as a revoke does.
+    let Some(read_only) = session_read_only(&daemon, &session).await else {
         let refusal = refused("a revoked session");
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
-    }
+    };
     let accept = derive_accept_key(key.as_bytes());
     let switching = format!(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
@@ -1334,7 +1335,7 @@ async fn serve_socket(
             .await;
     let (local, plain) = tokio::io::duplex(64 * 1024);
     let (local_in, local_out) = tokio::io::split(local);
-    let serve = connection::serve(plain, daemon, stop_reading, closing, false);
+    let serve = connection::serve(plain, daemon, stop_reading, closing, false, read_only);
     let ((), pumped) = tokio::join!(serve, pump(socket, local_in, local_out));
     if let Err(error) = pumped {
         debug!(%peer, %error, "a remote WebSocket failed");
@@ -1438,13 +1439,23 @@ async fn session_for(daemon: &Daemon, token: &str) -> Option<StoredSession> {
         .find(|s| s.token_hash == hash)
 }
 
-/// Whether session `id` may have a socket now: it exists, and a browser's only while `remoteWeb`
-/// is on.
-async fn session_open(daemon: &Daemon, id: &str) -> bool {
-    match stored_sessions(daemon).await.iter().find(|s| s.id == id) {
-        Some(session) => !session.browser || web_on(daemon).await,
-        None => false,
-    }
+/// Whether session `id`'s device is read-only, if it may have a socket now: it exists, and a
+/// browser's only while `remoteWeb` is on. Lists it can't read leave it no socket, rather than full
+/// access.
+async fn session_read_only(daemon: &Daemon, id: &str) -> Option<bool> {
+    let id = id.to_owned();
+    let (browser, read_only) = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| {
+            let lists = access::read_lists(db)?;
+            let sessions = read_sessions(db)?;
+            let session = sessions.iter().find(|s| s.id == id);
+            Ok(session.map(|s| (s.browser, lists.read_only_clients.contains(&s.thumbprint))))
+        })
+        .await
+        .ok()
+        .flatten()?;
+    (!browser || web_on(daemon).await).then_some(read_only)
 }
 
 /// Closes every browser's connections, as `remoteWeb` turns off. Their sessions stay, for when it
@@ -1457,10 +1468,11 @@ pub(crate) async fn close_browsers(daemon: &Daemon) {
     }
 }
 
-fn listed(sessions: Vec<StoredSession>) -> Vec<RemoteSession> {
+fn listed(sessions: Vec<StoredSession>, lists: &access::Lists) -> Vec<RemoteSession> {
     sessions
         .into_iter()
         .map(|s| RemoteSession {
+            read_only: lists.read_only_clients.contains(&s.thumbprint),
             id: s.id,
             name: s.name,
             created_at: s.created_at,
@@ -1473,8 +1485,12 @@ pub(crate) async fn sessions(
     daemon: &Daemon,
     cancel: &CancellationToken,
 ) -> Result<Vec<RemoteSession>, ErrorObject> {
-    let sessions = daemon.reader.run(cancel, |db| read_sessions(db)).await?;
-    Ok(listed(sessions))
+    daemon
+        .reader
+        .run(cancel, |db| {
+            Ok(listed(read_sessions(db)?, &access::read_lists(db)?))
+        })
+        .await
 }
 
 /// Revokes the session `id` and closes its connections. Answers with the sessions left. A session
@@ -1498,7 +1514,7 @@ pub(crate) async fn revoke(
             write_sessions(db, &sessions)?;
             let lists = access::read_lists(db)?;
             let approved = thumbprint.filter(|key| lists.approved_clients.contains(key));
-            Ok((sessions, approved))
+            Ok((listed(sessions, &lists), approved))
         })
         .await?;
     daemon.remote.revoke(&id);
@@ -1507,7 +1523,7 @@ pub(crate) async fn revoke(
         access::remove(daemon, cancel, thumbprint).await?;
         return self::sessions(daemon, cancel).await;
     }
-    Ok(listed(sessions))
+    Ok(sessions)
 }
 
 /// A new pairing code, advertised over mDNS by this host's name while it waits. Refused while

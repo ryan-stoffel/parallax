@@ -46,19 +46,21 @@ use tracing::{Instrument, debug, debug_span, error, info, warn};
 use super::Daemon;
 use crate::event_log::EventLog;
 use crate::logging::{untrusted, untrusted_id};
-use crate::methods::{self, Context, Cursors, Delivery, Reply, Session};
+use crate::methods::{self, Context, Cursors, Delivery, Reply, Session, read_only};
 
 type InFlight = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
 /// Serves one connection until it closes. `closing` closes it at once; `stop_reading` stops
 /// reading and closes it after the requests already read are answered. `over_connect` says it
 /// came through Parallax Connect's listener and its `whois` check ([`Context::over_connect`]).
+/// `read_only` says its device is limited to reads ([`Context::read_only`]).
 pub(crate) async fn serve<S>(
     stream: S,
     daemon: Arc<Daemon>,
     stop_reading: CancellationToken,
     closing: CancellationToken,
     over_connect: bool,
+    read_only: bool,
 ) where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -76,6 +78,7 @@ pub(crate) async fn serve<S>(
         stop_reading: stop_reading.clone(),
         closing: closing.clone(),
         over_connect,
+        read_only,
     };
     let stall = Stall {
         timeout: daemon.limits.idle_timeout,
@@ -122,6 +125,7 @@ struct Reader<S> {
     stopped_reading: CancellationToken,
     closing: CancellationToken,
     over_connect: bool,
+    read_only: bool,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
@@ -265,6 +269,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             command_id: None,
             replies: self.replies.clone(),
             over_connect: self.over_connect,
+            read_only: self.read_only,
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -331,6 +336,10 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
     }
 
     fn notification(&self, notification: &Notification) {
+        if self.read_only && !read_only::allows_notification(&notification.method) {
+            let method = untrusted(&notification.method);
+            return debug!(?method, "ignored a read-only device's notification");
+        }
         // A terminal's input is written here, so it reaches the terminal in the order it was
         // sent, and a detach lands before a later open.
         let terminals = &self.daemon.terminals;
@@ -745,6 +754,7 @@ mod tests {
             daemon,
             CancellationToken::new(),
             CancellationToken::new(),
+            false,
             false,
         ));
         let (read, mut write) = tokio::io::split(client);

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge, SavedHost } from "../../preload/bridge";
+import type { RemoteSession, RemoteSessionsResult } from "../../protocol/generated/protocol";
 import { Notifications } from "../notifications";
 import { LanSettings } from "./LanSettings";
 
@@ -19,6 +20,7 @@ const connected: ConnectionState = {
 let remote = false;
 let remoteWeb = false;
 let relay = false;
+let sessions: RemoteSession[] = [];
 let hosts: SavedHost[] = [];
 type Set = { remote?: boolean; remoteWeb?: boolean; relay?: boolean };
 const request = vi.fn(async (_host: string, method: string, params: Set) => {
@@ -41,7 +43,7 @@ const request = vi.fn(async (_host: string, method: string, params: Set) => {
   if (method === "remote/sessions")
     return {
       result: {
-        sessions: [],
+        sessions,
         listening: remote,
         pairing: remote,
         fingerprint: "ab".repeat(32),
@@ -70,6 +72,7 @@ beforeEach(() => {
   remote = false;
   remoteWeb = false;
   relay = false;
+  sessions = [];
   hosts = [{ id: `lan:${"ab".repeat(32)}`, name: "studio", routes: ["192.168.1.20"] }];
   request.mockClear();
   pairLan.mockClear();
@@ -112,6 +115,59 @@ const click = async (element: Element) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
+
+test("making a device read-only asks first, says it's for good, and a failure says why", async () => {
+  const session = { id: "s1", name: "phone", createdAt: "2026-11-04T00:00:00Z" };
+  const makeDeviceReadOnly = vi.fn(async (): Promise<RemoteSessionsResult | string> => ({
+    sessions: [{ ...session, readOnly: true }],
+    listening: true,
+    pairing: false,
+  }));
+  window.parallax.makeDeviceReadOnly = makeDeviceReadOnly;
+  window.parallax.connectionState = async () => ({
+    ...connected,
+    capabilities: { readOnlyDevices: {} },
+  });
+  sessions = [session];
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() =>
+    root.render(
+      <>
+        <LanSettings />
+        <Notifications />
+      </>,
+    ),
+  );
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+
+  // The first click only asks. Cancel leaves it as it was.
+  await click(button("Make read-only"));
+  expect(makeDeviceReadOnly).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("This can't be undone.");
+  await click(button("Cancel"));
+  expect(document.body.textContent).not.toContain("This can't be undone.");
+
+  makeDeviceReadOnly.mockResolvedValueOnce("the store is locked");
+  await click(button("Make read-only"));
+  await click(button("Make read-only"));
+  expect(document.querySelector('[aria-label="Notifications"]')?.textContent).toContain(
+    "the store is locked",
+  );
+
+  await click(button("Make read-only"));
+  await click(button("Make read-only"));
+  expect(makeDeviceReadOnly).toHaveBeenCalledWith("s1");
+  const said = document.body.textContent;
+  expect(said).toContain("Read-only: it reads threads");
+  expect(said).toContain("revoke it and connect it again as a new device");
+  // Nothing offers to undo it, only Revoke.
+  expect(button("Make read-only")).toBeUndefined();
+  expect(button("Revoke")).toBeDefined();
+});
 
 test("Reach from anywhere registers this computer with the relay before turning it on", async () => {
   remote = true;

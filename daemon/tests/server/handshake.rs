@@ -60,6 +60,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("orchestratorEpochs".to_owned(), serde_json::Map::new()),
             ("orchestratorThreads".to_owned(), serde_json::Map::new()),
             ("delegation".to_owned(), serde_json::Map::new()),
+            ("readOnlyDevices".to_owned(), serde_json::Map::new()),
             ("devices".to_owned(), serde_json::Map::new()),
             ("eventFilters".to_owned(), serde_json::Map::new()),
             ("eventsBefore".to_owned(), serde_json::Map::new()),

@@ -338,10 +338,13 @@ export function parseSignIn(line: string): SignInAnswer | undefined {
   return undefined;
 }
 
-/** A host's approved and removed keys and approved host ids, as `access/merge` takes them. */
+/**
+ * A host's approved, removed, and read-only keys and approved host ids, as `access/merge` takes
+ * them. A plxd from before read-only devices leaves out the read-only keys.
+ */
 export type Lists = Pick<
   AccessState,
-  "approvedClients" | "removedClients" | "approvedHosts" | "allowedHosts"
+  "approvedClients" | "removedClients" | "approvedHosts" | "allowedHosts" | "readOnlyClients"
 >;
 
 /**
@@ -367,8 +370,8 @@ export function listSources<T extends { relayId: string; state: Lists }>(
 
 /**
  * Every list in `states` together, with `hostIds`, the connected hosts' own relay ids, approved
- * too. A key removed anywhere is removed, and not approved, everywhere. A computer added with Allow
- * alone stays out of `approvedHosts`, the only list an older client or plxd reads, so neither ever
+ * too. A key removed anywhere is removed, and not approved, everywhere. A key read-only anywhere
+ * is read-only everywhere. A computer added with Allow alone stays out of `approvedHosts`, the only list an older client or plxd reads, so neither ever
  * takes it for a computer the user verified.
  */
 export function unionLists(states: Lists[], hostIds: string[]): Lists {
@@ -378,11 +381,13 @@ export function unionLists(states: Lists[], hostIds: string[]): Lists {
   const hosts = new Set(
     [...states.flatMap((s) => s.approvedHosts), ...hostIds].filter((id) => !allowed.has(id)),
   );
+  const readOnly = new Set(states.flatMap((s) => s.readOnlyClients ?? []));
   return {
     approvedClients: [...approved].sort(),
     removedClients: [...removed].sort(),
     approvedHosts: [...hosts].sort(),
     ...(allowed.size > 0 && { allowedHosts: [...allowed].sort() }),
+    ...(readOnly.size > 0 && { readOnlyClients: [...readOnly].sort() }),
   };
 }
 
@@ -393,7 +398,8 @@ export function lacks(state: Lists, union: Lists): boolean {
     !has(state.approvedClients, union.approvedClients) ||
     !has(state.removedClients, union.removedClients) ||
     !has(state.approvedHosts, union.approvedHosts) ||
-    !has(state.allowedHosts ?? [], union.allowedHosts ?? [])
+    !has(state.allowedHosts ?? [], union.allowedHosts ?? []) ||
+    !has(state.readOnlyClients ?? [], union.readOnlyClients ?? [])
   );
 }
 

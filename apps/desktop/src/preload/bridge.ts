@@ -482,6 +482,12 @@ export interface ParallaxBridge {
    */
   revokeDevice(id: string): Promise<RemoteSessionsResult | string>;
   /**
+   * Makes the device of session `id` on this computer read-only, here and on every other computer
+   * this app reaches. Nothing undoes it (0091). Resolves to this computer's sessions, or an error
+   * for people.
+   */
+  makeDeviceReadOnly(id: string): Promise<RemoteSessionsResult | string>;
+  /**
    * Turns on Reach from anywhere on `tailnet:` device `hostId` the user kept on Tailscale only,
    * registered under the signed-in account, so it's reached through the account before the
    * Tailscale-only path goes (0091). Resolves to an error for people, or undefined.
@@ -864,6 +870,7 @@ export const withheldMethods = [
   "access/approve",
   "access/deny",
   "access/remove",
+  "access/setReadOnly",
   "access/forgetHost",
   "access/setupCode",
   // Revoking goes through `revokeDevice`, which also removes the device's key everywhere (0091).

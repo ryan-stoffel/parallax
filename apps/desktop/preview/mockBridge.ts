@@ -2305,6 +2305,10 @@ export const mockBridge: ParallaxBridge = {
     lan.sessions = lan.sessions.filter((s) => s.id !== id);
     return delay({ sessions: lan.sessions, listening: lan.on, pairing: false });
   },
+  makeDeviceReadOnly: (id) => {
+    lan.sessions = lan.sessions.map((s) => (s.id === id ? { ...s, readOnly: true } : s));
+    return delay({ sessions: lan.sessions, listening: lan.on, pairing: false });
+  },
   onAccessRequests: (listener) => {
     listener([...accessRequests]);
     accessListeners.add(listener);

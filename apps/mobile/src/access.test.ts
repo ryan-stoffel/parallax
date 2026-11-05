@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 
 import {
   approvalCode,
+  asLists,
   commitment,
   emptyBook,
   forgetRequest,
@@ -99,4 +100,24 @@ test("lists merge with removal winning, and a host lacking any entry gets a merg
   });
   expect(lacks(a, union)).toBe(true);
   expect(lacks(union, union)).toBe(false);
+});
+
+test("a key read-only anywhere is read-only everywhere, and a host without the mark gets it", () => {
+  const lists = { approvedClients: ["k1"], removedClients: [], approvedHosts: [] };
+  const marked = { ...lists, readOnlyClients: ["k1"] };
+  // A fake computer's malformed marks are no lists at all.
+  expect(asLists(marked)).toEqual(marked);
+  expect(asLists({ ...lists, readOnlyClients: "k1" })).toBeUndefined();
+  // A host that never heard of the mark, or a plxd from before it, can't take it off.
+  const union = merged([lists, marked], []);
+  expect(union.readOnlyClients).toEqual(["k1"]);
+  expect(merged([marked, lists], []).readOnlyClients).toEqual(["k1"]);
+  expect(lacks(lists, union)).toBe(true);
+  expect(lacks(marked, union)).toBe(false);
+  // A removal doesn't touch the mark, and the mark doesn't touch a removal.
+  const removed = { ...lists, approvedClients: [], removedClients: ["k1"] };
+  expect(merged([marked, removed], [])).toMatchObject({
+    readOnlyClients: ["k1"],
+    removedClients: ["k1"],
+  });
 });

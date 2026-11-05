@@ -6,11 +6,11 @@
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
-    AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
-    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams,
-    RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
-    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
-    RemoteSessionsResult,
+    AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
+    AccessState, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
+    RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams,
+    RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams,
+    RemoteSessionsParams, RemoteSessionsResult,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -114,7 +114,13 @@ pub(crate) async fn access_get(
     context: &Context,
     params: AccessGetParams,
 ) -> Result<AccessState, ErrorObject> {
-    access::state(&context.daemon, params.after, &context.stopped_reading).await
+    let mut state = access::state(&context.daemon, params.after, &context.stopped_reading).await?;
+    // It can't answer a request, so it gets neither the request's code nor a prompt for it.
+    if context.read_only {
+        state.pending = None;
+        state.setup_approved = None;
+    }
+    Ok(state)
 }
 
 /// The state after a change, at once.
@@ -156,6 +162,15 @@ pub(crate) async fn access_remove(
 ) -> Result<AccessState, ErrorObject> {
     access::remove(&context.daemon, &context.cancel, params.thumbprint).await?;
     access_now(context).await
+}
+
+/// `access/setReadOnly`.
+pub(crate) async fn access_set_read_only(
+    context: &Context,
+    params: AccessSetReadOnlyParams,
+) -> Result<RemoteSessionsResult, ErrorObject> {
+    access::set_read_only(&context.daemon, &context.cancel, params.id).await?;
+    sessions(context, RemoteSessionsParams {}).await
 }
 
 /// `access/forgetHost`.

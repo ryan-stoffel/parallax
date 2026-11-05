@@ -28,7 +28,7 @@ use tokio::time::{Instant, sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::connect::free_port;
-use crate::remote::{LOOPBACK, https, open_account, set_remote, wait_listening};
+use crate::remote::{LOOPBACK, https, open_account, refusal, set_remote, wait_listening};
 use crate::support::{Client, InProcess, temp_dir};
 
 const USER: &str = "user_1";
@@ -213,10 +213,9 @@ async fn forgetting_a_computer_drops_its_approval_and_this_computers_session_for
     let (_server, mut client, _, _) = host(dir.path(), &issuer).await;
     client
         .call::<AccessMerge>(AccessMergeParams {
-            approved_clients: Vec::new(),
-            removed_clients: Vec::new(),
             approved_hosts: vec![OTHER.to_owned()],
             allowed_hosts: vec![OTHER.to_owned()],
+            ..AccessMergeParams::default()
         })
         .await
         .unwrap();
@@ -502,6 +501,131 @@ async fn with_a_bare_setup_command_allow_alone_gets_no_session_until_this_comput
 }
 
 #[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one device told step by step")]
+async fn read_only_stays_with_the_key_and_no_merge_lifts_it() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    let routes = [route.clone()];
+    let phone = temp_dir();
+    let (_, signed_in) = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    let SignIn::Pending { request, .. } = signed_in else {
+        panic!("a new device waits: {signed_in:?}");
+    };
+    let waiting = {
+        let (route, request, dir) = (route.clone(), request.clone(), phone.path().to_owned());
+        let host_id = host_id.clone();
+        tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
+    };
+    client
+        .call::<AccessApprove>(AccessRequestParams { request })
+        .await
+        .unwrap();
+    assert!(matches!(
+        waiting.await.unwrap(),
+        Ok(SignIn::Approved { .. })
+    ));
+    let mut app = open_account(&routes, &host_id, phone.path()).await.unwrap();
+    app.initialize().await;
+
+    // Another host's mark reaches this one in a merge, and closes the connection it has.
+    let key = thumbprint(phone.path());
+    let merged = client
+        .call::<AccessMerge>(AccessMergeParams {
+            read_only_clients: vec![key.clone()],
+            ..AccessMergeParams::default()
+        })
+        .await
+        .unwrap();
+    assert!(merged.read_only_clients.contains(&key));
+    assert!(app.closes().await, "the mark closes its connection");
+
+    // Signing in again makes a new session, which is read-only too.
+    let again = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path()).await;
+    assert!(matches!(again, Ok((_, SignIn::Approved { .. }))));
+    let sessions = client
+        .call::<RemoteSessions>(RemoteSessionsParams {})
+        .await
+        .unwrap()
+        .sessions;
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions.iter().all(|s| s.read_only));
+    let mut app = open_account(&routes, &host_id, phone.path()).await.unwrap();
+    app.initialize().await;
+    let write = r#"{"autoResume":false}"#;
+    assert_eq!(
+        refusal(&mut app, 2, "host/settings/set", write).await,
+        Some("readOnly".to_owned())
+    );
+
+    // It reads who may sign in, with no request's code to answer.
+    let tablet = temp_dir();
+    let (_, tablet_in) = sign_in(&issuer, &routes, &host_id, USER, "tablet", tablet.path())
+        .await
+        .unwrap();
+    let SignIn::Pending { request, .. } = tablet_in else {
+        panic!("a new device waits: {tablet_in:?}");
+    };
+    assert!(access(&mut client).await.pending.is_some());
+    app.send(r#"{"jsonrpc":"2.0","id":3,"method":"access/get","params":{}}"#)
+        .await;
+    let state: serde_json::Value = serde_json::from_str(&app.next().await).unwrap();
+    assert!(state["result"]["version"].is_number(), "{state}");
+    assert!(state["result"].get("pending").is_none(), "{state}");
+
+    // A merge from a host or client that doesn't know the mark, or wants it gone, lists the key
+    // as approved at most. The mark stays, and so does its connection.
+    let merged = client
+        .call::<AccessMerge>(AccessMergeParams {
+            approved_clients: vec![key.clone()],
+            ..AccessMergeParams::default()
+        })
+        .await
+        .unwrap();
+    assert!(merged.read_only_clients.contains(&key));
+    assert_eq!(refusal(&mut app, 4, "thread/list", "{}").await, None);
+    assert_eq!(
+        refusal(&mut app, 5, "host/settings/set", write).await,
+        Some("readOnly".to_owned())
+    );
+
+    // Removed, the key gets nothing again, and stays marked. Another key, once approved, has full
+    // access.
+    let removed = client
+        .call::<AccessRemove>(AccessRemoveParams {
+            thumbprint: key.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(removed.removed_clients.contains(&key));
+    assert!(removed.read_only_clients.contains(&key));
+    assert!(app.closes().await, "its socket closed");
+    let refused = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path()).await;
+    assert!(matches!(refused, Err(remote::Error::Refused)));
+    let waiting = {
+        let (route, request, dir) = (route.clone(), request.clone(), tablet.path().to_owned());
+        let host_id = host_id.clone();
+        tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
+    };
+    client
+        .call::<AccessApprove>(AccessRequestParams { request })
+        .await
+        .unwrap();
+    assert!(matches!(
+        waiting.await.unwrap(),
+        Ok(SignIn::Approved { .. })
+    ));
+    let mut app = open_account(&routes, &host_id, tablet.path())
+        .await
+        .unwrap();
+    app.initialize().await;
+    assert_eq!(refusal(&mut app, 2, "host/settings/set", write).await, None);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn a_setup_code_approves_the_device_that_types_it_within_five_runs_an_hour() {
     let issuer = clerk().await;
     let dir = temp_dir();
@@ -690,6 +814,7 @@ async fn a_removal_from_the_relay_counts_only_when_an_approved_computer_signed_i
             removed_clients: Vec::new(),
             approved_hosts: vec![approved.thumbprint(), in_both.thumbprint()],
             allowed_hosts: vec![restricted.thumbprint(), in_both.thumbprint()],
+            read_only_clients: vec![tablet_key.clone()],
         })
         .await
         .unwrap();
@@ -743,6 +868,11 @@ async fn a_removal_from_the_relay_counts_only_when_an_approved_computer_signed_i
     let state_after = access(&mut client).await;
     assert_eq!(state_after.removed_clients, one(&tablet_key));
     assert_eq!(state_after.approved_clients, one(&phone_key));
+    assert_eq!(
+        state_after.read_only_clients,
+        one(&tablet_key),
+        "still marked"
+    );
     let tablet_again = open_account(&routes, &host_id, tablet.path()).await;
     assert!(matches!(tablet_again, Err(remote::Error::Refused)));
     phone_app

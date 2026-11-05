@@ -126,6 +126,8 @@ export interface Lists {
   approvedHosts: string[];
   /** Hosts added with Allow alone, which clients use and take no lists from. */
   allowedHosts?: string[];
+  /** The read-only keys. A plxd from before read-only devices leaves them out. */
+  readOnlyClients?: string[];
 }
 
 const strings = (value: unknown) =>
@@ -133,7 +135,7 @@ const strings = (value: unknown) =>
 
 /**
  * `result`, a computer's answer to `access/get`, as lists, or undefined when it's malformed, as a
- * fake computer's can be. An older plxd leaves out `allowedHosts`.
+ * fake computer's can be. An older plxd leaves out `allowedHosts` and `readOnlyClients`.
  */
 export function asLists(result: unknown): Lists | undefined {
   const lists = (result ?? {}) as Record<keyof Lists, unknown>;
@@ -141,7 +143,8 @@ export function asLists(result: unknown): Lists | undefined {
     strings(lists.approvedClients) &&
     strings(lists.removedClients) &&
     strings(lists.approvedHosts) &&
-    (lists.allowedHosts === undefined || strings(lists.allowedHosts));
+    (lists.allowedHosts === undefined || strings(lists.allowedHosts)) &&
+    (lists.readOnlyClients === undefined || strings(lists.readOnlyClients));
   return whole ? (lists as unknown as Lists) : undefined;
 }
 
@@ -191,23 +194,26 @@ export function sourcesFor<T extends Known>(
 /**
  * Every host's lists in one, with `hosts` (the ones this phone proved) approved too, and `allowed`
  * (the marks it keeps) marked. A key removed anywhere ends up removed and not approved, so the
- * lists merge with no clock. A marked computer stays out of `approvedHosts`, the only list an older
- * client or plxd reads, so neither takes it for one the user verified.
+ * lists merge with no clock. A key read-only anywhere ends up read-only. A marked computer stays out
+ * of `approvedHosts`, the only list an older client or plxd reads, so neither takes it for one the
+ * user verified.
  */
 export function merged(all: Lists[], hosts: string[], allowed: string[] = []): Lists {
   const removed = new Set(all.flatMap((l) => l.removedClients));
   const sorted = (items: Iterable<string>) => [...new Set(items)].sort();
   const marks = sorted([...all.flatMap((l) => l.allowedHosts ?? []), ...allowed]);
+  const readOnly = all.flatMap((l) => l.readOnlyClients ?? []);
   return {
     approvedClients: sorted(all.flatMap((l) => l.approvedClients).filter((k) => !removed.has(k))),
     removedClients: sorted(removed),
     approvedHosts: sorted([...all.flatMap((l) => l.approvedHosts), ...hosts].filter((id) => !marks.includes(id))),
     ...(marks.length > 0 && { allowedHosts: marks }),
+    ...(readOnly.length > 0 && { readOnlyClients: sorted(readOnly) }),
   };
 }
 
 /** Whether `lists` lacks anything in `union`, so the host needs an `access/merge`. */
 export const lacks = (lists: Lists, union: Lists) =>
-  (["approvedClients", "removedClients", "approvedHosts", "allowedHosts"] as const).some((name) =>
+  (["approvedClients", "removedClients", "approvedHosts", "allowedHosts", "readOnlyClients"] as const).some((name) =>
     (union[name] ?? []).some((item) => !(lists[name] ?? []).includes(item)),
   );

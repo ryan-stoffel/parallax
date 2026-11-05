@@ -25,7 +25,9 @@
 //! approved clients copy them between hosts (`access/merge`). A removed key is never approved
 //! again, so the lists merge with no clock. A removal also goes straight to the account's other
 //! online hosts, signed by this host's key and carried by the relay, which can't forge one
-//! ([`remove`], [`receive_removal`]).
+//! ([`remove`], [`receive_removal`]). Read-only keys (`access/setReadOnly`) are a list of their
+//! own that merges the same way: nothing takes a key off, so no merge, removal, or compromised
+//! host can raise a device.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Mutex;
@@ -53,7 +55,7 @@ use crate::server::Daemon;
 pub(crate) const MAX_REQUESTS: usize = 5;
 
 /// Who may sign in with the account, as `host_settings.account_access` keeps it.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Lists {
     pub approved_clients: BTreeSet<String>,
@@ -62,15 +64,20 @@ pub(super) struct Lists {
     /// Those added with Allow alone, which clients take no lists from.
     #[serde(default)]
     allowed_hosts: BTreeSet<String>,
+    /// The read-only keys. Any other has full access. Nothing takes a key off, a removal included.
+    #[serde(default)]
+    pub read_only_clients: BTreeSet<String>,
 }
 
 impl Lists {
-    /// Adds `other`'s entries. A key removed on either side ends up removed and not approved.
+    /// Adds `other`'s entries. A key removed on either side ends up removed and not approved. A
+    /// key read-only on either side ends up read-only, and a removal doesn't touch that list.
     fn merge(&mut self, other: Self) {
         self.approved_clients.extend(other.approved_clients);
         self.removed_clients.extend(other.removed_clients);
         self.approved_hosts.extend(other.approved_hosts);
         self.allowed_hosts.extend(other.allowed_hosts);
+        self.read_only_clients.extend(other.read_only_clients);
         let removed = &self.removed_clients;
         self.approved_clients.retain(|key| !removed.contains(key));
     }
@@ -473,16 +480,18 @@ pub(crate) async fn record_account(daemon: &Daemon, user: &str) -> Result<(), St
     Ok(())
 }
 
-/// Changes the stored lists with `change`, and ends the sessions of every removed key.
+/// Changes the stored lists with `change`, ends the sessions of every removed key, and closes the
+/// connections of every key that just became read-only, which reconnect read-only.
 async fn update(
     daemon: &Daemon,
     cancel: &CancellationToken,
     change: impl FnOnce(&mut Lists) -> Result<(), ErrorObject> + Send + 'static,
 ) -> Result<Lists, ErrorObject> {
-    let (lists, ended) = daemon
+    let (lists, ended, limited) = daemon
         .store
         .run(cancel, move |db| {
             let mut lists = read_lists(db)?;
+            let read_only_before = lists.read_only_clients.clone();
             change(&mut lists)?;
             let json = serde_json::to_string(&lists)
                 .map_err(|e| ErrorObject::internal_error(e.to_string()))?;
@@ -495,12 +504,24 @@ async fn update(
             if !ended.is_empty() {
                 write_sessions(db, &kept)?;
             }
-            Ok((lists, ended))
+            let limited = kept
+                .into_iter()
+                .filter(|s| {
+                    lists.read_only_clients.contains(&s.thumbprint)
+                        && !read_only_before.contains(&s.thumbprint)
+                })
+                .map(|s| s.id)
+                .collect::<Vec<_>>();
+            Ok((lists, ended, limited))
         })
         .await?;
     for session in ended {
         info!(session = %session.id, "ended a removed device's session");
         daemon.remote.revoke(&session.id);
+    }
+    for session in limited {
+        info!(%session, "closed a session whose device became read-only");
+        daemon.remote.revoke(&session);
     }
     daemon.remote.access.drop_removed(&lists.removed_clients);
     daemon.remote.access.changed();
@@ -549,6 +570,7 @@ pub(crate) async fn state(
         removed_clients: lists.removed_clients.into_iter().collect(),
         approved_hosts: lists.approved_hosts.into_iter().collect(),
         allowed_hosts: lists.allowed_hosts.into_iter().collect(),
+        read_only_clients: lists.read_only_clients.into_iter().collect(),
         pending,
         setup_approved,
     })
@@ -565,6 +587,7 @@ pub(crate) async fn merge(
         &params.removed_clients,
         &params.approved_hosts,
         &params.allowed_hosts,
+        &params.read_only_clients,
     ];
     if let Some(bad) = all.into_iter().flatten().find(|id| !remote::is_host_id(id)) {
         return Err(ErrorObject::invalid_params(format!(
@@ -576,6 +599,7 @@ pub(crate) async fn merge(
         removed_clients: params.removed_clients.into_iter().collect(),
         approved_hosts: params.approved_hosts.into_iter().collect(),
         allowed_hosts: params.allowed_hosts.into_iter().collect(),
+        read_only_clients: params.read_only_clients.into_iter().collect(),
     };
     update(daemon, cancel, move |lists| {
         lists.merge(other);
@@ -674,6 +698,32 @@ pub(crate) async fn receive_removal(daemon: &Daemon, statement: &str) {
     if let Err(error) = applied {
         warn!(error = %error.message, "could not keep a device's removal");
     }
+}
+
+/// `access/setReadOnly`: makes session `id`'s device read-only. The mark is the key's, so signing
+/// in again keeps it, and nothing takes it off.
+pub(crate) async fn set_read_only(
+    daemon: &Daemon,
+    cancel: &CancellationToken,
+    id: String,
+) -> Result<(), ErrorObject> {
+    let session = id.clone();
+    let thumbprint = daemon
+        .reader
+        .run(cancel, move |db| {
+            let sessions = read_sessions(db)?;
+            let found = sessions.into_iter().find(|s| s.id == session);
+            Ok(found.map(|s| s.thumbprint))
+        })
+        .await?
+        .ok_or_else(|| ErrorObject::invalid_params(format!("no session is {id}")))?;
+    info!(%thumbprint, "made a device read-only");
+    update(daemon, cancel, move |lists| {
+        lists.read_only_clients.insert(thumbprint);
+        Ok(())
+    })
+    .await?;
+    Ok(())
 }
 
 /// `access/forgetHost`: drops a computer the user removed from the approved hosts, and deletes
@@ -1028,5 +1078,42 @@ mod tests {
         removed.removed_clients.insert(KEY.to_owned());
         back.merge(removed);
         assert!(back.approved_clients.is_empty(), "the other way round too");
+    }
+
+    #[test]
+    fn no_merge_raises_a_read_only_key_from_either_side() {
+        let mut limited = Lists::default();
+        limited.read_only_clients.insert(KEY.to_owned());
+        // A host that never heard of the mark, or one that wants it gone, lists it as approved at
+        // most. It has no way to say otherwise.
+        let mut other = Lists::default();
+        other.approved_clients.insert(KEY.to_owned());
+
+        let mut here = limited.clone();
+        here.merge(other.clone());
+        assert!(here.read_only_clients.contains(KEY), "merged into it");
+        let mut there = other;
+        there.merge(limited);
+        assert!(there.read_only_clients.contains(KEY), "it spreads too");
+    }
+
+    #[test]
+    fn a_removal_and_a_read_only_mark_clear_neither_the_other_from_either_side() {
+        let mut marked = Lists::default();
+        marked.read_only_clients.insert(KEY.to_owned());
+        let mut removed = Lists::default();
+        removed.removed_clients.insert(KEY.to_owned());
+        for (mut here, there) in [(marked.clone(), removed.clone()), (removed, marked)] {
+            here.merge(there);
+            assert!(here.read_only_clients.contains(KEY));
+            assert!(here.removed_clients.contains(KEY));
+        }
+    }
+
+    #[test]
+    fn stored_lists_from_before_read_only_devices_still_read() {
+        let old = r#"{"approvedClients":["k"],"removedClients":[],"approvedHosts":[]}"#;
+        let lists: Lists = serde_json::from_str(old).unwrap();
+        assert!(lists.read_only_clients.is_empty());
     }
 }
