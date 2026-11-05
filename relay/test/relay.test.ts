@@ -333,6 +333,47 @@ describe("streams", () => {
     await expect.poll(() => openStreams(host)).toEqual({});
   });
 
+  it("drops a stream's report alarm once an 8 MiB report drains it, and when it closes", async () => {
+    const { host, token, control } = await online();
+    const pair = async () => {
+      const client = opened(await connect(host, token));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, open));
+      await client.next();
+      await side.next();
+      const object = streamObject(open.stream);
+      const send = async () => {
+        client.ws.send(new Uint8Array([0]));
+        await side.next();
+      };
+      const alarm = () => runInDurableObject(object, (_: StreamRelay, state) => state.storage.getAlarm());
+      return { client, object, send, alarm };
+    };
+
+    // A report by size leaves nothing pending, and the next frame sets the alarm again.
+    const drained = await pair();
+    await drained.send();
+    expect(await drained.alarm()).not.toBeNull();
+    await runInDurableObject(drained.object, (relay: StreamRelay) => {
+      (relay as unknown as { unreported: number }).unreported = REPORT_BYTES - MIN_FRAME_BYTES;
+    });
+    await drained.send();
+    await expect.poll(drained.alarm).toBeNull();
+    await drained.send();
+    expect(await drained.alarm()).not.toBeNull();
+
+    // An end closing.
+    drained.client.ws.close(1000, "done");
+    await expect.poll(drained.alarm).toBeNull();
+
+    // The host's object closing it.
+    const closed = await pair();
+    await closed.send();
+    expect(await closed.alarm()).not.toBeNull();
+    await runInDurableObject(closed.object, (relay: StreamRelay) => relay.close(4429, "daily limit"));
+    expect(await closed.alarm()).toBeNull();
+  });
+
   it("reports a slow stream's count on its alarm, which more frames don't push back", async () => {
     const { host, token, control } = await online();
     const client = opened(await connect(host, token));

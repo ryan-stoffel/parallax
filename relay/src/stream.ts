@@ -119,6 +119,7 @@ export class StreamRelay extends DurableObject<Env> {
   async close(code: number, reason: string) {
     this.reported = true;
     for (const ws of this.ctx.getWebSockets()) this.shut(ws, code, reason);
+    await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
   }
 
@@ -257,6 +258,9 @@ export class StreamRelay extends DurableObject<Env> {
     const bytes = this.pending();
     if (closed) this.unreported = 0;
     else this.keep(0);
+    // Nothing's left to report, so nothing needs waking until the next frame sets it again.
+    this.reportDue = false;
+    await this.ctx.storage.deleteAlarm();
     const host = this.env.HOSTS.get(this.env.HOSTS.idFromName(armed.hostId));
     const within = await host.report(armed.stream, bytes, closed);
     if (!within && !closed)
