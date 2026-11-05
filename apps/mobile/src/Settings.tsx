@@ -180,7 +180,6 @@ export function SettingsScreen() {
 /** General: this phone's notifications, by kind, with a test. */
 function GeneralPage() {
   const prefs = usePrefs();
-  const { computers } = useFleet();
   const { accessToken } = useAccount();
   const [on, setOn] = useState<boolean>();
   const [relay, setRelay] = useState<string>();
@@ -208,7 +207,7 @@ function GeneralPage() {
       title="Notifications"
       footer={
         on
-          ? `When a thread needs your approval, finishes its turn, or fails, while Parallax is open or for about 30 seconds after you leave it. ${relay ?? "It also notifies while closed."}`
+          ? `When a thread needs your approval, or stays finished or failed for 30 seconds, while Parallax is open or for about 30 seconds after you leave it. ${relay ?? "It also notifies while closed."}`
           : undefined
       }
     >
@@ -223,8 +222,8 @@ function GeneralPage() {
       ) : (
         <>
           {kind("needsYou", "Needs you", "A thread asks for your approval or an answer.")}
-          {kind("done", "Finished", "A thread finishes its turn.")}
-          {kind("failed", "Failed", "A thread stops on an error.")}
+          {kind("done", "Finished", "A thread finishes and stays finished for 30 seconds.")}
+          {kind("failed", "Failed", "A thread stops on an error and stays stopped for 30 seconds.")}
           <Row
             title="Test notification"
             detail="Sends one, as a thread that finished would."
@@ -233,7 +232,7 @@ function GeneralPage() {
               <Action
                 label="Send"
                 onPress={() => {
-                  notify("done", "", "test", "Parallax", computers[0]?.machine.name ?? "this phone");
+                  notify("done", "", "test", "Parallax");
                   Alert.alert("Sent", "Leave the app within a few seconds to see it as a banner.");
                 }}
               />

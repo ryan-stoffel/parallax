@@ -75,6 +75,9 @@ export async function sendApns(
         "apns-topic": TOPIC,
         "apns-push-type": "alert",
         "apns-priority": "10",
+        // The app's own notification for this event has the same id (`apps/mobile/src/push.ts`),
+        // so iOS keeps one. APNs takes at most 64 bytes.
+        "apns-collapse-id": `${notification.run}:${notification.state}`.slice(0, 64),
       },
       body: payload,
     });

@@ -678,6 +678,7 @@ describe("push", () => {
     const [request] = seen;
     expect(new URL(request!.url).pathname).toBe(`/3/device/${device}`);
     expect(request!.headers.get("apns-topic")).toBe("dev.parallax.mobile");
+    expect(request!.headers.get("apns-collapse-id")).toBe("run-1:done");
     // The app reads a remote push's data from `body`.
     expect((await request!.json<{ body: unknown }>()).body).toEqual(notification);
 

@@ -29,7 +29,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::{
-    AgentOutcome, AgentOutputItem, ParallaxEvent, RelayHost, RelaySignResult, RelayStatus, RunId,
+    AgentOutcome, AgentOutputItem, AgentStatus, ParallaxEvent, RelayHost, RelaySignResult,
+    RelayStatus, RunId,
 };
 use rustls::pki_types::ServerName;
 use serde::Deserialize;
@@ -55,6 +56,9 @@ const MAX_CLOCK_OFFSET_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How often plxd pings the relay. Cloudflare closes a WebSocket idle for 100 s.
 const PING: Duration = Duration::from_mins(1);
+/// How long a run must stay finished or failed before its push goes (PLX-1337): an agent that
+/// goes again within it wasn't done. The phone holds its own notification as long (`HOLD_MS`).
+const HOLD: Duration = Duration::from_secs(30);
 
 /// The first wait before reconnecting, doubled after each failure up to [`MAX_BACKOFF`].
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
@@ -724,6 +728,7 @@ enum Ended {
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let relay = &daemon.relay;
     let mut failures = 0_u32;
+    let mut pushes = Pushes::new(daemon.log.head());
     loop {
         if !wanted(&daemon).await {
             relay.set(Status::default());
@@ -735,10 +740,13 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             }
         }
         let started = Instant::now();
-        let ended = connected(&daemon, &stop).await;
+        let ended = connected(&daemon, &stop, &mut pushes).await;
         let wait = match ended {
             Ok(Ended::Stopped) => return,
-            Ok(Ended::Off) => continue,
+            Ok(Ended::Off) => {
+                pushes.holds.clear();
+                continue;
+            }
             // Waits for `relay/register` here, or tries again on backoff, since another computer
             // may register this one with its `relay/sign` (PLX-1146).
             Err(Error::Refused) => {
@@ -785,7 +793,11 @@ fn backoff(failures: u32) -> Duration {
 
 /// One connection to the relay: opened with a proof of the host key, then streams, webhooks, and
 /// pushes until it ends.
-async fn connected(daemon: &Arc<Daemon>, stop: &CancellationToken) -> Result<Ended, Error> {
+async fn connected(
+    daemon: &Arc<Daemon>,
+    stop: &CancellationToken,
+    pushes: &mut Pushes,
+) -> Result<Ended, Error> {
     let key = signer(daemon).await?;
     let host_id = key.thumbprint();
     let url = &daemon.relay.url;
@@ -840,7 +852,7 @@ async fn connected(daemon: &Arc<Daemon>, stop: &CancellationToken) -> Result<End
         connected: Some(host_id.clone()),
         problem: None,
     });
-    let ended = serve(daemon, socket, &host_id, stop).await;
+    let ended = serve(daemon, socket, &host_id, stop, pushes).await;
     daemon.relay.set(Status::default());
     ended
 }
@@ -892,6 +904,7 @@ async fn serve(
     socket: WebSocketStream<Stream>,
     host_id: &str,
     stop: &CancellationToken,
+    pushes: &mut Pushes,
 ) -> Result<Ended, Error> {
     let (mut sink, mut frames) = socket.split();
     let (replies, mut answered) = mpsc::channel::<String>(16);
@@ -904,8 +917,7 @@ async fn serve(
         remote.port,
     );
     let mut events = daemon.log.watch();
-    let mut after = daemon.log.head();
-    let mut waiting = Waiting::default();
+    pushes.catch_up(&daemon.log, Instant::now());
     // The spare stream (0091): asked for while `remote` is on, and again once it's taken or ends.
     let (spare_done, mut spare_ended) = mpsc::channel::<()>(4);
     let mut spare: Option<CancellationToken> = None;
@@ -933,6 +945,7 @@ async fn serve(
             }
             _ => {}
         }
+        let held = pushes.next_due();
         tokio::select! {
             () = stop.cancelled() => {
                 let _ = sink.close().await;
@@ -957,8 +970,19 @@ async fn serve(
                 sink.send(hooks().await).await.map_err(failed)?;
             }
             Ok(()) = events.changed() => {
-                for push in pushes(&daemon.log, &mut after, &mut waiting) {
+                for push in pushes.read(&daemon.log, Instant::now()) {
                     sink.send(Message::text(push)).await.map_err(failed)?;
+                }
+            }
+            () = time::sleep_until(held.unwrap_or_else(Instant::now)), if held.is_some() => {
+                // An event ready at this moment too may cancel a hold, so events go first.
+                for push in pushes.read(&daemon.log, Instant::now()) {
+                    sink.send(Message::text(push)).await.map_err(failed)?;
+                }
+                // Each stays held until it's sent, so a socket that fails sends it on the next.
+                for (run, push) in pushes.due(Instant::now()) {
+                    sink.send(Message::text(push)).await.map_err(failed)?;
+                    pushes.holds.remove(&run);
                 }
             }
             frame = frames.next() => {
@@ -1091,7 +1115,8 @@ async fn hook(daemon: &Daemon, frame: &[u8]) -> Option<Value> {
 
 /// The runs whose agent still waits on background work (a subagent, command, or Monitor) or on
 /// pull requests plxd watches (PLX-777). A turn that ends while its run waits isn't done: the
-/// agent wakes for what it waits on and carries on.
+/// agent usually wakes for what it waits on and carries on. If it doesn't, the run is done once
+/// the wait clears and [`HOLD`] passes.
 #[derive(Default)]
 struct Waiting {
     background: HashSet<RunId>,
@@ -1113,67 +1138,184 @@ fn mark(set: &mut HashSet<RunId>, run: RunId, on: bool) {
     }
 }
 
-/// The pushes for the events after `after`, which moves past them: a run that asks for approval,
-/// finishes with nothing left to wait on, or fails. Each names only the run.
-fn pushes(log: &EventLog, after: &mut u64, waiting: &mut Waiting) -> Vec<String> {
-    let mut pushes = Vec::new();
-    let kept = |e: &Entry| {
-        e.approvals
-            || matches!(
-                e.kind(),
-                "agent.finished" | "agent.background" | "pr.watches"
-            )
-    };
-    loop {
-        match log.next_matching(*after, kept) {
-            Ok((Some(entry), seq)) => {
-                *after = seq;
-                pushes.extend(push(&entry.event(), waiting));
-            }
-            Ok((None, head)) => {
-                *after = head;
-                return pushes;
-            }
-            Err(_) => {
-                *after = log.head();
-                return pushes;
+/// A run's `done` or `failed` push, waiting out [`HOLD`].
+struct Hold {
+    /// The status it holds at: any other cancels it.
+    status: AgentStatus,
+    due: Instant,
+}
+
+/// What plxd has told the relay about runs, which outlives a connection, so a hold goes on through
+/// a reconnect, and a run that waits still does.
+struct Pushes {
+    /// The last event read: [`Pushes::read`] moves past each, so none goes twice.
+    after: u64,
+    waiting: Waiting,
+    /// The runs whose last turn completed and that haven't gone again since.
+    completed: HashSet<RunId>,
+    holds: HashMap<RunId, Hold>,
+}
+
+impl Pushes {
+    fn new(after: u64) -> Self {
+        Self {
+            after,
+            waiting: Waiting::default(),
+            completed: HashSet::new(),
+            holds: HashMap::new(),
+        }
+    }
+
+    /// The pushes to send now for the events after `after`, a run asking for approval, and the
+    /// holds those events start and cancel. Each names only the run.
+    fn read(&mut self, log: &EventLog, now: Instant) -> Vec<String> {
+        let mut pushes = Vec::new();
+        loop {
+            let (holds, completed) = (&self.holds, &self.completed);
+            let kept = |e: &Entry| {
+                e.approvals
+                    || match e.kind() {
+                        "agent.finished" | "agent.background" | "pr.watches" => true,
+                        // Frequent, and it only matters to a held or completed run.
+                        "agent.updated" => e.run.is_some_and(|run| {
+                            holds.contains_key(&run) || completed.contains(&run)
+                        }),
+                        _ => false,
+                    }
+            };
+            match log.next_matching(self.after, kept) {
+                Ok((Some(entry), seq)) => {
+                    self.after = seq;
+                    pushes.extend(self.apply(&entry.event(), now));
+                }
+                Ok((None, head)) => {
+                    self.after = head;
+                    return pushes;
+                }
+                // What a hold waited to hear may be among what's gone, so it can't say.
+                Err(_) => {
+                    self.after = log.head();
+                    self.holds.clear();
+                    self.completed.clear();
+                    return pushes;
+                }
             }
         }
     }
+
+    /// Reads what happened while no socket was open. A held run follows it, and `waiting` stays
+    /// right, but nothing else that happened then is pushed: it would all arrive at once, late.
+    fn catch_up(&mut self, log: &EventLog, now: Instant) {
+        let held: HashSet<RunId> = self.holds.keys().copied().collect();
+        self.read(log, now);
+        self.holds.retain(|run, _| held.contains(run));
+    }
+
+    /// Takes in `event`: the push it sends at once, if any.
+    fn apply(&mut self, event: &ParallaxEvent, now: Instant) -> Option<String> {
+        match event {
+            ParallaxEvent::AgentBackground { run_id, tasks } => {
+                let was = self.waiting.on(*run_id);
+                mark(&mut self.waiting.background, *run_id, !tasks.is_empty());
+                self.wait_changed(*run_id, was, now);
+            }
+            ParallaxEvent::PrWatches { run_id, urls } => {
+                let was = self.waiting.on(*run_id);
+                mark(&mut self.waiting.watching, *run_id, !urls.is_empty());
+                self.wait_changed(*run_id, was, now);
+            }
+            ParallaxEvent::AgentUpdated { run_id, state } => {
+                if state.status != AgentStatus::Completed {
+                    self.completed.remove(run_id);
+                }
+                if self
+                    .holds
+                    .get(run_id)
+                    .is_some_and(|hold| hold.status != state.status)
+                {
+                    self.holds.remove(run_id);
+                }
+            }
+            ParallaxEvent::AgentFinished { run_id, outcome } => {
+                let done = matches!(outcome, AgentOutcome::Completed { .. });
+                mark(&mut self.completed, *run_id, done);
+                let status = match outcome {
+                    AgentOutcome::Completed { .. } if !self.waiting.on(*run_id) => {
+                        Some(AgentStatus::Completed)
+                    }
+                    AgentOutcome::Failed { .. } => Some(AgentStatus::Failed),
+                    _ => None,
+                };
+                if let Some(status) = status {
+                    let due = now + HOLD;
+                    self.holds.insert(*run_id, Hold { status, due });
+                } else {
+                    self.holds.remove(run_id);
+                }
+            }
+            // A compacted turn repeats requests that were already pushed.
+            ParallaxEvent::AgentOutput {
+                run_id,
+                items,
+                compacted: None,
+                ..
+            } if items
+                .iter()
+                .any(|item| matches!(item, AgentOutputItem::ApprovalRequested { .. })) =>
+            {
+                self.holds.remove(run_id);
+                return Some(message(*run_id, "needsYou"));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// What `run`'s waiting means now, `was` being whether it waited before this event. A run
+    /// that waits isn't done, though a failure is news whatever it waits on, and its hold ends only
+    /// when the run goes again, as the phone's does. A completed run's last wait clearing may bring
+    /// no new turn, as when its CLI exits, so that starts a hold, which a new turn cancels.
+    fn wait_changed(&mut self, run: RunId, was: bool, now: Instant) {
+        if self.waiting.on(run) {
+            if self
+                .holds
+                .get(&run)
+                .is_some_and(|hold| hold.status == AgentStatus::Completed)
+            {
+                self.holds.remove(&run);
+            }
+        } else if was && self.completed.contains(&run) {
+            let status = AgentStatus::Completed;
+            let due = now + HOLD;
+            self.holds.insert(run, Hold { status, due });
+        }
+    }
+
+    /// When the next hold ends.
+    fn next_due(&self) -> Option<Instant> {
+        self.holds.values().map(|hold| hold.due).min()
+    }
+
+    /// The pushes whose holds ended by `now`. The caller removes each once it's sent.
+    fn due(&self, now: Instant) -> Vec<(RunId, String)> {
+        self.holds
+            .iter()
+            .filter(|(_, hold)| hold.due <= now)
+            .map(|(run, hold)| {
+                let state = if hold.status == AgentStatus::Failed {
+                    "failed"
+                } else {
+                    "done"
+                };
+                (*run, message(*run, state))
+            })
+            .collect()
+    }
 }
 
-/// The push for `event`, if any, keeping `waiting` up to date.
-fn push(event: &ParallaxEvent, waiting: &mut Waiting) -> Option<String> {
-    let (run, state) = match event {
-        ParallaxEvent::AgentBackground { run_id, tasks } => {
-            mark(&mut waiting.background, *run_id, !tasks.is_empty());
-            return None;
-        }
-        ParallaxEvent::PrWatches { run_id, urls } => {
-            mark(&mut waiting.watching, *run_id, !urls.is_empty());
-            return None;
-        }
-        ParallaxEvent::AgentFinished { run_id, outcome } => match outcome {
-            AgentOutcome::Completed { .. } if waiting.on(*run_id) => return None,
-            AgentOutcome::Completed { .. } => (*run_id, "done"),
-            AgentOutcome::Failed { .. } => (*run_id, "failed"),
-            _ => return None,
-        },
-        // A compacted turn repeats requests that were already pushed.
-        ParallaxEvent::AgentOutput {
-            run_id,
-            items,
-            compacted: None,
-            ..
-        } if items
-            .iter()
-            .any(|item| matches!(item, AgentOutputItem::ApprovalRequested { .. })) =>
-        {
-            (*run_id, "needsYou")
-        }
-        _ => return None,
-    };
-    Some(json!({ "t": "push", "run": run.to_string(), "state": state }).to_string())
+/// What tells the relay that `run` reached `state`.
+fn message(run: RunId, state: &str) -> String {
+    json!({ "t": "push", "run": run.to_string(), "state": state }).to_string()
 }
 
 #[cfg(test)]
@@ -1182,52 +1324,353 @@ mod tests {
 
     use super::*;
 
+    /// A log, the pushes reading it, one run's events, and a clock moved by hand.
+    struct Fixture {
+        log: EventLog,
+        pushes: Pushes,
+        run: RunId,
+        now: Instant,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let log = EventLog::new(100);
+            let pushes = Pushes::new(log.head());
+            Self {
+                log,
+                pushes,
+                run: RunId::generate(),
+                now: Instant::now(),
+            }
+        }
+
+        fn log(&self, event: ParallaxEvent) {
+            self.log
+                .append_in_memory(jiff::Timestamp::now(), None, event);
+        }
+
+        /// Logs `event` and reads it: the states pushed at once.
+        fn see(&mut self, event: ParallaxEvent) -> Vec<String> {
+            self.log(event);
+            let pushes = self.pushes.read(&self.log, self.now);
+            pushes.iter().map(|push| state_of(push)).collect()
+        }
+
+        /// Moves on by `by`: the states of the holds that ended, each sent.
+        fn wait(&mut self, by: Duration) -> Vec<String> {
+            self.now += by;
+            let due = self.pushes.due(self.now);
+            for (run, _) in &due {
+                self.pushes.holds.remove(run);
+            }
+            due.iter().map(|(_, push)| state_of(push)).collect()
+        }
+
+        fn completed(&self) -> ParallaxEvent {
+            ParallaxEvent::AgentFinished {
+                run_id: self.run,
+                outcome: AgentOutcome::Completed { result: None },
+            }
+        }
+
+        fn failed(&self) -> ParallaxEvent {
+            ParallaxEvent::AgentFinished {
+                run_id: self.run,
+                outcome: AgentOutcome::Failed {
+                    failure: AgentFailureKind::SpawnFailed,
+                    message: "no CLI".to_owned(),
+                },
+            }
+        }
+
+        fn status(&self, status: &str) -> ParallaxEvent {
+            ParallaxEvent::AgentUpdated {
+                run_id: self.run,
+                state: serde_json::from_value(json!({
+                    "status": status,
+                    "accountId": "a",
+                    "updatedAt": "2026-01-01T00:00:00Z",
+                }))
+                .unwrap(),
+            }
+        }
+
+        fn background(&self, on: bool) -> ParallaxEvent {
+            ParallaxEvent::AgentBackground {
+                run_id: self.run,
+                tasks: on
+                    .then(|| AgentBackgroundTask {
+                        task_id: "t1".to_owned(),
+                        kind: AgentBackgroundKind::Monitor,
+                        description: "Watching the build".to_owned(),
+                        call_id: None,
+                    })
+                    .into_iter()
+                    .collect(),
+            }
+        }
+
+        fn watches(&self, on: bool) -> ParallaxEvent {
+            ParallaxEvent::PrWatches {
+                run_id: self.run,
+                urls: on
+                    .then(|| "https://github.com/o/r/pull/1".to_owned())
+                    .into_iter()
+                    .collect(),
+            }
+        }
+
+        fn approval(&self) -> ParallaxEvent {
+            serde_json::from_value(json!({
+                "kind": "agent.output",
+                "runId": self.run,
+                "items": [{
+                    "kind": "approvalRequested",
+                    "approvalId": "01a0f1c2-3d4e-7f50-8a61-7b8c9d0e1f21",
+                    "toolName": "Bash",
+                    "input": {},
+                    "expiresAt": "2026-01-01T00:00:00Z",
+                }],
+            }))
+            .unwrap()
+        }
+    }
+
+    fn state_of(push: &str) -> String {
+        let push = serde_json::from_str::<Value>(push).unwrap();
+        push["state"].as_str().unwrap().to_owned()
+    }
+
+    const NOTHING: [String; 0] = [];
+    const JUST_UNDER: Duration = HOLD.saturating_sub(Duration::from_secs(1));
+
+    #[test]
+    fn a_run_that_stays_finished_or_failed_pushes_once_when_the_hold_ends() {
+        let mut f = Fixture::new();
+        assert_eq!(f.see(f.completed()), NOTHING);
+        // The state saved with `agent.finished` isn't the run going again.
+        assert_eq!(f.see(f.status("completed")), NOTHING);
+        assert_eq!(f.wait(JUST_UNDER), NOTHING);
+        assert_eq!(f.wait(Duration::from_secs(1)), ["done"]);
+        assert_eq!(f.wait(HOLD), NOTHING);
+        assert_eq!(f.pushes.next_due(), None);
+
+        assert_eq!(f.see(f.failed()), NOTHING);
+        assert_eq!(f.pushes.next_due(), Some(f.now + HOLD));
+        assert_eq!(f.wait(HOLD), ["failed"]);
+    }
+
+    #[test]
+    fn a_run_going_again_within_the_hold_cancels_it() {
+        let mut f = Fixture::new();
+        let again = [
+            f.status("running"),
+            f.status("waiting"),
+            f.background(true),
+            f.watches(true),
+        ];
+        for event in again {
+            assert_eq!(f.see(f.completed()), NOTHING);
+            assert_eq!(f.see(event), NOTHING);
+            assert_eq!(f.wait(HOLD), NOTHING);
+            // Back as it was for the next.
+            assert_eq!(f.see(f.background(false)), NOTHING);
+            assert_eq!(f.see(f.watches(false)), NOTHING);
+        }
+
+        // Finished again later, the hold starts over.
+        assert_eq!(f.see(f.completed()), NOTHING);
+        assert_eq!(f.wait(JUST_UNDER), NOTHING);
+        assert_eq!(f.see(f.status("running")), NOTHING);
+        assert_eq!(f.see(f.completed()), NOTHING);
+        assert_eq!(f.wait(JUST_UNDER), NOTHING);
+        assert_eq!(f.wait(Duration::from_secs(1)), ["done"]);
+    }
+
+    #[test]
+    fn an_approval_request_pushes_at_once_and_ends_the_hold() {
+        let mut f = Fixture::new();
+        assert_eq!(f.see(f.completed()), NOTHING);
+        assert_eq!(f.see(f.approval()), ["needsYou"]);
+        assert_eq!(f.wait(HOLD), NOTHING);
+    }
+
     #[test]
     fn a_turn_that_ends_while_its_run_waits_is_not_done() {
-        let run = RunId::generate();
-        let mut waiting = Waiting::default();
-        let mut state = |event: ParallaxEvent| {
-            push(&event, &mut waiting)
-                .map(|p| serde_json::from_str::<Value>(&p).unwrap()["state"].clone())
-        };
-        let finished = || ParallaxEvent::AgentFinished {
-            run_id: run,
-            outcome: AgentOutcome::Completed { result: None },
-        };
-        let background = |on: bool| ParallaxEvent::AgentBackground {
-            run_id: run,
-            tasks: on
-                .then(|| AgentBackgroundTask {
-                    task_id: "t1".to_owned(),
-                    kind: AgentBackgroundKind::Monitor,
-                    description: "Watching the build".to_owned(),
-                    call_id: None,
-                })
-                .into_iter()
-                .collect(),
-        };
-        let watches = |urls: Vec<String>| ParallaxEvent::PrWatches { run_id: run, urls };
+        let mut f = Fixture::new();
+        f.see(f.background(true));
+        f.see(f.completed());
+        assert_eq!(f.wait(HOLD), NOTHING, "a Monitor still runs");
+        f.see(f.background(false));
+        f.see(f.watches(true));
+        f.see(f.completed());
+        assert_eq!(f.wait(HOLD), NOTHING, "a pull request is still watched");
+        f.see(f.watches(false));
+        f.see(f.completed());
+        assert_eq!(f.wait(HOLD), ["done"]);
+        // A failure is news whatever the run waits on, unless the run goes again.
+        f.see(f.background(true));
+        f.see(f.failed());
+        f.see(f.watches(true));
+        assert_eq!(f.wait(HOLD), ["failed"]);
+        f.see(f.failed());
+        f.see(f.status("running"));
+        assert_eq!(f.wait(HOLD), NOTHING);
+    }
 
-        assert_eq!(state(background(true)), None);
-        assert_eq!(state(finished()), None, "a Monitor still runs");
-        assert_eq!(state(background(false)), None);
+    #[test]
+    fn a_reconnect_keeps_holds_and_waiting_and_sends_nothing_old() {
+        let mut f = Fixture::new();
+        let held = f.run;
+        assert_eq!(f.see(f.completed()), NOTHING);
+
+        // While the socket is down, a second run starts waiting, asks for approval, and finishes.
+        f.run = RunId::generate();
+        f.log(f.watches(true));
+        f.log(f.approval());
+        f.log(f.completed());
+        f.pushes.catch_up(&f.log, f.now);
         assert_eq!(
-            state(watches(vec!["https://github.com/o/r/pull/1".to_owned()])),
-            None
+            f.pushes.holds.len(),
+            1,
+            "what happened meanwhile isn't pushed"
         );
-        assert_eq!(state(finished()), None, "a pull request is still watched");
-        assert_eq!(state(watches(Vec::new())), None);
-        assert_eq!(state(finished()), Some(json!("done")));
-        // A failure is news whatever the run waits on.
-        assert_eq!(state(background(true)), None);
-        let failed = ParallaxEvent::AgentFinished {
-            run_id: run,
-            outcome: AgentOutcome::Failed {
-                failure: AgentFailureKind::SpawnFailed,
-                message: "no CLI".to_owned(),
-            },
+        assert!(f.pushes.holds.contains_key(&held));
+        // Its waiting is still known, so its next turn isn't done.
+        assert_eq!(f.see(f.completed()), NOTHING);
+        assert_eq!(f.pushes.holds.len(), 1);
+
+        // The first run's hold ends on the new connection, and only once.
+        assert_eq!(f.wait(HOLD), ["done"]);
+        f.pushes.catch_up(&f.log, f.now);
+        assert_eq!(f.wait(HOLD), NOTHING);
+
+        // A held run that goes again while the socket is down doesn't push.
+        f.run = held;
+        assert_eq!(f.see(f.completed()), NOTHING);
+        f.log(f.status("running"));
+        f.pushes.catch_up(&f.log, f.now);
+        assert_eq!(f.wait(HOLD), NOTHING);
+    }
+
+    #[test]
+    fn a_completed_run_whose_last_wait_clears_is_done_with_no_new_turn() {
+        let mut f = Fixture::new();
+        f.see(f.background(true));
+        f.see(f.watches(true));
+        f.see(f.completed());
+        assert_eq!(f.wait(HOLD), NOTHING);
+        f.see(f.background(false));
+        assert_eq!(f.wait(HOLD), NOTHING, "a pull request is still watched");
+        f.see(f.watches(false));
+        assert_eq!(f.wait(JUST_UNDER), NOTHING);
+        assert_eq!(f.wait(Duration::from_secs(1)), ["done"]);
+        // Empty again, nothing cleared.
+        f.see(f.watches(false));
+        assert_eq!(f.wait(HOLD), NOTHING);
+        // A hold cancelled by a wait starts over when that wait clears.
+        f.see(f.completed());
+        f.see(f.background(true));
+        f.see(f.background(false));
+        assert_eq!(f.wait(HOLD), ["done"]);
+        // The agent woke within the hold.
+        f.see(f.background(true));
+        f.see(f.background(false));
+        f.see(f.status("running"));
+        assert_eq!(f.wait(HOLD), NOTHING);
+        // A run going again isn't tracked: its next finish decides.
+        f.see(f.background(true));
+        f.see(f.background(false));
+        assert_eq!(f.wait(HOLD), NOTHING);
+    }
+
+    /// Both ends of a socket to the relay, in memory.
+    async fn socket() -> (WebSocketStream<Stream>, WebSocketStream<Stream>) {
+        let (plxd, relay) = tokio::io::duplex(4096);
+        let end = |io: DuplexStream, role| {
+            WebSocketStream::from_raw_socket(Box::new(io) as Stream, role, None)
         };
-        assert_eq!(state(failed), Some(json!("failed")));
+        (
+            end(plxd, tungstenite::protocol::Role::Client).await,
+            end(relay, tungstenite::protocol::Role::Server).await,
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_push_goes_out_on_the_next_connection_when_its_hold_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        let run = RunId::generate();
+        let mut pushes = Pushes::new(daemon.log.head());
+        daemon.log.append_in_memory(
+            jiff::Timestamp::now(),
+            None,
+            ParallaxEvent::AgentFinished {
+                run_id: run,
+                outcome: AgentOutcome::Completed { result: None },
+            },
+        );
+        let finished = Instant::now();
+        pushes.read(&daemon.log, finished);
+
+        // The socket drops long before the hold ends.
+        let (plxd, mut relay) = socket().await;
+        let (ended, ()) = tokio::join!(
+            serve(&daemon, plxd, "host", &stop, &mut pushes),
+            async move { assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks") }
+        );
+        assert!(ended.is_err());
+        assert!(finished.elapsed() < HOLD);
+
+        let (plxd, mut relay) = socket().await;
+        let (ended, ()) = tokio::join!(serve(&daemon, plxd, "host", &stop, &mut pushes), async {
+            assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
+            let push = next_json(&mut relay).await.unwrap();
+            assert_eq!(push["t"], "push");
+            assert_eq!(push["run"], run.to_string());
+            assert_eq!(push["state"], "done");
+            assert!(finished.elapsed() >= HOLD);
+            stop.cancel();
+        });
+        assert!(matches!(ended, Ok(Ended::Stopped)));
+        assert_eq!(pushes.next_due(), None);
+    }
+
+    /// `select!` picks among ready arms at random, so a few rounds, each with a hold's deadline
+    /// and the event that cancels it ready at once. An approval logged with them still goes.
+    #[tokio::test(start_paused = true)]
+    async fn an_event_ready_with_a_holds_deadline_is_read_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        let append = |event| {
+            daemon
+                .log
+                .append_in_memory(jiff::Timestamp::now(), None, event);
+        };
+        let (f, asking) = (Fixture::new(), Fixture::new());
+        let mut pushes = Pushes::new(daemon.log.head());
+        for _ in 0..16 {
+            append(f.completed());
+            pushes.read(&daemon.log, Instant::now());
+
+            let (plxd, mut relay) = socket().await;
+            let (running, approval) = (f.status("running"), asking.approval());
+            let (ended, ()) = tokio::join!(
+                serve(&daemon, plxd, "host", &stop, &mut pushes),
+                async move {
+                    assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
+                    append(running);
+                    append(approval);
+                    time::advance(HOLD).await;
+                    let push = next_json(&mut relay).await.unwrap();
+                    assert_eq!(push["state"], "needsYou");
+                }
+            );
+            assert!(ended.is_err());
+            assert_eq!(pushes.next_due(), None);
+        }
     }
 
     /// A relay from before 0091, on loopback: `/connect` without a ticket is 401, `POST
