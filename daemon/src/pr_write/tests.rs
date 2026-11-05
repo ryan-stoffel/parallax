@@ -269,3 +269,31 @@ fn deleting_a_branch_names_it_in_its_own_repository() {
         "auto-merge is pinned to the head the user saw"
     );
 }
+
+/// Viewed goes to `markFileAsViewed` or `unmarkFileAsViewed` with GraphQL variables, so a path that
+/// starts with `-` or `@` is only ever a value.
+#[test]
+fn viewed_marks_and_unmarks_a_file_with_graphql_variables() {
+    let args = |viewed| {
+        let write = PrWrite::SetFileViewed {
+            pull_request_id: "PR_1".to_owned(),
+            path: "@odd/-path.rs".to_owned(),
+            viewed,
+        };
+        let (steps, body) = commands(
+            "https://github.com/me/app/pull/7",
+            write,
+            Path::new("/tmp/body"),
+        )
+        .unwrap();
+        assert_eq!(body, None);
+        assert_eq!(steps.len(), 1);
+        steps.into_iter().next().unwrap()
+    };
+    let marked = args(true);
+    assert!(marked[3].contains("markFileAsViewed"), "{marked:?}");
+    assert_eq!(marked[5], "pr=PR_1");
+    assert_eq!(marked[6], "-f");
+    assert_eq!(marked[7], "path=@odd/-path.rs");
+    assert!(args(false)[3].contains("unmarkFileAsViewed"));
+}

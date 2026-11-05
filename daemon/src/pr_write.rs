@@ -91,6 +91,8 @@ pub(crate) async fn write(
             )))
         })
         .map_err(|error| crate::agents::pr_error(&error))?;
+    // The next read should show this write, not a read shared from before it.
+    crate::pr_watch::forget_read(daemon, &url);
     Ok(PrWriteResult { url })
 }
 
@@ -362,6 +364,14 @@ const REPLY: &str = "mutation($thread: ID!, $body: String!) { \
 const RESOLVE: &str =
     "mutation($thread: ID!) { resolveReviewThread(input: {threadId: $thread}) { thread { id } } }";
 
+/// Marks `$path` viewed on pull request `$pr`.
+const MARK_VIEWED: &str = "mutation($pr: ID!, $path: String!) { \
+    markFileAsViewed(input: {pullRequestId: $pr, path: $path}) { clientMutationId } }";
+
+/// Takes back marking `$path` viewed on pull request `$pr`.
+const UNMARK_VIEWED: &str = "mutation($pr: ID!, $path: String!) { \
+    unmarkFileAsViewed(input: {pullRequestId: $pr, path: $path}) { clientMutationId } }";
+
 /// The `gh` commands that make `write` to `url`, each a step run after the one before, and the
 /// body to put in `body_file`, which they read it from. Other values go as `--flag=value` or
 /// GraphQL variables, so none is read as a flag.
@@ -437,6 +447,16 @@ fn commands(
                 return Err("pass a body, resolve, or both".to_owned());
             }
             Ok((steps, body))
+        }
+        PrWrite::SetFileViewed {
+            pull_request_id,
+            path,
+            viewed,
+        } => {
+            let query = format!("query={}", if viewed { MARK_VIEWED } else { UNMARK_VIEWED });
+            let (pr, path) = (format!("pr={pull_request_id}"), format!("path={path}"));
+            let step = gh(&["api", "graphql", "-f", &query, "-f", &pr, "-f", &path]);
+            Ok((vec![step], None))
         }
         PrWrite::Unknown => Err("unknown pull request write".to_owned()),
     }

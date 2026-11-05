@@ -60,7 +60,8 @@ const focused = (to: DiffFocus | undefined, path: string, line?: DiffLine) =>
  * one virtualized window, so a huge file and many small ones both stay cheap, unified or split as
  * the reader chose and the width allows. A new `focus` scrolls to its file, or to its lines, which
  * it marks (a guide's step, PLX-1188). With `onViewed`, each file has Viewed, and a viewed file
- * folds. `threads` sit under their line on their side, or under their file's header when plxd
+ * folds; `changedSinceViewed` names the files viewed before a later commit changed them. A file's
+ * header stays at the top while its lines scroll. `threads` sit under their line on their side, or under their file's header when plxd
  * doesn't say the line, drawn by `renderThread`. With `tree`, a file tree that jumps to a file
  * shows beside the diff once its container (an `@container`) is at least 900px wide.
  */
@@ -69,6 +70,7 @@ export function ChangesDiff({
   truncated,
   focus,
   viewed,
+  changedSinceViewed,
   onViewed,
   threads = [],
   renderThread,
@@ -78,6 +80,7 @@ export function ChangesDiff({
   truncated?: boolean;
   focus?: DiffFocus;
   viewed?: ReadonlySet<string>;
+  changedSinceViewed?: ReadonlySet<string>;
   onViewed?: (path: string, viewed: boolean) => void;
   threads?: readonly ThreadView[];
   renderThread?: (thread: ThreadView) => ReactNode;
@@ -149,6 +152,49 @@ export function ChangesDiff({
       });
     virtualizer.measure();
   };
+  // The header of the file at the top, once its own header has scrolled off.
+  const offset = virtualizer.scrollOffset ?? 0;
+  const topItem = virtualizer.getVirtualItems().find((item) => item.end > offset);
+  const topRow = topItem && rows[topItem.index];
+  const stuck = topRow && !(topRow.header && topItem.start >= offset) ? topRow.file : undefined;
+  const fileHeader = (file: DiffFile, pinned?: boolean) => {
+    const path = file.path;
+    // Folding from the pinned header would leave the reader far below it.
+    const backToHeader = () => {
+      if (pinned)
+        virtualizer.scrollToIndex(
+          rows.findIndex((r) => r.header && r.file === file),
+          { align: "start" },
+        );
+    };
+    return (
+      <DiffFileHeader
+        file={file}
+        shut={shut(path)}
+        onToggle={() => {
+          toggle(path);
+          backToHeader();
+        }}
+        threads={threads.filter((t) => t.path === path).length}
+      >
+        {changedSinceViewed?.has(path) && (
+          <span className="shrink-0 text-meta text-warning">Changed since viewed</span>
+        )}
+        {onViewed && (
+          <Checkbox
+            checked={!!viewed?.has(path)}
+            onChange={(on) => {
+              onViewed(path, on);
+              virtualizer.measure();
+              backToHeader();
+            }}
+          >
+            <span className="text-meta text-muted-foreground">Viewed</span>
+          </Checkbox>
+        )}
+      </DiffFileHeader>
+    );
+  };
   return (
     <>
       <div className="flex min-h-11 flex-wrap items-center gap-2 px-3 py-1.5 text-body text-muted-foreground">
@@ -195,13 +241,19 @@ export function ChangesDiff({
       </div>
       <div className="flex min-h-0 flex-1 border-t border-border">
         {tree && files.length > 1 && (
-          <FileTree files={files} viewed={viewed} onPick={(path) => setJump({ path })} />
+          <FileTree
+            files={files}
+            viewed={viewed}
+            changed={changedSinceViewed}
+            onPick={(path) => setJump({ path })}
+          />
         )}
         <div
           ref={scroll}
           aria-label="Changed files"
           className="min-h-0 min-w-0 flex-1 overflow-y-auto"
         >
+          {stuck && <div className="sticky top-0 z-10 h-0">{fileHeader(stuck, true)}</div>}
           <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
               const row = rows[item.index]!;
@@ -215,24 +267,7 @@ export function ChangesDiff({
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
                   {row.header ? (
-                    <DiffFileHeader
-                      file={row.file}
-                      shut={shut(path)}
-                      onToggle={() => toggle(path)}
-                      threads={threads.filter((t) => t.path === path).length}
-                    >
-                      {onViewed && (
-                        <Checkbox
-                          checked={!!viewed?.has(path)}
-                          onChange={(on) => {
-                            onViewed(path, on);
-                            virtualizer.measure();
-                          }}
-                        >
-                          <span className="text-meta text-muted-foreground">Viewed</span>
-                        </Checkbox>
-                      )}
-                    </DiffFileHeader>
+                    fileHeader(row.file)
                   ) : row.threads ? (
                     <ThreadColumn threads={row.threads} render={renderThread!} edged />
                   ) : row.sides ? (
@@ -417,10 +452,12 @@ export function DiffLineView({ line }: { line: DiffLine }) {
 function FileTree({
   files,
   viewed,
+  changed,
   onPick,
 }: {
   files: DiffFile[];
   viewed?: ReadonlySet<string>;
+  changed?: ReadonlySet<string>;
   onPick: (path: string) => void;
 }) {
   const nodes = fileTree(
@@ -447,13 +484,23 @@ function FileTree({
         <li key={node.file.path}>
           <button
             type="button"
-            title={node.file.path}
+            title={
+              changed?.has(node.file.path)
+                ? `${node.file.path}, changed since viewed`
+                : node.file.path
+            }
             onClick={() => onPick(node.file.path)}
             className={`flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-meta hover:bg-hover ${seen ? "text-faint-foreground" : ""}`}
             style={indent}
           >
             <FileIcon path={node.file.path} />
             <span className="min-w-0 flex-1 truncate">{node.name}</span>
+            {changed?.has(node.file.path) && (
+              <span
+                aria-label="Changed since viewed"
+                className="size-1.5 shrink-0 rounded-full bg-warning"
+              />
+            )}
             {seen ? (
               <icons.done aria-label="Viewed" className="size-3.5 shrink-0 text-added" />
             ) : (
