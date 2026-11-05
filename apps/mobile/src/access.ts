@@ -129,26 +129,41 @@ export interface Lists {
 }
 
 /**
- * Which of `known` this phone takes lists from (0091). A computer added with Allow alone may be a
- * fake one the user clicked through, so it gets lists but gives none: nothing it says reaches the
- * user's other computers. `allowed` is those this phone allowed itself. Marks count only from a
- * computer that isn't marked itself, so a fake one can't demote the real ones.
+ * Which of `known` may add to `target`'s lists (0091): `target` itself, the computers its own list
+ * vouches for, following their lists, and those this phone `proved` with a typed or paired code.
+ * A phone can't tell a fake computer that signed it in with no tap from a real one approved on
+ * another device, so each computer's list decides what it accepts: nothing real lists a fake one,
+ * so a fake's keys, removals, and host ids reach only fakes. A computer marked by one of these, or
+ * in `allowed` (the marks this phone keeps), takes lists and adds none, as it may be a fake one the
+ * user clicked through.
  */
-export function listSources<T extends { id: string; lists: Lists }>(known: T[], allowed: string[]): T[] {
+export function sourcesFor<T extends { id: string; lists: Lists }>(
+  target: T,
+  known: T[],
+  proved: string[],
+  allowed: string[],
+): T[] {
   const marked = new Set(allowed);
-  for (let size = -1; size !== marked.size; ) {
-    size = marked.size;
-    for (const each of known)
-      if (!marked.has(each.id)) for (const id of each.lists.allowedHosts ?? []) marked.add(id);
+  // Each new mark starts the walk again, as a marked computer may have vouched for another.
+  for (;;) {
+    const vouched = new Set([target.id, ...proved]);
+    const adds = (each: T) => each === target || (vouched.has(each.id) && !marked.has(each.id));
+    for (let size = -1; size !== vouched.size; ) {
+      size = vouched.size;
+      for (const each of known.filter(adds)) for (const id of each.lists.approvedHosts) vouched.add(id);
+    }
+    const sources = known.filter(adds);
+    const before = marked.size;
+    for (const each of sources) for (const id of each.lists.allowedHosts ?? []) marked.add(id);
+    if (marked.size === before) return sources;
   }
-  return known.filter((each) => !marked.has(each.id));
 }
 
 /**
- * Every host's lists in one, with `hosts` (the ones this phone has sessions with) approved too,
- * and `allowed` (those it allowed itself) marked. A key removed anywhere ends up removed and not
- * approved, so the lists merge with no clock. A marked computer stays out of `approvedHosts`, the
- * only list an older client or plxd reads, so neither takes it for one the user verified.
+ * Every host's lists in one, with `hosts` (the ones this phone proved) approved too, and `allowed`
+ * (the marks it keeps) marked. A key removed anywhere ends up removed and not approved, so the
+ * lists merge with no clock. A marked computer stays out of `approvedHosts`, the only list an older
+ * client or plxd reads, so neither takes it for one the user verified.
  */
 export function merged(all: Lists[], hosts: string[], allowed: string[] = []): Lists {
   const removed = new Set(all.flatMap((l) => l.removedClients));

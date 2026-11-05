@@ -70,7 +70,7 @@ interface FleetValue {
   deviceKey?: string;
   /**
    * Revokes session `session` on computer `id`. A device signed in with the account also loses its
-   * key there, which `share` then copies to every computer this phone uses (0091).
+   * key there, which `share` then copies to the computers that accept this one's lists (0091).
    */
   revoke: (id: string, session: string) => Promise<RemoteSessionsResult | { error: string }>;
   /** Sends `host/update` to computer `id`, which only the user's Update does here (0066). */
@@ -345,8 +345,8 @@ export function FleetProvider({
   }
 
   /**
-   * Copies who's approved between every connected computer that keeps it (0091), with the
-   * computers this phone uses approved too, and trusts the computers they list.
+   * Copies who's approved between the connected computers that keep it (0091), each getting only
+   * what its own list accepts, and trusts the computers they list.
    */
   async function share() {
     if (!accounts) return;
@@ -357,12 +357,13 @@ export function FleetProvider({
       keepers.map(async ([id, host]) => ({ id, answer: await host.request("access/get", {}) })),
     );
     const lists = answers.flatMap(({ id, answer }) =>
-      "error" in answer ? [] : [{ id, lists: answer.result as AccessState as Lists }],
+      "error" in answer
+        ? []
+        : [{ id: id.replace(/^account:/, ""), connection: id, lists: answer.result as AccessState as Lists }],
     );
     if (!lists.length) return;
-    const union = await accounts.absorb(lists.map((l) => ({ id: l.id.replace(/^account:/, ""), lists: l.lists })));
-    for (const { id, lists: theirs } of lists)
-      if (lacks(theirs, union)) void fleet.hosts.get(id)?.request("access/merge", union);
+    for (const { connection, lists: theirs, union } of await accounts.absorb(lists))
+      if (lacks(theirs, union)) void fleet.hosts.get(connection)?.request("access/merge", union);
     // A computer one of them lists connects now.
     for (const m of latest.current.machines)
       if (m.account && accounts.trusts(m.account.hostId) && !fleet.hosts.has(m.id)) {
@@ -395,7 +396,7 @@ export function FleetProvider({
         const decide = (method: "access/approve" | "access/deny") =>
           void host.request(method, { request: pending.id }).then((done) => {
             if ("error" in done) showAlert("Couldn't answer the request", done.error.message);
-            // Approved here, it's approved on every computer this phone uses.
+            // Approved here, it's approved on the computers that accept this one's lists.
             else if (method === "access/approve") void share();
           });
         confirmDevice(pending.name, pending.code, () => decide("access/approve"), () => decide("access/deny"));
