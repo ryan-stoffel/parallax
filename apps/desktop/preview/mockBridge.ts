@@ -1260,7 +1260,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
   // The value goes nowhere: only how the request ended is logged, as plxd logs it (0063).
   "secret/answer": (p) => {
     const status =
-      p.answer.type === "save" ? "saved" : p.answer.type === "decline" ? "declined" : "cancelled";
+      p.answer.type === "decline" ? "declined" : p.answer.type === "cancel" ? "cancelled" : "saved";
     output(p.runId, { kind: "secretResolved", requestId: p.requestId, status });
     return {};
   },

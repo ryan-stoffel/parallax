@@ -95,6 +95,7 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0095](0095-pr-guides.md) | `pr/guide` (`prGuide`) answers from the store's newest guide per pull request and starts one in the background for a new head: a tool-less call to the user's default model through `Backend::namer`, over the title, description, and a size-capped diff, checked before it's kept; the old guide shows out of date until then, and a failed try waits for Regenerate |
 | [0096](0096-linked-providers.md) | Settings › Providers can link providers across computers: the app keeps one list and each connected computer follows it through `providers/*`, turning others off rather than removing them; secrets, sign-ins, CLI paths, and hubs stay per computer |
 | [0098](0098-secret-files-for-commands.md) | `request_secret` takes `delivery: "file"`: the answer goes straight to an owner-only file for the thread's own commands, for 24 hours, and the card says those commands can read it; MCP `instructions` send agents to it instead of chat, including for sudo |
+| [0099](0099-secret-card-input.md) | `request_secret` takes a required `input`, `value`, `env`, or `file`, that picks the card's view, separately from `delivery`; a picked file goes byte for byte as `saveBytes` |
 
 Numbers are assigned in order. Take the next free number when you start the record, add a row to this table in the same PR, and link the record from its issue.
 

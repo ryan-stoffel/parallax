@@ -1,6 +1,6 @@
 # 0098: An agent's commands can use a secret the user enters privately
 
-- Status: accepted; extends [0063](0063-schedules-pr-watches-and-delegation.md)
+- Status: accepted; extends [0063](0063-schedules-pr-watches-and-delegation.md); extended by [0099](0099-secret-card-input.md)
 - Date: 2026-11-03
 - Issue: PLX-1282
 

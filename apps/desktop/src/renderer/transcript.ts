@@ -885,6 +885,17 @@ function applyOutput(
   }
 }
 
+/** plxd's limit on an answer (`MAX_SECRET_BYTES`). */
+export const maxSecretBytes = 64 * 1024;
+
+/** What a secret request asks the user for. An item from before `input` goes by its delivery (0099). */
+export const secretInput = (request: SecretRequest) =>
+  request.input ?? (request.delivery === "file" ? "env" : "value");
+
+/** Whether a file called `name` is one of `accept`'s extensions. No list takes any file. */
+export const acceptsFile = (name: string, accept?: readonly string[]) =>
+  !accept?.length || accept.some((ext) => name.toLowerCase().endsWith(ext.toLowerCase()));
+
 /** The secret requests still waiting, oldest first. */
 export const waitingSecrets = (items: readonly Item[]) =>
   items.filter((i): i is Extract<Item, { kind: "secret" }> => i.kind === "secret" && !i.status);

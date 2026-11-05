@@ -4543,7 +4543,16 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 * How the agent gets the answer. Absent means `secretRef`. With `file`, its commands can
 	 * read the value, so the card must say so.
 	 */
-	delivery?: SecretDelivery, } | { "kind": "secretResolved",
+	delivery?: SecretDelivery,
+	/**
+	 * What the user gives (0099). Absent, as on an older item, means what `delivery` used
+	 * to imply: `env` with `file`, else `value`.
+	 */
+	input?: SecretInput,
+	/**
+	 * With `input: file`: the extensions to offer, such as `.p8`. Absent means any.
+	 */
+	accept?: Array<string>, } | { "kind": "secretResolved",
 	/**
 	 * The request's id.
 	 */
@@ -4665,6 +4674,13 @@ export type OrchestratorSessionEnd = "compactedOut" | "notResumable" | "userFres
  * A newer client may send a delivery this version does not know; plxd refuses it.
  */
 export type SecretDelivery = "secretRef" | "file";
+
+/**
+ * What the user gives to a secret request, which picks the card's input (0099).
+ *
+ * A newer client may send an input this version does not know; plxd refuses it.
+ */
+export type SecretInput = "value" | "env" | "file";
 
 /**
  * How a secret request stands (0063).
@@ -11012,6 +11028,14 @@ export type SecretRequestParams = {
 	 */
 	delivery?: SecretDelivery,
 	/**
+	 * What the user gives. `env` and `file` always deliver a file.
+	 */
+	input?: SecretInput,
+	/**
+	 * With `input: file`: the extensions to offer, each with its leading dot.
+	 */
+	accept?: Array<string>,
+	/**
 	 * How long to wait for an answer before answering `pending`, at most 50000.
 	 */
 	waitMs: number,
@@ -11064,7 +11088,11 @@ export type SecretChoice = { "type": "save",
 	/**
 	 * The secret.
 	 */
-	secret: string, } | { "type": "decline" } | { "type": "cancel"
+	secret: string, } | { "type": "saveBytes",
+	/**
+	 * The file's contents, as standard base64.
+	 */
+	base64: string, } | { "type": "decline" } | { "type": "cancel"
 };
 
 /**

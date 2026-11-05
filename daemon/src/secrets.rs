@@ -11,6 +11,10 @@
 //! [`run`] deletes each file 24 hours after it was written, going by the file's own age, so no
 //! record is needed and a restart loses none.
 //!
+//! `input` (0099) says what the user gives, which picks the card's view: one value, an env file, or
+//! a file they already have. `env` and `file` always deliver a file. A picked file arrives as
+//! base64, so binary ones survive.
+//!
 //! A request lives in memory while its turn runs, as T3's runtime requests do: `secret/request`
 //! records it with a `secretRequested` transcript item, which the app shows as a private card,
 //! and waits for its answer. A turn that ends first cancels it. A ref works once, only for the
@@ -27,12 +31,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+use data_encoding::BASE64;
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountId, AgentOutputItem, AgentStatus, ErrorKind, ParallaxEvent, RunId, ScopeId,
-    SecretAnswerParams, SecretAnswerResult, SecretChoice, SecretDelivery, SecretRequestParams,
-    SecretRequestResult, SecretStatus,
+    SecretAnswerParams, SecretAnswerResult, SecretChoice, SecretDelivery, SecretInput,
+    SecretRequestParams, SecretRequestResult, SecretStatus,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -64,6 +69,10 @@ const REMEMBERED: Duration = Duration::from_hours(2);
 /// The longest label, reason, placeholder, and secret, in bytes.
 const MAX_TEXT_BYTES: usize = 2 * 1024;
 const MAX_SECRET_BYTES: usize = 64 * 1024;
+
+/// The most extensions a request's `accept` lists, and the longest one, in bytes.
+const MAX_ACCEPT: usize = 16;
+const MAX_EXTENSION_BYTES: usize = 32;
 
 /// The requests made since plxd started, and the expiry timer's wake-up.
 #[derive(Default)]
@@ -116,6 +125,8 @@ pub(crate) async fn request(
         reason,
         placeholder,
         delivery,
+        input,
+        accept,
         wait_ms,
     } = params;
     if cfg!(not(any(target_os = "macos", target_os = "linux"))) {
@@ -128,6 +139,25 @@ pub(crate) async fn request(
         return Err(ErrorObject::invalid_params(
             "delivery must be secretRef or file",
         ));
+    }
+    if input == Some(SecretInput::Unknown) {
+        return Err(ErrorObject::invalid_params(
+            "input must be value, env, or file",
+        ));
+    }
+    let to_file = matches!(input, Some(SecretInput::Env | SecretInput::File));
+    if to_file && delivery == Some(SecretDelivery::SecretRef) {
+        return Err(ErrorObject::invalid_params(
+            "input env or file delivers a file, so it can't use delivery secretRef",
+        ));
+    }
+    let delivery = if to_file {
+        Some(SecretDelivery::File)
+    } else {
+        delivery
+    };
+    if let Some(accept) = &accept {
+        check_accept(accept)?;
     }
     let id = request_id_of(&request_id)?;
     for (name, text) in [("label", &label), ("reason", &reason)] {
@@ -153,6 +183,8 @@ pub(crate) async fn request(
                 reason,
                 placeholder,
                 delivery,
+                input,
+                accept,
             };
             let delivery = delivery.unwrap_or(SecretDelivery::SecretRef);
             begin(daemon, run_id, id, delivery, item).await?;
@@ -250,18 +282,34 @@ pub(crate) async fn answer(
                     "the secret must be 1 to {MAX_SECRET_BYTES} bytes"
                 )));
             }
-            // The agent waits inside the turn that asked; once it has ended, no one would get
-            // the ref.
-            if running(daemon, run_id).await?.is_none() {
-                end(daemon, run_id, id, SecretStatus::Cancelled, None).await;
-                return Err(ErrorObject::invalid_params(
-                    "the agent that asked has stopped, so this secret can't be used",
-                ));
-            }
+            refuse_stopped(daemon, run_id, id).await?;
             let saved = match delivery {
-                SecretDelivery::File => save_file(daemon, run_id, secret).await?,
+                SecretDelivery::File => {
+                    save_file(daemon, run_id, Zeroizing::new(secret.as_bytes().to_vec())).await?
+                }
                 _ => save(daemon, run_id, secret).await?,
             };
+            end(daemon, run_id, id, SecretStatus::Saved, Some(saved)).await;
+            daemon.secrets.refs.notify_one();
+        }
+        SecretChoice::SaveBytes { base64 } => {
+            let base64 = Zeroizing::new(base64);
+            if delivery != SecretDelivery::File {
+                return Err(ErrorObject::invalid_params(
+                    "a picked file needs a request with delivery file",
+                ));
+            }
+            let bytes = BASE64
+                .decode(base64.as_bytes())
+                .map(Zeroizing::new)
+                .map_err(|_| ErrorObject::invalid_params("the file isn't valid base64"))?;
+            if bytes.is_empty() || bytes.len() > MAX_SECRET_BYTES {
+                return Err(ErrorObject::invalid_params(format!(
+                    "the file must be 1 to {MAX_SECRET_BYTES} bytes"
+                )));
+            }
+            refuse_stopped(daemon, run_id, id).await?;
+            let saved = save_file(daemon, run_id, bytes).await?;
             end(daemon, run_id, id, SecretStatus::Saved, Some(saved)).await;
             daemon.secrets.refs.notify_one();
         }
@@ -274,6 +322,18 @@ pub(crate) async fn answer(
         }
     }
     Ok(SecretAnswerResult {})
+}
+
+/// Closes request `id` and refuses its answer if `run`'s turn has ended. The agent waits inside the
+/// turn that asked, so no one would get the result.
+async fn refuse_stopped(daemon: &Daemon, run: RunId, id: Uuid) -> Result<(), ErrorObject> {
+    if running(daemon, run).await?.is_some() {
+        return Ok(());
+    }
+    end(daemon, run, id, SecretStatus::Cancelled, None).await;
+    Err(ErrorObject::invalid_params(
+        "the agent that asked has stopped, so this secret can't be used",
+    ))
 }
 
 /// Keeps `secret` in the keystore under a new ref for `run`, and records the ref.
@@ -307,10 +367,10 @@ async fn save(
 async fn save_file(
     daemon: &Daemon,
     run: RunId,
-    secret: Zeroizing<String>,
+    secret: Zeroizing<Vec<u8>>,
 ) -> Result<String, ErrorObject> {
     let folder = crate::paths::secret_files_dir(daemon.data_dir.root(), run);
-    let written = tokio::task::spawn_blocking(move || write_file(&folder, secret.as_bytes()))
+    let written = tokio::task::spawn_blocking(move || write_file(&folder, &secret))
         .await
         .map_err(|error| ErrorObject::internal_error(error.to_string()))?
         .map_err(|error| {
@@ -592,6 +652,26 @@ fn check_text(name: &str, text: &str) -> Result<(), ErrorObject> {
     if text.trim().is_empty() || text.len() > MAX_TEXT_BYTES {
         return Err(ErrorObject::invalid_params(format!(
             "{name} must be 1 to {MAX_TEXT_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+/// Refuses an `accept` that isn't a short list of extensions, each with its leading dot, which the
+/// app's file dialog couldn't filter by.
+fn check_accept(accept: &[String]) -> Result<(), ErrorObject> {
+    let extension = |text: &String| {
+        text.len() <= MAX_EXTENSION_BYTES
+            && text.strip_prefix('.').is_some_and(|rest| {
+                !rest.is_empty()
+                    && rest
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            })
+    };
+    if accept.len() > MAX_ACCEPT || !accept.iter().all(extension) {
+        return Err(ErrorObject::invalid_params(format!(
+            "accept must be at most {MAX_ACCEPT} extensions, each with its leading dot, such as .p8"
         )));
     }
     Ok(())

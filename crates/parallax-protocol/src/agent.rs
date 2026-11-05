@@ -829,6 +829,15 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         delivery: Option<SecretDelivery>,
+        /// What the user gives (0099). Absent, as on an older item, means what `delivery` used
+        /// to imply: `env` with `file`, else `value`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        input: Option<SecretInput>,
+        /// With `input: file`: the extensions to offer, such as `.p8`. Absent means any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        accept: Option<Vec<String>>,
     },
     /// How a secret request ended. Never carries the value.
     SecretResolved {
@@ -917,6 +926,24 @@ pub enum SecretDelivery {
     /// An owner-only file for the agent's own shell commands, which can read the value.
     File,
     /// A delivery this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// What the user gives to a secret request, which picks the card's input (0099).
+///
+/// A newer client may send an input this version does not know; plxd refuses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SecretInput {
+    /// One value, such as an API key, token, or password: a single masked field.
+    Value,
+    /// A whole env file: a multi-line editor.
+    Env,
+    /// A file the user already has, such as a `.p8` or `.p12`: a file picker.
+    File,
+    /// An input this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
     Unknown,

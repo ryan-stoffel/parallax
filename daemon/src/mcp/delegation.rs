@@ -21,8 +21,8 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentPermission, AgentRun, AgentStatus, CompletionWake,
     DelegatedTask, OrchestrationCommand, ProvidersListParams, RunId, SecretAnswerParams,
-    SecretChoice, SecretDelivery, SecretRequestParams, SecretRequestResult, SecretStatus,
-    TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
+    SecretChoice, SecretDelivery, SecretInput, SecretRequestParams, SecretRequestResult,
+    SecretStatus, TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -51,7 +51,7 @@ const MAX_WAIT: Duration = Duration::from_mins(60);
 /// runs calling the tool. A failed login is named as a trigger, since it's the usual way an agent
 /// finds out it needs a secret. The sudo steps are T3's: `-n` proves the command needs a password,
 /// `-k` makes sudo read it even with cached credentials, and the file replaces the command's stdin.
-pub const INSTRUCTIONS: &str = "When a task needs a password, passphrase, token, API key, private key, or .env contents only the user has, call request_secret yourself. A command that fails or stops on authentication counts, such as Permission denied, a 401 or 403, no password supplied, or a password prompt. Then don't stop to report the failure, ask in chat, invent a value, tell the user to set up access, or hand the command back: call request_secret and run the command again with the answer. Stop only if the user declines. Pass its secretRef to a tool that takes one. For a shell command, use delivery 'file', then read the returned path only inside the command, or copy it where the task needs it, such as a gitignored .env. Never print the value. An HTTP API: curl -H \"Authorization: Bearer $(cat \"$file\")\" <url>. A database: set its password variable, such as PGPASSWORD for psql, from the file for that one command. For an ssh private key, use ssh -i \"$file\" <host>. To log in to ssh with what the user typed, use sshpass -f \"$file\" ssh <host> if sshpass is installed. Otherwise write a temporary executable script that cats the file, point the SSH_ASKPASS variable at it, set SSH_ASKPASS_REQUIRE to force, and run ssh with stdin from /dev/null. When a command you were asked to run needs a sudo password: settle the full command first, with its own -y if it asks to confirm and a file argument for anything it would read from stdin, since the password takes stdin. Once `sudo -n <cmd>` fails for lack of a password, call request_secret with delivery 'file' and run that exact command as `sudo -k -S -p '' <cmd> < \"$file\"`. Don't suggest passwordless sudo instead.";
+pub const INSTRUCTIONS: &str = "When a task needs a password, passphrase, token, API key, private key, or .env contents only the user has, call request_secret yourself. A command that fails or stops on authentication counts, such as Permission denied, a 401 or 403, no password supplied, or a password prompt. Then don't stop to report the failure, ask in chat, invent a value, tell the user to set up access, or hand the command back: call request_secret and run the command again with the answer. Stop only if the user declines. When the user offers a secret, or asks whether they can give you one, such as 'can I give you the API key?', don't say no, ask them to paste it in chat, or explain how, even if nothing needs it yet: call request_secret in that same turn. Set input to what the user gives: value for one value such as an API key, token, or password, env for a whole .env file, or file with accept for a file they already have, such as a .p8, .p12, or private key. Pass its secretRef to a tool that takes one. For a shell command, use delivery 'file', then read the returned path only inside the command, or copy it where the task needs it, such as a gitignored .env. Never print the value. An HTTP API: curl -H \"Authorization: Bearer $(cat \"$file\")\" <url>. A database: set its password variable, such as PGPASSWORD for psql, from the file for that one command. For an ssh private key, use ssh -i \"$file\" <host>. To log in to ssh with what the user typed, use sshpass -f \"$file\" ssh <host> if sshpass is installed. Otherwise write a temporary executable script that cats the file, point the SSH_ASKPASS variable at it, set SSH_ASKPASS_REQUIRE to force, and run ssh with stdin from /dev/null. When a command you were asked to run needs a sudo password: settle the full command first, with its own -y if it asks to confirm and a file argument for anything it would read from stdin, since the password takes stdin. Once `sudo -n <cmd>` fails for lack of a password, call request_secret with delivery 'file' and run that exact command as `sudo -k -S -p '' <cmd> < \"$file\"`. Don't suggest passwordless sudo instead.";
 
 /// How long `request_secret` waits for the user without a `timeoutMs`, and the most it takes, as
 /// T3's, and the longest one `secret/request` waits.
@@ -173,17 +173,19 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "request_secret",
-            "Ask the user for a secret (a token, API key, signing secret, password, passphrase, private key, or .env contents) through a private card in this thread, and wait for the answer. Call it when a task needs one, including when a command fails or stops on authentication, such as ssh's Permission denied or a 401, instead of reporting the failure. The value is NEVER returned to you or shown in the transcript. By default it is kept in the host's keystore, and the result carries a secretRef: pass it to a tool that takes one, such as schedule_task's signature.secretRef. It works once, for this thread, within 24 hours. With delivery 'file', the result instead carries file, the path of a private file for your own shell commands, which lasts 24 hours and which other threads can't read: read it only inside a command, and never print it. Never ask for secrets in chat, and never invent one.",
+            "Ask the user for a secret (a token, API key, signing secret, password, passphrase, private key, or .env contents) through a private card in this thread, and wait for the answer. Call it when a task needs one, including when a command fails or stops on authentication, such as ssh's Permission denied or a 401, instead of reporting the failure, and when the user offers one or asks whether they can give you one, instead of answering no. The value is NEVER returned to you or shown in the transcript. By default it is kept in the host's keystore, and the result carries a secretRef: pass it to a tool that takes one, such as schedule_task's signature.secretRef. It works once, for this thread, within 24 hours. With delivery 'file', the result instead carries file, the path of a private file for your own shell commands, which lasts 24 hours and which other threads can't read: read it only inside a command, and never print it. input picks what the user sees: value is one masked field, env is a multi-line editor, and file is a file picker. Choose by what you need, not by how you'll use it: an API key for a shell command is input 'value' with delivery 'file'. env and file always deliver a file. Never ask for secrets in chat, and never invent one.",
             object(
                 json!({
                     "label": {"type": "string", "description": "What you need, the card's title, such as 'GitHub webhook secret'."},
                     "reason": {"type": "string", "description": "One or two sentences on what it is for and where the user gets it."},
                     "placeholder": {"type": "string", "description": "A hint inside the input, such as 'Paste your GitHub token'."},
-                    "delivery": {"type": "string", "enum": ["secretRef", "file"], "description": "secretRef, the default, for a tool that takes one, or file for a shell command."},
+                    "delivery": {"type": "string", "enum": ["secretRef", "file"], "description": "secretRef, the default, for a tool that takes one, or file for a shell command. input env and file always use file."},
+                    "input": {"type": "string", "enum": ["value", "env", "file"], "description": "What the user gives: value for one value such as an API key, token, or password; env for a whole .env file; file for a file they already have, such as a .p8, .p12, or private key."},
+                    "accept": {"type": "array", "items": {"type": "string"}, "description": "With input file: the extensions to offer, each with its leading dot, such as ['.p8']. Omit to offer any file."},
                     "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 3_600_000, "description": "How long to wait for the user. Default 600000 (10 minutes)."},
                     "clientRequestId": {"type": "string", "description": "Reuse it when retrying a call that lost its result, so the user sees one card. Use a new one to ask again after timed_out or cancelled."},
                 }),
-                &["label", "reason"],
+                &["label", "reason", "input"],
             ),
             false,
         ),
@@ -300,6 +302,9 @@ struct SecretArgs {
     placeholder: Option<String>,
     #[serde(default)]
     delivery: Option<SecretDelivery>,
+    input: SecretInput,
+    #[serde(default)]
+    accept: Option<Vec<String>>,
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
@@ -550,6 +555,8 @@ async fn request_secret(
         reason,
         placeholder,
         delivery,
+        input,
+        accept,
         timeout_ms,
         ..
     } = args;
@@ -565,6 +572,8 @@ async fn request_secret(
         reason: reason.clone(),
         placeholder: placeholder.clone(),
         delivery,
+        input: Some(input),
+        accept: accept.clone(),
         wait_ms: u32::try_from(wait.as_millis()).unwrap_or(u32::MAX),
     };
     let mut answered = loop {
