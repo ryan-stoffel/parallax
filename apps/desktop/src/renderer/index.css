@@ -850,7 +850,8 @@ body {
 /* Linux's panes are square, like the windows of the tiling desktops it mostly runs on (Omarchy's
    Hyprland). What's inside them keeps its corners. The shown tab joins its pane square, without
    its curves, as on glass. */
-[data-platform="linux"] :is(.pane-card, .tab-shown, .tab-cap) {
+/* :root outranks the flush tab's corner, .tab-shown[data-flush] .tab-cap. */
+:root[data-platform="linux"] :is(.pane-card, .tab-shown, .tab-cap) {
   border-radius: 0;
 }
 [data-platform="linux"] .tab-shown::before,
