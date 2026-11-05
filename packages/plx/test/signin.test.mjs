@@ -8,7 +8,15 @@ import test from "node:test";
 import { setTimeout as wait } from "node:timers/promises";
 
 import { lineReader } from "../src/cli.mjs";
-import { canOpenBrowser, codePage, signIn } from "../src/signin.mjs";
+import { authorizeUrl, canOpenBrowser, codePage, signIn } from "../src/signin.mjs";
+
+test("authorizeUrl asks for plx's scope unless told another", () => {
+  const clerk = { api: "https://clerk.test", clientId: "client" };
+  const request = { redirectUri: "http://127.0.0.1/callback", state: "state", verifier: "verifier" };
+  const scope = (/** @type {string} */ url) => new URL(url).searchParams.get("scope");
+  assert.equal(scope(authorizeUrl(clerk, request)), "profile email");
+  assert.equal(scope(authorizeUrl(clerk, { ...request, scope: "profile offline_access" })), "profile offline_access");
+});
 
 /**
  * A fake Clerk whose token endpoint accepts `good-code` with the verifier matching the challenge

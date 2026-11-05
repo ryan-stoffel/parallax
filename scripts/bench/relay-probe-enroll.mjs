@@ -15,6 +15,8 @@ import { createServer } from "node:http";
 import { authorizeUrl, clerkOf } from "../../packages/plx/src/signin.mjs";
 
 const REPO = "ryan-stoffel/parallax";
+// offline_access is what makes Clerk give a refresh token, as for the desktop app.
+const SCOPES = "profile email offline_access";
 // PROBE_CLERK_API names another Clerk, for trying this against a local one.
 const clerk = { ...clerkOf(process.env), ...(process.env.PROBE_CLERK_API && { api: process.env.PROBE_CLERK_API }) };
 const verifier = randomBytes(32).toString("base64url");
@@ -36,7 +38,7 @@ const server = createServer((request, response) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const redirectUri = `http://127.0.0.1:${server.address().port}/callback`;
-console.log(`Open this in a private window and sign in as the test account:\n\n  ${authorizeUrl(clerk, { redirectUri, state, verifier })}\n`);
+console.log(`Open this in a private window and sign in as the test account:\n\n  ${authorizeUrl(clerk, { redirectUri, state, verifier, scope: SCOPES })}\n`);
 const params = await called;
 server.close();
 const code = params.get("code");

@@ -130,15 +130,16 @@ export function canOpenBrowser(env, platform, noBrowser) {
 /**
  * Clerk's authorize URL for this sign-in.
  * @param {Clerk} clerk
- * @param {{ redirectUri: string, state: string, verifier: string }} request
+ * @param {{ redirectUri: string, state: string, verifier: string, scope?: string }} request `scope`
+ *   replaces plx's own, for a caller that needs more, such as a refresh token.
  */
-export function authorizeUrl(clerk, { redirectUri, state, verifier }) {
+export function authorizeUrl(clerk, { redirectUri, state, verifier, scope = SCOPES }) {
   const url = new URL(`${clerk.api}/oauth/authorize`);
   url.search = new URLSearchParams({
     response_type: "code",
     client_id: clerk.clientId,
     redirect_uri: redirectUri,
-    scope: SCOPES,
+    scope,
     state,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",
