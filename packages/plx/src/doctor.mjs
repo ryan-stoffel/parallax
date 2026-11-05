@@ -62,6 +62,7 @@ import { fetchReleases, pickRelease } from "./releases.mjs";
  * @property {{ providers: Provider[] }} [providers]
  * @property {{ connect?: boolean, remote?: boolean, relay?: boolean, cleanWorktrees?: boolean }} [settings]
  * @property {{ tailscale: string, port: number, listening: boolean, devices: { parallax?: boolean, online?: boolean }[] }} [connect]
+ * @property {{ listening: boolean, problem?: string, relay?: { connected: boolean, problem?: string } }} [sessions]
  */
 
 /**
@@ -320,9 +321,9 @@ function probePipe(dataDir) {
 
 /**
  * Asks the running plxd, over `plxd attach`, for its version, health, agents, settings, and
- * Parallax Connect's state. `attach` starts
- * plxd when none runs, so this is only called when one does. Resolves when every request is
- * answered, or after `timeoutMs` with what was.
+ * Parallax Connect's state, over the relay and Tailscale. `attach` starts plxd when none runs, so
+ * this is only called when one does. Resolves when every request is answered, or after
+ * `timeoutMs` with what was.
  * @param {string} plxd
  * @param {string} version plx's, for the `initialize` request.
  * @param {number} timeoutMs
@@ -337,6 +338,7 @@ function askPlxd(plxd, version, timeoutMs = 15_000) {
     ["providers", "providers/list", {}],
     ["settings", "host/settings/get", {}],
     ["connect", "connect/devices", {}],
+    ["sessions", "remote/sessions", {}],
   ];
   return new Promise((resolve) => {
     /** @type {Record<string, unknown>} */
@@ -474,7 +476,7 @@ export function evaluate(facts) {
     "plxd",
     plxd
       ? { state: facts.plxdVersion ? "ok" : "fail", detail: facts.plxdVersion ? `${facts.plxdVersion} at ${plxd}` : `${plxd} --version printed no version` }
-      : { state: "fail", detail: `not found. Install Parallax from ${REPO}/releases, or run npx plx-cli setup.` },
+      : { state: "fail", detail: `not found. Install Parallax from ${REPO}/releases, or run npx plx-cli connect.` },
   );
 
   /** @type {Fix | undefined} */
@@ -534,12 +536,27 @@ export function evaluate(facts) {
     add("Agent CLIs", found.length ? { state: "ok", detail: `on PATH: ${found.join(", ")}` } : { state: "fail", detail: "neither claude nor codex is on PATH. Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup" });
   }
 
+  const sessions = answers?.sessions;
+  if (answers?.settings?.relay && sessions) {
+    const why = sessions.relay?.problem ? `: ${sessions.relay.problem}` : "";
+    add("Relay", sessions.relay?.connected ? { state: "ok", detail: "connected" } : { state: "fail", detail: `on, but not connected${why}` });
+  }
+  if (answers?.settings?.remote && sessions) {
+    const why = sessions.problem ? `: ${sessions.problem}` : "";
+    add("Remote access", sessions.listening ? { state: "ok", detail: "listening" } : { state: "fail", detail: `on, but not listening${why}` });
+  }
+
+  // Tailscale is an optional route (0091): the relay still reaches this computer without it.
   if (answers?.settings?.connect && answers.connect) {
     const { tailscale, port, listening, devices } = answers.connect;
     const others = devices.filter((device) => device.parallax).length;
-    if (tailscale !== "running") add("Connect", { state: "fail", detail: `on, but Tailscale is ${tailscale === "missing" ? "not installed" : "not connected"}, so other computers can't reach this one` });
-    else if (!listening) add("Connect", { state: "fail", detail: `on, but plxd isn't listening on port ${port}. plxd's log says why.` });
-    else add("Connect", { state: "ok", detail: `listening on port ${port}; ${others} other computer${others === 1 ? "" : "s"} on Parallax` });
+    // The relay's streams end at the listener, so it needs `remote` too.
+    const reachable = answers.settings.relay && answers.settings.remote && sessions?.relay?.connected && sessions.listening;
+    const down = (/** @type {string} */ why) =>
+      /** @type {Result} */ (reachable ? { state: "warn", detail: `${why}. The relay still reaches this computer.` } : { state: "fail", detail: `${why}, so other computers can't reach this one` });
+    if (tailscale !== "running") add("Tailscale", down(`on, but Tailscale is ${tailscale === "missing" ? "not installed" : "not connected"}`));
+    else if (!listening) add("Tailscale", down(`on, but plxd isn't listening on port ${port}`));
+    else add("Tailscale", { state: "ok", detail: `listening on port ${port}; ${others} other computer${others === 1 ? "" : "s"} on Parallax` });
   }
 
   add("git", facts.git ? { state: "ok", detail: `${facts.git.version} at ${facts.git.path}` } : { state: "fail", detail: "isn't on PATH. Parallax runs agents in git worktrees." });

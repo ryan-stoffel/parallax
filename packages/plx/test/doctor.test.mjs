@@ -43,6 +43,48 @@ const healthy = () => ({
   agentClis: { claude: "/opt/homebrew/bin/claude", codex: undefined },
 });
 
+/** Facts with these settings, and the relay and listener in this state. @param {object} settings @param {object} sessions */
+const withConnect = (settings, sessions) => {
+  const facts = healthy();
+  const answers = /** @type {NonNullable<typeof facts.answers>} */ (facts.answers);
+  answers.settings = /** @type {any} */ (settings);
+  answers.sessions = /** @type {any} */ (sessions);
+  return facts;
+};
+
+/** One check's result by name. @param {import("../src/doctor.mjs").Facts} facts @param {string} name */
+const check = (facts, name) => evaluate(facts).find((checked) => checked.name === name)?.result;
+
+test("a relay that isn't connected fails, with plxd's reason, and shows in the context file", () => {
+  const problem = "This computer isn't registered with the relay yet.";
+  const facts = withConnect({ relay: true, remote: true }, { listening: true, relay: { connected: false, problem } });
+  assert.equal(check(facts, "Relay")?.state, "fail");
+  assert.ok(check(facts, "Relay")?.detail.includes(problem));
+  const context = buildContext({ generatedAt: "now", version: "0.6.2", launchedAs: "plx doctor", facts, results: evaluate(facts), sourceCache: "/src" });
+  assert.ok(context.includes(`Parallax Relay: not connected: ${problem}`));
+  assert.ok(context.includes("Remote access (Reach from anywhere): listening"));
+});
+
+test("a listener that can't start fails with plxd's reason", () => {
+  const facts = withConnect({ relay: true, remote: true }, { listening: false, problem: "port 7341 is in use", relay: { connected: true } });
+  assert.equal(check(facts, "Relay")?.state, "ok");
+  assert.equal(check(facts, "Remote access")?.state, "fail");
+  assert.ok(check(facts, "Remote access")?.detail.includes("port 7341 is in use"));
+});
+
+test("Tailscale being down only fails when the relay can't reach this computer either", () => {
+  const stopped = { tailscale: "stopped", port: 7340, listening: false, devices: [] };
+  const up = withConnect({ connect: true, relay: true, remote: true }, { listening: true, relay: { connected: true } });
+  const down = withConnect({ connect: true, relay: true, remote: true }, { listening: true, relay: { connected: false } });
+  const off = withConnect({ connect: true }, { listening: false });
+  const webhooksOnly = withConnect({ connect: true, relay: true }, { listening: false, relay: { connected: true } });
+  for (const facts of [up, down, off, webhooksOnly]) /** @type {NonNullable<typeof facts.answers>} */ (facts.answers).connect = stopped;
+  assert.equal(check(up, "Tailscale")?.state, "warn");
+  assert.equal(check(down, "Tailscale")?.state, "fail");
+  assert.equal(check(off, "Tailscale")?.state, "fail");
+  assert.equal(check(webhooksOnly, "Tailscale")?.state, "fail");
+});
+
 test("a second instance signs in to its own home, with its login env, from plxd's CLI", () => {
   const fix = signInFix({
     instance: { id: "work-codex", kind: "codex", name: "Work Codex", home: "/Users/me/.parallax/codex/work" },

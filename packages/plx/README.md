@@ -91,6 +91,7 @@ It asks the running plxd for its version, health, and agents, then checks:
 - It's the newest release on its channel.
 - The project store is ok and its writes aren't queuing.
 - Each agent Parallax uses is installed and signed in.
+- When they're on, the relay is connected, plxd is listening for other devices, and the Tailscale route is up.
 - git is on PATH, the disk has room, and plxd's log has no errors from the last 24 hours.
 
 For each failed check it can fix, it asks first: it starts plxd or runs an agent's own sign-in. Then it writes `context.md` (this computer's facts and the results) and `prompt.md` (the [playbook](src/doctor-playbook.md)) to `doctor/<time>/` in the data folder. It offers to open Claude Code or Codex on them, as T3 Code's `t3 triage` does. The agent asks what went wrong, reads the logs and the store, checks Parallax's source and issues, and helps you file an issue with the `via-doctor` template. It posts only after you approve the text. Without either agent, the doctor prints the two files' paths to paste into any agent.
