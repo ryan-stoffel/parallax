@@ -6,9 +6,8 @@ import {
   FilePlus,
   FileSymlink,
   Folder,
-  FolderOpen,
   FolderPlus,
-  FolderTree,
+  PanelLeft,
   Search,
   X,
 } from "lucide-react";
@@ -30,7 +29,7 @@ import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { FileEditor } from "./FileEditor";
 import { useShortcutLabel } from "./keybindings";
-import { CHECK_EVERY_MS, type OpenFile, openFilesOf } from "./openFiles";
+import { CHECK_EVERY_MS, openFilesOf } from "./openFiles";
 import { FileIcon } from "./TurnChanges";
 import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu, searchField } from "./ui";
 
@@ -119,7 +118,12 @@ export function FilesPanel({
   const connectedNow = useConnectedNow(hostId);
   const store = openFilesOf(hostId, runId);
   store.writable = !!writable;
-  const { tabs, active: activeId } = useSyncExternalStore(store.subscribe, store.get);
+  const {
+    tabs,
+    active: activeId,
+    home,
+    closing,
+  } = useSyncExternalStore(store.subscribe, store.get);
   const file = tabs.find((f) => f.id === activeId);
   const [listings, setListings] = useState<Record<string, Listing>>({});
   const [expanded, setExpandedNow] = useState(store.expanded);
@@ -137,8 +141,6 @@ export function FilesPanel({
   }, [!unavailable]);
   const beside = width >= TREE_BESIDE_WIDTH;
   const [treeBeside, setTreeBeside] = useState(true);
-  // When narrow, whether the tree is drawn over the file.
-  const [treeDrawer, setTreeDrawer] = useState(false);
   const [treeWidth, setTreeWidth] = useState(
     () => Number(localStorage.getItem(TREE_WIDTH_KEY)) || TREE_WIDTH,
   );
@@ -163,14 +165,21 @@ export function FilesPanel({
       },
     );
   };
-  const [closing, setClosing] = useState<OpenFile>();
+  // A tab whose edits can't land asks before it closes (OpenFiles.askClose).
   const closeDialog = useRef<HTMLDialogElement>(null);
+  const closingFile = tabs.find((f) => f.id === closing);
+  useEffect(() => {
+    const dialog = closeDialog.current;
+    if (!dialog || !closingFile) return;
+    dialog.showModal();
+    const cancel = () => store.settleClose(false);
+    dialog.addEventListener("close", cancel);
+    return () => dialog.removeEventListener("close", cancel);
+  }, [store, closingFile]);
 
-  /** Opens `path` from the tree or a search, and when narrow, goes to it. */
-  const openFile = (path: string, options?: Parameters<typeof store.open>[1]) => {
+  /** Opens `path` from the tree or a search, which shows it in place of the tree when narrow. */
+  const openFile = (path: string, options?: Parameters<typeof store.open>[1]) =>
     store.open(path, options);
-    setTreeDrawer(false);
-  };
   const treeRef = useRef<HTMLDivElement>(null);
   /** Opens the folders above `path` and scrolls its row into view. */
   const revealInTree = (path: string) => {
@@ -189,13 +198,8 @@ export function FilesPanel({
   };
   const showInFiles = (path: string) => {
     if (beside) setTreeBeside(true);
-    else setTreeDrawer(true);
+    else store.showHome(true);
     revealInTree(path);
-  };
-  const closeTab = async (tab: OpenFile) => {
-    if (await store.close(tab.id)) return;
-    setClosing(tab);
-    closeDialog.current?.showModal();
   };
 
   const [draft, setDraft] = useState<Draft>();
@@ -333,7 +337,6 @@ export function FilesPanel({
 
   if (unavailable) return <Empty title="Files aren't available" hint={unavailable} />;
   const top = listings[""];
-  const rootFolder = top && "folder" in top ? top.folder : undefined;
   const empty = top && "entries" in top && top.entries.length === 0 && !draft;
 
   /** The field a name is typed in, in place of a row, with why the last save failed under it. */
@@ -392,10 +395,10 @@ export function FilesPanel({
       // A guide runs down each open folder's entries, under its chevron.
       <ul
         role="group"
-        style={{ "--guide": `${depth * INDENT - 3}px` } as CSSProperties}
+        style={{ "--guide": `${depth * INDENT - 6}px` } as CSSProperties}
         className={
           depth
-            ? "relative before:absolute before:inset-y-0 before:left-[var(--guide)] before:w-px before:bg-border/60"
+            ? "relative before:absolute before:inset-y-0 before:left-[var(--guide)] before:w-px before:bg-border/50"
             : ""
         }
       >
@@ -407,7 +410,6 @@ export function FilesPanel({
           const isFolder = entry.kind === "dir";
           const open = expanded.has(path);
           const link = entry.kind === "symlink";
-          const FolderIcon = open ? FolderOpen : Folder;
           const renaming = draft && "path" in draft && draft.path === path;
           return (
             <li
@@ -451,14 +453,14 @@ export function FilesPanel({
                         : undefined
                     }
                     aria-current={file?.path === path ? "true" : undefined}
-                    className={`flex h-6.5 w-full items-center gap-1.5 rounded-md pr-2 text-left text-body hover:bg-hover aria-[current]:bg-selected ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
+                    className={`flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-body text-foreground/90 transition-colors hover:bg-hover aria-[current]:bg-selected aria-[current]:text-foreground ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
                   >
-                    <ChevronRight
-                      aria-hidden
-                      className={`size-3.5 shrink-0 text-faint-foreground ${isFolder ? "" : "invisible"} ${open ? "rotate-90" : ""}`}
-                    />
+                    {/* As Pierre's and T3 Code's trees: a folder is its chevron and name, and a file its icon. */}
                     {isFolder ? (
-                      <FolderIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                      <ChevronRight
+                        aria-hidden
+                        className={`size-4 shrink-0 text-faint-foreground transition-transform duration-fast ${open ? "rotate-90" : ""}`}
+                      />
                     ) : link ? (
                       <FileSymlink aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                     ) : entry.kind === "file" ? (
@@ -506,9 +508,9 @@ export function FilesPanel({
     menu.current?.hidePopover();
     action();
   };
-  // With no file, the tree is the whole view when narrow. Wide, it stays where it is.
-  const treeOnScreen = beside ? treeBeside : treeDrawer || !file;
-  const drawer = !beside && !!file && treeDrawer;
+  // Narrow, the Files tab shows the tree and a file's tab the file. Wide, the tree sits beside.
+  const fileOnScreen = !!file && !home;
+  const treeOnScreen = beside ? treeBeside : !fileOnScreen;
   /** Down and Up move through the tree's visible rows, and Left from a closed row goes to its folder. */
   const onTreeKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("button[data-row]")];
@@ -527,60 +529,45 @@ export function FilesPanel({
   const explorer = (
     <section
       aria-label="Explorer"
-      style={beside && (file || treeBeside) ? { width: shownTreeWidth } : undefined}
-      className={`flex min-h-0 flex-col files-chrome ${
-        drawer
-          ? "absolute inset-y-0 left-0 z-30 w-[min(20rem,88%)] border-r border-border shadow-xl"
-          : beside
-            ? "relative shrink-0 border-r border-border/60"
-            : "min-w-0 flex-1"
-      }`}
+      style={beside ? { width: shownTreeWidth } : undefined}
+      className={`flex min-h-0 flex-col ${beside ? "relative shrink-0 border-r border-border/60" : "min-w-0 flex-1"}`}
     >
-      <div className="flex h-9 shrink-0 items-center gap-0.5 pr-1 pl-3">
-        <h2
-          title={rootFolder}
-          className="min-w-0 flex-1 truncate text-meta font-medium tracking-wide text-muted-foreground uppercase"
-        >
-          {rootFolder ? nameOf(rootFolder) : "Files"}
-        </h2>
-        {editable && (
-          <>
-            <IconButton
-              size="sm"
-              label="New file"
-              onClick={() => startDraft({ folder: "", isFolder: false })}
-            >
-              <FilePlus aria-hidden />
-            </IconButton>
-            <IconButton
-              size="sm"
-              label="New folder"
-              onClick={() => startDraft({ folder: "", isFolder: true })}
-            >
-              <FolderPlus aria-hidden />
-            </IconButton>
-          </>
-        )}
-        <IconButton
-          size="sm"
-          label="Collapse folders"
-          disabled={expanded.size === 0}
-          onClick={() => setExpanded(() => new Set())}
-        >
-          <ListCollapse aria-hidden />
-        </IconButton>
-        {drawer && (
-          <IconButton size="sm" label="Hide files" onClick={() => setTreeDrawer(false)}>
-            <X aria-hidden />
-          </IconButton>
-        )}
-      </div>
       <FileSearch
         hostId={hostId}
         runId={runId}
         enabled={connectedNow}
         grep={!!grep}
         onOpen={(path, line) => openFile(path, { transient: true, ...(line && { line }) })}
+        actions={
+          <>
+            {editable && (
+              <>
+                <IconButton
+                  size="sm"
+                  label="New file"
+                  onClick={() => startDraft({ folder: "", isFolder: false })}
+                >
+                  <FilePlus aria-hidden />
+                </IconButton>
+                <IconButton
+                  size="sm"
+                  label="New folder"
+                  onClick={() => startDraft({ folder: "", isFolder: true })}
+                >
+                  <FolderPlus aria-hidden />
+                </IconButton>
+              </>
+            )}
+            <IconButton
+              size="sm"
+              label="Collapse folders"
+              disabled={expanded.size === 0}
+              onClick={() => setExpanded(() => new Set())}
+            >
+              <ListCollapse aria-hidden />
+            </IconButton>
+          </>
+        }
       >
         {empty ? (
           <Empty title="No files" hint="This thread's folder is empty." />
@@ -590,7 +577,7 @@ export function FilesPanel({
             role="tree"
             aria-label="Files"
             onKeyDown={onTreeKey}
-            className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
+            className="min-h-0 flex-1 overflow-y-auto px-2 pt-1.5 pb-3"
           >
             {tree("", 0)}
           </div>
@@ -611,7 +598,7 @@ export function FilesPanel({
             if (e.key === "ArrowLeft") setWidthOfTree(shownTreeWidth - 16);
             else if (e.key === "ArrowRight") setWidthOfTree(shownTreeWidth + 16);
           }}
-          className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize transition-colors hover:bg-accent/30 focus-visible:bg-accent/30 focus-visible:outline-none active:bg-accent/40"
+          className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize transition-colors hover:bg-border focus-visible:bg-border focus-visible:outline-none active:bg-border"
         />
       )}
     </section>
@@ -619,50 +606,38 @@ export function FilesPanel({
   return (
     <div ref={root} className="relative flex min-h-0 flex-1 overflow-hidden">
       {treeOnScreen && explorer}
-      {drawer && (
-        <button
-          type="button"
-          aria-label="Hide files"
-          tabIndex={-1}
-          onClick={() => setTreeDrawer(false)}
-          className="absolute inset-0 z-20 bg-black/30"
+      {fileOnScreen ? (
+        <FileEditor
+          store={store}
+          file={file}
+          wide={beside}
+          treeOpen={treeOnScreen}
+          onToggleTree={() => setTreeBeside(!treeBeside)}
+          onReveal={showInFiles}
+          onClose={(tab) => void store.askClose(tab.id)}
+          hostId={hostId}
+          runId={runId}
         />
+      ) : (
+        beside && (
+          <NoFile
+            treeButton={
+              !treeBeside && (
+                <IconButton size="sm" label="Show files" onClick={() => setTreeBeside(true)}>
+                  <PanelLeft aria-hidden />
+                </IconButton>
+              )
+            }
+          />
+        )
       )}
-      {file
-        ? (beside || !treeOnScreen || drawer) && (
-            <FileEditor
-              store={store}
-              file={file}
-              tabs={tabs}
-              wide={beside}
-              treeOpen={treeOnScreen}
-              onToggleTree={() =>
-                beside ? setTreeBeside(!treeBeside) : setTreeDrawer(!treeDrawer)
-              }
-              onReveal={showInFiles}
-              onClose={(tab) => void closeTab(tab)}
-              hostId={hostId}
-              runId={runId}
-            />
-          )
-        : beside && (
-            <NoFile
-              treeButton={
-                !treeBeside && (
-                  <IconButton size="sm" label="Show files" onClick={() => setTreeBeside(true)}>
-                    <FolderTree aria-hidden />
-                  </IconButton>
-                )
-              }
-            />
-          )}
       <ConfirmDialog
         ref={closeDialog}
-        title={<>Close “{closing && nameOf(closing.path)}” without saving?</>}
+        title={<>Close “{closingFile && nameOf(closingFile.path)}” without saving?</>}
         titleClass="break-all"
         action="Close without saving"
         onConfirm={() => {
-          if (closing) store.discard(closing.id);
+          store.settleClose(true);
           closeDialog.current?.close();
         }}
       >
@@ -749,6 +724,7 @@ function FileSearch({
   onOpen,
   enabled,
   grep,
+  actions,
   children,
 }: {
   hostId: string;
@@ -756,6 +732,8 @@ function FileSearch({
   onOpen: (path: string, line?: number) => void;
   enabled: boolean;
   grep: boolean;
+  /** Buttons beside the box, such as New file. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
@@ -808,13 +786,14 @@ function FileSearch({
     "flex h-6.5 w-full items-center gap-1.5 rounded-md px-2 text-left text-body hover:bg-hover";
   return (
     <>
-      <div className="shrink-0 px-2 pb-1.5">
-        <label className={`${searchField} h-7!`}>
+      {/* As tall as the file's path row beside it, so their lines meet. */}
+      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border/60 px-1.5">
+        <label className={`${searchField} h-7! min-w-0 flex-1`}>
           <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
           <input
             type="search"
             aria-label="Search files"
-            placeholder={grep ? "Search names and contents" : "Search files"}
+            placeholder="Search files"
             value={query}
             disabled={!enabled}
             onFocus={() => void load()}
@@ -838,6 +817,7 @@ function FileSearch({
             </button>
           )}
         </label>
+        {actions}
       </div>
       {words.length === 0 ? (
         children

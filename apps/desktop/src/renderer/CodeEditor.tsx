@@ -107,11 +107,25 @@ const indentGuides = ViewPlugin.fromClass(
     build(view: EditorView) {
       const builder = new RangeSetBuilder<Decoration>();
       const mark = Decoration.mark({ class: "cm-indent" });
+      const tab = view.state.tabSize;
       for (const { from, to } of view.visibleRanges) {
         for (let at = from; at <= to;) {
           const line = view.state.doc.lineAt(at);
-          const width = /^[ \t]*/.exec(line.text)![0].length;
-          if (width && width < line.length) builder.add(line.from, line.from + width, mark);
+          const lead = /^[ \t]*/.exec(line.text)![0];
+          // A wrapped line's rest hangs under its own indent, two columns in, as VS Code's does.
+          let columns = 2;
+          for (const c of lead) columns += c === "\t" ? tab - ((columns - 2) % tab) : 1;
+          builder.add(
+            line.from,
+            line.from,
+            Decoration.line({
+              attributes: {
+                style: `padding-left: calc(6px + ${columns}ch); text-indent: -${columns}ch`,
+              },
+            }),
+          );
+          if (lead.length && lead.length < line.length)
+            builder.add(line.from, line.from + lead.length, mark);
           at = line.to + 1;
         }
       }
@@ -158,15 +172,22 @@ const look = EditorView.theme({
     lineHeight: "1.6",
     overflow: "auto",
   },
-  ".cm-content": { caretColor: "var(--foreground)", padding: "6px 0 24px" },
+  ".cm-content": { caretColor: "var(--foreground)", padding: "8px 0 32px" },
+  ".cm-line": { padding: "0 16px 0 6px" },
   ".cm-cursor": { borderLeftColor: "var(--foreground)" },
   ".cm-gutters": {
     backgroundColor: "transparent",
     border: "none",
     color: "var(--faint-foreground)",
   },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 12px", minWidth: "40px" },
-  ".cm-foldGutter .cm-gutterElement": { padding: "0 4px 0 0" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 4px 0 14px", minWidth: "36px" },
+  // Fold arrows show only while the pointer is over the gutter, as in VS Code.
+  ".cm-foldGutter .cm-gutterElement": {
+    padding: "0 2px",
+    opacity: "0",
+    transition: "opacity 120ms",
+  },
+  ".cm-gutters:hover .cm-foldGutter .cm-gutterElement": { opacity: "1" },
   ".cm-indent": {
     backgroundImage:
       "repeating-linear-gradient(to right, var(--border) 0 1px, transparent 1px var(--indent-width))",
@@ -200,8 +221,13 @@ const look = EditorView.theme({
     color: "var(--muted-foreground)",
     fontSize: "12px",
   },
-  ".cm-activeLine": { backgroundColor: "var(--hover)" },
-  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--foreground)" },
+  // The cursor's line shows only while you're in the editor.
+  ".cm-activeLine": { backgroundColor: "transparent" },
+  "&.cm-focused .cm-activeLine": {
+    backgroundColor: "color-mix(in oklab, var(--hover) 70%, transparent)",
+  },
+  ".cm-activeLineGutter": { backgroundColor: "transparent" },
+  "&.cm-focused .cm-activeLineGutter": { color: "var(--foreground)" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, ::selection":
     { backgroundColor: "color-mix(in oklab, var(--accent) 30%, transparent)" },
   ".cm-selectionMatch": { backgroundColor: "color-mix(in oklab, var(--accent) 16%, transparent)" },

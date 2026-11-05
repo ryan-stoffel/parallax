@@ -20,7 +20,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, Fragment } from "react";
 
 import type { BrowserAction } from "../preload/bridge";
 import {
@@ -209,8 +209,32 @@ function firstPanel(scope: string, orchestrated: boolean): Scoped {
  * tab (PLX-755), shown only while its thread, `documents.runId`, is open, as a pull request's is.
  * `device` draws the Device view (PLX-886), told whether it's shown, and each new `showDevice` opens
  * it. Each new `showOrchestrator` shows an open orchestrator's Orchestrator tab, and each new
- * `showFiles` opens the Files view.
+ * `showFiles` opens the Files view. `filesTabs` draws the Files view's tab with its open files.
  */
+/** A tab in the panel's row, as the Files view's file tabs draw theirs too. */
+export const panelTab = (shown: boolean) =>
+  `group flex items-center rounded-lg ${shown ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`;
+export const panelTabButton =
+  "flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left text-body";
+export const panelTabClose =
+  "mx-0.5 grid size-5 shrink-0 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5";
+
+/**
+ * What draws the Files view's tab, with its open files after it in the same row, as T3 Code's
+ * panel does: `current` while the Files view is in front, `show` brings it there, and `close`
+ * closes it.
+ */
+export type FilesTabs = (tab: {
+  /** The Files tab's id, which the panel moves focus to. */
+  id: string;
+  /** Whether the row has room for every tab's name: the panel is full screen or wide. */
+  roomy: boolean;
+  current: boolean;
+  show: () => void;
+  close: () => void;
+  icon: Surface["icon"];
+}) => ReactNode;
+
 export function SidePanel({
   scope,
   width = 416,
@@ -238,6 +262,7 @@ export function SidePanel({
   showDevice,
   showOrchestrator,
   showFiles,
+  filesTabs,
 }: {
   scope: string;
   width?: number;
@@ -253,6 +278,8 @@ export function SidePanel({
   remoteHost?: string;
   terminal?: (shown: boolean, empty: ReactNode) => ReactNode;
   files?: ReactNode;
+  /** Draws the Files view's tab and its open files. */
+  filesTabs?: FilesTabs;
   changesView?: ReactNode;
   browse?: { url?: string; agentTab?: string };
   /** A new request opens the Changes view. */
@@ -551,10 +578,23 @@ export function SidePanel({
             // A browser tab shrinks with the others as more open, and shows its close button only
             // in front and on hover, so its title keeps the room.
             const browserTab = !!face;
+            if (s.name === "Files" && filesTabs)
+              return (
+                <Fragment key={s.key}>
+                  {filesTabs({
+                    id: `side-panel-tab-${s.key}`,
+                    roomy: expanded || width >= 720,
+                    current: s === current,
+                    show: () => reveal(s),
+                    close: () => closeView(s),
+                    icon: s.icon,
+                  })}
+                </Fragment>
+              );
             return (
               <li
                 key={s.key}
-                className={`group flex items-center rounded-lg ${browserTab ? "w-40 min-w-9 shrink" : "shrink-0"} ${s === current ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+                className={`${panelTab(s === current)} ${browserTab ? "w-40 min-w-9 shrink" : "shrink-0"}`}
               >
                 <button
                   type="button"
@@ -564,7 +604,7 @@ export function SidePanel({
                   onClick={() => reveal(s)}
                   // A middle click closes a browser tab, as in Chrome.
                   onAuxClick={(e) => browserTab && e.button === 1 && closeView(s)}
-                  className={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left text-body ${pinned.includes(s) ? "pr-2" : ""}`}
+                  className={`${panelTabButton} ${pinned.includes(s) ? "pr-2" : ""}`}
                 >
                   {face?.icon ? (
                     <img src={face.icon} alt="" className="size-3.5 shrink-0" />
@@ -584,7 +624,7 @@ export function SidePanel({
                     aria-label={`Close ${name}`}
                     title={`Close ${name}`}
                     onClick={() => closeView(s)}
-                    className={`mx-0.5 size-5 shrink-0 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5 ${browserTab && s !== current ? "hidden group-focus-within:grid group-hover:grid" : "grid"}`}
+                    className={`${panelTabClose} ${browserTab && s !== current ? "hidden! group-focus-within:grid! group-hover:grid!" : ""}`}
                   >
                     <X />
                   </button>

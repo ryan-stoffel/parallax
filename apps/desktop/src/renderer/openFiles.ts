@@ -80,8 +80,16 @@ function lastMarkdownView(): MarkdownView {
   return saved === "split" || saved === "preview" ? saved : "code";
 }
 
-/** What the Files view draws, replaced on each change. */
-export type OpenFilesView = { tabs: readonly OpenFile[]; active?: number };
+/**
+ * What the Files view draws, replaced on each change. `home` shows the tree in place of the
+ * active tab. `closing` is a tab whose edits can't be saved, waiting on a choice to close it.
+ */
+export type OpenFilesView = {
+  tabs: readonly OpenFile[];
+  active?: number;
+  home?: boolean;
+  closing?: number;
+};
 
 /** What the store keeps of a tab beyond what's drawn. */
 type Run = {
@@ -215,7 +223,7 @@ export class OpenFiles {
       ? this.view.tabs.map((f) => (f === replaced ? file : f))
       : [...this.view.tabs, file];
     if (replaced) this.forget(replaced);
-    this.draw({ tabs, active: id });
+    this.draw({ ...this.view, tabs, active: id, home: false });
     void this.read(path, link, 0).then((body) => this.change(id, { body }));
     return id;
   }
@@ -252,9 +260,26 @@ export class OpenFiles {
   }
 
   activate(id: number) {
-    if (this.view.active === id) return;
-    this.draw({ ...this.view, active: id });
+    if (this.view.active === id && !this.view.home) return;
+    this.draw({ ...this.view, active: id, home: false });
     void this.check(id);
+  }
+
+  /** Shows the tree in place of the active tab, or not. */
+  showHome(home: boolean) {
+    if (!!this.view.home !== home) this.draw({ ...this.view, home });
+  }
+
+  /** Closes tab `id` once it's saved, or asks first, through `closing`, when its edits can't land. */
+  async askClose(id: number) {
+    if (!(await this.close(id))) this.draw({ ...this.view, closing: id });
+  }
+
+  /** Answers `closing`: drops the tab's edits and closes it, or keeps it open. */
+  settleClose(discard: boolean) {
+    const id = this.view.closing;
+    this.draw({ ...this.view, closing: undefined });
+    if (discard && id !== undefined) this.discard(id);
   }
 
   /** `path` as a tab shows it, read with its SHA-256 so what's edited is known exactly. */
@@ -484,8 +509,10 @@ export class OpenFiles {
     const tabs = this.view.tabs.filter((f) => f.id !== id);
     const at = this.view.tabs.findIndex((f) => f.id === id);
     this.draw({
+      ...this.view,
       tabs,
       active: this.view.active === id ? (tabs[at] ?? tabs[at - 1])?.id : this.view.active,
+      ...(tabs.length === 0 && { home: true }),
     });
   }
 

@@ -12,11 +12,20 @@ import {
   FolderTree,
   LoaderCircle,
   Lock,
+  PanelLeft,
   TriangleAlert,
   WrapText,
   X,
 } from "lucide-react";
-import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { AgentEntry } from "../protocol/generated/protocol";
 import { setAppearance, useAppearance } from "./appearance";
@@ -26,6 +35,7 @@ import { describeError } from "./errors";
 import { DownloadButton } from "./FileCards";
 import type { MarkdownView, OpenFile, OpenFiles } from "./openFiles";
 import { GithubMarkdown } from "./pr/GithubMarkdown";
+import { type FilesTabs, panelTab, panelTabButton, panelTabClose } from "./SidePanel";
 import { FileIcon } from "./TurnChanges";
 import { Button, IconButton, Menu, menuItem, Segmented } from "./ui";
 
@@ -40,14 +50,13 @@ const isMarkdown = (path: string) => /\.(md|mdx|markdown)$/i.test(path);
 const PREVIEW_AFTER_MS = 150;
 
 /**
- * The open file and everything around it, laid out like VS Code: a strip of tabs joined to the
- * editor, the file's path as a breadcrumb, the text, and a status bar. `wide` has room for a
- * split Markdown view and the status bar's details. `treeOpen` draws the button that shows the tree.
+ * The open file and everything around it: its path as a breadcrumb with its actions, the text, and
+ * a status line. Its tab is in the side panel's row (FileTabs). `wide` has room for the tree beside
+ * it, which `onToggleTree` shows or hides, a split Markdown view, and the status line's details.
  */
 export function FileEditor({
   store,
   file,
-  tabs,
   wide,
   treeOpen,
   onToggleTree,
@@ -58,7 +67,6 @@ export function FileEditor({
 }: {
   store: OpenFiles;
   file: OpenFile;
-  tabs: readonly OpenFile[];
   wide: boolean;
   treeOpen: boolean;
   onToggleTree: () => void;
@@ -101,16 +109,17 @@ export function FileEditor({
   );
   return (
     <section aria-label={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <TabStrip
-        store={store}
-        file={file}
-        tabs={tabs}
-        treeOpen={treeOpen}
-        onToggleTree={onToggleTree}
-        onReveal={onReveal}
-        onClose={onClose}
-      />
-      <div className="flex h-8 shrink-0 items-center gap-2 pr-1.5">
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 pr-1.5 pl-1.5">
+        {wide && (
+          <IconButton
+            size="sm"
+            label={treeOpen ? "Hide files" : "Show files"}
+            aria-expanded={treeOpen}
+            onClick={onToggleTree}
+          >
+            <PanelLeft aria-hidden />
+          </IconButton>
+        )}
         <Breadcrumb
           path={file.path}
           hostId={hostId}
@@ -118,7 +127,7 @@ export function FileEditor({
           onOpen={(path, link) => store.open(path, { link, transient: true })}
         />
         {markdown && (
-          <div className="[&_label]:py-0.5 [&_label]:text-meta">
+          <div className="[&_fieldset]:border-transparent [&_fieldset]:bg-hover/60 [&_label]:py-0.5 [&_label]:text-meta">
             <Segmented<MarkdownView>
               label="Show Markdown as"
               value={view}
@@ -193,107 +202,114 @@ function TabMark({ tab }: { tab: OpenFile }) {
   return null;
 }
 
-/** The open files' tabs, joined to the editor below, as in VS Code. */
-function TabStrip({
+/**
+ * The Files view's tab and its open files, drawn in the side panel's own row as T3 Code's panel
+ * does, so the view has one row of tabs. The Files tab shows the tree, and a file's tab shows the
+ * file. A file opened with one click is in italics until it's kept, by a double-click or an edit.
+ */
+export function FileTabs({
   store,
-  file,
-  tabs,
-  treeOpen,
-  onToggleTree,
-  onReveal,
-  onClose,
+  id,
+  roomy,
+  current,
+  show,
+  close,
+  icon: Icon,
 }: {
   store: OpenFiles;
-  file: OpenFile;
-  tabs: readonly OpenFile[];
-  treeOpen: boolean;
-  onToggleTree: () => void;
-  onReveal: (path: string) => void;
-  onClose: (tab: OpenFile) => void;
-}) {
-  const strip = useRef<HTMLUListElement>(null);
+} & Parameters<FilesTabs>[0]) {
+  const { tabs, active, home } = useSyncExternalStore(store.subscribe, store.get);
+  const fileShown = current && active !== undefined && !home;
   const menu = useRef<HTMLDivElement>(null);
   const [target, setTarget] = useState<OpenFile>();
-  // The tab on screen is in view, however many are open.
-  useEffect(() => {
-    strip.current
-      ?.querySelector('[aria-selected="true"]')
-      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [file.id, tabs.length]);
   const choose = (action: (tab: OpenFile) => void) => () => {
     menu.current?.hidePopover();
     if (target) action(target);
   };
+  // The tab in front stays in view, however many are open.
+  const shownTab = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    shownTab.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [active, fileShown]);
   return (
-    <div className="flex h-9 shrink-0 border-b border-border/60 files-chrome">
-      <button
-        type="button"
-        aria-label={treeOpen ? "Hide files" : "Show files"}
-        aria-pressed={treeOpen}
-        title={treeOpen ? "Hide files" : "Show files"}
-        onClick={onToggleTree}
-        className="grid w-9 shrink-0 place-items-center border-r border-border/60 text-muted-foreground transition-colors hover:bg-hover hover:text-foreground aria-pressed:text-foreground"
-      >
-        <FolderTree aria-hidden className="size-4" />
-      </button>
-      <ul
-        ref={strip}
-        role="tablist"
-        aria-label="Open files"
-        className="flex min-w-0 flex-1 overflow-x-auto"
-      >
-        {tabs.map((tab) => {
-          const current = tab.id === file.id;
-          const mark = tab.conflict || tab.save !== "saved";
-          return (
-            <li
-              key={tab.id}
-              className={`group/tab relative -mb-px flex shrink-0 border-r border-border/60 ${current ? "z-10 bg-background" : ""}`}
+    <>
+      <li className={`${panelTab(current && !fileShown)} shrink-0`}>
+        <button
+          type="button"
+          id={id}
+          aria-current={current && !fileShown ? "true" : undefined}
+          onClick={() => {
+            show();
+            store.showHome(true);
+          }}
+          className={panelTabButton}
+        >
+          <Icon aria-hidden className="size-3.5 shrink-0" />
+          <span className="truncate">Files</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Close Files"
+          title="Close Files"
+          onClick={close}
+          className={panelTabClose}
+        >
+          <X />
+        </button>
+      </li>
+      {tabs.map((tab) => {
+        const shown = fileShown && tab.id === active;
+        const mark = !!tab.conflict || tab.save !== "saved";
+        return (
+          <li
+            key={tab.id}
+            ref={shown ? shownTab : undefined}
+            // The shown tab keeps its name. Narrow, the others are their icon, named on hover.
+            className={`${panelTab(shown)} shrink-0 ${shown || roomy ? "max-w-48" : ""}`}
+          >
+            <button
+              type="button"
+              aria-current={shown ? "true" : undefined}
+              title={tab.path}
+              onClick={() => {
+                show();
+                store.activate(tab.id);
+              }}
+              onDoubleClick={() => store.pin(tab.id)}
+              onAuxClick={(e) => {
+                if (e.button === 1) void store.askClose(tab.id);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTarget(tab);
+                menu.current?.showPopover({ source: e.currentTarget });
+              }}
+              className={shown || roomy ? panelTabButton : "grid size-7 place-items-center"}
             >
-              {current && <span aria-hidden className="absolute inset-x-0 top-0 h-0.5 bg-accent" />}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={current}
-                title={tab.path}
-                onClick={() => store.activate(tab.id)}
-                onDoubleClick={() => store.pin(tab.id)}
-                onAuxClick={(e) => {
-                  if (e.button === 1) onClose(tab);
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setTarget(tab);
-                  menu.current?.showPopover({ source: e.currentTarget });
-                }}
-                className={`flex h-full max-w-52 items-center gap-1.5 pr-7 pl-3 text-meta transition-colors ${current ? "text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+              <FileIcon path={tab.path} />
+              <span
+                className={`truncate ${tab.transient ? "italic" : ""} ${shown || roomy ? "" : "sr-only"}`}
               >
-                <FileIcon path={tab.path} />
-                <span className={`truncate ${tab.transient ? "italic" : ""}`}>
-                  {nameOf(tab.path)}
+                {nameOf(tab.path)}
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-label={`Close ${nameOf(tab.path)}`}
+              title="Close"
+              onClick={() => void store.askClose(tab.id)}
+              className={`${panelTabClose} ${!mark && !shown ? "invisible group-focus-within:visible group-hover:visible" : ""} ${shown || roomy ? "" : "hidden!"}`}
+            >
+              {mark && (
+                <span className="group-hover:hidden">
+                  <TabMark tab={tab} />
                 </span>
-              </button>
-              <button
-                type="button"
-                aria-label={`Close ${nameOf(tab.path)}`}
-                title="Close"
-                onClick={() => onClose(tab)}
-                className="absolute top-1/2 right-1.5 grid size-5 -translate-y-1/2 place-items-center rounded-sm text-muted-foreground hover:bg-hover hover:text-foreground"
-              >
-                {mark && (
-                  <span className="grid place-items-center group-hover/tab:hidden">
-                    <TabMark tab={tab} />
-                  </span>
-                )}
-                <X
-                  aria-hidden
-                  className={`size-3.5 ${mark ? "hidden group-hover/tab:block" : current ? "" : "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"}`}
-                />
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+              )}
+              <X aria-hidden className={mark ? "hidden group-hover:block" : ""} />
+            </button>
+          </li>
+        );
+      })}
       <Menu
         ref={menu}
         label={target ? `Actions for ${nameOf(target.path)}` : "Tab actions"}
@@ -304,7 +320,7 @@ function TabStrip({
           type="button"
           role="menuitem"
           className={menuItem}
-          onClick={choose((tab) => onClose(tab))}
+          onClick={choose((tab) => void store.askClose(tab.id))}
         >
           Close
         </button>
@@ -333,16 +349,8 @@ function TabStrip({
         >
           Copy path
         </button>
-        <button
-          type="button"
-          role="menuitem"
-          className={menuItem}
-          onClick={choose((tab) => onReveal(tab.path))}
-        >
-          Show in files
-        </button>
       </Menu>
-    </div>
+    </>
   );
 }
 
@@ -672,7 +680,7 @@ function StatusBar({
     </>
   );
   return (
-    <div className="flex h-6 shrink-0 items-center gap-3 border-t border-border/60 files-chrome pr-1.5 pl-3 text-meta text-faint-foreground">
+    <div className="flex h-7 shrink-0 items-center gap-3 border-t border-border/60 pr-1.5 pl-3 text-meta text-faint-foreground">
       <span className="flex min-w-0 flex-1 items-center gap-1.5" title={readOnly}>
         {state}
       </span>
@@ -688,10 +696,7 @@ function StatusBar({
         </button>
       )}
       {wide && cursor?.indent && <span className="shrink-0">{cursor.indent}</span>}
-      {wide && <span className="shrink-0">UTF-8</span>}
-      {(wide || eol === "\r\n") && (
-        <span className="shrink-0">{eol === "\r\n" ? "CRLF" : "LF"}</span>
-      )}
+      {eol === "\r\n" && <span className="shrink-0">CRLF</span>}
       {cursor?.language && <span className="shrink-0 pr-1.5">{cursor.language}</span>}
     </div>
   );

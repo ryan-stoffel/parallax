@@ -2584,13 +2584,3 @@ body {
   max-width: 100%;
   height: auto;
 }
-
-/* The Files view's frame around the text (PLX-1428): the explorer, tabs, and status bar, a step
-   off the editor as VS Code's are. The sidebar's tone in light, and the raised surface in dark,
-   where the sidebar is the same black as the editor. */
-.files-chrome {
-  background-color: var(--sidebar);
-}
-:root.dark .files-chrome {
-  background-color: var(--surface);
-}
