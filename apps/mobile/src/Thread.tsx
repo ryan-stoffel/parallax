@@ -667,6 +667,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const parent = useMemo(() => (thread && state ? parentLink(state, thread) : undefined), [state, thread]);
   // When the current turn's prompt went, for "Working for".
   const since = transcript.items.findLast((i) => i.kind === "user")?.at;
+  const orchestrator = state?.orchestrators.find((o) => o.run === runId);
   // Nothing in yet: no rows, no prompt from here, and no error to say instead.
   const loading =
     !!computer && rows.length === 0 && !first && pending.length === 0 && error === undefined && (transcript.seq === 0 || computer.view.loading);
@@ -814,6 +815,14 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           watching={watching}
           queue={queue}
           held={held}
+          inbox={
+            orchestrator && "inbox" in (computer?.view.capabilities ?? {})
+              ? {
+                  orchestrator: orchestrator.id,
+                  open: () => navigation.navigate("OrchestratorInbox", { hostId, orchestrator: orchestrator.id }),
+                }
+              : undefined
+          }
           running={isRunning(transcript.run?.status)}
           stalled={stalled}
           original={
