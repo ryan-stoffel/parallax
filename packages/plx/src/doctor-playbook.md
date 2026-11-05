@@ -54,9 +54,10 @@ the agent CLIs it runs, git worktrees, and the SQLite store. The app is only a c
 - Each thread runs in its own git worktree under `worktrees/` in the data folder.
 - Parallax Connect joins computers signed in to one Parallax account. With `relay` on, plxd keeps
   one WebSocket to Parallax Relay (`relay.parallax.codes`), for phone notifications, webhooks, and
-  streams from the user's other devices. With `remote` on (Reach from anywhere), it listens on TCP
-  7341 with TLS, and the relay carries only ciphertext to that listener. `npx plx-cli connect` sets
-  this up. A new device or computer needs one approval with a 6-digit code.
+  streams from the user's other devices. The app calls `relay` Reach from anywhere. With `remote`
+  on (the app's Pair computers on this network), it listens on TCP 7341 with TLS, and the relay
+  carries only ciphertext to that listener. `npx plx-cli connect` sets this up. A new device or
+  computer needs one approval with a 6-digit code.
 - Tailscale is an optional direct route: with `connect` on, plxd also listens on TCP 7340 on its
   Tailscale address. A computer with the relay connected and `remote` listening doesn't need it.
 - SSH hosts are reached with `ssh … plxd attach`, falling back to plxd in `~/.parallax-plxd`,
@@ -74,7 +75,14 @@ Work from evidence, not assumption. In rough order of value:
   stderr go there too (on systemd older than 240, to `journalctl --user -u
   io.github.ryan-stoffel.parallax.plxd`). Useful lines: `listening` (with version, pid, socket),
   `not starting` and `could not start`, `the socket was gone`, `could not listen on`, `connected
-  to the relay`, `lost the relay connection`, `refused a tailnet connection`, and any `ERROR`.
+  to the relay`, `relay link lost` (with its `cause`), `client disconnected` (with its `route` and
+  `reason`), `refused a tailnet connection`, and any `ERROR`.
+- **The app's connection log**, `~/.parallax/desktop/logs/connection.log`, or Settings > About >
+  Connection log on the phone: `client_disconnect` and `client_connect` lines with route and reason.
+- **Connect's errors.** `npx plx-cli connect status` opens a real stream through the relay and names
+  the part that failed. The page at
+  https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/docs/connect/troubleshooting.md
+  lists each message and what to do.
 - **Ask the running plxd.** `plxd attach` takes JSON-RPC lines on stdin, but starts plxd if none
   runs, so check the context file first. Send `initialize` first:
 
@@ -132,7 +140,7 @@ Check these against the evidence before going deeper.
 | Claude or Cursor threads fail to start | The note `Node.js 22.16 or newer is required` (Claude) or `Node.js 22.13 or newer is required` (Cursor), or `Couldn't install the …` SDK | Install Node 22.16 or newer with npm |
 | API keys fail on Linux | `keychainUnavailable`: no unlocked Secret Service | Install and unlock a Secret Service (gnome-keyring, KeePassXC) |
 | This computer isn't on the account | The Relay check says `This computer isn't registered with the relay yet` | `npx plx-cli connect` on this computer, or sign in to the app here |
-| The relay can't be reached | The Relay check says `Parallax couldn't reach the relay: …`, or `lost the relay connection` in the log | Check this computer's network, proxy, or firewall for `relay.parallax.codes`; plxd keeps retrying |
+| The relay can't be reached | The Relay check says `Parallax couldn't reach the relay: …`, or `relay link lost` in the log | Check this computer's network, proxy, or firewall for `relay.parallax.codes`; plxd keeps retrying |
 | Clock errors from the relay | `this computer's clock is too far off the relay's` | Set the computer's clock to the right time |
 | Other devices can't reach this computer | The Remote access check says `not listening`, often a port in use | Free TCP 7341, or follow the reason it gives |
 | A new device or computer can't get in | `access/get` shows a `pending` device, or the other computer asks for a code | `npx plx-cli connect approve` approves a waiting device or shows a new code to type |

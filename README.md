@@ -14,6 +14,8 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/ryan-stoffel/parallax/releases">Releases</a>
   &nbsp;·&nbsp;
+  <a href="docs/connect/README.md">Parallax Connect</a>
+  &nbsp;·&nbsp;
   <a href="docs/PLAN.md">Plan</a>
 </p>
 
@@ -51,16 +53,14 @@ An orchestrator thread is for work bigger than one chat. It plans the work, star
 
 ## Your computers
 
-- **Local, SSH, or Tailscale.** The app attaches to `plxd` on this computer, on any machine you can `ssh` into, or across your tailnet with Parallax Connect.
+- **Local, SSH, or Parallax Connect.** The app attaches to `plxd` on this computer, on any machine you can `ssh` into, or on any computer on your Parallax account. [Parallax Connect](docs/connect/README.md) reaches a computer over its LAN or Tailscale address when it can, and through Parallax Relay when it can't, with TLS end to end, so the relay can't read your threads. Run `npx plx-cli connect` on a computer to add it.
 - **Triggers.** Schedules, webhooks, and pull request watches wake an agent while you're away.
 - **Agent tools.** Agents can drive a browser, render HTML, and run the iOS Simulator and Android Emulator.
 
 ## On your phone and in a browser
 
-In Settings > Connections, turn on Pair computers on this network, then choose Pair a device and enter the code it shows on the other device.
-
-- **Web app.** `plxd` serves the app over HTTPS. Turn on Open in a browser, open the address Settings shows, and enter the code.
-- **iOS app.** It finds your computers on the network, pairs with the same code, and lists your threads. Open one to read it, approve a request, or send a reply. A message sent offline goes out when the phone reconnects. The app lives in [`apps/mobile`](apps/mobile).
+- **iOS app.** Sign in to your Parallax account, and it lists your computers. Allow the phone once on a device you already use, and it reaches them all, at home or away. It can also pair with a computer on the same network, using the code from Pair a device. Open a thread to read it, approve a request, or send a reply. A message sent offline goes out when the phone reconnects. The app lives in [`apps/mobile`](apps/mobile). It isn't on the App Store.
+- **Web app.** `plxd` serves the app over HTTPS on your network, and there's no hosted version. In Settings > Connections, turn on Pair computers on this network and Open in a browser, then choose Pair a device. Open the address Settings shows, and enter the code.
 
 <p align="center">
   <img src="docs/images/readme/web.png" alt="The web app in a browser, showing a finished thread" width="520">
