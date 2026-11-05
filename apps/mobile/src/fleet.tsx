@@ -22,7 +22,7 @@ import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/ren
 import type { AccessState, HostUpdateResult, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
-import { lacks, type Lists } from "./access";
+import { lacks } from "./access";
 import { listHosts, relayCap, type AccountHosts, type Gate, type Listed } from "./accountHosts";
 import { allowThisPhone, askToAllow, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
 import { showAlert } from "./dialogStore";
@@ -30,7 +30,7 @@ import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
 import { savePushKey } from "./push";
-import { toAsk } from "./setup";
+import { keeper, toAsk } from "./setup";
 
 /** How often the account's computers are listed while the app is in front. */
 const LOOK_MS = 15_000;
@@ -357,9 +357,7 @@ export function FleetProvider({
       keepers.map(async ([id, host]) => ({ id, answer: await host.request("access/get", {}) })),
     );
     const lists = answers.flatMap(({ id, answer }) =>
-      "error" in answer
-        ? []
-        : [{ id: id.replace(/^account:/, ""), connection: id, lists: answer.result as AccessState as Lists }],
+      "error" in answer ? [] : keeper(latest.current.machines, id, answer.result),
     );
     if (!lists.length) return;
     for (const { connection, lists: theirs, union } of await accounts.absorb(lists))

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { commitment, lacks, REQUEST_LIFETIME_MS } from "./access";
 import { AccountHosts, Denied, listHosts, relayProblem } from "./accountHosts";
 import { base64url } from "./pairing";
+import { keeper } from "./setup";
 
 /** Each host's bridge port, and how it answers a path. A rejected answer is a lost connection. */
 type Answer = { status: number; json?: object } | Error;
@@ -209,11 +210,46 @@ test("a typed code on a computer that first signed in with no tap counts from th
 
 test("a computer paired on the LAN gives lists to every computer, and isn't named as a host", async () => {
   const accounts = await load();
-  const paired = { id: "paired-abc", lists: { ...none, approvedClients: ["k"], allowedHosts: ["tapped"] } };
+  const paired = { id: "paired-abc", paired: true, lists: { ...none, approvedClients: ["k"], allowedHosts: ["tapped"] } };
   const { union } = of(await accounts.absorb([paired, { id: "other", lists: none }]), "other");
   expect(union.approvedClients).toEqual(["k"]);
   expect(union.approvedHosts).toEqual([]);
   expect(accounts.allowed).toEqual(["tapped"]);
+});
+
+test("a fake computer whose id starts with paired- proves nothing, even with a real pairing's id", async () => {
+  const accounts = await load();
+  const machines = [
+    { id: "paired-abc", name: "paired", paired: {} as never },
+    { id: "account:paired-abc", name: "fake", account: { hostId: "paired-abc", routes: [] } },
+    { id: "account:paired-fake", name: "fake", account: { hostId: "paired-fake", routes: [] } },
+    { id: "account:real", name: "real", account: { hostId: "real", routes: [] } },
+  ];
+  const real = { ...none, approvedHosts: ["real"] };
+  const known = await accounts.absorb([
+    ...keeper(machines, "account:real", real),
+    ...keeper(machines, "paired-abc", { ...none, approvedClients: ["k"] }),
+    ...keeper(machines, "account:paired-abc", { ...fakeLists("real"), allowedHosts: ["real"] }),
+    ...keeper(machines, "account:paired-fake", { ...fakeLists("real"), allowedHosts: ["real"] }),
+  ]);
+  const { union } = of(known, "real");
+  // The real pairing's list counts, and neither fake's does.
+  expect(union).toEqual({ ...real, approvedClients: ["k"] });
+  expect(accounts.allowed).toEqual([]);
+});
+
+test("a malformed answer to access/get is no list, and the others still count", async () => {
+  const accounts = await load();
+  const machines = [{ id: "account:real", name: "real", account: { hostId: "real", routes: [] } }];
+  for (const malformed of [{}, null, [], "lists", { ...none, approvedHosts: [1] }, { ...none, allowedHosts: "real" }])
+    expect(keeper(machines, "account:fake", malformed)).toEqual([]);
+
+  const known = await accounts.absorb([
+    ...keeper(machines, "account:fake", {}),
+    ...keeper(machines, "account:real", { ...none, approvedHosts: ["new"] }),
+  ]);
+  expect(known.map((each) => each.id)).toEqual(["real"]);
+  expect(accounts.trusts("new")).toBe(true);
 });
 
 test("a restriction a proved computer states outlives it going offline, and a relaunch", async () => {

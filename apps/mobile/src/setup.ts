@@ -1,6 +1,7 @@
 // What the phone keeps about its computers (machines.json), and how a setup from an older version
 // moves to the account (0091). Pure, so it's tested without React Native.
 
+import { asLists } from "./access";
 import type { Listed } from "./accountHosts";
 import type { Saved } from "./host";
 
@@ -67,6 +68,17 @@ export function withListed(
     .filter((l) => !hidden.includes(accountId(l.hostId)) && !kept.some((m) => m.id === accountId(l.hostId)))
     .map((l) => ({ id: accountId(l.hostId), name: l.name || "Computer", account: { hostId: l.hostId, routes: [] } }));
   return added.length || kept.length < known.length ? [...kept, ...added] : known;
+}
+
+/**
+ * Computer `connection`'s answer to `access/get`, as `AccountHosts.absorb` takes it: none when it's
+ * malformed, and LAN-paired only if the phone's own record of that connection says so.
+ */
+export function keeper(machines: Machine[], connection: string, result: unknown) {
+  const lists = asLists(result);
+  if (!lists) return [];
+  const paired = !!machines.find((m) => m.id === connection)?.paired;
+  return [{ id: connection.replace(/^account:/, ""), connection, paired, lists }];
 }
 
 /**

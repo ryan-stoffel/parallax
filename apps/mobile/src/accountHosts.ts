@@ -20,6 +20,7 @@ import {
   setupRun,
   sourcesFor,
   type HostBook,
+  type Known,
   type Lists,
 } from "./access";
 import type { RelayUsage } from "../../desktop/src/protocol/generated/protocol";
@@ -240,10 +241,9 @@ export class AccountHosts {
    * write, as it may be offline next time. Another computer's aren't, as a fake one could then
    * restrict a real one, and those count only for the computer that holds them.
    */
-  async absorb<T extends { id: string; lists: Lists }>(known: T[]): Promise<(T & { union: Lists })[]> {
-    const proved = [...this.proved, ...known.map((each) => each.id).filter((id) => id.startsWith("paired-"))];
+  async absorb<T extends Known>(known: T[]): Promise<(T & { union: Lists })[]> {
     const marks = known
-      .filter((each) => proved.includes(each.id) && !this.allowed.includes(each.id))
+      .filter((each) => (each.paired || this.proved.includes(each.id)) && !this.allowed.includes(each.id))
       .flatMap((each) => each.lists.allowedHosts ?? []);
     const allowed = [...new Set([...this.allowed, ...marks])];
     const listed = known
@@ -257,7 +257,7 @@ export class AccountHosts {
     return known.map((each) => ({
       ...each,
       union: merged(
-        sourcesFor(each, known, proved, allowed).map((source) => source.lists),
+        sourcesFor(each, known, this.proved, allowed).map((source) => source.lists),
         this.proved,
         allowed,
       ),

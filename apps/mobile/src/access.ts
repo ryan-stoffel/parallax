@@ -128,16 +128,44 @@ export interface Lists {
   allowedHosts?: string[];
 }
 
+const strings = (value: unknown) =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/**
+ * `result`, a computer's answer to `access/get`, as lists, or undefined when it's malformed, as a
+ * fake computer's can be. An older plxd leaves out `allowedHosts`.
+ */
+export function asLists(result: unknown): Lists | undefined {
+  const lists = (result ?? {}) as Record<keyof Lists, unknown>;
+  const whole =
+    strings(lists.approvedClients) &&
+    strings(lists.removedClients) &&
+    strings(lists.approvedHosts) &&
+    (lists.allowedHosts === undefined || strings(lists.allowedHosts));
+  return whole ? (lists as unknown as Lists) : undefined;
+}
+
+/**
+ * A connected computer's lists, under the id its connection pins. `paired` says the connection is a
+ * LAN pairing, by the phone's own record of it: the relay picks a listed computer's id, so no id
+ * can show that.
+ */
+export interface Known {
+  id: string;
+  lists: Lists;
+  paired?: boolean;
+}
+
 /**
  * Which of `known` may add to `target`'s lists (0091): `target` itself, the computers its own list
- * vouches for, following their lists, and those this phone `proved` with a typed or paired code.
- * A phone can't tell a fake computer that signed it in with no tap from a real one approved on
- * another device, so each computer's list decides what it accepts: nothing real lists a fake one,
- * so a fake's keys, removals, and host ids reach only fakes. A computer marked by one of these, or
- * in `allowed` (the marks this phone keeps), takes lists and adds none, as it may be a fake one the
- * user clicked through.
+ * vouches for, following their lists, and those this phone proved: `proved`, with a typed code, and
+ * those `paired` on the LAN with one. A phone can't tell a fake computer that signed it in with no
+ * tap from a real one approved on another device, so each computer's list decides what it accepts:
+ * nothing real lists a fake one, so a fake's keys, removals, and host ids reach only fakes. A
+ * computer marked by one of these, or in `allowed` (the marks this phone keeps), takes lists and
+ * adds none, as it may be a fake one the user clicked through.
  */
-export function sourcesFor<T extends { id: string; lists: Lists }>(
+export function sourcesFor<T extends Known>(
   target: T,
   known: T[],
   proved: string[],
@@ -147,7 +175,8 @@ export function sourcesFor<T extends { id: string; lists: Lists }>(
   // Each new mark starts the walk again, as a marked computer may have vouched for another.
   for (;;) {
     const vouched = new Set([target.id, ...proved]);
-    const adds = (each: T) => each === target || (vouched.has(each.id) && !marked.has(each.id));
+    const adds = (each: T) =>
+      each === target || ((each.paired || vouched.has(each.id)) && !marked.has(each.id));
     for (let size = -1; size !== vouched.size; ) {
       size = vouched.size;
       for (const each of known.filter(adds)) for (const id of each.lists.approvedHosts) vouched.add(id);
