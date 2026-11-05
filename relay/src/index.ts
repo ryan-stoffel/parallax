@@ -22,7 +22,7 @@ import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
 import { forwarded, HOOK_METHODS, type HookReply, HostRelay, readCapped } from "./host";
 import { logged, scrub, short } from "./log";
-import { StreamRelay } from "./stream";
+import { streamObject, StreamRelay } from "./stream";
 import { UserAccount } from "./user";
 
 export { HostRelay, StreamRelay, UserAccount };
@@ -87,12 +87,12 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   if (action === "host") return host.fetch(request);
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
     return json(426, { error: "upgrade_required" });
-  const streamOf = (id: string) => env.STREAMS.get(env.STREAMS.idFromName(`${hostId}/${id}`));
   if (action === "streams") {
     const token = new URL(request.url).searchParams.get("token") ?? "";
-    if (!/^[0-9a-f-]{36}$/.test(stream)) return json(404, { error: "not_found" });
-    const url = `https://stream/host?token=${encodeURIComponent(token)}`;
-    return streamOf(stream).fetch(url, { headers: { upgrade: "websocket" } });
+    const object = streamObject(env, hostId, stream);
+    if (!object) return json(404, { error: "not_found" });
+    const url = `https://stream/host?host=${hostId}&token=${encodeURIComponent(token)}`;
+    return object.fetch(url, { headers: { upgrade: "websocket" } });
   }
   const ticket = new URL(request.url).searchParams.get("ticket");
   let opened: Awaited<ReturnType<HostRelay["open"]>>;
@@ -105,7 +105,9 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
     opened = await host.open(user);
   }
   if ("error" in opened) return json(opened.status, { error: opened.error });
-  return streamOf(opened.stream).fetch("https://stream/client", { headers: { upgrade: "websocket" } });
+  const object = streamObject(env, hostId, opened.stream);
+  if (!object) return json(404, { error: "not_found" });
+  return object.fetch("https://stream/client", { headers: { upgrade: "websocket" } });
 }
 
 const routes = {

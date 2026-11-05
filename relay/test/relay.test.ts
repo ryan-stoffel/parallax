@@ -71,8 +71,8 @@ function openStreams(host: Host) {
   );
 }
 
-function streamObject(host: Host, stream: string) {
-  return streams.get(streams.idFromName(`${host.id}/${stream}`));
+function streamObject(stream: string) {
+  return streams.get(streams.idFromString(stream));
 }
 
 const hosts = testEnv.HOSTS;
@@ -249,7 +249,7 @@ describe("streams", () => {
     expect(await side.closed).toBe(1000);
     // The stream's object reports its close, which frees its place, and keeps nothing.
     await expect.poll(() => openStreams(host)).toEqual({});
-    const left = await runInDurableObject(streamObject(host, open.stream), async (_: StreamRelay, state) =>
+    const left = await runInDurableObject(streamObject(open.stream), async (_: StreamRelay, state) =>
       (await state.storage.list()).size,
     );
     expect(left).toBe(0);
@@ -304,9 +304,67 @@ describe("streams", () => {
     const { host, token, control } = await online();
     const client = opened(await connect(host, token));
     const open = JSON.parse((await control.next()) as string) as Open;
-    expect(await runDurableObjectAlarm(streamObject(host, open.stream))).toBe(true);
+    expect(await runDurableObjectAlarm(streamObject(open.stream))).toBe(true);
     expect(await client.closed).toBe(4408);
     await expect.poll(() => openStreams(host)).toEqual({});
+  });
+
+  it("refuses a stream id that's malformed or another namespace's, without throwing", async () => {
+    const { host } = await online();
+    const ids = ["nope", "0".repeat(64), "f".repeat(63), "A".repeat(64), hosts.newUniqueId().toString()];
+    for (const id of ids) {
+      const refused = await socket(`/v1/hosts/${host.id}/streams/${id}?token=x`);
+      expect(refused instanceof Response && refused.status).toBe(404);
+    }
+    const none = await socket(`/v1/hosts/${host.id}/streams`);
+    expect(none instanceof Response && none.status).toBe(404);
+  });
+
+  it("refuses plxd's side of a stream through another host's path, even with its token", async () => {
+    const { host, token, control } = await online();
+    const { open } = await stream(host, token, control);
+    expect(open.stream).toMatch(/^[0-9a-f]{64}$/);
+    const other = await newHost();
+    const refused = await socket(`/v1/hosts/${other.id}/streams/${open.stream}?token=${open.token}`);
+    expect(refused instanceof Response && refused.status).toBe(404);
+    opened(await join(host, open));
+  });
+
+  it("still serves and closes a stream from before unique ids, whose object has a name", async () => {
+    const { host, token } = await online();
+    const named = async (spare: boolean) => {
+      const id = crypto.randomUUID();
+      const secret = crypto.randomUUID();
+      const object = streams.get(streams.idFromName(`${host.id}/${id}`));
+      await object.arm({ hostId: host.id, stream: id, tokenHash: await sha256(secret) });
+      await runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (_: HostRelay, state) => {
+        const listed = (await state.storage.get<Record<string, object>>("streams")) ?? {};
+        await state.storage.put("streams", { ...listed, [id]: spare ? { spare } : {} });
+      });
+      return { object, open: { t: "open", stream: id, token: secret } };
+    };
+    const kept = (object: DurableObjectStub<StreamRelay>) =>
+      runInDurableObject(object, async (_: StreamRelay, state) => (await state.storage.list()).size);
+
+    // A client takes it as the spare, plxd joins it, and its close reports back to free its place.
+    const spare = await named(true);
+    const client = opened(await connect(host, token));
+    const side = opened(await join(host, spare.open));
+    expect(await client.next()).toBe("ready");
+    expect(await side.next()).toBe("ready");
+    client.ws.close(1000);
+    expect(await side.closed).toBe(1000);
+    await expect.poll(() => openStreams(host)).toEqual({});
+    expect(await kept(spare.object)).toBe(0);
+
+    // One still listed when plxd reconnects, as after a deploy, closes and keeps nothing.
+    const listed = await named(false);
+    const left = opened(await join(host, listed.open));
+    const { control: again } = await connectHost(host);
+    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready" });
+    expect(await left.closed).toBe(1000);
+    expect(await openStreams(host)).toEqual({});
+    expect(await kept(listed.object)).toBe(0);
   });
 
   it("forgets the streams of plxd's last control connection when it reconnects", async () => {
@@ -586,7 +644,7 @@ describe("cost ceilings", () => {
       (relay as unknown as { traffic?: object }).traffic = undefined;
     });
     // Two frames short of a report: each one-byte frame counts as 16 KiB.
-    await runInDurableObject(streamObject(host, first.open.stream), (relay: StreamRelay) => {
+    await runInDurableObject(streamObject(first.open.stream), (relay: StreamRelay) => {
       (relay as unknown as { unreported: number }).unreported = REPORT_BYTES - 2 * MIN_FRAME_BYTES;
     });
     first.client.ws.send(new Uint8Array([0]));
@@ -614,7 +672,7 @@ describe("cost ceilings", () => {
     };
     for (let i = 0; i < 3; i++) await send(i);
     // Its in-memory state goes; the WebSockets hibernate, open.
-    await evictDurableObject(streamObject(host, open.stream));
+    await evictDurableObject(streamObject(open.stream));
     await send(3);
     client.ws.close(1000);
     await side.closed;
