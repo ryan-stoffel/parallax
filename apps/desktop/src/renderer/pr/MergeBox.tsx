@@ -180,7 +180,6 @@ export function MergeBox({
             <button
               type="button"
               aria-expanded={folds ? checksOpen : undefined}
-              title={[row.label, row.detail].filter(Boolean).join(" · ")}
               onClick={onRow[row.key]}
               className="flex w-full items-start gap-2.5 px-3.5 py-3 text-left transition-colors hover:bg-hover"
             >
@@ -199,7 +198,7 @@ export function MergeBox({
             </button>
             {folds && (
               <Reveal open={checksOpen}>
-                <div className="flex flex-col gap-2 px-3 pb-3">
+                <div className="flex flex-col gap-1.5 border-t border-border/60 px-1.5 py-1.5">
                   {groupChecks(checks).map((g) => (
                     <CheckGroup key={g.name} group={g} now={now} actions={checkActions} />
                   ))}

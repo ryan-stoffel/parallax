@@ -47,6 +47,12 @@ const TREE_MIN_WIDTH = 900;
 /** The file tree's width beside the diff. */
 const TREE_WIDTH = 256;
 
+/** Below this width, the bar drops its line count, which the header above also has. */
+const TIGHT_WIDTH = 400;
+
+/** Below this width, the bar also drops its viewed count, which each file's checkbox shows. */
+const TIGHTER_WIDTH = 360;
+
 /** How far into the diff counts as reading it, past a stray nudge at its top. */
 const SCROLLED_PAST = 40;
 
@@ -137,6 +143,7 @@ export function ChangesDiff({
   comments,
   actions,
   leading,
+  roomForActions,
   onScrolled,
   tree,
 }: {
@@ -151,6 +158,8 @@ export function ChangesDiff({
   comments?: DiffComments;
   actions?: ReactNode;
   leading?: ReactNode;
+  /** `actions` need more of a narrow bar than usual, so its counts give way. */
+  roomForActions?: boolean;
   /** Told whether the reader has scrolled into the diff, or back to its top. */
   onScrolled?: (scrolled: boolean) => void;
   tree?: boolean;
@@ -178,6 +187,9 @@ export function ChangesDiff({
   const hasTree = !!tree && files.length > 1;
   const treeFits = width >= TREE_MIN_WIDTH;
   const compact = width < COMPACT_WIDTH;
+  // What the narrowest bars let go of, in turn. Unmeasured, nothing goes.
+  const tight = width > 0 && (width < TIGHT_WIDTH || (compact && !!roomForActions));
+  const tighter = width > 0 && (width < TIGHTER_WIDTH || (compact && !!roomForActions));
   const treeBeside = hasTree && treeFits && treeOn;
   const narrow = width - (treeBeside ? TREE_WIDTH : 0) < SPLIT_MIN_WIDTH;
   const layout = narrow ? "unified" : chosen;
@@ -370,13 +382,26 @@ export function ChangesDiff({
     localStorage.setItem(TREE_KEY, on ? "on" : "off");
     setTreeOn(on);
   };
-  const stat = (
-    <DiffStat
-      added={added}
-      removed={removed}
-      title={kinds.map((k) => `${k.kind}: +${k.added} −${k.removed}`).join("\n") || undefined}
-    />
-  );
+  // Beside the diff there's room to list the kinds in the bar. Otherwise they open from the count.
+  const stat =
+    treeFits || kinds.length < 2 ? (
+      <DiffStat added={added} removed={removed} />
+    ) : (
+      <span tabIndex={0} className="group/stat relative shrink-0 rounded-sm outline-offset-2">
+        <DiffStat added={added} removed={removed} />
+        <span
+          role="tooltip"
+          className="invisible absolute top-full left-0 z-30 mt-2 w-44 rounded-lg border border-border bg-surface p-2 opacity-0 shadow-composer transition-opacity group-hover/stat:visible group-hover/stat:opacity-100 group-focus/stat:visible group-focus/stat:opacity-100"
+        >
+          {kinds.map((k) => (
+            <span key={k.kind} className="flex items-center justify-between gap-3 py-0.5">
+              <span className="text-muted-foreground">{k.kind}</span>
+              <DiffStat added={k.added} removed={k.removed} />
+            </span>
+          ))}
+        </span>
+      </span>
+    );
   return (
     <div ref={root} className="flex min-h-0 flex-1 flex-col">
       <div
@@ -394,7 +419,7 @@ export function ChangesDiff({
                 {files.length} {files.length === 1 ? "file" : "files"}
               </span>
             )}
-            {stat}
+            {!tight && stat}
             {treeFits && kinds.length > 1 && (
               <span className="flex min-w-0 items-center gap-3 overflow-hidden pl-1 whitespace-nowrap text-faint-foreground">
                 {kinds.map((k) => (
@@ -417,7 +442,7 @@ export function ChangesDiff({
           </icons.warning>
         )}
         <span className="flex-1" />
-        {onViewed && files.length > 0 && (
+        {onViewed && files.length > 0 && !tighter && (
           <span title={`${seen} of ${files.length} files viewed`} className="shrink-0 tabular-nums">
             {seen}/{files.length}
             {compact ? "" : " viewed"}
