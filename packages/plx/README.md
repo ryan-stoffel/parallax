@@ -42,7 +42,7 @@ Options:
 
 ## Scripts
 
-`plx connect`, `scripts/connect.sh`, and `scripts/connect.ps1` run with no terminal, which for plx means stdin isn't one. `connect.sh` with no terminal needs plx-cli 0.7.0 or newer on npm, and fails without it.
+`plx connect`, `scripts/connect.sh`, and `scripts/connect.ps1` run with no terminal, which for plx means stdin isn't one. With no terminal, both scripts need plx-cli 0.7.0 or newer on npm, and fail without it.
 
 - No browser opens. plx prints the sign-in link on its own indented line, which works from any device.
 - plx reads the code from stdin, one line per try, up to 3 tries. When input ends first, it says no code was entered and exits 1. `curl ... | sh` leaves nothing on stdin, so to pipe a code in, download `connect.sh` and run it with `sh connect.sh < codes`.

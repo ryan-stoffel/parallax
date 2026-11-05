@@ -95,7 +95,8 @@ test("connect.ps1 with no terminal runs plx, outlasts npm's stderr, and passes o
     const command = `Get-Content -Raw -LiteralPath '${script("connect.ps1")}' | Invoke-Expression; Connect-Parallax --channel stable`;
     const { code, stdout, stderr } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], env);
     assert.equal(code, 7, `exit ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
-    assert.equal(readFileSync(recorded, "utf8").trim(), "-y plx-cli@latest connect --channel nightly --channel stable");
+    // Quoted as cmd sees it, so only a plx that fails at end of input runs.
+    assert.equal(readFileSync(recorded, "utf8").trim(), '-y "plx-cli@0.7.0 - 99" connect --channel nightly --channel stable');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

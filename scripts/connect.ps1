@@ -58,6 +58,10 @@ function Connect-Parallax {
   # When a caller captures stderr, Windows PowerShell makes each of a command's stderr lines an
   # error, and 'Stop' would end setup at npm's first warning.
   $ErrorActionPreference = 'Continue'
-  & $npx -y plx-cli@latest connect --channel nightly @args
+  # With no terminal, plx-cli before 0.7.0 would exit 0 at end of input with nothing signed in, so
+  # npx fails rather than run one. A hyphen range, because cmd runs npx.cmd and takes > and ^ as its
+  # own. Its spaces make PowerShell quote it, and npx.cmd passes the quotes on.
+  $plx = if ([Console]::IsInputRedirected) { 'plx-cli@0.7.0 - 99' } else { 'plx-cli@latest' }
+  & $npx -y $plx connect --channel nightly @args
   exit $LASTEXITCODE
 }
