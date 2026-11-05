@@ -83,7 +83,8 @@ class PinnedTlsModule : Module() {
 
     /**
      * The URL of file `name` in a folder of the app's files: the outbox's, whose messages belong to
-     * this phone's pairing. `android:allowBackup` is off in app.json, so nothing here is backed up.
+     * this phone's pairing. `android:allowBackup` is off in app.json, so no cloud backup holds it.
+     * expo-file-system can create a file here, as it can't in `noBackupFilesDir`.
      */
     Function("privateFile") { name: String ->
       val folder = File(context.filesDir, BACKUP_FREE_FOLDER)

@@ -366,7 +366,7 @@ jobs:
   # The mobile app on Android (PLX-1370): its debug APK, pinned-tls's tests on the JVM, and on an
   # emulator those tests and the real app. Slow, so only when the PR changes the mobile app.
   android:
-    needs: changes
+    needs: [changes, plxd]
     if: needs.changes.outputs.mobile == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -404,6 +404,17 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-android-${{ hashFiles('apps/mobile/pnpm-lock.yaml', 'apps/mobile/modules/pinned-tls/android/build.gradle') }}
           restore-keys: gradle-android-
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plxd-ubuntu-24.04
+          path: ${{ runner.temp }}/plxd
+
+      # Artifacts drop the executable bit.
+      - name: Point the tests at plxd
+        run: |
+          chmod +x "$RUNNER_TEMP/plxd/plxd"
+          echo "PLXD_PATH=$RUNNER_TEMP/plxd/plxd" >> "$GITHUB_ENV"
 
       - name: Use JDK 17
         run: echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"

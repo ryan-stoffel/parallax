@@ -141,11 +141,11 @@ class Answer(val status: Int?, val body: String, val refused: Boolean, val seen:
 const val CREDENTIAL = "DPoP credential-that-must-not-leak"
 
 /** A pinned GET with the credential, as the app's `request` makes it. */
-fun pinnedGet(port: Int, pin: String?, preamble: ByteArray? = null): Answer {
+fun pinnedGet(port: Int, pin: String?, preamble: ByteArray? = null, host: String = "127.0.0.1"): Answer {
   val pinning = Pinning(pin)
   val client = pinning.client(10.0, preamble)
   val request = Request.Builder()
-    .url("https://127.0.0.1:$port/.well-known/parallax")
+    .url("https://$host:$port/.well-known/parallax")
     .header("Authorization", CREDENTIAL)
     .build()
   return try {
