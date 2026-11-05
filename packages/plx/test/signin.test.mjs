@@ -348,6 +348,7 @@ test("polling stops when the code's own lifetime ends, even if Clerk never says 
 for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceClerk>[0]][]} */ ([
   // What Clerk's development instance answers today: the instance offers the grant, this client doesn't have it.
   ["the device endpoint refuses this OAuth application", { deviceStatus: 400, device: { error: "invalid_grant", error_description: CLERK_REFUSAL } }],
+  ["the device endpoint answers RFC 6749's unauthorized_client", { deviceStatus: 400, device: { error: "unauthorized_client" } }],
   ["discovery doesn't list the device endpoint", { metadata: { token_endpoint: "https://clerk.example/oauth/token", grant_types_supported: [DEVICE_GRANT] } }],
   ["discovery doesn't list the grant", { metadata: { device_authorization_endpoint: "https://clerk.example/oauth/device_authorization", token_endpoint: "https://clerk.example/oauth/token", grant_types_supported: ["authorization_code"] } }],
 ])) {

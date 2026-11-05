@@ -208,9 +208,9 @@ export async function signIn(options) {
 /**
  * Asks Clerk for a device code, or resolves to undefined when the grant isn't available, so this
  * sign-in has to use the paste flow: discovery doesn't list it, or the device endpoint answers 400
- * `invalid_grant`, as Clerk does for an OAuth application without it. Discovery only says the
- * instance offers the grant, so it can't settle this alone. Any other failure rejects, since it
- * would most likely stop the paste flow too.
+ * `invalid_grant`, as Clerk does for an OAuth application without it, or `unauthorized_client`,
+ * RFC 6749's code for that. Discovery only says the instance offers the grant, so it can't settle
+ * this alone. Any other failure rejects, since it would most likely stop the paste flow too.
  * @param {Clerk} clerk
  * @returns {Promise<DeviceGrant | undefined>}
  */
@@ -230,7 +230,7 @@ async function startDeviceGrant(clerk) {
   if (!Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) return undefined;
   const res = await request(endpoint, { method: "POST", body: new URLSearchParams({ client_id: clerk.clientId, scope: SCOPES }) });
   const body = /** @type {Record<string, unknown>} */ (await res.json().catch(() => ({})));
-  if (res.status === 400 && body["error"] === "invalid_grant") return undefined;
+  if (res.status === 400 && (body["error"] === "invalid_grant" || body["error"] === "unauthorized_client")) return undefined;
   const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUri, verification_uri_complete: complete, expires_in: expiresIn, interval } = body;
   if (!res.ok || typeof deviceCode !== "string" || typeof userCode !== "string" || typeof verificationUri !== "string" || typeof expiresIn !== "number") {
     const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");
