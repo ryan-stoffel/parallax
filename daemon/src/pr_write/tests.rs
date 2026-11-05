@@ -2,11 +2,11 @@ use std::path::Path;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
-use parallax_protocol::{PrAction, PrMergeMethod, PrReviewEvent, PrWrite};
+use parallax_protocol::{PrAction, PrDiffSide, PrMergeMethod, PrReviewEvent, PrWrite};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use super::{BUDGET, Failed, GAP, QUEUE_WAIT, act_args, commands, paced};
+use super::{BUDGET, Failed, GAP, QUEUE_WAIT, act_args, commands, paced, refusal};
 use crate::pr_media::{Limit, limit};
 use crate::worktree::PrError;
 
@@ -296,4 +296,164 @@ fn viewed_marks_and_unmarks_a_file_with_graphql_variables() {
     assert_eq!(marked[6], "-f");
     assert_eq!(marked[7], "path=@odd/-path.rs");
     assert!(args(false)[3].contains("unmarkFileAsViewed"));
+}
+
+const PR: &str = "https://github.com/me/app/pull/7";
+
+/// The one step `write` makes, and the body it reads from its file.
+fn one_step(write: PrWrite) -> (Vec<String>, Option<String>) {
+    let (mut steps, body) = commands(PR, write, Path::new("/tmp/body")).unwrap();
+    assert_eq!(steps.len(), 1);
+    (steps.remove(0), body)
+}
+
+/// The value after the flag that sets `name`, as `-f name=value` or `-F name=value`.
+fn field<'a>(step: &'a [String], name: &str) -> Option<&'a str> {
+    let prefix = format!("{name}=");
+    step.iter()
+        .find_map(|arg| arg.strip_prefix(prefix.as_str()))
+}
+
+fn comment(line: Option<u64>, start_line: Option<u64>, side: Option<PrDiffSide>) -> PrWrite {
+    PrWrite::AddReviewComment {
+        pull_request_id: "PR_1".to_owned(),
+        path: "src/main.rs".to_owned(),
+        body: "Why?".to_owned(),
+        line,
+        start_line,
+        side,
+        head_sha: None,
+    }
+}
+
+#[test]
+fn a_review_comment_goes_to_the_pending_review_with_its_range_and_side() {
+    let (step, body) = one_step(comment(Some(14), Some(12), Some(PrDiffSide::Left)));
+    assert_eq!(body.as_deref(), Some("Why?"));
+    assert!(
+        field(&step, "query")
+            .unwrap()
+            .contains("addPullRequestReviewThread")
+    );
+    assert_eq!(field(&step, "pr"), Some("PR_1"));
+    assert_eq!(field(&step, "path"), Some("src/main.rs"));
+    assert_eq!(field(&step, "body"), Some("@/tmp/body"));
+    assert_eq!(field(&step, "subject"), Some("LINE"));
+    assert_eq!(field(&step, "line"), Some("14"));
+    assert_eq!(field(&step, "side"), Some("LEFT"));
+    assert_eq!(field(&step, "startLine"), Some("12"));
+    assert_eq!(field(&step, "startSide"), Some("LEFT"));
+}
+
+#[test]
+fn a_review_comment_with_no_side_is_on_the_new_side_and_with_no_line_on_the_file() {
+    let (step, _) = one_step(comment(Some(14), None, None));
+    assert_eq!(field(&step, "side"), Some("RIGHT"));
+    assert_eq!(field(&step, "startLine"), None);
+    let (step, _) = one_step(comment(None, None, None));
+    assert_eq!(field(&step, "subject"), Some("FILE"));
+    assert_eq!(field(&step, "line"), None);
+    assert_eq!(field(&step, "side"), None);
+}
+
+#[test]
+fn a_single_comment_posts_at_once_on_the_head_commit() {
+    let single = |line| PrWrite::AddReviewComment {
+        pull_request_id: "PR_1".to_owned(),
+        path: "src/main.rs".to_owned(),
+        body: "Why?".to_owned(),
+        line,
+        start_line: None,
+        side: Some(PrDiffSide::Right),
+        head_sha: Some("abc123".to_owned()),
+    };
+    let (step, _) = one_step(single(Some(14)));
+    assert!(step.contains(&"repos/me/app/pulls/7/comments".to_owned()));
+    assert_eq!(field(&step, "commit_id"), Some("abc123"));
+    assert_eq!(field(&step, "line"), Some("14"));
+    assert_eq!(field(&step, "side"), Some("RIGHT"));
+    assert_eq!(field(&step, "subject_type"), None);
+    let (step, _) = one_step(single(None));
+    assert_eq!(field(&step, "subject_type"), Some("file"));
+}
+
+#[test]
+fn an_empty_review_comment_or_a_range_with_no_end_is_refused() {
+    let empty = PrWrite::AddReviewComment {
+        pull_request_id: "PR_1".to_owned(),
+        path: "a".to_owned(),
+        body: "  ".to_owned(),
+        line: Some(1),
+        start_line: None,
+        side: None,
+        head_sha: None,
+    };
+    assert!(commands(PR, empty, Path::new("/tmp/body")).is_err());
+    assert!(commands(PR, comment(None, Some(1), None), Path::new("/tmp/body")).is_err());
+}
+
+#[test]
+fn a_pending_comment_is_edited_and_deleted_by_its_id() {
+    let (step, body) = one_step(PrWrite::EditReviewComment {
+        comment_id: "PRRC_1".to_owned(),
+        body: "Better".to_owned(),
+    });
+    assert!(
+        field(&step, "query")
+            .unwrap()
+            .contains("updatePullRequestReviewComment")
+    );
+    assert_eq!(field(&step, "comment"), Some("PRRC_1"));
+    assert_eq!(body.as_deref(), Some("Better"));
+    let (step, body) = one_step(PrWrite::DeleteReviewComment {
+        comment_id: "PRRC_1".to_owned(),
+    });
+    assert!(
+        field(&step, "query")
+            .unwrap()
+            .contains("deletePullRequestReviewComment")
+    );
+    assert_eq!(body, None);
+}
+
+#[test]
+fn a_pending_review_is_submitted_with_its_verdict_or_discarded() {
+    let submit = |event| PrWrite::SubmitReview {
+        review_id: "PRR_1".to_owned(),
+        event,
+        body: String::new(),
+    };
+    for (event, name) in [
+        (PrReviewEvent::Comment, "COMMENT"),
+        (PrReviewEvent::Approve, "APPROVE"),
+        (PrReviewEvent::RequestChanges, "REQUEST_CHANGES"),
+    ] {
+        let (step, _) = one_step(submit(event));
+        assert!(
+            field(&step, "query")
+                .unwrap()
+                .contains("submitPullRequestReview")
+        );
+        assert_eq!(field(&step, "review"), Some("PRR_1"));
+        assert_eq!(field(&step, "event"), Some(name));
+    }
+    assert!(commands(PR, submit(PrReviewEvent::Unknown), Path::new("/tmp/body")).is_err());
+    let (step, _) = one_step(PrWrite::DiscardReview {
+        review_id: "PRR_1".to_owned(),
+    });
+    assert!(
+        field(&step, "query")
+            .unwrap()
+            .contains("deletePullRequestReview")
+    );
+}
+
+/// GitHub answers a line outside the diff with a null thread and no error.
+#[test]
+fn a_null_thread_is_a_refusal() {
+    let null = r#"{"data":{"addPullRequestReviewThread":{"thread":null}}}"#;
+    assert!(refusal(null).is_some());
+    let taken = r#"{"data":{"addPullRequestReviewThread":{"thread":{"id":"PRRT_1"}}}}"#;
+    assert!(refusal(taken).is_none());
+    assert!(refusal("").is_none());
 }

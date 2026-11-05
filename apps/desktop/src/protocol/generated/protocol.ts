@@ -7826,6 +7826,10 @@ export type PullRequest = {
 	 * read it.
 	 */
 	nodeId?: string,
+	/**
+	 * The signed-in reviewer's pending review, started here or on GitHub.
+	 */
+	pendingReviewId?: string,
 };
 
 /**
@@ -8054,6 +8058,10 @@ export type PrReviewThread = {
 	 */
 	side?: PrDiffSide,
 	/**
+	 * The first line it covers, when it covers more than `line`.
+	 */
+	startLine?: number,
+	/**
 	 * The diff down to its line, from its first comment.
 	 */
 	diffHunk?: string,
@@ -8088,6 +8096,10 @@ export type PrThreadComment = {
 	 * Its GitHub node id.
 	 */
 	id: string,
+	/**
+	 * Whether it waits in the signed-in reviewer's pending review, seen by no one else.
+	 */
+	pending?: boolean,
 	/**
 	 * Its web URL.
 	 */
@@ -11353,7 +11365,63 @@ export type PrWrite = { "kind": "comment",
 	/**
 	 * Whether to resolve the thread, after the reply.
 	 */
-	resolve?: boolean, } | { "kind": "setFileViewed",
+	resolve?: boolean, } | { "kind": "addReviewComment",
+	/**
+	 * The pull request's node id, as `pr/view` gives it.
+	 */
+	pullRequestId: string,
+	/**
+	 * The file's path in the repository.
+	 */
+	path: string,
+	/**
+	 * The comment, in Markdown.
+	 */
+	body: string,
+	/**
+	 * The line, or the range's last line. Absent comments on the whole file.
+	 */
+	line?: number,
+	/**
+	 * The range's first line, on the same side and in the same hunk as `line`.
+	 */
+	startLine?: number,
+	/**
+	 * The diff's side of `line` and `start_line`. Absent means the new side.
+	 */
+	side?: PrDiffSide,
+	/**
+	 * The head commit to post on at once, instead of adding to the pending review.
+	 */
+	headSha?: string, } | { "kind": "editReviewComment",
+	/**
+	 * The comment's node id.
+	 */
+	commentId: string,
+	/**
+	 * The new body, in Markdown.
+	 */
+	body: string, } | { "kind": "deleteReviewComment",
+	/**
+	 * The comment's node id.
+	 */
+	commentId: string, } | { "kind": "submitReview",
+	/**
+	 * The pending review's id, as `pr/view` gives it.
+	 */
+	reviewId: string,
+	/**
+	 * Its verdict.
+	 */
+	event: PrReviewEvent,
+	/**
+	 * The review's text, in Markdown. May be empty when it has comments.
+	 */
+	body: string, } | { "kind": "discardReview",
+	/**
+	 * The pending review's id, as `pr/view` gives it.
+	 */
+	reviewId: string, } | { "kind": "setFileViewed",
 	/**
 	 * The pull request's node id, as `pr/view` gives it.
 	 */

@@ -889,6 +889,90 @@ fn pr_view_s_checks_carry_whether_required_and_their_run_and_job() {
     assert_eq!(pr.checks_state, Some(PrCheckState::Failed));
 }
 
+/// FULL with its reviews and review threads as `reviews` and `threads`.
+fn with_review_threads(reviews: &str, threads: &str) -> Detail {
+    let mut json: serde_json::Value = serde_json::from_str(FULL).unwrap();
+    let pr = json.pointer_mut("/data/repository/pullRequest").unwrap();
+    pr["reviews"] =
+        serde_json::json!({ "nodes": serde_json::from_str::<serde_json::Value>(reviews).unwrap() });
+    pr["reviewThreads"] =
+        serde_json::json!({ "nodes": serde_json::from_str::<serde_json::Value>(threads).unwrap() });
+    parse(&json.to_string()).unwrap()
+}
+
+const PENDING_THREADS: &str = r#"[
+  {"id": "PRRT_mine", "path": "a.rs", "line": 9, "startLine": 7, "diffSide": "LEFT",
+   "subjectType": "LINE", "comments": {"nodes": [
+     {"id": "PRRC_mine", "author": {"login": "me"}, "body": "soon",
+      "createdAt": "2026-10-09T10:04:00Z", "state": "PENDING",
+      "pullRequestReview": {"id": "PRR_mine"}}
+  ]}},
+  {"id": "PRRT_file", "path": "b.rs", "line": 1, "diffSide": "RIGHT", "subjectType": "FILE",
+   "comments": {"nodes": [
+     {"id": "PRRC_file", "author": {"login": "me"}, "body": "whole file",
+      "createdAt": "2026-10-09T10:04:00Z", "state": "PENDING",
+      "pullRequestReview": {"id": "PRR_mine"}}
+  ]}},
+  {"id": "PRRT_one", "path": "c.rs", "line": 3, "startLine": 3, "diffSide": "LEFT",
+   "subjectType": "LINE", "comments": {"nodes": [
+     {"id": "PRRC_one", "author": {"login": "rev"}, "body": "sent",
+      "createdAt": "2026-10-09T10:04:00Z", "state": "SUBMITTED",
+      "pullRequestReview": {"id": "PRR_old"}}
+  ]}},
+  {"id": "PRRT_gone", "path": "d.rs", "line": 3, "diffSide": "RIGHT", "subjectType": "LINE",
+   "comments": {"nodes": [
+     {"id": "PRRC_gone", "author": {"login": "me"}, "body": "discarded",
+      "createdAt": "2026-10-09T10:04:00Z", "state": "PENDING",
+      "pullRequestReview": {"id": "PRR_discarded"}}
+  ]}}
+]"#;
+
+const PENDING_REVIEW: &str = r#"[{"id": "PRR_mine", "author": {"login": "me"}, "body": "",
+  "state": "PENDING"}]"#;
+
+#[test]
+fn pr_view_shows_the_viewer_s_pending_review_and_drops_a_discarded_one() {
+    let pr = viewed(
+        "https://github.com/me/app/pull/7",
+        with_review_threads(PENDING_REVIEW, PENDING_THREADS),
+        Some(0),
+    )
+    .unwrap();
+    assert_eq!(pr.pending_review_id.as_deref(), Some("PRR_mine"));
+    let ids: Vec<_> = pr.review_threads.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["PRRT_mine", "PRRT_file", "PRRT_one"],
+        "not the discarded one"
+    );
+    let mine = &pr.review_threads[0];
+    assert!(mine.comments[0].pending);
+    assert_eq!(
+        (mine.line, mine.start_line, mine.side),
+        (Some(9), Some(7), Some(PrDiffSide::Left))
+    );
+    assert_eq!(pr.review_threads[1].line, None, "on the whole file");
+    let sent = &pr.review_threads[2];
+    assert!(!sent.comments[0].pending);
+    assert_eq!(sent.start_line, None, "a one-line thread has no range");
+}
+
+#[test]
+fn agents_hear_nothing_of_a_pending_comment() {
+    let detail = with_review_threads(PENDING_REVIEW, PENDING_THREADS);
+    let unresolved: Vec<_> = detail
+        .unresolved
+        .iter()
+        .filter_map(|thread| thread.id.as_deref())
+        .collect();
+    assert_eq!(unresolved, ["PRRT_one"]);
+    assert_eq!(
+        detail.remarks.len(),
+        2,
+        "the sent comment and FULL's other one"
+    );
+}
+
 #[test]
 fn pr_view_says_which_files_the_reviewer_viewed() {
     let pr = full();
