@@ -71,24 +71,43 @@ export async function newestVersion(id: string, plxd: string): Promise<string | 
 
 /**
  * The version a computer connected on `plxd` could update to, once known. Undefined `plxd` waits.
- * Without an answer from GitHub or the computer it stays unknown, so nothing offers an update.
+ * Without an answer from GitHub or the computer it's unknown, so nothing offers an update. An
+ * answer only holds for the `id` and `plxd` it was for, since plxd takes a version from another
+ * channel if it's sent one.
  */
 export function useNewestVersion(id: string, plxd: string | undefined): string | undefined {
-  const [newest, setNewest] = useState<string>();
+  const [newest, setNewest] = useState<{ id: string; plxd: string; version?: string }>();
   useEffect(() => {
     if (!plxd) return;
     let live = true;
     newestVersion(id, plxd).then(
-      (found) => {
-        if (live) setNewest(found);
+      (version) => {
+        if (live) setNewest({ id, plxd, version });
       },
-      () => {},
+      () => {
+        if (live) setNewest(undefined);
+      },
     );
     return () => {
       live = false;
     };
   }, [id, plxd]);
-  return newest;
+  return newest?.id === id && newest.plxd === plxd ? newest.version : undefined;
+}
+
+/** Whether two plxd versions are on one channel. plxd itself ignores the channel when it updates. */
+export const sameChannel = (a: string, b: string) => a.endsWith("-nightly") === b.endsWith("-nightly");
+
+/**
+ * What an update's restart would cut off on `id`, to ask about first, or undefined when `id` says
+ * nothing's running. A computer that doesn't say may have threads running.
+ */
+export async function restartCutsOff(id: string): Promise<string | undefined> {
+  const health = await window.parallax.request(id, "host/health", {});
+  if (!("result" in health)) return "any running threads";
+  const running = health.result.runningAgents;
+  if (running === 0) return undefined;
+  return running === 1 ? "1 running thread" : `${running} running threads`;
 }
 
 /** A computer's update: plxd downloading it, restarting into it, or waiting for its agents. */

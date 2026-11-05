@@ -3,7 +3,7 @@
 import { ActivityIndicator } from "react-native";
 
 import { isOlder } from "../../desktop/src/main/hostUpdate";
-import { updateComputer, useComputerUpdate, useNewestVersion } from "./computerUpdate";
+import { restartCutsOff, sameChannel, updateComputer, useComputerUpdate, useNewestVersion } from "./computerUpdate";
 import { showAlert } from "./dialogStore";
 import { useFleet, type Computer } from "./fleet";
 import { Action, can } from "./SettingsParts";
@@ -19,13 +19,11 @@ export function ComputerVersion({ m }: { m: Computer }) {
   const plxd = m.connectedNow ? shown : undefined;
   const newest = useNewestVersion(id, can(m, "hostUpdate") ? plxd : undefined);
 
-  /** Asks first when the restart would cut off running threads, as Update everything does. */
+  /** Asks first when the restart may cut off running threads, as Update everything does. */
   const start = async (version: string) => {
-    const health = await window.parallax.request(id, "host/health", {});
-    const running = "result" in health ? health.result.runningAgents : 0;
     const go = () => void updateComputer(id, version, (target, now) => updateHost(id, target, now));
-    if (running === 0) return go();
-    const threads = running === 1 ? "1 running thread" : `${running} running threads`;
+    const threads = await restartCutsOff(id);
+    if (!threads) return go();
     showAlert(
       `Update ${m.machine.name}?`,
       `Parallax restarts there now, which cuts off ${threads}. They go on afterward if Continue threads after restarts is on.`,
@@ -51,8 +49,9 @@ export function ComputerVersion({ m }: { m: Computer }) {
         />
       );
     case "failed":
-      // One that came back on the version after all, as when the phone slept through it, didn't fail.
-      if (shown && !isOlder(shown, update.version)) break;
+      // One that came back on the version after all, as when the phone slept through it, didn't
+      // fail. One now on another channel mustn't retry a version from the last one.
+      if (shown && (!isOlder(shown, update.version) || !sameChannel(shown, update.version))) break;
       return (
         <Row
           title="Parallax"
