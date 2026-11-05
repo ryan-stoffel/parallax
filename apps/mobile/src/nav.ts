@@ -24,6 +24,8 @@ export type Screens = {
   Settings: NavigatorScreenParams<SettingsScreens> | undefined;
   /** Every pull request, as a sheet that pushes each one inside itself. */
   PullRequests: NavigatorScreenParams<PullRequestScreens> | undefined;
+  /** Every Project, as a sheet that pushes each one inside itself. */
+  Projects: NavigatorScreenParams<ProjectScreens> | undefined;
 };
 
 /** The Settings sheet's pages. */
@@ -52,11 +54,19 @@ export type PullRequestScreens = {
   PullRequest: Screens["PullRequest"];
 };
 
+/** The Projects sheet's pages. `id` is a Project on computer `hostId`. */
+export type ProjectScreens = {
+  ProjectList: undefined;
+  Project: { hostId: string; id: string };
+  /** A Project's instructions, in a text editor. */
+  ProjectInstructions: { hostId: string; id: string };
+};
+
 /**
  * Every route by name. A screen navigates by name, and the nearest stack with that name takes it,
  * so a screen needn't know which stack holds it.
  */
-type AllScreens = Screens & SettingsScreens & PullRequestScreens;
+type AllScreens = Screens & SettingsScreens & PullRequestScreens & ProjectScreens;
 
 export const useNav = () => useNavigation<NativeStackNavigationProp<AllScreens>>();
 
