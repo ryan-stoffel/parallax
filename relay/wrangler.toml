@@ -11,6 +11,10 @@ compatibility_date = "2026-10-01"
 routes = [{ pattern = "relay.parallax.codes", custom_domain = true }]
 workers_dev = false
 
+# Workers Logs: each invocation's outcome and every console line, in the dashboard (PLX-1349).
+[observability]
+enabled = true
+
 [[durable_objects.bindings]]
 name = "HOSTS"
 class_name = "HostRelay"

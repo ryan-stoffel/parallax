@@ -10,6 +10,7 @@ import {
   verifyEs256,
 } from "./crypto";
 import { type Env, json } from "./index";
+import { logError, logEvent, logged, scrub, short } from "./log";
 import { MAX_SEALED, type Notification } from "./push";
 
 /** The user a host is registered to, and its key. */
@@ -193,7 +194,11 @@ export class HostRelay extends DurableObject<Env> {
     const streams = await this.streams();
     await this.ctx.storage.delete("streams");
     await Promise.all(
-      Object.keys(streams).map((id) => this.streamOf(hostId, id).close(code, reason).catch(() => {})),
+      Object.keys(streams).map((id) =>
+        this.streamOf(hostId, id)
+          .close(code, reason)
+          .catch((error) => logError("host.closeStreams", this.context(), error)),
+      ),
     );
   }
 
@@ -204,6 +209,23 @@ export class HostRelay extends DurableObject<Env> {
   /** plxd's control socket. */
   private host() {
     return this.ctx.getWebSockets("host").find((ws) => ws.readyState === WebSocket.OPEN);
+  }
+
+  /** What a log line says about this object and, when there is one, the socket `ws`. */
+  private context(ws?: WebSocket) {
+    return {
+      object: "host",
+      id: short(this.ctx.id.toString()),
+      host: ws && this.ctx.getTags(ws).find((tag) => tag !== "host"),
+    };
+  }
+
+  /** Closes plxd's control socket, which is every WebSocket this object holds. */
+  private closeHost(code: number, reason: string) {
+    for (const ws of this.ctx.getWebSockets("host")) {
+      logEvent("socket_closing", { ...this.context(ws), by: "relay", code, reason });
+      ws.close(code, reason);
+    }
   }
 
   /**
@@ -228,7 +250,7 @@ export class HostRelay extends DurableObject<Env> {
       return { status: 429, error: "rate_limited" };
     const before = await this.owner();
     if (before && before.user !== user) {
-      for (const ws of this.ctx.getWebSockets()) ws.close(4409, "moved to another user");
+      this.closeHost(4409, "moved to another user");
       await this.closeStreams(hostId, 4409, "moved to another user");
       this.tickets.clear();
       // The host no longer counts against its old user's slots.
@@ -247,7 +269,7 @@ export class HostRelay extends DurableObject<Env> {
   async unregister(user: string): Promise<boolean> {
     const owner = await this.owner();
     if (owner?.user !== user) return false;
-    for (const ws of this.ctx.getWebSockets()) ws.close(4410, "removed");
+    this.closeHost(4410, "removed");
     await this.closeStreams(owner.hostId, 4410, "removed");
     this.tickets.clear();
     this.traffic = undefined;
@@ -342,7 +364,11 @@ export class HostRelay extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return json(426, { error: "upgrade_required" });
-    return this.hostSocket(request.headers.get(PROOF_HEADER) ?? "");
+    return logged(
+      "host.fetch",
+      () => this.context(),
+      () => this.hostSocket(request.headers.get(PROOF_HEADER) ?? ""),
+    );
   }
 
   /**
@@ -372,19 +398,39 @@ export class HostRelay extends DurableObject<Env> {
     if (!this.limits.allow("hostConnect", LIMITS.hostConnect))
       return json(429, { error: "rate_limited" }, { "retry-after": "60" });
     await this.ctx.storage.put("lastProof", time);
-    for (const other of this.ctx.getWebSockets("host")) other.close(4409, "replaced");
+    // Whether the relay still thinks the last connection is alive: see `log.ts`.
+    const openBefore = this.ctx
+      .getWebSockets("host")
+      .filter((ws) => ws.readyState === WebSocket.OPEN).length;
+    this.closeHost(4409, "replaced");
     // plxd's streams end with its control connection, so a new one starts with none open, even
     // when the old ones' close never arrived, as after a deploy.
     await this.closeStreams(owner.hostId, 1000, "the host reconnected");
     const [client, server] = Object.values(new WebSocketPair());
-    this.ctx.acceptWebSocket(server!, ["host"]);
+    // The second tag names the host in this socket's log lines, with no storage read to fail.
+    this.ctx.acceptWebSocket(server!, ["host", short(owner.hostId)]);
+    logEvent("host_connected", {
+      ...this.context(server!),
+      open_before: openBefore,
+      since_last_ms: last ? now - last : null,
+    });
     server!.send(JSON.stringify({ t: "ready" }));
-    this.ctx.waitUntil(this.deliverHeld());
+    this.ctx.waitUntil(
+      logged(
+        "host.deliverHeld",
+        () => this.context(),
+        () => this.deliverHeld(),
+      ),
+    );
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async webSocketMessage(_: WebSocket, message: string | ArrayBuffer) {
-    return this.fromHost(message);
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    return logged(
+      "host.webSocketMessage",
+      () => this.context(ws),
+      () => this.fromHost(message),
+    );
   }
 
   /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, or a
@@ -426,17 +472,25 @@ export class HostRelay extends DurableObject<Env> {
     }
   }
 
-  async webSocketClose(ws: WebSocket) {
-    // Completes the closing handshake the other end started.
+  async webSocketClose(ws: WebSocket, code: number, reason: string, clean: boolean) {
+    // Only the relay closes this socket with a 4xxx code, which plxd echoes back.
+    const by = code >= 4000 ? "relay" : "peer";
+    logEvent("socket_closed", { ...this.context(ws), by, code, reason: scrub(reason), clean });
+    this.finishClose(ws);
+  }
+
+  async webSocketError(ws: WebSocket, error: unknown) {
+    logError("host.webSocketError", this.context(ws), error);
+    this.finishClose(ws);
+  }
+
+  /** Completes the closing handshake the other end started. */
+  private finishClose(ws: WebSocket) {
     try {
       ws.close(1000, "closed");
     } catch {
       // Already closed.
     }
-  }
-
-  async webSocketError(ws: WebSocket) {
-    await this.webSocketClose(ws);
   }
 
   /**
@@ -491,7 +545,8 @@ export class HostRelay extends DurableObject<Env> {
       this.waiting.set(head.id, done);
       try {
         host.send(frame);
-      } catch {
+      } catch (error) {
+        logError("host.send", this.context(host), error);
         done(null);
       }
     });
@@ -607,8 +662,14 @@ export class HostRelay extends DurableObject<Env> {
 
   /** Drops held webhooks older than 24 hours, and retries the due ones while plxd is here. */
   async alarm() {
-    if (this.host()) await this.deliverHeld();
-    else await this.schedule();
+    return logged(
+      "host.alarm",
+      () => this.context(),
+      async () => {
+        if (this.host()) await this.deliverHeld();
+        else await this.schedule();
+      },
+    );
   }
 }
 
