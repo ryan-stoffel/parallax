@@ -46,6 +46,7 @@ import { TurnChanges } from "./Diff";
 import { counts, editRows } from "./diffLogic";
 import { FileCard, openLinked } from "./FileCard";
 import { useComputer, useFleet } from "./fleet";
+import { ForkSheet } from "./ForkSheet";
 import { openLightbox } from "./Lightbox";
 import { MessageMenu } from "./MessageMenu";
 import type { Screens } from "./nav";
@@ -490,6 +491,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   // What the trace sheet last opened on, as it was then, and a count that makes each opening fresh.
   const [trace, setTrace] = useState<{ key: string; title: string; items: Item[]; start?: string; n: number }>();
   const [traceOpen, setTraceOpen] = useState(false);
+  const [forking, setForking] = useState(false);
   const state = computer?.view.state;
   const thread = state?.threads.find((t) => t.id === runId);
   const run = state?.runs[runId];
@@ -558,6 +560,10 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                 inline: true,
                 items: [
                   { type: "action", label: "Rename", icon: symbol("pencil"), onPress: rename },
+                  // As on the desktop: an orchestrator's chat isn't forked.
+                  ...(run && computer && "threadFork" in computer.view.capabilities && !state?.orchestrators.some((o) => o.run === runId)
+                    ? [{ type: "action" as const, label: "Fork", icon: symbol("arrow.triangle.branch"), onPress: () => setForking(true) }]
+                    : []),
                   {
                     type: "action",
                     label: thread?.pinned ? "Unpin" : "Pin",
@@ -627,6 +633,9 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   // Nothing in yet: no rows, no prompt from here, and no error to say instead.
   const loading =
     !!computer && rows.length === 0 && !first && pending.length === 0 && error === undefined && (transcript.seq === 0 || computer.view.loading);
+
+  // A fork's original, while it's listed (0050).
+  const original = state?.threads.find((t) => t.id === thread?.forkedFrom?.run);
 
   const changeDraft = (next: string) => {
     setDraft(next);
@@ -770,6 +779,12 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           held={held}
           running={isRunning(transcript.run?.status)}
           stalled={stalled}
+          original={
+            original && {
+              name: state?.titles[original.id] ?? "Thread",
+              open: () => navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId: original.id } }] }),
+            }
+          }
           connected={connected}
           parent={
             parent && {
@@ -788,6 +803,15 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           onStop={() => void cancel()}
           bottom={Math.max(insets.bottom, 8)}
         />
+        {computer && run && (
+          <ForkSheet
+            computer={computer}
+            run={run}
+            open={forking}
+            onClose={() => setForking(false)}
+            onForked={(id) => navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId: id } }] })}
+          />
+        )}
       </KeyboardAvoidingView>
     </RowContext>
   );
