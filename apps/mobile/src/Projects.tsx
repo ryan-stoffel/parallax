@@ -3,9 +3,9 @@
 // of its name, New thread, and its instructions and file names; and its instructions in a text
 // editor. A thread's long press and Thread details change its Project with `threadProject`.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { Check, FileText, Pencil, Plus, SquarePen } from "lucide-react-native";
+import { Check, FileText, FolderMinus, LayoutGrid, Pencil, Plus, SquarePen } from "lucide-react-native";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActionSheetIOS, ActivityIndicator, Alert, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { Repo, Thread } from "../../desktop/src/protocol/generated/protocol";
@@ -19,13 +19,14 @@ import {
   waitingOf,
   type ThreadsView,
 } from "../../desktop/src/renderer/threads";
+import { showAlert, showMenu, showPrompt } from "./dialogStore";
 import { type Computer, useComputer, useFleet } from "./fleet";
 import { GlassButton } from "./Glass";
 import { ProviderLogo } from "./logos";
 import { ago, useShow, type ProjectScreens } from "./nav";
 import { projectGroups } from "./projectLogic";
 import { RepoIcon } from "./RepoIcon";
-import { AttentionBadge, Button, DeviceIcon, Icon, Row, Section, T, useColors } from "./ui";
+import { AttentionBadge, Button, DeviceIcon, Empty, Icon, Row, Section, T, useColors } from "./ui";
 
 /** Whether `name` is a Project on `computer`. */
 const holds = (computer: Computer, name: string) =>
@@ -68,28 +69,21 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
 
   async function make(computer: Computer, name: string) {
     const made = await computer.view.createProject(name);
-    if (typeof made === "string") return Alert.alert("Couldn't create the Project", made);
+    if (typeof made === "string") return showAlert("Couldn't create the Project", made);
     navigation.navigate("Project", { hostId: computer.machine.id, id: made.id });
   }
 
   function create() {
-    Alert.prompt(
+    showPrompt(
       "New Project",
       undefined,
       (text) => {
         const name = text.trim();
         if (!name) return;
         if (makers.length === 1) return void make(makers[0]!, name);
-        ActionSheetIOS.showActionSheetWithOptions(
-          {
-            title: `Which computer should ${name} be on?`,
-            options: [...makers.map((m) => m.machine.name), "Cancel"],
-            cancelButtonIndex: makers.length,
-          },
-          (i) => {
-            const computer = makers[i];
-            if (computer) void make(computer, name);
-          },
+        showMenu(
+          makers.map((computer) => ({ label: computer.machine.name, onPress: () => void make(computer, name) })),
+          `Which computer should ${name} be on?`,
         );
       },
       "plain-text",
@@ -139,9 +133,12 @@ export function ProjectList({ navigation }: NativeStackScreenProps<ProjectScreen
       ) : loading ? (
         <ActivityIndicator color={c.accent} />
       ) : (
-        <T muted style={{ textAlign: "center" }}>
-          No Projects yet. A Project groups threads and gives them shared instructions and files.
-        </T>
+        <Empty
+          icon={LayoutGrid}
+          title="No Projects yet"
+          note="A Project groups threads and gives them shared instructions and files."
+          action={canCreate ? <Button label="New Project" icon={Plus} onPress={create} /> : undefined}
+        />
       )}
     </Page>
   );
@@ -286,7 +283,7 @@ export function ProjectInstructionsScreen({
     setSaving(true);
     const failed = await view.updateRepo(id, { instructions: text });
     setSaving(false);
-    if (failed) return Alert.alert("Couldn't save the instructions", failed);
+    if (failed) return showAlert("Couldn't save the instructions", failed);
     navigation.goBack();
   }
   const latest = useRef(save);
@@ -327,24 +324,19 @@ export function ProjectInstructionsScreen({
 
 /** Opens the Projects `thread` can join, with Remove from Project while it's in one. */
 function chooseProject(thread: Thread, view: ThreadsView, projects: Repo[], current?: Repo) {
-  const options = [...projects.map((p) => p.name), ...(current ? ["Remove from Project"] : []), "Cancel"];
   const move = async (project?: Repo) => {
     if (project?.id === thread.project) return;
     const failed = project
       ? await addToProject(view, [thread], project)
       : await view.setProject([thread.id]);
-    if (failed) Alert.alert("Couldn't change the thread's Project", failed);
+    if (failed) showAlert("Couldn't change the thread's Project", failed);
   };
-  ActionSheetIOS.showActionSheetWithOptions(
-    {
-      title: current ? `Project: ${current.name}` : "Add to Project",
-      options,
-      cancelButtonIndex: options.length - 1,
-      destructiveButtonIndex: current ? projects.length : undefined,
-    },
-    (i) => {
-      if (i !== options.length - 1) void move(projects[i]);
-    },
+  showMenu(
+    [
+      ...projects.map((p) => ({ label: p.name, checked: p.id === current?.id, onPress: () => void move(p) })),
+      ...(current ? [{ label: "Remove from Project", icon: FolderMinus, destructive: true, onPress: () => void move() }] : []),
+    ],
+    current ? `Project: ${current.name}` : "Add to Project",
   );
 }
 

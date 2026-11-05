@@ -32,6 +32,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactNode,
 } from "react";
 import {
@@ -42,6 +43,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   useColorScheme,
   View,
   type ColorValue,
@@ -501,6 +503,58 @@ export function AttentionBadge({ attention, since }: { attention: Attention; sin
   }
 }
 
+/** What a screen says with nothing to show: an icon, a title, why, and what to do about it. */
+export function Empty({
+  icon,
+  title,
+  note,
+  action,
+}: {
+  icon: LucideIcon;
+  title: string;
+  note?: string;
+  action?: ReactNode;
+}) {
+  const c = useColors();
+  return (
+    <View style={styles.empty}>
+      <View style={[styles.emptyMark, { backgroundColor: c.selected }]}>
+        <Icon icon={icon} size={22} color={c.mutedForeground} />
+      </View>
+      <T medium style={{ fontSize: 16, textAlign: "center" }}>
+        {title}
+      </T>
+      {!!note && (
+        <T muted style={{ fontSize: 14, textAlign: "center" }}>
+          {note}
+        </T>
+      )}
+      {!!action && <View style={{ marginTop: 8 }}>{action}</View>}
+    </View>
+  );
+}
+
+/** A text box for forms and prompts: a key, a label, a name. */
+export function Input(props: ComponentProps<typeof TextInput> & { mono?: boolean }) {
+  const c = useColors();
+  return (
+    <TextInput
+      placeholderTextColor={c.faintForeground}
+      selectionColor={c.accent}
+      autoCapitalize="none"
+      autoCorrect={false}
+      spellCheck={false}
+      {...props}
+      style={[
+        styles.input,
+        { color: c.foreground, backgroundColor: c.code, borderColor: c.border },
+        props.mono && { fontFamily: font.mono, fontSize: 13 },
+        props.style,
+      ]}
+    />
+  );
+}
+
 /** A titled group of rows, as iOS Settings draws one. */
 export function Section({
   title,
@@ -516,7 +570,7 @@ export function Section({
     <View style={{ gap: 6 }}>
       {title && (
         <T muted style={styles.sectionTitle}>
-          {title.toUpperCase()}
+          {title}
         </T>
       )}
       <View style={[styles.group, { backgroundColor: c.surface, borderColor: c.border }]}>
@@ -538,6 +592,7 @@ export function Row({
   iconColor,
   title,
   detail,
+  path,
   right,
   onPress,
   chevron,
@@ -550,6 +605,8 @@ export function Row({
   iconColor?: ColorValue;
   title: string;
   detail?: string;
+  /** `detail` is a path: one line, cut in the middle, so its ends both show. */
+  path?: boolean;
   right?: ReactNode;
   onPress?: () => void;
   chevron?: boolean;
@@ -577,7 +634,7 @@ export function Row({
         <View style={{ flex: 1, gap: 1 }}>
           <T style={destructive ? { color: c.danger } : undefined}>{title}</T>
           {!!detail && (
-            <T muted style={{ fontSize: 13, lineHeight: 18 }}>
+            <T muted numberOfLines={path ? 1 : undefined} ellipsizeMode="middle" style={{ fontSize: 13, lineHeight: 18 }}>
               {detail}
             </T>
           )}
@@ -781,9 +838,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   buttonText: { fontSize: 15, fontWeight: "500" },
+  empty: { alignItems: "center", gap: 8, paddingTop: 72, paddingHorizontal: 40 },
+  emptyMark: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center", marginBottom: 4 },
+  input: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 11, fontSize: 15 },
   badge: { flexDirection: "row", alignItems: "center", gap: 4 },
   badgeText: { fontSize: 12, fontWeight: "500", fontVariant: ["tabular-nums"] },
-  sectionTitle: { fontSize: 12, letterSpacing: 0.4, paddingHorizontal: 16 },
+  sectionTitle: { fontSize: 13, lineHeight: 18, paddingHorizontal: 16 },
   footer: { fontSize: 12, lineHeight: 17, paddingHorizontal: 16 },
   group: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingLeft: 16 },

@@ -34,11 +34,12 @@ import {
   type LucideIcon,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { Alert, AppState, Linking, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { AppState, Linking, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
 import { appVersion } from "../modules/pinned-tls";
 import { Avatar, nameOf, useAccount } from "./Account";
 import { formatCode } from "./accountPrompts";
+import { showAlert } from "./dialogStore";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { useNav, type PhonePage, type SettingsScreens } from "./nav";
 import { pairedId } from "./machines";
@@ -233,7 +234,7 @@ function GeneralPage() {
                 label="Send"
                 onPress={() => {
                   notify("done", "", "test", "Parallax");
-                  Alert.alert("Sent", "Leave the app within a few seconds to see it as a banner.");
+                  showAlert("Sent", "Leave the app within a few seconds to see it as a banner.");
                 }}
               />
             }
@@ -493,7 +494,7 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
           destructive
           last
           onPress={() =>
-            Alert.alert(`Remove ${m.machine.name}?`, "Its threads leave this phone. Add it again any time.", [
+            showAlert(`Remove ${m.machine.name}?`, "Its threads leave this phone. Add it again any time.", [
               { text: "Cancel", style: "cancel" },
               {
                 text: "Remove",

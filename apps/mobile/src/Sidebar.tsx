@@ -12,20 +12,24 @@ import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
 import {
   AlarmClock,
+  AlarmClockOff,
   Archive,
+  ArchiveRestore,
+  Check,
   ChevronDown,
+  Folder,
   FolderGit2,
   GitPullRequest,
   ListFilter,
+  Pencil,
   Pin,
+  PinOff,
   Search,
   SquarePen,
 } from "lucide-react-native";
 import { useRef, useState, type ReactNode } from "react";
 import {
-  ActionSheetIOS,
   ActivityIndicator,
-  Alert,
   FlatList,
   Keyboard,
   Pressable,
@@ -59,6 +63,7 @@ import {
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Avatar } from "./Account";
 import { Choices, type Choice } from "./Choices";
+import { showAlert, showMenu, showPrompt } from "./dialogStore";
 import { useFleet, type Computer } from "./fleet";
 import { GlassButton } from "./Glass";
 import { ProviderLogo } from "./logos";
@@ -74,7 +79,7 @@ import {
 } from "./orchestratorLogic";
 import { getPrefs } from "./prefs";
 import { threadProject } from "./Projects";
-import { AttentionBadge, Button, DeviceIcon, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
+import { AttentionBadge, Button, DeviceIcon, Empty, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
 
 /** How much of the screen's width the sidebar takes. */
 export const sidebarWidth = (screen: number) => Math.round(screen * 0.78);
@@ -137,14 +142,14 @@ export function useStartOrchestrator() {
   const show = useShow();
   const [starting, setStarting] = useState<string>();
   const ask = ({ computer, orchestrator }: ProjectEntry) =>
-    Alert.prompt(`Start ${orchestrator.name}`, "What should it work on?", (text) => {
+    showPrompt(`Start ${orchestrator.name}`, "What should it work on?", (text) => {
       const prompt = text.trim();
       if (!prompt) return;
       const runId = uuidv7();
       setStarting(orchestrator.id);
       void startOrchestrator(computer.view, orchestrator.id, runId, prompt).then((failed) => {
         setStarting(undefined);
-        if (failed) return Alert.alert(`Couldn't start ${orchestrator.name}`, failed);
+        if (failed) return showAlert(`Couldn't start ${orchestrator.name}`, failed);
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Keyboard.dismiss();
         setStarted(runId, prompt);
@@ -209,7 +214,7 @@ function OrchestratorRow({ entry }: { entry: ProjectEntry }) {
               <View style={styles.line}>
                 <DeviceIcon name={computer.machine.name} size={13} color={c.faintForeground} />
                 <T faint numberOfLines={1} ellipsizeMode="head" style={{ ...styles.small, flex: 1 }}>
-                  {[unstarted, agentsLine(children)].filter(Boolean).join(" · ") || homeless(orchestrator.repoPath)}
+                  {[unstarted, agentsLine(children)].filter(Boolean).join(" · ") || orchestrator.repoPath.split(/[\\/]/).pop()}
                 </T>
               </View>
             </View>
@@ -395,30 +400,29 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
 
   function actions() {
     const project = threadProject(thread, view, computers);
-    const list: [string, () => void][] = [
-      [thread.pinned ? "Unpin" : "Pin", () => void view.update(thread.id, { pinned: !thread.pinned })],
-      ...snoozeChoices().map(
-        ({ label, until }): [string, () => void] => [
-          `Snooze ${label.toLowerCase()}`,
-          () => void view.update(thread.id, { snoozedUntil: until.toISOString() }),
-        ],
-      ),
-      // Waking now ends the snooze, as the desktop's undo does.
-      ...(asleep
-        ? [["Unsnooze", () => void view.update(thread.id, { snoozedUntil: new Date().toISOString() })] as [string, () => void]]
-        : []),
-      ...(unseen ? [["Mark as read", () => void view.update(thread.id, { seen: true })] as [string, () => void]] : []),
+    showMenu(
       [
-        "Rename",
-        () =>
-          Alert.prompt("Rename thread", undefined, (next) => void view.update(thread.id, { title: next.trim() }), "plain-text", title),
+        { label: thread.pinned ? "Unpin" : "Pin", icon: thread.pinned ? PinOff : Pin, onPress: () => void view.update(thread.id, { pinned: !thread.pinned }) },
+        ...snoozeChoices().map(({ label, until }) => ({
+          label: `Snooze ${label.toLowerCase()}`,
+          icon: AlarmClock,
+          onPress: () => void view.update(thread.id, { snoozedUntil: until.toISOString() }),
+        })),
+        // Waking now ends the snooze, as the desktop's undo does.
+        ...(asleep
+          ? [{ label: "Unsnooze", icon: AlarmClockOff, onPress: () => void view.update(thread.id, { snoozedUntil: new Date().toISOString() }) }]
+          : []),
+        ...(unseen ? [{ label: "Mark as read", icon: Check, onPress: () => void view.update(thread.id, { seen: true }) }] : []),
+        {
+          label: "Rename",
+          icon: Pencil,
+          onPress: () =>
+            showPrompt("Rename thread", undefined, (next) => void view.update(thread.id, { title: next.trim() }), "plain-text", title),
+        },
+        ...(project ? [{ label: project.label, icon: Folder, onPress: project.choose ?? (() => {}) }] : []),
+        { label: thread.archived ? "Unarchive" : "Archive", icon: thread.archived ? ArchiveRestore : Archive, onPress: () => void view.archive(thread.id, !thread.archived) },
       ],
-      ...(project ? [[project.label, project.choose ?? (() => {})] as [string, () => void]] : []),
-      [thread.archived ? "Unarchive" : "Archive", () => void view.archive(thread.id, !thread.archived)],
-    ];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { title, options: [...list.map(([l]) => l), "Cancel"], cancelButtonIndex: list.length },
-      (i) => list[i]?.[1](),
+      title,
     );
   }
 
@@ -800,9 +804,7 @@ export function Sidebar() {
               ) : loading || offline.length === computers.length ? (
                 <ActivityIndicator color={c.accent} />
               ) : (
-                <T muted style={{ textAlign: "center" }}>
-                  No threads yet. Start one with New thread.
-                </T>
+                <Empty icon={Lucide.MessagesSquare} title="No threads yet" note="Start one with New thread." />
               )}
             </View>
           )

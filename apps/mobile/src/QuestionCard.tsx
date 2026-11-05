@@ -6,11 +6,12 @@
 import * as Haptics from "expo-haptics";
 import { Check, ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { Alert, Keyboard, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
+import { Keyboard, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
 
 import type { AgentApproveParams } from "../../desktop/src/protocol/generated/protocol";
 import { fill, isAnswered, SKIPPED, type Choice, type Question, type QuestionOption } from "../../desktop/src/renderer/questions";
 import type { ApprovalRequest } from "../../desktop/src/renderer/transcript";
+import { showAlert } from "./dialogStore";
 import { nextOpen, toggled, typedIn } from "./questionLogic";
 import { Button, Icon, T, useColors } from "./ui";
 
@@ -149,10 +150,10 @@ export function QuestionCard({
     if (!("error" in reply)) return onAnswered();
     // Nothing waits on an answer anymore, so the card has nothing left to do.
     if (reply.error.data?.kind === "approvalNotFound") {
-      Alert.alert("This question is no longer waiting");
+      showAlert("This question is no longer waiting");
       return onAnswered();
     }
-    Alert.alert("Your answer didn't reach the agent", reply.error.message);
+    showAlert("Your answer didn't reach the agent", reply.error.message);
   }
 
   function pick(option: QuestionOption) {

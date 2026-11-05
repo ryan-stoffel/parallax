@@ -24,7 +24,7 @@ import {
 } from "lucide-react-native";
 import { useRef, useState, type ReactNode } from "react";
 import { useIsFocused } from "@react-navigation/native";
-import { Alert, LayoutAnimation, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import { LayoutAnimation, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
 
 import type {
   AgentBackgroundTask,
@@ -53,6 +53,7 @@ import {
   type SubagentState,
 } from "../../desktop/src/renderer/transcript";
 import { presentWaiting } from "../../desktop/src/renderer/waiting";
+import { showAlert, showPrompt } from "./dialogStore";
 import { DiffView } from "./Diff";
 import { editRows } from "./diffLogic";
 import { QuestionCard } from "./QuestionCard";
@@ -87,7 +88,7 @@ function ApprovalCard({
       decision,
     });
     setAnswering(false);
-    if ("error" in reply) Alert.alert("Your answer didn't reach the agent", reply.error.message);
+    if ("error" in reply) showAlert("Your answer didn't reach the agent", reply.error.message);
     else onAnswered();
   }
   return (
@@ -186,7 +187,7 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
     });
     // On success the card goes once plxd logs the answer.
     if ("error" in reply) {
-      Alert.alert(saving ? "Couldn't save the secret" : "Couldn't decline the secret", reply.error.message);
+      showAlert(saving ? "Couldn't save the secret" : "Couldn't decline the secret", reply.error.message);
       setBusy(undefined);
     }
   }
@@ -197,13 +198,13 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
     const { name, uri } = picked.assets[0]!;
     const copy = new File(uri);
     try {
-      if (!acceptsFile(name, request.accept)) return Alert.alert(`Couldn't use ${name}`, `Choose ${wanted}.`);
-      if (!copy.size) return Alert.alert(`Couldn't use ${name}`, "It's empty.");
-      if (copy.size > maxSecretBytes) return Alert.alert(`Couldn't use ${name}`, "A secret can be up to 64 KB.");
+      if (!acceptsFile(name, request.accept)) return showAlert(`Couldn't use ${name}`, `Choose ${wanted}.`);
+      if (!copy.size) return showAlert(`Couldn't use ${name}`, "It's empty.");
+      if (copy.size > maxSecretBytes) return showAlert(`Couldn't use ${name}`, "A secret can be up to 64 KB.");
       value.current = await copy.base64();
       setFileName(name);
     } catch (e) {
-      Alert.alert(`Couldn't use ${name}`, (e as Error).message);
+      showAlert(`Couldn't use ${name}`, (e as Error).message);
     } finally {
       if (copy.exists) copy.delete();
     }
@@ -407,7 +408,7 @@ function QueueList({
     setBusy(true);
     const answer = await window.parallax.request(hostId, "orchestration/dispatch", command);
     setBusy(false);
-    if ("error" in answer) Alert.alert("Couldn't change the queue", answer.error.message);
+    if ("error" in answer) showAlert("Couldn't change the queue", answer.error.message);
   }
   function move(id: string, to: number) {
     const ids = messages.map((m) => m.id);
@@ -416,7 +417,7 @@ function QueueList({
     void change({ type: "queued-run.reorder", threadId: runId, runIds: ids });
   }
   const edit = (m: QueuedMessage) =>
-    Alert.prompt(
+    showPrompt(
       "Edit queued message",
       undefined,
       (next) => void change({ type: "queued-run.edit", threadId: runId, runId: m.id, text: next }),
@@ -496,7 +497,7 @@ function WaitingList({
     // What ends leaves with plxd's events, and what didn't can be stopped again.
     setStopping(false);
     const wrong = answers.find((a) => "error" in a);
-    if (wrong && "error" in wrong) Alert.alert("Couldn't stop waiting", wrong.error.message);
+    if (wrong && "error" in wrong) showAlert("Couldn't stop waiting", wrong.error.message);
   }
   return (
     <>

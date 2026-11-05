@@ -13,12 +13,13 @@ import {
   type LucideIcon,
 } from "lucide-react-native";
 import { useMemo, useState } from "react";
-import { Alert, Linking, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, RadialGradient, Rect, Stop } from "react-native-svg";
 
 import { activityOf, dayOf, rhythmOf } from "../../desktop/src/renderer/activity";
 import { isRepository } from "../../desktop/src/renderer/threads";
 import { Avatar, nameOf, PORTAL, useAccount } from "./Account";
+import { showAlert } from "./dialogStore";
 import { useFleet } from "./fleet";
 import { useNav } from "./nav";
 import { Action, Section } from "./SettingsParts";
@@ -187,7 +188,7 @@ export function AccountScreen() {
               label="Sign out"
               destructive
               onPress={() =>
-                Alert.alert("Sign out of Parallax?", "Your computers stay on this phone.", [
+                showAlert("Sign out of Parallax?", "Your computers stay on this phone.", [
                   { text: "Cancel", style: "cancel" },
                   { text: "Sign out", style: "destructive", onPress: () => void signOut() },
                 ])

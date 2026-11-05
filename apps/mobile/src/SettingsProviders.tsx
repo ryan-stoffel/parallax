@@ -6,7 +6,7 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { Plus, RefreshCw, Trash2 } from "lucide-react-native";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Alert, Linking, Switch, View } from "react-native";
+import { Linking, Switch, View } from "react-native";
 
 import { HOME_VARS } from "../../desktop/src/preload/bridge";
 import type {
@@ -27,6 +27,7 @@ import {
 } from "../../desktop/src/renderer/providerKinds";
 import { capitalized, instanceStatus } from "../../desktop/src/renderer/settings/shared";
 import { Choices } from "./Choices";
+import { showAlert, showPrompt } from "./dialogStore";
 import { useComputer, type Computer } from "./fleet";
 import { ProviderLogo } from "./logos";
 import { ago, useNav, type SettingsScreens } from "./nav";
@@ -81,7 +82,7 @@ async function askSecrets(preset: Preset): Promise<Record<string, string> | unde
   for (const v of preset.env ?? []) {
     if (!v.secret || v.value) continue;
     const value = await new Promise<string | undefined>((done) =>
-      Alert.prompt(
+      showPrompt(
         preset.name,
         `${v.name}: kept in the host's keychain, and never shown again.`,
         [
@@ -271,7 +272,7 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
   };
   const setEnv = (env: ProviderEnvVar[]) => change({ env });
   const editVar = (v: ProviderEnvVar) =>
-    Alert.prompt(
+    showPrompt(
       v.name,
       v.secret ? "Secret, kept in the host's keychain. A new value replaces it." : undefined,
       [
@@ -284,11 +285,11 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
       v.secret ? "" : (v.value ?? ""),
     );
   const addVar = () =>
-    Alert.prompt("Add variable", "Letters, digits, and _, not starting with a digit.", (name) => {
+    showPrompt("Add variable", "Letters, digits, and _, not starting with a digit.", (name) => {
       const trimmed = name.trim();
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) return fail("Couldn't add the variable", "Letters, digits, and _, not starting with a digit.");
       const secret = secretName(trimmed);
-      Alert.prompt(
+      showPrompt(
         trimmed,
         secret ? "Secret: kept in the host's keychain, and never shown again." : undefined,
         (value) => setEnv(withVar(instance.env, trimmed, value, secret)),
@@ -296,15 +297,15 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
       );
     });
   const addModel = () =>
-    Alert.prompt("Add custom model", "Model id, such as gpt-oss:120b", (raw) => {
+    showPrompt("Add custom model", "Model id, such as gpt-oss:120b", (raw) => {
       const modelId = raw.trim();
       if (!modelId || /\s/.test(modelId)) return fail("Couldn't add the model", "A model id has no spaces.");
-      Alert.prompt("Display name", undefined, (name) =>
+      showPrompt("Display name", undefined, (name) =>
         change({ models: [...instance.models.filter((x) => x.id !== modelId), { id: modelId, name: name.trim() || modelId }] }),
       );
     });
   const remove = () =>
-    Alert.alert(`Remove ${instance.name}?`, "Its settings and secrets leave this host; its threads keep their transcripts.", [
+    showAlert(`Remove ${instance.name}?`, "Its settings and secrets leave this host; its threads keep their transcripts.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Remove",
@@ -464,7 +465,7 @@ function ProviderBody({ m, info, onRemoved }: { m: Computer; info: ProviderInfo;
             onPress={
               x.custom
                 ? () =>
-                    Alert.alert(`Remove ${x.name}?`, undefined, [
+                    showAlert(`Remove ${x.name}?`, undefined, [
                       { text: "Cancel", style: "cancel" },
                       { text: "Remove", style: "destructive", onPress: () => change({ models: instance.models.filter((y) => y.id !== x.id) }) },
                     ])

@@ -2,7 +2,7 @@
 // every turn or for one turn, from the checkpoints plxd captures as each turn ends, each file with
 // its lines added and removed, folding on a tap. Reverting to a turn stays on the desktop.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { ChevronRight, FileText, History } from "lucide-react-native";
+import { ChevronRight, CircleAlert, FileDiff, FileText, History } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,7 +14,7 @@ import { Choices } from "./Choices";
 import { useComputer } from "./fleet";
 import type { Screens } from "./nav";
 import { DiffLine, DiffStats, useCard } from "./PullRequestParts";
-import { Icon, Row, Section, T, useColors } from "./ui";
+import { Empty, Icon, Row, Section, T, useColors } from "./ui";
 
 /** A file's path, its lines added and removed, and a chevron, which folds its lines on a tap. */
 function FileHeader({ file, open, onToggle }: { file: DiffFile; open: boolean; onToggle: (path: string) => void }) {
@@ -48,17 +48,6 @@ function FileHeader({ file, open, onToggle }: { file: DiffFile; open: boolean; o
 }
 
 /** Why there's no diff to show. */
-function Empty({ title, hint }: { title: string; hint: string }) {
-  return (
-    <View style={{ gap: 4, paddingTop: 24, alignItems: "center" }}>
-      <T medium>{title}</T>
-      <T muted style={{ fontSize: 14, textAlign: "center" }}>
-        {hint}
-      </T>
-    </View>
-  );
-}
-
 export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "ThreadChanges">) {
   const { hostId, runId } = route.params;
   const c = useColors();
@@ -151,11 +140,11 @@ export function ThreadChangesScreen({ route }: NativeStackScreenProps<Screens, "
   // What's already read stays through a lost connection, and is read again when it's back.
   const empty =
     unavailable && !diff ? (
-      <Empty title="Changes aren't available" hint={unavailable} />
+      <Empty icon={FileDiff} title="Changes aren't available" note={unavailable} />
     ) : runs && "error" in runs ? (
-      <Empty title="Couldn't load the changes" hint={runs.error} />
+      <Empty icon={CircleAlert} title="Couldn't load the changes" note={runs.error} />
     ) : runs && latest === undefined ? (
-      <Empty title="No changes yet" hint="Edits from this thread show up here for review." />
+      <Empty icon={FileDiff} title="No changes yet" note="Edits from this thread show up here for review." />
     ) : undefined;
   const loading = !unavailable && (!runs || (latest !== undefined && !shown));
 

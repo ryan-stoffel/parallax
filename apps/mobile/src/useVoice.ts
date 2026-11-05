@@ -1,17 +1,18 @@
 // A composer's dictation: the desktop's VoiceSession over iOS speech recognition (speech.ts).
 import { useEffect, useRef, useState } from "react";
-import { Alert, AppState, Linking } from "react-native";
+import { AppState, Linking } from "react-native";
 
 import { VoiceSession, type VoicePhase } from "../../desktop/src/renderer/voiceSession";
+import { showAlert } from "./dialogStore";
 import { SpeechDenied, speechDependencies } from "./speech";
 
 function voiceFailed(error: unknown) {
   if (error instanceof SpeechDenied)
-    return Alert.alert("Dictation is off for Parallax", "Allow the microphone and speech recognition in Settings to dictate.", [
+    return showAlert("Dictation is off for Parallax", "Allow the microphone and speech recognition in Settings to dictate.", [
       { text: "Not now", style: "cancel" },
       { text: "Open Settings", onPress: () => void Linking.openSettings() },
     ]);
-  Alert.alert("Dictation failed", error instanceof Error ? error.message : "Try again.");
+  showAlert("Dictation failed", error instanceof Error ? error.message : "Try again.");
 }
 
 /**

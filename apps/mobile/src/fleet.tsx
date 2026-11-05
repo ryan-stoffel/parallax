@@ -14,7 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Alert, AppState } from "react-native";
+import { AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
 import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
@@ -24,6 +24,7 @@ import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
 import { allowThisPhone, confirmDevice, setUpComputer, showWaiting } from "./accountPrompts";
+import { showAlert } from "./dialogStore";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
@@ -96,7 +97,8 @@ function outboxFor(host: () => Fleet, id: string): Outbox {
     saved,
     send,
     (messages) => file.write(JSON.stringify(messages)),
-    (m, error) => Alert.alert("Message not sent", `“${m.text}”: ${error.message}`),
+    // A dialog, not a notice: the saved copy is gone, so this is the last sight of what was typed.
+    (m, error) => showAlert("Message not sent", `“${m.text}”: ${error.message}`, [{ text: "OK" }]),
   );
   async function send(m: Outgoing): Promise<Sent> {
     const connection = host().hosts.get(id);
@@ -347,7 +349,7 @@ export function FleetProvider({
         asked.add(pending.id);
         const decide = (method: "access/approve" | "access/deny") =>
           void host.request(method, { request: pending.id }).then((done) => {
-            if ("error" in done) Alert.alert("Couldn't answer the request", done.error.message);
+            if ("error" in done) showAlert("Couldn't answer the request", done.error.message);
             // Approved here, it's approved on every computer this phone uses.
             else if (method === "access/approve") void share();
           });
