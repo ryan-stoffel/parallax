@@ -32,3 +32,19 @@ export function githubProblem(error?: RpcError): string | undefined {
     ? "GitHub isn't installed on this host."
     : "GitHub isn't signed in on this host.";
 }
+
+/** plxd's refusal of `thread/fork` (0050), for people. `running` is whether the thread runs now. */
+export function forkError(error: RpcError, running: boolean): string {
+  switch (error.data?.kind) {
+    case "threadNotFound":
+      return "This thread isn't on this host anymore.";
+    case "idConflict":
+      return "That fork's id was already taken. Try again.";
+  }
+  // invalidParams: a turn that hasn't ended, or one a fork copied from the thread it forked.
+  if (error.code === -32602)
+    return running
+      ? "This turn is still running. Fork it once it finishes."
+      : "This turn was copied from another thread. Fork it from that thread.";
+  return describeError(error);
+}

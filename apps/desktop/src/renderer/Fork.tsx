@@ -3,39 +3,15 @@ import { createContext, useContext, useId, useRef, useState, type RefObject } fr
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
-import { describeError } from "./errors";
-import { useCatalog, type Model } from "./models";
+import { forkError } from "./errors";
+import { useCatalog } from "./models";
 import { notify } from "./notifications";
 import { kindOf, logoOf } from "./providers";
-import type { ForkChoice } from "./threads";
+import { forkChoiceOf, type ForkChoice } from "./threads";
 import { isRunning } from "./transcript";
 import { Menu, menuItem } from "./ui";
 
-/** plxd's refusal of `thread/fork` (0050), for people. `running` is whether the thread runs now. */
-export function forkError(error: RpcError, running: boolean): string {
-  switch (error.data?.kind) {
-    case "threadNotFound":
-      return "This thread isn't on this host anymore.";
-    case "idConflict":
-      return "That fork's id was already taken. Try again.";
-  }
-  // invalidParams: a turn that hasn't ended, or one a fork copied from the thread it forked.
-  if (error.code === -32602)
-    return running
-      ? "This turn is still running. Fork it once it finishes."
-      : "This turn was copied from another thread. Fork it from that thread.";
-  return describeError(error);
-}
-
-/** What fork's menu sends to run on `m`: its model, and its instance when that isn't the run's. */
-function choiceOf(m: Model, run: AgentRun): ForkChoice {
-  return {
-    ...(m.id && { model: m.id }),
-    ...(m.provider !== run.backend && {
-      account: { kind: "subscription", backend: m.provider } as const,
-    }),
-  };
-}
+export { forkError };
 
 /**
  * Fork's menu (0050): keep the thread's model, or pick another of the host's, which may be another
@@ -131,7 +107,7 @@ export function ForkMenu({
                       role="menuitem"
                       aria-label={`${m.name} (${found?.name ?? m.provider})`}
                       disabled={busy}
-                      onClick={() => void pick(choiceOf(m, run))}
+                      onClick={() => void pick(forkChoiceOf(m, run))}
                       className={`${menuItem} disabled:opacity-50`}
                     >
                       <Logo aria-hidden />

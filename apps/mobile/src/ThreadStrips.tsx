@@ -15,6 +15,7 @@ import {
   Check,
   Circle,
   CornerUpRight,
+  GitFork,
   KeyRound,
   Pencil,
   Target,
@@ -528,6 +529,7 @@ export function ThreadStrips({
   stalled,
   connected,
   parent,
+  original,
 }: {
   hostId: string;
   runId: string;
@@ -544,6 +546,8 @@ export function ThreadStrips({
   connected: boolean;
   /** The thread this one is a child of, and how to open it. */
   parent?: { name: string; open: () => void };
+  /** The thread this one was forked from, and how to open it. */
+  original?: { name: string; open: () => void };
 }) {
   const c = useColors();
   const live = running && !stalled;
@@ -568,6 +572,29 @@ export function ThreadStrips({
           <Icon icon={ArrowLeft} size={14} color={c.mutedForeground} />
           <T muted style={text}>
             Parent
+          </T>
+        </>
+      ),
+    });
+
+  if (original)
+    tabs.push({
+      key: "original",
+      label: `Forked from ${original.name}. Open it`,
+      onPress: original.open,
+      full: (
+        <>
+          <Icon icon={GitFork} size={14} color={c.mutedForeground} />
+          <T muted numberOfLines={1} style={{ ...text, flex: 1 }}>
+            Forked from <T style={text}>{original.name}</T>
+          </T>
+        </>
+      ),
+      compact: (
+        <>
+          <Icon icon={GitFork} size={14} color={c.mutedForeground} />
+          <T muted style={text}>
+            Forked
           </T>
         </>
       ),

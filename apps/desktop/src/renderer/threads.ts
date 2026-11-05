@@ -781,6 +781,19 @@ export type RepoChange = Omit<RepoUpdateParams, "repo">;
 /** What a fork runs on: absent keeps the thread's model and account. */
 export type ForkChoice = { model?: string; account?: AccountChoice };
 
+/** What a fork sends to run on `m`: its model, and its instance when that isn't the run's. */
+export function forkChoiceOf(
+  m: { id: string; provider: string },
+  run: { backend: string },
+): ForkChoice {
+  return {
+    ...(m.id && { model: m.id }),
+    ...(m.provider !== run.backend && {
+      account: { kind: "subscription", backend: m.provider } as const,
+    }),
+  };
+}
+
 /** What `thread/update` changes. An empty `title` clears it. */
 export type ThreadChange = {
   seen?: boolean;
