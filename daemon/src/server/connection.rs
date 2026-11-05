@@ -175,7 +175,8 @@ impl Closed {
 /// `stop_reading` stops reading and closes it after the requests already read are answered.
 /// `over_connect` says it came through Parallax Connect's listener and its `whois` check
 /// ([`Context::over_connect`]). `read_only` says its device is limited to reads
-/// ([`Context::read_only`]).
+/// ([`Context::read_only`]), and `over_relay` that it came through a relay stream
+/// ([`Context::over_relay`]).
 pub(crate) async fn serve<S>(
     stream: S,
     daemon: Arc<Daemon>,
@@ -183,6 +184,7 @@ pub(crate) async fn serve<S>(
     closing: CancellationToken,
     over_connect: bool,
     read_only: bool,
+    over_relay: bool,
 ) -> Closed
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
@@ -205,6 +207,7 @@ where
         read_only,
         reason: Reason::HostClosed,
         error: None,
+        over_relay,
     };
     let stall = Stall {
         timeout: daemon.limits.idle_timeout,
@@ -264,6 +267,7 @@ struct Reader<S> {
     /// Why reading stopped. [`Reason::HostClosed`] until something else ends it.
     reason: Reason,
     error: Option<String>,
+    over_relay: bool,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
@@ -416,6 +420,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             replies: self.replies.clone(),
             over_connect: self.over_connect,
             read_only: self.read_only,
+            over_relay: self.over_relay,
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -923,6 +928,7 @@ mod tests {
             CancellationToken::new(),
             false,
             false,
+            false,
         ));
         let (read, mut write) = tokio::io::split(client);
         for request in requests {
@@ -964,6 +970,7 @@ mod tests {
                 Arc::clone(daemon),
                 stop.clone(),
                 closing.clone(),
+                false,
                 false,
                 false,
             ));

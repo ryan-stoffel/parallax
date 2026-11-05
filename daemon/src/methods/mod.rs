@@ -96,6 +96,9 @@ pub(crate) struct Context {
     /// The connection's device is read-only. [`dispatch`] refuses it anything [`read_only`]
     /// doesn't allow.
     pub read_only: bool,
+    /// The connection came through a Parallax Relay stream, whose bytes count against the host's
+    /// daily budget (0091). Its terminals' output is batched and paced ([`crate::terminals`]).
+    pub over_relay: bool,
 }
 
 impl Context {
@@ -454,7 +457,12 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         TerminalOpen => |p| ready(
             daemon
                 .terminals
-                .open(p, &context.replies, &context.stopped_reading)
+                .open(
+                    p,
+                    &context.replies,
+                    &context.stopped_reading,
+                    context.over_relay,
+                )
                 .map(|()| TerminalResult {})
         ),
         TerminalClose => |p| {
@@ -586,6 +594,7 @@ mod tests {
             replies: tokio::sync::mpsc::channel(1).0,
             over_connect: false,
             read_only: false,
+            over_relay: false,
         };
         let request = Request {
             id: 1.into(),
