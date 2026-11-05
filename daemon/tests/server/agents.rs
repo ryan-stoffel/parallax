@@ -958,6 +958,7 @@ async fn read_file(
             size_only: None,
             offset: None,
             length: None,
+            hash: None,
         })
         .await
 }
@@ -1020,6 +1021,7 @@ async fn assert_reviewable(
             size_only: Some(true),
             offset: None,
             length: None,
+            hash: None,
         })
         .await
         .unwrap();
@@ -1059,6 +1061,7 @@ async fn assert_paths_are_checked(client: &mut Conn, run_id: RunId) {
             size_only: None,
             offset: None,
             length: None,
+            hash: None,
         })
         .await
         .unwrap_err();

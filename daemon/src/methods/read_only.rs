@@ -173,6 +173,7 @@ fn is_read(method: RequestName) -> bool {
         | M::AgentFileCreate
         | M::AgentFileRename
         | M::AgentFileDelete
+        | M::AgentFileWrite
         | M::AgentAccept
         | M::AgentRequestChanges
         | M::AgentOpenPr
