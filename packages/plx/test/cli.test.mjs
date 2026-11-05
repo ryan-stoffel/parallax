@@ -128,19 +128,44 @@ test("plx exits on its own with stdin still open, once nothing is asking", { tim
   assert.deepEqual(await noTerminal(script, "pipe"), { code: 0, stdout: "q?\ngot the answer\n" });
 });
 
-test("plx connect with no terminal prints the link, skips the browser, and exits 1 at end of input", { timeout: 30_000 }, async () => {
+/**
+ * A script running real `plx connect` sign-in with stdin already ended. Clerk answers through
+ * `clerk`, a function of the URL. The rest fails, so it can't install anything or reach a real plxd.
+ * @param {string} clerk
+ */
+function connectScript(clerk) {
   const cli = new URL("../src/cli.mjs", import.meta.url).href;
-  // Only sign-in is real. The rest fails, so this can't install anything or reach a real plxd.
-  const script = `import { main, realDeps } from ${JSON.stringify(cli)};
+  return `import { main, realDeps } from ${JSON.stringify(cli)};
+    const clerk = ${clerk};
+    globalThis.fetch = async (url) => Response.json(clerk(String(url)));
     const never = async () => { throw new Error("got past sign-in"); };
     const deps = (noBrowser) => ({ ...realDeps(noBrowser), release: async () => ({ tag_name: "v1", prerelease: true, assets: [] }), details: never, install: never, plxd: never });
     main(["connect"], deps).then((code) => { process.exitCode = code; });`;
+}
+
+test("plx connect with no terminal and no device grant prints the link, skips the browser, and exits 1 at end of input", { timeout: 30_000 }, async () => {
+  const script = connectScript(`() => ({ token_endpoint: "unused" })`);
   const { code, stdout } = /** @type {{ code: number, stdout: string }} */ (await noTerminal(script, "ignore"));
   assert.equal(code, 1, stdout);
   assert.match(stdout, /^ {2}https:\/\/127\.0\.0\.1:1\/oauth\/authorize\S+$/m);
   assert.match(stdout, /^Paste the code it shows: $/m);
   assert.match(stdout, /^✗ No code was entered before input ended\./m);
   assert.doesNotMatch(stdout, /Opened your browser|got past sign-in/);
+});
+
+test("plx connect with no terminal and the device grant signs in with nothing on stdin", { timeout: 30_000 }, async () => {
+  const script = connectScript(`(url) => {
+    if (url.endsWith("/.well-known/oauth-authorization-server")) return { device_authorization_endpoint: "https://clerk.example/device", token_endpoint: "https://clerk.example/token", grant_types_supported: ["urn:ietf:params:oauth:grant-type:device_code"] };
+    if (url.endsWith("/device")) return { device_code: "secret", user_code: "ABCD-EFGH", verification_uri: "https://clerk.example/activate", expires_in: 60, interval: 1 };
+    return { access_token: "token" };
+  }`);
+  const { code, stdout } = /** @type {{ code: number, stdout: string }} */ (await noTerminal(script, "ignore"));
+  // The stub fails right after sign-in, which is how far this run goes.
+  assert.equal(code, 1, stdout);
+  assert.match(stdout, /^ {2}https:\/\/clerk\.example\/activate$/m);
+  assert.match(stdout, /^ {2}Code: ABCD-EFGH$/m);
+  assert.match(stdout, /got past sign-in/);
+  assert.doesNotMatch(stdout, /Opened your browser|Paste the code|No code was entered/);
 });
 
 test("the bin runs main, and --version prints plx-cli's version", () => {

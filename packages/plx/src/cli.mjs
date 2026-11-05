@@ -35,9 +35,9 @@ Tailscale (until the release after this one):
 
 Options:
   --channel stable|nightly   Which release to install (default: nightly)
-  --no-browser               Sign in on any device and paste the code here, rather than in a
-                             browser on this computer. Automatic over SSH, without a display,
-                             and with no terminal
+  --no-browser               Sign in on any device, with a link and a short code printed here,
+                             rather than in a browser on this computer. Automatic over SSH,
+                             without a display, and with no terminal
   --user <user>              The SSH user for add (default: ssh's own)
   --port <port>              The SSH port for add
   --headless                 Install plxd alone, without the app, for the Tailscale add and setup
@@ -101,9 +101,9 @@ let stdinReader;
 const prompt = (question) => (stdinReader ??= lineReader(process.stdin, process.stdout))(question);
 
 /**
- * What `plx connect` reaches: Clerk through the browser or a pasted code, plxd over `plxd
- * attach`, and stdin. With no terminal the browser stays closed: a script's sign-in is a link it
- * passes on, which works from any device.
+ * What `plx connect` reaches: Clerk through the browser, the device grant, or a pasted code, plxd
+ * over `plxd attach`, and stdin. With no terminal the browser stays closed: a script's sign-in is a
+ * link it passes on, which works from any device.
  * @param {boolean} noBrowser
  * @returns {import("./connect.mjs").Deps}
  */

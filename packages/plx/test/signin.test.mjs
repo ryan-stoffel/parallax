@@ -429,14 +429,15 @@ for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceCl
   test(`the paste flow takes over, with no error shown, when ${name}`, async () => {
     const fake = await fakeDeviceClerk(options);
     let out = "";
+    // A prompt that rejects is input ending, so reaching it fails the way the paste flow does.
     await assert.rejects(
       quietly((printed) =>
         signInWithout(fake, async () => {
           out = printed();
-          throw new Error("reached the paste prompt");
+          throw new Error("Input ended.");
         }),
       ),
-      /reached the paste prompt/,
+      /No code was entered before input ended/,
     );
     fake.close();
     assert.match(out, /\/oauth\/authorize\?/);
