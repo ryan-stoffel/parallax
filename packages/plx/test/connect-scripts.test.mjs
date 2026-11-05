@@ -88,15 +88,18 @@ test("connect.sh as a file with no terminal leaves plx the script's stdin for a 
 
 const POWERSHELL = ["-NoProfile", "-NonInteractive", "-Command"];
 
-// Windows' ways of having no terminal. cmd with no console gets powershell.exe a console of its own.
-/** @type {[string, (command: string) => [string, string[], import("node:child_process").SpawnOptions]][]} */
+// Windows' ways of having no terminal, each with the plx-cli the script should ask for. A
+// powershell.exe started directly with no console runs nothing at all and exits 0 (0091), so it
+// isn't here. Through cmd it gets a new console, which is its stdin, so the script sees a terminal.
+const NEEDS_FIX = '"plx-cli@0.7.0 - 99"';
+/** @type {[string, string, (command: string) => [string, string[], import("node:child_process").SpawnOptions]][]} */
 const LAUNCHES = [
-  ["piped output", (command) => ["powershell.exe", [...POWERSHELL, command], {}]],
-  ["a hidden console", (command) => ["powershell.exe", [...POWERSHELL, command], { windowsHide: true }]],
-  ["no console, through cmd", (command) => [`powershell.exe ${POWERSHELL.join(" ")} "${command}"`, [], { detached: true, shell: true }]],
+  ["piped output", NEEDS_FIX, (command) => ["powershell.exe", [...POWERSHELL, command], {}]],
+  ["a hidden console", NEEDS_FIX, (command) => ["powershell.exe", [...POWERSHELL, command], { windowsHide: true }]],
+  ["no console, through cmd", "plx-cli@latest", (command) => [`powershell.exe ${POWERSHELL.join(" ")} "${command}"`, [], { detached: true, shell: true }]],
 ];
 
-for (const [launch, how] of LAUNCHES) {
+for (const [launch, plx, how] of LAUNCHES) {
   test(`connect.ps1 with ${launch} runs plx, outlasts npm's stderr, and passes on its exit code`, { skip: process.platform !== "win32", timeout: 180_000 }, async () => {
     const root = mkdtempSync(path.join(tmpdir(), "plx-scripts-"));
     try {
@@ -107,8 +110,7 @@ for (const [launch, how] of LAUNCHES) {
       const [file, args, options] = how(`Get-Content -Raw -LiteralPath '${script("connect.ps1")}' | Invoke-Expression; Connect-Parallax --channel stable`);
       const { code, stdout, stderr } = await run(file, args, env, undefined, options);
       assert.equal(code, 7, `exit ${code}\nstdout: ${stdout}\nstderr: ${stderr}`);
-      // Quoted as cmd sees it, so only a plx that fails at end of input runs.
-      assert.equal(readFileSync(recorded, "utf8").trim(), '-y "plx-cli@0.7.0 - 99" connect --channel nightly --channel stable');
+      assert.equal(readFileSync(recorded, "utf8").trim(), `-y ${plx} connect --channel nightly --channel stable`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
