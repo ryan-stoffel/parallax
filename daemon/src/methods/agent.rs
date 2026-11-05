@@ -451,6 +451,7 @@ mod tests {
             replies: tokio::sync::mpsc::channel(1).0,
             over_connect: false,
             read_only: false,
+            over_relay: false,
         };
         let (run_id, project) = (RunId::generate(), ScopeId::generate());
         daemon

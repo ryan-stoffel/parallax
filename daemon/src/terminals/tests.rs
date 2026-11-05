@@ -8,7 +8,9 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use super::{History, Terminals, without_queries};
+#[cfg(unix)]
+use super::{BATCH_WINDOW, FLOOD_PAUSE, QUEUE_BEHIND};
+use super::{FLOOD_TAIL, History, Terminals, flood_tail, without_queries};
 use crate::methods::Reply;
 
 const PATIENCE: Duration = Duration::from_secs(20);
@@ -102,7 +104,7 @@ async fn opening_again_replays_the_history_then_streams_to_both() {
     let stopped = CancellationToken::new();
     let (first_tx, mut first) = mpsc::channel(256);
     terminals
-        .open(open(Some(echo())), &first_tx, &stopped)
+        .open(open(Some(echo())), &first_tx, &stopped, false)
         .unwrap();
     // The first output is always the history, even when empty.
     let (history, replay) = next(&mut first).await.unwrap();
@@ -113,7 +115,9 @@ async fn opening_again_replays_the_history_then_streams_to_both() {
 
     // Another client attaches to the same terminal, which doesn't start again.
     let (second_tx, mut second) = mpsc::channel(256);
-    terminals.open(open(None), &second_tx, &stopped).unwrap();
+    terminals
+        .open(open(None), &second_tx, &stopped, false)
+        .unwrap();
     let (history, replay) = next(&mut second).await.unwrap();
     assert!(replay);
     assert!(history.contains("ready"), "{history:?}");
@@ -154,7 +158,7 @@ async fn a_command_ends_with_the_connection_that_opened_it() {
     let stopped = CancellationToken::new();
     let (replies, mut output) = mpsc::channel(256);
     terminals
-        .open(open(Some(echo())), &replies, &stopped)
+        .open(open(Some(echo())), &replies, &stopped, false)
         .unwrap();
     until(&mut output, "ready").await;
 
@@ -168,4 +172,123 @@ async fn a_command_ends_with_the_connection_that_opened_it() {
     })
     .await
     .expect("the command ended");
+}
+
+#[test]
+fn a_floods_tail_starts_at_a_line_and_a_character() {
+    let short = "a\nb\n";
+    assert_eq!(flood_tail(short), short);
+
+    let lines = "line\n".repeat(FLOOD_TAIL);
+    let tail = flood_tail(&lines);
+    assert!(tail.len() <= FLOOD_TAIL);
+    assert!(tail.starts_with("line\n"));
+    assert!(tail.ends_with("line\n"));
+
+    // No line to start at, and the cut falls inside a three-byte character.
+    let wide = "€".repeat(FLOOD_TAIL);
+    assert!(flood_tail(&wide).len() <= FLOOD_TAIL);
+    assert!(flood_tail(&wide).starts_with('€'));
+}
+
+/// Runs `script` in `sh`, over the relay.
+#[cfg(unix)]
+fn over_relay(
+    terminals: &Terminals,
+    script: &str,
+    stopped: &CancellationToken,
+) -> (mpsc::Sender<Reply>, mpsc::Receiver<Reply>) {
+    let (replies, output) = mpsc::channel(256);
+    let command = TerminalCommand {
+        program: "sh".to_owned(),
+        args: vec!["-c".to_owned(), script.to_owned()],
+        env: std::collections::BTreeMap::new(),
+    };
+    terminals
+        .open(open(Some(command)), &replies, stopped, true)
+        .unwrap();
+    (replies, output)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn output_over_the_relay_comes_in_batches_and_all_of_it_arrives() {
+    let terminals = Terminals::default();
+    let stopped = CancellationToken::new();
+    let started = tokio::time::Instant::now();
+    let script =
+        "i=0; while [ $i -lt 2000 ]; do echo line-$i; i=$((i+1)); done; echo end; read line";
+    let (_replies, mut output) = over_relay(&terminals, script, &stopped);
+    let mut shown = String::new();
+    let mut messages = 0_u128;
+    while !shown.contains("end\r\n") {
+        let (data, _) = next(&mut output).await.expect("it exited first");
+        shown.push_str(&data);
+        messages += 1;
+    }
+    let windows = started.elapsed().as_millis() / BATCH_WINDOW.as_millis();
+    // The replay, and at most one message for each window and the one that starts them.
+    assert!(messages <= windows + 3, "{messages} in {windows} windows");
+    for i in 0..2000 {
+        assert!(
+            shown.contains(&format!("line-{i}\r\n")),
+            "line {i} is missing"
+        );
+    }
+    terminals.close_thread("t");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn output_over_the_relay_doesnt_pile_up_behind_a_slow_client() {
+    let terminals = Terminals::default();
+    let stopped = CancellationToken::new();
+    let (replies, mut output) = over_relay(&terminals, "yes", &stopped);
+    // Nothing reads what's queued, as with a client slower than the pace.
+    tokio::time::sleep(3 * FLOOD_PAUSE).await;
+    let queued = replies.max_capacity() - replies.capacity();
+    assert!(queued <= QUEUE_BEHIND + 1, "{queued} messages queued");
+
+    // It catches up with the end of the history once the client reads again.
+    let (_, replay) = next(&mut output).await.expect("it exited first");
+    assert!(replay, "the first output is the history");
+    let mut replayed = false;
+    while !replayed {
+        (_, replayed) = next(&mut output).await.expect("it exited first");
+    }
+    terminals.close_thread("t");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_flood_over_the_relay_is_skipped_and_typing_after_it_isnt() {
+    let terminals = Terminals::default();
+    let stopped = CancellationToken::new();
+    let script = "yes | head -c 4194304; echo end; read line; echo got-$line; read line";
+    let (_replies, mut output) = over_relay(&terminals, script, &stopped);
+    let mut shown = String::new();
+    let mut bytes = 0;
+    let mut replays = 0;
+    while !shown.contains("end\r\n") {
+        let (data, replay) = next(&mut output).await.expect("it exited first");
+        bytes += data.len();
+        replays += usize::from(replay);
+        // What came before a replay is gone from the client's screen.
+        if replay {
+            shown.clear();
+        }
+        shown.push_str(&data);
+    }
+    assert!(replays >= 2, "the flood was never skipped");
+    assert!(bytes < 2 * 1024 * 1024, "{bytes} of 4 MiB were sent");
+
+    // It paid for what it sent, so what's typed next goes as output, not as another skip.
+    terminals.write("t".to_owned(), "1".to_owned(), "you\r".to_owned());
+    let mut echoed = String::new();
+    while !echoed.contains("got-you") {
+        let (data, replay) = next(&mut output).await.expect("it exited first");
+        assert!(!replay, "typing after a flood was skipped");
+        echoed.push_str(&data);
+    }
+    terminals.close_thread("t");
 }

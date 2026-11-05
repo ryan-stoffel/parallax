@@ -6,6 +6,11 @@
 //! it came, and one waits for its program to exit. What it prints is appended to its history and
 //! broadcast under one lock, which `terminal/open` also takes to copy the history and subscribe, so
 //! a client sees each byte exactly once.
+//!
+//! Over the relay, where every frame counts as at least 16 KiB of the host's daily budget (0091), a
+//! stream batches and paces what it sends ([`Pace`]). A flood is skipped, and the client gets the
+//! end of the history about once a second. Reopening the terminal gets all of it. Other connections
+//! get every chunk as it's printed.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -23,6 +28,7 @@ use parallax_protocol::{
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::AbortHandle;
+use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use uuid::Uuid;
@@ -38,6 +44,30 @@ const MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHUNK: usize = 512 * 1024;
 /// The output chunks a slow connection may fall behind by before it gets the history again.
 const LAG: usize = 256;
+/// How long a stream over the relay gathers output after it last sent some. Output after a quiet
+/// moment goes at once. Five frames a second is about 7 hours of nonstop output, however little of
+/// it, to spend the host's 2 GiB a day.
+const BATCH_WINDOW: Duration = Duration::from_millis(200);
+/// The same while someone is typing in the terminal, so that quick keystrokes' echoes aren't held.
+const TYPING_BATCH_WINDOW: Duration = Duration::from_millis(50);
+/// How long after a keystroke a terminal counts as being typed in.
+const TYPING_LINGERS: Duration = Duration::from_secs(1);
+/// The most bytes a second a stream over the relay sends for as long as its terminal floods.
+const PACE_BYTES_PER_SECOND: f64 = 256.0 * 1024.0;
+/// How much output a stream over the relay sends at once before pacing starts, so printing a file
+/// of about this size shows all of it.
+const PACE_BURST: f64 = 512.0 * 1024.0;
+/// How many messages may wait to go out on a connection before a stream over the relay counts as
+/// behind. More would only make every answer on it wait longer for a client that's slower than
+/// the pace.
+const QUEUE_BEHIND: usize = 4;
+/// How long a stream over the relay waits after it finds its terminal flooding, and so how often
+/// the client's terminal is redrawn during a flood.
+const FLOOD_PAUSE: Duration = Duration::from_secs(1);
+/// How much of the history a stream over the relay sends each time it skips ahead: about 1,600
+/// full lines. Under what it earns in [`FLOOD_PAUSE`], so when a flood ends it owes nothing, and
+/// the next keystroke's echo goes as output, not as another skip.
+const FLOOD_TAIL: usize = 128 * 1024;
 
 type Key = (String, String);
 type Open = Arc<Mutex<HashMap<Key, Arc<Terminal>>>>;
@@ -55,6 +85,8 @@ struct Terminal {
     shared: Mutex<Shared>,
     output: broadcast::Sender<Output>,
     input: std_mpsc::Sender<String>,
+    /// When a client last wrote to it.
+    typed: Mutex<Option<Instant>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// The connections it streams to, so opening it again on one replaces that stream.
     streams: Mutex<Vec<Stream>>,
@@ -88,12 +120,13 @@ impl Terminals {
     /// `terminal/open`: attaches `replies`' connection to the running terminal with this key,
     /// resized, else starts one. Its output goes to `replies` until the terminal exits, the
     /// connection detaches it, or `stopped` (the connection closing), which also ends a command
-    /// terminal.
+    /// terminal. With `over_relay`, the output is batched and paced.
     pub(crate) fn open(
         &self,
         params: TerminalOpenParams,
         replies: &mpsc::Sender<Reply>,
         stopped: &CancellationToken,
+        over_relay: bool,
     ) -> Result<(), ErrorObject> {
         let key = (params.thread_id.clone(), params.terminal_id.clone());
         let size = pty_size(params.cols, params.rows);
@@ -116,6 +149,7 @@ impl Terminals {
             output,
             history,
             exit,
+            over_relay.then(|| Pace::new(Instant::now())),
         ));
         terminal
             .detach(replies)
@@ -141,6 +175,7 @@ impl Terminals {
     /// `terminal/write`: queues `data` for the terminal's program, if it runs.
     pub(crate) fn write(&self, thread_id: String, terminal_id: String, data: String) {
         if let Some(terminal) = lock(&self.open).get(&(thread_id, terminal_id)) {
+            *lock(&terminal.typed) = Some(Instant::now());
             let _ = terminal.input.send(data);
         }
     }
@@ -260,6 +295,16 @@ impl Terminal {
         streams
     }
 
+    /// How long a stream over the relay gathers output now.
+    fn batch_window(&self) -> Duration {
+        let typing = lock(&self.typed).is_some_and(|typed| typed.elapsed() < TYPING_LINGERS);
+        if typing {
+            TYPING_BATCH_WINDOW
+        } else {
+            BATCH_WINDOW
+        }
+    }
+
     /// A receiver for what it prints from now on, what it printed until now without its queries,
     /// and its exit code if it already exited. The queries are stripped after the lock, which the
     /// reader needs, is let go.
@@ -322,6 +367,7 @@ fn start(
         }),
         output: broadcast::channel(LAG).0,
         input,
+        typed: Mutex::default(),
         killer: Mutex::new(child.clone_killer()),
         streams: Mutex::default(),
         shell,
@@ -488,8 +534,122 @@ fn finish(terminal: &Arc<Terminal>, code: i32, open: &Open) {
     }
 }
 
+/// What one stream over the relay may still send, as a token bucket, and when it last sent.
+struct Pace {
+    tokens: f64,
+    filled: Instant,
+    sent: Instant,
+}
+
+impl Pace {
+    fn new(now: Instant) -> Self {
+        Self {
+            tokens: PACE_BURST,
+            filled: now,
+            sent: now.checked_sub(BATCH_WINDOW).unwrap_or(now),
+        }
+    }
+
+    /// Whether `bytes` fit what's left.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a batch is far under 2^52 bytes"
+    )]
+    fn afford(&mut self, bytes: usize, now: Instant) -> bool {
+        let earned = now.duration_since(self.filled).as_secs_f64() * PACE_BYTES_PER_SECOND;
+        self.tokens = (self.tokens + earned).min(PACE_BURST);
+        self.filled = now;
+        self.tokens >= bytes as f64
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a batch is far under 2^52 bytes"
+    )]
+    fn spend(&mut self, bytes: usize) {
+        self.tokens -= bytes as f64;
+    }
+
+    /// Pays for skipping ahead, and answers the end of `history` to send for it.
+    fn skip(&mut self, history: &str, now: Instant) -> String {
+        let tail = flood_tail(history);
+        self.spend(tail.len());
+        self.sent = now;
+        tail.to_owned()
+    }
+}
+
+/// The last [`FLOOD_TAIL`] bytes of `history`, from a line's start when there is one to start at.
+fn flood_tail(history: &str) -> &str {
+    let Some(from) = history.len().checked_sub(FLOOD_TAIL) else {
+        return history;
+    };
+    let from = history.ceil_char_boundary(from);
+    let line = history[from..].find('\n').map_or(from, |at| from + at + 1);
+    &history[line..]
+}
+
+/// Whether more than [`QUEUE_BEHIND`] messages wait to go out on `replies`.
+fn behind(replies: &mpsc::Sender<Reply>) -> bool {
+    !replies.is_closed() && replies.max_capacity() - replies.capacity() > QUEUE_BEHIND
+}
+
+/// Waits out a flood's pause, and until nothing waits to go out on the connection, so a flood adds
+/// at most one message to what a slow client has to read. Answers false when the connection stopped.
+async fn flood_pause(replies: &mpsc::Sender<Reply>, stopped: &CancellationToken) -> bool {
+    loop {
+        tokio::select! {
+            () = stopped.cancelled() => return false,
+            () = time::sleep(FLOOD_PAUSE) => {}
+        }
+        if replies.is_closed() || replies.capacity() == replies.max_capacity() {
+            return true;
+        }
+    }
+}
+
+/// How gathering a batch ended.
+enum Gathered {
+    /// Its window ended.
+    Due,
+    /// The terminal exited with this code.
+    Exit(i32),
+    /// More came than the stream could keep up with.
+    Lagged,
+    Stopped,
+}
+
+/// Adds what's printed to `batch` until `until`.
+async fn gather(
+    output: &mut broadcast::Receiver<Output>,
+    stopped: &CancellationToken,
+    batch: &mut String,
+    until: Instant,
+) -> Gathered {
+    while Instant::now() < until {
+        let next = tokio::select! {
+            () = stopped.cancelled() => return Gathered::Stopped,
+            () = time::sleep_until(until) => return Gathered::Due,
+            next = output.recv() => next,
+        };
+        match next {
+            Ok(Output::Data(data)) => batch.push_str(&data),
+            Ok(Output::Exit(code)) => return Gathered::Exit(code),
+            Err(broadcast::error::RecvError::Lagged(_)) => return Gathered::Lagged,
+            Err(broadcast::error::RecvError::Closed) => return Gathered::Due,
+        }
+    }
+    Gathered::Due
+}
+
 /// Sends a terminal's history, then what it prints, then its exit, to one connection. A
-/// connection that falls [`LAG`] chunks behind gets the history again.
+/// connection that falls [`LAG`] chunks behind gets the history again. With `pace`, what's printed
+/// goes in batches, and a batch it can't afford, or a connection that's behind, skips to the
+/// history's end.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one loop over what a terminal prints and how it's sent"
+)]
 async fn stream(
     terminal: Arc<Terminal>,
     replies: mpsc::Sender<Reply>,
@@ -497,6 +657,7 @@ async fn stream(
     mut output: broadcast::Receiver<Output>,
     mut history: String,
     mut exit: Option<i32>,
+    mut pace: Option<Pace>,
 ) {
     let (thread_id, terminal_id) = terminal.key.clone();
     let send = async |message: Output, replay: bool| {
@@ -540,6 +701,44 @@ async fn stream(
                 next = output.recv() => next,
             };
             match next {
+                Ok(Output::Data(data)) if pace.is_some() => {
+                    let Some(pace) = pace.as_mut() else { return };
+                    let mut batch = data.to_string();
+                    let until = pace.sent + terminal.batch_window();
+                    let gathered = gather(&mut output, &stopped, &mut batch, until).await;
+                    if matches!(gathered, Gathered::Stopped) {
+                        if terminal.command {
+                            terminal.kill();
+                        }
+                        return;
+                    }
+                    let now = Instant::now();
+                    if matches!(gathered, Gathered::Lagged)
+                        || !pace.afford(batch.len(), now)
+                        || behind(&replies)
+                    {
+                        if !flood_pause(&replies, &stopped).await {
+                            if terminal.command {
+                                terminal.kill();
+                            }
+                            return;
+                        }
+                        (output, history, exit) = terminal.subscribe();
+                        history = pace.skip(&history, Instant::now());
+                        break;
+                    }
+                    pace.spend(batch.len());
+                    pace.sent = now;
+                    for part in chunks(&batch) {
+                        if !send(Output::Data(part.into()), false).await {
+                            return;
+                        }
+                    }
+                    if let Gathered::Exit(code) = gathered {
+                        send(Output::Exit(code), false).await;
+                        return;
+                    }
+                }
                 Ok(message @ Output::Data(_)) => {
                     if !send(message, false).await {
                         return;
@@ -551,6 +750,9 @@ async fn stream(
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     (output, history, exit) = terminal.subscribe();
+                    if let Some(pace) = pace.as_mut() {
+                        history = pace.skip(&history, Instant::now());
+                    }
                     break;
                 }
                 Err(broadcast::error::RecvError::Closed) => return,

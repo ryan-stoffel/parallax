@@ -344,7 +344,7 @@ impl Serving {
                         // Small request and answer frames: send each at once.
                         let _ = stream.set_nodelay(true);
                         // No key names the device here, so a read-only mark can't reach it (0091).
-                        connection::serve(stream, daemon, stop_reading, closing, true, false)
+                        connection::serve(stream, daemon, stop_reading, closing, true, false, false)
                             .await
                             .log(connection::Route::Tailnet);
                     }

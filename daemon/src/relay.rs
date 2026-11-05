@@ -546,6 +546,10 @@ fn keep(slot: &EndSlot, end: StreamEnd) {
     *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(end);
 }
 
+/// The most bytes one frame on a stream carries. The relay counts each frame as at least 16 KiB
+/// (`relay/src/stream.ts`), so a transfer that fills its frames counts its real size.
+const MAX_STREAM_FRAME: usize = 64 * 1024;
+
 /// Joins a WebSocket's binary frames to a byte stream: what's written to the answer goes out in
 /// frames, and frames come out of it. Either side's end ends both, as does `keepalive` finding the
 /// socket dead. A client has its own heartbeat, so needs none. Why the stream ended goes in `end`
@@ -555,7 +559,7 @@ fn pipe(
     mut keepalive: Option<Keepalive>,
     end: EndSlot,
 ) -> DuplexStream {
-    let (ours, theirs) = tokio::io::duplex(64 * 1024);
+    let (ours, theirs) = tokio::io::duplex(MAX_STREAM_FRAME);
     tokio::spawn(async move {
         let (mut sink, mut frames) = socket.split();
         let (mut reader, mut writer) = tokio::io::split(theirs);
@@ -569,7 +573,7 @@ fn pipe(
             error
         };
         let outgoing = async {
-            let mut buffer = vec![0; 16 * 1024];
+            let mut buffer = vec![0; MAX_STREAM_FRAME];
             loop {
                 let due = async {
                     match &mut keepalive {
@@ -1875,7 +1879,13 @@ async fn stream(
         let mut tcp = out.connect(local).await?;
         let _ = tcp.set_nodelay(true);
         let mut piped = pipe(socket, Some(keepalive), end);
-        tokio::io::copy_bidirectional(&mut piped, &mut tcp).await?;
+        tokio::io::copy_bidirectional_with_sizes(
+            &mut piped,
+            &mut tcp,
+            MAX_STREAM_FRAME,
+            MAX_STREAM_FRAME,
+        )
+        .await?;
         Ok::<_, Error>(())
     };
     tokio::select! {
