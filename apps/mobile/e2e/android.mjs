@@ -278,6 +278,11 @@ try {
     },
   });
   cleanups.push(() => process.kill(-metro.pid, "SIGTERM"));
+  // An app that starts before Metro answers looks for a bundle in its assets, and a debug APK has none.
+  await until("Metro", async () => {
+    const answer = await fetch("http://127.0.0.1:8081/status").catch(() => null);
+    return (await answer?.text())?.includes("packager-status:running");
+  }, 120_000);
 
   adb("shell", "am", "start", "-n", `${APP}/.MainActivity`);
   await waitFor("Sign in", { timeoutMs: 300_000 });
