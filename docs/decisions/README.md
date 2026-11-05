@@ -97,6 +97,7 @@ A decision that affects more than one issue gets a record here. Records supersed
 | [0098](0098-secret-files-for-commands.md) | `request_secret` takes `delivery: "file"`: the answer goes straight to an owner-only file for the thread's own commands, for 24 hours, and the card says those commands can read it; MCP `instructions` send agents to it instead of chat, including for sudo |
 | [0099](0099-secret-card-input.md) | `request_secret` takes a required `input`, `value`, `env`, or `file`, that picks the card's view, separately from `delivery`; a picked file goes byte for byte as `saveBytes` |
 | [0100](0100-encrypted-push.md) | A closed app's notification shows the thread's title and the start of its reply: plxd seals them with a per-computer AES-256-GCM key the app gets from `relay/pushKey`, the relay carries them unread, and a notification service extension opens them, or leaves the fixed text if it can't |
+| [0101](0101-files-view-editor.md) | The Files view edits text files in place with CodeMirror 6, saving as you type: each save carries the SHA-256 it was edited from, plxd refuses a mismatch, and the app offers Reload or Overwrite |
 
 Numbers are assigned in order. Take the next free number when you start the record, add a row to this table in the same PR, and link the record from its issue.
 
