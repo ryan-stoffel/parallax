@@ -242,6 +242,7 @@ fn is_read(method: RequestName) -> bool {
         | M::RelayRegister
         | M::RelaySign
         | M::RelayHosts
+        | M::RelayCheck
         | M::RelayRemove
         | M::AccessMerge
         | M::AccessSetReadOnly

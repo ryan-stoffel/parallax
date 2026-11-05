@@ -3,24 +3,26 @@
 //! forwarded with plxd's signature check and held while plxd is away.
 //!
 //! Runs only when `relay/scripts/e2e.mjs` starts a relay and passes its URL and a Clerk token in
-//! `PLXD_TEST_RELAY_URL` and `PLXD_TEST_RELAY_TOKEN`. Elsewhere it passes without doing anything.
+//! `PLXD_TEST_RELAY_URL` and `PLXD_TEST_RELAY_TOKEN`. Elsewhere it passes without doing anything,
+//! but for the older relay's test, whose relay is its own.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::jsonrpc::Message;
 use parallax_protocol::methods::{
     AccessGet, AccessMerge, AccessRemove, HostAnnounceUpdate, HostSettingsGet, HostSettingsSet,
-    OrchestratorCreate, RelayHosts, RelayRegister, RelayRemove, RelaySign, RemoteRevoke,
-    RemoteSessions, ScheduleList, ScheduleSave,
+    OrchestratorCreate, RelayCheck, RelayHosts, RelayRegister, RelayRemove, RelaySign,
+    RemoteRevoke, RemoteSessions, ScheduleList, ScheduleSave,
 };
 use parallax_protocol::{
     AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice,
-    HostAnnounceUpdateParams, HostSettingsGetParams, HostSettingsSetParams, RelayHostsParams,
-    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelayStatus, RemoteRevokeParams,
-    RemoteSessionsParams, Schedule, ScheduleListParams, ScheduleSaveParams, SignatureEncoding,
-    WebhookSignature,
+    HostAnnounceUpdateParams, HostSettingsGetParams, HostSettingsSetParams, RelayCheckParams,
+    RelayCheckPart, RelayHostsParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
+    RelayStatus, RemoteRevokeParams, RemoteSessionsParams, Schedule, ScheduleListParams,
+    ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
 use plxd::{relay, remote};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -574,6 +576,91 @@ async fn removing_a_device_on_one_computer_cuts_it_off_on_the_others_within_seco
     for server in [a_server, b_server, c_server, d_server] {
         server.stop().await;
     }
+}
+
+#[tokio::test]
+async fn the_connection_check_crosses_the_relay_and_names_the_part_that_failed() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+    ) else {
+        return;
+    };
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    let port = free_port();
+    config.remote_port = port;
+    config.relay_url.clone_from(&url);
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    let check = async |client: &mut Client, token: Option<&str>| {
+        client
+            .call::<RelayCheck>(RelayCheckParams {
+                token: token.map(str::to_owned),
+            })
+            .await
+            .unwrap()
+    };
+
+    set_relay(&mut client, true).await;
+    let unknown = check(&mut client, None).await;
+    assert_eq!(unknown.failed, Some(RelayCheckPart::SignIn), "{unknown:?}");
+
+    client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token.clone(),
+            signed: None,
+        })
+        .await
+        .unwrap();
+    relay_status(&mut client, |s| s.connected).await;
+    let off = check(&mut client, None).await;
+    assert_eq!(off.failed, Some(RelayCheckPart::Listener), "{off:?}");
+
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let passed = check(&mut client, Some(&token)).await;
+    assert_eq!(passed.failed, None, "{passed:?}");
+    assert!(passed.round_trip_ms.is_some(), "{passed:?}");
+    let bad = check(&mut client, Some("not.a.token")).await;
+    assert_eq!(bad.failed, Some(RelayCheckPart::SignIn), "{bad:?}");
+    for result in [&unknown, &off, &passed, &bad] {
+        assert!(!result.diagnostics.contains(&token));
+        assert!(!result.diagnostics.contains("user_e2e"));
+    }
+}
+
+#[tokio::test]
+async fn the_connection_check_says_an_older_relay_needs_updating() {
+    // A relay from before the check: its `ready` doesn't say `check`, and it ignores the rest.
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::text(
+                r#"{"t":"ready"}"#,
+            ))
+            .await
+            .unwrap();
+        while let Some(Ok(_)) = socket.next().await {}
+    });
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.relay_url = url;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_relay(&mut client, true).await;
+    relay_status(&mut client, |s| s.connected).await;
+
+    let older = client
+        .call::<RelayCheck>(RelayCheckParams { token: None })
+        .await
+        .unwrap();
+    assert_eq!(older.failed, Some(RelayCheckPart::Relay), "{older:?}");
+    assert!(older.fix.unwrap().contains("relay needs updating"));
 }
 
 /// How many connections the relay benchmark times.

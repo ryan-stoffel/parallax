@@ -689,6 +689,12 @@ export type ParallaxRequests = {
 	 */
 	"relay/hosts": { params: RelayHostsParams, result: RelayHostsResult },
 	/**
+	 * `relay/check`: opens a real stream through the relay back to this host's listener, and
+	 * says which part failed and what to do about it (PLX-1356). An older plxd answers it as
+	 * an unknown method.
+	 */
+	"relay/check": { params: RelayCheckParams, result: RelayCheckResult },
+	/**
 	 * `relay/remove`: removes one of the user's hosts from the relay, freeing its place, and
 	 * answers with the rest.
 	 */
@@ -1243,6 +1249,7 @@ export const REQUEST_METHODS = [
 	"relay/register",
 	"relay/sign",
 	"relay/hosts",
+	"relay/check",
 	"relay/remove",
 	"relay/id",
 	"relay/pushKey",
@@ -8712,6 +8719,51 @@ export type RelayUsage = {
 	 */
 	resetsAt: number,
 };
+
+/**
+ * Params of `relay/check` (PLX-1356).
+ */
+export type RelayCheckParams = {
+	/**
+	 * The user's Clerk session token, which also checks the sign-in. plxd sends it to the relay
+	 * and keeps nothing of it. Without one, as plxd keeps none, the sign-in check is whether the
+	 * relay accepts this host's key.
+	 */
+	token?: string,
+};
+
+/**
+ * Result of `relay/check` (PLX-1356): whether a real stream through the relay reached this host's
+ * listener, with TLS pinned to its own host id, and if not, the first part that failed.
+ */
+export type RelayCheckResult = {
+	/**
+	 * The first part that failed. The parts after it weren't checked. None when all passed.
+	 */
+	failed?: RelayCheckPart,
+	/**
+	 * What went wrong, for people.
+	 */
+	problem?: string,
+	/**
+	 * What to do about it, for people.
+	 */
+	fix?: string,
+	/**
+	 * How long the stream took, from asking the relay to reading the listener's answer.
+	 */
+	roundTripMs?: number,
+	/**
+	 * This result as text to paste into a bug report. It holds no token, ticket, session, or user
+	 * id, and only the start of the host id.
+	 */
+	diagnostics: string,
+};
+
+/**
+ * A part of the path a client's connection takes through Parallax Relay.
+ */
+export type RelayCheckPart = "signIn" | "relay" | "listener" | "stream";
 
 /**
  * Params of `relay/remove`: removes one of the signed-in user's hosts from Parallax Relay,

@@ -15,6 +15,7 @@ import {
   type AccessState,
   type CliKind,
   type DeviceStreamParams,
+  type RelayCheckResult,
   type RelayHost,
   type RelayHostsResult,
   type RemoteSessionsResult,
@@ -330,6 +331,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:localName", () => localName());
   ipcMain.handle("parallax:registerRelay", () => registerRelay());
   ipcMain.handle("parallax:relayHosts", () => relayHosts());
+  ipcMain.handle("parallax:checkRelay", () => checkRelay());
   ipcMain.handle("parallax:removeRelayHost", (_event, hostId: unknown) =>
     typeof hostId === "string" ? relayHosts(hostId) : "invalid host",
   );
@@ -1217,6 +1219,19 @@ async function relayHosts(remove?: string): Promise<RelayHost[] | string> {
   const answer = await connections.get("local")?.request("relay/hosts", { token });
   if (!answer) return "Parallax isn't connected to this computer's plxd.";
   return "error" in answer ? answer.error.message : answer.result.hosts;
+}
+
+/**
+ * `window.parallax.checkRelay`: plxd's connection check (PLX-1356), with the account's token, so it
+ * checks the sign-in too. Main sends the token straight to plxd. Answers the result, or why not.
+ */
+async function checkRelay(): Promise<RelayCheckResult | string> {
+  const token = await account?.accessToken();
+  if (!token) return noToken();
+  // Six steps of up to 10 s each, on a relay slow at every one, and a 5 s wait to connect.
+  const answer = await connections.get("local")?.request("relay/check", { token }, 70_000);
+  if (!answer) return "Parallax isn't connected to this computer's plxd.";
+  return "error" in answer ? answer.error.message : answer.result;
 }
 
 /**

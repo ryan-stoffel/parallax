@@ -39,7 +39,7 @@ async function online(user = `user_${crypto.randomUUID()}`) {
   const token = await session(user);
   expect((await register(host, token)).status).toBe(200);
   const { control } = await connectHost(host);
-  expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready" });
+  expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready", check: true });
   return { host, token, control };
 }
 
@@ -239,6 +239,32 @@ describe("one user can't reach another user's host", () => {
     const { ticket } = await stream(host, token, control);
     const reused = await socket(`/v1/hosts/${host.id}/connect?ticket=${ticket}`);
     expect(reused instanceof Response && reused.status).toBe(401);
+  });
+});
+
+describe("connection check", () => {
+  it("gives plxd a ticket to itself over its control socket, which opens a real stream", async () => {
+    const { host, control } = await online();
+    control.ws.send(JSON.stringify({ t: "check" }));
+    const answer = JSON.parse((await control.next()) as string) as { t: string; ticket: string };
+    expect(answer.t).toBe("check");
+    const client = opened(await socket(`/v1/hosts/${host.id}/connect?ticket=${answer.ticket}`));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, open));
+    expect(await client.next()).toBe("ready");
+    expect(await side.next()).toBe("ready");
+    const reused = await socket(`/v1/hosts/${host.id}/connect?ticket=${answer.ticket}`);
+    expect(reused instanceof Response && reused.status).toBe(401);
+  });
+
+  it("answers with the refusal when the host has opened too many streams this minute", async () => {
+    const { control } = await online();
+    let answer: { ticket?: string; error?: string } = {};
+    for (let sent = 0; sent <= LIMITS.opens; sent++) {
+      control.ws.send(JSON.stringify({ t: "check" }));
+      answer = JSON.parse((await control.next()) as string) as typeof answer;
+    }
+    expect(answer).toEqual({ t: "check", error: "rate_limited" });
   });
 });
 
@@ -517,7 +543,7 @@ describe("streams", () => {
     const listed = await named(false);
     const left = opened(await join(host, listed.open));
     const { control: again } = await connectHost(host);
-    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready" });
+    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready", check: true });
     expect(await left.closed).toBe(1000);
     expect(await openStreams(host)).toEqual({});
     expect(await kept(listed.object)).toBe(0);
@@ -650,7 +676,7 @@ describe("webhooks", () => {
     expect(await held.json()).toEqual({ queued: true });
 
     const { control } = await connectHost(host);
-    expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready" });
+    expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready", check: true });
     const { head, body } = hookFrame((await control.next()) as ArrayBuffer);
     expect(new TextDecoder().decode(body)).toBe("one");
     control.ws.send(JSON.stringify({ t: "hook", id: head.id, status: 202, body: {} }));
@@ -776,7 +802,7 @@ describe("rate limits", () => {
       expect(stranger instanceof Response && stranger.status).toBe(401);
     }
     const { control } = await connectHost(host);
-    expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready" });
+    expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready", check: true });
     // plxd's own reconnects are what count.
     for (let i = 2; i < LIMITS.hostConnect; i++) await (await connectHost(host)).control.next();
     const over = await hostSocket(host, await hostProof(host));
@@ -809,7 +835,7 @@ describe("a device's removal", () => {
     expect(await silent(stranger.control)).toBe(true);
 
     const { control } = await connectHost(away);
-    expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready" });
+    expect(JSON.parse((await control.next()) as string)).toEqual({ t: "ready", check: true });
     expect(await silent(control)).toBe(true);
   });
 

@@ -151,6 +151,7 @@ const bridge: ParallaxBridge = {
   registerRelay: () => ipcRenderer.invoke("parallax:registerRelay"),
   relayHosts: () => ipcRenderer.invoke("parallax:relayHosts"),
   removeRelayHost: (hostId) => ipcRenderer.invoke("parallax:removeRelayHost", hostId),
+  checkRelay: () => ipcRenderer.invoke("parallax:checkRelay"),
 
   onConnect: (listener) => follow("parallax:connect", listener),
   setConnect: (on) => ipcRenderer.invoke("parallax:setConnect", on),

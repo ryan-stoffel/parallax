@@ -6,8 +6,8 @@
 // State: `relay` and `remote` (settings), `registered`, `connects` (false keeps the relay
 // unreachable), `pending` (a new device's request), `pairAfterCodes` (the setup code count after
 // which a device pairs), `pairInMs` (how long after that code it pairs), `expiresInMs` (each
-// setup code's life), and `idleMs` (when set, it exits after that long without a request, as plxd
-// closes a silent connection).
+// setup code's life), `idleMs` (when set, it exits after that long without a request, as plxd
+// closes a silent connection), and `noCheck` (it has no `relay/check`, as an older plxd).
 
 import { appendFileSync } from "node:fs";
 
@@ -24,6 +24,7 @@ const state = {
   expiresInMs: 600_000,
   /** @type {number | undefined} */
   idleMs: undefined,
+  noCheck: false,
   ...JSON.parse(process.env["FAKE_PLXD"] ?? "{}"),
 };
 let version = 1;
@@ -76,6 +77,14 @@ const methods = {
   "relay/hosts": ({ token }) => {
     if (token !== "good-token") throw new Error("The relay refused the sign-in.");
     return { hosts: [{ hostId: HOST_ID, name: "studio", online: true, thisComputer: true }] };
+  },
+  "relay/check": () => {
+    if (state.noCheck) throw new Error("Method not found");
+    if (state.relay && state.remote && state.registered && state.connects)
+      return { roundTripMs: 42, diagnostics: "Result: passed" };
+    return state.remote
+      ? { failed: "relay", problem: "Couldn't reach Parallax Relay.", fix: "Check the internet.", diagnostics: "Result: failed" }
+      : { failed: "listener", problem: "The listener is off.", fix: "Run plx connect.", diagnostics: "Result: failed" };
   },
   "relay/id": () => ({ hostId: HOST_ID }),
   "relay/remove": ({ token }) => {

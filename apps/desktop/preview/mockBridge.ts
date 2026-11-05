@@ -2231,6 +2231,8 @@ export const mockBridge: ParallaxBridge = {
     relayHosts = relayHosts.filter((h) => h.hostId !== hostId);
     return delay([...relayHosts], 300);
   },
+  checkRelay: () =>
+    delay({ roundTripMs: 84, diagnostics: "Parallax connection check\nResult: passed\n" }, 400),
 
   onConnect: (listener) => {
     listener({ ...connect });

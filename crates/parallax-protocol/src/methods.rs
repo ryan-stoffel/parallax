@@ -84,31 +84,32 @@ use crate::{
     ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
     PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
     QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams,
-    RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams, RelayPushKeyResult,
-    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams,
-    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
-    RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
-    RepoCloneProgressResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
-    RepoGrepResult, RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult,
-    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams,
-    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
-    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
-    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
-    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
-    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
-    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
-    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
-    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
-    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
-    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
-    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams,
-    ThreadSetProjectResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
-    UsageLimitsResult, UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
-    UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
+    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RelayCheckParams,
+    RelayCheckResult, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
+    RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams,
+    RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams,
+    RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
+    RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
+    RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoLogoParams, RepoLogoResult,
+    RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult, RepoRemoteParams,
+    RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams, RepoScriptsResult,
+    RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams,
+    ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams, SecretAnswerResult,
+    SecretRequestParams, SecretRequestResult, SubscribeShellParams, SubscribeShellResult,
+    SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams, TaskStatusParams,
+    TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams,
+    TerminalOutputParams, TerminalResizeParams, TerminalResult, TerminalWriteParams,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadImportChatParams,
+    ThreadImportParams, ThreadImportableParams, ThreadImportableResult, ThreadImportedChatsParams,
+    ThreadImportedChatsResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
+    ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult,
+    UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
+    UsageHistoryResult, UsageLimitsParams, UsageLimitsResult, UsageReportClaimParams,
+    UsageReportClaimResult, UsageReportReleaseParams, UsageReportReleaseResult, VoiceCleanParams,
+    VoiceCleanResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -638,6 +639,10 @@ method_table! {
         RelaySign = "relay/sign": RelaySignParams => RelaySignResult;
         /// `relay/hosts`: the hosts the signed-in user has on Parallax Relay (PLX-652, 0068).
         RelayHosts = "relay/hosts": RelayHostsParams => RelayHostsResult;
+        /// `relay/check`: opens a real stream through the relay back to this host's listener, and
+        /// says which part failed and what to do about it (PLX-1356). An older plxd answers it as
+        /// an unknown method.
+        RelayCheck = "relay/check": RelayCheckParams => RelayCheckResult;
         /// `relay/remove`: removes one of the user's hosts from the relay, freeing its place, and
         /// answers with the rest.
         RelayRemove = "relay/remove": RelayRemoveParams => RelayHostsResult;

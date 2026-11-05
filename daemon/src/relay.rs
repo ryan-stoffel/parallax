@@ -28,6 +28,8 @@
 //! Every connection honors `HTTPS_PROXY` ([`proxy`]). The relay's TLS also trusts the OS's root
 //! certificates, so it works through a TLS-inspecting proxy, which then sees what the relay does
 //! and no more: clients' streams are still TLS to a pinned certificate. Clerk's doesn't ([`Roots`]).
+//!
+//! [`check`] opens such a stream back to this host, to prove the whole path works (PLX-1356).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
@@ -47,13 +49,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream};
 use tokio::net::{TcpSocket, TcpStream};
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::{self, Instant, MissedTickBehavior};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+pub(crate) mod check;
 mod proxy;
 mod seal;
 
@@ -677,13 +680,16 @@ async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream
         Err((Some(401 | 404 | 426), _)) => ticketed(url, token, host_id).await?,
         Err((_, error)) => return Err(error),
     };
-    // The relay says so once the host joined the stream.
+    joined(&mut socket).await?;
+    let end = client_slot();
+    *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    Ok(pipe(socket, None, end))
+}
+
+/// Waits for the relay to say the host joined a client's stream.
+async fn joined(socket: &mut WebSocketStream<Stream>) -> Result<(), Error> {
     match socket.next().await {
-        Some(Ok(Message::Text(text))) if text.as_str() == "ready" => {
-            let end = client_slot();
-            *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
-            Ok(pipe(socket, None, end))
-        }
+        Some(Ok(Message::Text(text))) if text.as_str() == "ready" => Ok(()),
         _ => Err(Error::Protocol(
             "the host didn't join the relay's stream".to_owned(),
         )),
@@ -728,6 +734,12 @@ pub(crate) struct Relay {
     removed: Notify,
     /// The streams joined to the remote listener, by the address each connects from.
     streams: Mutex<HashMap<SocketAddr, Arc<RelayStream>>>,
+    /// Wakes the connection to ask the relay for a connection check's ticket.
+    check_asked: Notify,
+    /// Who waits for the relay's answer to that.
+    check_answer: Mutex<Option<oneshot::Sender<Value>>>,
+    /// Lets one connection check run at a time, since the relay's answer names no check.
+    check_running: tokio::sync::Mutex<()>,
 }
 
 /// A client's stream through the relay, as the remote listener reads it when that client's
@@ -772,6 +784,10 @@ struct Status {
     /// This host's relay id while connected.
     connected: Option<String>,
     problem: Option<String>,
+    /// The relay refused the last connection because it doesn't know this host's key.
+    unregistered: bool,
+    /// The connected relay answers the connection check. An older one doesn't say so.
+    checks: bool,
 }
 
 impl Relay {
@@ -785,6 +801,9 @@ impl Relay {
             removals: Mutex::default(),
             removed: Notify::new(),
             streams: Mutex::default(),
+            check_asked: Notify::new(),
+            check_answer: Mutex::default(),
+            check_running: tokio::sync::Mutex::const_new(()),
         }
     }
 
@@ -1339,8 +1358,9 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             Err(Error::Refused) => {
                 let problem = "This computer isn't registered with the relay yet. Sign in to Parallax to register it.";
                 relay.set(Status {
-                    connected: None,
                     problem: Some(problem.to_owned()),
+                    unregistered: true,
+                    ..Status::default()
                 });
                 failures += 1;
                 Some(backoff(failures))
@@ -1351,8 +1371,8 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
                 }
                 failures += 1;
                 relay.set(Status {
-                    connected: None,
                     problem: Some(cant_reach(&error)),
+                    ..Status::default()
                 });
                 Some(backoff(failures))
             }
@@ -1360,8 +1380,8 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
                 warn!(%error, "could not connect to the relay");
                 failures += 1;
                 relay.set(Status {
-                    connected: None,
                     problem: Some(cant_reach(&error)),
+                    ..Status::default()
                 });
                 Some(backoff(failures))
             }
@@ -1427,12 +1447,13 @@ async fn connected(
         async move {
             let headers = [(PROOF_HEADER, proof.as_str()), (STREAMS_HEADER, &listed)];
             let mut socket = websocket(url, &path, &headers).await?;
-            if next_json(&mut socket).await?["t"] != "ready" {
+            let ready = next_json(&mut socket).await?;
+            if ready["t"] != "ready" {
                 return Err(Error::Protocol(
                     "the relay didn't accept the host key".to_owned(),
                 ));
             }
-            Ok(socket)
+            Ok((socket, ready["check"] == true))
         }
     };
     let timed = |at| async move {
@@ -1441,7 +1462,8 @@ async fn connected(
             .map_err(|_| Error::Protocol("the relay didn't answer in time".to_owned()))?
     };
     let relay = &daemon.relay;
-    let socket = match timed(now_ms() + relay.clock_offset.load(Ordering::Relaxed)).await {
+    let (socket, checks) = match timed(now_ms() + relay.clock_offset.load(Ordering::Relaxed)).await
+    {
         Err(Error::Clock(relay_ms)) => {
             // A clock off by more than a day isn't a drift to correct for, and keeps the sums below
             // from overflowing.
@@ -1467,7 +1489,8 @@ async fn connected(
     info!(%host_id, "connected to the relay");
     daemon.relay.set(Status {
         connected: Some(host_id.clone()),
-        problem: None,
+        checks,
+        ..Status::default()
     });
     let linked = Instant::now();
     let ended = serve(daemon, socket, &host_id, stop, pushes, streams, link).await;
@@ -1611,11 +1634,7 @@ async fn serve(
     let (mut sink, mut frames) = socket.split();
     let (replies, mut answered) = mpsc::channel::<String>(16);
     let removals = removal_queue(daemon);
-    let remote = &daemon.remote;
-    let local = SocketAddr::new(
-        remote.address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        remote.port,
-    );
+    let local = local_listener(daemon);
     let mut events = daemon.log.watch();
     pushes.catch_up(&daemon.log, Instant::now());
     link.start_over();
@@ -1675,6 +1694,9 @@ async fn serve(
             }
             () = link.changed() => return Ok(Ended::Moved),
             Some(reply) = answered.recv() => sink.send(Message::text(reply)).await.map_err(failed)?,
+            () = daemon.relay.check_asked.notified() => {
+                sink.send(Message::text(r#"{"t":"check"}"#)).await.map_err(failed)?;
+            }
             () = daemon.relay.hooks_changed.notified() => {
                 sink.send(hooks().await).await.map_err(failed)?;
             }
@@ -1713,7 +1735,9 @@ async fn serve(
                         } else {
                             serde_json::from_str(&text).unwrap_or(Value::Null)
                         };
-                        if message["t"] == "open" && serving(daemon).await {
+                        if message["t"] == "check" {
+                            daemon.relay.check_answered(message);
+                        } else if message["t"] == "open" && serving(daemon).await {
                             let daemon = Arc::clone(daemon);
                             let host_id = host_id.to_owned();
                             let (stop, done) = match &mut streams.spare {
@@ -1760,6 +1784,15 @@ async fn serve(
             }
         }
     }
+}
+
+/// Where this computer reaches its own remote listener.
+fn local_listener(daemon: &Daemon) -> SocketAddr {
+    let remote = &daemon.remote;
+    SocketAddr::new(
+        remote.address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        remote.port,
+    )
 }
 
 /// Joins a client's stream, which the relay announced with `message`, to the remote listener at

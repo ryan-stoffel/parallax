@@ -50,6 +50,36 @@
   },
   {
     "jsonrpc": "2.0",
+    "id": 40,
+    "method": "relay/check",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 40,
+    "result": {
+      "roundTripMs": 412,
+      "diagnostics": "Parallax connection check\nResult: passed, a stream through the relay took 412 ms\n"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 42,
+    "method": "relay/check",
+    "params": { "token": "<clerk session token>" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 42,
+    "result": {
+      "failed": "listener",
+      "problem": "This computer's listener is off, so a stream has nowhere to go.",
+      "fix": "Turn on Pair computers on this network in Settings, or run plx connect.",
+      "diagnostics": "Parallax connection check\nResult: failed at listener\n"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": 4,
     "method": "relay/hosts",
     "params": { "token": "<clerk session token>" }

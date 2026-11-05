@@ -249,6 +249,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RelayRegister => |p| remote::register_relay(context, p),
         RelaySign => |p| remote::relay_sign(context, p),
         RelayHosts => |p| remote::relay_hosts(context, p),
+        RelayCheck => |p| remote::relay_check(context, p),
         RelayRemove => |p| remote::relay_remove(context, p),
         RelayId => |p| remote::relay_id(context, p),
         RelayPushKey => |p| remote::relay_push_key(context, p),

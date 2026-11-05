@@ -371,6 +371,14 @@ test("status --json prints the documented fields, and a failure leaves stdout em
     routes: ["192.168.1.20", "relay:tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE"],
     approvedDevices: 1,
     waitingDevice: null,
+    check: {
+      ok: false,
+      failed: "relay",
+      problem: "Couldn't reach Parallax Relay.",
+      fix: "Check the internet.",
+      roundTripMs: null,
+      diagnostics: "Result: failed",
+    },
   });
 
   const off = fakes({});
@@ -382,6 +390,14 @@ test("status --json prints the documented fields, and a failure leaves stdout em
     routes: [],
     approvedDevices: 1,
     waitingDevice: null,
+    check: {
+      ok: false,
+      failed: "listener",
+      problem: "The listener is off.",
+      fix: "Run plx connect.",
+      roundTripMs: null,
+      diagnostics: "Result: failed",
+    },
   });
 
   fake.deps.plxd = () => Promise.reject(new Error("Couldn't start plxd: not found"));
@@ -397,6 +413,27 @@ test("status --json prints the documented fields, and a failure leaves stdout em
   }
   fake.done();
   off.done();
+});
+
+test("status reports the connection check, naming the part that failed and what to do", async () => {
+  const works = fakes({ relay: true, remote: true, registered: true });
+  const passed = await printed(() => connect.status(works.deps));
+  assert.match(passed.out, /^Connection check +passed: a stream through the relay took 42 ms$/m);
+  assert.doesNotMatch(passed.out, /What to do/);
+
+  const stopped = fakes({ relay: true, registered: true });
+  const failed = await printed(() => connect.status(stopped.deps));
+  assert.equal(failed.code, 0, "the check is a report, not a failed command");
+  assert.match(failed.out, /^Connection check +failed at the listener: The listener is off\.$/m);
+  assert.match(failed.out, /^What to do +Run plx connect\.$/m);
+
+  const older = fakes({ relay: true, remote: true, registered: true, noCheck: true });
+  const unknown = await printed(() => connect.status(older.deps));
+  assert.match(unknown.out, /^Connection check +couldn't run: plxd couldn't run the check: Method not found$/m);
+  assert.match(unknown.out, /^What to do +Run plx connect to update plxd\.$/m);
+  works.done();
+  stopped.done();
+  older.done();
 });
 
 test("add signs in here, then installs and links over ssh", { skip: process.platform === "win32" }, async () => {
