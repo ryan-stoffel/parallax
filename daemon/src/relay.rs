@@ -556,9 +556,11 @@ fn pipe(socket: WebSocketStream<Stream>, mut keepalive: Option<Keepalive>) -> Du
             }
             writer.shutdown().await
         };
+        // `incoming` first, so an answer that's waiting counts before `outgoing` judges a ping.
         let ended = tokio::select! {
-            ended = outgoing => ended,
+            biased;
             ended = incoming => ended,
+            ended = outgoing => ended,
         };
         if let Err(error) = ended {
             debug!(%error, "a relay stream ended");
@@ -1404,7 +1406,10 @@ async fn serve(
             _ => {}
         }
         let held = pushes.next_due();
+        // In order, with the ping last: an answer that's waiting must count before a missed one is
+        // judged, or a stall of one ping calls a live relay silent (PLX-1426).
         tokio::select! {
+            biased;
             () = stop.cancelled() => {
                 let _ = sink.close().await;
                 return Ok(Ended::Stopped);
@@ -1417,13 +1422,6 @@ async fn serve(
             }
             Some(()) = streams.spare_ended.recv() => streams.spare = None,
             () = link.changed() => return Ok(Ended::Moved),
-            _ = ping.tick() => {
-                if !heard {
-                    return Err(Error::Protocol("the relay stopped answering".to_owned()));
-                }
-                heard = false;
-                sink.send(Message::text("ping")).await.map_err(failed)?;
-            }
             Some(reply) = answered.recv() => sink.send(Message::text(reply)).await.map_err(failed)?,
             () = daemon.relay.hooks_changed.notified() => {
                 sink.send(hooks().await).await.map_err(failed)?;
@@ -1498,6 +1496,13 @@ async fn serve(
                     Some(Err(error)) => return Err(failed(error)),
                 }
             }
+            _ = ping.tick() => {
+                if !heard {
+                    return Err(Error::Protocol("the relay stopped answering".to_owned()));
+                }
+                heard = false;
+                sink.send(Message::text("ping")).await.map_err(failed)?;
+            }
         }
     }
 }
@@ -1536,6 +1541,7 @@ async fn stream(
         if spare.is_some() {
             loop {
                 tokio::select! {
+                    biased;
                     frame = socket.next() => {
                         keepalive.heard.store(true, Ordering::Relaxed);
                         match frame {
@@ -2422,6 +2428,40 @@ mod tests {
             sealed_for("needsYou").await,
             json!({ "title": "Fix the bug", "text": "Needs your approval" })
         );
+    }
+
+    /// The relay's answer and the next ping ready at once, for enough rounds that a random pick
+    /// between them would call the relay silent.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_ready_with_the_next_ping_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        let mut pushes = Pushes::new(daemon.log.head());
+        let (mut streams, mut link) = lasting(&stop);
+        let (plxd, mut relay) = socket().await;
+        let (ended, ()) = tokio::join!(
+            serve(
+                &daemon,
+                plxd,
+                "host",
+                &stop,
+                &mut pushes,
+                &mut streams,
+                &mut link
+            ),
+            async {
+                assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
+                for _ in 0..32 {
+                    let ping = relay.next().await.unwrap().unwrap();
+                    assert_eq!(ping.to_text().unwrap(), "ping");
+                    relay.send(Message::text("pong")).await.unwrap();
+                    time::advance(PING).await;
+                }
+                stop.cancel();
+            }
+        );
+        assert!(matches!(ended, Ok(Ended::Stopped)));
     }
 
     /// `select!` picks among ready arms at random, so a few rounds, each with a hold's deadline
