@@ -76,8 +76,7 @@ type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
  *
  * A divider on each line, showing a short grip under the pointer or keyboard focus, drags or arrow-keys
  * to resize and double-clicks back to even. A drag shows
- * its lines here and hands them up once it ends, so App doesn't render on every move. `details` floats
- * over the focused pane's card. A tab or sidebar thread `drop` accepts, dragged over the window, previews
+ * its lines here and hands them up once it ends, so App doesn't render on every move. A tab or sidebar thread `drop` accepts, dragged over the window, previews
  * where it would land: the window's sides, top, bottom, and corners are zones (`zoneAt`), and its
  * middle adds a tab to the pane under the pointer.
  */
@@ -97,7 +96,6 @@ export function SplitTiles({
   onCloseTab,
   onNewTab,
   onDropOnTabs,
-  details,
   drop,
 }: {
   items: TileItem[];
@@ -116,7 +114,6 @@ export function SplitTiles({
   onCloseTab: (tabId: string) => void;
   onNewTab: (paneId: string) => void;
   onDropOnTabs: (drop: TabDrop, paneId: string, before?: string) => void;
-  details?: ReactNode;
   drop?: {
     accepts: (e: DragEvent) => boolean;
     onDrop: (target: TileDrop, e: DragEvent) => void;
@@ -298,7 +295,6 @@ export function SplitTiles({
                 className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-4 bg-linear-to-b from-pane to-transparent"
               />
               {node}
-              {i === focused && details}
             </div>
           </div>
         );

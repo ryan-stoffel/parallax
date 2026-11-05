@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 
@@ -221,6 +221,19 @@ test("the destination dialog isn't inside the panel, which can be hidden when it
   const dialog = document.querySelector('dialog[aria-label="SSH destination"]')!;
   expect(dialog.closest("[hidden]")).toBeNull();
   expect(dialog.closest("aside")).toBeNull();
+});
+
+test("a Remote Control thread's Project row follows the menu", () => {
+  act(() => toggleItem("project"));
+  const body = show(
+    <ThreadDetails
+      mode="docked"
+      host={{ id: "local", name: "macbook" }}
+      remoteControl={{ session: undefined }}
+      project={{} as ComponentProps<typeof ThreadDetails>["project"]}
+    />,
+  );
+  expect(body.querySelector('section[aria-label="Project"]')).toBeNull();
 });
 
 test("a Remote Control thread still has the customize button", () => {

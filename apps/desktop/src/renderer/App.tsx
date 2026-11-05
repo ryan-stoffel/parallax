@@ -742,11 +742,14 @@ export function App() {
       : undefined;
   // Thread details, docked at the thread's right, or floating over it when the row is too narrow.
   // Shown or hidden per thread, which its children and parent share, so opening one from
-  // Lineage keeps it open.
+  // Lineage keeps it open. A split shares one, for the focused thread, so moving focus doesn't
+  // resize the tiles under the pointer.
   const details = useThreadDetails(
-    openThread
-      ? JSON.stringify([host.id, "thread", rootOf(threads.state, openThread).id])
-      : panelKey,
+    tiled
+      ? "split"
+      : openThread
+        ? JSON.stringify([host.id, "thread", rootOf(threads.state, openThread).id])
+        : panelKey,
     workspace.maximized
       ? 1
       : Math.min(...workspace.panes.map((pane) => rectOf(pane.cells, workspace.cuts).width)),
@@ -1324,16 +1327,13 @@ export function App() {
     sidePanelOpen ? "" : "window-controls-inset",
   ].join(" ");
 
-  // A split shows Thread details for a thread. Floating, it sits in the focused tile, and docked
-  // or hidden, at the row's end.
-  const detailsShown = !tiled || selection.kind === "thread";
-  const detailsInTile = detailsShown && !group.project && details.mode === "floating";
   // The PR view takes over from Thread details when it opens a pull request.
   const openPrFromDetails = (url?: string) => {
     openPr(url);
     details.close();
   };
-  // Thread details for the open thread: beside the chat, or in a split floating in its tile.
+  // Thread details for the open thread, at the row's end in every mode, so changing mode keeps its
+  // dialogs and work under way.
   const threadDetails = (mode: ComponentProps<typeof ThreadDetails>["mode"]) => (
     <ThreadDetails
       key={panelKey}
@@ -1856,8 +1856,6 @@ export function App() {
                             placeView(state, drop.hostId, view, paneId, before),
                           );
                         }}
-                        // Floating, it sits in the card, below the tabs' row and its buttons.
-                        details={detailsInTile ? threadDetails("floating") : undefined}
                         // A tab anywhere, or a sidebar thread not over a composer, which takes it to
                         // attach (PLX-378).
                         drop={{
@@ -2011,9 +2009,7 @@ export function App() {
                       />
                     </div>
                   </div>
-                  {detailsShown &&
-                    !detailsInTile &&
-                    threadDetails(group.project ? "hidden" : details.mode)}
+                  {threadDetails(group.project ? "hidden" : details.mode)}
                 </div>
               </>
             )}

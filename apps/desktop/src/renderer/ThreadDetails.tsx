@@ -86,10 +86,9 @@ export function useThreadDetails(key: string, share = 1) {
     observer.observe(element);
     return () => observer.disconnect();
   }, [element, share]);
-  // Shows or hides it for `key`'s thread, by default the open one's: a split's tile names its own.
-  const toggle = (which = key) =>
+  const toggle = () =>
     setOpen((was) => {
-      const next = was.includes(which) ? was.filter((other) => other !== which) : [...was, which];
+      const next = was.includes(key) ? was.filter((other) => other !== key) : [...was, key];
       localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(next));
       return next;
     });
@@ -101,9 +100,8 @@ export function useThreadDetails(key: string, share = 1) {
       localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(next));
       return next;
     });
-  const isOpen = (which: string) => open.includes(which);
   const mode: ThreadDetailsMode = !open.includes(key) ? "hidden" : narrow ? "floating" : "docked";
-  return { mode, toggle, close, isOpen, ref };
+  return { mode, toggle, close, ref };
 }
 
 /** The top bar's button that shows and hides Thread details. */
@@ -245,12 +243,13 @@ export function ThreadDetails({
       aria-label="Thread details"
       hidden={mode === "hidden"}
       data-mode={mode}
-      // Docked, it takes room in the thread's row; floating, it hovers over the thread's card at
-      // the right, below the tabs' row and short of the composer. Either way it's opaque cards sized to their rows, scrolling past
+      // Docked, it takes room in the thread's row; floating, it hovers over the row's right, below
+      // the tabs' row and short of the composer. Either way it's opaque cards sized to their rows, scrolling past
       // their room.
       className={`flex w-72 flex-col py-2 pr-3 ${
         mode === "floating"
-          ? "pointer-events-none absolute top-0 right-0 bottom-36 z-30 max-w-[calc(100%-1rem)]"
+          ? // 43px clears the tabs' row and its buttons (SplitTiles' gutter and strip height).
+            "pointer-events-none absolute top-[43px] right-0 bottom-36 z-30 max-w-[calc(100%-1rem)]"
           : "shrink-0"
       }`}
     >
@@ -265,7 +264,8 @@ export function ThreadDetails({
         {/* A Remote Control thread works on another computer, which its section names: no folder,
             apps, actions, or Git of this one's. */}
         {remoteControl
-          ? project && (
+          ? project &&
+            shows("project") && (
               <section aria-label="Project" className={`${detailsCard} p-1`}>
                 <ThreadProjectMenu {...project} />
               </section>
