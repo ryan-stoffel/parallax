@@ -126,7 +126,9 @@ export function SecretCard({
     if (paint.current) paintSecret(paint.current, value, shown);
     setFilled(!!value.trim());
   }
-  useLayoutEffect(repaint, [shown]);
+  // A file loads across renders, so its repaint waits for the render that knows the latest `shown`.
+  const [loads, setLoads] = useState(0);
+  useLayoutEffect(repaint, [shown, loads]);
 
   async function send(
     answer:
@@ -218,7 +220,7 @@ export function SecretCard({
     if (!text.trim() || text.includes("\0") || text.includes("\uFFFD"))
       return refuse("Use a text file with something in it.");
     if (field.current) field.current.value = text;
-    repaint();
+    setLoads((count) => count + 1);
     field.current?.focus();
   }
 

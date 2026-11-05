@@ -217,3 +217,19 @@ test("Removing a picked file brings the drop zone back, focused, with Save off",
   expect(save.disabled).toBe(true);
   expect(document.activeElement?.textContent).toContain("Drop a .p8 file here");
 });
+
+test("A file that finishes loading after Hide stays masked", async () => {
+  const el = card("file", "env");
+  const show = el.querySelector<HTMLButtonElement>('button[aria-label="Show values"]')!;
+  await act(async () => show.click());
+  let finish!: (text: string) => void;
+  const file = new File(["x"], "slow.env");
+  file.text = () => new Promise((resolve) => (finish = resolve));
+  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(picker, "files", { value: [file], configurable: true });
+  await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+  await act(async () => show.click());
+  await act(async () => finish("API_KEY=plain\nOTHER=two\n"));
+  expect(el.querySelector("textarea")!.value).toContain("plain");
+  expect(painted(el)).not.toContain("plain");
+});
