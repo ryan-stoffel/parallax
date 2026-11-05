@@ -44,6 +44,7 @@ import { AboutScreen, AddComputerScreen, ComputerScreen, phonePages, PhoneSettin
 import { ComputerSettingsScreen } from "./SettingsComputer";
 import { ProviderScreen } from "./SettingsProviders";
 import { Sidebar, SidebarSky, sidebarWidth } from "./Sidebar";
+import { ThreadChangesScreen } from "./ThreadChanges";
 import { ThreadDetailsScreen } from "./ThreadDetails";
 import { dark, light, type Colors } from "./theme";
 import { ThreadScreen } from "./Thread";
@@ -446,6 +447,18 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
                 headerTransparent: false,
                 headerStyle: { backgroundColor: c.background },
                 title: "Thread details",
+                sheetAllowedDetents: [0.6, 0.95],
+              }}
+            />
+            <Stack.Screen
+              name="ThreadChanges"
+              component={ThreadChangesScreen}
+              // A solid header, as Thread details has, since its list lays out under one.
+              options={{
+                ...sheet(c),
+                headerTransparent: false,
+                headerStyle: { backgroundColor: c.background },
+                title: "Changes",
                 sheetAllowedDetents: [0.6, 0.95],
               }}
             />

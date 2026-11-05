@@ -10,6 +10,8 @@ export type Screens = {
   /** `instant`: shown without a transition, as a new thread its page started becomes. */
   Thread: { hostId: string; runId: string; instant?: boolean };
   ThreadDetails: { hostId: string; runId: string };
+  /** A thread's changes, across every turn or for one, as a sheet. */
+  ThreadChanges: { hostId: string; runId: string };
   /** A pull request, pushed over its thread, or inside the Pull requests sheet. */
   PullRequest: { hostId: string; runId: string; url: string };
   /** The repository, then computer, picker for a new thread, as a sheet. */

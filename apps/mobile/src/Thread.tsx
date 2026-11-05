@@ -544,6 +544,12 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                     icon: symbol("info.circle"),
                     onPress: () => navigation.navigate("ThreadDetails", { hostId, runId }),
                   },
+                  {
+                    type: "action",
+                    label: "Changes",
+                    icon: symbol("plus.forwardslash.minus"),
+                    onPress: () => navigation.navigate("ThreadChanges", { hostId, runId }),
+                  },
                   ...prs.map((url) => ({
                     type: "action" as const,
                     label: `Pull request #${url.split("/").pop()}`,
