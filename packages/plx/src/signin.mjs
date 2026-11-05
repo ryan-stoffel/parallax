@@ -221,13 +221,14 @@ async function startDeviceGrant(clerk) {
       throw new Error("Couldn't reach Clerk to sign in. Check this computer's network and run it again.");
     });
   const found = await request(`${clerk.api}/.well-known/oauth-authorization-server`);
-  const metadata = /** @type {Record<string, unknown> | undefined} */ (await found.json().catch(() => undefined));
-  if (!found.ok || !metadata) throw new Error(`Clerk didn't start the sign-in: its discovery document answered ${found.status}.`);
-  const endpoint = metadata["device_authorization_endpoint"];
-  const tokenEndpoint = metadata["token_endpoint"];
-  const grants = metadata["grant_types_supported"];
-  if (typeof endpoint !== "string" || typeof tokenEndpoint !== "string") return undefined;
-  if (!Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) return undefined;
+  if (!found.ok) throw new Error(`Clerk didn't start the sign-in: its discovery document answered ${found.status}.`);
+  const metadata = /** @type {Record<string, unknown> | null | undefined} */ (await found.json().catch(() => undefined));
+  const { device_authorization_endpoint: endpoint, token_endpoint: tokenEndpoint, grant_types_supported: grants } = metadata ?? {};
+  // A device field left out means the grant isn't offered (RFC 8414). A wrong type is a broken document, and so is no token endpoint.
+  if (typeof tokenEndpoint !== "string" || (endpoint !== undefined && typeof endpoint !== "string") || (grants !== undefined && !Array.isArray(grants))) {
+    throw new Error("Clerk didn't start the sign-in: its discovery document is malformed.");
+  }
+  if (typeof endpoint !== "string" || !Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) return undefined;
   const res = await request(endpoint, { method: "POST", body: new URLSearchParams({ client_id: clerk.clientId, scope: SCOPES }) });
   const body = /** @type {Record<string, unknown>} */ (await res.json().catch(() => ({})));
   if (res.status === 400 && (body["error"] === "invalid_grant" || body["error"] === "unauthorized_client")) return undefined;
@@ -268,10 +269,11 @@ async function finishDeviceGrant(device, { sleep = wait }) {
   const deadline = Date.now() + expiresIn * 1000;
   let { interval } = device;
   for (;;) {
-    // Decided before the wait: a timer can wake a millisecond early and poll a code already gone.
+    // Checked both ways, so no poll goes out for a code already gone: a wait cut short by the
+    // deadline can wake a millisecond early, and any wait can wake late, as after a laptop's sleep.
     const left = deadline - Date.now();
     await sleep(Math.max(0, Math.min(interval * 1000, left)));
-    if (interval * 1000 >= left) throw expired;
+    if (interval * 1000 >= left || Date.now() >= deadline) throw expired;
     /** @type {Response} */
     let res;
     try {

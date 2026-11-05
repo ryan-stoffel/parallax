@@ -22,7 +22,7 @@ async function fakeClerk() {
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       // Discovery lists no device grant, so a sign-in with no browser pastes.
-      if (req.url === "/.well-known/oauth-authorization-server") return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      if (req.url === "/.well-known/oauth-authorization-server") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ token_endpoint: "unused" }));
       const grant = new URLSearchParams(body);
       grants.push(grant);
       const verified = createHash("sha256").update(grant.get("code_verifier") ?? "").digest("base64url") === challenge;
@@ -192,7 +192,8 @@ const CLERK_REFUSAL = "The requested OAuth 2.0 Client does not have the 'urn:iet
  * A fake Clerk with the device grant, per RFC 8628. Time is the fake's `sleep`, so a poll sooner
  * than the current interval counts as `early` and gets `slow_down`, as a real server answers it.
  * Each other poll takes the next of `polls`: an OAuth error, `token`, `drop` (the connection
- * breaks), or `503`. `metadata` and `device` replace what discovery and the device endpoint answer.
+ * breaks), or `503`. `metadata` and `device` replace what discovery and the device endpoint answer,
+ * and a string `metadata` is sent as it is.
  * @param {{ polls?: string[], metadata?: unknown, discoveryStatus?: number, device?: Record<string, unknown>, deviceStatus?: number }} [options]
  */
 async function fakeDeviceClerk({ polls = [], metadata, discoveryStatus = 200, device, deviceStatus = 200 } = {}) {
@@ -222,6 +223,7 @@ async function fakeDeviceClerk({ polls = [], metadata, discoveryStatus = 200, de
     req.on("end", () => {
       const params = new URLSearchParams(text);
       if (req.url === "/.well-known/oauth-authorization-server") {
+        if (typeof metadata === "string") return void res.writeHead(discoveryStatus).end(metadata);
         return json(discoveryStatus, metadata ?? { device_authorization_endpoint: `${api}/oauth/device_authorization`, token_endpoint: `${api}/oauth/token`, grant_types_supported: ["authorization_code", DEVICE_GRANT] });
       }
       if (req.url === "/oauth/device_authorization") {
@@ -345,6 +347,26 @@ test("polling stops when the code's own lifetime ends, even if Clerk never says 
   assert.equal(fake.tokenRequests.length, 0);
 });
 
+test("a wait that wakes after the code's lifetime ends doesn't poll", async () => {
+  const fake = await fakeDeviceClerk({ device: { device_code: "secret-device-code", user_code: "WDJB-MJHT", verification_uri: "https://clerk.example/oauth/device", expires_in: 0.02, interval: 0.001 } });
+  await assert.rejects(
+    quietly(() =>
+      signIn({
+        clerk: fake.clerk,
+        browser: false,
+        codePage: "unused",
+        open: async () => false,
+        prompt: async () => assert.fail("nothing is pasted in the device grant"),
+        // Asked for a millisecond, it wakes well past the 20 ms lifetime, as after a laptop's sleep.
+        sleep: () => wait(60),
+      }),
+    ),
+    /The code expired/,
+  );
+  fake.close();
+  assert.equal(fake.tokenRequests.length, 0);
+});
+
 for (const [name, options] of /** @type {[string, Parameters<typeof fakeDeviceClerk>[0]][]} */ ([
   // What Clerk's development instance answers today: the instance offers the grant, this client doesn't have it.
   ["the device endpoint refuses this OAuth application", { deviceStatus: 400, device: { error: "invalid_grant", error_description: CLERK_REFUSAL } }],
@@ -376,6 +398,11 @@ for (const [name, options, message] of /** @type {[string, Parameters<typeof fak
   ["answers invalid_grant with a server error", { deviceStatus: 500, device: { error: "invalid_grant" } }, /Clerk didn't start the sign-in: invalid_grant\./],
   ["answers without a code", { device: { verification_uri: "https://clerk.example/oauth/device", expires_in: 600 } }, /Clerk didn't start the sign-in: it answered 200\./],
   ["fails its discovery document", { discoveryStatus: 503 }, /its discovery document answered 503/],
+  ["sends a discovery document that isn't JSON", { metadata: "<html>Sign in to this network</html>" }, /its discovery document is malformed/],
+  ["sends a discovery document that's a list", { metadata: "[]" }, /its discovery document is malformed/],
+  ["sends a discovery document with no token endpoint", { metadata: { grant_types_supported: [DEVICE_GRANT] } }, /its discovery document is malformed/],
+  ["sends a device endpoint that isn't a string", { metadata: { device_authorization_endpoint: 5, token_endpoint: "https://clerk.example/oauth/token", grant_types_supported: [DEVICE_GRANT] } }, /its discovery document is malformed/],
+  ["sends grant types that aren't a list", { metadata: { device_authorization_endpoint: "https://clerk.example/d", token_endpoint: "https://clerk.example/oauth/token", grant_types_supported: DEVICE_GRANT } }, /its discovery document is malformed/],
 ])) {
   test(`the sign-in stops with the reason, rather than pasting, when Clerk ${name}`, async () => {
     const fake = await fakeDeviceClerk(options);
