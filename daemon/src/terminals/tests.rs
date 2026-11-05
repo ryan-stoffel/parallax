@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
-use super::{BATCH_WINDOW, RELAY_CHUNK};
+use super::{BATCH_WINDOW, PACE_BURST, PACE_BYTES_PER_SECOND, RELAY_CHUNK};
 use super::{
     FLOOD_PAUSE, FLOOD_TAIL, History, QUEUE_BEHIND, Terminals, behind, flood_pause, flood_tail,
     unsent, without_queries,
@@ -254,6 +254,13 @@ async fn a_floods_pause_ends_once_the_queue_is_back_under_its_limit_though_never
     assert!(timeout(2 * FLOOD_PAUSE, pause).await.unwrap().unwrap());
 }
 
+/// `data` less its carriage returns. A macOS pseudo-terminal under load sometimes ends a line with
+/// `\r\r\n`, writing the `\r` again when its output queue fills between the two.
+#[cfg(unix)]
+fn lines(data: &str) -> String {
+    data.replace('\r', "")
+}
+
 /// Runs `script` in `sh`, over the relay.
 #[cfg(unix)]
 fn over_relay(
@@ -284,9 +291,9 @@ async fn output_over_the_relay_comes_in_batches_and_all_of_it_arrives() {
     let (_replies, mut output) = over_relay(&terminals, script, &stopped);
     let mut shown = String::new();
     let mut messages = 0_u128;
-    while !shown.contains("end\r\n") {
+    while !shown.contains("end\n") {
         let (data, _) = next(&mut output).await.expect("it exited first");
-        shown.push_str(&data);
+        shown.push_str(&lines(&data));
         messages += 1;
     }
     let windows = started.elapsed().as_millis() / BATCH_WINDOW.as_millis();
@@ -294,7 +301,7 @@ async fn output_over_the_relay_comes_in_batches_and_all_of_it_arrives() {
     assert!(messages <= windows + 3, "{messages} in {windows} windows");
     for i in 0..2000 {
         assert!(
-            shown.contains(&format!("line-{i}\r\n")),
+            shown.contains(&format!("line-{i}\n")),
             "line {i} is missing"
         );
     }
@@ -330,17 +337,28 @@ async fn a_flood_over_the_relay_is_skipped_and_typing_after_it_isnt() {
     let terminals = Terminals::default();
     let stopped = CancellationToken::new();
     let script = "yes | head -c 4194304; echo end; read line; echo got-$line; read line";
+    let started = tokio::time::Instant::now();
     let (_replies, mut output) = over_relay(&terminals, script, &stopped);
     let mut shown = String::new();
     let mut replays = 0;
-    while !shown.contains("end\r\n") {
+    let mut bytes = 0_usize;
+    while !shown.contains("end\n") {
         let (data, replay) = next(&mut output).await.expect("it exited first");
         replays += usize::from(replay);
-        shown.push_str(&data);
+        bytes += data.len();
+        shown.push_str(&lines(&data));
     }
     assert_eq!(replays, 1, "only the first output replays");
-    let bytes = shown.len();
-    assert!(bytes < 2 * 1024 * 1024, "{bytes} of 4 MiB were sent");
+    // No more than the pace allows, however long a slow machine takes to print it, and the last
+    // skip's tail, which it pays for after.
+    let paced = PACE_BURST + PACE_BYTES_PER_SECOND * started.elapsed().as_secs_f64();
+    #[expect(clippy::cast_precision_loss, reason = "a few MiB")]
+    let (sent, tail) = (bytes as f64, FLOOD_TAIL as f64);
+    assert!(
+        sent <= paced + tail,
+        "{bytes} of 4 MiB were sent in {:?}",
+        started.elapsed()
+    );
 
     // It paid for what it sent, so what's typed next goes as output, not after another skip's
     // pause.
