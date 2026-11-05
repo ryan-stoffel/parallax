@@ -106,6 +106,8 @@ export const icons = {
   closedPullRequest: GitPullRequestClosed,
   merged: GitMerge,
   commit: GitCommitHorizontal,
+  /** A suggested change to a pull request's lines. */
+  suggest: FileDiff,
   /** The unified layout of a diff. */
   unified: Rows2,
   /** The split layout of a diff. */
