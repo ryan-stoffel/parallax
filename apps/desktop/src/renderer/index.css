@@ -847,6 +847,44 @@ body {
   bottom: 1px;
 }
 
+/* Linux is square, like the tiling desktops it mostly runs on (Omarchy's Hyprland): the radius
+   scale is 0, so every rounded-sm through rounded-prompt is, and the fixed radii below follow.
+   Circles (rounded-full) stay round. The shown tab drops its curves and sits on the card's line,
+   as on glass. */
+[data-platform="linux"] {
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-prompt: 0px;
+}
+[data-platform="linux"]
+  :is(
+    .tab-shown,
+    .tab-cap,
+    .composer-tabs,
+    .composer-bar,
+    .composer-actions,
+    .composer-action,
+    .composer-input pre,
+    .markdown table,
+    .markdown :not(pre) > code
+  ) {
+  border-radius: 0;
+}
+/* Over inline styles: the voice pill's morph (VoicePill.tsx) and Enriched Markdown's code, tables,
+   and images (AgentChat.tsx). */
+[data-platform="linux"] :is(.composer-pill, .enriched *) {
+  border-radius: 0 !important;
+}
+[data-platform="linux"] .tab-shown::before,
+[data-platform="linux"] .tab-shown::after {
+  display: none;
+}
+[data-platform="linux"] .tab-cap {
+  bottom: 1px;
+}
+
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
    through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
