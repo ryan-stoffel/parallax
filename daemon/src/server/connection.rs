@@ -972,6 +972,7 @@ mod tests {
                 closing.clone(),
                 false,
                 false,
+                false,
             ));
             (client, stop, closing, serve)
         };

@@ -1339,6 +1339,7 @@ async fn serve_socket(
     let (local, plain) = tokio::io::duplex(64 * 1024);
     let (local_in, local_out) = tokio::io::split(local);
     let over_relay = relay_stream.is_some();
+    let ended = closing.clone();
     let serve = connection::serve(
         plain,
         daemon,
@@ -1348,8 +1349,8 @@ async fn serve_socket(
         read_only,
         over_relay,
     );
-    let (mut closed, (pumped, socket_end)) =
-        tokio::join!(serve, pump(socket, local_in, local_out, over_relay));
+    let pumped = pump(socket, local_in, local_out, over_relay.then_some(&ended));
+    let (mut closed, (pumped, socket_end)) = tokio::join!(serve, pumped);
     if let Err(error) = pumped {
         debug!(%peer, %error, "a remote WebSocket failed");
     }
@@ -1423,7 +1424,9 @@ const RELAY_WINDOW: u64 = 512 * 1024;
 /// WebSocket's own, inside the TLS the relay can't read, so the relay does nothing and every client
 /// answers it unchanged. It carries the bytes sent so far, which the pong echoes. A client that
 /// answered once and then stops is a client that stopped reading: its replies stall, and the
-/// connection closes as any such connection does ([`connection`]).
+/// connection closes after the stall timeout as any such connection does ([`connection`]), which
+/// ends the wait. Only that connection waits: its terminals skip ahead instead of queueing
+/// ([`crate::terminals`]), and nothing else on plxd waits for its queue.
 #[derive(Default)]
 struct Window {
     sent: AtomicU64,
@@ -1464,13 +1467,13 @@ impl Window {
 
 /// Carries frames from `socket` to the connection as lines, and its lines back as frames, until
 /// the connection closes. A client's close ends what the connection reads, so it still answers
-/// what it read. Answers with how the socket ended, if it did first. With `over_relay`, what's
-/// sent waits for the client's pongs ([`Window`]).
+/// what it read. Answers with how the socket ended, if it did first. Over the relay, `relay` is the
+/// connection's `closing`, and what's sent waits for the client's pongs ([`Window`]) until then.
 async fn pump<S, I, O>(
     socket: WebSocketStream<S>,
     local_in: I,
     mut local_out: O,
-    over_relay: bool,
+    relay: Option<&CancellationToken>,
 ) -> (io::Result<()>, Option<SocketEnd>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -1479,6 +1482,7 @@ where
 {
     let (mut sink, mut frames) = socket.split();
     let window = Window::default();
+    let over_relay = relay.is_some();
     let incoming = async {
         let mut end = SocketEnd::Ended;
         while let Some(frame) = frames.next().await {
@@ -1511,7 +1515,13 @@ where
         let mut lines = tokio::io::BufReader::new(local_in).lines();
         let mut pinged = 0;
         while let Some(line) = lines.next_line().await? {
-            window.room().await;
+            if let Some(closed) = relay {
+                // Once it's closed, what's left goes unpaced, and the input ends.
+                tokio::select! {
+                    () = window.room() => {}
+                    () = closed.cancelled() => {}
+                }
+            }
             let sent =
                 window.sent.fetch_add(line.len() as u64, Ordering::Relaxed) + line.len() as u64;
             if over_relay && sent - pinged >= RELAY_WINDOW {
@@ -1971,15 +1981,41 @@ mod tests {
     const LINE: usize = 128 * 1024;
     const PATIENCE: Duration = Duration::from_secs(20);
 
-    /// Runs `pump` over the relay. Answers the client's socket, and the input of what's sent to it.
-    async fn relay_pump() -> (WebSocketStream<DuplexStream>, DuplexStream) {
+    /// A `pump` over the relay: the client's socket, the input of what's sent to it, the
+    /// connection's `closing`, and the pump.
+    struct RelayPump {
+        client: WebSocketStream<DuplexStream>,
+        input: DuplexStream,
+        closing: CancellationToken,
+        pump: tokio::task::JoinHandle<()>,
+    }
+
+    async fn relay_pump() -> RelayPump {
         // Room for everything, so only the window holds `pump` back.
         let (client, server) = tokio::io::duplex(64 * 1024 * 1024);
         let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
         let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
-        let (ours, local_in) = tokio::io::duplex(64 * 1024);
-        tokio::spawn(super::pump(server, local_in, tokio::io::sink(), true));
-        (client, ours)
+        let (input, local_in) = tokio::io::duplex(64 * 1024);
+        let closing = CancellationToken::new();
+        let token = closing.clone();
+        let pump = tokio::spawn(async move {
+            let _ = super::pump(server, local_in, tokio::io::sink(), Some(&token)).await;
+        });
+        RelayPump {
+            client,
+            input,
+            closing,
+            pump,
+        }
+    }
+
+    /// Reads `client`'s first ping and answers it, so it's a client that answers, then reads
+    /// nothing more.
+    async fn answer_once(client: &mut WebSocketStream<DuplexStream>) {
+        let first = time::timeout(PATIENCE, client.next()).await.unwrap();
+        assert!(matches!(first, Some(Ok(Message::Ping(_)))), "{first:?}");
+        client.flush().await.unwrap();
+        time::sleep(Duration::from_millis(100)).await;
     }
 
     /// Writes `lines` of [`LINE`] bytes to `input`. Answers how many bytes it has written so far.
@@ -2000,12 +2036,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_client_that_answered_and_stopped_reading_holds_the_window() {
-        let (mut client, input) = relay_pump().await;
-        // It answers the first ping, so it's a client that answers, then reads nothing.
-        let first = time::timeout(PATIENCE, client.next()).await.unwrap();
-        assert!(matches!(first, Some(Ok(Message::Ping(_)))), "{first:?}");
-        client.flush().await.unwrap();
-        time::sleep(Duration::from_millis(100)).await;
+        let RelayPump {
+            mut client, input, ..
+        } = relay_pump().await;
+        answer_once(&mut client).await;
 
         let lines = 32;
         let written = feed(input, lines);
@@ -2034,7 +2068,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_client_that_never_answers_is_never_waited_for() {
-        let (_client, input) = relay_pump().await;
+        // The client stays open, and never answers.
+        let RelayPump {
+            client: _client,
+            input,
+            ..
+        } = relay_pump().await;
         let lines = 32;
         let written = feed(input, lines);
         let all = async {
@@ -2045,5 +2084,40 @@ mod tests {
         time::timeout(PATIENCE, all)
             .await
             .expect("it waited for a client that never answers");
+    }
+
+    #[tokio::test]
+    async fn a_stalled_client_is_let_go_when_its_connection_closes() {
+        let RelayPump {
+            mut client,
+            mut input,
+            closing,
+            pump,
+        } = relay_pump().await;
+        answer_once(&mut client).await;
+        // More than the window, so the pump waits on a client that won't read.
+        let write = tokio::spawn(async move {
+            let line = format!("{}\n", "x".repeat(LINE - 1));
+            for _ in 0..32 {
+                input.write_all(line.as_bytes()).await.unwrap();
+            }
+        });
+        time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            !pump.is_finished() && !write.is_finished(),
+            "nothing waited"
+        );
+
+        // The connection closes, as one does once its writes stall. Its last lines go unpaced, and
+        // the pump ends with its input.
+        closing.cancel();
+        time::timeout(PATIENCE, write)
+            .await
+            .expect("the pump still waits on the client")
+            .unwrap();
+        time::timeout(PATIENCE, pump)
+            .await
+            .expect("the pump never ended")
+            .unwrap();
     }
 }

@@ -9,8 +9,11 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
-use super::{BATCH_WINDOW, FLOOD_PAUSE, QUEUE_BEHIND};
-use super::{FLOOD_TAIL, History, Terminals, flood_tail, without_queries};
+use super::{BATCH_WINDOW, RELAY_CHUNK};
+use super::{
+    FLOOD_PAUSE, FLOOD_TAIL, History, QUEUE_BEHIND, Terminals, behind, flood_pause, flood_tail,
+    unsent, without_queries,
+};
 use crate::methods::Reply;
 
 const PATIENCE: Duration = Duration::from_secs(20);
@@ -191,6 +194,66 @@ fn a_floods_tail_starts_at_a_line_and_a_character() {
     assert!(flood_tail(&wide).starts_with('€'));
 }
 
+#[test]
+fn a_skip_sends_only_what_the_client_lacks() {
+    let history = "seen\n".repeat(10) + "new";
+    // What it's owed when that fits, and nothing it has.
+    assert_eq!(unsent(&history, 3), "new");
+    assert_eq!(unsent(&history, 0), "");
+    // More than the history holds is all of it.
+    assert_eq!(unsent(&history, 1 << 40), history);
+    // More than a skip carries is the history's tail.
+    let long = "line\n".repeat(FLOOD_TAIL);
+    let owed = (2 * FLOOD_TAIL) as u64;
+    assert_eq!(unsent(&long, owed), flood_tail(&long));
+}
+
+/// A connection's queue with `queued` messages in it.
+fn queue(queued: usize) -> (mpsc::Sender<Reply>, mpsc::Receiver<Reply>) {
+    let (replies, queue) = mpsc::channel(256);
+    for _ in 0..queued {
+        replies
+            .try_send(Reply::Notification(super::notification::<TerminalExit>(
+                TerminalExitParams {
+                    thread_id: "t".to_owned(),
+                    terminal_id: "1".to_owned(),
+                    exit_code: 0,
+                },
+            )))
+            .unwrap();
+    }
+    (replies, queue)
+}
+
+#[test]
+fn a_connection_is_behind_past_its_queue_limit() {
+    let (replies, mut queue) = queue(QUEUE_BEHIND + 1);
+    assert!(behind(&replies));
+    queue.try_recv().unwrap();
+    assert!(!behind(&replies), "at the limit isn't behind");
+    drop(queue);
+    assert!(!behind(&replies), "a closed connection isn't behind");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_floods_pause_ends_once_the_queue_is_back_under_its_limit_though_never_empty() {
+    let (replies, mut queue) = queue(2 * QUEUE_BEHIND);
+    let stopped = CancellationToken::new();
+    let pause = tokio::spawn({
+        let replies = replies.clone();
+        async move { flood_pause(&replies, &stopped).await }
+    });
+    tokio::time::sleep(3 * FLOOD_PAUSE).await;
+    assert!(!pause.is_finished(), "it ended while the client was behind");
+    // The client reads until it isn't behind, but the queue never empties, as when another
+    // terminal on the connection keeps printing.
+    while behind(&replies) {
+        queue.try_recv().unwrap();
+    }
+    assert!(replies.capacity() < replies.max_capacity());
+    assert!(timeout(2 * FLOOD_PAUSE, pause).await.unwrap().unwrap());
+}
+
 /// Runs `script` in `sh`, over the relay.
 #[cfg(unix)]
 fn over_relay(
@@ -247,14 +310,16 @@ async fn output_over_the_relay_doesnt_pile_up_behind_a_slow_client() {
     // Nothing reads what's queued, as with a client slower than the pace.
     tokio::time::sleep(3 * FLOOD_PAUSE).await;
     let queued = replies.max_capacity() - replies.capacity();
-    assert!(queued <= QUEUE_BEHIND + 1, "{queued} messages queued");
+    let skip = FLOOD_TAIL.div_ceil(RELAY_CHUNK);
+    assert!(queued <= QUEUE_BEHIND + skip, "{queued} messages queued");
 
-    // It catches up with the end of the history once the client reads again.
+    // It goes on once the client reads again, adding to what the client shows.
     let (_, replay) = next(&mut output).await.expect("it exited first");
     assert!(replay, "the first output is the history");
-    let mut replayed = false;
-    while !replayed {
-        (_, replayed) = next(&mut output).await.expect("it exited first");
+    for _ in 0..2 * queued {
+        let (data, replay) = next(&mut output).await.expect("it exited first");
+        assert!(!replay, "a skip replaced what the client shows");
+        assert!(data.len() <= RELAY_CHUNK, "a {} byte message", data.len());
     }
     terminals.close_thread("t");
 }
@@ -267,28 +332,30 @@ async fn a_flood_over_the_relay_is_skipped_and_typing_after_it_isnt() {
     let script = "yes | head -c 4194304; echo end; read line; echo got-$line; read line";
     let (_replies, mut output) = over_relay(&terminals, script, &stopped);
     let mut shown = String::new();
-    let mut bytes = 0;
     let mut replays = 0;
     while !shown.contains("end\r\n") {
         let (data, replay) = next(&mut output).await.expect("it exited first");
-        bytes += data.len();
         replays += usize::from(replay);
-        // What came before a replay is gone from the client's screen.
-        if replay {
-            shown.clear();
-        }
         shown.push_str(&data);
     }
-    assert!(replays >= 2, "the flood was never skipped");
+    assert_eq!(replays, 1, "only the first output replays");
+    let bytes = shown.len();
     assert!(bytes < 2 * 1024 * 1024, "{bytes} of 4 MiB were sent");
 
-    // It paid for what it sent, so what's typed next goes as output, not as another skip.
+    // It paid for what it sent, so what's typed next goes as output, not after another skip's
+    // pause.
+    let typed = tokio::time::Instant::now();
     terminals.write("t".to_owned(), "1".to_owned(), "you\r".to_owned());
     let mut echoed = String::new();
     while !echoed.contains("got-you") {
         let (data, replay) = next(&mut output).await.expect("it exited first");
-        assert!(!replay, "typing after a flood was skipped");
+        assert!(!replay, "typing after a flood replayed");
         echoed.push_str(&data);
     }
+    assert!(
+        typed.elapsed() < FLOOD_PAUSE,
+        "the echo took {:?}",
+        typed.elapsed()
+    );
     terminals.close_thread("t");
 }
