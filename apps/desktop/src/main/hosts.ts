@@ -1870,8 +1870,17 @@ const notListedWatch = new NoticeWatch<"notListed">(showNotice);
 
 /** The account's computers whose last read said what they've used of the relay's daily cap. */
 let relayUsage: RelayHost[] = [];
-/** Tells the windows what the account's list says of each computer's cap, when that changed. */
-function showRelayUsage(hosts: RelayHost[]) {
+/** Reads of the account's list started, and the newest whose answer was shown. */
+let listReads = 0;
+let shownRead = 0;
+/**
+ * Tells the windows what read `read` of the account's list says of each computer's cap, when that
+ * changed. Discovery and the timer can read at once, and an older answer that lands last would
+ * lower a warning and bring back one the user closed, so it's dropped.
+ */
+function showRelayUsage(read: number, hosts: RelayHost[]) {
+  if (read < shownRead) return;
+  shownRead = read;
   const next = hosts.filter((host) => host.usage);
   if (JSON.stringify(next) === JSON.stringify(relayUsage)) return;
   relayUsage = next;
@@ -1884,6 +1893,7 @@ function showRelayUsage(hosts: RelayHost[]) {
  * network at all, nothing is. Only reads with a plxd to ask count as reads.
  */
 async function readAccountList(): Promise<RelayHostsResult | undefined> {
+  const read = ++listReads;
   const token = await account?.accessToken();
   if (!token) {
     const unreachable = account?.clerkUnreachable();
@@ -1891,7 +1901,7 @@ async function readAccountList(): Promise<RelayHostsResult | undefined> {
     // Signed out, so no account to be on. With Clerk down, it's unknown, so it stays as it was.
     if (!unreachable) {
       notListedWatch.read(undefined);
-      showRelayUsage([]);
+      showRelayUsage(read, []);
     }
     return undefined;
   }
@@ -1903,7 +1913,7 @@ async function readAccountList(): Promise<RelayHostsResult | undefined> {
     return undefined;
   }
   outageWatch.read(undefined);
-  showRelayUsage(answer.result.hosts);
+  showRelayUsage(read, answer.result.hosts);
   notListedWatch.read(
     joinedNotListed(answer.result, settings.joinedRelay, tokenSubject(token))
       ? "notListed"

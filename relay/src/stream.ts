@@ -9,6 +9,9 @@ import { logError, logEvent, logged, scrub, short } from "./log";
 export const MIN_FRAME_BYTES = 16 * 1024;
 /** How many bytes a stream carries before it reports them to its host's object (0068, 0091). */
 export const REPORT_BYTES = 8 * 1_048_576;
+/** The longest a stream that stays open keeps counted bytes before it reports them, so the host's
+ *  usage, which clients warn from, can't stay short by a slow stream's count (PLX-1357). */
+export const REPORT_AFTER = 5 * 60_000;
 /** How long a client waits for plxd to join its stream before the stream closes. */
 export const JOIN_TIMEOUT = 30_000;
 
@@ -46,14 +49,17 @@ const tail = (id: string) => id.slice(-8);
  * here it tells each `ready` and passes binary frames between them, unread.
  *
  * It counts each frame as at least [`MIN_FRAME_BYTES`] and reports its count to the host's object
- * every [`REPORT_BYTES`] and when it closes; the host's object answers whether the day's budget
- * has room, and closes every stream's object when it doesn't. The count not yet reported is kept
- * in each WebSocket's attachment too, which survives hibernation without a storage write.
+ * every [`REPORT_BYTES`], within [`REPORT_AFTER`] of a frame, and when it closes; the host's object
+ * answers whether the day's budget has room, and closes every stream's object when it doesn't. The
+ * count not yet reported is kept in each WebSocket's attachment too, which survives hibernation
+ * without a storage write. An idle stream reports nothing and sets no alarm.
  */
 export class StreamRelay extends DurableObject<Env> {
   /** Bytes counted since the last report, read back from the WebSockets' attachments on wake. */
   private unreported?: number;
   private reported = false;
+  /** Whether the alarm is known to be set for a report. Lost on hibernation, so it's then read. */
+  private reportDue = false;
   /** Whether the relay has begun ending this stream, so a close from here on isn't an end's own.
    *  In memory, since an end answers a close long before the object could hibernate. */
   private ending = false;
@@ -173,8 +179,17 @@ export class StreamRelay extends DurableObject<Env> {
         peer.send(message);
         this.keep(this.pending() + Math.max(message.byteLength, MIN_FRAME_BYTES));
         if (this.pending() >= REPORT_BYTES) await this.report(false);
+        else await this.reportSoon();
       },
     );
+  }
+
+  /** Sets the alarm for a report, unless one is set, so a steady trickle can't keep pushing it back. */
+  private async reportSoon() {
+    if (this.reportDue) return;
+    this.reportDue = true;
+    if ((await this.ctx.storage.getAlarm()) === null)
+      await this.ctx.storage.setAlarm(Date.now() + REPORT_AFTER);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, clean: boolean) {
@@ -214,13 +229,18 @@ export class StreamRelay extends DurableObject<Env> {
     await this.finish();
   }
 
-  /** plxd never joined the client's stream in time. */
+  /** Both ends are here, so it's time to report what's counted. Otherwise plxd never joined the
+   *  client's stream in time. */
   async alarm() {
     return logged(
       "stream.alarm",
       () => this.context(),
       async () => {
-        if (this.side("host")) return;
+        if (this.side("host")) {
+          this.reportDue = false;
+          if (this.pending() > 0) await this.report(false);
+          return;
+        }
         for (const ws of this.ctx.getWebSockets()) this.shut(ws, 4408, "the host didn't join");
         await this.finish();
       },

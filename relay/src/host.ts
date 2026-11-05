@@ -152,8 +152,9 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * Adds `bytes` to today's traffic, saved at once, and answers whether the host is still within
-   * [`MAX_DAILY_BYTES`]. Streams report every [`REPORT_BYTES`] and when they close, so this saves
-   * no more often than 0068's host object did.
+   * [`MAX_DAILY_BYTES`]. Streams report every [`REPORT_BYTES`], within [`REPORT_AFTER`] of a frame,
+   * and when they close, so this saves about as often as 0068's host object did, plus at most once
+   * per [`REPORT_AFTER`] for each stream carrying frames.
    */
   private async count(bytes: number): Promise<boolean> {
     const traffic = await this.today();
@@ -286,6 +287,8 @@ export class HostRelay extends DurableObject<Env> {
   /**
    * The host as `user` sees it in their list, or null when it isn't theirs. `usage` is what clients
    * warn from: past `limit`, [`admit`] answers `daily_limit` until `resetsAt`, in ms since the epoch.
+   * Its `bytes` are what streams reported, so they can be short by under [`REPORT_BYTES`] per open
+   * stream, for at most [`REPORT_AFTER`]. Asking each stream's object would wake it on every list.
    */
   async status(user: string) {
     const owner = await this.owner();

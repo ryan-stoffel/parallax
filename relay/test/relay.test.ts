@@ -333,6 +333,48 @@ describe("streams", () => {
     await expect.poll(() => openStreams(host)).toEqual({});
   });
 
+  it("reports a slow stream's count on its alarm, which more frames don't push back", async () => {
+    const { host, token, control } = await online();
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, open));
+    await client.next();
+    await side.next();
+    const bytes = async () => {
+      const list = (await (await call("/v1/hosts", { token })).json()) as {
+        hosts: { usage: { bytes: number } }[];
+      };
+      return list.hosts[0]!.usage.bytes;
+    };
+    const object = streamObject(open.stream);
+    const alarm = () => runInDurableObject(object, (_: StreamRelay, state) => state.storage.getAlarm());
+    const send = async () => {
+      client.ws.send(new Uint8Array([0]));
+      await side.next();
+    };
+
+    expect(await alarm()).toBeNull();
+    await send();
+    const first = await alarm();
+    expect(first).toBeGreaterThan(Date.now());
+    await send();
+    expect(await alarm()).toBe(first);
+    // Woken from hibernation it no longer remembers the alarm, and still doesn't move it.
+    await runInDurableObject(object, (relay: StreamRelay) => {
+      (relay as unknown as { reportDue: boolean }).reportDue = false;
+    });
+    await send();
+    expect(await alarm()).toBe(first);
+    expect(await bytes()).toBe(0);
+
+    expect(await runDurableObjectAlarm(object)).toBe(true);
+    expect(await bytes()).toBe(3 * MIN_FRAME_BYTES);
+    // Nothing since, so no alarm, and the stream stays open.
+    expect(await alarm()).toBeNull();
+    await send();
+    expect(await alarm()).toBeGreaterThan(Date.now());
+  });
+
   it("refuses a stream id that's malformed or another namespace's, without throwing", async () => {
     const { host } = await online();
     const ids = ["nope", "0".repeat(64), "f".repeat(63), "A".repeat(64), hosts.newUniqueId().toString()];
