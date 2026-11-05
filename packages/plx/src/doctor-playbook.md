@@ -52,9 +52,15 @@ the agent CLIs it runs, git worktrees, and the SQLite store. The app is only a c
   Workers run sandboxed: on Linux with bubblewrap and socat, which a release plxd carries in
   `tools/sandbox/` and uses when the host has none.
 - Each thread runs in its own git worktree under `worktrees/` in the data folder.
-- Parallax Connect, when on, has plxd listen on TCP 7340 on its own Tailscale address, for the
-  user's other computers. SSH hosts are reached with `ssh … plxd attach`, falling back to plxd in
-  `~/.parallax-plxd`, `~/.local/bin`, or the app.
+- Parallax Connect joins computers signed in to one Parallax account. With `relay` on, plxd keeps
+  one WebSocket to Parallax Relay (`relay.parallax.codes`), for phone notifications, webhooks, and
+  streams from the user's other devices. With `remote` on (Reach from anywhere), it listens on TCP
+  7341 with TLS, and the relay carries only ciphertext to that listener. `npx plx-cli connect` sets
+  this up. A new device or computer needs one approval with a 6-digit code.
+- Tailscale is an optional direct route: with `connect` on, plxd also listens on TCP 7340 on its
+  Tailscale address. A computer with the relay connected doesn't need it.
+- SSH hosts are reached with `ssh … plxd attach`, falling back to plxd in `~/.parallax-plxd`,
+  `~/.local/bin`, or the app.
 - The `parallax` command is plxd under another name: with no arguments it opens the terminal UI.
 - First establish how this user runs it: the app on this computer, plxd alone (Linux, headless),
   an SSH host, or Connect between computers. The same symptom points at different code in each.
@@ -67,15 +73,16 @@ Work from evidence, not assumption. In rough order of value:
   the time of the problem with `tail` or `grep`, never the whole file. The service's stdout and
   stderr go there too (on systemd older than 240, to `journalctl --user -u
   io.github.ryan-stoffel.parallax.plxd`). Useful lines: `listening` (with version, pid, socket),
-  `not starting` and `could not start`, `the socket was gone`, `could not listen on`, `refused a
-  tailnet connection`, and any `ERROR`.
+  `not starting` and `could not start`, `the socket was gone`, `could not listen on`, `connected
+  to the relay`, `lost the relay connection`, `refused a tailnet connection`, and any `ERROR`.
 - **Ask the running plxd.** `plxd attach` takes JSON-RPC lines on stdin, but starts plxd if none
   runs, so check the context file first. Send `initialize` first:
 
       printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"doctor","version":"0"},"capabilities":{}}}' '{"jsonrpc":"2.0","id":2,"method":"host/health","params":{}}' | plxd attach
 
-  Useful methods: `host/health`, `host/version`, `host/settings/get`, `connect/devices`,
-  `github/status`, `accounts/list`. Never print `providers/list`'s `env` or `loginEnv` fields:
+  Useful methods: `host/health`, `host/version`, `host/settings/get`, `remote/sessions` (the relay
+  and the listener), `access/get` (the account and any device waiting for approval),
+  `connect/devices` (Tailscale), `github/status`, `accounts/list`. Never print `providers/list`'s `env` or `loginEnv` fields:
   they may hold the user's keys.
 - **The project store**, `plxd.sqlite3`. Read it with `sqlite3 -readonly`, and never write to it,
   even with the user's permission: plxd holds it open. Tables that matter: `runs` (one row per
@@ -124,10 +131,15 @@ Check these against the evidence before going deeper.
 | Agents fail on NixOS | No `NIX_LD` and no `/run/current-system/sw/share/nix-ld/lib/ld.so` | `programs.nix-ld.enable = true;` in configuration.nix, then `sudo nixos-rebuild switch` |
 | Claude or Cursor threads fail to start | The note `Node.js 22.16 or newer is required` (Claude) or `Node.js 22.13 or newer is required` (Cursor), or `Couldn't install the …` SDK | Install Node 22.16 or newer with npm |
 | API keys fail on Linux | `keychainUnavailable`: no unlocked Secret Service | Install and unlock a Secret Service (gnome-keyring, KeePassXC) |
-| Connect doesn't reach another computer | `connect/devices` shows Tailscale `missing` or `stopped`, or `listening: false`; `could not listen on …` or `refused a tailnet connection` in the log | Start Tailscale on both, signed in as the same Tailscale user and not tagged; on Windows, allow TCP 7340 in the firewall |
+| This computer isn't on the account | The Relay check says `This computer isn't registered with the relay yet` | `npx plx-cli connect` on this computer, or sign in to the app here |
+| The relay can't be reached | The Relay check says `Parallax couldn't reach the relay: …`, or `lost the relay connection` in the log | Check this computer's network, proxy, or firewall for `relay.parallax.codes`; plxd keeps retrying |
+| Clock errors from the relay | `this computer's clock is too far off the relay's` | Set the computer's clock to the right time |
+| Other devices can't reach this computer | The Remote access check says `not listening`, often a port in use | Free TCP 7341, or follow the reason it gives |
+| A new device or computer can't get in | `access/get` shows a `pending` device, or the other computer asks for a code | `npx plx-cli connect approve` approves a waiting device or shows a new code to type |
+| The Tailscale route doesn't work | `connect/devices` shows Tailscale `missing` or `stopped`, or `listening: false`; `could not listen on …` or `refused a tailnet connection` in the log | Only matters when the relay is down too. Start Tailscale on both, signed in as the same Tailscale user and not tagged; on Windows, allow TCP 7340 in the firewall |
 | plxd stops at logout on Linux | Linger is off | `sudo loginctl enable-linger $USER` |
 | The disk fills up | Free space in the context file; `du -sh` on `worktrees/` and `plxd.log` | Worktrees go only after their PR merges with `cleanWorktrees` on; offer to delete worktrees of finished, archived threads, after listing them for the user |
-| SSH host fails | Exit 127: no plxd found; exit 255: ssh itself failed; output from shell startup files corrupts the connection | Install plxd there with `npx plx-cli add <host>`; make startup files quiet for non-interactive shells |
+| SSH host fails | Exit 127: no plxd found; exit 255: ssh itself failed; output from shell startup files corrupts the connection | Install plxd there with `npx plx-cli connect add <host>`; make startup files quiet for non-interactive shells |
 | Windows threads don't run | `workerUnavailable`: Windows runs no workers | Run threads on a Mac or Linux host, or WSL2, through Connect or SSH |
 
 ## 7. Get the source
@@ -162,7 +174,7 @@ release notes and recent commits that touch the relevant code.
 
 If the user is behind and the fix likely shipped, say so plainly. The app updates itself from its
 menu; plxd in `~/.parallax-plxd` is updated by the app. For a computer set up with plx,
-`npx plx-cli setup` installs the newest release again.
+`npx plx-cli connect` installs the newest release again (add `--channel nightly` for a nightly).
 
 ## 9. Offer outcomes
 
@@ -211,5 +223,5 @@ Never read secrets:
   their status commands instead: `claude auth status`, `codex login status`, `gh auth status`.
 - `providers/list`'s `env` and `loginEnv` values, and `PLXD_RELAY_TOKEN`.
 
-Scrub anything you quote in an issue or comment: keys, tokens, Tailscale addresses and device
-names, repository and project names, and the user's home folder path. When in doubt, leave it out.
+Scrub anything you quote in an issue or comment: keys, tokens, relay host ids and webhook URLs,
+account ids, Tailscale addresses and device names, repository and project names, and the user's home folder path. When in doubt, leave it out.
