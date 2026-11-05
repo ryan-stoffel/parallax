@@ -13,6 +13,7 @@ import type {
 } from "../../desktop/src/protocol/generated/protocol";
 import { describeError } from "../../desktop/src/renderer/errors";
 import { Choices, type Choice } from "./Choices";
+import { restarting } from "./computerUpdate";
 import { showAlert } from "./dialogStore";
 import { useFleet, type Computer } from "./fleet";
 import { DeviceIcon, Icon, Input, Row, T, useColors } from "./ui";
@@ -139,7 +140,7 @@ export function ComputerPicker({ m, onChange }: { m: Computer; onChange: (id: st
       <Row
         leading={<DeviceIcon name={m.machine.name} size={18} color={c.mutedForeground} />}
         title={m.machine.name}
-        detail={m.shownConnected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
+        detail={restarting(m.machine.id, m.connectedNow) ? "Updating…" : m.shownConnected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
         last
         onPress={more ? () => setOpen(true) : undefined}
         right={more ? <Icon icon={ChevronsUpDown} size={16} color={c.faintForeground} /> : undefined}
