@@ -51,16 +51,30 @@ export function setUpComputer(
     },
     () =>
       void accounts
-        .ask(
+        .compare(
           hostId,
           routes,
-          (code, allow) => {
+          (code) => {
             handlers.onWaiting(code);
-            showWaiting(name, code, allow);
+            return askToAllow(name, code);
           },
           () => showConfirm(name),
         )
         .then(handlers.done, failed),
+  );
+}
+
+/** A new computer's code to compare: resolves to whether the user allowed it. */
+export function askToAllow(name: string, code: string): Promise<boolean> {
+  return new Promise((resolve) =>
+    showAlert(
+      `Add ${name}?`,
+      `${formatCode(code)}\n\nAllow it only if ${name} shows this code. Another code, or none, means something else is answering.`,
+      [
+        { text: "Deny", style: "destructive", onPress: () => resolve(false) },
+        { text: "Allow", onPress: () => resolve(true) },
+      ],
+    ),
   );
 }
 

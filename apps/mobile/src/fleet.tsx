@@ -24,7 +24,7 @@ import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, listSources, merged, type Lists } from "./access";
 import { listHosts, relayCap, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { allowThisPhone, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
+import { allowThisPhone, askToAllow, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
 import { showAlert } from "./dialogStore";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
@@ -283,12 +283,12 @@ export function FleetProvider({
     const id = accountId(next.hostId);
     const routes = latest.current.machines.find((m) => m.id === id)?.account?.routes ?? [];
     await account
-      .ask(
+      .compare(
         next.hostId,
         routes,
-        (code, allow) => {
+        (code) => {
           gate(id, { kind: "waiting", code });
-          showWaiting(next.name, code, allow);
+          return askToAllow(next.name, code);
         },
         () => showConfirm(next.name),
       )
@@ -361,7 +361,7 @@ export function FleetProvider({
     const allowed = accounts.allowed;
     const known = lists.map((l) => ({ id: l.id.replace(/^account:/, ""), lists: l.lists }));
     const union = merged(listSources(known, allowed).map((s) => s.lists), accounts.sessions, allowed);
-    await accounts.trust(union.approvedHosts);
+    await accounts.trust([...union.approvedHosts, ...(union.allowedHosts ?? [])]);
     for (const { id, lists: theirs } of lists)
       if (lacks(theirs, union)) void fleet.hosts.get(id)?.request("access/merge", union);
     // A computer one of them lists connects now.

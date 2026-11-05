@@ -53,6 +53,8 @@ function holding(poll: () => Answer, values: unknown[] = []) {
 
 const session = { status: 200, json: { accessToken: "session" } };
 const load = () => AccountHosts.load(async () => "token", "iPhone");
+/** The sessions the phone keeps, whatever it trusts. */
+const savedSessions = () => (JSON.parse(net.store.get("account-hosts")!) as { sessions: object }).sessions;
 
 beforeEach(() => {
   net.ports.length = 0;
@@ -62,6 +64,81 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.unstubAllGlobals());
+
+test("comparing takes no session before Allow, even from a host that offers one", async () => {
+  const polled: unknown[] = [];
+  net.answers["fake"] = holding(() => (polled.push(1), session));
+  const accounts = await load();
+
+  let allow = (_allowed: boolean) => {};
+  const decided = new Promise<boolean>((resolve) => (allow = resolve));
+  const running = accounts.compare("fake", [], () => decided);
+  await vi.waitFor(() => expect(net.ports.length).toBeGreaterThan(0));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Nothing tapped: it asked nothing more of the host, and trusts it with nothing.
+  expect(polled).toEqual([]);
+  expect(accounts.trusts("fake")).toBe(false);
+  expect(accounts.sessions).toEqual([]);
+
+  allow(false);
+  await expect(running).rejects.toBeInstanceOf(Denied);
+  expect(accounts.trusts("fake")).toBe(false);
+  expect(savedSessions()).toEqual({});
+});
+
+test("a host that answers a compare with a session at once showed no code, so nothing is kept", async () => {
+  net.answers["signin"] = () => session;
+  net.answers["value"] = (path) =>
+    path === "/api/auth/account" ? { status: 202, json: held } : session;
+  const accounts = await load();
+  const decide = vi.fn(async () => true);
+  for (const host of ["signin", "value"]) {
+    await expect(accounts.compare(host, [], decide)).rejects.toThrow(/no code to compare/);
+    expect(accounts.trusts(host)).toBe(false);
+  }
+  expect(decide).not.toHaveBeenCalled();
+  expect(savedSessions()).toEqual({});
+});
+
+test("a computer allowed by comparing is used, and marked so no lists come from it", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  net.answers["a"] = (path, body) => {
+    bodies.push(body);
+    if (path === "/api/auth/account") return { status: 202, json: held };
+    return body["allow"] ? session : { status: 202, json: { value: base64url(hostValue) } };
+  };
+  const accounts = await load();
+  await accounts.compare("a", [], async () => true);
+  expect(bodies.at(-1)).toMatchObject({ request: "r1", allow: true });
+  expect(accounts.trusts("a")).toBe(true);
+  expect(accounts.allowed).toEqual(["a"]);
+});
+
+test("a bare setup's computer takes Allow here and then its own confirmation", async () => {
+  let confirmed = false;
+  net.answers["a"] = (path, body) => {
+    if (path === "/api/auth/account") return { status: 202, json: held };
+    if (body["allow"]) return { status: 202, json: { value: base64url(hostValue), needsHost: true } };
+    if (body["wait"]) return confirmed ? session : { status: 202, json: {} };
+    return { status: 202, json: { value: base64url(hostValue) } };
+  };
+  const accounts = await load();
+  const onConfirm = vi.fn(() => void (confirmed = true));
+  await accounts.compare("a", [], async () => true, onConfirm);
+  expect(onConfirm).toHaveBeenCalledOnce();
+  expect(accounts.allowed).toEqual(["a"]);
+});
+
+test("a tap on a new phone's own request marks the computer", async () => {
+  net.answers["a"] = (path, body) => {
+    if (path === "/api/auth/account") return { status: 202, json: held };
+    if (body["allow"]) return session;
+    return { status: 202, json: { value: base64url(hostValue) } };
+  };
+  const accounts = await load();
+  await accounts.ask("a", [], (_code, allow) => allow());
+  expect(accounts.allowed).toEqual(["a"]);
+});
 
 test("a tap during a wait keeps the request the host still holds", async () => {
   const values: unknown[] = [];

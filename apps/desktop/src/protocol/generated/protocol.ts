@@ -8766,8 +8766,9 @@ export type AccessState = {
 	 */
 	approvedHosts: Array<string>,
 	/**
-	 * Those of them added with Allow alone (0091): clients use them and copy lists to them, but
-	 * take no keys or host ids from them.
+	 * Hosts added with Allow alone (0091), apart from `approved_hosts`, which is all an older
+	 * client reads: clients use them and copy lists to them, but take no keys or host ids from
+	 * them.
 	 */
 	allowedHosts?: Array<string>,
 	/**

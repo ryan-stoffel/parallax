@@ -62,6 +62,8 @@ test("a computer added with Allow alone gives no lists, and can't demote a real 
   const union = merged(sources.map((s) => s.lists), ["real", "fake"], ["fake"]);
   expect(union.approvedClients).toEqual([]);
   expect(union.allowedHosts).toEqual(["fake"]);
+  // An older client reads only this list, so a restricted computer stays out of it.
+  expect(union.approvedHosts).toEqual(["real"]);
   expect(lacks(real.lists, union)).toBe(true);
   // A mark from a real computer counts on a phone that didn't allow it itself.
   const marked = { id: "real", lists: lists(["fake"]) };

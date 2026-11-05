@@ -2089,7 +2089,8 @@ async function vouchedHosts(): Promise<Set<string> | undefined> {
     known,
     known.find((k) => k.id === "local"),
   ))
-    for (const id of each.state.approvedHosts) vouched.add(id);
+    for (const id of [...each.state.approvedHosts, ...(each.state.allowedHosts ?? [])])
+      vouched.add(id);
   return vouched;
 }
 
@@ -2238,13 +2239,14 @@ async function compareCodes(id: string): Promise<void> {
     typeInstead(why);
     return done?.(why);
   }
+  // Before the merge, so its change doesn't read as another computer vouching mid-comparison.
+  setAccess(id, undefined);
   await connections.get("local")?.request("access/merge", {
     approvedClients: [],
     removedClients: [],
-    approvedHosts: [relayId],
+    approvedHosts: [],
     allowedHosts: [relayId],
   });
-  setAccess(id, undefined);
   connections.get(id)?.retry();
   done?.(undefined);
 }
@@ -2506,7 +2508,10 @@ function watchAccess(hostId: string): void {
       showRequest(hostId, answer.result.pending);
       // Another of the user's computers vouched for one waiting on its code, as the computer it
       // just joined does (`syncAccess`), so it signs in with no code asked for.
-      for (const vouched of answer.result.approvedHosts) {
+      for (const vouched of [
+        ...answer.result.approvedHosts,
+        ...(answer.result.allowedHosts ?? []),
+      ]) {
         const id = accountId(vouched);
         const step = accountAccess.get(id)?.step;
         if (step !== "needsCode" && step !== "compare" && step !== "confirm") continue;
@@ -2585,8 +2590,10 @@ const syncAccess = coalesced(async () => {
         host.request("access/get", {}),
         host.request("relay/id", {}),
       ]);
+      // An account computer is who its connection pins, whatever its answer says. Only this
+      // computer's plxd and Tailscale's authenticated peers say for themselves.
       return "result" in state && "result" in own
-        ? { id, host, state: state.result, relayId: own.result.hostId }
+        ? { id, host, state: state.result, relayId: relayIdOf(id) ?? own.result.hostId }
         : undefined;
     }),
   );

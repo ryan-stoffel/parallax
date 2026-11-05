@@ -721,6 +721,61 @@ test("a connecting computer and this one copy approved and removed keys and host
   }
 });
 
+test("a computer added with Allow gives no lists even if it lies about its id, and older clients never see it", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const local = await start({
+      accounts: [
+        { hostId: studio, name: "studio", routes: [] },
+        { hostId: buildBox, name: "build-box", routes: [] },
+      ],
+    });
+    const real = accountConnection(studio)!;
+    const fakeHost = accountConnection(buildBox)!;
+    fake.answers.set(
+      "access/get",
+      listsBy((c) =>
+        c === local
+          ? { allowedHosts: [buildBox] }
+          : c === fakeHost
+            ? {
+                approvedClients: ["attacker"],
+                removedClients: ["my-laptop"],
+                approvedHosts: ["attacker-host"],
+              }
+            : { approvedClients: ["k1"] },
+      ),
+    );
+    // The inner TLS proves this is the computer pinned as build-box, not what its JSON says.
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === local ? "self" : studio },
+    }));
+    const merged: {
+      approvedClients: string[];
+      removedClients: string[];
+      approvedHosts: string[];
+    }[] = [];
+    fake.answers.set("access/merge", (params: never) => (merged.push(params), { result: {} }));
+    local.set(connected({ accountAccess: {} }));
+    real.set(connected({ accountAccess: {} }));
+    fakeHost.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(merged.length).toBeGreaterThan(0);
+    for (const params of merged) {
+      expect(params.approvedClients).not.toContain("attacker");
+      expect(params.removedClients).not.toContain("my-laptop");
+      expect(params.approvedHosts).not.toContain("attacker-host");
+      // An older client reads only this list, so a restricted computer stays out of it.
+      expect(params.approvedHosts).not.toContain(buildBox);
+    }
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
 test("revoking a signed-in device here removes its key on every other computer this app reaches", async () => {
   vi.useFakeTimers();
   fake.answers.clear();
@@ -1005,7 +1060,7 @@ test("a new account computer's code is compared once, and one added by Allow is 
     expect(merged).toContainEqual({
       approvedClients: [],
       removedClients: [],
-      approvedHosts: [buildBox],
+      approvedHosts: [],
       allowedHosts: [buildBox],
     });
     expect(box.retry).toHaveBeenCalled();

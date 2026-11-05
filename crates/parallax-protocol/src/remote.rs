@@ -262,8 +262,9 @@ pub struct AccessState {
     pub removed_clients: Vec<String>,
     /// The relay ids of the account's approved hosts.
     pub approved_hosts: Vec<String>,
-    /// Those of them added with Allow alone (0091): clients use them and copy lists to them, but
-    /// take no keys or host ids from them.
+    /// Hosts added with Allow alone (0091), apart from `approved_hosts`, which is all an older
+    /// client reads: clients use them and copy lists to them, but take no keys or host ids from
+    /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub allowed_hosts: Vec<String>,

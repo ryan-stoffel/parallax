@@ -348,7 +348,8 @@ export type Lists = Pick<
  * Which of `known` this app takes lists from (0091), `own` being this computer's plxd, which it
  * always trusts. A computer added with Allow alone may be a fake one the user clicked through, so
  * it gets lists but gives none: nothing it says reaches the user's other computers. Marks count
- * only from a computer that isn't marked itself, so a fake one can't demote the real ones.
+ * only from a computer that isn't marked itself, so a fake one can't demote the real ones. Each
+ * `relayId` must be what the connection pins, never what the computer says of itself.
  */
 export function listSources<T extends { relayId: string; state: Lists }>(
   known: T[],
@@ -366,13 +367,17 @@ export function listSources<T extends { relayId: string; state: Lists }>(
 
 /**
  * Every list in `states` together, with `hostIds`, the connected hosts' own relay ids, approved
- * too. A key removed anywhere is removed, and not approved, everywhere.
+ * too. A key removed anywhere is removed, and not approved, everywhere. A computer added with Allow
+ * alone stays out of `approvedHosts`, the only list an older client or plxd reads, so neither ever
+ * takes it for a computer the user verified.
  */
 export function unionLists(states: Lists[], hostIds: string[]): Lists {
   const removed = new Set(states.flatMap((s) => s.removedClients));
   const approved = new Set(states.flatMap((s) => s.approvedClients).filter((k) => !removed.has(k)));
-  const hosts = new Set([...states.flatMap((s) => s.approvedHosts), ...hostIds]);
   const allowed = new Set(states.flatMap((s) => s.allowedHosts ?? []));
+  const hosts = new Set(
+    [...states.flatMap((s) => s.approvedHosts), ...hostIds].filter((id) => !allowed.has(id)),
+  );
   return {
     approvedClients: [...approved].sort(),
     removedClients: [...removed].sort(),

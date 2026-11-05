@@ -424,12 +424,14 @@ export class AccountHosts {
   /**
    * Signs in at `at` with a fresh Clerk token. An approved key gets a session, kept. Otherwise the
    * host holds a request: with a value this phone kept for it, it goes on; with none, it starts
-   * one only when the user `ask`ed, and both ends then show its code.
+   * one only when the user `ask`ed, and both ends then show its code. With `compare`, a host that
+   * answers with a session at once showed no code to compare, so it's refused and nothing is kept.
    */
   private async signIn(
     at: Endpoint,
     hostId: string,
     ask: boolean,
+    compare = false,
   ): Promise<{ session: string } | { gate: Gate; request?: string }> {
     const token = await this.token(true);
     if (!token) throw new Error("Sign in to Parallax again.");
@@ -444,6 +446,7 @@ export class AccountHosts {
     // Already approved: trusted only if it already was, by a code or a host this phone uses, or if
     // this phone asked, and was allowed while it couldn't hear. That Allow may have come from any
     // of them, as it covers them all.
+    if (status === 200 && compare) throw new Denied(NO_CODE);
     if (status === 200) return this.approved(hostId, json, this.askedAny);
     if (status === 401 || status === 403)
       throw new Refused(describeRefusal(json) ?? "That computer refused this phone's sign-in.");
@@ -468,7 +471,10 @@ export class AccountHosts {
       value = started.value;
     }
     const step = await this.approval(at, { request: requestId, value: base64url(value) });
-    if ("session" in step) return this.approved(hostId, step.session, true);
+    if ("session" in step) {
+      if (compare) throw new Denied(NO_CODE);
+      return this.approved(hostId, step.session, true);
+    }
     // Only now does the host show its value, which must be the one it committed to.
     const hostValue = fromBase64url(String(step.pending["value"] ?? ""));
     if (commitment(hostValue) !== committed) throw new WrongHost("Another computer answered for that one.");
@@ -577,6 +583,41 @@ export class AccountHosts {
   }
 
   /**
+   * Compares codes with new computer `hostId`, which nothing vouches for, so it may be one the relay
+   * made up. It takes no session until `decide` says the user allowed the code, and then marks the
+   * computer `allowed`, so this phone takes no lists from it. Without the Allow it asks nothing more
+   * of the host, which withdraws the request. `onConfirm` says the computer must confirm too, as its
+   * setup named no device. Rejects when it's denied or lapses, with a message for people.
+   */
+  async compare(
+    hostId: string,
+    learned: string[],
+    decide: (code: string) => Promise<boolean>,
+    onConfirm: () => void = () => {},
+  ): Promise<void> {
+    const { at } = await this.first(hostId, ordered(hostId, learned));
+    try {
+      const signed = await this.signIn(at, hostId, true, true);
+      if (!("gate" in signed) || signed.gate.kind !== "waiting" || !signed.request)
+        throw new Error("That computer didn't start a request.");
+      const request = signed.request;
+      if (!(await decide(signed.gate.code))) {
+        await this.approval(at, { request, deny: true }).catch(() => {});
+        throw new Denied("You didn't allow it.");
+      }
+      let step = await this.approval(at, { request, allow: true });
+      if ("pending" in step) onConfirm();
+      while (!("session" in step)) step = await this.approval(at, { request }, true);
+      await this.approved(hostId, step.session, true, true);
+    } catch (e) {
+      if (e instanceof Denied) await this.setBook(hostId, forgetRequest(this.book(hostId)));
+      throw e;
+    } finally {
+      at.close();
+    }
+  }
+
+  /**
    * Sets up `hostId` with the code `plx connect` shows on it: one SPAKE2 run, pinned to the host
    * id, which approves this phone's key there and this phone's trust in the host. The code is
    * used once whatever happens, and at most 5 runs an hour go to one host.
@@ -598,6 +639,8 @@ export class AccountHosts {
     }
   }
 }
+
+const NO_CODE = "That computer showed no code to compare. Type the code it shows.";
 
 /** A sign-in or request the host refused: this phone needs setting up or approving again. */
 class Refused extends Error {}

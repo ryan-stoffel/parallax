@@ -147,7 +147,8 @@ export function listSources<T extends { id: string; lists: Lists }>(known: T[], 
 /**
  * Every host's lists in one, with `hosts` (the ones this phone has sessions with) approved too,
  * and `allowed` (those it allowed itself) marked. A key removed anywhere ends up removed and not
- * approved, so the lists merge with no clock.
+ * approved, so the lists merge with no clock. A marked computer stays out of `approvedHosts`, the
+ * only list an older client or plxd reads, so neither takes it for one the user verified.
  */
 export function merged(all: Lists[], hosts: string[], allowed: string[] = []): Lists {
   const removed = new Set(all.flatMap((l) => l.removedClients));
@@ -156,7 +157,7 @@ export function merged(all: Lists[], hosts: string[], allowed: string[] = []): L
   return {
     approvedClients: sorted(all.flatMap((l) => l.approvedClients).filter((k) => !removed.has(k))),
     removedClients: sorted(removed),
-    approvedHosts: sorted([...all.flatMap((l) => l.approvedHosts), ...hosts]),
+    approvedHosts: sorted([...all.flatMap((l) => l.approvedHosts), ...hosts].filter((id) => !marks.includes(id))),
     ...(marks.length > 0 && { allowedHosts: marks }),
   };
 }

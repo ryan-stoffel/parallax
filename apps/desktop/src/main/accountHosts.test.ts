@@ -244,7 +244,7 @@ test("a computer added with Allow alone gives no lists, and can't demote a real 
   ).toEqual({
     approvedClients: [],
     removedClients: [],
-    approvedHosts: ["fake", "own", "real"],
+    approvedHosts: ["own", "real"],
     allowedHosts: ["fake"],
   });
   // Another device allowed it: a mark from a real computer counts here too.
