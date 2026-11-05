@@ -181,6 +181,13 @@ async fn sign_in(daemon: &Daemon, token: &str, host_id: &str) -> Result<(), Fail
                 "Try again in a few minutes.",
             ));
         }
+        Ok(Ok((429, _))) => {
+            return Err(failure(
+                RelayPart,
+                "The relay is limiting this account's requests for now.",
+                "Wait a minute, then check again.",
+            ));
+        }
         Ok(Ok((status, _))) => {
             return Err(failure(
                 RelayPart,
@@ -306,7 +313,15 @@ async fn through_relay(daemon: &Daemon, host_id: &str) -> Result<(), Failure> {
     let socket = within(upgrade(&relay.url, &path, &[])).await;
     let mut socket = match socket {
         Some(Ok(socket)) => socket,
-        Some(Err((Some(429), _))) => return Err(refused("rate_limited")),
+        // The ticket already counted against the host's opens, so it's one of these two.
+        Some(Err((Some(429), _))) => {
+            return Err(failure(
+                Stream,
+                "The relay refused the stream: this computer has 16 open, or this network made \
+                 too many requests this minute.",
+                "Close a connection or wait a minute, then check again.",
+            ));
+        }
         // Says nothing of the ticket, whose URL it failed at.
         Some(Err((Some(status), _))) => {
             return Err(failure(
@@ -351,25 +366,23 @@ async fn through_relay(daemon: &Daemon, host_id: &str) -> Result<(), Failure> {
     }
 }
 
-/// The relay's refusal of a new stream, by its reason.
+/// The relay's refusal of a new stream, by its reason. A reason this doesn't know gets no words of
+/// its own, since what the relay sends could say anything, even echo the token `sign_in` gave it,
+/// and this text reaches a terminal and bug reports.
 fn refused(error: &str) -> Failure {
     use RelayCheckPart::Stream;
     match error {
-        "rate_limited" | "too_many_streams" => failure(
+        "rate_limited" => failure(
             Stream,
-            "The relay refused a new stream: this computer has 16 open, or opened 30 this minute.",
-            "Close a connection or wait a minute, then check again.",
+            "The relay refused a new stream: this computer opened 30 this minute.",
+            "Wait a minute, then check again.",
         ),
         "daily_limit" => failure(
             Stream,
             "This computer used its 2 GiB through the relay for today.",
             "Streams come back at midnight UTC. Computers on the same network still connect directly.",
         ),
-        other => failure(
-            Stream,
-            format!("The relay refused a new stream: {other}."),
-            FIX_STREAM,
-        ),
+        _ => failure(Stream, "The relay refused a new stream.", FIX_STREAM),
     }
 }
 
@@ -492,6 +505,20 @@ mod tests {
     }
 
     #[test]
+    fn a_reason_the_relay_makes_up_never_reaches_the_report() {
+        let echoed = "eyJhbGciOiJSUzI1NiJ9.a-clerk-token.signature\u{1b}[2J update at evil.example";
+        let result = report(Err(refused(echoed)), &facts());
+        assert_eq!(result.failed, Some(RelayCheckPart::Stream));
+        let problem = result.problem.unwrap();
+        assert_eq!(problem, "The relay refused a new stream.");
+        for said in [&problem, &result.fix.unwrap(), &result.diagnostics] {
+            assert!(!said.contains("a-clerk-token"), "{said}");
+            assert!(!said.contains("evil.example"), "{said}");
+            assert!(!said.contains('\u{1b}'), "{said}");
+        }
+    }
+
+    #[test]
     fn a_pass_says_how_long_the_stream_took() {
         let result = report(Ok(12), &facts());
         assert_eq!(result.failed, None);
@@ -501,7 +528,7 @@ mod tests {
 
     #[test]
     fn the_relays_reasons_for_refusing_a_stream_each_say_what_to_do() {
-        for reason in ["rate_limited", "too_many_streams", "daily_limit", "other"] {
+        for reason in ["rate_limited", "daily_limit", "other"] {
             let refusal = refused(reason);
             assert_eq!(refusal.part, RelayCheckPart::Stream);
             assert!(!refusal.fix.is_empty());

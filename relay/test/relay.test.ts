@@ -576,7 +576,7 @@ describe("streams", () => {
     const lost = opened(await connect(host, token));
     const { stream: lostId } = JSON.parse((await control.next()) as string) as Open;
     const { control: again } = await connectHost(host, [kept.open.stream, lostId]);
-    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready" });
+    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready", check: true });
     expect(await unlisted.client.closed).toBe(1000);
     expect(await lost.closed).toBe(1000);
     expect(Object.keys(await openStreams(host))).toEqual([kept.open.stream]);
@@ -602,7 +602,7 @@ describe("streams", () => {
     const spare = JSON.parse((await control.next()) as string) as Open;
     const side = opened(await join(host, spare));
     const { control: again } = await connectHost(host, [spare.stream]);
-    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready" });
+    expect(JSON.parse((await again.next()) as string)).toEqual({ t: "ready", check: true });
     expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
     const client = opened(await connect(host, token));
     expect(await client.next()).toBe("ready");

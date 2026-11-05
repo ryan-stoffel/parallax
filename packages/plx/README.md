@@ -65,6 +65,8 @@ Lines starting with `→`, `✓`, or `✗` are progress for people. Their wordin
 
 `plx connect status --json` prints one object, and these field names are stable. It exits 0 whenever plxd answered, connected or not. When plxd doesn't answer, stdout is empty, the reason goes to stderr, and it exits 1.
 
+Each `plx connect status` that gets as far as the stream spends one of this computer's 30 stream opens a minute, in text or with `--json`, and every client on this computer shares them. So poll `--json` slowly, no more than once a minute.
+
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `account` | string or null | The Parallax account's user id, or null when not signed in. |
