@@ -251,7 +251,12 @@ async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [], field = false
       problem = undefined;
       const found = last.find(matches);
       if (found) return found;
-      const obstacle = last.find((element) => dismiss.includes(element.label));
+      // A busy emulator can leave a system "isn't responding" dialog over everything, for any app.
+      const stuck = last.find((element) => element.label.endsWith("isn't responding"));
+      const obstacle = last.find(
+        (element) => dismiss.includes(element.label) || (stuck && element.label === "Wait"),
+      );
+      if (stuck) log(stuck.label);
       if (obstacle) adb("shell", "input", "tap", String(obstacle.x), String(obstacle.y));
     } catch (e) {
       // uiautomator fails or hangs while the screen is changing. One that hung would block the next.

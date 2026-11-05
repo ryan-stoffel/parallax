@@ -445,6 +445,7 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_6
+          cores: 4
           ram-size: 4096M
           disk-size: 6G
           disable-animations: true
