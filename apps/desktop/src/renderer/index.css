@@ -861,6 +861,14 @@ body {
 [data-platform="linux"] .tab-cap {
   bottom: 1px;
 }
+/* With Tabs off, the workspace is square too and meets the window's edges, which the desktop
+   outlines, so its only line is the one by the sidebar. */
+:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"] {
+  border-radius: 0;
+}
+:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"]::after {
+  border-block: 0;
+}
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
