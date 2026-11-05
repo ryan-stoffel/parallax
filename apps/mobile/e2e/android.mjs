@@ -6,7 +6,8 @@
 // - pinned-tls's tests run on the emulator, against both a stand-in and a real plxd.
 // - The real app, on a Metro bundle naming those stand-ins, signs in and sets up `relay-box`, an
 //   account computer it can reach only through the relay, as this blocks its LAN address on the
-//   emulator. It pairs with `lan-box` by address and code. Each computer reports the phone's session.
+//   emulator. It pairs with `lan-box` by address and code first, then takes
+//   `relay-box`'s code, and each computer must report the phone's session.
 //
 // Screenshots, and logcat on a failure, go in ANDROID_E2E_OUT.
 import { execFileSync, spawn } from "node:child_process";
@@ -391,35 +392,38 @@ try {
     dismiss: ["Use without an account", "No thanks", "Accept & continue", "Got it"],
   });
 
-  // An account computer: the code its Settings or `plx connect` shows, typed here.
-  await waitFor("relay-box");
-  const { code } = await relayBox.call("access/setupCode");
-  await tap("Enter a code from plx connect");
-  await type("Set up relay-box", code);
-  shot("2-setup-code");
-  await tap("Set Up");
-  await phoneSession(relayBox);
-  shot("3-relay-box-connected");
-
   // A computer paired on the LAN, by its address and code. It advertises over mDNS once it has a
   // code. When the phone's look ends, one computer found fills the address: its real one, which is
   // blocked here, so 10.0.2.2 replaces it.
   const { code: pairing } = await lanBox.call("remote/pair");
   await tap(/^Pair a computer on this/);
   await waitFor("Look again");
-  shot("4-found-on-this-network");
+  shot("2-found-on-this-network");
   await type("Address", `${RUNNER}:${lanBox.port}`);
   await type("Code", pairing.replaceAll("-", ""));
-  shot("5-pair-lan-box");
+  shot("3-pair-lan-box");
   await tap("Pair");
   await phoneSession(lanBox);
+  log("the LAN path reached lan-box");
   await waitFor("lan-box");
-  shot("6-computers");
+  shot("4-lan-box-paired");
 
-  await tap("Continue");
-  await tap("Not now");
-  await waitFor("Open sidebar");
-  shot("7-main");
+  // An account computer: the code its Settings or `plx connect` shows, typed here, through the relay.
+  await waitFor("relay-box");
+  const { code } = await relayBox.call("access/setupCode");
+  await tap("Enter a code from plx connect");
+  await type("Set up relay-box", code);
+  shot("5-setup-code");
+  await tap("Set Up");
+  await phoneSession(relayBox);
+  log("the relay path reached relay-box");
+  await waitFor("Ready");
+  shot("6-relay-box-ready");
+
+  // Not a check: what relay-box's row says after the screen's next look, which runs every 15 seconds.
+  await sleep(20_000);
+  shot("7-after-the-next-look");
+  log(`after the next look: ${readScreen().map((e) => e.label).filter(Boolean).join(" | ")}`);
   failed = false;
 } finally {
   clearTimeout(watchdog);
