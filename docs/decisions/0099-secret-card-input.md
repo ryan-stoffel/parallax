@@ -15,6 +15,7 @@ The secret card picked its view from `delivery`, which says how the agent gets t
 - **`accept` lists the extensions a `file` input offers,** each with its leading dot, such as `.p8`. It filters the OS file dialog, and the card checks a dropped file against it.
 - **A picked file goes as `saveBytes`,** in base64, so a binary file reaches the private file byte for byte. The contents are read only on Save. The limit stays 64 KB, measured on the bytes.
 - **The desktop card follows T3 Code's:** its label and reason, the input with Save on one line, then the privacy note and a quiet Decline. The editor and the file's drop zone need the width, so their Save joins that last line.
+- **An offer brings up the card.** When the user asks "can I give you the API key?", the agent calls `request_secret` in that turn instead of saying no. Each thread's instructions say so, as 0098's do for a failed login.
 - **An item with no `input`,** from before this record, shows what it showed before: the editor with `delivery: "file"`, else the field.
 - **On the phone, `file` opens the document picker,** and the app deletes the picker's cached copy once it has read it. `env` stays in the secure field, since iOS doesn't mask a multi-line one (0098).
 
