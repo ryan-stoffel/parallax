@@ -15,9 +15,12 @@ import {
   emptyBook,
   forgetRequest,
   keptValue,
+  listSources,
+  merged,
   newRequest,
   setupRun,
   type HostBook,
+  type Lists,
 } from "./access";
 import type { RelayUsage } from "../../desktop/src/protocol/generated/protocol";
 import { relayCapNotice } from "../../desktop/src/renderer/relayCap";
@@ -62,7 +65,7 @@ interface Stored {
   sessions: Record<string, string>;
   /** The hosts this phone uses: approved with its own code, or listed by one it uses. */
   trusted: string[];
-  /** Those this phone allowed with a click alone, which it takes no lists from. */
+  /** Those added with Allow alone, here or as a computer it uses said, which it takes no lists from. */
   allowed?: string[];
   books: Record<string, HostBook>;
   /** Why this phone stopped asking on its own, until the user asks again. */
@@ -165,7 +168,7 @@ export class AccountHosts {
     return Object.keys(this.stored.sessions).filter((id) => this.trusts(id));
   }
 
-  /** The hosts this phone allowed with a click alone, which it takes no lists from. */
+  /** The hosts added with Allow alone, here or as a computer it uses said, kept for good. */
   get allowed() {
     return this.stored.allowed ?? [];
   }
@@ -219,12 +222,22 @@ export class AccountHosts {
     return Object.values(this.stored.books).some((book) => book.kept);
   }
 
-  /** Trusts `hostIds` too, as a host this phone uses listed them. */
-  async trust(hostIds: string[]) {
-    const added = hostIds.filter((id) => !this.stored.trusted.includes(id));
-    if (!added.length) return;
-    this.stored = { ...this.stored, trusted: [...this.stored.trusted, ...added] };
-    await this.save();
+  /**
+   * Takes in the lists of the computers this phone reaches: the union to copy back to them, and it
+   * trusts the hosts that union lists. Restrictions are kept here with that trust, in one write, as
+   * the computer that told this phone of one may be offline next time.
+   */
+  async absorb(known: { id: string; lists: Lists }[]): Promise<Lists> {
+    const sources = listSources(known, this.allowed);
+    const union = merged(sources.map((s) => s.lists), this.sessions, this.allowed);
+    const marks = union.allowedHosts ?? [];
+    const trusted = [...new Set([...this.stored.trusted, ...union.approvedHosts, ...marks])];
+    const allowed = [...new Set([...this.allowed, ...marks])];
+    if (trusted.length !== this.stored.trusted.length || allowed.length !== this.allowed.length) {
+      this.stored = { ...this.stored, trusted, allowed };
+      await this.save();
+    }
+    return union;
   }
 
   /**

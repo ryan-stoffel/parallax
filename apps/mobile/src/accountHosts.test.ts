@@ -65,6 +65,29 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
+test("a restriction learned from a computer outlives that computer going offline, and a relaunch", async () => {
+  const none = { approvedClients: [], removedClients: [], approvedHosts: [] };
+  const accounts = await load();
+  // The real computer is online, and says "fake" was added with Allow on another device.
+  await accounts.absorb([
+    { id: "real", lists: { ...none, allowedHosts: ["fake"] } },
+    { id: "fake", lists: none },
+  ]);
+  expect(accounts.trusts("fake")).toBe(true);
+  expect(accounts.allowed).toEqual(["fake"]);
+
+  // Relaunched, with it offline: the fake one lists an attacker's key and host, to no effect.
+  const later = await load();
+  const union = await later.absorb([
+    { id: "other", lists: none },
+    { id: "fake", lists: { ...none, approvedClients: ["attacker"], approvedHosts: ["attacker-host"] } },
+  ]);
+  expect(union.approvedClients).not.toContain("attacker");
+  expect(union.approvedHosts).not.toContain("attacker-host");
+  expect(union.allowedHosts).toEqual(["fake"]);
+  expect(later.trusts("attacker-host")).toBe(false);
+});
+
 test("comparing takes no session before Allow, even from a host that offers one", async () => {
   const polled: unknown[] = [];
   net.answers["fake"] = holding(() => (polled.push(1), session));

@@ -2084,11 +2084,10 @@ async function vouchedHosts(): Promise<Set<string> | undefined> {
     }),
   );
   const known = read.filter((each) => each !== undefined);
+  const own = known.find((k) => k.id === "local");
+  if (!own) return undefined;
   const vouched = new Set(tailnetRelayIds.values());
-  for (const each of listSources(
-    known,
-    known.find((k) => k.id === "local"),
-  ))
+  for (const each of listSources(known, own))
     for (const id of [...each.state.approvedHosts, ...(each.state.allowedHosts ?? [])])
       vouched.add(id);
   return vouched;
@@ -2598,11 +2597,11 @@ const syncAccess = coalesced(async () => {
     }),
   );
   const known = read.filter((each) => each !== undefined);
-  if (known.length < 2) return;
-  const sources = listSources(
-    known,
-    known.find((each) => each.id === "local"),
-  );
+  // This computer's plxd keeps the restrictions, so nothing is copied without it: the computer
+  // that told it of one may be offline, leaving no other way to tell a restricted one.
+  const own = known.find((each) => each.id === "local");
+  if (!own || known.length < 2) return;
+  const sources = listSources(known, own);
   const union = unionLists(
     sources.map((each) => each.state),
     known.map((each) => each.relayId),

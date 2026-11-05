@@ -721,6 +721,37 @@ test("a connecting computer and this one copy approved and removed keys and host
   }
 });
 
+test("with this computer's plxd down, whose lists hold the restrictions, nothing is copied", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    await start({
+      accounts: [
+        { hostId: studio, name: "studio", routes: [] },
+        { hostId: buildBox, name: "build-box", routes: [] },
+      ],
+    });
+    const real = accountConnection(studio)!;
+    const restricted = accountConnection(buildBox)!;
+    fake.answers.set(
+      "access/get",
+      listsBy((c) => (c === restricted ? { approvedClients: ["attacker"] } : {})),
+    );
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === real ? studio : buildBox },
+    }));
+    const merged: unknown[] = [];
+    fake.answers.set("access/merge", (params: unknown) => (merged.push(params), { result: {} }));
+    real.set(connected({ accountAccess: {} }));
+    restricted.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(merged).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
 test("a computer added with Allow gives no lists even if it lies about its id, and older clients never see it", async () => {
   vi.useFakeTimers();
   fake.answers.clear();

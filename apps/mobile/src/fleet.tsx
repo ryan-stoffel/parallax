@@ -22,7 +22,7 @@ import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/ren
 import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
-import { lacks, listSources, merged, type Lists } from "./access";
+import { lacks, type Lists } from "./access";
 import { listHosts, relayCap, type AccountHosts, type Gate, type Listed } from "./accountHosts";
 import { allowThisPhone, askToAllow, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
 import { showAlert } from "./dialogStore";
@@ -358,10 +358,7 @@ export function FleetProvider({
       "error" in answer ? [] : [{ id, lists: answer.result as AccessState as Lists }],
     );
     if (!lists.length) return;
-    const allowed = accounts.allowed;
-    const known = lists.map((l) => ({ id: l.id.replace(/^account:/, ""), lists: l.lists }));
-    const union = merged(listSources(known, allowed).map((s) => s.lists), accounts.sessions, allowed);
-    await accounts.trust([...union.approvedHosts, ...(union.allowedHosts ?? [])]);
+    const union = await accounts.absorb(lists.map((l) => ({ id: l.id.replace(/^account:/, ""), lists: l.lists })));
     for (const { id, lists: theirs } of lists)
       if (lacks(theirs, union)) void fleet.hosts.get(id)?.request("access/merge", union);
     // A computer one of them lists connects now.
