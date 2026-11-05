@@ -3,7 +3,9 @@
 //! setup code approves the device that types it, within its run limit.
 
 use std::path::Path;
+use std::time::Duration;
 
+use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::methods::{
     AccessApprove, AccessDeny, AccessForgetHost, AccessGet, AccessMerge, AccessRemove,
     AccessSetupCode, HostSettingsSet, RelayId, RelayPushKey, RelayRegister, RelaySign,
@@ -21,9 +23,12 @@ use ring::rsa::{KeyPair, PublicKeyComponents};
 use serde_json::json;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use tokio::time::{Instant, sleep, timeout};
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::connect::free_port;
-use crate::remote::{LOOPBACK, https, set_remote, wait_listening};
+use crate::remote::{LOOPBACK, https, open_account, set_remote, wait_listening};
 use crate::support::{Client, InProcess, temp_dir};
 
 const USER: &str = "user_1";
@@ -33,7 +38,7 @@ fn clerk_key() -> KeyPair {
 }
 
 /// Serves the test key as a Clerk instance's JWKS on loopback, and answers with its issuer.
-async fn clerk() -> String {
+pub(crate) async fn clerk() -> String {
     let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
     let issuer = format!("http://{}", listener.local_addr().unwrap());
     let public: PublicKeyComponents<Vec<u8>> = clerk_key().public().into();
@@ -56,7 +61,7 @@ async fn clerk() -> String {
 }
 
 /// A fresh session token of `user` from the Clerk instance at `issuer`.
-fn token(issuer: &str, user: &str) -> String {
+pub(crate) fn token(issuer: &str, user: &str) -> String {
     token_at(issuer, user, remote::now_seconds())
 }
 
@@ -82,7 +87,7 @@ fn token_at(issuer: &str, user: &str, now: i64) -> String {
 }
 
 /// A host's config: its listener on loopback `port`, the relay at `relay`, trusting `issuer`.
-fn config(dir: &Path, issuer: &str, relay: &str, port: u16) -> plxd::server::Config {
+pub(crate) fn config(dir: &Path, issuer: &str, relay: &str, port: u16) -> plxd::server::Config {
     let mut config = InProcess::config(dir);
     config.remote_address = Some(LOOPBACK);
     config.remote_port = port;
@@ -139,7 +144,7 @@ async fn access(client: &mut Client) -> parallax_protocol::AccessState {
         .unwrap()
 }
 
-fn thumbprint(dir: &Path) -> String {
+pub(crate) fn thumbprint(dir: &Path) -> String {
     remote::device_key(dir).unwrap().thumbprint()
 }
 
@@ -613,6 +618,177 @@ async fn a_removal_beats_an_approval_not_yet_used_and_revoking_a_session_removes
     assert!(state.approved_clients.is_empty(), "{state:?}");
     let again = sign_in(&issuer, &routes, &host_id, USER, "tablet", tablet.path()).await;
     assert!(matches!(again, Err(remote::Error::Refused)), "{again:?}");
+    server.stop().await;
+}
+
+/// A relay on loopback that takes one plxd's control socket: frames sent on the first answer go to
+/// plxd, and the `removed` frames plxd sends come out of the second.
+async fn fake_control_relay() -> (
+    String,
+    mpsc::Sender<String>,
+    mpsc::Receiver<serde_json::Value>,
+) {
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (to_plxd, mut frames) = mpsc::channel::<String>(16);
+    let (removal, from_plxd) = mpsc::channel(16);
+    tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        socket
+            .send(Message::text(r#"{"t":"ready"}"#))
+            .await
+            .unwrap();
+        loop {
+            tokio::select! {
+                Some(frame) = frames.recv() => socket.send(Message::text(frame)).await.unwrap(),
+                read = socket.next() => {
+                    let Some(Ok(Message::Text(text))) = read else { return };
+                    let frame: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                    if frame["t"] == "removed" {
+                        removal.send(frame).await.unwrap();
+                    }
+                }
+            }
+        }
+    });
+    (url, to_plxd, from_plxd)
+}
+
+/// The key the removal frame `frame` names, once `signer` is checked as what signed it for [`USER`].
+fn announced(frame: &serde_json::Value, signer: &str) -> Vec<String> {
+    let statement = frame["statement"].as_str().unwrap();
+    let (signed_by, removed) = remote::open_removal(statement, USER).unwrap();
+    assert_eq!(signed_by, signer);
+    removed
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "what a relay could send, told case by case"
+)]
+async fn a_removal_from_the_relay_counts_only_when_an_approved_computer_signed_it() {
+    let issuer = clerk().await;
+    let (relay, frames, mut announcements) = fake_control_relay().await;
+    let dir = temp_dir();
+    let port = free_port();
+    let (server, mut client, route, host_id) =
+        host_at(config(dir.path(), &issuer, &relay, port)).await;
+    let routes = [route.clone()];
+    let approved = remote::DpopKey::generate();
+    let stranger = remote::DpopKey::generate();
+    // Added with Allow alone: one kept only as restricted, and one a merge left in both lists.
+    let restricted = remote::DpopKey::generate();
+    let in_both = remote::DpopKey::generate();
+    let (phone, tablet) = (temp_dir(), temp_dir());
+    let phone_key = thumbprint(phone.path());
+    let tablet_key = thumbprint(tablet.path());
+    client
+        .call::<AccessMerge>(AccessMergeParams {
+            approved_clients: vec![phone_key.clone(), tablet_key.clone()],
+            removed_clients: Vec::new(),
+            approved_hosts: vec![approved.thumbprint(), in_both.thumbprint()],
+            allowed_hosts: vec![restricted.thumbprint(), in_both.thumbprint()],
+        })
+        .await
+        .unwrap();
+    let lists = access(&mut client).await;
+    assert!(lists.approved_hosts.contains(&in_both.thumbprint()));
+    assert!(lists.allowed_hosts.contains(&in_both.thumbprint()));
+    for (dir, name) in [(&phone, "phone"), (&tablet, "tablet")] {
+        let signed_in = sign_in(&issuer, &routes, &host_id, USER, name, dir.path()).await;
+        assert!(matches!(signed_in, Ok((_, SignIn::Approved { .. }))));
+    }
+    let mut phone_app = open_account(&routes, &host_id, phone.path()).await.unwrap();
+    assert!(phone_app.initialize().await["result"].is_object());
+    let tell = |statement: String| {
+        let frame = json!({ "t": "removed", "statement": statement }).to_string();
+        let frames = frames.clone();
+        async move { frames.send(frame).await.unwrap() }
+    };
+    let one = |key: &str| vec![key.to_owned()];
+
+    // What a relay could make: signed by a host of its own, by a fake computer the user allowed, by
+    // an approved computer for another account, an approved computer's with another key swapped
+    // in, too long, and not one at all.
+    tell(remote::signed_removal(&stranger, USER, &one(&phone_key))).await;
+    tell(remote::signed_removal(&restricted, USER, &one(&phone_key))).await;
+    tell(remote::signed_removal(&in_both, USER, &one(&phone_key))).await;
+    tell(remote::signed_removal(
+        &approved,
+        "user_2",
+        &one(&phone_key),
+    ))
+    .await;
+    let real = remote::signed_removal(&approved, USER, &one(&tablet_key));
+    tell(real.replace(&tablet_key, &phone_key)).await;
+    tell(remote::signed_removal(
+        &approved,
+        USER,
+        &vec![phone_key.clone(); 200],
+    ))
+    .await;
+    tell("not a statement".to_owned()).await;
+
+    // The real one, last, ends the tablet's sessions.
+    tell(real.clone()).await;
+    let mut state = access(&mut client).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state.removed_clients.is_empty() && Instant::now() < deadline {
+        sleep(Duration::from_millis(20)).await;
+        state = access(&mut client).await;
+    }
+    sleep(Duration::from_millis(200)).await;
+    let state_after = access(&mut client).await;
+    assert_eq!(state_after.removed_clients, one(&tablet_key));
+    assert_eq!(state_after.approved_clients, one(&phone_key));
+    let tablet_again = open_account(&routes, &host_id, tablet.path()).await;
+    assert!(matches!(tablet_again, Err(remote::Error::Refused)));
+    phone_app
+        .send(r#"{"jsonrpc":"2.0","id":2,"method":"host/health","params":{}}"#)
+        .await;
+    assert!(
+        phone_app.next().await.contains(r#""result""#),
+        "still connected"
+    );
+
+    // Replaying it changes nothing, and what comes from the relay isn't passed on.
+    let version = access(&mut client).await.version;
+    tell(real).await;
+    sleep(Duration::from_millis(200)).await;
+    assert_eq!(access(&mut client).await.version, version);
+
+    // A removal made here goes to the relay signed by this host, once. The phone's live session
+    // ends here, and a real statement can't bring it back.
+    client
+        .call::<AccessRemove>(AccessRemoveParams {
+            thumbprint: phone_key.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(phone_app.closes().await);
+    let frame = timeout(Duration::from_secs(5), announcements.recv())
+        .await
+        .unwrap();
+    assert_eq!(announced(&frame.unwrap(), &host_id), one(&phone_key));
+    client
+        .call::<AccessRemove>(AccessRemoveParams {
+            thumbprint: phone_key,
+        })
+        .await
+        .unwrap();
+    let other = remote::DpopKey::generate().thumbprint();
+    client
+        .call::<AccessRemove>(AccessRemoveParams {
+            thumbprint: other.clone(),
+        })
+        .await
+        .unwrap();
+    let frame = timeout(Duration::from_secs(5), announcements.recv())
+        .await
+        .unwrap();
+    assert_eq!(announced(&frame.unwrap(), &host_id), one(&other));
     server.stop().await;
 }
 

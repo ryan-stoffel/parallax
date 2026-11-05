@@ -36,6 +36,8 @@ export const MAX_STREAMS = 16;
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** The largest removal statement the relay passes on, as plxd caps it. */
+export const MAX_REMOVAL = 8192;
 /** How many webhook URLs plxd may list. */
 const MAX_HOOK_URLS = 1_000;
 /** How long the relay waits for a webhook's body. */
@@ -66,6 +68,7 @@ export const LIMITS = {
   hooks: 600,
   hookUrl: 60,
   pushes: 60,
+  removals: 30,
 };
 
 /** The methods a webhook may use, as T3's. */
@@ -446,8 +449,18 @@ export class HostRelay extends DurableObject<Env> {
     );
   }
 
-  /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, or a
-   *  request for a spare stream. */
+  /**
+   * A removal statement from another of `user`'s hosts, for plxd here, if this host is theirs and
+   * online. plxd checks it, since the relay can't vouch for it, and nothing is kept for an offline
+   * host, which catches up from a client (0091).
+   */
+  async tellRemoved(user: string, statement: string) {
+    const owner = await this.owner();
+    if (owner?.user === user) this.host()?.send(JSON.stringify({ t: "removed", statement }));
+  }
+
+  /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, a request
+   *  for a spare stream, or a device's removal for its user's other hosts. */
   private async fromHost(message: string | ArrayBuffer) {
     const parsed = typeof message === "string" ? parse(message) : undefined;
     if (parsed?.t === "hook" && typeof parsed.id === "string") {
@@ -482,6 +495,20 @@ export class HostRelay extends DurableObject<Env> {
       for (const id of Object.keys(streams)) if (streams[id]?.spare) delete streams[id];
       await this.ctx.storage.put<Streams>("streams", streams);
       if (Object.keys(streams).length < MAX_STREAMS) await this.newStream(owner.hostId, true);
+    } else if (parsed?.t === "removed" && typeof parsed.statement === "string") {
+      const statement = parsed.statement;
+      const owner = await this.owner();
+      if (!owner || statement.length > MAX_REMOVAL || !this.limits.allow("removals", LIMITS.removals))
+        return;
+      const account = this.env.USERS.get(this.env.USERS.idFromName(owner.user));
+      const others = (await account.hosts()).filter((id) => id !== owner.hostId);
+      await Promise.all(
+        others.map((id) =>
+          this.env.HOSTS.get(this.env.HOSTS.idFromName(id))
+            .tellRemoved(owner.user, statement)
+            .catch((error) => logError("host.tellRemoved", this.context(), error)),
+        ),
+      );
     }
   }
 

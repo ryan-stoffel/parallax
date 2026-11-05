@@ -23,7 +23,9 @@
 //!
 //! The host keeps the approved and removed client keys and the account's approved host ids, and
 //! approved clients copy them between hosts (`access/merge`). A removed key is never approved
-//! again, so the lists merge with no clock.
+//! again, so the lists merge with no clock. A removal also goes straight to the account's other
+//! online hosts, signed by this host's key and carried by the relay, which can't forge one
+//! ([`remove`], [`receive_removal`]).
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Mutex;
@@ -36,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     HOUR, Request, clean_name, host_key, host_name, lock, new_session, read_sessions, refused,
@@ -444,7 +446,7 @@ async fn lists(daemon: &Daemon) -> Result<Lists, ErrorObject> {
         .await
 }
 
-async fn account(daemon: &Daemon) -> Option<String> {
+pub(crate) async fn account(daemon: &Daemon) -> Option<String> {
     daemon
         .reader
         .run(&CancellationToken::new(), |db| {
@@ -607,7 +609,8 @@ pub(crate) fn deny(daemon: &Daemon, id: &str) -> Result<(), ErrorObject> {
         .map_err(ErrorObject::invalid_params)
 }
 
-/// `access/remove`: removes a client's key for good, and ends its sessions here.
+/// `access/remove`: removes a client's key for good, ends its sessions here, and tells the
+/// account's other online hosts, unless this host already knew.
 pub(crate) async fn remove(
     daemon: &Daemon,
     cancel: &CancellationToken,
@@ -617,13 +620,60 @@ pub(crate) async fn remove(
         return Err(ErrorObject::invalid_params("not a key thumbprint"));
     }
     info!(%thumbprint, "removed a device");
+    let known = lists(daemon).await?.removed_clients.contains(&thumbprint);
+    let key = thumbprint.clone();
     update(daemon, cancel, move |lists| {
-        lists.removed_clients.insert(thumbprint);
+        lists.removed_clients.insert(key);
         lists.merge(Lists::default());
         Ok(())
     })
     .await?;
+    if !known {
+        daemon.relay.tell_removed(thumbprint);
+    }
     Ok(())
+}
+
+/// A removal the relay passed on from another host: applied as [`remove`] applies one, and not
+/// passed on, when its signature checks out for this host's account and this host approved its
+/// signer. The relay holds no approved host's key, so it can't make one, and replaying a real one
+/// changes nothing. A computer added with Allow alone may be a fake one the user clicked through,
+/// so it gives no removals, even with its id in `approved_hosts` too, which merges can leave.
+pub(crate) async fn receive_removal(daemon: &Daemon, statement: &str) {
+    let Some(account) = account(daemon).await else {
+        return;
+    };
+    let (signer, removed) = match remote::open_removal(statement, &account) {
+        Ok(opened) => opened,
+        Err(why) => {
+            debug!(why, "ignored a device's removal from the relay");
+            return;
+        }
+    };
+    let Ok(known) = lists(daemon).await else {
+        return;
+    };
+    if !known.approved_hosts.contains(&signer) || known.allowed_hosts.contains(&signer) {
+        debug!(%signer, "ignored a device's removal signed by a computer not approved here");
+        return;
+    }
+    let fresh: BTreeSet<String> = removed
+        .into_iter()
+        .filter(|key| !known.removed_clients.contains(key))
+        .collect();
+    if fresh.is_empty() {
+        return;
+    }
+    info!(%signer, count = fresh.len(), "another computer removed a device");
+    let applied = update(daemon, &CancellationToken::new(), move |lists| {
+        lists.removed_clients.extend(fresh);
+        lists.merge(Lists::default());
+        Ok(())
+    })
+    .await;
+    if let Err(error) = applied {
+        warn!(error = %error.message, "could not keep a device's removal");
+    }
 }
 
 /// `access/forgetHost`: drops a computer the user removed from the approved hosts, and deletes
