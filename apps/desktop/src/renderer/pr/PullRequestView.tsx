@@ -76,6 +76,9 @@ const GUIDE_POLL_MS = 4_000;
 
 type Tab = "summary" | "guide" | "timeline" | "code";
 
+/** The view's narrowest width as the full view, wider than any side panel opens by default. */
+const FULL_VIEW_WIDTH = 900;
+
 /**
  * One linked pull request in the side panel (PLX-1153, PLX-1182). A header that stays put: its
  * title and `#n`; its author, age, and `base ← head`; its state, size, Open in GitHub, Refresh, and
@@ -109,6 +112,12 @@ export function PullRequestView({
   const closeDialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("summary");
+  // Wide enough to be the full view rather than the side panel.
+  const viewRoot = useRef<HTMLDivElement>(null);
+  const [fullView, setFullView] = useState(false);
+  // A new tab starts at its top. Only the diff reports scrolling.
+  const [diffScrolled, setDiffScrolled] = useState(false);
+  useEffect(() => setDiffScrolled(false), [tab]);
   const [shots, setShots] = useState<{ images: { src: string; name: string }[]; index: number }>();
   const [diff, setDiff] = useState<{ for: string; result?: PrDiffResult; error?: string }>();
   const [codeFocus, setCodeFocus] = useState<DiffFocus>();
@@ -138,6 +147,17 @@ export function PullRequestView({
   const [statusTick, setStatusTick] = useState(0);
   const linked = prs.get(url);
   const pr = linked?.pr;
+  useLayoutEffect(() => {
+    const el = viewRoot.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setFullView(el.clientWidth >= FULL_VIEW_WIDTH);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // The root isn't there until the pull request has been read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!pr]);
   const inBrowser = behaviorPrefs.use().openPrsIn === "browser" && !!onBrowse;
   const openOnGithub = useCallback(
     (to: string) => (inBrowser ? onBrowse?.(to) : window.open(to, "_blank", "noreferrer")),
@@ -443,66 +463,121 @@ export function PullRequestView({
     { id: "code", label: "Code", count: <Count n={pr.changedFiles} /> },
   ];
 
-  // Code wants the room: its header is one line.
-  const condensed = tab === "code";
-  return (
-    <div className="@container flex min-h-0 flex-1 flex-col" onClick={(e) => showShot(e.target)}>
-      <header className="shrink-0 border-b border-border px-3 pt-2">
-        <div className="flex items-start gap-2">
-          {condensed && <StateBadge pr={pr} />}
-          <h2
-            className={`min-w-0 flex-1 wrap-break-word ${condensed ? "truncate py-0.5 text-body font-medium" : "line-clamp-2 py-0.5 text-reading leading-snug font-semibold"}`}
-            title={pr.title}
-          >
-            {pr.title}{" "}
-            <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
-          </h2>
-          <div className="flex shrink-0 items-center">
-            <IconButton
-              size="sm"
-              label={`Open ${pr.repo}#${pr.number} on GitHub`}
-              onClick={() => openOnGithub(pr.url)}
-            >
-              <GitHubLogo className="size-4" />
-            </IconButton>
-            <IconButton
-              size="sm"
-              label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
-              disabled={busy}
-              onClick={refresh}
-            >
-              <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
-            </IconButton>
-            <IconButton
-              size="sm"
-              label="Pull request actions"
-              aria-haspopup="menu"
-              popoverTarget={`${id}-menu`}
-            >
-              <icons.more aria-hidden />
-            </IconButton>
-          </div>
+  const headerActions = (
+    <>
+      <IconButton
+        label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
+        disabled={busy}
+        onClick={refresh}
+      >
+        <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
+      </IconButton>
+      <IconButton label="Pull request actions" aria-haspopup="menu" popoverTarget={`${id}-menu`}>
+        <icons.more aria-hidden />
+      </IconButton>
+    </>
+  );
+  const openInGithub = (
+    <Button
+      size="sm"
+      variant="outline"
+      aria-label={`Open ${pr.repo}#${pr.number} on GitHub`}
+      title={`Open ${pr.repo}#${pr.number} on GitHub`}
+      onClick={() => openOnGithub(pr.url)}
+      className="rounded-full pr-2.5 pl-3"
+    >
+      Open in
+      <GitHubLogo className="size-4" />
+    </Button>
+  );
+  const branches = (
+    <BranchChips head={pr.headBranch} base={pr.baseBranch} issue={baseIssue(pr, status)} />
+  );
+  // Reading code wants the room: the header folds to a line, in full view on the Code tab, and in
+  // the side panel once its diff has scrolled.
+  const onCode = tab === "code";
+  const header = fullView ? (
+    <header className="shrink-0 border-b border-border px-4 pt-3 pb-2.5">
+      <div className="flex items-center gap-2">
+        {onCode && <StateBadge pr={pr} />}
+        <h2 className="min-w-0 flex-1 truncate text-reading font-semibold" title={pr.title}>
+          {pr.title}{" "}
+          <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
+        </h2>
+        {openInGithub}
+        {headerActions}
+      </div>
+      {!onCode && (
+        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
+          <StateBadge pr={pr} />
+          <Avatar login={pr.author} />
+          <span className="shrink-0 font-medium text-foreground">{pr.author}</span>
+          {pr.createdAt && <span className="shrink-0">{ago(pr.createdAt)}</span>}
+          <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
+          <span className="ml-auto flex min-w-0 justify-end">{branches}</span>
         </div>
-        {!condensed && (
-          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta text-muted-foreground">
+      )}
+      <Tabs tab={tab} onTab={setTab} tabs={tabs} className="mx-auto mt-2.5 max-w-xl" />
+    </header>
+  ) : (
+    <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
+      <div className="mx-auto max-w-3xl">
+        {onCode && diffScrolled ? (
+          <div className="flex items-center gap-2">
             <StateBadge pr={pr} />
-            <span className="flex shrink-0 items-center gap-1.5">
-              <Avatar login={pr.author} />
-              <span className="font-medium text-foreground">{pr.author}</span>
-              {pr.createdAt && <span>{ago(pr.createdAt)}</span>}
-            </span>
-            <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
-            <span className="flex min-w-0 basis-64 @lg:ml-auto @lg:justify-end">
-              <BranchChips
-                head={pr.headBranch}
-                base={pr.baseBranch}
-                issue={baseIssue(pr, status)}
-              />
-            </span>
+            <h2 className="min-w-0 flex-1 truncate text-body font-medium" title={pr.title}>
+              {pr.title}
+            </h2>
+            {headerActions}
           </div>
+        ) : (
+          <>
+            <h2
+              className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
+              title={pr.title}
+            >
+              {pr.title}{" "}
+              <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
+            </h2>
+            <div className="mt-2 flex min-w-0 items-center gap-2 text-body">
+              <Avatar login={pr.author} />
+              <span className="shrink-0 font-medium">{pr.author}</span>
+              {pr.createdAt && (
+                <span className="shrink-0 text-meta text-muted-foreground">
+                  {ago(pr.createdAt)}
+                </span>
+              )}
+              <span className="ml-auto flex min-w-0 justify-end">{branches}</span>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <StateBadge pr={pr} />
+              <DiffStat
+                added={pr.additions}
+                removed={pr.deletions}
+                title={breakdown || undefined}
+              />
+              <span className="flex-1" />
+              {openInGithub}
+              {headerActions}
+            </div>
+          </>
         )}
-        <Tabs tab={tab} onTab={setTab} tabs={tabs} />
-      </header>
+        <Tabs
+          tab={tab}
+          onTab={setTab}
+          tabs={tabs}
+          className={onCode && diffScrolled ? "mt-2" : ""}
+        />
+      </div>
+    </header>
+  );
+  return (
+    <div
+      ref={viewRoot}
+      className="@container flex min-h-0 flex-1 flex-col"
+      onClick={(e) => showShot(e.target)}
+    >
+      {header}
 
       {tab === "summary" && (
         <div className="min-h-0 flex-1 overflow-y-auto px-4">
@@ -572,6 +647,7 @@ export function PullRequestView({
                 diff={diff.result!.diff}
                 truncated={diff.result!.truncated}
                 leading={leading}
+                onScrolled={setDiffScrolled}
                 viewed={viewedFiles.viewed}
                 changedSinceViewed={viewedFiles.changed}
                 onViewed={(path, on) => void viewedFiles.set(path, on)}
@@ -754,10 +830,12 @@ function Tabs({
   tab,
   onTab,
   tabs,
+  className = "",
 }: {
   tab: Tab;
   onTab: (tab: Tab) => void;
   tabs: { id: Tab; label: string; count?: ReactNode }[];
+  className?: string;
 }) {
   const list = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ left: number; width: number }>();
@@ -786,12 +864,12 @@ function Tabs({
         onTab(next.id);
         list.current?.querySelector<HTMLElement>(`[data-tab="${next.id}"]`)?.focus();
       }}
-      className="relative mt-1 flex gap-4"
+      className={`relative mt-3 grid auto-cols-fr grid-flow-col rounded-lg bg-hover p-0.5 ${className}`}
     >
       {thumb && (
         <span
           aria-hidden
-          className="absolute bottom-0 left-0 h-0.5 rounded-full bg-foreground transition-[translate,width] duration-fast motion-reduce:transition-none"
+          className="absolute top-0.5 bottom-0.5 left-0 rounded-md border border-border bg-surface shadow-xs transition-[translate,width] duration-base ease-in-out"
           style={{ translate: `${thumb.left}px 0`, width: thumb.width }}
         />
       )}
@@ -804,7 +882,7 @@ function Tabs({
           aria-selected={tab === t.id}
           tabIndex={tab === t.id ? 0 : -1}
           onClick={() => onTab(t.id)}
-          className="relative flex h-8 items-center gap-1.5 text-body text-muted-foreground transition-colors hover:text-foreground aria-selected:font-medium aria-selected:text-foreground"
+          className="relative flex h-8 items-center justify-center gap-1.5 rounded-md text-body text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-selected:font-medium aria-selected:text-foreground"
         >
           {t.label}
           {t.count}

@@ -47,6 +47,9 @@ const TREE_MIN_WIDTH = 900;
 /** The file tree's width beside the diff. */
 const TREE_WIDTH = 256;
 
+/** How far into the diff counts as reading it, past a stray nudge at its top. */
+const SCROLLED_PAST = 40;
+
 /** Below this width, the bar's controls fold into a menu and a file's header drops its words. */
 const COMPACT_WIDTH = 560;
 
@@ -118,7 +121,8 @@ const focused = (to: DiffFocus | undefined, path: string, line?: DiffLine) =>
  * header stays at the top while its lines scroll. `threads` sit under their line on their side, or under their file's header when plxd
  * doesn't say the line, drawn by `renderThread`. With `comments`, a line's gutter takes a comment:
  * its + on hover, a drag or a shift-click for a range, and each file's header for the whole file.
- * `actions` sit in the bar above the files, with `leading` at its start. With `tree`, a file tree
+ * `actions` sit in the bar above the files, with `leading` at its start. `onScrolled` hears when the
+ * reader scrolls in, so a header above can fold. With `tree`, a file tree
  * that jumps to a file shows beside the diff when there's room, and from a button when there isn't.
  */
 export function ChangesDiff({
@@ -133,6 +137,7 @@ export function ChangesDiff({
   comments,
   actions,
   leading,
+  onScrolled,
   tree,
 }: {
   diff: string;
@@ -146,6 +151,8 @@ export function ChangesDiff({
   comments?: DiffComments;
   actions?: ReactNode;
   leading?: ReactNode;
+  /** Told whether the reader has scrolled into the diff, or back to its top. */
+  onScrolled?: (scrolled: boolean) => void;
   tree?: boolean;
 }) {
   const files = useMemo(() => parseDiff(diff), [diff]);
@@ -283,6 +290,8 @@ export function ChangesDiff({
   };
   // The header of the file at the top, once its own header has scrolled off.
   const offset = virtualizer.scrollOffset ?? 0;
+  const scrolled = offset > SCROLLED_PAST;
+  useEffect(() => onScrolled?.(scrolled), [scrolled, onScrolled]);
   const topItem = virtualizer.getVirtualItems().find((item) => item.end > offset);
   const topRow = topItem && rows[topItem.index];
   const stuck = topRow && !(topRow.header && topItem.start >= offset) ? topRow.file : undefined;
