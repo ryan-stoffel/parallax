@@ -10,6 +10,9 @@
 # the argument (workflow_dispatch has no release), and skips SHA256SUMS.
 set -euo pipefail
 
+retry=$(dirname "$0")/gh-retry
+gh() { "$retry" "$@"; }
+
 write() {
   if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
 }

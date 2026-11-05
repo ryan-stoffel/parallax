@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Runs gh with the given arguments, trying again with a growing wait when it fails, and exits with
+# the last try's status. GitHub sometimes answers a release read or write with a 500 or a 404 for a
+# few minutes (PLX-1430), and one such answer shouldn't fail a build that took twenty. Every call
+# through this must be safe to repeat, so an upload needs --clobber: a failed try can leave its file
+# behind, and a 500 can come after the file arrived.
+#
+# Environment: GH_RETRY_WAITS, the seconds to wait before each new try, for tests.
+set -uo pipefail
+
+for wait in ${GH_RETRY_WAITS:-15 45 120}; do
+  if gh "$@"; then exit 0; fi
+  echo "gh-retry: gh $1 ${2:-} failed. Trying again in ${wait}s." >&2
+  sleep "$wait"
+done
+exec gh "$@"
