@@ -1,10 +1,15 @@
-// Notifications: a thread that needs you, finished, or failed, on any computer.
+// Notifications: a thread that needs you, or stayed finished or failed for 30 seconds, on any
+// computer.
 //
 // While the app runs, it watches every computer's threads and posts the notification itself,
-// with the thread's title, which never leaves the phone. For when it doesn't, it hands its APNs
-// token to Parallax Relay (0068), which plxd tells about runs and which sends a fixed text with
-// the run's id. Tapping either opens the thread.
+// with the thread's title and the start of the agent's last reply, which never leave the phone.
+// For when it doesn't, it hands its APNs token to Parallax Relay (0068), which plxd tells about
+// runs and which sends a fixed text with the run's id. Both name one event alike, so iOS shows one
+// of them, and a push doesn't show in front for a thread the app notifies about itself. Tapping
+// either opens the thread.
 import * as Notifications from "expo-notifications";
+
+import { lastReplyIn, type Alert } from "./alerts";
 
 /** Parallax Relay (0068). */
 export const RELAY_URL = "https://relay.parallax.codes";
@@ -13,10 +18,15 @@ export const RELAY_URL = "https://relay.parallax.codes";
 let viewing: string | undefined;
 export const setViewing = (runId: string | undefined) => void (viewing = runId);
 
+/** Whether the app itself notifies about a thread, as one on a computer it's connected to. */
+let notifiesFor: (runId: string) => boolean = () => false;
+export const setNotifiesFor = (check: typeof notifiesFor) => void (notifiesFor = check);
+
 Notifications.setNotificationHandler({
   handleNotification: async (n) => {
+    // Only a push has `run`. This runs only in front, where the app notifies for itself.
     const data = n.request.content.data as { runId?: string; run?: string };
-    const shown = (data.runId ?? data.run) !== viewing;
+    const shown = (data.runId ?? data.run) !== viewing && !(data.run && notifiesFor(data.run));
     return {
       shouldShowBanner: shown,
       shouldShowList: shown,
@@ -32,23 +42,39 @@ const bodies = {
   failed: "Failed",
 };
 
-/** Posts the notification for `alert` on thread `runId`, titled with its title. */
-export function notify(
-  alert: "needsYou" | "done" | "failed",
-  hostId: string,
-  runId: string,
-  title: string,
-  machine: string,
-) {
+/**
+ * Posts the notification for `alert` on thread `runId`, titled with its title, with `text` or else
+ * what `alert` means. Its identifier is the push's collapse id (`relay/src/push.ts`), so whichever
+ * comes second replaces the first.
+ */
+export function notify(alert: Alert, hostId: string, runId: string, title: string, text?: string) {
   void Notifications.scheduleNotificationAsync({
+    identifier: `${runId}:${alert}`,
     content: {
       title,
-      body: `${bodies[alert]} · ${machine}`,
+      body: text ?? bodies[alert],
       data: { hostId, runId },
       sound: true,
     },
     trigger: null,
   });
+}
+
+/** The start of the agent's last reply in thread `runId`, if its computer can say. */
+export async function lastReply(hostId: string, runId: string): Promise<string | undefined> {
+  try {
+    const answer = await window.parallax.request(hostId, "agent/events", {
+      runId,
+      after: 0,
+      before: Number.MAX_SAFE_INTEGER,
+      limit: 200,
+    });
+    // A plxd too old for `before` answers with no `seq`, and with the run's first page.
+    if ("error" in answer || answer.result.seq === undefined) return undefined;
+    return lastReplyIn(answer.result.events, runId);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Asks for permission once. Resolves to whether notifications are on. */

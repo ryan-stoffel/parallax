@@ -29,7 +29,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AccountProvider, SignIn, useAccount } from "./Account";
 import { AccountHosts } from "./accountHosts";
 import { AccountScreen } from "./AccountScreen";
-import { useFleet, FleetProvider } from "./fleet";
+import { useFleet, FleetProvider, type Computer } from "./fleet";
 import { GlassButton, SidebarIcon } from "./Glass";
 import { loadSetup, saveSetup, type Setup } from "./machines";
 import { SidebarControl, type ProjectScreens, type PullRequestScreens, type Screens, type SettingsScreens } from "./nav";
@@ -38,8 +38,8 @@ import { NewOrchestratorScreen } from "./NewOrchestrator";
 import { Loading, Onboarding } from "./Onboarding";
 import { ProjectInstructionsScreen, ProjectList, ProjectScreen } from "./Projects";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
-import { alertFor, phaseOf, type Phase } from "./alerts";
-import { notify, onOpened, registerWithRelay } from "./push";
+import { holdAlerts, phaseOf, type Alert } from "./alerts";
+import { lastReply, notify, onOpened, registerWithRelay, setNotifiesFor } from "./push";
 import { LightboxHost } from "./Lightbox";
 import { OrchestratorInboxScreen } from "./OrchestratorInbox";
 import { getPrefs } from "./prefs";
@@ -141,33 +141,51 @@ const back = ({ navigation }: { navigation: { goBack: () => void } }): NativeSta
   ),
 });
 
+/** Whether `m`'s threads are known now. A list still loading would look like every run starting over. */
+const current = (m: Computer) => m.connected && !m.view.loading;
+
 /**
- * Notifies when a thread on any computer starts needing the user, or finishes or fails, and
- * opens the thread a tapped notification is about. At launch it gives Parallax Relay this
- * phone's push token, so it's notified while the app is closed too.
+ * Posts `alert` for a thread, unless its switch is off or it's out of sight now, such as on a
+ * computer that dropped during the hold, whose thread may have gone on since: plxd's push covers it.
+ */
+async function tell(computers: Computer[], hostId: string, runId: string, alert: Alert) {
+  const m = computers.find((c) => c.machine.id === hostId);
+  if (!m || !current(m) || !getPrefs().notify[alert]) return;
+  const { state } = m.view;
+  if (!state.threads.some((t) => t.id === runId && !t.archived)) return;
+  const title = state.titles[runId] ?? "A thread";
+  notify(alert, hostId, runId, title, alert === "needsYou" ? undefined : await lastReply(hostId, runId));
+}
+
+/**
+ * Notifies when a thread on any computer starts needing the user, or finishes or fails and stays
+ * that way, and opens the thread a tapped notification is about. At launch it gives Parallax
+ * Relay this phone's push token, so it's notified while the app is closed too.
  */
 function Alerts() {
   const { computers } = useFleet();
   const { accessToken } = useAccount();
-  const phases = useRef(new Map<string, Phase>());
   const latest = useRef(computers);
   latest.current = computers;
+  const [alerts] = useState(() =>
+    holdAlerts((hostId, runId, alert) => void tell(latest.current, hostId, runId, alert)),
+  );
 
   for (const m of computers) {
-    // A list still loading would look like every run starting over.
-    if (!m.connected || m.view.loading) continue;
+    if (!current(m)) continue;
     const { state } = m.view;
     for (const t of state.threads) {
       if (t.archived) continue;
-      const key = `${m.machine.id}:${t.id}`;
       const asks = state.approvals[t.id]?.items.filter((i) => i.kind === "approval" && !i.resolved).length ?? 0;
-      const now = phaseOf(state.runs[t.id], asks, t.id in state.waiting);
-      const alert = alertFor(phases.current.get(key), now);
-      phases.current.set(key, now);
-      if (alert && getPrefs().notify[alert]) notify(alert, m.machine.id, t.id, state.titles[t.id] ?? "A thread", m.machine.name);
+      alerts.see(m.machine.id, t.id, phaseOf(state.runs[t.id], asks, t.id in state.waiting));
     }
   }
 
+  useEffect(() => () => alerts.clear(), [alerts]);
+  useEffect(() => {
+    setNotifiesFor((runId) => latest.current.some((m) => current(m) && m.view.state.threads.some((t) => t.id === runId)));
+    return () => setNotifiesFor(() => false);
+  }, []);
   useEffect(() => void registerWithRelay(accessToken), []);
   useEffect(
     () =>
