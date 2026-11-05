@@ -301,6 +301,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:deviceKey", () => deviceKey());
   ipcMain.handle("parallax:accessRequests", () => accessRequests());
   ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
+  ipcMain.handle("parallax:makeDeviceReadOnly", (_event, id: unknown) => makeDeviceReadOnly(id));
   ipcMain.handle("parallax:turnOnReach", (_event, hostId: unknown) => turnOnReach(hostId));
   ipcMain.handle("parallax:answerAccess", (_event, id: unknown, allow: unknown) =>
     typeof id === "string" && typeof allow === "boolean"
@@ -2760,6 +2761,22 @@ async function revokeDevice(id: unknown): Promise<RemoteSessionsResult | string>
       removed.map((thumbprint) => host.request("access/remove", { thumbprint })),
     ),
   );
+  return answer.result;
+}
+
+/**
+ * `window.parallax.makeDeviceReadOnly`: makes the device of this computer's session `id` read-only,
+ * and copies that to the other computers this app reaches (`syncAccess`). A computer offline now
+ * learns of it once it connects. Answers this computer's sessions, or why not, for people.
+ */
+async function makeDeviceReadOnly(id: unknown): Promise<RemoteSessionsResult | string> {
+  if (typeof id !== "string") return "invalid session";
+  const local = connections.get("local");
+  if (local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  const answer = await local.request("access/setReadOnly", { id });
+  if ("error" in answer) return answer.error.message;
+  void syncAccess();
   return answer.result;
 }
 

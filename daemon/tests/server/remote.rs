@@ -1,7 +1,7 @@
 //! Remote access on the LAN (PLX-641, 0065): the HTTPS listener on loopback, pairing with a
 //! one-time code over SPAKE2, DPoP-bound sessions, and refusing every client that didn't pair.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
@@ -9,12 +9,17 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::methods::{
-    HostSettingsGet, HostSettingsSet, RemotePair, RemoteRevoke, RemoteSessions,
+    AccessSetReadOnly, HostSettingsGet, HostSettingsSet, OrchestrationDispatch,
+    OrchestrationGetFullThreadDiff, RemotePair, RemoteRevoke, RemoteSessions, RepoAdd,
+    RepoGitStatus, TerminalOpen, TerminalWrite, ThreadStart,
 };
 use parallax_protocol::{
-    HostSettingsGetParams, HostSettingsSetParams, RemotePairParams, RemoteRevokeParams,
-    RemoteSessionsParams,
+    AccessSetReadOnlyParams, DispatchMode, FullThreadDiffParams, HostSettingsGetParams,
+    HostSettingsSetParams, RemotePairParams, RemoteRevokeParams, RemoteSessionsParams,
+    RepoAddParams, RepoGitStatusParams, RepoId, RunId, TerminalCommand, TerminalOpenParams,
+    TerminalWriteParams, ThreadStartParams, TurnId,
 };
+use plxd::backend::fake::Step;
 use plxd::remote;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader, duplex};
@@ -147,6 +152,445 @@ impl App {
             Ok(Ok(None) | Err(_))
         )
     }
+}
+
+/// Sends `method` on `app` and answers with its error's kind or message, if it failed.
+pub(crate) async fn refusal(app: &mut App, id: u32, method: &str, params: &str) -> Option<String> {
+    app.send(&format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}","params":{params}}}"#
+    ))
+    .await;
+    let answer: Value = serde_json::from_str(&app.next().await).unwrap();
+    let error = &answer["error"];
+    (!error.is_null()).then(|| {
+        error["data"]["kind"]
+            .as_str()
+            .unwrap_or(error["message"].as_str().unwrap_or_default())
+            .to_owned()
+    })
+}
+
+#[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one device told step by step")]
+async fn a_read_only_device_reads_threads_and_is_refused_writes_and_terminals() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let laptop = temp_dir();
+    let code = new_code(&mut client).await;
+    let route = format!("127.0.0.1:{port}");
+    let routes = std::slice::from_ref(&route);
+    let paired = remote::pair(routes, &code, "laptop", laptop.path())
+        .await
+        .unwrap();
+    let fp = &paired.fingerprint;
+    let sessions = client
+        .call::<RemoteSessions>(RemoteSessionsParams {})
+        .await
+        .unwrap()
+        .sessions;
+    assert!(!sessions[0].read_only, "full access until limited");
+    let id = sessions[0].id.clone();
+    let mut app = open(routes, fp, laptop.path()).await.unwrap();
+    app.initialize().await;
+
+    // Limiting it closes the connection it has, which came up with full access.
+    let listed = client
+        .call::<AccessSetReadOnly>(AccessSetReadOnlyParams { id: id.clone() })
+        .await
+        .unwrap();
+    assert!(listed.sessions[0].read_only);
+    assert!(app.closes().await, "limiting it closes its connection");
+
+    let mut app = open(routes, fp, laptop.path()).await.unwrap();
+    app.initialize().await;
+    let read_only = Some("readOnly".to_owned());
+    assert_eq!(refusal(&mut app, 2, "thread/list", "{}").await, None);
+    let subscribe = r#"{"afterSeq":0}"#;
+    assert_ne!(
+        refusal(&mut app, 3, "events/subscribe", subscribe).await,
+        read_only
+    );
+    let refused = [
+        ("host/settings/set", r#"{"autoResume":false}"#),
+        (
+            "terminal/open",
+            r#"{"threadId":"t","terminalId":"t","cwd":"/","cols":80,"rows":24}"#,
+        ),
+        (
+            "agent/send",
+            r#"{"runId":"00000000-0000-0000-0000-000000000000"}"#,
+        ),
+        ("remote/pair", "{}"),
+        ("remote/revoke", r#"{"id":"x"}"#),
+        ("access/setReadOnly", r#"{"id":"x"}"#),
+        ("access/merge", "{}"),
+        ("secret/answer", "{}"),
+    ];
+    for (n, (method, params)) in (10..).zip(refused) {
+        assert_eq!(
+            refusal(&mut app, n, method, params).await,
+            read_only,
+            "{method}"
+        );
+    }
+
+    // It can name a terminal the host's own app opened, and what it types goes nowhere. A shell
+    // runs what it reads in order, so once the app's line has run, the device's never will.
+    if cfg!(unix) {
+        let marks = temp_dir();
+        let (refused, allowed) = (marks.path().join("refused"), marks.path().join("allowed"));
+        let command = TerminalCommand {
+            program: "/bin/sh".to_owned(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+        };
+        // A connection of its own, as the terminal's output goes to the one that opened it.
+        let mut shell = Client::ready(&server.socket).await;
+        shell
+            .send::<TerminalOpen>(TerminalOpenParams {
+                thread_id: "t".to_owned(),
+                terminal_id: "1".to_owned(),
+                cwd: None,
+                command: Some(command),
+                cols: 80,
+                rows: 24,
+            })
+            .await;
+        while !matches!(
+            shell.next().await,
+            Some(parallax_protocol::jsonrpc::Message::Response(_))
+        ) {}
+        let write = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "terminal/write",
+            "params": {
+                "threadId": "t",
+                "terminalId": "1",
+                "data": format!("touch {}\n", refused.display()),
+            },
+        });
+        app.send(&write.to_string()).await;
+        // Answered, so plxd has read the notification before it.
+        assert_eq!(refusal(&mut app, 30, "thread/list", "{}").await, None);
+        shell
+            .notify::<TerminalWrite>(TerminalWriteParams {
+                thread_id: "t".to_owned(),
+                terminal_id: "1".to_owned(),
+                data: format!("touch {}\n", allowed.display()),
+            })
+            .await;
+        let deadline = Instant::now() + PATIENCE;
+        while !allowed.exists() {
+            assert!(Instant::now() < deadline, "the app's line never ran");
+            sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!refused.exists(), "a read-only device typed in a terminal");
+    }
+    drop(app);
+
+    // Nothing lifts the mark. Revoked and paired again, it's a new key, with full access.
+    client
+        .call::<RemoteRevoke>(RemoteRevokeParams { id })
+        .await
+        .unwrap();
+    let code = new_code(&mut client).await;
+    remote::pair(routes, &code, "laptop", laptop.path())
+        .await
+        .unwrap();
+    let mut app = open(routes, fp, laptop.path()).await.unwrap();
+    app.initialize().await;
+    let settings = r#"{"autoResume":true}"#;
+    assert_eq!(
+        refusal(&mut app, 2, "host/settings/set", settings).await,
+        None
+    );
+
+    set_remote(&mut client, false).await;
+    server.stop().await;
+}
+
+/// A script at `dir/name` that touches `dir/name.ran`, then runs `then`.
+#[cfg(unix)]
+fn planted(dir: &Path, name: &str, then: &str) -> String {
+    use std::os::unix::fs::PermissionsExt as _;
+    let script = dir.join(name);
+    let ran = dir.join(format!("{name}.ran"));
+    let body = format!("#!/bin/sh\ntouch '{}'\n{then}\n", ran.display());
+    std::fs::write(&script, body).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script.to_str().unwrap().to_owned()
+}
+
+/// Waits until checkpoint `to` of `thread` can be diffed.
+#[cfg(unix)]
+async fn checkpointed(client: &mut Client, thread: RunId, to: u32) {
+    let deadline = Instant::now() + PATIENCE;
+    while client
+        .call::<OrchestrationGetFullThreadDiff>(FullThreadDiffParams {
+            thread_id: thread,
+            to,
+            ignore_whitespace: None,
+        })
+        .await
+        .is_err()
+    {
+        assert!(Instant::now() < deadline, "no checkpoint {to}");
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// What a repository's own config can have git run must not run for a read-only device: what it
+/// can read runs none of it, and what would run it, `git status`, is refused.
+#[cfg(unix)]
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "each plant, proven first, told in turn"
+)]
+async fn a_read_only_device_runs_nothing_the_repository_configures() {
+    use std::process::Command;
+
+    use crate::agents::{end_turn, fake, git, init, real_repo};
+    use crate::orchestration::sent;
+    use crate::threads::start_params;
+
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    config.backends = Some(fake(vec![
+        init("read-only"),
+        end_turn("Turn 1."),
+        Step::AwaitFollowUp,
+        Step::WriteFile {
+            path: "b.txt".to_owned(),
+            content: "two\n".to_owned(),
+        },
+        end_turn("Turn 2."),
+    ]));
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+
+    let repos = temp_dir();
+    let repo = real_repo(repos.path());
+    let submodule = repo.join("sub");
+    std::fs::create_dir(&submodule).unwrap();
+    git(&submodule, &["init", "-q"]);
+    git(&submodule, &["config", "user.name", "Test User"]);
+    git(&submodule, &["config", "user.email", "test@example.com"]);
+    std::fs::write(submodule.join("a.txt"), "one\n").unwrap();
+    git(&submodule, &["add", "."]);
+    git(&submodule, &["commit", "-q", "-m", "one"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "submodule"]);
+    let repo_id = RepoId::generate();
+    client
+        .call::<RepoAdd>(RepoAddParams {
+            id: repo_id,
+            path: repo.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap();
+
+    // A thread in the current checkout, with two checkpoints the submodule differs between.
+    let thread = client
+        .call::<ThreadStart>(ThreadStartParams {
+            checkout: true,
+            ..start_params(Some(repo_id), "Start")
+        })
+        .await
+        .unwrap()
+        .run
+        .id;
+    checkpointed(&mut client, thread, 1).await;
+    std::fs::write(submodule.join("a.txt"), "two\n").unwrap();
+    git(&submodule, &["commit", "-q", "-am", "two"]);
+    client
+        .call::<OrchestrationDispatch>(sent(
+            thread,
+            TurnId::generate(),
+            "Go on",
+            DispatchMode::QueueAfterActive,
+        ))
+        .await
+        .unwrap();
+    checkpointed(&mut client, thread, 2).await;
+    let (from, to) = (
+        format!("refs/parallax/checkpoints/{thread}/1"),
+        format!("refs/parallax/checkpoints/{thread}/2"),
+    );
+
+    std::fs::write(repo.join(".gitattributes"), "* filter=evil diff=evil\n").unwrap();
+    std::fs::write(repo.join("notes.txt"), "hello\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "notes"]);
+
+    // Everything a status or a diff can be configured to run. The same size, so git has to read
+    // the file through its clean filter to tell that it changed.
+    let scripts = temp_dir();
+    let fsmonitor = planted(scripts.path(), "fsmonitor", "exit 0");
+    let clean = planted(scripts.path(), "clean", "cat");
+    let textconv = planted(scripts.path(), "textconv", "cat \"$1\"");
+    let driver = planted(scripts.path(), "driver", "exit 0");
+    let external = planted(scripts.path(), "external", "exit 0");
+    let nested = planted(scripts.path(), "nested", "exit 0");
+    for (name, value) in [
+        ("core.fsmonitor", &fsmonitor),
+        ("filter.evil.clean", &clean),
+        ("diff.evil.textconv", &textconv),
+        ("diff.evil.command", &driver),
+        ("diff.external", &external),
+        ("diff.submodule", &"diff".to_owned()),
+    ] {
+        git(&repo, &["config", name, value]);
+    }
+    git(&submodule, &["config", "diff.external", &nested]);
+    std::fs::write(repo.join("notes.txt"), "HELLO\n").unwrap();
+    let ran = |name: &str| scripts.path().join(format!("{name}.ran")).exists();
+    let forget = || {
+        for name in [
+            "fsmonitor",
+            "clean",
+            "textconv",
+            "driver",
+            "external",
+            "nested",
+            "ssh",
+        ] {
+            let _ = std::fs::remove_file(scripts.path().join(format!("{name}.ran")));
+        }
+    };
+
+    // They do run. Plain git starts the monitor and the filter, and `diff.submodule=diff` runs a
+    // nested diff that ignores `--no-ext-diff`.
+    git(&repo, &["status"]);
+    assert!(ran("fsmonitor") && ran("clean"), "the plants never ran");
+    forget();
+    git(
+        &repo,
+        &["diff", "--no-ext-diff", "--no-textconv", &from, &to],
+    );
+    assert!(ran("nested"), "the submodule's plant never ran");
+    forget();
+
+    let laptop = temp_dir();
+    let code = new_code(&mut client).await;
+    let route = format!("127.0.0.1:{port}");
+    let routes = std::slice::from_ref(&route);
+    let paired = remote::pair(routes, &code, "laptop", laptop.path())
+        .await
+        .unwrap();
+    let id = client
+        .call::<RemoteSessions>(RemoteSessionsParams {})
+        .await
+        .unwrap()
+        .sessions[0]
+        .id
+        .clone();
+    client
+        .call::<AccessSetReadOnly>(AccessSetReadOnlyParams { id })
+        .await
+        .unwrap();
+    let mut app = open(routes, &paired.fingerprint, laptop.path())
+        .await
+        .unwrap();
+    app.initialize().await;
+
+    let repo_param = serde_json::json!({ "repo": repo_id }).to_string();
+    let grep = serde_json::json!({ "repo": repo_id, "query": "HELLO" }).to_string();
+    let turn = serde_json::json!({ "threadId": thread, "from": 1, "to": 2 }).to_string();
+    let whole = serde_json::json!({ "threadId": thread, "to": 2 }).to_string();
+    for (n, (method, params)) in (10..).zip([
+        ("repo/files", &repo_param),
+        ("repo/grep", &grep),
+        ("repo/logo", &repo_param),
+        ("repo/refs", &repo_param),
+        ("orchestration/getTurnDiff", &turn),
+        ("orchestration/getFullThreadDiff", &whole),
+    ]) {
+        assert_eq!(refusal(&mut app, n, method, params).await, None, "{method}");
+    }
+    assert_eq!(
+        refusal(&mut app, 20, "repo/gitStatus", &repo_param).await,
+        Some("readOnly".to_owned())
+    );
+    for name in [
+        "fsmonitor",
+        "clean",
+        "textconv",
+        "driver",
+        "external",
+        "nested",
+    ] {
+        assert!(!ran(name), "a read-only device ran the repository's {name}");
+    }
+
+    // Why `repo/gitStatus` stays refused: on a full-access connection it runs the clean filter,
+    // which no `-c` can turn off. Its monitor stays off even here.
+    client
+        .call::<RepoGitStatus>(RepoGitStatusParams { repo: repo_id })
+        .await
+        .unwrap();
+    assert!(ran("clean"), "the refused read does run the filter");
+    assert!(!ran("fsmonitor"));
+    forget();
+
+    // A partial clone missing a blob fetches it through `core.sshCommand`. Plain git does, and a
+    // checkpoint's diff gets an error instead.
+    let ssh = planted(scripts.path(), "ssh", "exit 1");
+    let blob = git(&repo, &["rev-parse", &format!("{to}:b.txt")]);
+    for (name, value) in [
+        ("core.repositoryformatversion", "1"),
+        ("extensions.partialClone", "origin"),
+        ("remote.origin.url", "ssh://plant.invalid/repo.git"),
+        ("remote.origin.promisor", "true"),
+        ("core.sshCommand", &ssh),
+    ] {
+        git(&repo, &["config", name, value]);
+    }
+    let (fan, rest) = blob.split_at(2);
+    std::fs::remove_file(repo.join(".git/objects").join(fan).join(rest)).unwrap();
+    let plain = Command::new("git")
+        .args([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--submodule=short",
+            &from,
+            &to,
+        ])
+        .current_dir(&repo)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .unwrap();
+    assert!(!plain.status.success());
+    assert!(ran("ssh"), "the partial clone's plant never ran");
+    forget();
+    for (n, (method, params)) in (30..).zip([
+        ("orchestration/getTurnDiff", &turn),
+        ("orchestration/getFullThreadDiff", &whole),
+    ]) {
+        assert_ne!(
+            refusal(&mut app, n, method, params).await,
+            Some("readOnly".to_owned()),
+            "{method}"
+        );
+        assert!(!ran("ssh"), "{method} ran the repository's sshCommand");
+    }
+
+    drop(app);
+    set_remote(&mut client, false).await;
+    server.stop().await;
 }
 
 #[tokio::test]

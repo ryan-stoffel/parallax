@@ -705,9 +705,16 @@ export type ParallaxRequests = {
 	 */
 	"access/get": { params: AccessGetParams, result: AccessState },
 	/**
-	 * `access/merge`: merges another host's approved and removed lists into this one's.
+	 * `access/merge`: merges another host's approved, removed, and read-only lists into this
+	 * one's.
 	 */
 	"access/merge": { params: AccessMergeParams, result: AccessState },
+	/**
+	 * `access/setReadOnly`: makes a session's device read-only, for every session of its key,
+	 * and closes those sessions' connections so they reconnect read-only. No method undoes
+	 * it (0091). Answers as `remote/sessions` does. Gated on `readOnlyDevices`.
+	 */
+	"access/setReadOnly": { params: AccessSetReadOnlyParams, result: RemoteSessionsResult },
 	/**
 	 * `access/approve`: approves the waiting request's key, once it shows a code.
 	 */
@@ -1234,6 +1241,7 @@ export const REQUEST_METHODS = [
 	"relay/pushKey",
 	"access/get",
 	"access/merge",
+	"access/setReadOnly",
 	"access/approve",
 	"access/deny",
 	"access/remove",
@@ -8532,6 +8540,11 @@ export type RemoteSession = {
 	 * When it paired, in RFC 3339.
 	 */
 	createdAt: string,
+	/**
+	 * Whether its device is read-only, which refuses it everything but reads. Absent means full
+	 * access.
+	 */
+	readOnly?: boolean,
 };
 
 /**
@@ -8772,6 +8785,10 @@ export type AccessState = {
 	 */
 	allowedHosts?: Array<string>,
 	/**
+	 * The thumbprints of read-only clients. A merge can't take one off (0091).
+	 */
+	readOnlyClients?: Array<string>,
+	/**
 	 * A new device's request, while it waits.
 	 */
 	pending?: AccessRequest,
@@ -8829,6 +8846,20 @@ export type AccessMergeParams = {
 	 * Host ids added with Allow alone.
 	 */
 	allowedHosts?: Array<string>,
+	/**
+	 * Read-only client thumbprints. A merge only adds to them, so it can't raise a device.
+	 */
+	readOnlyClients?: Array<string>,
+};
+
+/**
+ * Params of `access/setReadOnly`.
+ */
+export type AccessSetReadOnlyParams = {
+	/**
+	 * A session of the device, by the id `remote/sessions` lists.
+	 */
+	id: string,
 };
 
 /**
@@ -12021,7 +12052,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits" | "relayUnreachable" | "clerkUnreachable";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits" | "relayUnreachable" | "clerkUnreachable" | "readOnly";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

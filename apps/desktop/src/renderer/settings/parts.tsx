@@ -256,14 +256,16 @@ export const hostsOf = (hosts: Host[], value: string) =>
   value === allHosts ? hosts : hosts.filter((h) => h.id === value);
 
 /**
- * Remove and Cancel, for a removal that asks first in place. Cancel takes focus, so a double click
- * or a second Enter can't remove.
+ * Remove, or `label`, and Cancel, for a removal that asks first in place. Cancel takes focus, so a
+ * double click or a second Enter can't remove.
  */
 export function ConfirmRemove({
+  label = "Remove",
   disabled,
   onRemove,
   onCancel,
 }: {
+  label?: string;
   disabled?: boolean;
   onRemove: () => void;
   onCancel: () => void;
@@ -271,7 +273,7 @@ export function ConfirmRemove({
   return (
     <>
       <button type="button" disabled={disabled} onClick={onRemove} className={dangerButton}>
-        Remove
+        {label}
       </button>
       <button type="button" autoFocus onClick={onCancel} className={quietButton}>
         Cancel

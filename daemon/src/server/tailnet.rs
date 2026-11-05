@@ -343,7 +343,8 @@ impl Serving {
                         info!(%peer, node = %whois.node, "accepted a tailnet connection");
                         // Small request and answer frames: send each at once.
                         let _ = stream.set_nodelay(true);
-                        connection::serve(stream, daemon, stop_reading, closing, true).await;
+                        // No key names the device here, so a read-only mark can't reach it (0091).
+                        connection::serve(stream, daemon, stop_reading, closing, true, false).await;
                     }
                     Err(reason) => warn!(%peer, %reason, "refused a tailnet connection"),
                 }

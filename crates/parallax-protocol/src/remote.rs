@@ -188,6 +188,19 @@ pub struct RemoteSession {
     pub name: String,
     /// When it paired, in RFC 3339.
     pub created_at: String,
+    /// Whether its device is read-only, which refuses it everything but reads. Absent means full
+    /// access.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub read_only: bool,
+}
+
+/// Params of `access/setReadOnly`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessSetReadOnlyParams {
+    /// A session of the device, by the id `remote/sessions` lists.
+    pub id: String,
 }
 
 /// Params of `remote/revoke`: ends a session and closes its connections.
@@ -268,6 +281,10 @@ pub struct AccessState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub allowed_hosts: Vec<String>,
+    /// The thumbprints of read-only clients. A merge can't take one off (0091).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub read_only_clients: Vec<String>,
     /// A new device's request, while it waits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -315,6 +332,10 @@ pub struct AccessMergeParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub allowed_hosts: Vec<String>,
+    /// Read-only client thumbprints. A merge only adds to them, so it can't raise a device.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub read_only_clients: Vec<String>,
 }
 
 /// Params of `access/approve` and `access/deny`.

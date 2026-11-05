@@ -28,7 +28,8 @@ use crate::jsonrpc::CancelRequestParams;
 use crate::schedule::{PrFailureLogParams, PrFailureLogResult};
 use crate::{
     AccessForgetHostParams, AccessGetParams, AccessMergeParams, AccessRemoveParams,
-    AccessRequestParams, AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
+    AccessRequestParams, AccessSetReadOnlyParams, AccessSetupCodeParams, AccessSetupCodeResult,
+    AccessState,
 };
 use crate::{
     AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
@@ -179,6 +180,47 @@ macro_rules! method_table {
                 type Params = $notification_params;
             }
         )*
+
+        /// Every request method, for a `match` that has to decide about each, so a new one
+        /// doesn't compile until it does.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum RequestName {
+            $(
+                $(#[doc = $request_doc])*
+                $request,
+            )*
+        }
+
+        impl RequestName {
+            /// The method with this name on the wire.
+            #[must_use]
+            pub fn from_name(name: &str) -> Option<Self> {
+                match name {
+                    $($request_name => Some(Self::$request),)*
+                    _ => None,
+                }
+            }
+        }
+
+        /// Every notification method, as [`RequestName`] has every request.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum NotificationName {
+            $(
+                $(#[doc = $notification_doc])*
+                $notification,
+            )*
+        }
+
+        impl NotificationName {
+            /// The notification with this name on the wire.
+            #[must_use]
+            pub fn from_name(name: &str) -> Option<Self> {
+                match name {
+                    $($notification_name => Some(Self::$notification),)*
+                    _ => None,
+                }
+            }
+        }
 
         pub(crate) fn visit(visitor: &mut impl Visitor) {
             $(visitor.request::<$request>(&[$($request_doc),*]);)*
@@ -606,8 +648,13 @@ method_table! {
         /// `access/get`: who may sign in with this host's account, and a new device's request
         /// while it waits (0091). With `after`, it answers once that changes.
         AccessGet = "access/get": AccessGetParams => AccessState;
-        /// `access/merge`: merges another host's approved and removed lists into this one's.
+        /// `access/merge`: merges another host's approved, removed, and read-only lists into this
+        /// one's.
         AccessMerge = "access/merge": AccessMergeParams => AccessState;
+        /// `access/setReadOnly`: makes a session's device read-only, for every session of its key,
+        /// and closes those sessions' connections so they reconnect read-only. No method undoes
+        /// it (0091). Answers as `remote/sessions` does. Gated on `readOnlyDevices`.
+        AccessSetReadOnly = "access/setReadOnly": AccessSetReadOnlyParams => RemoteSessionsResult;
         /// `access/approve`: approves the waiting request's key, once it shows a code.
         AccessApprove = "access/approve": AccessRequestParams => AccessState;
         /// `access/deny`: drops the waiting request, so a new one can start.

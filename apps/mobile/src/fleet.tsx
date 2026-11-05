@@ -81,6 +81,11 @@ interface FleetValue {
   revoke: (id: string, session: string) => Promise<RemoteSessionsResult | { error: string }>;
   /** Sends `host/update` to computer `id`, which only the user's Update does here (0066). */
   updateHost: (id: string, version: string, now?: boolean) => Promise<RpcResponse<HostUpdateResult>>;
+  /**
+   * Makes the device of `session` on computer `id` read-only, there and on every other computer
+   * this phone reaches. Nothing undoes it (0091). Answers that computer's sessions, or why not.
+   */
+  makeReadOnly: (id: string, session: string) => Promise<RemoteSessionsResult | { error: string }>;
   /** Unsent text, by thread. */
   drafts: Map<string, string>;
 }
@@ -546,6 +551,13 @@ export function FleetProvider({
       const answer = await fleet.hosts.get(id)?.request("host/update", { version, ...(now && { now }) });
       if (!answer) return { error: { code: -32602, message: "That computer isn't in Parallax anymore." } };
       return answer as RpcResponse<HostUpdateResult>;
+    },
+    async makeReadOnly(id, session) {
+      const answer = await fleet.hosts.get(id)?.request("access/setReadOnly", { id: session });
+      if (!answer) return { error: "That computer isn't connected." };
+      if ("error" in answer) return { error: answer.error.message };
+      void share();
+      return answer.result as RemoteSessionsResult;
     },
     drafts,
   };

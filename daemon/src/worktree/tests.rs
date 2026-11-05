@@ -444,6 +444,69 @@ async fn git_status_counts_staged_ignored_additions_without_changing_real_index(
     }
 }
 
+/// `agent/diff` on a changed, populated submodule: `diff.submodule=diff` would start a nested diff,
+/// which ignores `--no-ext-diff` and runs a `diff.<driver>.command` the submodule sets. A planted
+/// `diff.external` wouldn't show this, as `-c diff.external=` reaches the nested diff too.
+#[tokio::test]
+async fn diff_commits_does_not_run_a_submodules_diff_driver() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let mgr = manager(data_dir.path());
+    let created = mgr
+        .create_named(&repo, RunId::generate(), None, None)
+        .await
+        .unwrap();
+
+    let sub = created.path.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    git(&sub, &["init", "-q"]);
+    git(&sub, &["config", "user.name", "Test User"]);
+    git(&sub, &["config", "user.email", "test@example.com"]);
+    std::fs::write(sub.join(".gitattributes"), "* diff=evil\n").unwrap();
+    std::fs::write(sub.join("a.txt"), "one\n").unwrap();
+    git(&sub, &["add", "."]);
+    git(&sub, &["commit", "-q", "-m", "one"]);
+    let first = mgr
+        .commit_all(&created.path, &created.git_dir, &repo, "the submodule")
+        .await
+        .unwrap()
+        .expect("there was something to commit");
+    std::fs::write(sub.join("a.txt"), "two\n").unwrap();
+    git(&sub, &["commit", "-q", "-am", "two"]);
+    let second = mgr
+        .commit_all(&created.path, &created.git_dir, &repo, "it moved")
+        .await
+        .unwrap()
+        .expect("there was something to commit");
+
+    let sentinel = data_dir.path().join("sentinel-driver");
+    let script = data_dir.path().join("driver.sh");
+    write_sentinel_script(&script, &sentinel);
+    git(
+        &sub,
+        &["config", "diff.evil.command", script.to_str().unwrap()],
+    );
+    git(&created.path, &["config", "diff.submodule", "diff"]);
+
+    // It does run: plain git, with the flags that don't stop it.
+    let (first, second) = (first.sha, second.sha);
+    let args = ["diff", "--no-ext-diff", "--no-textconv", &first, &second];
+    git(&created.path, &args);
+    assert!(sentinel.exists(), "the plant never ran");
+    std::fs::remove_file(&sentinel).unwrap();
+
+    let diff = mgr
+        .diff_commits(&created.path, &created.git_dir, &first, &second)
+        .await
+        .unwrap();
+    assert!(diff.files.iter().any(|file| file.path == "sub"));
+    assert!(
+        !sentinel.exists(),
+        "the submodule's driver must not have run"
+    );
+}
+
 #[tokio::test]
 async fn diff_commits_does_not_run_a_gitattributes_textconv_driver() {
     let repo_dir = tempfile::tempdir().unwrap();

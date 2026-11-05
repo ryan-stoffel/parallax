@@ -160,6 +160,8 @@ pub enum ErrorKind {
     /// Parallax Relay answered that it can't read Clerk's keys, so no sign-in can be checked
     /// (PLX-1351).
     ClerkUnreachable,
+    /// This device is read-only on this host and the method isn't a read (PLX-1364).
+    ReadOnly,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]

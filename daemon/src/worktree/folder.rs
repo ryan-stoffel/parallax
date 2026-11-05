@@ -12,7 +12,8 @@ use std::time::Duration;
 use parallax_protocol::{GitStatus, GrepMatch};
 
 use super::{
-    Commit, DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, describe_failure, timed_out,
+    Commit, DEFAULT_TIMEOUT, GitOutput, NO_TRANSPORT, WorktreeError, WorktreeManager,
+    describe_failure, timed_out,
 };
 use crate::backend::process::{Output, ProcessSpec};
 
@@ -301,6 +302,10 @@ impl WorktreeManager {
             .folder_git_ok(
                 folder,
                 &[
+                    NO_TRANSPORT[0],
+                    NO_TRANSPORT[1],
+                    NO_TRANSPORT[2],
+                    NO_TRANSPORT[3],
                     "ls-files",
                     "-z",
                     "--cached",
@@ -335,6 +340,10 @@ impl WorktreeManager {
         max_matches: usize,
     ) -> Result<(Vec<GrepMatch>, bool), WorktreeError> {
         let args = [
+            NO_TRANSPORT[0],
+            NO_TRANSPORT[1],
+            NO_TRANSPORT[2],
+            NO_TRANSPORT[3],
             "grep",
             "--null",
             "--line-number",

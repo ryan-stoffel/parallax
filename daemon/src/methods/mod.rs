@@ -42,6 +42,7 @@ mod pr;
 mod provider_updates;
 pub(crate) mod question;
 mod queue;
+pub(crate) mod read_only;
 mod remote;
 mod thread;
 mod usage;
@@ -92,6 +93,9 @@ pub(crate) struct Context {
     /// The connection came through Parallax Connect's listener from another of the user's
     /// devices, which `tailscale whois` checked (0056). Only such a connection syncs You (0082).
     pub over_connect: bool,
+    /// The connection's device is read-only. [`dispatch`] refuses it anything [`read_only`]
+    /// doesn't allow.
+    pub read_only: bool,
 }
 
 impl Context {
@@ -138,6 +142,9 @@ pub(crate) enum Reply {
 
 /// Answers a request on an initialized connection.
 pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Reply {
+    if context.read_only && !read_only::allows_request(&request.method) {
+        return Reply::Response(Response::error(Some(request.id), read_only::refusal()));
+    }
     if let Some(reply) = command_prelude(&mut context, &mut request) {
         return reply;
     }
@@ -246,6 +253,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         AccessApprove => |p| remote::access_approve(context, p),
         AccessDeny => |p| remote::access_deny(context, p),
         AccessRemove => |p| remote::access_remove(context, p),
+        AccessSetReadOnly => |p| remote::access_set_read_only(context, p),
         AccessForgetHost => |p| remote::access_forget_host(context, p),
         AccessSetupCode => |p| remote::access_setup_code(context, p),
         RemoteRevoke => |p| remote::revoke(context, p),
@@ -572,6 +580,7 @@ mod tests {
             command_id: None,
             replies: tokio::sync::mpsc::channel(1).0,
             over_connect: false,
+            read_only: false,
         };
         let request = Request {
             id: 1.into(),

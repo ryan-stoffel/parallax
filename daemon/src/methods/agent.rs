@@ -450,6 +450,7 @@ mod tests {
             command_id: None,
             replies: tokio::sync::mpsc::channel(1).0,
             over_connect: false,
+            read_only: false,
         };
         let (run_id, project) = (RunId::generate(), ScopeId::generate());
         daemon

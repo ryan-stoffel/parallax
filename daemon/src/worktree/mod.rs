@@ -273,8 +273,14 @@ const WORKTREE_GIT_CONFIG: &[(&str, &str)] = &[
 
 /// Extra flags for a diff-family subcommand (`diff`, `show`, `log`) scoped to a worker's worktree
 /// (#166): a `.gitattributes` `diff=` driver's `textconv`, or `GIT_EXTERNAL_DIFF`-style external
-/// diff, must not run either.
-const NO_DIFF_DRIVERS: &[&str] = &["--no-ext-diff", "--no-textconv"];
+/// diff, must not run either. Nor must a nested diff: with `diff.submodule=diff`, git starts a diff
+/// in a changed submodule that ignores `--no-ext-diff` and honors that submodule's own config.
+const NO_DIFF_DRIVERS: &[&str] = &["--no-ext-diff", "--no-textconv", "--submodule=short"];
+
+/// `-c` flags for a git read on a checkout, ahead of the subcommand: a partial clone's missing
+/// object can start a fetch through `core.sshCommand` or a remote helper, as a diff's does.
+/// `git_spec` can't set these, since plxd's own fetch and push go through it.
+const NO_TRANSPORT: [&str; 4] = ["-c", "core.sshCommand=false", "-c", "protocol.allow=never"];
 
 /// Why a worktree operation failed.
 #[derive(Debug, thiserror::Error)]
@@ -1117,10 +1123,13 @@ impl WorktreeManager {
         })
     }
 
-    /// The process spec [`WorktreeManager::run_git`] runs.
+    /// The process spec [`WorktreeManager::run_git`] runs. With no hooks and no filesystem monitor,
+    /// which any command that reads the index would otherwise start, so a read a read-only device
+    /// may ask for (`ls-files`, `grep`, `for-each-ref`) runs nothing the repository configures
+    /// (PLX-1364). A clean filter is another matter: see [`crate::methods::read_only`].
     fn git_spec(&self, cwd: &Path, args: &[&str]) -> ProcessSpec {
         let mut spec = ProcessSpec::new("git", cwd);
-        spec.args = ["-c", NO_HOOKS]
+        spec.args = ["-c", NO_HOOKS, "-c", "core.fsmonitor=false"]
             .iter()
             .chain(args)
             .map(|arg| OsString::from(*arg))

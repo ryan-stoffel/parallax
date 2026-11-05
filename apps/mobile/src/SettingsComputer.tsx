@@ -783,16 +783,17 @@ const iconNames = { laptop: "Laptop", desktop: "PC", mini: "Mini PC", server: "S
 /**
  * Connections: the host's name and icon for Parallax Connect (0056), and pairing on its network
  * (PLX-641): its switch, Open in a browser, Pair a device's one-time code, and the computers
- * paired with it, each to revoke.
+ * paired with it, each to make read-only (PLX-1364) or revoke.
  */
 function ConnectionsPage({ m }: { m: Computer }) {
   const id = m.machine.id;
   const { settings, error, set } = useHostSettings(m);
-  const { revoke: revokeSession } = useFleet();
+  const { revoke: revokeSession, makeReadOnly: makeSessionReadOnly } = useFleet();
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [picking, setPicking] = useState(false);
   const connect = can(m, "connect");
   const remote = can(m, "remote");
+  const canMakeReadOnly = can(m, "readOnlyDevices");
   const { status, setStatus, readSessions } = useRemoteSessions(id, remote, m.connectedNow);
   const sessions = status?.sessions ?? [];
   // While a code is up, a computer that pairs shows up here, and the code goes, as it does once
@@ -834,6 +835,17 @@ function ConnectionsPage({ m }: { m: Computer }) {
       if ("error" in answer) fail("Couldn't revoke the computer", answer.error);
       else setStatus(answer);
     });
+  const makeReadOnly = (s: { id: string; name: string }) =>
+    confirm(
+      `Make ${s.name || "Unnamed computer"} read-only?`,
+      "On all your computers, it can read threads but not change anything. This can't be undone. To give it full access, revoke it and connect it again as a new device.",
+      "Make read-only",
+      async () => {
+        const answer = await makeSessionReadOnly(id, s.id);
+        if ("error" in answer) fail("Couldn't make the computer read-only", answer.error);
+        else setStatus(answer);
+      },
+    );
 
   if (!connect && !remote)
     return (
@@ -902,9 +914,16 @@ function ConnectionsPage({ m }: { m: Computer }) {
             <Row
               key={s.id}
               title={s.name || "Unnamed computer"}
-              detail={`Paired ${new Date(s.createdAt).toLocaleDateString()}`}
+              detail={`Paired ${new Date(s.createdAt).toLocaleDateString()}${s.readOnly ? ". Read-only. To give it full access, revoke it and connect it again as a new device." : ""}`}
               last={i === sessions.length - 1}
-              right={<Action label="Revoke" onPress={() => revoke(s)} />}
+              right={
+                <View style={{ flexDirection: "row", gap: 16 }}>
+                  {canMakeReadOnly && !s.readOnly && (
+                    <Action label="Read-only" onPress={() => makeReadOnly(s)} />
+                  )}
+                  <Action label="Revoke" onPress={() => revoke(s)} />
+                </View>
+              }
             />
           ))}
         </Section>

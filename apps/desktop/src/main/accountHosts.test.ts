@@ -397,6 +397,23 @@ test("lists merge with removal winning, and only a host that lacks something is 
   expect(lacks({ ...union, approvedClients: [...union.approvedClients, "k9"] }, union)).toBe(false);
 });
 
+test("a key read-only anywhere is read-only everywhere, and a host without the mark gets it", () => {
+  const lists = { approvedClients: ["k1"], removedClients: [], approvedHosts: [] };
+  const marked = { ...lists, readOnlyClients: ["k1"] };
+  // A host that never heard of the mark, or a plxd from before it, can't take it off.
+  const union = unionLists([lists, marked], []);
+  expect(union.readOnlyClients).toEqual(["k1"]);
+  expect(unionLists([marked, lists], []).readOnlyClients).toEqual(["k1"]);
+  expect(lacks(lists, union)).toBe(true);
+  expect(lacks(marked, union)).toBe(false);
+  // A removal doesn't touch the mark, and the mark doesn't touch a removal.
+  const removed = { ...lists, approvedClients: [], removedClients: ["k1"] };
+  expect(unionLists([marked, removed], [])).toMatchObject({
+    readOnlyClients: ["k1"],
+    removedClients: ["k1"],
+  });
+});
+
 test("a run asked for while one runs runs once more after, not once per ask", async () => {
   let release = () => {};
   let runs = 0;

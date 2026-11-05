@@ -30,8 +30,8 @@ use tokio::time::timeout;
 use tracing::warn;
 
 use super::{
-    ChangeStatus, ChangedFile, DEFAULT_TIMEOUT, DiffStat, NO_DIFF_DRIVERS, WorktreeError,
-    WorktreeManager, changed_file, collect, describe_failure, git_failed, timed_out,
+    ChangeStatus, ChangedFile, DEFAULT_TIMEOUT, DiffStat, NO_DIFF_DRIVERS, NO_TRANSPORT,
+    WorktreeError, WorktreeManager, changed_file, collect, describe_failure, git_failed, timed_out,
 };
 use crate::backend::process::{Output, StdinMode};
 use crate::json::escaped_len as json_len;
@@ -468,7 +468,15 @@ impl WorktreeManager {
         if paths.is_empty() {
             return Ok(HashSet::new());
         }
-        let args = ["check-ignore", "-z", "--stdin"];
+        let args = [
+            NO_TRANSPORT[0],
+            NO_TRANSPORT[1],
+            NO_TRANSPORT[2],
+            NO_TRANSPORT[3],
+            "check-ignore",
+            "-z",
+            "--stdin",
+        ];
         let mut spec = match git_dir {
             Some(git_dir) => self.worktree_spec(work_tree, git_dir, &args).await?,
             None => self.git_spec(work_tree, &args),

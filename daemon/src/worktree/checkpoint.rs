@@ -14,7 +14,8 @@ use uuid::Uuid;
 
 use super::folder::RunFolder;
 use super::{
-    DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, collect_capped, timed_out,
+    DEFAULT_TIMEOUT, GitOutput, NO_DIFF_DRIVERS, NO_TRANSPORT, WorktreeError, WorktreeManager,
+    collect_capped, timed_out,
 };
 
 /// `-c` overrides for a capture's writes: fsynced objects and refs, and no filesystem monitor,
@@ -179,7 +180,12 @@ impl WorktreeManager {
         max_bytes: usize,
     ) -> Result<(String, bool), WorktreeError> {
         let (from, to) = (format!("{from}^{{commit}}"), format!("{to}^{{commit}}"));
-        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
+        // A read must run nothing the repository configures, on a checkout too, where `folder_spec`
+        // adds less. `diff.submodule=diff` runs a nested diff that ignores `--no-ext-diff`, and a
+        // partial clone's missing blob starts a fetch through `core.sshCommand`, which now fails.
+        let mut args = NO_TRANSPORT.to_vec();
+        args.extend(["diff", "--no-color"]);
+        args.extend_from_slice(NO_DIFF_DRIVERS);
         match format {
             DiffFormat::Patch { ignore_whitespace } => {
                 args.push("--patch");

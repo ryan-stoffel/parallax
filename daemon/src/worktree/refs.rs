@@ -5,7 +5,7 @@ use std::path::Path;
 
 use parallax_protocol::RepoRef;
 
-use super::{WorktreeError, WorktreeManager};
+use super::{NO_TRANSPORT, WorktreeError, WorktreeManager};
 
 impl WorktreeManager {
     /// The local and remote-tracking branches of `repo_path`'s repository, from one
@@ -23,6 +23,10 @@ impl WorktreeManager {
             .run_git_ok(
                 &repo_root,
                 &[
+                    NO_TRANSPORT[0],
+                    NO_TRANSPORT[1],
+                    NO_TRANSPORT[2],
+                    NO_TRANSPORT[3],
                     "for-each-ref",
                     "--sort=-committerdate",
                     "--format=%(HEAD)%(refname) %(symref) %(worktreepath)",

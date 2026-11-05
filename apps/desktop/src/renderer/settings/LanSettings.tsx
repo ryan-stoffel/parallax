@@ -26,7 +26,11 @@ const fingerprint = (hex: string) => hex.toUpperCase().match(/../g)!.join(" ");
 
 /** What a paired computer can do, said before anyone pairs one. */
 const GRANTS =
-  "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers. Pair only your own computers.";
+  "A paired computer has full control of this one: it can run agents and commands with full access, open terminals, change settings, and pair other computers, until you make it read-only here. Pair only your own computers.";
+
+/** Why read-only is for good: it belongs to the device's key, and only a new key has full access (0091). */
+const READ_ONLY_FOR_GOOD =
+  "This can't be undone. To give it full access, revoke it and connect it again as a new device.";
 
 /**
  * Settings > Connections' sections on how computers reach this one. Reach from anywhere, the local
@@ -38,13 +42,16 @@ const GRANTS =
  * over HTTPS with its own pinned certificate, and Open in a browser, its `remoteWeb`, also serves
  * the app there for a browser to pair with (PLX-651). Pair a device shows a short one-time code
  * while this computer advertises itself by name over mDNS, and the computers paired with this one
- * can be revoked, even with the switch off. Below, the computers this app paired with, each with
+ * can be revoked or made read-only (PLX-1364), even with the switch off. Below, the computers this app paired with, each with
  * its connection and Remove, and Pair computer, which finds the computers showing a code, or takes
  * an address, then the code.
  */
 export function LanSettings() {
   const local = useShownConnection(localId);
   const connected = local?.status === "connected";
+  const canMakeReadOnly = connected && "readOnlyDevices" in local.capabilities;
+  // The session whose Make read-only is waiting for a second click.
+  const [confirmingReadOnly, setConfirmingReadOnly] = useState<string>();
   const connectedNow = useConnectedNow(localId);
   const connect = useConnect();
   const computers = useHosts().filter((h) => h.routes);
@@ -147,6 +154,14 @@ export function LanSettings() {
     retry();
     const answer = await window.parallax.revokeDevice(id);
     if (typeof answer === "string") return failed("Couldn't revoke the computer", answer);
+    setStatus(answer);
+  };
+  // It reaches every computer this app reaches, closes the device's connections, and can't be undone.
+  const makeReadOnly = async (id: string) => {
+    retry();
+    setConfirmingReadOnly(undefined);
+    const answer = await window.parallax.makeDeviceReadOnly(id);
+    if (typeof answer === "string") return failed("Couldn't make the computer read-only", answer);
     setStatus(answer);
   };
 
@@ -313,11 +328,36 @@ export function LanSettings() {
           <Row
             key={s.id}
             title={s.name || "Unnamed computer"}
-            description={`Paired ${new Date(s.createdAt).toLocaleDateString()}`}
+            description={
+              confirmingReadOnly === s.id
+                ? `Make this computer read-only on all your computers? It can read threads but not change anything. ${READ_ONLY_FOR_GOOD}`
+                : s.readOnly
+                  ? `Paired ${new Date(s.createdAt).toLocaleDateString()}. Read-only: it reads threads and can't change anything. ${READ_ONLY_FOR_GOOD}`
+                  : `Paired ${new Date(s.createdAt).toLocaleDateString()}`
+            }
           >
-            <button type="button" className={quietButton} onClick={() => void revoke(s.id)}>
-              Revoke
-            </button>
+            {confirmingReadOnly === s.id ? (
+              <ConfirmRemove
+                label="Make read-only"
+                onRemove={() => void makeReadOnly(s.id)}
+                onCancel={() => setConfirmingReadOnly(undefined)}
+              />
+            ) : (
+              <>
+                {canMakeReadOnly && !s.readOnly && (
+                  <button
+                    type="button"
+                    className={quietButton}
+                    onClick={() => setConfirmingReadOnly(s.id)}
+                  >
+                    Make read-only
+                  </button>
+                )}
+                <button type="button" className={quietButton} onClick={() => void revoke(s.id)}>
+                  Revoke
+                </button>
+              </>
+            )}
           </Row>
         ))}
       </Section>
