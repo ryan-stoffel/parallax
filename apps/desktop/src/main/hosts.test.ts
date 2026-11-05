@@ -787,6 +787,262 @@ const offline: ConnectionState = {
 const pendingLine = '{"status":"pending","request":"r1","code":"482913"}';
 const approvedLine = '{"status":"approved","name":"build-box","routes":[]}';
 
+/**
+ * A signed-in app using `studio` and `buildBox`, whose lists `lists` adds to, and its removals.
+ * `own` is what this computer's plxd lists.
+ */
+async function usingBoth(
+  lists: object | ((connection: unknown) => object) = {},
+  own: object = { approvedHosts: [studio, buildBox] },
+  account = signedIn().account,
+) {
+  const local = await start(
+    {
+      localName: "macbook",
+      accounts: [
+        { hostId: studio, name: "studio", routes: [] },
+        { hostId: buildBox, name: "build-box", routes: [] },
+      ],
+    },
+    account,
+  );
+  const removed: unknown[] = [];
+  fake.answers.set("access/remove", (params: unknown, c: unknown) => {
+    removed.push([c === local, params]);
+    return { result: {} };
+  });
+  fake.answers.set(
+    "access/get",
+    listsBy((c) => (c === local ? own : typeof lists === "function" ? lists(c) : lists)),
+  );
+  return {
+    local,
+    removed,
+    first: accountConnection(studio)!,
+    second: accountConnection(buildBox)!,
+  };
+}
+
+const signInRuns = () => fake.dials.filter((d) => d.args.includes("--sign-in"));
+
+const allowAlone = { approvedHosts: [studio], allowedHosts: [buildBox] };
+
+test("a computer added with Allow alone can't lead this app to start over", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const claim = { removedClients: ["old-key"], readOnlyClients: ["old-key"] };
+    const { local, removed, second } = await usingBoth(
+      (c) => (c === accountConnection(buildBox) ? claim : {}),
+      allowAlone,
+    );
+    dialRuns(
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      // Its refusal of the sign-in says the same.
+      { lines: [], code: 6 },
+    );
+    local.set(connected({ accountAccess: {} }));
+    second.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    second.set(refused);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(signInRuns()).toHaveLength(1);
+    expect(listed(buildBox)?.access).toMatchObject({
+      step: "ask",
+      why: expect.stringMatching(/Allow alone/) as string,
+    });
+    expect(fake.sent.get("parallax:keyStanding")).toBeUndefined();
+
+    expect(await fake.handlers.get("parallax:startOver")!()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(removed).toEqual([]);
+    expect(fake.dials.map((d) => d.args[1])).not.toContain("--new-device-key");
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("starting over sends a computer added with Allow alone no token, and a second click does nothing", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { local, removed, first, second } = await usingBoth(
+      (c) => (c === accountConnection(studio) ? { readOnlyClients: ["old-key"] } : {}),
+      allowAlone,
+    );
+    dialRuns(
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      { lines: ['{"thumbprint":"new-key"}'], code: 0 },
+      // The verified computer's request is denied.
+      { lines: [pendingLine], code: 5 },
+    );
+    local.set(connected({ accountAccess: {} }));
+    first.set(connected({ accountAccess: {} }));
+    second.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.sent.get("parallax:keyStanding")).toBe("readOnly");
+
+    const started = fake.handlers.get("parallax:startOver")!();
+    const again = fake.handlers.get("parallax:startOver")!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await started).toBeUndefined();
+    expect(await again).toBeUndefined();
+    first.set(refused);
+    second.set(refused);
+    await vi.advanceTimersByTimeAsync(30);
+
+    expect(removed).toEqual([[true, { thumbprint: "old-key" }]]);
+    expect(signInRuns().map((d) => d.args[1])).toEqual([`--account=${studio}`]);
+    expect(listed(studio)?.access?.step).toBe("ask");
+    expect(listed(buildBox)?.access).toEqual({ step: "needsCode", quiet: true });
+
+    // With no mark left, another click doesn't remove the new key.
+    expect(await fake.handlers.get("parallax:startOver")!()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(removed).toHaveLength(1);
+    expect(fake.dials.filter((d) => d.args[1] === "--new-device-key")).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a sign-in waiting on its token when this app starts over never runs", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const held = signedIn().account;
+    let release = () => {};
+    const account = {
+      ...held,
+      freshToken: () => new Promise<string>((resolve) => (release = () => resolve(freshToken))),
+    };
+    const { local, first, second } = await usingBoth(
+      (c) => (c === accountConnection(studio) ? { readOnlyClients: ["old-key"] } : {}),
+      undefined,
+      account,
+    );
+    dialRuns(
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      { lines: ['{"thumbprint":"new-key"}'], code: 0 },
+      { lines: [pendingLine], code: 5 },
+    );
+    local.set(connected({ accountAccess: {} }));
+    first.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    // The other computer's sign-in now waits on its token.
+    second.set(refused);
+    await vi.advanceTimersByTimeAsync(1);
+    const stale = release;
+
+    const started = fake.handlers.get("parallax:startOver")!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await started).toBeUndefined();
+    stale();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signInRuns()).toEqual([]);
+    // The ask that starting over made is the one that goes on, to the first verified computer.
+    release();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(signInRuns().map((d) => d.args[1])).toEqual([`--account=${studio}`]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("starting over removes the old key, then asks one computer at a time, and a refusal asks no others", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { local, removed, first, second } = await usingBoth();
+    dialRuns(
+      { lines: [], code: 6 },
+      { lines: [], code: 6 },
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      { lines: ['{"thumbprint":"new-key"}'], code: 0 },
+      // The first is out of reach, so the second is asked, and its request is denied.
+      { lines: [], code: 4 },
+      { lines: [pendingLine], code: 5 },
+    );
+    local.set(connected({ accountAccess: {} }));
+    first.set(refused);
+    second.set(refused);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(fake.sent.get("parallax:keyStanding")).toBe("removed");
+    expect(listed(studio)?.access).toMatchObject({
+      step: "ask",
+      why: expect.stringMatching(/removed/) as string,
+    });
+
+    fake.dials.length = 0;
+    const started = fake.handlers.get("parallax:startOver")!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await started).toBeUndefined();
+    expect(removed).toEqual([[true, { thumbprint: "old-key" }]]);
+    expect(fake.dials.slice(0, 2).map((d) => d.args[1])).toEqual([
+      "--device-key",
+      "--new-device-key",
+    ]);
+    expect(fake.sent.get("parallax:keyStanding")).toBeNull();
+    expect(first.reconnect).toHaveBeenCalled();
+    expect(second.reconnect).toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30);
+    expect(signInRuns().map((d) => d.args[1])).toEqual([
+      `--account=${studio}`,
+      `--account=${buildBox}`,
+    ]);
+    expect(listed(buildBox)?.access?.step).toBe("ask");
+    expect(listed(studio)?.access?.step).toBe("ask");
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("once one computer lets a new key in, the rest sign in, and a read-only mark is noticed", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { local, first, second } = await usingBoth({ readOnlyClients: ["old-key", "another"] });
+    dialRuns(
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      { lines: ['{"thumbprint":"old-key"}'], code: 0 },
+      { lines: ['{"thumbprint":"new-key"}'], code: 0 },
+      { lines: [pendingLine], code: 0 },
+    );
+    local.set(connected({ accountAccess: {} }));
+    first.set(connected({ accountAccess: {} }));
+    second.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.sent.get("parallax:keyStanding")).toBe("readOnly");
+
+    fake.dials.length = 0;
+    const started = fake.handlers.get("parallax:startOver")!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await started).toBeUndefined();
+    first.set(refused);
+    second.set(refused);
+    // While the first waits for its Allow, the second doesn't ask.
+    await vi.advanceTimersByTimeAsync(5);
+    expect(listed(studio)?.access).toEqual({ step: "pending", code: "482913" });
+    expect(signInRuns()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(first.retry).toHaveBeenCalled();
+    expect(signInRuns().map((d) => d.args[1])).toEqual([
+      `--account=${studio}`,
+      `--account=${buildBox}`,
+    ]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
 test("a restriction learned from another computer holds after the relay cuts that computer off", async () => {
   vi.useFakeTimers();
   fake.answers.clear();

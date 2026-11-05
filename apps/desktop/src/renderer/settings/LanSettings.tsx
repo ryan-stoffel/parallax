@@ -30,7 +30,7 @@ const GRANTS =
 
 /** Why read-only is for good: it belongs to the device's key, and only a new key has full access (0091). */
 const READ_ONLY_FOR_GOOD =
-  "This can't be undone. To give it full access, revoke it and connect it again as a new device.";
+  "This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.";
 
 /**
  * Settings > Connections' sections on how computers reach this one. Reach from anywhere, the local

@@ -122,8 +122,9 @@ export async function allowThisPhone(
   onWaiting: (hostId: string, code: string, allow: () => void) => void,
 ): Promise<Asked> {
   const asked = (host: Listed) => accounts.asked(host.hostId);
+  const askable = accounts.askable(hosts);
   return askEach(
-    [...hosts.filter(asked), ...hosts.filter((host) => !asked(host))],
+    [...askable.filter(asked), ...askable.filter((host) => !asked(host))],
     (host) =>
       accounts.ask(
         host.hostId,

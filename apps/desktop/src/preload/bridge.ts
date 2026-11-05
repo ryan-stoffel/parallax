@@ -465,6 +465,16 @@ export interface ParallaxBridge {
    */
   askAgain(hostId: string): Promise<void>;
   /**
+   * Calls `listener` with why this computer's account key needs replacing, or null, now and on every
+   * change (0091). Returns the unsubscribe function.
+   */
+  onKeyStanding(listener: (standing: KeyStanding | null) => void): () => void;
+  /**
+   * Replaces this computer's account key, deleting the old one's sessions, and asks for approval as
+   * a new device (0091). Resolves to an error for people, or undefined.
+   */
+  startOver(): Promise<string | undefined>;
+  /**
    * The user's answer to new computer `hostId`'s code to compare (0091). Allowing resolves once
    * the computer lets this device in. Resolves to an error for people, or undefined.
    */
@@ -638,6 +648,9 @@ export type Outage = "relay" | "clerk";
 /** What the app says about Parallax Connect: an outage, or that the relay lacks this computer. */
 export type ConnectNotice = Outage | "notListed";
 
+/** Why this computer's account key needs replacing: a verified computer says so (0091). */
+export type KeyStanding = "removed" | "readOnly";
+
 export type Profile = {
   name: string;
   firstName: string;
@@ -796,9 +809,10 @@ export type DeviceHost = {
 export type AccountAccess =
   /**
    * `offline` while the computer is offline or doesn't answer, as a leftover from an old install
-   * would: no dialog asks for its code then, unless the user picks Enter code.
+   * would: no dialog asks for its code then, unless the user picks Enter code. `quiet` also asks with
+   * no dialog: after starting over, a computer added with Allow alone takes only its typed code.
    */
-  | { step: "needsCode"; error?: string; offline?: true }
+  | { step: "needsCode"; error?: string; offline?: true; quiet?: true }
   | { step: "pairing" }
   /** A new computer's code, which the user allows here only if it shows the same. */
   | { step: "compare"; code: string }

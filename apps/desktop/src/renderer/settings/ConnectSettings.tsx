@@ -18,6 +18,7 @@ import {
   type ConnectNotice,
   type DeviceHost,
   type DeviceIcon as DeviceIconName,
+  type KeyStanding,
 } from "../../preload/bridge";
 import type { RelayHost } from "../../protocol/generated/protocol";
 import { NewComputerDialog } from "../AccountPrompts";
@@ -29,7 +30,15 @@ import { localId, useConnect, useHosts } from "../hosts";
 import { notify } from "../notifications";
 import { useProfile } from "../profile";
 import { menuItem, menuPanel } from "../ui";
-import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./parts";
+import {
+  ConfirmRemove,
+  primaryButton,
+  quietButton,
+  RenameForm,
+  Row,
+  Section,
+  Switch,
+} from "./parts";
 import { RoutesDialog } from "./RoutesDialog";
 
 /** What's wrong with Parallax Connect, at the top of its section, with what to do about it. */
@@ -50,6 +59,57 @@ function NoticeRow({
       </div>
       {children}
     </div>
+  );
+}
+
+const KEY_STANDING_TEXT: Record<KeyStanding, { title: string; body: string }> = {
+  removed: {
+    title: "This computer was removed",
+    body: "Your computers refuse its key for good. To use them from here again, start over with a new key.",
+  },
+  readOnly: {
+    title: "This computer is read-only",
+    body: "It reads threads and can't change anything, and its key stays that way. For full access, start over with a new key.",
+  },
+};
+
+/** What the second click on Start over does, and what it doesn't. */
+const START_OVER_CONFIRM =
+  "This deletes this computer's key and its sessions on your account's computers, and that key can't return. Nothing connects until you allow this computer on another device, or with plx connect approve on one of your computers. It shows there as a new device, and allowing it gives full access.";
+
+/**
+ * A computer whose account key was removed or made read-only starts over with a new key from here
+ * (0091). It shows only then, as nothing else needs a new key.
+ */
+function StartOverRow() {
+  const [standing, setStanding] = useState<KeyStanding | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => window.parallax.onKeyStanding(setStanding), []);
+  if (!standing) return null;
+  const startOver = async () => {
+    setConfirming(false);
+    const failed = await window.parallax.startOver();
+    if (failed) notify({ tone: "error", title: "Couldn't start over", body: failed });
+  };
+  const { title, body } = KEY_STANDING_TEXT[standing];
+  return (
+    <NoticeRow title={title} body={confirming ? START_OVER_CONFIRM : body}>
+      {confirming ? (
+        <ConfirmRemove
+          label="Start over"
+          onRemove={() => void startOver()}
+          onCancel={() => setConfirming(false)}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          className={`${quietButton} shrink-0`}
+        >
+          Start over with a new key
+        </button>
+      )}
+    </NoticeRow>
   );
 }
 
@@ -112,6 +172,7 @@ export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () =
             )}
           </NoticeRow>
         )}
+        <StartOverRow />
         {relayUsage.map((host) => {
           const cap = relayCapOf(host);
           return cap && <NoticeRow key={host.hostId} title={cap.title} body={cap.body} />;

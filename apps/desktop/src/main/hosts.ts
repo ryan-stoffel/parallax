@@ -1,5 +1,5 @@
 import { app, ipcMain, net, powerMonitor, type WebContents } from "electron";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -12,6 +12,7 @@ import {
   ErrorCodes,
   REQUEST_METHODS,
   type AccessRequest,
+  type AccessState,
   type CliKind,
   type DeviceStreamParams,
   type RelayHost,
@@ -28,6 +29,7 @@ import {
   type DeviceHost,
   type DeviceIcon,
   iconFor,
+  type KeyStanding,
   withheldMethods,
   type RendererMethod,
   type RpcResponse,
@@ -45,7 +47,11 @@ import {
   coalesced,
   waitForListener,
   countPairRun,
+  allowedAmong,
   directRoutes,
+  EXIT_REMOVED,
+  EXIT_UNAVAILABLE,
+  keyStandingIn,
   lacks,
   listSources,
   mergeListed,
@@ -290,6 +296,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
     if (!saved) return;
     const id = accountId(saved.hostId);
     const step = accountAccess.get(id)?.step;
+    if (startingOver || typedOnly.has(id)) return;
     if (step === "ask") return signIn(id);
     if (step === "needsCode") return compareCodes(id);
   });
@@ -299,6 +306,8 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       : "invalid request",
   );
   ipcMain.handle("parallax:deviceKey", () => deviceKey());
+  ipcMain.handle("parallax:keyStanding", () => keyStanding());
+  ipcMain.handle("parallax:startOver", () => startOver());
   ipcMain.handle("parallax:accessRequests", () => accessRequests());
   ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
   ipcMain.handle("parallax:makeDeviceReadOnly", (_event, id: unknown) => makeDeviceReadOnly(id));
@@ -2094,6 +2103,7 @@ function followAccess(hostId: string, state: ConnectionState): void {
   if (state.status !== "connected") return;
   if (relayId) {
     signedIn.delete(hostId);
+    typedOnly.delete(hostId);
     allowing.delete(hostId);
     setAccess(hostId, undefined);
     finishMigration(relayId);
@@ -2131,19 +2141,10 @@ const accessHosts = () =>
  * local plxd answers and has saved every restriction those lists hold.
  */
 async function vouchedHosts(): Promise<Set<string> | undefined> {
-  const asked = accessHosts();
-  if (!asked.some(([id]) => id === "local")) return undefined;
-  const read = await Promise.all(
-    asked.map(async ([id, each]) => {
-      const answer = await each.request("access/get", {});
-      const relayId = relayIdOf(id) ?? tailnetRelayIds.get(id) ?? "";
-      return "result" in answer ? { id, relayId, state: answer.result } : undefined;
-    }),
-  );
-  const known = read.filter((each) => each !== undefined);
-  const own = known.find((k) => k.id === "local");
-  if (!own) return undefined;
-  const sources = listSources(known, own);
+  const read = await readAccess();
+  if (!read) return undefined;
+  const sources = listSources(read.known, read.own);
+  const { own } = read;
   // Saved first, or not used: the computer that told of a restriction may be gone by the next sync.
   const saved = own.state.allowedHosts ?? [];
   const unsaved = sources
@@ -2155,6 +2156,40 @@ async function vouchedHosts(): Promise<Set<string> | undefined> {
     for (const id of [...each.state.approvedHosts, ...(each.state.allowedHosts ?? [])])
       vouched.add(id);
   return vouched;
+}
+
+/** Each connected computer's lists, under the relay id it pins. Undefined until the local plxd answers. */
+async function readAccess() {
+  const asked = accessHosts();
+  if (!asked.some(([id]) => id === "local")) return undefined;
+  const read = await Promise.all(
+    asked.map(async ([id, each]) => {
+      const answer = await each.request("access/get", {});
+      const relayId = relayIdOf(id) ?? tailnetRelayIds.get(id) ?? "";
+      return "result" in answer ? { id, relayId, state: answer.result } : undefined;
+    }),
+  );
+  const known = read.filter((each) => each !== undefined);
+  const own = known.find((k) => k.id === "local");
+  return own && { known, own };
+}
+
+/**
+ * The computers whose word about this computer's key counts, and which starting over asks (0091):
+ * those a list source approves, or Tailscale vouches for. `allowed` are those added with Allow alone,
+ * any of which may be a fake one the user clicked through. Undefined until the local plxd answers.
+ */
+async function verifiedHosts(): Promise<
+  { verified: Set<string>; allowed: Set<string> } | undefined
+> {
+  const read = await readAccess();
+  if (!read) return undefined;
+  const allowed = allowedAmong(read.known, read.own);
+  const verified = new Set(tailnetRelayIds.values());
+  for (const each of listSources(read.known, read.own))
+    for (const id of each.state.approvedHosts) verified.add(id);
+  for (const id of allowed) verified.delete(id);
+  return { verified, allowed };
 }
 
 /**
@@ -2181,10 +2216,14 @@ async function saveRestrictions(allowedHosts: string[]): Promise<boolean> {
  * the user to ask again, since a new request starts only when the user asks (0091).
  */
 async function beginAccess(id: string): Promise<void> {
+  if (typedOnly.has(id) && accountAccess.get(id)?.step !== "pairing")
+    return setAccess(id, { step: "needsCode", quiet: true });
+  if (startingOver) return;
   const step = accountAccess.get(id)?.step;
   if (step === "signingIn" || step === "pairing" || step === "pending" || step === "ask") return;
   const relayId = relayIdOf(id);
   const vouched = await vouchedHosts();
+  if (startingOver) return;
   if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
   if (!vouched.has(relayId) || allowing.has(id)) return askForCode(id);
   if (signedIn.has(id))
@@ -2207,7 +2246,7 @@ const probing = new Set<string>();
 async function askForCode(id: string): Promise<void> {
   const relayId = relayIdOf(id);
   const routes = accountRoutes.get(id);
-  if (!relayId || !routes || probing.has(id)) return;
+  if (!relayId || !routes || probing.has(id) || typedOnly.has(id)) return;
   probing.add(id);
   const answers =
     !offlineAccounts.has(id) && (await probeRoutes(relayId, routes.dial())) !== undefined;
@@ -2260,6 +2299,7 @@ async function compareCodes(id: string): Promise<void> {
   const typeInstead = (error?: string) =>
     setAccess(id, { step: "needsCode", ...(error && { error }) });
   setAccess(id, { step: "signingIn" });
+  const epoch = keyEpoch;
   const token = await account?.freshToken();
   if (!token) {
     // Nothing started, so a later look may still compare, once signed in.
@@ -2267,6 +2307,8 @@ async function compareCodes(id: string): Promise<void> {
     return typeInstead();
   }
   const relayToken = await account?.accessToken();
+  // Starting over replaced the key meanwhile, and decides what this computer needs.
+  if (epoch !== keyEpoch) return;
   const child = spawn(
     plxd,
     [
@@ -2373,26 +2415,157 @@ async function deviceKey(): Promise<string | undefined> {
   }
 }
 
+/** What each computer this app reaches said of this computer's key, until the key is replaced. */
+const keyMarks = new Map<string, KeyStanding>();
+/** This computer's key's thumbprint, once read, until it's replaced. */
+let ownKey: Promise<string | undefined> | undefined;
+/** While starting over replaces the key and asks, which holds back every other sign-in. */
+let startingOver = false;
+/** Counts starts over, so a sign-in waiting on its token when one begins sends nothing. */
+let keyEpoch = 0;
+/** Each account computer's `plxd dial --sign-in` while it runs. */
+const signIns = new Map<string, ChildProcess>();
+/**
+ * Computers added with Allow alone, which a new key sends no token until a verified computer lets
+ * it in: only their typed setup code reaches them, so a fake one can't catch a token while the user
+ * expects a prompt (0091).
+ */
+const typedOnly = new Set<string>();
+
+/** Whether this computer's key needs replacing, which Settings offers to do. A removal comes first. */
+const keyStanding = (): KeyStanding | null =>
+  [...keyMarks.values()].includes("removed") ? "removed" : keyMarks.size > 0 ? "readOnly" : null;
+
+function markKey(hostId: string, standing: KeyStanding): void {
+  const before = keyStanding();
+  keyMarks.set(hostId, standing);
+  if (keyStanding() !== before) broadcast("parallax:keyStanding", keyStanding());
+}
+
+/**
+ * Whether computer `hostId`'s word about this computer's key counts: this computer's plxd, or a
+ * verified computer. One added with Allow alone may be a fake one, which must not lead the user to
+ * start over (0091).
+ */
+async function believes(hostId: string): Promise<boolean> {
+  if (hostId === "local") return true;
+  const relayId = relayIdOf(hostId) ?? tailnetRelayIds.get(hostId);
+  return !!relayId && !!(await verifiedHosts())?.verified.has(relayId);
+}
+
+/** Reads what computer `hostId`'s lists say of this computer's key. Only a mark runs plxd. */
+async function readKeyStanding(hostId: string, lists: AccessState): Promise<void> {
+  if (startingOver || (!lists.removedClients.length && !lists.readOnlyClients?.length)) return;
+  const standing = keyStandingIn(await (ownKey ??= deviceKey()), lists);
+  if (standing && (await believes(hostId)) && !startingOver) markKey(hostId, standing);
+}
+
+/**
+ * `window.parallax.startOver`: replaces this computer's account key, for one a verified computer
+ * says is removed or read-only (0091). This computer's plxd removes the old key first, and tells the
+ * user's other computers, so its sessions end and it can't return. `plxd dial --new-device-key`
+ * deletes what it held here. Nothing approves the new key: this click asks verified computers
+ * (`askAsNewDevice`), and one added with Allow alone takes its typed setup code. Resolves to an
+ * error for people. A second click does nothing, as there's no mark left to act on.
+ */
+async function startOver(): Promise<string | undefined> {
+  const plxd = localPlxd();
+  const local = connections.get("local");
+  if (startingOver || !keyStanding()) return undefined;
+  if (!plxd || local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  startingOver = true;
+  const stop = (why: string) => {
+    startingOver = false;
+    return why;
+  };
+  const proof = await verifiedHosts();
+  const old = await deviceKey();
+  if (!proof || !old) return stop("Parallax couldn't read this computer's key or lists.");
+  const marked = await local.request("access/remove", { thumbprint: old });
+  if ("error" in marked) return stop(marked.error.message);
+  // A sign-in under way would save a session with the old key, or start one with the new.
+  keyEpoch++;
+  for (const child of signIns.values()) child.kill();
+  signIns.clear();
+  for (const id of comparing.keys()) endCompare(id);
+  try {
+    await dialPlxd(plxd, ["--new-device-key"]);
+  } catch (error) {
+    const why = (error as { stderr?: string }).stderr?.replace(/^plxd dial: /gm, "").trim();
+    for (const id of accountRoutes.keys()) setAccess(id, undefined);
+    return stop(`Parallax couldn't make a new key: ${why || "plxd failed"}`);
+  }
+  ownKey = undefined;
+  keyMarks.clear();
+  broadcast("parallax:keyStanding", null);
+  signedIn.clear();
+  const computers = [...accountRoutes.keys()].filter((id) => connections.has(id));
+  for (const id of computers) {
+    setAccess(id, undefined);
+    if (proof.allowed.has(relayIdOf(id) ?? "")) typedOnly.add(id);
+    connections.get(id)?.reconnect();
+  }
+  void askAsNewDevice(
+    computers,
+    computers.filter((id) => proof.verified.has(relayIdOf(id) ?? "")),
+  );
+  return undefined;
+}
+
+/**
+ * Asks `verified` in turn until one lets this new key in, passing over any it can't reach. One Allow
+ * covers them all, as the device that gives it copies the key to the rest, so one click makes one
+ * prompt, and each gets its token alone (0091). The rest sign in after that, one at a time, and those
+ * added with Allow alone wait for the user to ask. A denied or lapsed request leaves them all waiting
+ * for the user, and those added with Allow alone for their typed code.
+ */
+async function askAsNewDevice(computers: string[], verified: string[]): Promise<void> {
+  let allowedBy: string | undefined;
+  for (const id of verified) {
+    const exit = await signIn(id);
+    if (exit === 0) allowedBy = id;
+    if (exit !== EXIT_UNAVAILABLE) break;
+  }
+  const refused = (id: string) => {
+    const state = connections.get(id)?.state;
+    return state?.status === "failed" && state.error.reason === "refused";
+  };
+  if (allowedBy) {
+    const after = verified.slice(verified.indexOf(allowedBy) + 1);
+    for (const id of after) if (refused(id)) await signIn(id);
+    typedOnly.clear();
+  }
+  startingOver = false;
+  for (const id of computers) {
+    signedIn.add(id);
+    if (refused(id)) void beginAccess(id);
+  }
+}
+
 /**
  * Signs in to account computer `id` with a fresh Clerk token (0091) through `plxd dial --account
  * --sign-in`, which saves the session it gets. While the computer waits for one of the user's
  * devices to allow this one, its code shows here too; during migration, the `tailnet:` connection
- * to the same computer allows it, so no code is asked for.
+ * to the same computer allows it, so no code is asked for. Resolves to how `plxd dial` exited, if it
+ * ran.
  */
-async function signIn(id: string): Promise<void> {
+async function signIn(id: string): Promise<number | null | undefined> {
   const relayId = relayIdOf(id);
   const routes = accountRoutes.get(id);
   const plxd = localPlxd();
-  if (!relayId || !routes || !plxd) return;
+  if (!relayId || !routes || !plxd) return undefined;
   signedIn.add(id);
   setAccess(id, { step: "signingIn" });
+  const epoch = keyEpoch;
   const token = await account?.freshToken();
-  if (!token)
-    return setAccess(id, {
-      step: "ask",
-      why: noToken(),
-    });
+  if (!token) {
+    setAccess(id, { step: "ask", why: noToken() });
+    return undefined;
+  }
   const relayToken = await account?.accessToken();
+  // Starting over replaced the key meanwhile, and decides what this computer needs.
+  if (epoch !== keyEpoch) return undefined;
   const child = spawn(
     plxd,
     ["dial", `--account=${relayId}`, "--sign-in", `--name=${localName()}`, "--", ...routes.dial()],
@@ -2401,6 +2574,7 @@ async function signIn(id: string): Promise<void> {
       env: { ...process.env, ...(relayToken && { PLXD_RELAY_TOKEN: relayToken }) },
     },
   );
+  signIns.set(id, child);
   child.stdin.on("error", () => {});
   child.stdin.end(`${token}\n`);
   let stderr = "";
@@ -2420,18 +2594,27 @@ async function signIn(id: string): Promise<void> {
     child.on("close", resolve);
   });
   if (request) ownRequests.delete(request);
+  // Starting over stopped this sign-in.
+  if (signIns.get(id) !== child) return code;
+  signIns.delete(id);
   if (code === 0) {
     setAccess(id, undefined);
     connections.get(id)?.retry();
-    return;
+    return code;
   }
+  const removed = code === EXIT_REMOVED && (await believes(id));
+  if (removed) markKey(id, "removed");
   setAccess(id, {
     step: "ask",
-    why:
-      code === 5
-        ? "It didn't let this computer in: the request was denied or lapsed."
-        : `Parallax couldn't sign in there: ${stderr.replace(/^plxd dial: /gm, "").trim() || "plxd failed"}`,
+    why: removed
+      ? "It removed this computer. Start over with a new key above."
+      : code === EXIT_REMOVED
+        ? "It says it removed this computer, but it was added with Allow alone, so Parallax doesn't act on that."
+        : code === 5
+          ? "It didn't let this computer in: the request was denied or lapsed."
+          : `Parallax couldn't sign in there: ${stderr.replace(/^plxd dial: /gm, "").trim() || "plxd failed"}`,
   });
+  return code;
 }
 
 /** Keeps what account computer `relayId` said of itself while signing in or pairing. */
@@ -2601,6 +2784,7 @@ function watchAccess(hostId: string): void {
       }
       after = answer.result.version;
       showRequest(hostId, answer.result.pending);
+      void readKeyStanding(hostId, answer.result);
       // Another of the user's computers vouched for one waiting on its code, as the computer it
       // just joined does (`syncAccess`), so it signs in with no code asked for.
       for (const vouched of [

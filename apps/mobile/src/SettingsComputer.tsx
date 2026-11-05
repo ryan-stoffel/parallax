@@ -838,7 +838,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
   const makeReadOnly = (s: { id: string; name: string }) =>
     confirm(
       `Make ${s.name || "Unnamed computer"} read-only?`,
-      "On all your computers, it can read threads but not change anything. This can't be undone. To give it full access, revoke it and connect it again as a new device.",
+      "On all your computers, it can read threads but not change anything. This can't be undone. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device.",
       "Make read-only",
       async () => {
         const answer = await makeSessionReadOnly(id, s.id);
@@ -914,7 +914,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
             <Row
               key={s.id}
               title={s.name || "Unnamed computer"}
-              detail={`Paired ${new Date(s.createdAt).toLocaleDateString()}${s.readOnly ? ". Read-only. To give it full access, revoke it and connect it again as a new device." : ""}`}
+              detail={`Paired ${new Date(s.createdAt).toLocaleDateString()}${s.readOnly ? ". Read-only. To give it full access, revoke it, then pair it again, or choose Start over with a new key in Settings > Connections on that device." : ""}`}
               last={i === sessions.length - 1}
               right={
                 <View style={{ flexDirection: "row", gap: 16 }}>

@@ -65,6 +65,15 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// expired, or this computer's session was revoked. Retrying won't help.
 pub const EXIT_REFUSED: i32 = 5;
 
+/// `plxd dial --sign-in` exits with this when the host says this computer's key was removed (0091):
+/// only [`new_device_key`] gets it back in, and then only once approved.
+pub const EXIT_REMOVED: i32 = 6;
+
+/// Why a host refuses a removed key's sign-in, which clients read to offer a new key (0091). Hosts
+/// have said just this since 0091, so no version check is needed. It's the host's word, inside the
+/// pinned connection, and all it can lead to is the user asking for approval again.
+pub const DEVICE_REMOVED: &str = "this device was removed";
+
 /// A pairing code's alphabet: no 0, 1, I, or O, as T3 Code's.
 const CODE_ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -882,6 +891,9 @@ pub enum Error {
         "the computer refused this one: the code is wrong, used, or expired, or this computer isn't paired anymore"
     )]
     Refused,
+    /// The host says this computer's key was removed, so it refuses that key for good.
+    #[error("this computer was removed from your computers; start over with a new key in Settings")]
+    Removed,
     /// The host's certificate isn't the pinned one, or a host couldn't vouch for it while pairing.
     #[error("another computer answered at this address")]
     WrongHost,
@@ -920,6 +932,11 @@ fn save_credential(data_dir: &Path, name: &str, token: &str, key: &DpopKey) -> R
     Ok(())
 }
 
+/// The file [`device_key`] keeps its key in.
+fn device_key_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("remote-device-key")
+}
+
 /// This computer's own `DPoP` key for `account:` hosts (0091), made the first time. One key for
 /// every host, since its thumbprint is what the user's hosts approve and copy between them.
 ///
@@ -927,7 +944,7 @@ fn save_credential(data_dir: &Path, name: &str, token: &str, key: &DpopKey) -> R
 ///
 /// When the file can't be read or written, or is damaged.
 pub fn device_key(data_dir: &Path) -> io::Result<DpopKey> {
-    let path = data_dir.join("remote-device-key");
+    let path = device_key_path(data_dir);
     let pkcs8 = match fs::read(&path) {
         Ok(pkcs8) => pkcs8,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -937,6 +954,44 @@ pub fn device_key(data_dir: &Path) -> io::Result<DpopKey> {
     };
     DpopKey::from_pkcs8(&pkcs8)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "the device key file is damaged"))
+}
+
+/// Replaces [`device_key`] with a new one, for a computer whose key was removed or made read-only
+/// (0091), and deletes what the old one held: each session saved with it and each request's kept
+/// value. A session paired on the LAN has a key of its own and stays. Each host's count of requests
+/// stays, so starting over doesn't reset the 5 an hour. The new key has no session and no approval.
+///
+/// # Errors
+///
+/// When a file can't be read, written, or deleted, or the new key can't be read back.
+pub fn new_device_key(data_dir: &Path) -> io::Result<DpopKey> {
+    let path = device_key_path(data_dir);
+    let old = match fs::read(&path) {
+        Ok(pkcs8) => Some(base64url(&pkcs8)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let saved = match fs::read_dir(data_dir.join("remote-hosts")) {
+        Ok(saved) => saved.collect::<io::Result<Vec<_>>>()?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    for file in saved {
+        let file = file.path();
+        let holds_old = fs::read(&file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Credential>(&bytes).ok())
+            .is_some_and(|credential| Some(credential.key) == old);
+        if holds_old || file.extension().is_some_and(|ext| ext == "request") {
+            fs::remove_file(file)?;
+        }
+    }
+    if old.is_some() {
+        fs::remove_file(&path)?;
+    }
+    let pkcs8 = create_once(&path, &DpopKey::generate().pkcs8)?;
+    DpopKey::from_pkcs8(&pkcs8)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "the new device key is damaged"))
 }
 
 /// The key this host seals a push's title and text with (0100): 32 random bytes in an owner-only
@@ -1428,9 +1483,10 @@ fn client_value(
 ///
 /// # Errors
 ///
-/// [`Error::Refused`] when the host refuses the token or this computer's key, or its request
-/// limit is reached, [`Error::WrongHost`] when another key answers at the last route tried or the
-/// host's value doesn't match its commitment, and the last route's error when none answered.
+/// [`Error::Removed`] when the host says this computer's key was removed, [`Error::Refused`] when
+/// it refuses the token or the key otherwise, or its request limit is reached, [`Error::WrongHost`]
+/// when another key answers at the last route tried or the host's value doesn't match its
+/// commitment, and the last route's error when none answered.
 pub async fn sign_in(
     routes: &[String],
     host_id: &str,
@@ -1456,7 +1512,9 @@ pub async fn sign_in(
         let attempt = sign_in_at(tls, route, host_id, token, name, compare, data_dir, &key);
         match tokio::time::timeout(REQUEST_TIMEOUT, attempt).await {
             Ok(Ok(signed_in)) => return Ok((route.clone(), signed_in)),
-            Ok(Err(error @ (Error::Refused | Error::WrongHost))) => return Err(error),
+            Ok(Err(error @ (Error::Refused | Error::Removed | Error::WrongHost))) => {
+                return Err(error);
+            }
             Ok(Err(error)) => last = error,
             Err(_) => last = timed_out(route),
         }
@@ -1488,6 +1546,11 @@ async fn sign_in_at(
         200 if compare => return Err(Error::Refused),
         200 => return approved(route, host_id, key, data_dir, &json(&answer)?),
         202 => json(&answer)?,
+        403 if json::<serde_json::Value>(&answer)
+            .is_ok_and(|body| body["error_description"].as_str() == Some(DEVICE_REMOVED)) =>
+        {
+            return Err(Error::Removed);
+        }
         401 | 403 | 429 => return Err(Error::Refused),
         _ => return Err(Error::Protocol(format!("{path} answered {status}"))),
     };
@@ -1576,7 +1639,13 @@ pub async fn await_approval(
     let key = device_key(data_dir)?;
     let pin = Pin::HostId(host_id.to_owned());
     let body = json!({ "request": request, "wait": true });
+    // A real host drops a request by then, and a fake one doesn't get to hold this forever.
+    let give_up = tokio::time::Instant::now() + REQUEST_LIFETIME + REQUEST_TIMEOUT;
     loop {
+        if tokio::time::Instant::now() >= give_up {
+            let _ = fs::remove_file(committed_path(data_dir, host_id));
+            return Err(Error::Refused);
+        }
         let step = approval_step(route, &pin, &key, &body);
         let answered = tokio::time::timeout(APPROVAL_WAIT + REQUEST_TIMEOUT, step)
             .await
@@ -1981,6 +2050,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_device_key_deletes_only_what_the_old_one_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = device_key(dir.path()).unwrap();
+        let host = "a".repeat(43);
+        save_credential(dir.path(), &host, "account session", &old).unwrap();
+        save_credential(dir.path(), "lan", "paired session", &DpopKey::generate()).unwrap();
+        let waiting = committed_path(dir.path(), &host);
+        let counted = requests_path(dir.path(), &host);
+        fs::write(&waiting, "{}").unwrap();
+        fs::write(&counted, "[1]").unwrap();
+
+        let new = new_device_key(dir.path()).unwrap();
+
+        assert_ne!(new.thumbprint(), old.thumbprint());
+        assert_eq!(
+            device_key(dir.path()).unwrap().thumbprint(),
+            new.thumbprint()
+        );
+        assert!(!credential_path(dir.path(), &host).exists(), "its session");
+        assert!(!waiting.exists(), "its request's value");
+        assert!(
+            credential_path(dir.path(), "lan").exists(),
+            "another key's session"
+        );
+        assert_eq!(fs::read(&counted).unwrap(), b"[1]", "the count of requests");
+    }
 
     #[test]
     fn the_push_key_is_made_once_and_owner_only() {

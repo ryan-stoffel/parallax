@@ -53,6 +53,7 @@ beforeEach(() => {
   window.parallax = {
     onProfile: () => () => {},
     onConnectNotice: () => () => {},
+    onKeyStanding: () => () => {},
     onRelayUsage: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),

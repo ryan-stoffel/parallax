@@ -101,7 +101,7 @@ export class Fleet {
   add(m: Machine): void {
     this.machines.set(m.id, m);
     if (this.hosts.has(m.id)) return;
-    if (m.account && !this.account?.hosts.trusts(m.account.hostId))
+    if (m.account && !this.account?.hosts.mayConnect(m.account.hostId))
       return this.account?.gated(m.id, { kind: "setup" });
     if (!m.account && !m.paired) return;
     const open = m.account ? () => this.openAccount(m.id) : () => pairedSocket(m.paired!);

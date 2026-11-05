@@ -133,8 +133,8 @@ pub struct Config {
     /// How often plxd checks the `connect` setting and Tailscale, to bind or drop the Connect
     /// listener. 10 s by default.
     pub connect_check_interval: Duration,
-    /// The address the remote listener binds instead of every IPv4 address. `None` by default;
-    /// tests bind loopback.
+    /// The address the remote listener binds instead of every IPv4 address. `PLXD_REMOTE_ADDRESS`
+    /// when set, for tests that run a whole plxd, else `None`; tests bind loopback.
     pub remote_address: Option<IpAddr>,
     /// The remote listener's port. `PLXD_REMOTE_PORT` when set, for tests that run a whole plxd,
     /// else 7341.
@@ -189,7 +189,9 @@ impl Config {
             connect_address: None,
             connect_port: parallax_protocol::CONNECT_PORT,
             connect_check_interval: Duration::from_secs(10),
-            remote_address: None,
+            remote_address: std::env::var("PLXD_REMOTE_ADDRESS")
+                .ok()
+                .and_then(|address| address.parse().ok()),
             remote_port: std::env::var("PLXD_REMOTE_PORT")
                 .ok()
                 .and_then(|port| port.parse().ok())

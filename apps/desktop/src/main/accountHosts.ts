@@ -1,4 +1,4 @@
-import type { DeviceIcon, Outage } from "../preload/bridge";
+import type { DeviceIcon, KeyStanding, Outage } from "../preload/bridge";
 import type {
   AccessState,
   RelayHost,
@@ -400,6 +400,21 @@ export type Lists = Pick<
   "approvedClients" | "removedClients" | "approvedHosts" | "allowedHosts" | "readOnlyClients"
 >;
 
+/** `plxd dial` exits with this when no route answered. */
+export const EXIT_UNAVAILABLE = 4;
+/** `plxd dial --sign-in` exits with this when the computer says this one's key was removed. */
+export const EXIT_REMOVED = 6;
+
+/** What `lists` say of `key`, this computer's own, if they say it needs replacing (0091). */
+export function keyStandingIn(
+  key: string | undefined,
+  lists: Pick<Lists, "removedClients" | "readOnlyClients">,
+): KeyStanding | undefined {
+  if (!key) return undefined;
+  if (lists.removedClients.includes(key)) return "removed";
+  return lists.readOnlyClients?.includes(key) ? "readOnly" : undefined;
+}
+
 /**
  * Which of `known` this app takes lists from (0091), `own` being this computer's plxd, which it
  * always trusts. A computer added with Allow alone may be a fake one the user clicked through, so
@@ -411,6 +426,15 @@ export function listSources<T extends { relayId: string; state: Lists }>(
   known: T[],
   own: T | undefined,
 ): T[] {
+  const allowed = allowedAmong(known, own);
+  return known.filter((each) => each === own || !allowed.has(each.relayId));
+}
+
+/** The computers `own`'s list and those it leads to mark as added with Allow alone (0091). */
+export function allowedAmong<T extends { relayId: string; state: Lists }>(
+  known: T[],
+  own: T | undefined,
+): Set<string> {
   const allowed = new Set(own?.state.allowedHosts ?? []);
   for (let size = -1; size !== allowed.size;) {
     size = allowed.size;
@@ -418,7 +442,7 @@ export function listSources<T extends { relayId: string; state: Lists }>(
       if (!allowed.has(each.relayId))
         for (const id of each.state.allowedHosts ?? []) allowed.add(id);
   }
-  return known.filter((each) => each === own || !allowed.has(each.relayId));
+  return allowed;
 }
 
 /**

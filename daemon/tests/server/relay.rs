@@ -502,7 +502,7 @@ async fn removing_a_device_on_one_computer_cuts_it_off_on_the_others_within_seco
         let dialed = open_account(routes, id, phone.path()).await;
         assert!(matches!(dialed, Err(remote::Error::Refused)));
         let signed_in = sign_in(route, id, "phone", phone.path().to_owned()).await;
-        assert!(matches!(signed_in, Err(remote::Error::Refused)));
+        assert!(matches!(signed_in, Err(remote::Error::Removed)));
     }
 
     // C goes offline, so it hears nothing and its session stays, until a client catches it up.

@@ -2295,6 +2295,8 @@ export const mockBridge: ParallaxBridge = {
     return () => setupApprovedListeners.delete(listener);
   },
   askAgain: () => delay(undefined),
+  onKeyStanding: () => () => {},
+  startOver: () => delay(undefined),
   answerCompare: () => delay(undefined),
   deviceKey: () => delay(undefined),
   turnOnReach: (hostId) => {

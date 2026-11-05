@@ -163,7 +163,7 @@ test("making a device read-only asks first, says it's for good, and a failure sa
   expect(makeDeviceReadOnly).toHaveBeenCalledWith("s1");
   const said = document.body.textContent;
   expect(said).toContain("Read-only: it reads threads");
-  expect(said).toContain("revoke it and connect it again as a new device");
+  expect(said).toContain("Start over with a new key");
   // Nothing offers to undo it, only Revoke.
   expect(button("Make read-only")).toBeUndefined();
   expect(button("Revoke")).toBeDefined();
