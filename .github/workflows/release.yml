@@ -325,13 +325,15 @@ jobs:
 
   # Tests the deployed relay with this nightly's own plxd once its files are all attached, so a
   # failure lands on the nightly that caused it (PLX-1360). Off the path to the update: a failure
-  # fails this job and leaves the release published.
+  # shows on this job and in the notes, and leaves the release published and this run's conclusion
+  # alone (PLX-1431). relay-probe.yml's own schedule is the alert.
   probe:
     needs: [plan, finish]
     if: ${{ !cancelled() && needs.plan.outputs.build == 'true' && needs.plan.outputs.channel == 'nightly' && needs.plan.outputs.dry_run != '1' }}
     uses: ./.github/workflows/relay-probe.yml
     with:
       tag: ${{ needs.plan.outputs.tag }}
+      advisory: true
     secrets:
       PROBE_CLERK_REFRESH_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN }}
       PROBE_SECRET_WRITER: ${{ secrets.PROBE_SECRET_WRITER }}
