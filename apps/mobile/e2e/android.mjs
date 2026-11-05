@@ -29,9 +29,25 @@ const RUNNER = "10.0.2.2";
 const plxd = process.env.PLXD_PATH;
 if (!plxd) throw new Error("PLXD_PATH must name a plxd built with the fake backend");
 
+const started = Date.now();
+const log = (message) => console.log(`[android e2e +${Math.round((Date.now() - started) / 1000)}s] ${message}`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const adb = (...args) => execFileSync("adb", args, { maxBuffer: 64 << 20 });
+
+// Every blocking call has a limit: an adb call with none once hung for 47 minutes while Chrome drew,
+// past every wait here, until the job's own limit cancelled it with nothing to show.
+const adbWithin = (timeout, ...args) =>
+  execFileSync("adb", args, { maxBuffer: 64 << 20, timeout, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] });
+const adb = (...args) => adbWithin(30_000, ...args);
 const cleanups = [];
+
+/** The app, the browser, or whatever else has the screen, for a failure to name. */
+function focused() {
+  try {
+    return adb("shell", "dumpsys window | grep mCurrentFocus").toString().trim();
+  } catch (e) {
+    return `unknown: ${e.message}`;
+  }
+}
 
 const freePort = () =>
   new Promise((resolve) => {
@@ -43,6 +59,7 @@ const freePort = () =>
 
 /** Waits until `check` answers something truthy, and returns it. */
 async function until(what, check, timeoutMs = 60_000) {
+  log(`waiting for ${what}, up to ${timeoutMs / 1000}s`);
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const answer = await check();
@@ -107,7 +124,7 @@ const wrangler = spawn(
 cleanups.push(() => process.kill(-wrangler.pid, "SIGTERM"));
 const relayUrl = `http://127.0.0.1:${relayPort}`;
 await until("wrangler dev", async () => {
-  const answer = await fetch(`${relayUrl}/v1/hosts`).catch(() => null);
+  const answer = await fetch(`${relayUrl}/v1/hosts`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
   return answer?.status === 401;
 });
 
@@ -136,9 +153,12 @@ async function computer(name, relay) {
   let id = 0;
   const call = (method, params = {}) =>
     new Promise((resolve, reject) => {
-      waiting.set(++id, (message) =>
-        message.error ? reject(new Error(`${method}: ${JSON.stringify(message.error)}`)) : resolve(message.result),
-      );
+      const timer = setTimeout(() => reject(new Error(`${name} didn't answer ${method} in 30s`)), 30_000);
+      waiting.set(++id, (message) => {
+        clearTimeout(timer);
+        if (message.error) reject(new Error(`${name}: ${method}: ${JSON.stringify(message.error)}`));
+        else resolve(message.result);
+      });
       attach.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     });
   await call("initialize", { protocol: { min: 1, max: 1 }, client: { name: "e2e", version: "0" }, capabilities: {} });
@@ -149,21 +169,24 @@ async function computer(name, relay) {
     await until(`${name} on the relay`, async () => (await call("remote/sessions")).relay?.connected);
   }
   const { hostId } = await call("relay/id");
-  return { call, hostId, port };
+  return { name, call, hostId, port };
 }
 
 // --- Driving the emulator.
 
 function gradle(...args) {
+  log(`gradle ${args[0]}`);
   execFileSync("./gradlew", ["--console=plain", "-PreactNativeArchitectures=x86_64", ...args], {
     cwd: join(mobile, "android"),
     stdio: "inherit",
+    timeout: 10 * 60_000,
+    killSignal: "SIGKILL",
   });
 }
 
 /** The screen's elements now: each one's text or description, and where its center is. */
 function screen() {
-  const xml = adb("exec-out", "uiautomator", "dump", "/dev/tty").toString();
+  const xml = adbWithin(20_000, "exec-out", "uiautomator", "dump", "/dev/tty").toString();
   return [...xml.matchAll(/<node [^>]*?>/g)].map(([node]) => {
     const attribute = (name) => node.match(new RegExp(` ${name}="([^"]*)"`))?.[1] ?? "";
     const [, x1, y1, x2, y2] = attribute("bounds").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/) ?? [];
@@ -183,32 +206,42 @@ const shot = (name) => writeFileSync(join(out, `${name}.png`), adb("exec-out", "
  */
 async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [] } = {}) {
   const matches = (label) => (typeof wanted === "string" ? label === wanted : wanted.test(label));
+  log(`waiting for ${wanted} on screen, up to ${timeoutMs / 1000}s`);
   const deadline = Date.now() + timeoutMs;
   let last = [];
+  let problem;
   for (;;) {
     try {
       last = screen();
+      problem = undefined;
       const found = last.find((element) => matches(element.label));
       if (found) return found;
       const obstacle = last.find((element) => dismiss.includes(element.label));
       if (obstacle) adb("shell", "input", "tap", String(obstacle.x), String(obstacle.y));
-    } catch {
-      // uiautomator fails while the screen is changing.
+    } catch (e) {
+      // uiautomator fails or hangs while the screen is changing. One that hung would block the next.
+      problem = e.message;
+      try {
+        adb("shell", "pkill -f uiautomator");
+      } catch {}
     }
     if (Date.now() > deadline)
-      throw new Error(`no ${wanted} on screen: ${last.map((e) => e.label).filter(Boolean).join(" | ")}`);
+      throw new Error(
+        `no ${wanted} on screen after ${timeoutMs / 1000}s. In front: ${focused()}. Last read${problem ? ` failed: ${problem}` : ""}: ${last.map((e) => e.label).filter(Boolean).join(" | ")}`,
+      );
     await sleep(1000);
   }
 }
 
 async function tap(wanted, options) {
   const { x, y } = await waitFor(wanted, options);
+  log(`tapping ${wanted}`);
   adb("shell", "input", "tap", String(x), String(y));
 }
 
 /** Waits until `box` has a session named for this phone, which only reaching it can make. */
 const phoneSession = (box) =>
-  until("the phone's session", async () => {
+  until(`${box.name} to report this phone's session`, async () => {
     const { sessions } = await box.call("remote/sessions");
     return sessions.some((session) => session.name === "Android phone");
   }, 120_000);
@@ -222,6 +255,11 @@ async function type(label, text) {
 }
 
 let failed = true;
+// Past every step's own limit, in case of something none of them covers. Well inside the CI step's.
+const watchdog = setTimeout(() => {
+  console.error(`android e2e: over its 20 minutes. In front: ${focused()}`);
+  process.exit(1);
+}, 20 * 60_000);
 try {
   const relayBox = await computer("relay-box", true);
   const lanBox = await computer("lan-box", false);
@@ -236,7 +274,8 @@ try {
     argument("relayToken", mint()),
   );
 
-  adb("install", "-r", join(mobile, "android/app/build/outputs/apk/debug/app-debug.apk"));
+  log("installing the app");
+  adbWithin(3 * 60_000, "install", "-r", join(mobile, "android/app/build/outputs/apk/debug/app-debug.apk"));
   adb("shell", "pm", "grant", APP, "android.permission.POST_NOTIFICATIONS");
   adb("reverse", "tcp:8081", "tcp:8081");
   // Past Chrome's first-run pages, for the sign-in's Custom Tab.
@@ -267,7 +306,7 @@ try {
   cleanups.push(() => process.kill(-metro.pid, "SIGTERM"));
   // An app that starts before Metro answers looks for a bundle in its assets, and a debug APK has none.
   await until("Metro", async () => {
-    const answer = await fetch("http://127.0.0.1:8081/status").catch(() => null);
+    const answer = await fetch("http://127.0.0.1:8081/status", { signal: AbortSignal.timeout(5000) }).catch(() => null);
     return (await answer?.text())?.includes("packager-status:running");
   }, 120_000);
 
@@ -308,10 +347,12 @@ try {
   shot("6-main");
   failed = false;
 } finally {
+  clearTimeout(watchdog);
   if (failed) {
+    log(`failed. In front: ${focused()}`);
     try {
       shot("failed");
-      writeFileSync(join(out, "logcat.txt"), adb("logcat", "-d"));
+      writeFileSync(join(out, "logcat.txt"), adbWithin(60_000, "logcat", "-d"));
     } catch {}
   }
   for (const cleanup of cleanups) {
