@@ -100,7 +100,7 @@ beforeEach(() => {
   };
   window.parallax = {
     onProfile: () => () => {},
-    onOutage: () => () => {},
+    onConnectNotice: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async () => ({

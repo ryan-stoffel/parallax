@@ -7,7 +7,9 @@ import {
   lacks,
   mergeListed,
   outageOf,
-  OutageWatch,
+  joinedNotListed,
+  listedKey,
+  NoticeWatch,
   parseSignIn,
   RECHECK_MS,
   Routes,
@@ -156,7 +158,7 @@ test("a list missing a saved computer keeps it, whole, as only `removed` drops o
 
 test("an outage shows after two failed reads, follows what's down, and ends on the next answer", () => {
   const shown: unknown[] = [];
-  const watch = new OutageWatch((outage) => shown.push(outage));
+  const watch: NoticeWatch<"relay" | "clerk"> = new NoticeWatch(() => shown.push(watch.current));
   watch.read("relay");
   expect(shown).toEqual([]);
   watch.read(undefined);
@@ -170,6 +172,23 @@ test("an outage shows after two failed reads, follows what's down, and ends on t
   watch.read(undefined);
   expect(shown).toEqual(["relay", "clerk", undefined]);
   expect(watch.current).toBeUndefined();
+});
+
+test("the list's key changes when only `removed` does", () => {
+  const hosts = [{ hostId: studio, name: "studio", online: true, thisComputer: false }];
+  expect(listedKey({ hosts, removed: [] })).toBe(listedKey({ hosts }));
+  expect(listedKey({ hosts, removed: ["gone"] })).not.toBe(listedKey({ hosts, removed: [] }));
+});
+
+test("only the key and account that joined can be missing from the list, unless marked", () => {
+  const joined = { hostId: studio, user: "user_1" };
+  const listed = [{ hostId: studio, name: "studio", online: true, thisComputer: true }];
+  expect(joinedNotListed({ hosts: [] }, joined, "user_1")).toBe(true);
+  expect(joinedNotListed({ hosts: [], removed: [] }, joined, "user_1")).toBe(true);
+  expect(joinedNotListed({ hosts: [], removed: [studio] }, joined, "user_1")).toBe(false);
+  expect(joinedNotListed({ hosts: listed }, joined, "user_1")).toBe(false);
+  expect(joinedNotListed({ hosts: [] }, joined, "user_2")).toBe(false);
+  expect(joinedNotListed({ hosts: [] }, undefined, "user_1")).toBe(false);
 });
 
 test("only plxd's outage kinds count as an outage", () => {

@@ -82,7 +82,7 @@ import { attentionOf } from "./attention";
 import { WorkingMark } from "./AttentionMark";
 import {
   useAccountAlarms,
-  useOutageAlarms,
+  useConnectNotices,
   useConnectionAlarms,
   useOutdatedAlarms,
   useHostUpdateAlarms,
@@ -729,7 +729,7 @@ export function App() {
   useOutdatedAlarms(listed);
   useHostUpdateAlarms(hosts);
   useAccountAlarms();
-  useOutageAlarms();
+  useConnectNotices();
   useUpdateAlarms();
   const needsYou = useNeedsYouAlarm(listed, (hostId, orchestratorId) =>
     openOnHost(hostId, { kind: "orchestrator", orchestratorId }),

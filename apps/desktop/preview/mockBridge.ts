@@ -2384,7 +2384,7 @@ export const mockBridge: ParallaxBridge = {
     return () => profileListeners.delete(listener);
   },
   // The browser's sign-in, done a moment later.
-  onOutage: () => () => {},
+  onConnectNotice: () => () => {},
   signIn: async () => {
     await delay(undefined, 1500);
     for (const listener of profileListeners) listener(profile);

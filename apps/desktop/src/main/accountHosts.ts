@@ -1,5 +1,10 @@
 import type { DeviceIcon, Outage } from "../preload/bridge";
-import type { AccessState, RelayHost, RemoteSessionsResult } from "../protocol/generated/protocol";
+import type {
+  AccessState,
+  RelayHost,
+  RelayHostsResult,
+  RemoteSessionsResult,
+} from "../protocol/generated/protocol";
 import { isDeviceIcon } from "./connect";
 import { isRoute } from "./settings";
 
@@ -110,23 +115,47 @@ export function outageOf(error: { data?: unknown }): Outage | undefined {
 /** Reads of the account's list that must fail in a row before the app says so, so a blip doesn't. */
 const OUTAGE_READS = 2;
 
-/** Follows each read of the account's list, and calls `changed` when the outage to show changes. */
-export class OutageWatch {
-  /** The outage to show, if any. */
-  current?: Outage;
+/**
+ * Follows each read of the account's list, and calls `changed` when the notice to show changes. A
+ * read that found a problem counts toward `OUTAGE_READS`, and one that didn't ends it.
+ */
+export class NoticeWatch<T extends string> {
+  /** The notice to show, if any. */
+  current?: T;
   private failed = 0;
 
-  constructor(private readonly changed: (outage: Outage | undefined) => void) {}
+  constructor(private readonly changed: () => void) {}
 
-  /** One read: what it found down, or undefined when it answered or says nothing of an outage. */
-  read(down: Outage | undefined): void {
-    this.failed = down ? this.failed + 1 : 0;
-    const next = this.failed >= OUTAGE_READS ? down : undefined;
+  /** One read: the problem it found, if any. */
+  read(found: T | undefined): void {
+    this.failed = found ? this.failed + 1 : 0;
+    const next = this.failed >= OUTAGE_READS ? found : undefined;
     if (next === this.current) return;
     this.current = next;
-    this.changed(next);
+    this.changed();
   }
 }
+
+/**
+ * Whether the key and account that joined the relay are missing from `list`, with no mark that it
+ * was removed. The relay may have lost its data, or it was removed before the relay kept marks.
+ */
+export const joinedNotListed = (
+  { hosts, removed }: RelayHostsResult,
+  joined: { hostId: string; user: string } | undefined,
+  user: string | undefined,
+): boolean =>
+  !!joined &&
+  joined.user === user &&
+  !hosts.some((host) => host.hostId === joined.hostId) &&
+  !removed?.includes(joined.hostId);
+
+/** Which computers the account lists, which are online, and which it marks removed. */
+export const listedKey = ({ hosts, removed }: RelayHostsResult): string =>
+  [
+    ...hosts.map((host) => `${host.hostId} ${host.online}`).sort(),
+    ...(removed ?? []).map((hostId) => `removed ${hostId}`).sort(),
+  ].join("\n");
 
 /** A typed setup code's runs allowed per host an hour (0091), since a fake host sets no limit. */
 export const MAX_PAIR_RUNS = 5;

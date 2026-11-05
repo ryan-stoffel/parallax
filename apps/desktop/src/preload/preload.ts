@@ -219,7 +219,7 @@ const bridge: ParallaxBridge = {
     );
     return stop;
   },
-  onOutage: (listener) => follow("parallax:outage", listener),
+  onConnectNotice: (listener) => follow("parallax:connectNotice", listener),
   signIn: (create) => ipcRenderer.invoke("parallax:signIn", create),
   editProfile: (page) => ipcRenderer.invoke("parallax:editProfile", page),
   signOut: () => ipcRenderer.invoke("parallax:signOut"),

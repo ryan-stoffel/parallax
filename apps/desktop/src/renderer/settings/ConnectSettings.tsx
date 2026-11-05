@@ -14,12 +14,12 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   DEVICE_ICONS,
   iconFor,
+  type ConnectNotice,
   type DeviceHost,
   type DeviceIcon as DeviceIconName,
-  type Outage,
 } from "../../preload/bridge";
 import { NewComputerDialog } from "../AccountPrompts";
-import { OUTAGE_TEXT } from "../alarms";
+import { CONNECT_NOTICE_TEXT, setUpAgain } from "../alarms";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { accessLabel, ConnectWizard, SetupCodeDialog } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
@@ -48,8 +48,8 @@ export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () =
   const [signingIn, setSigningIn] = useState(false);
   useEffect(() => window.parallax.onDevices(setDevices), []);
   useEffect(() => void window.parallax.discoverAccount(), []);
-  const [outage, setOutage] = useState<Outage | null>(null);
-  useEffect(() => window.parallax.onOutage(setOutage), []);
+  const [notice, setNotice] = useState<ConnectNotice | null>(null);
+  useEffect(() => window.parallax.onConnectNotice(setNotice), []);
   const local = hosts.find((h) => h.id === localId)!;
 
   const signIn = async () => {
@@ -77,10 +77,17 @@ export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () =
           )
         }
       >
-        {outage && (
-          <div role="status" className="border-b border-border px-4 py-3">
-            <p className="text-body font-medium">{OUTAGE_TEXT[outage].title}</p>
-            <p className="text-meta text-muted-foreground">{OUTAGE_TEXT[outage].body}</p>
+        {notice && (
+          <div role="status" className="flex items-center gap-4 border-b border-border px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-body font-medium">{CONNECT_NOTICE_TEXT[notice].title}</p>
+              <p className="text-meta text-muted-foreground">{CONNECT_NOTICE_TEXT[notice].body}</p>
+            </div>
+            {notice === "notListed" && (
+              <button type="button" onClick={() => void setUpAgain()} className={quietButton}>
+                Set up again
+              </button>
+            )}
           </div>
         )}
         <ul aria-label="Computers" className="border-border not-last:border-b">

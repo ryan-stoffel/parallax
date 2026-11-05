@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import type { ConnectionState, Outage, Profile } from "../preload/bridge";
+import type { ConnectNotice, ConnectionState, Profile } from "../preload/bridge";
 import type { AgentRun, InboxItem, Thread } from "../protocol/generated/protocol";
 import { attentionOf, type Attention } from "./attention";
 import type { Host } from "./hosts";
@@ -296,8 +296,8 @@ export function useHostUpdateAlarms(hosts: Host[]) {
   );
 }
 
-/** What each outage means, for people: what's down, and what still works (PLX-1351). */
-export const OUTAGE_TEXT: Record<Outage, { title: string; body: string }> = {
+/** What each notice says, for people: what's wrong, and what still works (PLX-1351). */
+export const CONNECT_NOTICE_TEXT: Record<ConnectNotice, { title: string; body: string }> = {
   relay: {
     title: "Can't reach Parallax Relay",
     body: "Computers on this network keep working. The rest reconnect when the relay is back.",
@@ -306,15 +306,30 @@ export const OUTAGE_TEXT: Record<Outage, { title: string; body: string }> = {
     title: "Can't reach Clerk sign-in",
     body: "Computers on this network keep working. New relay connections and sign-ins wait until it's back.",
   },
+  notListed: {
+    title: "This computer isn't on your account",
+    body: "Parallax Relay doesn't list it. If you didn't remove it, set it up again so your devices can reach it.",
+  },
 };
 
-/** Says what's down while Parallax Relay or Clerk can't be reached, until it's back. */
-export function useOutageAlarms() {
+/** Registers this computer again, the one click `notListed` offers, and says why it couldn't. */
+export async function setUpAgain() {
+  const failed = await window.parallax.registerRelay();
+  if (failed) notify({ tone: "error", title: "Couldn't set up this computer", body: failed });
+}
+
+/** Says what's wrong with Parallax Connect while it lasts, and offers `notListed`'s one click. */
+export function useConnectNotices() {
   useEffect(
     () =>
-      window.parallax.onOutage((outage) => {
-        if (outage) notify({ key: "outage", tone: "error", ...OUTAGE_TEXT[outage] });
-        else dismiss("outage");
+      window.parallax.onConnectNotice((notice) => {
+        if (!notice) return dismiss("connect");
+        notify({
+          key: "connect",
+          tone: "error",
+          ...CONNECT_NOTICE_TEXT[notice],
+          ...(notice === "notListed" && { action: { label: "Set up again", run: setUpAgain } }),
+        });
       }),
     [],
   );

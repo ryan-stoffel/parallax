@@ -1064,15 +1064,12 @@ test("a computer the relay marks removed stays off at its next start; nothing el
     expect(calls.at(-1)).toBe("register");
     rmSync(fake.userData, { recursive: true, force: true });
 
-    // Another computer marked removed, or an empty list from a relay that lost its data: this
-    // computer registers again, with `relay` left alone.
+    // A failed list, a list with no mark for it, and an older relay's list prove nothing either
+    // way: no setting changes, and it doesn't put itself back on the account.
     list({ hosts: [], removed: [studio] });
     await startWith(joined);
-    expect(calls).toEqual(["register"]);
+    expect(calls).toEqual([]);
     rmSync(fake.userData, { recursive: true, force: true });
-
-    // A failed list and an older relay's list that doesn't name it prove nothing either way: no
-    // setting changes, and it doesn't put itself back on the account.
     list({ error: { code: -32000, message: "down", data: { kind: "relayUnreachable" } } });
     await startWith(joined);
     expect(calls).toEqual([]);
@@ -1088,6 +1085,43 @@ test("a computer the relay marks removed stays off at its next start; nothing el
     rmSync(fake.userData, { recursive: true, force: true });
     await startWith({ hostId: studio, user: "user_1" });
     expect(calls).toEqual(["register"]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a joined key that isn't listed or marked waits for one click, with no setting changed", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const calls: string[] = [];
+    let hosts: object[] = [];
+    fake.answers.set("relay/id", { result: { hostId: buildBox } });
+    fake.answers.set("relay/hosts", () => ({ result: { hosts, removed: [] } }));
+    fake.answers.set("access/get", accessState([]));
+    fake.answers.set("host/settings/get", { result: { connect: false } });
+    fake.answers.set("host/settings/set", () => (calls.push("set"), { result: {} }));
+    fake.answers.set("relay/register", () => {
+      calls.push("register");
+      hosts = [{ hostId: buildBox, name: "me", online: true, thisComputer: true }];
+      return { result: {} };
+    });
+    const { account } = signedIn();
+    const joinedRelay = { hostId: buildBox, user: "user_1" };
+    const local = await start({ joinedRelay }, account);
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    const discover = fake.handlers.get("parallax:discoverAccount")!;
+    await discover();
+    await discover();
+    expect(calls).toEqual([]);
+    expect(fake.sent.get("parallax:connectNotice")).toBe("notListed");
+
+    expect(await fake.handlers.get("parallax:registerRelay")!()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(["register"]);
+    expect(fake.sent.get("parallax:connectNotice")).toBeNull();
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
@@ -1115,15 +1149,15 @@ test("an outage says what's down and changes no setting; a list naming nothing k
 
     // The relay is down, and two reads in a row say so.
     await discover();
-    expect(fake.sent.get("parallax:outage")).toBeUndefined();
+    expect(fake.sent.get("parallax:connectNotice")).toBeUndefined();
     await discover();
-    expect(fake.sent.get("parallax:outage")).toBe("relay");
-    expect(await fake.handlers.get("parallax:outage")!()).toBe("relay");
+    expect(fake.sent.get("parallax:connectNotice")).toBe("relay");
+    expect(await fake.handlers.get("parallax:connectNotice")!()).toBe("relay");
 
     // Answering ends it, and an empty list, as from a relay that lost its data, drops nothing.
     fake.answers.set("relay/hosts", { result: { hosts: [], removed: [] } });
     await discover();
-    expect(fake.sent.get("parallax:outage")).toBeNull();
+    expect(fake.sent.get("parallax:connectNotice")).toBeNull();
     expect(box.disposed).toBe(false);
     expect(readFileSync(file, "utf8")).toBe(before);
 
@@ -1134,7 +1168,7 @@ test("an outage says what's down and changes no setting; a list naming nothing k
     });
     await discover();
     await discover();
-    expect(fake.sent.get("parallax:outage")).toBeNull();
+    expect(fake.sent.get("parallax:connectNotice")).toBeNull();
     fake.online = true;
 
     // Clerk is down: no token, and what's asked of it says so instead of asking to sign in.
@@ -1142,19 +1176,24 @@ test("an outage says what's down and changes no setting; a list naming nothing k
     account.accessToken = async () => undefined as unknown as string;
     await discover();
     await discover();
-    expect(fake.sent.get("parallax:outage")).toBe("clerk");
+    expect(fake.sent.get("parallax:connectNotice")).toBe("clerk");
     expect(await fake.handlers.get("parallax:relayHosts")!()).toMatch(/can't reach Clerk/);
     expect(readFileSync(file, "utf8")).toBe(before);
     expect(box.disposed).toBe(false);
     fake.clerkDown = false;
 
-    // Marked removed by the relay is the one thing that drops a computer.
+    // Marked removed by the relay is the one thing that drops a computer. The timer's read notices
+    // the mark alone, with `hosts` the same as before.
     account.accessToken = async () => relayToken;
-    fake.answers.set("relay/hosts", { result: { hosts: [], removed: [buildBox] } });
+    fake.answers.set("relay/hosts", { result: { hosts: [], removed: [] } });
     await discover();
+    fake.visible = true;
+    fake.answers.set("relay/hosts", { result: { hosts: [], removed: [buildBox] } });
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(box.disposed).toBe(true);
     expect(JSON.parse(readFileSync(file, "utf8")).accounts).toEqual([]);
   } finally {
+    fake.visible = false;
     vi.useRealTimers();
     fake.online = true;
     fake.clerkDown = false;

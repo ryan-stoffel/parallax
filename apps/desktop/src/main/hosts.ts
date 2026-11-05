@@ -31,6 +31,8 @@ import {
   withheldMethods,
   type RendererMethod,
   type RpcResponse,
+  type ConnectNotice,
+  type Outage,
   type SavedHost,
   type SetupCode,
   type SshHost,
@@ -48,7 +50,9 @@ import {
   parseSignIn,
   relayIdOf,
   Routes,
-  OutageWatch,
+  joinedNotListed,
+  listedKey,
+  NoticeWatch,
   outageOf,
   tokenSubject,
   unionLists,
@@ -267,7 +271,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // Settings > Connections and Add computer ask for the account's computers when they open, and
   // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
-  ipcMain.handle("parallax:outage", () => outageWatch.current ?? null);
+  ipcMain.handle("parallax:connectNotice", () => connectNotice());
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
@@ -1135,6 +1139,8 @@ async function registerRelay(): Promise<string | undefined> {
   const own = await connections.get("local")?.request("relay/id", {});
   const user = tokenSubject(token);
   if (own && "result" in own && user) keepJoined(own.result.hostId, user);
+  // Ends the `notListed` notice now, rather than at the next look.
+  void discoverAccounts();
   return undefined;
 }
 
@@ -1148,10 +1154,10 @@ async function registerRelay(): Promise<string | undefined> {
  *
  * This computer's own registration reads the list first, unless a sign-in asked for it (0091,
  * PLX-1351). `removed` naming its key means the user removed it from another computer while it
- * couldn't hear, so its `relay` goes off, and only a sign-in or a setup brings it back. A list that
- * failed, or a relay too old to send `removed`, can't tell a removed computer from lost data, so a
- * key that joined and isn't listed changes no setting and doesn't register, which could undo a
- * Remove. A newer relay that lists it nowhere lost its data or never had it, so it registers.
+ * couldn't hear, so its `relay` goes off, and only a sign-in or a setup brings it back. A key that
+ * joined and isn't listed may have been removed before the relay kept marks, or the relay may have
+ * lost its data. Nothing here can tell, so it never registers by itself and changes no setting:
+ * `notListed` offers the one click that does (`registerRelay`). A key that never joined registers.
  */
 async function joinRelay(hostId: string, signingIn = false): Promise<void> {
   if (hostId !== "local" && !hostId.startsWith("tailnet:")) return;
@@ -1171,8 +1177,7 @@ async function joinRelay(hostId: string, signingIn = false): Promise<void> {
       }
       const { joinedRelay } = settings;
       const joinedHere = joinedRelay?.hostId === hostId && joinedRelay.user === user;
-      if (joinedHere && !list?.removed && !list?.hosts.some((host) => host.hostId === hostId))
-        return;
+      if (joinedHere && !list?.hosts.some((host) => host.hostId === hostId)) return;
     }
     const joined = await local.request("relay/register", { token });
     if ("result" in joined && hostId && user) keepJoined(hostId, user);
@@ -1785,8 +1790,14 @@ function dropAccountConnection(id: string): void {
 /** How often the account's computers are asked for while a window is on screen. */
 const LOOK_MS = 15_000;
 
-/** The outage shown while reads of the account's list fail (PLX-1351). */
-const outageWatch = new OutageWatch((outage) => broadcast("parallax:outage", outage ?? null));
+/** What the app says about Parallax Connect (PLX-1351): an outage first, as it hides the rest. */
+const connectNotice = (): ConnectNotice | null =>
+  outageWatch.current ?? notListedWatch.current ?? null;
+const showNotice = () => broadcast("parallax:connectNotice", connectNotice());
+/** Reads of the account's list that failed. */
+const outageWatch = new NoticeWatch<Outage>(showNotice);
+/** Reads of the account's list that lack this computer's key, with no mark that it was removed. */
+const notListedWatch = new NoticeWatch<"notListed">(showNotice);
 
 /**
  * The account's list from the local plxd, or undefined when it can't be read. A failure here never
@@ -1796,7 +1807,10 @@ const outageWatch = new OutageWatch((outage) => broadcast("parallax:outage", out
 async function readAccountList(): Promise<RelayHostsResult | undefined> {
   const token = await account?.accessToken();
   if (!token) {
-    outageWatch.read(net.isOnline() && account?.clerkUnreachable() ? "clerk" : undefined);
+    const unreachable = account?.clerkUnreachable();
+    outageWatch.read(net.isOnline() && unreachable ? "clerk" : undefined);
+    // Signed out, so no account to be on. With Clerk down, it's unknown, so it stays as it was.
+    if (!unreachable) notListedWatch.read(undefined);
     return undefined;
   }
   const local = connections.get("local");
@@ -1807,6 +1821,11 @@ async function readAccountList(): Promise<RelayHostsResult | undefined> {
     return undefined;
   }
   outageWatch.read(undefined);
+  notListedWatch.read(
+    joinedNotListed(answer.result, settings.joinedRelay, tokenSubject(token))
+      ? "notListed"
+      : undefined,
+  );
   return answer.result;
 }
 
@@ -1825,7 +1844,7 @@ const discoverAccounts = coalesced(async () => {
     if (!list.hosts.some((h) => h.hostId === saved.hostId)) await forgetComputer(saved.hostId);
     else if (!(await removeFromAccount(saved.hostId)))
       list.hosts = list.hosts.filter((h) => h.hostId !== saved.hostId);
-  lastListed = listedKey(list.hosts);
+  lastListed = listedKey(list);
   const { accounts, changed } = mergeListed(savedAccounts(), list.hosts, list.removed);
   if (changed) {
     for (const old of savedAccounts())
@@ -1843,13 +1862,6 @@ const discoverAccounts = coalesced(async () => {
   broadcast("parallax:devices", deviceHosts());
 });
 
-/** Which computers the account lists and which are online, to notice a change. */
-const listedKey = (hosts: RelayHost[]) =>
-  hosts
-    .map((host) => `${host.hostId} ${host.online}`)
-    .sort()
-    .join("\n");
-
 /** The account's computers as discovery last saw them. */
 let lastListed: string | undefined;
 
@@ -1861,7 +1873,7 @@ let lastListed: string | undefined;
  */
 async function lookForNewComputers(): Promise<void> {
   const list = await readAccountList();
-  if (list && listedKey(list.hosts) !== lastListed) return void discoverAccounts();
+  if (list && listedKey(list) !== lastListed) return void discoverAccounts();
   // Online on the relay can come before its listener answers, and nothing changes in the list when
   // it starts to, so a computer waiting for that is probed again.
   for (const [id, access] of accountAccess)
