@@ -420,8 +420,14 @@ jobs:
             --issuer "$APPLE_API_ISSUER" --wait --output-format json) || true
           echo "$result"
           if [ "$(jq -r .status <<< "$result")" != Accepted ]; then
-            xcrun notarytool log "$(jq -r .id <<< "$result")" --key "$key" \
-              --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" || true
+            # Apple gives an id only once it has taken the submission, and only then is there a log.
+            id=$(jq -r '.id // empty' <<< "$result")
+            if [ -n "$id" ]; then
+              xcrun notarytool log "$id" --key "$key" \
+                --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" || true
+            else
+              echo "::error::Apple took no submission. On a 401, check the API key in App Store Connect and the secrets APPLE_API_KEY_P8, APPLE_API_KEY_ID, and APPLE_API_ISSUER."
+            fi
             rm -f "$key"
             exit 1
           fi
