@@ -22,6 +22,7 @@ import {
   type DiffSideName,
   type LineRange,
   type Row,
+  linesInRange,
 } from "./diffRows";
 import { parseDiff, type DiffFile, type DiffLine } from "./parseDiff";
 import type { ThreadView } from "./pr/model";
@@ -70,7 +71,8 @@ export type DiffComments = {
   /** Whether a new target may replace the open one, which holds no text. */
   canRetarget: boolean;
   onTarget: (target: CommentTarget) => void;
-  renderBox: () => ReactNode;
+  /** Draws the box, given the new-side text it's on, for a suggestion. */
+  renderBox: (lines?: string[]) => ReactNode;
 };
 
 /** A line's gutter: pressing it starts a pick, entering it extends one, unless it's not `active`. */
@@ -376,7 +378,9 @@ export function ChangesDiff({
                   {row.header ? (
                     fileHeader(row.file)
                   ) : row.composer ? (
-                    <ComposerRow side={row.composer}>{comments?.renderBox()}</ComposerRow>
+                    <ComposerRow side={row.composer}>
+                      {comments?.renderBox(linesInRange(row.file, comments.target?.range))}
+                    </ComposerRow>
                   ) : row.threads ? (
                     <ThreadColumn threads={row.threads} render={renderThread!} edged />
                   ) : row.sides ? (
