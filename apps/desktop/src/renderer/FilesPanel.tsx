@@ -760,7 +760,7 @@ function FileSearch({
 }) {
   const [query, setQuery] = useState("");
   const [paths, setPaths] = useState<string[] | { error: string }>();
-  const [lines, setLines] = useState<{ query: string; matches: GrepMatch[] }>();
+  const [lines, setLines] = useState<{ query: string; matches: GrepMatch[]; error?: string }>();
   const load = async () => {
     const answer = await window.parallax.request(hostId, "repo/files", { runId });
     setPaths("error" in answer ? { error: describeError(answer.error) } : answer.result.files);
@@ -773,8 +773,12 @@ function FileSearch({
       void window.parallax
         .request(hostId, "repo/grep", { runId, query: trimmed })
         .then((answer) => {
-          if (!stopped && !("error" in answer))
-            setLines({ query: trimmed, matches: answer.result.matches });
+          if (stopped) return;
+          setLines(
+            "error" in answer
+              ? { query: trimmed, matches: [], error: describeError(answer.error) }
+              : { query: trimmed, matches: answer.result.matches },
+          );
         });
     }, GREP_AFTER_MS);
     return () => {
@@ -795,7 +799,9 @@ function FileSearch({
     onOpen(path, line);
     clear();
   };
-  const matches = lines?.matches ?? [];
+  // Only the query in the box: an older one's lines aren't what Enter should open.
+  const current = lines?.query === trimmed ? lines : undefined;
+  const matches = current?.matches ?? [];
   const byFile = Map.groupBy(matches, (m) => m.path);
   const heading = "px-2 pt-2 pb-1 text-meta font-medium text-faint-foreground";
   const row =
@@ -844,6 +850,11 @@ function FileSearch({
           {paths && "error" in paths && (
             <p role="alert" className="px-2 py-1 text-body text-danger">
               {paths.error}
+            </p>
+          )}
+          {current?.error && (
+            <p role="alert" className="px-2 py-1 text-body text-danger">
+              {current.error}
             </p>
           )}
           {found.length > 0 && <h3 className={heading}>Files</h3>}

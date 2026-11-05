@@ -343,6 +343,26 @@ test("Compare shows what's on disk until it's stopped or settled", async () => {
   expect(disk.get("a.ts")).toBe("mine\n");
 });
 
+test("each go-to-line is taken once, and asks for the text when Markdown shows rendered", async () => {
+  disk.set("doc.md", "# Doc\n\ntext\n");
+  const store = new OpenFiles("local", "run-1");
+  const id = store.open("doc.md");
+  await settle();
+  store.setView(id, "preview");
+  store.goTo(id, 3);
+  expect(tab(store, id)?.view).toBe("code");
+  expect(store.takeJump(id)).toBe(3);
+  // Shown again, it stays where the cursor went since.
+  expect(store.takeJump(id)).toBeUndefined();
+  store.goTo(id, 1);
+  expect(store.takeJump(id)).toBe(1);
+
+  // A new tab opened at a line opens as text, whatever was chosen last.
+  store.setView(id, "preview");
+  const other = store.open("a.ts", { line: 1 });
+  expect(tab(store, other)?.view).toBe("code");
+});
+
 test("closing all leaves a tab whose edits can't land", async () => {
   disk.set("b.ts", "b\n");
   const store = new OpenFiles("local", "run-1");

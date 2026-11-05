@@ -82,7 +82,8 @@ export function FileEditor({
   // What a split's preview shows, kept up with typing.
   const [live, setLive] = useState("");
   const liveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => clearTimeout(liveTimer.current), []);
+  // A preview waiting to draw belongs to the tab and view it was typed in.
+  useEffect(() => () => clearTimeout(liveTimer.current), [file.id, view]);
   const reloads = text?.reloads ?? 0;
   useEffect(() => {
     if (view !== "code") setLive(store.textNow(file.id));
