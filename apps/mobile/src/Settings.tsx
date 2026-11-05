@@ -340,16 +340,43 @@ export function NewThreadsSection() {
 
 /**
  * Connections' settings of this phone's own: its computers, each with its page, the account's
- * computers removed from this phone, and Add computer. Opening it lists the account's computers
+ * computers removed from this phone, and Add computer. A phone whose key was removed or made
+ * read-only also starts over with a new key here (0091). Opening it lists the account's computers
  * again.
  */
 export function PhoneConnections() {
   const c = useColors();
   const nav = useNav();
-  const { computers, defaultId, discover, removed, restore } = useFleet();
+  const { computers, defaultId, discover, removed, restore, keyStanding, startOver } = useFleet();
   useEffect(discover, []);
+  const confirmStartOver = () =>
+    showAlert(
+      "Start over with a new key?",
+      "This deletes this phone's key and its sessions on your account's computers, and that key can't return. Nothing connects until you allow this phone on another device, or with plx connect approve on one of your computers. It shows there as a new device, and allowing it gives full access.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Start over",
+          style: "destructive",
+          onPress: () =>
+            void startOver().then((failed) => failed && showAlert("Couldn't start over", failed)),
+        },
+      ],
+    );
   return (
     <>
+      {keyStanding && (
+        <Section
+          title={keyStanding === "removed" ? "This phone was removed" : "This phone is read-only"}
+          footer={
+            keyStanding === "removed"
+              ? "Your computers refuse its key for good. To use them from here again, start over with a new key."
+              : "It reads threads and can't change anything, and its key stays that way. For full access, start over with a new key."
+          }
+        >
+          <Row icon={KeyRound} iconColor={c.accent} title="Start over with a new key" last onPress={confirmStartOver} />
+        </Section>
+      )}
       <Section
         title="Computers"
         footer="New threads start on the default computer. The computers you set up with plx connect join on their own."

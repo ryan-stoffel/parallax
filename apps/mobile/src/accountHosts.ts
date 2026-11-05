@@ -15,14 +15,18 @@ import {
   emptyBook,
   forgetRequest,
   keptValue,
+  keyStandingIn,
   merged,
   newRequest,
+  provedAmong,
+  REQUEST_LIFETIME_MS,
   setupRun,
   sourcesFor,
   type HostBook,
   type Known,
   type Lists,
 } from "./access";
+import type { KeyStanding } from "../../desktop/src/preload/bridge";
 import type { RelayUsage } from "../../desktop/src/protocol/generated/protocol";
 import { relayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { keychain, spakePair } from "./host";
@@ -75,10 +79,20 @@ interface Stored {
    * has none, as it kept no record of how it came to trust a computer.
    */
   proved?: string[];
+  /**
+   * Those a computer in `proved` or paired on the LAN approves, by pinned id, kept so starting over
+   * can tell them with nothing connected. Only these and `proved` count for it.
+   */
+  verified?: string[];
   books: Record<string, HostBook>;
   /** Why this phone stopped asking on its own, until the user asks again. */
   askingStopped?: string;
+  /** Keys this phone started over from, which it copies to the removed lists, so they can't return. */
+  retired?: string[];
 }
+
+/** Why a computer refuses a removed key's sign-in, as `DEVICE_REMOVED` in plxd says it. */
+const DEVICE_REMOVED = "this device was removed";
 
 /** What answers on a route: where requests go, the pin, and how to let it go. */
 interface Endpoint {
@@ -140,6 +154,14 @@ export async function listHosts(token: string): Promise<HostList | undefined> {
 }
 
 export class AccountHosts {
+  /**
+   * Whether this phone's key needs replacing, as a verified computer said. Not saved: they say so
+   * again, and it ends when the key does.
+   */
+  standing?: KeyStanding;
+  /** The last sign-in to send a token, which the next waits for. */
+  private turn: Promise<unknown> = Promise.resolve();
+
   private constructor(
     private stored: Stored,
     /** A Clerk access token: a fresh one for a host, never sent twice, else the current one. */
@@ -247,22 +269,108 @@ export class AccountHosts {
       .filter((each) => (each.paired || this.proved.includes(each.id)) && !this.allowed.includes(each.id))
       .flatMap((each) => each.lists.allowedHosts ?? []);
     const allowed = [...new Set([...this.allowed, ...marks])];
+    // Only a computer this phone's own record proves may lead the user to start over, as any other
+    // may be a fake one.
+    const proved = provedAmong(known, [...this.proved, ...(this.stored.verified ?? [])], allowed);
+    for (const { lists } of proved.sources) this.mark(keyStandingIn(this.thumbprint, lists));
+    const verified = [...new Set([...(this.stored.verified ?? []), ...proved.ids])].filter(
+      (id) => !proved.marked.has(id),
+    );
     const listed = known
       .filter((each) => !allowed.includes(each.id))
       .flatMap((each) => [...each.lists.approvedHosts, ...(each.lists.allowedHosts ?? [])]);
     const trusted = [...new Set([...this.stored.trusted, ...listed])];
-    if (trusted.length !== this.stored.trusted.length || allowed.length !== this.allowed.length) {
-      this.stored = { ...this.stored, trusted, allowed };
+    if (
+      trusted.length !== this.stored.trusted.length ||
+      allowed.length !== this.allowed.length ||
+      verified.join() !== (this.stored.verified ?? []).join()
+    ) {
+      this.stored = { ...this.stored, trusted, allowed, verified };
       await this.save();
     }
+    const retired = { approvedClients: [], removedClients: this.stored.retired ?? [], approvedHosts: [] };
     return known.map((each) => ({
       ...each,
       union: merged(
-        sourcesFor(each, known, this.proved, allowed).map((source) => source.lists),
+        [...sourcesFor(each, known, this.proved, allowed).map((source) => source.lists), retired],
         this.proved,
         allowed,
       ),
     }));
+  }
+
+  /** Whether this phone's own record proves computer `hostId`: a typed or LAN code, or what those approve. */
+  private isVerified(hostId: string) {
+    const record = [...this.proved, ...(this.stored.verified ?? [])];
+    return record.includes(hostId) && !this.allowed.includes(hostId);
+  }
+
+  /**
+   * Which of `listed` this phone may ask on its own. After starting over, only those its own record
+   * proves: the relay picks the list, and a fake computer mustn't catch a token while the user
+   * expects a prompt.
+   */
+  askable<T extends { hostId: string }>(listed: T[]): T[] {
+    if (!this.stored.retired?.length) return listed;
+    return listed.filter((l) => this.trusts(l.hostId) && this.isVerified(l.hostId));
+  }
+
+  /**
+   * Whether a connection may sign in to `hostId`, which sends it a fresh token: any computer this
+   * phone trusts. While a new key still has no session, only what `askable` lets it ask, as another
+   * computer's list can name a fake one while the user expects a prompt.
+   */
+  mayConnect(hostId: string) {
+    return this.trusts(hostId) && !this.heldBack(hostId);
+  }
+
+  /** Whether `hostId` gets no fresh token now, as a new key has no session and it isn't verified. */
+  private heldBack(hostId: string) {
+    return !!this.stored.retired?.length && !this.usesAny && !this.isVerified(hostId);
+  }
+
+  /** Keeps what a computer said of this phone's key. A removal outranks read-only. */
+  private mark(said: KeyStanding | undefined) {
+    if (said === "removed" || (said && !this.standing)) this.standing = said;
+  }
+
+  /**
+   * Replaces this phone's key, for one a verified computer says is removed or read-only (0091), and
+   * drops its sessions and the values of its waiting requests. `absorb` then copies the old key to
+   * the removed lists once the new one has a session. It keeps trusting only the computers its own
+   * record proves, so it asks only them, and any other waits for a tap, so a fake one catches no
+   * token while the user expects a prompt. The hour's counts stay, so this resets no limit. Nothing
+   * approves the new key. It's saved first: a failed save leaves the old key in use. With no mark to
+   * act on, as on a second tap, it does nothing, and answers false.
+   */
+  async startOver() {
+    const standing = this.standing;
+    if (!standing) return false;
+    this.standing = undefined;
+    const { askingStopped: _, ...rest } = this.stored;
+    const next: Stored = {
+      ...rest,
+      key: base64url(newDpopSecret()),
+      sessions: {},
+      trusted: rest.trusted.filter((id) => this.isVerified(id)),
+      books: Object.fromEntries(Object.entries(rest.books).map(([id, book]) => [id, forgetRequest(book)])),
+      retired: [...(rest.retired ?? []), this.thumbprint],
+    };
+    try {
+      await SecureStore.setItemAsync(KEY, JSON.stringify(next), keychain);
+    } catch (e) {
+      this.standing = standing;
+      throw e;
+    }
+    this.stored = next;
+    return true;
+  }
+
+  /** `run`, once any earlier one has ended, so each computer gets its fresh token alone. */
+  private inTurn<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.turn.then(run, run);
+    this.turn = next.catch(() => {});
+    return next;
   }
 
   /**
@@ -278,6 +386,7 @@ export class AccountHosts {
       sessions: Object.fromEntries(Object.entries(sessions).filter(([id]) => !held.includes(id))),
       trusted: trusted.filter((id) => !held.includes(id)),
       proved: this.proved.filter((id) => !held.includes(id)),
+      verified: (this.stored.verified ?? []).filter((id) => !held.includes(id)),
       books: Object.fromEntries(
         Object.entries(books).map(([id, book]) => [id, held.includes(id) ? forgetRequest(book) : book]),
       ),
@@ -479,23 +588,38 @@ export class AccountHosts {
     ask: boolean,
     compare = false,
   ): Promise<{ session: string } | { gate: Gate; request?: string }> {
-    const token = await this.token(true);
-    if (!token) throw new Error("Sign in to Parallax again.");
     const path = "/api/auth/account";
-    const { status, json } = await this.call(
-      at,
-      "POST",
-      path,
-      { DPoP: proof(this.secret, "POST", `${at.base}${path}`, token) },
-      { token, clientLabel: this.label },
-    );
+    const { status, json } = await this.inTurn(async () => {
+      // The one place a sign-in gets a token, so it holds however the caller got here, as when a
+      // computer held its descriptor's answer across starting over.
+      if (this.heldBack(hostId)) throw new Refused(HELD_BACK);
+      const key = this.stored.key;
+      const token = await this.token(true);
+      if (!token) throw new Error("Sign in to Parallax again.");
+      // Starting over replaced the key meanwhile, and decides which computers get a token.
+      if (this.stored.key !== key) throw new Error("This phone started over.");
+      const answer = await this.call(
+        at,
+        "POST",
+        path,
+        { DPoP: proof(this.secret, "POST", `${at.base}${path}`, token) },
+        { token, clientLabel: this.label },
+      );
+      // That answer is for the old key, and says nothing of the new one.
+      if (this.stored.key !== key) throw new Error("This phone started over.");
+      return answer;
+    });
     // Already approved: trusted only if it already was, by a code or a host this phone uses, or if
     // this phone asked, and was allowed while it couldn't hear. That Allow may have come from any
     // of them, as it covers them all.
     if (status === 200 && compare) throw new Denied(NO_CODE);
     if (status === 200) return this.approved(hostId, json, this.askedAny);
-    if (status === 401 || status === 403)
+    if (status === 401 || status === 403) {
+      // Any computer this phone's own record doesn't prove may be a fake one.
+      if (status === 403 && describeRefusal(json) === DEVICE_REMOVED && this.isVerified(hostId))
+        this.mark("removed");
       throw new Refused(describeRefusal(json) ?? "That computer refused this phone's sign-in.");
+    }
     if (status !== 202) throw new Error(describeRefusal(json) ?? `That computer answered ${status}.`);
     const requestId = String(json["request"]);
     const committed = String(json["commitment"]);
@@ -620,7 +744,9 @@ export class AccountHosts {
           () => {},
         );
       });
+      const giveUp = requestDeadline();
       for (;;) {
+        if (Date.now() >= giveUp) throw new Denied(LAPSED);
         const step = await Promise.race([this.approval(at, { request }, true), allowedHere]);
         if ("session" in step) {
           await this.approved(hostId, step.session, true, tapped ? "tapped" : undefined);
@@ -660,7 +786,11 @@ export class AccountHosts {
       }
       let step = await this.approval(at, { request, allow: true });
       if ("pending" in step) onConfirm();
-      while (!("session" in step)) step = await this.approval(at, { request }, true);
+      const giveUp = requestDeadline();
+      while (!("session" in step)) {
+        if (Date.now() >= giveUp) throw new Denied(LAPSED);
+        step = await this.approval(at, { request }, true);
+      }
       await this.approved(hostId, step.session, true, "tapped");
     } catch (e) {
       if (e instanceof Denied) await this.setBook(hostId, forgetRequest(this.book(hostId)));
@@ -694,6 +824,11 @@ export class AccountHosts {
 }
 
 const NO_CODE = "That computer showed no code to compare. Type the code it shows.";
+const LAPSED = "That request wasn't allowed in time.";
+const HELD_BACK = "This phone's new key hasn't been allowed yet. Type the code that computer shows, or allow this phone first.";
+
+/** When this phone stops waiting on a request: a real computer drops one by then, and a fake mustn't hold it. */
+const requestDeadline = () => Date.now() + REQUEST_LIFETIME_MS + 10_000;
 
 /** A sign-in or request the host refused: this phone needs setting up or approving again. */
 class Refused extends Error {}

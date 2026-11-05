@@ -16,7 +16,7 @@ import {
 } from "react";
 import { AppState } from "react-native";
 
-import type { ConnectionState, RpcResponse } from "../../desktop/src/preload/bridge";
+import type { ConnectionState, KeyStanding, RpcResponse } from "../../desktop/src/preload/bridge";
 import type { RouteEdit } from "../../desktop/src/preload/routeList";
 import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
@@ -74,6 +74,13 @@ interface FleetValue {
   editRoutes: (id: string, edit: RouteEdit) => string | undefined;
   /** The route computer `id`'s connection is on. */
   routeOf: (id: string) => string | undefined;
+  /** Why this phone's key needs replacing, as a verified computer said (0091). */
+  keyStanding?: KeyStanding;
+  /**
+   * Replaces this phone's key, for one that's removed or read-only, and asks for approval as a new
+   * device, on another device or with `plx connect approve` (0091). Resolves to an error for people.
+   */
+  startOver: () => Promise<string | undefined>;
   /**
    * Revokes session `session` on computer `id`. A device signed in with the account also loses its
    * key there, which `share` then copies to the computers that accept this one's lists (0091).
@@ -191,6 +198,9 @@ export function FleetProvider({
   const [gates, setGates] = useState<Record<string, Gate | undefined>>({});
   const [listed, setListed] = useState<Listed[]>([]);
   const [stopped, setStopped] = useState(accounts?.askingStopped);
+  const [keyStanding, setKeyStanding] = useState(accounts?.standing);
+  // A refused sign-in, which gates its computer, is how a removed phone hears.
+  useEffect(() => setKeyStanding(accounts?.standing), [gates]);
   const [drafts] = useState(() => new Map<string, string>());
   /** Requests already shown, so each asks once. */
   const [asked] = useState(() => new Set<string>());
@@ -254,9 +264,11 @@ export function FleetProvider({
   /**
    * A new phone asks to use the account's computers on its own (0091), as onboarding does, for one
    * that skipped it. It shows the code once, since its row is out of sight here. A denied or lapsed
-   * request stops it until the user taps a computer.
+   * request stops it until the user taps a computer. A phone told its key was removed asks nothing,
+   * as that key can't be approved, until the user starts over.
    */
   async function askOnItsOwn(found: Listed[]) {
+    if (accounts?.standing === "removed") return;
     if (accounts?.usesAny) return compareNew(accounts, found);
     const hosts = accounts ? toAsk(found, accounts.usesAny, latest.current.hidden) : [];
     if (!accounts || !hosts.length || asking.current || accounts.askingStopped) return;
@@ -318,9 +330,11 @@ export function FleetProvider({
   /**
    * A computer this phone uses that wasn't ready for it, as before another device copied its key,
    * gets a couple of tries, then waits for the app to come to the front: each try can start a
-   * request there, and a computer takes 5 an hour.
+   * request there, and a computer takes 5 an hour. A phone with no session anywhere, as after
+   * starting over, leaves this to `askOnItsOwn`, which asks one computer.
    */
   function retryGated() {
+    if (!accounts?.usesAny) return;
     for (const m of latest.current.machines) {
       if (!m.account || !accounts?.trusts(m.account.hostId)) continue;
       if (gatesNow.current[m.id]?.kind !== "setup") continue;
@@ -371,11 +385,13 @@ export function FleetProvider({
       "error" in answer ? [] : keeper(latest.current.machines, id, answer.result),
     );
     if (!lists.length) return;
-    for (const { connection, lists: theirs, union } of await accounts.absorb(lists))
+    const absorbed = await accounts.absorb(lists);
+    setKeyStanding(accounts.standing);
+    for (const { connection, lists: theirs, union } of absorbed)
       if (lacks(theirs, union)) void fleet.hosts.get(connection)?.request("access/merge", union);
     // A computer one of them lists connects now.
     for (const m of latest.current.machines)
-      if (m.account && accounts.trusts(m.account.hostId) && !fleet.hosts.has(m.id)) {
+      if (m.account && accounts.mayConnect(m.account.hostId) && !fleet.hosts.has(m.id)) {
         gate(m.id, undefined);
         fleet.add(m);
       }
@@ -486,8 +502,13 @@ export function FleetProvider({
     const { hostId } = m.account;
     void accounts.resumeAsking();
     setStopped(undefined);
+    // With no session anywhere, as after starting over, it asks one computer again, once more.
+    if (accounts.mayConnect(hostId) && !accounts.usesAny && !accounts.standing) {
+      gate(id, { kind: "setup" });
+      return void discover();
+    }
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
-    if (accounts.trusts(hostId)) return connect(m);
+    if (accounts.mayConnect(hostId)) return connect(m);
     setUpComputer(accounts, { hostId, name: m.name, choices: m.account }, {
       onWaiting: (code) => gate(id, { kind: "waiting", code }),
       done: () => connect(m),
@@ -495,8 +516,39 @@ export function FleetProvider({
     });
   }
 
+  /**
+   * Starts over with a new key (0091). The account's computers drop their connections, which hold
+   * the old key, and stay down until `askOnItsOwn`, from the list read here, gets this phone allowed.
+   */
+  async function startOver(): Promise<string | undefined> {
+    // No mark to act on, as on a second tap: nothing changes.
+    if (!accounts?.standing) return undefined;
+    const computers = latest.current.machines.filter((m) => m.account);
+    for (const m of computers) {
+      fleet.remove(m.id);
+      gate(m.id, { kind: "setup" });
+    }
+    const failed = await accounts.startOver().then(
+      () => undefined,
+      (e: Error) => e.message,
+    );
+    // Anything failed: the old key stays, as do its connections.
+    if (failed) {
+      for (const m of computers) connect(m);
+      return failed;
+    }
+    setKeyStanding(undefined);
+    setStopped(undefined);
+    shownCode.current = undefined;
+    retries.current.clear();
+    void discover();
+    return undefined;
+  }
+
   const value: FleetValue = {
     deviceKey: accounts?.thumbprint,
+    keyStanding,
+    startOver,
     computers: list,
     defaultId: defaultOf(setup.machines, setup.defaultId),
     setDefault: (id) => update((s) => ({ ...s, defaultId: id })),

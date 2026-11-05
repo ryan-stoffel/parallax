@@ -1058,7 +1058,7 @@ async fn new_session(
             info!(%name, "paired a remote client");
             Ok(token)
         }
-        Ok(false) => Err(access::removed("this device was removed")),
+        Ok(false) => Err(access::removed(remote::DEVICE_REMOVED)),
         Err(error) => {
             warn!(error = %error.message, "could not keep a remote session");
             Err((500, json!({ "error": "server_error" })))

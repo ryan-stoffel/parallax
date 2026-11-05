@@ -8,6 +8,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 
+import type { KeyStanding } from "../../desktop/src/preload/bridge";
 import { base64url, fromBase64url } from "./pairing";
 import { WrongHost } from "./routes";
 
@@ -192,6 +193,20 @@ export function sourcesFor<T extends Known>(
 }
 
 /**
+ * The computers this phone's own record proves (0091), by `sourcesFor`'s rule with no target: those
+ * `proved` with a typed code, those `paired` on the LAN, and what they approve, by pinned id, less
+ * any marked. `sources` are those of `known` among them, whose word about this phone's key counts.
+ * A computer that only signed this phone in, or that another computer's list names, isn't proved.
+ */
+export function provedAmong<T extends Known>(known: T[], proved: string[], allowed: string[]) {
+  const nobody = { id: "", lists: { approvedClients: [], removedClients: [], approvedHosts: [] } } as unknown as T;
+  const sources = sourcesFor(nobody, known, proved, allowed);
+  const marked = new Set([...allowed, ...sources.flatMap((each) => each.lists.allowedHosts ?? [])]);
+  const ids = [...proved, ...sources.flatMap((each) => [each.id, ...each.lists.approvedHosts])];
+  return { sources, marked, ids: [...new Set(ids)].filter((id) => !marked.has(id)) };
+}
+
+/**
  * Every host's lists in one, with `hosts` (the ones this phone proved) approved too, and `allowed`
  * (the marks it keeps) marked. A key removed anywhere ends up removed and not approved, so the
  * lists merge with no clock. A key read-only anywhere ends up read-only. A marked computer stays out
@@ -210,6 +225,12 @@ export function merged(all: Lists[], hosts: string[], allowed: string[] = []): L
     ...(marks.length > 0 && { allowedHosts: marks }),
     ...(readOnly.length > 0 && { readOnlyClients: sorted(readOnly) }),
   };
+}
+
+/** What `lists` say of `key`, this phone's own, if they say it needs replacing. */
+export function keyStandingIn(key: string, lists: Lists): KeyStanding | undefined {
+  if (lists.removedClients.includes(key)) return "removed";
+  return lists.readOnlyClients?.includes(key) ? "readOnly" : undefined;
 }
 
 /** Whether `lists` lacks anything in `union`, so the host needs an `access/merge`. */

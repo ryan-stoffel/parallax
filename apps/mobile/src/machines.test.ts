@@ -43,7 +43,7 @@ async function onRoute(route: string, better?: string) {
   const socket = { close: vi.fn(), onclose: undefined };
   const recheck = vi.fn(async () => better);
   const hosts = {
-    trusts: () => true,
+    mayConnect: () => true,
     open: async () => ({ socket, route }),
     recheck,
   };
@@ -55,6 +55,20 @@ async function onRoute(route: string, better?: string) {
   await host.open();
   return { fleet, host, socket, recheck, account };
 }
+
+test("a computer this phone may not connect to yet is gated, with nothing opened", () => {
+  vi.stubGlobal("window", {});
+  const open = vi.fn();
+  const gated = vi.fn();
+  const hosts = { mayConnect: () => false, open };
+  const m = { id: "account:h", name: "h", account: { hostId: "h", routes: [] } } as unknown as Machine;
+  const fleet = new Fleet(async () => {}, [], { hosts, learned: () => {}, gated } as never);
+  fleet.add(m);
+  expect(gated).toHaveBeenCalledWith("account:h", { kind: "setup" });
+  expect(fleet.hosts.has("account:h")).toBe(false);
+  expect(open).not.toHaveBeenCalled();
+  fleet.close();
+});
 
 test("moving a route above the one in use checks it now, and reopens when it answers", async () => {
   const { fleet, host, socket, recheck, account } = await onRoute(lan, added);
@@ -77,7 +91,7 @@ test("a slow route above a working one is moved to once, not every re-check", as
   const recheck = vi.fn(async (_h: string, _c: unknown, route: string) => (route === lan ? relay : undefined));
   const account = { hostId: "h", routes: [lan], routeOrder: [relay, lan] };
   const m = { id: "account:h", name: "h", account } as Machine;
-  const events = { hosts: { trusts: () => true, open, recheck }, learned: () => {}, gated: () => {} };
+  const events = { hosts: { mayConnect: () => true, open, recheck }, learned: () => {}, gated: () => {} };
   const fleet = new Fleet(async () => {}, [m], events as never);
   const host = made.at(-1)!;
   await host.open();
@@ -103,7 +117,7 @@ test("a move that fails holds that route back from re-checks, and the next open 
   const recheck = vi.fn(async () => relay);
   const account = { hostId: "h", routes: [lan], routeOrder: [relay, lan] };
   const m = { id: "account:h", name: "h", account } as Machine;
-  const events = { hosts: { trusts: () => true, open, recheck }, learned: () => {}, gated: () => {} };
+  const events = { hosts: { mayConnect: () => true, open, recheck }, learned: () => {}, gated: () => {} };
   const fleet = new Fleet(async () => {}, [m], events as never);
   const host = made.at(-1)!;
   await host.open();

@@ -81,7 +81,7 @@ export function AccountPrompts() {
 
 /** Whether computer `d` is waiting on its code now and answers, so a screen can ask for it. */
 export const asksForCode = (d: Pick<DeviceHost, "access">) =>
-  (d.access?.step === "needsCode" && !d.access.offline) ||
+  (d.access?.step === "needsCode" && !d.access.offline && !d.access.quiet) ||
   d.access?.step === "pairing" ||
   d.access?.step === "compare" ||
   d.access?.step === "confirm";

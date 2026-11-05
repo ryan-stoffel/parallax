@@ -129,7 +129,7 @@ struct DialArgs {
     /// The device's Tailscale IP, with port 7340 unless one is given, such as `100.87.92.42` or
     /// `[fd7a:115c:a1e0::1]:7340`. With `--remote`, the paired computer's routes, tried in order,
     /// each an IP or host name with port 7341 unless one is given
-    #[arg(value_name = "ADDR", required_unless_present_any = ["discover", "device_key"])]
+    #[arg(value_name = "ADDR", required_unless_present_any = ["discover", "device_key", "new_device_key"])]
     addresses: Vec<String>,
 
     /// Reach a computer paired over HTTPS, whose certificate fingerprint this is (PLX-641)
@@ -155,6 +155,11 @@ struct DialArgs {
     /// Print this computer's `DPoP` key thumbprint, which `plx connect --device` names, and exit
     #[arg(long, conflicts_with_all = ["account", "remote", "discover", "pair"])]
     device_key: bool,
+
+    /// Replace this computer's `DPoP` key with a new one, delete the sessions and waiting requests
+    /// the old one held, print the new key's thumbprint, and exit. Nothing approves the new key
+    #[arg(long, conflicts_with_all = ["account", "remote", "discover", "pair", "device_key"])]
+    new_device_key: bool,
 
     /// Pair with the computer at the first ADDR that answers, with the code it shows, read from
     /// the first line of stdin so no other user sees it; print its fingerprint, name, and routes
@@ -515,6 +520,7 @@ fn dial(args: &DialArgs) -> ! {
         || args.pair
         || args.discover
         || args.device_key
+        || args.new_device_key
     {
         std::process::exit(runtime.block_on(dial_remote(args, &report)));
     }
@@ -569,6 +575,7 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
     }
     let exit = |error: &remote::Error| match error {
         remote::Error::Refused => remote::EXIT_REFUSED,
+        remote::Error::Removed => remote::EXIT_REMOVED,
         _ => EXIT_UNAVAILABLE.into(),
     };
     if args.discover {
@@ -587,8 +594,8 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             }
         };
     }
-    if args.device_key {
-        return print_device_key(data_dir.root(), report);
+    if args.device_key || args.new_device_key {
+        return print_key(args.new_device_key, data_dir.root(), report);
     }
     let name = args.name.as_deref().unwrap_or_default();
     if let (Some(host_id), true) = (&args.account, args.sign_in) {
@@ -656,9 +663,15 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
     }
 }
 
-/// `dial --device-key` (0091): this computer's key, as `plx connect --device` names it.
-fn print_device_key(data_dir: &Path, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
-    match remote::device_key(data_dir) {
+/// `dial --device-key` and `--new-device-key` (0091): this computer's key, as `plx connect --device`
+/// names it.
+fn print_key(new: bool, data_dir: &Path, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    let key = if new {
+        remote::new_device_key(data_dir)
+    } else {
+        remote::device_key(data_dir)
+    };
+    match key {
         Ok(key) => {
             print_json(&serde_json::json!({ "thumbprint": key.thumbprint() }));
             0

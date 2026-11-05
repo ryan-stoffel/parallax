@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { commitment, lacks, REQUEST_LIFETIME_MS } from "./access";
 import { AccountHosts, Denied, listHosts, relayProblem } from "./accountHosts";
+import { allowThisPhone } from "./accountPrompts";
 import { base64url } from "./pairing";
 import { keeper } from "./setup";
 
@@ -23,6 +24,7 @@ vi.mock("expo-secure-store", () => ({
   setItemAsync: async (key: string, value: string) => void net.store.set(key, value),
   deleteItemAsync: async (key: string) => void net.store.delete(key),
 }));
+vi.mock("react-native", () => ({}));
 vi.mock("./push", () => ({ RELAY_URL: "https://relay.test" }));
 vi.mock("./host", async (original) => ({
   ...(await original<typeof import("./host")>()),
@@ -41,9 +43,9 @@ vi.mock("../modules/pinned-tls", () => ({
     net.sent.push({ hostname, pathname, pin, credential: !!body || Object.keys(headers).length > 0 });
     if (net.wrongKey.has(hostname)) throw Object.assign(new Error("key"), { code: "ERR_WRONG_HOST" });
     const hostId = net.ports[Number(port)]!;
-    const answer = (pathname === "/.well-known/parallax"
+    const answer = (await (pathname === "/.well-known/parallax"
       ? { status: 200, json: { name: hostId, routes: [] } }
-      : net.answers[hostId]!(pathname, (body ?? {}) as Record<string, unknown>)) as Answer;
+      : net.answers[hostId]!(pathname, (body ?? {}) as Record<string, unknown>))) as Answer;
     if (answer instanceof Error) throw answer;
     return { status: answer.status, body: JSON.stringify(answer.json ?? {}), fingerprint: "fp" };
   },
@@ -66,6 +68,298 @@ const session = { status: 200, json: { accessToken: "session" } };
 const load = () => AccountHosts.load(async () => "token", "iPhone");
 /** The sessions the phone keeps, whatever it trusts. */
 const savedSessions = () => (JSON.parse(net.store.get("account-hosts")!) as { sessions: object }).sessions;
+
+test("starting over makes a new key that asks again, keeping trust, the hour's count, and the old key out", async () => {
+  const hosts = await load();
+  net.answers["h"] = holding(() => session);
+  await hosts.ask("h", { routes: [] }, () => {});
+  expect(hosts.sessions).toEqual(["h"]);
+  const old = hosts.thumbprint;
+  await hosts.absorb([{ id: "h", paired: true, lists: none }]);
+
+  net.answers["h"] = () => ({ status: 403, json: { error_description: "this device was removed" } });
+  await expect(hosts.ask("h", { routes: [] }, () => {})).rejects.toThrow("this device was removed");
+  expect(hosts.standing).toBe("removed");
+
+  await hosts.startOver();
+  expect(hosts.thumbprint).not.toBe(old);
+  expect(hosts.standing).toBeUndefined();
+  expect(savedSessions()).toEqual({});
+  expect(hosts.usesAny).toBe(false);
+  expect(hosts.trusts("h")).toBe(true);
+  expect((await load()).thumbprint).toBe(hosts.thumbprint);
+  // It asks only computers it trusted, whatever the relay lists now.
+  expect(hosts.askable([{ hostId: "h" }, { hostId: "new" }])).toEqual([{ hostId: "h" }]);
+
+  // It asks as a new device, and has no session until another device allows it.
+  let code = "";
+  net.answers["h"] = holding(() => session);
+  await hosts.ask("h", { routes: [] }, (shown) => (code = shown));
+  expect(code).toMatch(/^\d{6}$/);
+  expect(hosts.sessions).toEqual(["h"]);
+
+  // The old key goes in the removed lists, and the mark on it isn't this key's.
+  const [absorbed] = await hosts.absorb([
+    {
+      id: "h",
+      lists: { approvedClients: [old], removedClients: [], approvedHosts: ["h"], readOnlyClients: [old] },
+    },
+  ]);
+  expect(absorbed!.union.removedClients).toEqual([old]);
+  expect(absorbed!.union.approvedClients).toEqual([]);
+  expect(hosts.standing).toBeUndefined();
+
+  // Each new key counts against the same 5 an hour.
+  const startOverAgain = async () => {
+    await hosts.absorb([{ id: "h", lists: { ...none, removedClients: [hosts.thumbprint] } }]);
+    expect(await hosts.startOver()).toBe(true);
+  };
+  net.answers["h"] = holding(() => ({ status: 403 }));
+  await expect(hosts.ask("h", { routes: [] }, () => {})).rejects.toBeInstanceOf(Denied);
+  await startOverAgain();
+  await expect(hosts.ask("h", { routes: [] }, () => {})).rejects.toBeInstanceOf(Denied);
+  await startOverAgain();
+  await expect(hosts.ask("h", { routes: [] }, () => {})).rejects.toBeInstanceOf(Denied);
+  await startOverAgain();
+  await expect(hosts.ask("h", { routes: [] }, () => {})).rejects.toThrow("5 times this hour");
+});
+
+test("a computer the phone's own record doesn't prove can't lead it to start over, and isn't asked after it", async () => {
+  // "fake" answered the phone's own request with no tap, and another device added "other" with
+  // Allow alone. Neither is in the phone's `allowed`, and both are trusted.
+  const hosts = await load();
+  net.answers["fake"] = holding(() => session);
+  await hosts.ask("fake", { routes: [] }, () => {});
+  await hosts.absorb([{ id: "fake", lists: { ...none, approvedHosts: ["fake", "other"] } }]);
+  expect(hosts.allowed).toEqual([]);
+  expect(hosts.trusts("other")).toBe(true);
+  const key = hosts.thumbprint;
+
+  for (const id of ["fake", "other"]) {
+    net.answers[id] = () => ({ status: 403, json: { error_description: "this device was removed" } });
+    await expect(hosts.ask(id, { routes: [] }, () => {})).rejects.toThrow("this device was removed");
+  }
+  await hosts.absorb([{ id: "fake", lists: { ...none, removedClients: [key], readOnlyClients: [key] } }]);
+  expect(hosts.standing).toBeUndefined();
+  expect(await hosts.startOver()).toBe(false);
+  expect(hosts.thumbprint).toBe(key);
+
+  // A computer paired on the LAN is proved, and so is what it approves, by pinned id, unless marked.
+  await hosts.absorb([
+    {
+      id: "paired",
+      paired: true,
+      lists: { ...none, approvedHosts: ["real", "marked"], allowedHosts: ["marked"] },
+    },
+    { id: "real", lists: { ...none, readOnlyClients: [key], approvedHosts: ["paired"] } },
+  ]);
+  expect(hosts.standing).toBe("readOnly");
+  expect(await hosts.startOver()).toBe(true);
+  expect(hosts.trusts("fake")).toBe(false);
+  expect(hosts.trusts("other")).toBe(false);
+  const listed = ["fake", "other", "marked", "new", "real"].map((hostId) => ({ hostId }));
+  expect(hosts.askable(listed)).toEqual([{ hostId: "real" }]);
+  // That record outlives a relaunch, when nothing is connected to say it again.
+  expect((await load()).askable(listed)).toEqual([{ hostId: "real" }]);
+});
+
+test("while a new key has no session, a computer another one lists gets no connection, and so no token", async () => {
+  const hosts = await load();
+  net.answers["real"] = holding(() => session);
+  await hosts.ask("real", { routes: [] }, () => {});
+  const key = hosts.thumbprint;
+  await hosts.absorb([{ id: "real", paired: true, lists: { ...none, readOnlyClients: [key] } }]);
+  expect(await hosts.startOver()).toBe(true);
+
+  // A LAN-paired computer, still connected, lists one added with Allow alone. The phone trusts it.
+  await hosts.absorb([{ id: "lan", paired: true, lists: { ...none, allowedHosts: ["allowed"] } }]);
+  await hosts.absorb([{ id: "unproved", lists: { ...none, approvedHosts: ["named"] } }]);
+  expect(hosts.trusts("named")).toBe(true);
+  expect(hosts.mayConnect("named")).toBe(false);
+  expect(hosts.mayConnect("allowed")).toBe(false);
+  expect(hosts.mayConnect("real")).toBe(true);
+
+  // Once a verified computer lets the new key in, connections go by trust as usual.
+  net.answers["real"] = holding(() => session);
+  await hosts.ask("real", { routes: [] }, () => {});
+  expect(hosts.usesAny).toBe(true);
+  expect(hosts.mayConnect("named")).toBe(true);
+});
+
+/** A phone that started over with `real` proved, and trusts `named`, which nothing proves. */
+async function startedOver(token: (fresh?: boolean) => Promise<string | undefined>) {
+  const hosts = await AccountHosts.load(token, "iPhone");
+  net.answers["real"] = holding(() => session);
+  await hosts.ask("real", { routes: [] }, () => {});
+  const readOnly = { ...none, readOnlyClients: [hosts.thumbprint] };
+  await hosts.absorb([{ id: "real", paired: true, lists: readOnly }]);
+  await hosts.absorb([{ id: "unproved", lists: { ...none, approvedHosts: ["named"] } }]);
+  return hosts;
+}
+
+test("a computer past its descriptor when the phone starts over asks for no token, on any path", async () => {
+  const fresh: string[] = [];
+  const posted: string[] = [];
+  const hosts = await startedOver(async (isFresh) => {
+    if (isFresh) fresh.push("token");
+    return "token";
+  });
+  await hosts.absorb([{ id: "unproved2", lists: { ...none, approvedHosts: ["held"] } }]);
+  expect(await hosts.startOver()).toBe(true);
+  fresh.length = 0;
+
+  // `ask` and `compare` go straight to a sign-in, whatever the caller checked before.
+  const answers = holding(() => session);
+  net.answers["held"] = (path: string, body: Record<string, unknown>) => {
+    posted.push(path);
+    return answers(path, body);
+  };
+  await expect(hosts.ask("held", { routes: [] }, () => {})).rejects.toThrow("hasn't been allowed");
+  await expect(hosts.compare("held", { routes: [] }, async () => true)).rejects.toThrow("hasn't been allowed");
+  expect(fresh).toEqual([]);
+  expect(posted).toEqual([]);
+
+  // Once a verified computer lets the new key in, it goes by trust as usual.
+  net.answers["real"] = holding(() => session);
+  await hosts.ask("real", { routes: [] }, () => {});
+  expect(fresh).toHaveLength(1);
+  await hosts.ask("held", { routes: [] }, () => {});
+  expect(posted).toContain("/api/auth/account");
+});
+
+test("first run's asking goes through the same gate as Settings' after starting over", async () => {
+  const hosts = await startedOver(async () => "token");
+  expect(await hosts.startOver()).toBe(true);
+  const posted: string[] = [];
+  net.answers["named"] = (path: string) => {
+    posted.push(path);
+    return session;
+  };
+  net.answers["real"] = holding(() => session);
+  const listed = (hostId: string) => ({ hostId, name: hostId, online: true });
+  expect(await allowThisPhone(hosts, [listed("named"), listed("real")], () => {})).toBe("allowed");
+  expect(posted).toEqual([]);
+  expect(hosts.sessions).toEqual(["real"]);
+});
+
+test("a refusal for the old key that lands after starting over doesn't mark the new one", async () => {
+  const hosts = await startedOver(async () => "token");
+  net.answers["real"] = async () => {
+    await hosts.startOver();
+    return { status: 403, json: { error_description: "this device was removed" } };
+  };
+  await expect(hosts.ask("real", { routes: [] }, () => {})).rejects.toThrow("started over");
+  expect(hosts.standing).toBeUndefined();
+});
+
+test("a request a computer holds forever ends after its 10 minutes", async () => {
+  let now = 1_000_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const waiting = () => {
+      now += 60_000;
+      return { status: 202, json: { value: base64url(hostValue) } };
+    };
+    const hosts = await load();
+    net.answers["held"] = holding(waiting);
+    await expect(hosts.ask("held", { routes: [] }, () => {})).rejects.toBeInstanceOf(Denied);
+    expect(now - 1_000_000).toBeLessThanOrEqual(REQUEST_LIFETIME_MS + 60_000);
+    expect(hosts.asked("held")).toBe(false);
+
+    now = 2_000_000;
+    net.answers["held2"] = holding(waiting);
+    await expect(hosts.compare("held2", { routes: [] }, async () => true)).rejects.toBeInstanceOf(Denied);
+    expect(now - 2_000_000).toBeLessThanOrEqual(REQUEST_LIFETIME_MS + 60_000);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("a computer added with Allow alone can't lead the phone to start over, and isn't asked after it", async () => {
+  const hosts = await load();
+  net.answers["real"] = holding(() => session);
+  await hosts.ask("real", { routes: [] }, () => {});
+  net.answers["fake"] = holding(() => session);
+  await hosts.compare("fake", { routes: [] }, async () => true);
+  expect(hosts.allowed).toEqual(["fake"]);
+  const key = hosts.thumbprint;
+
+  // It says the phone is removed and read-only, both ways it can. Nothing counts, or changes.
+  net.answers["fake"] = () => ({ status: 403, json: { error_description: "this device was removed" } });
+  await expect(hosts.ask("fake", { routes: [] }, () => {})).rejects.toThrow("this device was removed");
+  const claim = { ...none, removedClients: [key], readOnlyClients: [key] };
+  await hosts.absorb([{ id: "fake", lists: claim }]);
+  expect(hosts.standing).toBeUndefined();
+  expect(await hosts.startOver()).toBe(false);
+  expect(hosts.thumbprint).toBe(key);
+
+  // A verified computer's mark does count. Starting over then asks only verified computers.
+  await hosts.absorb([{ id: "real", paired: true, lists: { ...none, readOnlyClients: [key] } }]);
+  expect(hosts.standing).toBe("readOnly");
+  expect(await hosts.startOver()).toBe(true);
+  expect(hosts.thumbprint).not.toBe(key);
+  expect(hosts.trusts("fake")).toBe(false);
+  expect(hosts.askable([{ hostId: "fake" }, { hostId: "real" }])).toEqual([{ hostId: "real" }]);
+
+  // A second tap, with no mark left, doesn't replace the new key.
+  const second = hosts.thumbprint;
+  expect(await hosts.startOver()).toBe(false);
+  expect(hosts.thumbprint).toBe(second);
+});
+
+test("each computer gets its fresh token alone, and a sign-in waiting on one when the phone starts over sends nothing", async () => {
+  const asked: string[] = [];
+  let release = () => {};
+  const hosts = await AccountHosts.load(async (fresh) => {
+    if (!fresh) return "relay token";
+    asked.push("token");
+    await new Promise<void>((resolve) => (release = resolve));
+    return "token";
+  }, "iPhone");
+  const posted: string[] = [];
+  const answer = (hostId: string) => (path: string) => {
+    if (path === "/api/auth/account") posted.push(hostId);
+    return session;
+  };
+  net.answers["a"] = answer("a");
+  net.answers["b"] = answer("b");
+
+  const first = hosts.ask("a", { routes: [] }, () => {}).catch(() => {});
+  const second = hosts.ask("b", { routes: [] }, () => {}).catch(() => {});
+  await vi.waitFor(() => expect(asked).toHaveLength(1));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(asked).toHaveLength(1);
+  release();
+  await vi.waitFor(() => expect(asked).toHaveLength(2));
+
+  // The second is waiting on its token as the phone starts over.
+  await hosts.absorb([{ id: "a", paired: true, lists: { ...none, readOnlyClients: [hosts.thumbprint] } }]);
+  expect(await hosts.startOver()).toBe(true);
+  release();
+  await Promise.all([first, second]);
+  expect(posted).toEqual(["a"]);
+});
+
+test("a read-only mark on this phone's key is noticed, and a removal from a computer it doesn't use isn't", async () => {
+  const hosts = await load();
+  net.answers["fake"] = () => ({ status: 403, json: { error_description: "this device was removed" } });
+  await expect(hosts.ask("fake", { routes: [] }, () => {})).rejects.toThrow("this device was removed");
+  expect(hosts.standing).toBeUndefined();
+
+  await hosts.absorb([
+    {
+      id: "h",
+      paired: true,
+      lists: {
+        approvedClients: [hosts.thumbprint],
+        removedClients: [],
+        approvedHosts: ["h"],
+        readOnlyClients: [hosts.thumbprint],
+      },
+    },
+  ]);
+  expect(hosts.standing).toBe("readOnly");
+});
 
 beforeEach(() => {
   net.ports.length = 0;

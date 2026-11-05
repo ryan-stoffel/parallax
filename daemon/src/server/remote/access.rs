@@ -326,6 +326,20 @@ impl Access {
         }
     }
 
+    /// Marks the waiting request approved if its key is in `approved`, as when another computer's
+    /// Allow reaches here through `access/merge`. That key would get a session by signing in now,
+    /// so this grants nothing new, and the request ends without a prompt of its own.
+    fn approve_listed(&self, approved: &BTreeSet<String>) {
+        if let Some(pending) = self
+            .live()
+            .pending
+            .as_mut()
+            .filter(|p| approved.contains(&p.thumbprint))
+        {
+            pending.approved = true;
+        }
+    }
+
     /// Counts a setup code's SPAKE2 run: false when [`super::MAX_SETUP_RUNS`] started within the
     /// hour.
     pub(super) fn setup_run(&self) -> bool {
@@ -524,6 +538,7 @@ async fn update(
         daemon.remote.revoke(&session);
     }
     daemon.remote.access.drop_removed(&lists.removed_clients);
+    daemon.remote.access.approve_listed(&lists.approved_clients);
     daemon.remote.access.changed();
     Ok(lists)
 }
@@ -532,7 +547,7 @@ async fn update(
 fn approve_key(lists: &mut Lists, thumbprint: String) -> Result<(), ErrorObject> {
     if lists.removed_clients.contains(&thumbprint) {
         return Err(ErrorObject::invalid_params(
-            "That device was removed. It can sign in again with a new key.",
+            "That device was removed. It can start over with a new key in its Settings.",
         ));
     }
     lists.approved_clients.insert(thumbprint);
@@ -853,7 +868,7 @@ pub(super) async fn sign_in(
         return (500, json!({ "error": "server_error" }));
     };
     if lists.removed_clients.contains(&proven.thumbprint) {
-        return removed("this device was removed");
+        return removed(remote::DEVICE_REMOVED);
     }
     if lists.approved_clients.contains(&proven.thumbprint) {
         info!(name = %clean_name(&body.client_label), "an approved device signed in");
