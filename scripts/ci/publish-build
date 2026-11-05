@@ -9,7 +9,10 @@
 # none).
 set -euo pipefail
 
+retry=$(cd "$(dirname "$0")" && pwd)/gh-retry
 cd "$(dirname "$0")/../../apps/desktop/release"
+
+gh() { "$retry" "$@"; }
 
 write() {
   if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
@@ -45,10 +48,10 @@ for f in "${files[@]}" ${metadata[@]+"${metadata[@]}"}; do grep -qxF -- "$f" <<<
 if [ "$missing" = 0 ]; then
   echo "This build's files are already on $TAG."
 else
-  # The metadata goes last, so an updater never finds it before the files it names. A failed upload
-  # fails the job and leaves the metadata off; re-running the job replaces what did arrive.
-  write release upload "$TAG" "${files[@]}" --clobber
-  if [ ${#metadata[@]} -gt 0 ]; then write release upload "$TAG" "${metadata[@]}" --clobber; fi
+  # One file per call, so a retry repeats only the file that failed. The metadata goes last, so an
+  # updater never finds it before the files it names. An upload that keeps failing fails the job and
+  # leaves the metadata off; re-running the job replaces what did arrive.
+  for f in "${files[@]}" ${metadata[@]+"${metadata[@]}"}; do write release upload "$TAG" "$f" --clobber; done
 fi
 
 # Publishing creates the tag at the commit plan named. Every build does it once its own files are
