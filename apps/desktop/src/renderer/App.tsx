@@ -742,17 +742,12 @@ export function App() {
       : undefined;
   // Thread details, docked at the thread's right, or floating over it when the row is too narrow.
   // Shown or hidden per thread, which its children and parent share, so opening one from
-  // Lineage keeps it open. A split shares one, for the focused thread, so moving focus doesn't
-  // resize the tiles under the pointer.
+  // Lineage keeps it open. It docks in the focused tile, so `share` is that tile's part of the row.
   const details = useThreadDetails(
-    tiled
-      ? "split"
-      : openThread
-        ? JSON.stringify([host.id, "thread", rootOf(threads.state, openThread).id])
-        : panelKey,
-    workspace.maximized
-      ? 1
-      : Math.min(...workspace.panes.map((pane) => rectOf(pane.cells, workspace.cuts).width)),
+    openThread
+      ? JSON.stringify([host.id, "thread", rootOf(threads.state, openThread).id])
+      : panelKey,
+    workspace.maximized ? 1 : rectOf(focusedPane(workspace).cells, workspace.cuts).width,
   );
   // Each open thread's agent's own subagents, as its chat reports them (PLX-382).
   const [native, setNative] = useState<Readonly<Record<string, NativeSubagent[]>>>({});
@@ -1332,8 +1327,8 @@ export function App() {
     openPr(url);
     details.close();
   };
-  // Thread details for the open thread, at the row's end in every mode, so changing mode keeps its
-  // dialogs and work under way.
+  // Thread details for the open thread, inside its tile's card in every mode, so it's part of the
+  // thread and changing mode keeps its dialogs and work under way.
   const threadDetails = (mode: ComponentProps<typeof ThreadDetails>["mode"]) => (
     <ThreadDetails
       key={panelKey}
@@ -1856,6 +1851,7 @@ export function App() {
                             placeView(state, drop.hostId, view, paneId, before),
                           );
                         }}
+                        details={threadDetails(group.project ? "hidden" : details.mode)}
                         // A tab anywhere, or a sidebar thread not over a composer, which takes it to
                         // attach (PLX-378).
                         drop={{
@@ -2009,7 +2005,6 @@ export function App() {
                       />
                     </div>
                   </div>
-                  {threadDetails(group.project ? "hidden" : details.mode)}
                 </div>
               </>
             )}

@@ -49,10 +49,10 @@ const MIN_THREAD_WIDTH = 400;
 
 /**
  * Whether docking Thread details in a row `width` wide would leave a thread too little room, so
- * the card floats over the thread instead. `share` is the narrowest tile's part of the row.
+ * the card floats over the thread instead. `share` is the part of the row its tile has.
  */
 export const tooNarrowToDock = (width: number, share = 1) =>
-  width > 0 && (width - DOCKED_WIDTH) * share < MIN_THREAD_WIDTH;
+  width > 0 && width * share - DOCKED_WIDTH < MIN_THREAD_WIDTH;
 
 type ThreadDetailsMode = "docked" | "floating" | "hidden";
 
@@ -71,7 +71,7 @@ function readOpen(): string[] {
  * may unmount and return (behind the Pull requests page) and is measured again each time. Each
  * thread keeps its own choice, hidden until shown there. Shown, it docks beside the thread, which
  * centers its text and composer in what's left, and floats over the thread only when docking
- * wouldn't leave it enough room. `share` is the narrowest tile's part of the row.
+ * wouldn't leave it enough room. `share` is the part of the row its tile has.
  */
 export function useThreadDetails(key: string, share = 1) {
   const [element, ref] = useState<HTMLElement | null>(null);
@@ -119,8 +119,8 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 }
 
 /**
- * Thread details, docked at the thread's right, left of the side panel, or floating over the
- * thread: a stack of cards, after the redesign in `pingdotgg/t3code`'s `maria/redesign/*`. The
+ * Thread details, inside the thread's card, docked at its right or floating over the thread: a
+ * stack of cards, after the redesign in `pingdotgg/t3code`'s `maria/redesign/*`. The
  * workspace card comes first, with the thread's computer and folder, Open in, repository actions,
  * and its Project. The others, Git, pull requests, context, and lineage, can be collapsed and
  * reordered. Its menu, on a right-click anywhere or the sliders button, shows and hides each item.
@@ -243,13 +243,12 @@ export function ThreadDetails({
       aria-label="Thread details"
       hidden={mode === "hidden"}
       data-mode={mode}
-      // Docked, it takes room in the thread's row; floating, it hovers over the row's right, below
-      // the tabs' row and short of the composer. Either way it's opaque cards sized to their rows, scrolling past
+      // Inside the thread's card, below its tabs' row. Docked, it takes room beside the thread;
+      // floating, it hovers over the thread's right, short of the composer. Either way it's opaque cards sized to their rows, scrolling past
       // their room.
       className={`flex w-72 flex-col py-2 pr-3 ${
         mode === "floating"
-          ? // 43px clears the tabs' row and its buttons (SplitTiles' gutter and strip height).
-            "pointer-events-none absolute top-[43px] right-0 bottom-36 z-30 max-w-[calc(100%-1rem)]"
+          ? "pointer-events-none absolute top-0 right-0 bottom-36 z-30 max-w-[calc(100%-1rem)]"
           : "shrink-0"
       }`}
     >

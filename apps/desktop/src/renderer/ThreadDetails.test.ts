@@ -10,7 +10,7 @@ test("docks while a thread keeps enough room, and floats only when it can't", ()
   expect(tooNarrowToDock(0)).toBe(false);
 });
 
-test("in a split, the narrowest tile has to keep that room", () => {
-  expect(tooNarrowToDock(1088, 0.5)).toBe(false);
-  expect(tooNarrowToDock(1087, 0.5)).toBe(true);
+test("in a split, the tile it docks in has to keep that room", () => {
+  expect(tooNarrowToDock(1376, 0.5)).toBe(false);
+  expect(tooNarrowToDock(1375, 0.5)).toBe(true);
 });
