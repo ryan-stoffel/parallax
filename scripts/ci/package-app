@@ -21,14 +21,18 @@ set -x
 
 version=${PLX_VERSION:-0.0.0-local}
 
-# A nightly build is named "Parallax (Nightly)" and has its own icon on macOS and Windows
-# (PLX-286, PLX-956). Its appId stays the standard build's, so installed nightlies still take its
-# updates: Squirrel.Mac requires the same bundle id. Linux keeps "Parallax": electron-builder
-# refuses an AppImage whose name has parentheses (PLX-575), and the app sets its shown name itself.
+# A nightly build is named "Parallax (Nightly)" and has its own icon (PLX-286, PLX-956, PLX-1445).
+# Its appId stays the standard build's, so installed nightlies still take its updates:
+# Squirrel.Mac requires the same bundle id. Linux keeps "Parallax": electron-builder refuses an
+# AppImage whose name has parentheses (PLX-575), and the app sets its shown name itself.
 set --
 case $version in
-  *-nightly*) [ "$(uname -s)" = Linux ] || set -- "-c.productName=Parallax (Nightly)" \
-    -c.mac.icon=../../design/icon/icns/Parallax-nightly.icns -c.win.icon=../../design/icon/ico/Parallax-nightly.ico ;;
+  *-nightly*) if [ "$(uname -s)" = Linux ]; then
+      set -- -c.linux.icon=../../design/icon/png/Parallax-nightly
+    else
+      set -- "-c.productName=Parallax (Nightly)" \
+        -c.mac.icon=../../design/icon/icns/Parallax-nightly.icns -c.win.icon=../../design/icon/ico/Parallax-nightly.ico
+    fi ;;
 esac
 
 # plxd is built for the runner's own arch. Linux ships the static musl build (0023).
