@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CommentTarget } from "../diffRows";
 import { icons } from "../icons";
 import { useSticky } from "../sticky";
-import { Button } from "../ui";
+import { Button, IconButton } from "../ui";
 import { suggestionBlock } from "./suggestions";
 
 /** What a comment box's lines are called. */
@@ -18,7 +18,7 @@ export function targetName(target: CommentTarget) {
  * The box for a new comment under a diff's lines. Its primary starts or adds to the pending review,
  * and with no pending review it can also post the comment alone, as GitHub's page offers. Its text
  * outlives the row, under `draftKey`. `onSend` resolves to whether it worked: the text stays until
- * it does. With `lines`, the new-side text it's on, Suggest inserts a suggestion block to edit.
+ * it does. With `lines`, the new-side text it's on, its Suggest icon inserts a suggestion block to edit.
  */
 export function CommentBox({
   target,
@@ -69,7 +69,7 @@ export function CommentBox({
   return (
     <form
       aria-label={`Comment on ${targetName(target)}`}
-      className="overflow-hidden rounded-xl border border-border bg-surface font-sans focus-within:border-faint-foreground/60"
+      className="overflow-hidden rounded-xl border border-border bg-surface font-sans shadow-xs focus-within:border-faint-foreground/60"
       onSubmit={(e) => {
         e.preventDefault();
         void send("review");
@@ -89,7 +89,14 @@ export function CommentBox({
         }}
         className="field-sizing-content block max-h-64 min-h-16 w-full resize-none bg-transparent px-3 py-1.5 text-body placeholder:text-faint-foreground focus-visible:outline-none"
       />
-      <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border px-2 py-2">
+      <div className="flex flex-wrap items-center justify-end gap-1.5 px-2 pb-2">
+        {lines && (
+          <span className="mr-auto">
+            <IconButton size="md" label="Suggest a change" disabled={!!sending} onClick={suggest}>
+              <icons.suggest aria-hidden />
+            </IconButton>
+          </span>
+        )}
         <Button
           size="sm"
           disabled={!!sending}
@@ -100,13 +107,6 @@ export function CommentBox({
         >
           Cancel
         </Button>
-        {lines && (
-          <Button size="sm" disabled={!!sending} onClick={suggest}>
-            <icons.suggest aria-hidden />
-            Suggest
-          </Button>
-        )}
-        <span className="flex-1" />
         {!pending && (
           <Button
             size="sm"
