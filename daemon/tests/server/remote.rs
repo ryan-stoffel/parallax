@@ -147,8 +147,13 @@ impl App {
 
     /// Whether the host closed the connection within `PATIENCE`.
     pub(crate) async fn closes(&mut self) -> bool {
+        self.closes_within(PATIENCE).await
+    }
+
+    /// Whether the host closed the connection within `limit`.
+    pub(crate) async fn closes_within(&mut self, limit: Duration) -> bool {
         matches!(
-            timeout(PATIENCE, self.lines.next_line()).await,
+            timeout(limit, self.lines.next_line()).await,
             Ok(Ok(None) | Err(_))
         )
     }
