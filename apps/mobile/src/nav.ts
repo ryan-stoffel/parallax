@@ -12,6 +12,8 @@ export type Screens = {
   ThreadDetails: { hostId: string; runId: string };
   /** A pull request, pushed over its thread, or inside the Pull requests sheet. */
   PullRequest: { hostId: string; runId: string; url: string };
+  /** An orchestrator's inbox, as a sheet over its chat. */
+  OrchestratorInbox: { hostId: string; orchestrator: string };
   /** The repository, then computer, picker for a new thread, as a sheet. */
   NewThread: undefined;
   /** A new thread's page, the app's home: with no params, where the last new thread started. */

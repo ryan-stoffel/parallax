@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import type { SubscribeParams } from "../preload/bridge";
 import type { InboxItem, Question } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 
@@ -58,7 +59,12 @@ export function useInbox(
       setItems(list.result.items);
       void loadQuestions();
       // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
-      const since = { after: list.result.seq, orchestrator, shell: true, logId: list.logId };
+      const since: SubscribeParams = {
+        after: list.result.seq,
+        project: orchestrator,
+        shell: true,
+        logId: list.logId,
+      };
       unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();

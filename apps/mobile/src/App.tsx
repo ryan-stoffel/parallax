@@ -38,6 +38,7 @@ import { PullRequestList, PullRequestScreen } from "./PullRequests";
 import { alertFor, phaseOf, type Phase } from "./alerts";
 import { notify, onOpened, registerWithRelay } from "./push";
 import { LightboxHost } from "./Lightbox";
+import { OrchestratorInboxScreen } from "./OrchestratorInbox";
 import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
 import { AboutScreen, AddComputerScreen, ComputerScreen, phonePages, PhoneSettingsScreen, SettingsScreen } from "./Settings";
@@ -454,6 +455,7 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
             <Stack.Screen name="Search" component={SearchScreen} options={{ ...sheet(c), headerShown: false }} />
             {/* The sheet's grabber is its own; each page's header is its stack's. */}
             <Stack.Screen name="Settings" component={SettingsSheet} options={{ ...sheet(c), headerShown: false }} />
+            <Stack.Screen name="OrchestratorInbox" component={OrchestratorInboxScreen} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen name="PullRequests" component={PullRequestsSheet} options={{ ...sheet(c), headerShown: false }} />
           </Stack.Navigator>
         </Shell>

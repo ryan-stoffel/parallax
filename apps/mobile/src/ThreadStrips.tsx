@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Bot,
+  Inbox,
   Check,
   Circle,
   CornerUpRight,
@@ -18,6 +19,7 @@ import {
   X,
 } from "lucide-react-native";
 import { useRef, useState, type ReactNode } from "react";
+import { useIsFocused } from "@react-navigation/native";
 import { Alert, LayoutAnimation, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
 
 import type {
@@ -26,6 +28,7 @@ import type {
   OrchestrationCommand,
   QueuedMessage,
 } from "../../desktop/src/protocol/generated/protocol";
+import { useInbox } from "../../desktop/src/renderer/Inbox";
 import { latestPlan } from "../../desktop/src/renderer/plans";
 import { inputText, toolKind } from "../../desktop/src/renderer/steps";
 import {
@@ -466,6 +469,7 @@ export function ThreadStrips({
   subagents,
   background,
   watching,
+  inbox,
   queue,
   held,
   running,
@@ -479,6 +483,8 @@ export function ThreadStrips({
   subagents?: Readonly<Record<string, Subagent>>;
   background: AgentBackgroundTask[];
   watching: string[];
+  /** The orchestrator whose chat this is, on a plxd with `inbox`, and how to open its inbox. */
+  inbox?: { orchestrator: string; open: () => void };
   queue: QueuedMessage[];
   held: boolean;
   /** Whether the run is going. */
@@ -491,6 +497,10 @@ export function ThreadStrips({
 }) {
   const c = useColors();
   const live = running && !stalled;
+  // Only while the thread is in front: `inbox/seen` sends no event, so coming back from the inbox
+  // sheet, which marks items seen, lists them again for the count.
+  const focused = useIsFocused();
+  const { items: inboxItems } = useInbox(hostId, inbox?.orchestrator ?? "", connected && !!inbox && focused, false);
   const secret = waitingSecrets(items)[0];
   const tabs: Tab[] = [];
 
@@ -611,6 +621,21 @@ export function ThreadStrips({
       ),
       panel: <WaitingList hostId={hostId} runId={runId} background={background} watching={watching} items={waiting.items} />,
     });
+  }
+
+  // An orchestrator's inbox, which its own sheet opens.
+  if (inbox) {
+    const unread = inboxItems.filter((i) => !i.seenAt).length;
+    const tab = (
+      <>
+        <Icon icon={Inbox} size={14} color={c.mutedForeground} />
+        <T muted style={text}>
+          Inbox
+        </T>
+        {unread > 0 && <Count n={unread} />}
+      </>
+    );
+    tabs.push({ key: "inbox", label: `Inbox: ${unread} unread`, onPress: inbox.open, full: tab, compact: tab });
   }
 
   const goal = live ? pursuedGoal(items) : undefined;
