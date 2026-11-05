@@ -9,6 +9,10 @@ export interface DiffLine {
   new?: number;
   /** The part of `text` that changed, from and to, when its pair on the other side is similar. */
   mark?: [number, number];
+  /** For a hunk's `@@` header: how many unchanged lines come before the hunk. */
+  hidden?: number;
+  /** For a hunk's `@@` header: the enclosing function or heading git names after it. */
+  context?: string;
 }
 
 /** One file of a unified diff. */
@@ -47,9 +51,15 @@ export function parseDiff(diff: string): DiffFile[] {
       continue;
     } else if (line.startsWith("@@")) {
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+      const before = file.lines.length ? now : 1;
       old = Number(m?.[1] ?? 0);
       now = Number(m?.[2] ?? 0);
-      file.lines.push({ op: "@", text: line });
+      file.lines.push({
+        op: "@",
+        text: line,
+        hidden: Math.max(0, now - before),
+        context: /^@@[^@]*@@ ?(.*)$/.exec(line)?.[1] || undefined,
+      });
     } else if (file.lines.length === 0) {
       // The file's header, before its first hunk.
       // git quotes a path with special characters, and escapes them.

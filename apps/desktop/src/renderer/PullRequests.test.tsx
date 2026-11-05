@@ -266,7 +266,7 @@ test("parseDiff numbers each side, and keeps renames and binary files", () => {
       removed: 1,
       binary: false,
       lines: [
-        { op: "@", text: "@@ -10,3 +10,3 @@ fn main" },
+        { op: "@", text: "@@ -10,3 +10,3 @@ fn main", hidden: 9, context: "fn main" },
         { op: " ", text: "keep", old: 10, new: 10 },
         { op: "-", text: "-- gone", old: 11 },
         { op: "+", text: "++ here", new: 11 },
@@ -430,8 +430,11 @@ test("Timeline puts unresolved threads first, and replies, resolves, and comment
   const thread = document.querySelector('[aria-label="Thread on README.md"]')!;
   const inThread = (name: string) =>
     [...thread.querySelectorAll("button")].find((b) => b.textContent === name)!;
-  type(thread.querySelector("textarea")!, "Node 24");
   await act(async () => inThread("Reply").click());
+  type(thread.querySelector("textarea")!, "Node 24");
+  await act(async () =>
+    [...thread.querySelectorAll("button")].findLast((b) => b.textContent === "Reply")!.click(),
+  );
   await settle();
   await act(async () => inThread("Resolve").click());
   await settle();

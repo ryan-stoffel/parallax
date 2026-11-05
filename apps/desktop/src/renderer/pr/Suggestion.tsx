@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { DiffLineView } from "../ChangesDiff";
+import { languageOf } from "../diffHighlight";
 import { icons } from "../icons";
 import { Button } from "../ui";
 import type { ThreadView } from "./model";
@@ -52,30 +53,33 @@ export function Suggestion({
   before,
   after,
   start,
+  path,
   children,
 }: {
   before: string[];
   after: string[];
   start: number;
+  /** The file it's in, for its colors. */
+  path?: string;
   /** What can be done with it, under its lines. */
   children?: ReactNode;
 }) {
   return (
     <figure
       aria-label="Suggested change"
-      className="overflow-hidden rounded-lg border border-border bg-code"
+      className="overflow-hidden rounded-lg border border-border"
     >
-      <figcaption className="flex h-8 items-center gap-1.5 border-b border-border px-2.5 text-meta text-muted-foreground">
+      <figcaption className="flex h-7 items-center gap-1.5 border-b border-border px-2 text-meta text-muted-foreground">
         <icons.suggest aria-hidden className="size-3.5" />
         {after.length ? "Suggested change" : "Suggests deleting"}
       </figcaption>
       <div className="font-mono text-meta leading-5">
         {suggestionLines(before, after, start).map((line, i) => (
-          <DiffLineView key={i} line={line} />
+          <DiffLineView key={i} line={line} lang={path ? languageOf(path) : undefined} />
         ))}
       </div>
       {children && (
-        <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border px-2 py-1.5">
+        <div className="flex flex-wrap items-center justify-end gap-1 border-t border-border p-1">
           {children}
         </div>
       )}

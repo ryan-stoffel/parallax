@@ -443,47 +443,30 @@ export function PullRequestView({
     { id: "code", label: "Code", count: <Count n={pr.changedFiles} /> },
   ];
 
+  // Code wants the room: its header is one line.
+  const condensed = tab === "code";
   return (
     <div className="@container flex min-h-0 flex-1 flex-col" onClick={(e) => showShot(e.target)}>
-      <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
-        <div className="mx-auto max-w-3xl">
+      <header className="shrink-0 border-b border-border px-3 pt-2">
+        <div className="flex items-start gap-2">
+          {condensed && <StateBadge pr={pr} />}
           <h2
-            className="line-clamp-3 text-heading leading-snug font-semibold wrap-break-word"
+            className={`min-w-0 flex-1 wrap-break-word ${condensed ? "truncate py-0.5 text-body font-medium" : "line-clamp-2 py-0.5 text-reading leading-snug font-semibold"}`}
             title={pr.title}
           >
             {pr.title}{" "}
             <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
           </h2>
-          <div className="mt-2 flex min-w-0 items-center gap-2 text-body">
-            <Avatar login={pr.author} />
-            <span className="shrink-0 font-medium">{pr.author}</span>
-            {pr.createdAt && (
-              <span className="shrink-0 text-meta text-muted-foreground">{ago(pr.createdAt)}</span>
-            )}
-            <span className="ml-auto flex min-w-0 justify-end">
-              <BranchChips
-                head={pr.headBranch}
-                base={pr.baseBranch}
-                issue={baseIssue(pr, status)}
-              />
-            </span>
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            <StateBadge pr={pr} />
-            <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
-            <span className="flex-1" />
-            <Button
-              size="sm"
-              variant="outline"
-              aria-label={`Open ${pr.repo}#${pr.number} on GitHub`}
-              title={`Open ${pr.repo}#${pr.number} on GitHub`}
-              onClick={() => openOnGithub(pr.url)}
-              className="rounded-full pr-2.5 pl-3"
-            >
-              Open in
-              <GitHubLogo className="size-4" />
-            </Button>
+          <div className="flex shrink-0 items-center">
             <IconButton
+              size="sm"
+              label={`Open ${pr.repo}#${pr.number} on GitHub`}
+              onClick={() => openOnGithub(pr.url)}
+            >
+              <GitHubLogo className="size-4" />
+            </IconButton>
+            <IconButton
+              size="sm"
               label={linked?.at ? `Refresh (synced ${ago(linked.at)})` : "Refresh"}
               disabled={busy}
               onClick={refresh}
@@ -491,6 +474,7 @@ export function PullRequestView({
               <icons.refresh aria-hidden className={busy ? "animate-spin" : ""} />
             </IconButton>
             <IconButton
+              size="sm"
               label="Pull request actions"
               aria-haspopup="menu"
               popoverTarget={`${id}-menu`}
@@ -498,8 +482,26 @@ export function PullRequestView({
               <icons.more aria-hidden />
             </IconButton>
           </div>
-          <Tabs tab={tab} onTab={setTab} tabs={tabs} />
         </div>
+        {!condensed && (
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta text-muted-foreground">
+            <StateBadge pr={pr} />
+            <span className="flex shrink-0 items-center gap-1.5">
+              <Avatar login={pr.author} />
+              <span className="font-medium text-foreground">{pr.author}</span>
+              {pr.createdAt && <span>{ago(pr.createdAt)}</span>}
+            </span>
+            <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
+            <span className="flex min-w-0 basis-64 @lg:ml-auto @lg:justify-end">
+              <BranchChips
+                head={pr.headBranch}
+                base={pr.baseBranch}
+                issue={baseIssue(pr, status)}
+              />
+            </span>
+          </div>
+        )}
+        <Tabs tab={tab} onTab={setTab} tabs={tabs} />
       </header>
 
       {tab === "summary" && (
@@ -549,68 +551,71 @@ export function PullRequestView({
       )}
 
       {tab === "code" && (
-        <CodeTab commits={pr.commits ?? []}>
-          {!prs.diff ? (
-            <EmptyState
-              icon={<icons.diff aria-hidden />}
-              title="Files aren't available"
-              body="This host's plxd can't read a pull request's diff."
-            />
-          ) : !diff ? (
-            <DiffSkeleton />
-          ) : diff.error ? (
-            <EmptyState
-              icon={<icons.error aria-hidden />}
-              title="Couldn't read the diff"
-              body={<span role="alert">{diff.error}</span>}
-            />
-          ) : (
-            <ChangesDiff
-              diff={diff.result!.diff}
-              truncated={diff.result!.truncated}
-              viewed={viewedFiles.viewed}
-              changedSinceViewed={viewedFiles.changed}
-              onViewed={(path, on) => void viewedFiles.set(path, on)}
-              focus={codeFocus}
-              threads={threads}
-              renderThread={(t) => <ReviewThread bare {...threadProps(t)} />}
-              comments={comments}
-              actions={
-                write && (
-                  <>
-                    {suggestionBatch.size > 0 && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setCommitting([...suggestionBatch])}
+        <CodeTab commits={pr.commits ?? []} files={pr.changedFiles}>
+          {(leading) =>
+            !prs.diff ? (
+              <EmptyState
+                icon={<icons.diff aria-hidden />}
+                title="Files aren't available"
+                body="This host's plxd can't read a pull request's diff."
+              />
+            ) : !diff ? (
+              <DiffSkeleton />
+            ) : diff.error ? (
+              <EmptyState
+                icon={<icons.error aria-hidden />}
+                title="Couldn't read the diff"
+                body={<span role="alert">{diff.error}</span>}
+              />
+            ) : (
+              <ChangesDiff
+                diff={diff.result!.diff}
+                truncated={diff.result!.truncated}
+                leading={leading}
+                viewed={viewedFiles.viewed}
+                changedSinceViewed={viewedFiles.changed}
+                onViewed={(path, on) => void viewedFiles.set(path, on)}
+                focus={codeFocus}
+                threads={threads}
+                renderThread={(t) => <ReviewThread bare {...threadProps(t)} />}
+                comments={comments}
+                actions={
+                  write && (
+                    <>
+                      {suggestionBatch.size > 0 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setCommitting([...suggestionBatch])}
+                        >
+                          <icons.commit aria-hidden />
+                          Commit {suggestionBatch.size}{" "}
+                          {suggestionBatch.size === 1 ? "suggestion" : "suggestions"}
+                        </Button>
+                      )}
+                      <ReviewButton pending={pendingCount} popover={`${id}-review`} />
+                      <div
+                        id={`${id}-review`}
+                        popover="auto"
+                        aria-label="Your review"
+                        className={`${menuPanel("end")} w-[min(32rem,calc(100vw-2rem))] p-2`}
                       >
-                        <icons.commit aria-hidden />
-                        Commit {suggestionBatch.size}{" "}
-                        {suggestionBatch.size === 1 ? "suggestion" : "suggestions"}
-                      </Button>
-                    )}
-                    <ReviewButton pending={pendingCount} popover={`${id}-review`} />
-                    <div
-                      id={`${id}-review`}
-                      popover="auto"
-                      aria-label="Your review"
-                      className={`${menuPanel("end")} w-[min(32rem,90vw)] p-2`}
-                    >
-                      <ReviewForm
-                        write={write}
-                        open={open}
-                        draftKey={reviewDraftKey}
-                        reviewId={pendingReviewId}
-                        pending={pendingCount}
-                        onDone={() => document.getElementById(`${id}-review`)?.hidePopover()}
-                      />
-                    </div>
-                  </>
-                )
-              }
-              tree
-            />
-          )}
+                        <ReviewForm
+                          write={write}
+                          open={open}
+                          draftKey={reviewDraftKey}
+                          reviewId={pendingReviewId}
+                          pending={pendingCount}
+                          onDone={() => document.getElementById(`${id}-review`)?.hidePopover()}
+                        />
+                      </div>
+                    </>
+                  )
+                }
+                tree
+              />
+            )
+          }
         </CodeTab>
       )}
 
@@ -781,12 +786,12 @@ function Tabs({
         onTab(next.id);
         list.current?.querySelector<HTMLElement>(`[data-tab="${next.id}"]`)?.focus();
       }}
-      className="relative mt-3 grid auto-cols-fr grid-flow-col rounded-lg bg-hover p-0.5"
+      className="relative mt-1 flex gap-4"
     >
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0.5 bottom-0.5 left-0 rounded-md border border-border bg-surface shadow-xs transition-[translate,width] duration-base ease-in-out"
+          className="absolute bottom-0 left-0 h-0.5 rounded-full bg-foreground transition-[translate,width] duration-fast motion-reduce:transition-none"
           style={{ translate: `${thumb.left}px 0`, width: thumb.width }}
         />
       )}
@@ -799,7 +804,7 @@ function Tabs({
           aria-selected={tab === t.id}
           tabIndex={tab === t.id ? 0 : -1}
           onClick={() => onTab(t.id)}
-          className="relative flex h-8 items-center justify-center gap-1.5 rounded-md text-body text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-selected:font-medium aria-selected:text-foreground"
+          className="relative flex h-8 items-center gap-1.5 text-body text-muted-foreground transition-colors hover:text-foreground aria-selected:font-medium aria-selected:text-foreground"
         >
           {t.label}
           {t.count}
@@ -884,43 +889,53 @@ function Description({
 }
 
 /** The Code tab: the diff, and Files and Commits to switch between when it has commits. */
-function CodeTab({ commits, children }: { commits: PrCommit[]; children: ReactNode }) {
+function CodeTab({
+  commits,
+  files,
+  children,
+}: {
+  commits: PrCommit[];
+  files: number;
+  children: (leading: ReactNode) => ReactNode;
+}) {
   const [show, setShow] = useState<"files" | "commits">("files");
+  const leading = commits.length > 0 && (
+    <Segmented
+      label="Show"
+      value={show}
+      onChange={setShow}
+      options={[
+        { value: "files", name: `Files ${files}` },
+        { value: "commits", name: `Commits ${commits.length}` },
+      ]}
+    />
+  );
+  if (show === "files" || !commits.length)
+    return <div className="flex min-h-0 flex-1 flex-col">{children(leading)}</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {commits.length > 0 && (
-        <div className="flex shrink-0 px-4 pt-3 pb-1">
-          <Segmented
-            label="Show"
-            value={show}
-            onChange={setShow}
-            options={[
-              { value: "files", name: "Files" },
-              { value: "commits", name: `Commits ${commits.length}` },
-            ]}
-          />
-        </div>
-      )}
-      {show === "files" || !commits.length ? (
-        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
-      ) : (
-        <ol aria-label="Commits" className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-6">
-          {commits.map((c) => (
-            <li key={c.oid} className="flex items-start gap-2.5 rounded-lg px-2 py-2">
-              <icons.commit aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-body font-medium">{c.headline}</span>
-                <span className="mt-0.5 block text-meta text-faint-foreground">
-                  {c.author} · {ago(c.committedAt)}
-                </span>
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
+        {leading}
+      </div>
+      <ol aria-label="Commits" className="min-h-0 flex-1 overflow-y-auto p-1">
+        {commits.map((c) => (
+          <li
+            key={c.oid}
+            className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-hover"
+          >
+            <icons.commit aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-body">{c.headline}</span>
+              <span className="block truncate text-meta text-faint-foreground">
+                {c.author} · {ago(c.committedAt)}
               </span>
-              <span className="shrink-0 font-mono text-meta text-muted-foreground">
-                {c.oid.slice(0, 7)}
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
+            </span>
+            <span className="shrink-0 font-mono text-meta text-faint-foreground">
+              {c.oid.slice(0, 7)}
+            </span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
