@@ -170,6 +170,8 @@ async fn act(
                 account,
                 images,
                 threads,
+                computers: Vec::new(),
+                remote_threads: Vec::new(),
                 from: None,
                 delivery: None,
             };

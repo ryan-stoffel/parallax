@@ -250,6 +250,43 @@ pub(super) fn child_ended(
     });
 }
 
+/// Wakes `row`'s parent because the run it started on another computer ended (0101).
+pub(crate) fn remote_ended(daemon: &Arc<Daemon>, row: &parallax_store::RemoteRun) {
+    let task = row.task.then_some(row.id);
+    send(
+        daemon,
+        row.parent,
+        remote_line(row),
+        Vec::new(),
+        task,
+        row.ended_at,
+    );
+}
+
+/// The line for a run on another computer, as [`completion`] and [`summary`] give a local one's.
+fn remote_line(row: &parallax_store::RemoteRun) -> String {
+    let ended = match &row.reason {
+        Some(reason) => format!("{}: {}", row.status, one_line(reason, EXCERPT_BYTES)),
+        None => row.status.clone(),
+    };
+    let (id, title, name, host) = (row.id, task(&row.title), &row.host_name, &row.host_id);
+    if row.task {
+        return format!(
+            "- Delegated task {id} ({title}) on {name} reached a terminal state: {ended}. Use \
+             task_status with taskId {id} to read the result."
+        );
+    }
+    let saying = row
+        .summary
+        .as_deref()
+        .map(|said| format!(", saying: {}", one_line(said, EXCERPT_BYTES)))
+        .unwrap_or_default();
+    format!(
+        "- Run {id} ({title}) on {name}: {ended}{saying}. Read it with thread_read and computer \
+         {host}."
+    )
+}
+
 /// Hands `summary` to the actor of [`target`] of run `parent`: see [`notify_questions`]. `task`
 /// is the delegated task it reports, if any, and `ended` the newest stored end of a child it
 /// names.
@@ -624,6 +661,38 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
         Err(error) => {
             warn!(error = %error.message, "could not find what parents missed while plxd was stopped");
         }
+    }
+    catch_up_remote(daemon).await;
+}
+
+/// After a restart, wakes each parent for its runs on other computers that ended after its last
+/// turn began, whose wake-ups a restart lost (0101). A follower sees the ends plxd missed while it
+/// was stopped, once it reaches the computer.
+async fn catch_up_remote(daemon: &Arc<Daemon>) {
+    let missed = store(daemon, |db| {
+        let mut missed = Vec::new();
+        for row in db.undelivered_remote_runs().map_err(|e| store_error(&e))? {
+            let Some(parent) = db.get_run(row.parent).map_err(|e| store_error(&e))? else {
+                continue;
+            };
+            let since = last_turn(db, &parent)?;
+            if row.ended_at.is_some_and(|ended| ended > since)
+                && crate::delegation::remote_wakes(db, &row)?
+            {
+                missed.push(row);
+            }
+        }
+        Ok(missed)
+    })
+    .await;
+    match missed {
+        Ok(missed) => {
+            for row in missed {
+                info!(parent = %row.parent, run = %row.id, "waking a parent for a remote run's end");
+                remote_ended(daemon, &row);
+            }
+        }
+        Err(error) => warn!(error = %error.message, "could not read the remote runs' ends"),
     }
 }
 

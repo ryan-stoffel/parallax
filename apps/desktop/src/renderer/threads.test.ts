@@ -18,6 +18,7 @@ import {
   threadsReducer,
   type ThreadsState,
   type ThreadsView,
+  titleOf,
 } from "./threads";
 
 const messages = samples as { id?: number; method?: string; params?: unknown; result?: unknown }[];
@@ -377,4 +378,9 @@ test("addToProject waits for a copy already listed but still setting its instruc
   expect(await byName).toBe("too long");
   expect(await byId).toBe("too long");
   expect(setProject).not.toHaveBeenCalled();
+});
+
+test("a title from a prompt shows what it attached by name, not as a token", () => {
+  const started = { id: "plain-title", prompt: '@"build-box" @"Fix the test" compare' } as AgentRun;
+  expect(titleOf(started)).toBe("build-box Fix the test compare");
 });

@@ -16,6 +16,11 @@
 //! orchestrator's Agents panel, run as threads that ask through the inbox, in the orchestrator's
 //! mode, and `thread_list` lists its orchestrator's runs, each once. Every caller also gets
 //! [`super::device`]'s tools (PLX-640), [`super::triggers`]', and [`super::delegation`]'s (0063).
+//!
+//! `linked_computers` lists the user's other computers, and `thread_launch`, `thread_list`,
+//! `thread_read`, `thread_wait`, `thread_send`, and `thread_interrupt` take a `computer` (0101),
+//! which sends their calls there through this plxd ([`Plxd::on_computer`]). Nothing falls back to
+//! this computer.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,18 +28,18 @@ use std::time::Duration;
 
 use parallax_protocol::methods::{
     AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, AgentWait, ContextList,
-    ContextRead, ContextWrite, OrchestratorList, PrLink, PrUnlink, RepoAdd, ThreadArchive,
-    ThreadFork, ThreadList, ThreadSearch, ThreadStart, ThreadUpdate,
+    ContextRead, ContextWrite, OrchestratorList, PeerComputers, PeerStart, PrLink, PrUnlink,
+    RepoAdd, ThreadArchive, ThreadFork, ThreadList, ThreadSearch, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AgentCancelParams, AgentDelivery, AgentEffort, AgentEventsParams,
     AgentListParams, AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy, AgentRun,
     AgentSendParams, AgentStartParams, AgentStatus, AgentToolStatus, AgentWaitParams,
     AgentWaitUntil, ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams,
-    ErrorKind, OrchestratorListParams, OrchestratorThreadId, ParallaxEvent, PrViewParams, Repo,
-    RepoAddParams, RepoId, RunId, ScopeId, Thread, ThreadArchiveParams, ThreadForkParams,
-    ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadStartParams, ThreadUpdateParams,
-    TurnId,
+    ErrorKind, OrchestratorListParams, OrchestratorThreadId, ParallaxEvent, PeerComputersParams,
+    PeerStartParams, PeerWorkspace, PrViewParams, Repo, RepoAddParams, RepoId, RunId, ScopeId,
+    Thread, ThreadArchiveParams, ThreadForkParams, ThreadListParams, ThreadListResult,
+    ThreadSearchParams, ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -58,6 +63,7 @@ pub const TOOLS: &[&str] = &[
     "thread_send",
     "thread_wait",
     "thread_interrupt",
+    "linked_computers",
     "thread_update",
     "pr_link",
     "pr_unlink",
@@ -279,6 +285,10 @@ fn definitions(project: bool) -> Value {
         "description": "Run ids of threads whose summaries to attach to the message as context, at most 8.",
     });
     let mine = run_id("The thread's run id, from thread_list. Omit it for your own thread.");
+    let computer = json!({
+        "type": "string",
+        "description": "Do this on another of the user's computers: an id or name from linked_computers. An error if it's offline, unknown, unapproved, or refuses; it never falls back to this computer.",
+    });
     let mut tools = json!([
         tool(
             "thread_list",
@@ -286,6 +296,7 @@ fn definitions(project: bool) -> Value {
             object(
                 json!({
                     "includeArchived": {"type": "boolean", "description": "Also list archived threads. Default false."},
+                    "computer": computer,
                 }),
                 &[]
             ),
@@ -298,6 +309,7 @@ fn definitions(project: bool) -> Value {
                 json!({
                     "runId": target,
                     "after": {"type": "integer", "minimum": 0, "description": "Read the events after this one, from the last page's note. Default 0, the start."},
+                    "computer": computer,
                 }),
                 &["runId"]
             ),
@@ -317,7 +329,7 @@ fn definitions(project: bool) -> Value {
         ),
         tool(
             "thread_launch",
-            "Start a new thread as your child, on any backend, model, and mode, and return it at once. It runs on its own: use thread_wait to wait for it and thread_read to read what it did. Without a workspace it works in a new worktree of your repository, or with no repository if you have none.",
+            "Start a new thread as your child, on any backend, model, and mode, and return it at once. It runs on its own: use thread_wait to wait for it and thread_read to read what it did. Without a workspace it works in a new worktree of your repository, or with no repository if you have none. With computer, it runs on that computer, in that computer's copy of your repository, from origin's default branch or base, with that computer's accounts. Commits you haven't pushed aren't there, so push first, and get its results from its last message and what it pushes.",
             object(
                 json!({
                     "prompt": {"type": "string", "description": "The first message, at most 64 KiB. Make it self-contained."},
@@ -329,10 +341,11 @@ fn definitions(project: bool) -> Value {
                     "effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]},
                     "mode": {"type": "string", "enum": ["auto", "manual", "edit", "plan", "bypass"], "description": "Its permission mode. Omit it for yours, on the same backend."},
                     "workspace": {"type": "string", "enum": ["worktree", "checkout", "none"], "description": "worktree: a new git worktree of the repository; checkout: the repository's own checkout, whose changes stay uncommitted there; none: no repository."},
-                    "repo": {"type": "string", "description": "The repository, by absolute path or thread_list's repo id. Default: yours."},
+                    "repo": {"type": "string", "description": "The repository, by absolute path or thread_list's repo id. Default: yours. With computer, a repo id from thread_list on that computer; the default is its copy of yours, by origin."},
                     "base": {"type": "string", "description": "With worktree, the ref it starts from, such as origin/develop. Default HEAD."},
                     "branch": {"type": "string", "description": "With checkout, the branch to switch the checkout to first."},
                     "notify": {"type": "boolean", "description": "Wake you with a message from Parallax each time it finishes or stops, so you needn't wait on it. Default true."},
+                    "computer": computer,
                 }),
                 &["prompt"]
             ),
@@ -362,6 +375,7 @@ fn definitions(project: bool) -> Value {
                     "text": {"type": "string", "description": "The message, at most 64 KiB."},
                     "threads": threads,
                     "steer": {"type": "boolean", "description": "Send it into the turn the thread is running now, ahead of anything waiting, rather than after it. Only for a running thread. Default false."},
+                    "computer": computer,
                 }),
                 &["runId", "text"]
             ),
@@ -374,6 +388,7 @@ fn definitions(project: bool) -> Value {
                 json!({
                     "runId": target,
                     "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT.as_secs(), "description": "How long to wait. Default 300."},
+                    "computer": computer,
                 }),
                 &["runId"]
             ),
@@ -382,8 +397,14 @@ fn definitions(project: bool) -> Value {
         tool(
             "thread_interrupt",
             "Stop a thread's running turn, marked in its transcript as stopped by you. What it changed so far stays.",
-            object(json!({"runId": target}), &["runId"]),
+            object(json!({"runId": target, "computer": computer}), &["runId"]),
             false,
+        ),
+        tool(
+            "linked_computers",
+            "List the user's computers on their account: each one's id, name, whether it's online, whether it takes agent work now and why not, its running agents, and how busy it is. Pass an id or name as computer to thread_launch, thread_list, thread_read, thread_wait, thread_send, or thread_interrupt, or as target.computer to delegate_task. A computer takes agent work only if its user turned that on there. Work there runs with that computer's accounts and usage limits.",
+            object(json!({}), &[]),
+            true,
         ),
         tool(
             "thread_update",
@@ -462,6 +483,8 @@ fn definitions(project: bool) -> Value {
 struct ListArgs {
     #[serde(default)]
     include_archived: bool,
+    #[serde(default)]
+    computer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -470,6 +493,8 @@ struct ReadArgs {
     run_id: RunId,
     #[serde(default)]
     after: u64,
+    #[serde(default)]
+    computer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -516,6 +541,8 @@ struct LaunchArgs {
     branch: Option<String>,
     #[serde(default)]
     notify: Option<bool>,
+    #[serde(default)]
+    computer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -541,6 +568,8 @@ struct SendArgs {
     threads: Vec<RunId>,
     #[serde(default)]
     steer: bool,
+    #[serde(default)]
+    computer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -563,12 +592,16 @@ struct WaitArgs {
     run_id: RunId,
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    #[serde(default)]
+    computer: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TargetArgs {
     run_id: RunId,
+    #[serde(default)]
+    computer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -599,6 +632,14 @@ struct PrArgs {
 async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     let caller = server.binding.run;
     let plxd = &server.binding.plxd;
+    if let Some(computer) = &args.computer {
+        let plxd = plxd.on_computer(computer);
+        let mut threads = plxd.call::<ThreadList>(ThreadListParams {}).await?.threads;
+        threads.reverse();
+        threads.retain(|thread| args.include_archived || !thread.archived);
+        let listed = described(&plxd, &threads, caller).await?;
+        return Ok(pretty(&json!({"threads": listed})));
+    }
     let mut listed = Vec::new();
     let mut in_orchestrator = HashSet::new();
     if let Some(project) = server.project {
@@ -631,10 +672,14 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
     match name {
         "thread_list" => list(server, parse(arguments)?).await,
         "thread_read" => {
-            let ReadArgs { run_id, after } = parse(arguments)?;
-            let plxd = &binding.plxd;
-            find_run(plxd, run_id).await?;
-            read(plxd, run_id, after).await
+            let ReadArgs {
+                run_id,
+                after,
+                computer,
+            } = parse(arguments)?;
+            let plxd = on(&binding.plxd, computer.as_deref());
+            find_run(&plxd, run_id).await?;
+            read(&plxd, run_id, after).await
         }
         "thread_search" => {
             let SearchArgs { query, limit } = parse(arguments)?;
@@ -645,23 +690,30 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
             let threads = described(plxd, &found.threads, caller).await?;
             Ok(pretty(&json!({"threads": threads})))
         }
-        "thread_launch" if server.orchestrator => launch_child(server, parse(arguments)?).await,
-        "thread_launch" => launch(binding, parse(arguments)?).await,
+        "linked_computers" => {
+            let plxd = &binding.plxd;
+            Ok(pretty(
+                &plxd.call::<PeerComputers>(PeerComputersParams {}).await?,
+            ))
+        }
+        "thread_launch" => launch_tool(server, parse(arguments)?).await,
         "thread_fork" => fork(binding, parse(arguments)?).await,
         "thread_send" => send(binding, parse(arguments)?).await,
         "thread_wait" => {
             let WaitArgs {
                 run_id,
                 timeout_seconds,
+                computer,
             } = parse(arguments)?;
             not_yourself(caller, run_id, "wait on")?;
             let timeout = timeout_seconds.map_or(DEFAULT_WAIT, Duration::from_secs);
-            wait(&binding.plxd, run_id, timeout.min(MAX_WAIT), caller).await
+            let plxd = on(&binding.plxd, computer.as_deref());
+            wait(&plxd, run_id, timeout.min(MAX_WAIT), caller).await
         }
         "thread_interrupt" => {
-            let TargetArgs { run_id } = parse(arguments)?;
+            let TargetArgs { run_id, computer } = parse(arguments)?;
             not_yourself(caller, run_id, "interrupt")?;
-            let plxd = &binding.plxd;
+            let plxd = on(&binding.plxd, computer.as_deref());
             let run = plxd
                 .call::<AgentCancel>(AgentCancelParams {
                     run_id,
@@ -776,6 +828,24 @@ async fn described(plxd: &Plxd, threads: &[Thread], caller: RunId) -> Result<Vec
         .collect())
 }
 
+/// `thread_launch`, by where it runs.
+async fn launch_tool(server: &Server, mut args: LaunchArgs) -> Result<String, String> {
+    match args.computer.take() {
+        Some(_) if server.orchestrator => Err(
+            "an orchestrator's children run through its orchestrator, not on another computer"
+                .to_owned(),
+        ),
+        Some(computer) => launch_remote(&server.binding, &computer, args).await,
+        None if server.orchestrator => launch_child(server, args).await,
+        None => launch(&server.binding, args).await,
+    }
+}
+
+/// The client of `computer`, or of this computer's plxd without one (0101).
+fn on(plxd: &Plxd, computer: Option<&str>) -> Plxd {
+    computer.map_or_else(|| plxd.clone(), |computer| plxd.on_computer(computer))
+}
+
 /// Refuses a tool that would act on the caller itself: a thread can't wait on, message, or stop
 /// its own turn from inside it.
 fn not_yourself(caller: RunId, target: RunId, what: &str) -> Result<(), String> {
@@ -813,7 +883,7 @@ async fn host(plxd: &Plxd) -> Result<(ThreadListResult, Vec<AgentRun>), String> 
 
 /// The run `run_id`, a thread's or any other on the host: read alone by an `agent/wait` that
 /// doesn't wait, or found in every run on a plxd without `agent/wait`.
-pub(super) async fn find_run(plxd: &Plxd, run_id: RunId) -> Result<AgentRun, String> {
+pub(crate) async fn find_run(plxd: &Plxd, run_id: RunId) -> Result<AgentRun, String> {
     if plxd.agent_wait().await? {
         return agent_wait(plxd, run_id, Duration::ZERO).await?;
     }
@@ -1038,6 +1108,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         base,
         branch,
         notify,
+        computer: _,
     } = args;
     check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
     let account = account_choice(backend, account)?;
@@ -1099,6 +1170,8 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
             branch_slug: None,
             images: Vec::new(),
             threads,
+            computers: Vec::new(),
+            remote_threads: Vec::new(),
             // As a thread the user starts: full Claude Code, asking the app (0034).
             approvals: true,
             checkout,
@@ -1116,6 +1189,70 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
     )))
 }
 
+/// `thread_launch` with `computer`: a thread on that computer, which this plxd starts and follows
+/// (0101). The first message names this computer and the caller, and its mode is the caller's or
+/// stricter, which this plxd enforces.
+async fn launch_remote(
+    binding: &Binding,
+    computer: &str,
+    args: LaunchArgs,
+) -> Result<String, String> {
+    let LaunchArgs {
+        prompt,
+        threads,
+        title,
+        backend,
+        account,
+        model,
+        effort,
+        mode,
+        workspace,
+        repo,
+        base,
+        branch,
+        notify,
+        computer: _,
+    } = args;
+    check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
+    let account = account_choice(backend, account)?;
+    let repo = repo
+        .map(|repo| {
+            repo.parse::<RepoId>().map_err(|_| {
+                format!("repo {repo:?} isn't a repo id; thread_list with computer lists them")
+            })
+        })
+        .transpose()?;
+    let workspace = match workspace {
+        Some(Workspace::None) => PeerWorkspace::None,
+        Some(Workspace::Checkout) => PeerWorkspace::Checkout,
+        Some(Workspace::Worktree) | None => PeerWorkspace::Worktree,
+    };
+    let started = binding
+        .plxd
+        .call::<PeerStart>(PeerStartParams {
+            computer: computer.to_owned(),
+            run_id: RunId::generate(),
+            parent: binding.run,
+            prompt,
+            title,
+            account,
+            model,
+            effort,
+            permission: mode,
+            workspace,
+            repo,
+            base,
+            checkout_ref: branch,
+            threads,
+            notify: notify.unwrap_or(true),
+            completion_wake: None,
+        })
+        .await?;
+    let mut shown = describe(&started.run, Some(&started.thread), &[], binding.run);
+    shown["computer"] = json!({"id": started.computer, "name": started.computer_name});
+    Ok(pretty(&shown))
+}
+
 /// `thread_send`: `agent/send` from the caller, queued behind the target's running turn, or into
 /// it with `steer` (0048).
 async fn send(binding: &Binding, args: SendArgs) -> Result<String, String> {
@@ -1125,14 +1262,15 @@ async fn send(binding: &Binding, args: SendArgs) -> Result<String, String> {
         text,
         threads,
         steer,
+        computer,
     } = args;
     not_yourself(caller, run_id, "send a message to")?;
     check_text("text", &text, MAX_TEXT_BYTES)?;
-    let plxd = &binding.plxd;
+    let plxd = on(&binding.plxd, computer.as_deref());
     // plxd resumes an idle run with a steer, as with any message, so refuse it here.
     // ponytail: the target can still end between this check and the send, and then resumes with
     // the message as an ordinary one.
-    if steer && !running(&find_run(plxd, run_id).await?) {
+    if steer && !running(&find_run(&plxd, run_id).await?) {
         return Err(format!(
             "thread {run_id} isn't running a turn, so there is nothing to steer; send without \
              steer to start its next turn"
@@ -1151,6 +1289,8 @@ async fn send(binding: &Binding, args: SendArgs) -> Result<String, String> {
             account: None,
             images: Vec::new(),
             threads,
+            computers: Vec::new(),
+            remote_threads: Vec::new(),
             from: Some(caller),
             delivery: steer.then_some(AgentDelivery::Steer),
         })
@@ -1230,6 +1370,7 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
         base,
         branch,
         notify,
+        computer: _,
     } = args;
     let fixed = [
         ("title", title.is_some()),

@@ -22,7 +22,10 @@
 //!   credentials (#114).
 //! - [`mcp`]: `plxd mcp`, the orchestrator's Parallax tools as an MCP server on stdio, bound to one
 //!   project and one orchestrator thread (#195, 0019).
-//! - [`peer`]: the client of a plxd, over the local socket or a tailnet device's TCP port (0057).
+//! - [`peer`]: the client of a plxd, over the local socket, a tailnet device's TCP port (0057), or
+//!   the relay to another of the user's computers (0101).
+//! - `linked`: agents working across the user's computers: `peer/*`, and the followers that wake a
+//!   parent when a task on another computer ends (0101).
 //! - [`launch_agent`]: the service that `attach` starts plxd through, when it is installed.
 //! - [`service`]: installs, removes, and reports on the per-user service that keeps `serve`
 //!   running: a `LaunchAgent` on macOS (#61), a systemd user unit on Linux (PLX-18), and a logon
@@ -73,6 +76,8 @@ mod importer;
 mod json;
 pub mod keystore;
 pub mod launch_agent;
+mod linked;
+mod load;
 pub mod logging;
 pub mod mcp;
 mod methods;

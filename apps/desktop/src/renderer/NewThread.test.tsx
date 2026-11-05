@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import type { RpcResponse, ParallaxBridge } from "../preload/bridge";
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
 import { accessDefaults, accessPrefs } from "./accessPrefs";
+import { loadBalancer } from "./loadBalancer";
 import { App } from "./App";
 import { flushToasts } from "./undo";
 import { drafts, threadDrafts } from "./drafts";
@@ -59,7 +60,9 @@ const parallax: Repo = {
 const thread: Thread = { id: "t-1", repo: parallax.id, createdAt: "2026-09-26T12:00:01Z" };
 const run = (id: string, prompt: string, status = "running") => ({ id, prompt, status });
 
-type Answer = (params: Record<string, unknown>) => RpcResponse<unknown>;
+type Answer = (
+  params: Record<string, unknown>,
+) => RpcResponse<unknown> | Promise<RpcResponse<unknown>>;
 let answers: Record<string, Answer>;
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
   const answer = answers[method];
@@ -584,6 +587,152 @@ test("A send while the picked computer adds the repository waits, then starts th
     "thread/start",
     expect.objectContaining({ prompt: "Fix it", repo: added.id }),
   );
+});
+
+test("the Load Balancer holds a send that finds no computer until one is picked (0101)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  loadBalancer.set({ on: true, preferences: {}, leftOut: [] });
+  try {
+    answers["host/health"] = () => ({
+      result: {
+        uptimeSeconds: 1,
+        store: "ok",
+        runningAgents: 0,
+        load: { cpu: 95, memory: 10, cores: 8 },
+      },
+    });
+    answers["providers/list"] = () => ({ result: { providers: [] } });
+    answers["thread/start"] = (p) => ({
+      result: {
+        thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+        run: run(p["runId"] as string, "Fix it"),
+      },
+    });
+    // A new draft starts on it, with no click.
+    await renderApp();
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([]);
+    expect(document.body.textContent).toContain("Pick one under the box");
+    // A manual pick lets it through, with the prompt still in the box.
+    await pick("This Mac");
+    await send();
+    expect(calls("thread/start")).toHaveLength(1);
+  } finally {
+    loadBalancer.set({ on: false, preferences: {}, leftOut: [] });
+  }
+});
+
+const healthy = (cores: number) => ({
+  result: {
+    uptimeSeconds: 1,
+    store: "ok",
+    runningAgents: 0,
+    load: { cpu: 10, memory: 10, cores },
+  },
+});
+const runnable = {
+  result: {
+    providers: [
+      {
+        instance: { id: "claude", kind: "claude", name: "Claude", enabled: true, models: [] },
+        installed: true,
+        permissions: ["edit"],
+        models: [],
+      },
+    ],
+  },
+};
+const box = { id: "ssh-box", name: "box", destination: "box" };
+/** Answers `host/health` only when told, with `coresOf` each computer's cores. */
+function holdHealth(coresOf: (hostId: string) => number) {
+  const waiting: (() => void)[] = [];
+  const faked = request.getMockImplementation()!;
+  request.mockImplementation(async (hostId, method, params) =>
+    method === "host/health"
+      ? new Promise<ReturnType<typeof healthy>>((resolve) =>
+          waiting.push(() => resolve(healthy(coresOf(hostId)))),
+        )
+      : faked(hostId, method, params),
+  );
+  return {
+    answer: async () => {
+      await act(async () => {
+        for (const go of waiting.splice(0)) go();
+      });
+      await settle();
+    },
+    restore: () => request.mockImplementation(faked),
+  };
+}
+const runsOn = () =>
+  document.querySelector('main button[aria-label^="Runs on:"]')?.getAttribute("aria-label");
+
+describe("the Load Balancer in New Thread (0101)", () => {
+  let held: ReturnType<typeof holdHealth> | undefined;
+  beforeEach(() => {
+    window.parallax.hosts = async () => [box];
+    answers["providers/list"] = () => runnable;
+    answers["thread/start"] = (p) => ({
+      result: {
+        thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+        run: run(p["runId"] as string, "Fix it"),
+      },
+    });
+  });
+  afterEach(() => {
+    held?.restore();
+    held = undefined;
+    loadBalancer.set({ on: false, preferences: {}, leftOut: [] });
+  });
+
+  test("a send while it checks doesn't submit, and keeps its text", async () => {
+    loadBalancer.set({ on: true, preferences: {}, leftOut: [box.id] });
+    held = holdHealth(() => 8);
+    await renderApp();
+    const sendButton = () => button("Send") as HTMLButtonElement;
+    await send("Fix it");
+    expect(calls("thread/start")).toEqual([]);
+    expect(composer().textContent).toBe("Fix it");
+    expect(sendButton().disabled).toBe(true);
+    expect(sendButton().title).toContain("checking");
+    await held.answer();
+    expect(sendButton().disabled).toBe(false);
+    // Nothing went by itself: the next send is the one that goes.
+    expect(calls("thread/start")).toEqual([]);
+    await send();
+    expect(calls("thread/start")).toHaveLength(1);
+  });
+
+  test("a computer left out while it checks isn't picked", async () => {
+    loadBalancer.set({ on: true, preferences: {}, leftOut: [] });
+    held = holdHealth((hostId) => (hostId === box.id ? 64 : 1));
+    await renderApp();
+    expect(calls("host/health").length).toBeGreaterThan(0);
+    act(() => loadBalancer.set({ on: true, preferences: {}, leftOut: [box.id] }));
+    await held.answer();
+    expect(runsOn()).toMatch(/^Runs on: This Mac, picked by the Load Balancer/);
+  });
+
+  test("the New thread picker balances while the open computer isn't the start computer", async () => {
+    loadBalancer.set({ on: true, preferences: {}, leftOut: [box.id] });
+    answers["host/health"] = () => healthy(8);
+    await renderApp();
+    expect(runsOn()).toMatch(/^Runs on: This Mac, picked by the Load Balancer/);
+    // By hand onto the other computer, as a thread it placed there would leave the app.
+    await pick("box");
+    await settle();
+    expect(runsOn()).toMatch(/^Runs on: box/);
+    expect(runsOn()).not.toContain("Load Balancer");
+    await act(async () => button("New thread")!.click());
+    await settle();
+    const row = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((o) =>
+      o.textContent?.startsWith("parallax"),
+    )!;
+    await act(async () => row.click());
+    await settle();
+    // Back on the start computer, placed anew rather than kept there as a pick on purpose.
+    expect(runsOn()).toMatch(/^Runs on: This Mac, picked by the Load Balancer/);
+  });
 });
 
 test("Delete asks first, and only deletes once confirmed", async () => {

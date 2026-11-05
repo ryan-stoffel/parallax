@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, ParallaxBridge, SavedHost } from "../../preload/bridge";
+import type { ConnectionState, DeviceHost, ParallaxBridge, SavedHost } from "../../preload/bridge";
 import type {
   RelayCheckResult,
   RemoteSession,
@@ -260,4 +260,37 @@ test("Reach from anywhere registers this computer with the relay before turning 
   expect(document.querySelectorAll('[aria-label="Remove macbook from your account"]')).toHaveLength(
     0,
   );
+});
+
+test("a computer that can't take agent work says why, with its switch off", async () => {
+  const device = (id: string, name: string, more: object = {}) => ({
+    id,
+    name,
+    icon: "server",
+    detected: "server",
+    hostName: name,
+    enabled: true,
+    ...more,
+  });
+  window.parallax.onDevices = (listener) => {
+    listener([
+      device("account:old", "old-box"),
+      device("account:allow", "allow-box", { addedWithAllow: true }),
+      device("account:fine", "fine-box"),
+    ] as DeviceHost[]);
+    return () => {};
+  };
+  window.parallax.connectionState = async (id) =>
+    id === "account:old" ? connected : { ...connected, capabilities: { agentWork: {} } };
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(<LanSettings />));
+  unmount = () => root.unmount();
+  await settle();
+  const row = (id: string) => document.querySelector(`[data-computer="account:${id}"]`)!;
+  const toggle = (id: string) => row(id).querySelector<HTMLButtonElement>('[role="switch"]')!;
+  expect(row("old").textContent).toContain("Needs updating");
+  expect(toggle("old").disabled).toBe(true);
+  expect(row("allow").textContent).toContain("Added with Allow");
+  expect(toggle("allow").disabled).toBe(true);
+  expect(toggle("fine").disabled).toBe(false);
 });

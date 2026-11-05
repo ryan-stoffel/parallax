@@ -296,7 +296,7 @@ fn clip(text: &str, max: usize) -> String {
 }
 
 /// The end of `text`, at most `max` bytes.
-fn tail(text: &str, max: usize) -> String {
+pub(crate) fn tail(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_owned();
     }
@@ -355,7 +355,7 @@ pub(crate) fn pretty(value: &impl serde::Serialize) -> String {
 /// ended.
 // ponytail: pages through the run's whole event history on every call; add a from-the-end page
 // to agent/events if long runs make thread_wait slow.
-async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, String> {
+pub(crate) async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, String> {
     let mut after = 0;
     let mut last = None;
     loop {

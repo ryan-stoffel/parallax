@@ -333,7 +333,9 @@ fn capabilities_advertised(orchestrator_computer: bool) -> Capabilities {
 /// account in its own home, so several accounts of one kind run apart (0088). `accountAccess`:
 /// `relay/id`, `access/*`, and account sign-in on the remote listener (0091). `readOnlyDevices`
 /// (PLX-1364): `access/setReadOnly`, and a read-only device is refused what isn't a read.
-/// `relayPushKey` (0100): `relay/pushKey`.
+/// `relayPushKey` (0100): `relay/pushKey`. `agentWork` (0101): `agentWork` in `host/settings`, `load` in
+/// `host/health`, `POST /api/auth/peer` on the remote listener, `computers` and `remoteThreads` on
+/// `thread/start` and `agent/send`, and `peer/*`.
 const PLAIN_CAPABILITIES: &[&str] = &[
     "accountAccess",
     "accountHomes",
@@ -341,6 +343,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "agentClis",
     "agentReview",
     "agentWait",
+    "agentWork",
     "agents",
     "approvals",
     "autoResume",
@@ -797,6 +800,7 @@ pub(crate) fn health(context: &Context, _: HostHealthParams) -> HostHealthResult
         queues: Some(HostQueues {
             store: daemon.store.queue_stats(),
         }),
+        load: daemon.load.read(),
     }
 }
 
@@ -824,6 +828,10 @@ pub(crate) async fn settings(
 /// `host/settings/set`: stores the settings it names, then answers with them all. A change to
 /// `connect` wakes the tailnet listener, one to `remote` the remote listener, and one to `remote`
 /// or `relay` the relay connection.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one branch per setting, read in order"
+)]
 pub(crate) async fn set_settings(
     context: &Context,
     params: HostSettingsSetParams,
@@ -837,9 +845,18 @@ pub(crate) async fn set_settings(
         remote,
         remote_web,
         relay,
+        agent_work,
         device_name,
         device_icon,
     } = params;
+    // Other computers arrive at the remote listener, so the two go on and off together, and an
+    // explicit `remote: false` wins.
+    let remote = remote.or(agent_work.filter(|on| *on));
+    let agent_work = if remote == Some(false) {
+        Some(false)
+    } else {
+        agent_work
+    };
     let device_name = device_name.as_deref().map(clean_device_name);
     let device_icon = device_icon
         .map(|icon| check_device_icon(&icon))
@@ -895,6 +912,13 @@ pub(crate) async fn set_settings(
                 db.set_relay(on).map_err(|e| store_error(&e))?;
                 info!(relay = on, "changed the host's relay setting");
             }
+            if let Some(on) = agent_work {
+                db.set_agent_work(on).map_err(|e| store_error(&e))?;
+                info!(
+                    agent_work = on,
+                    "changed whether agents on other computers work here"
+                );
+            }
             if let Some(name) = device_name {
                 db.set_device_name(name.as_deref())
                     .map_err(|e| store_error(&e))?;
@@ -917,6 +941,9 @@ pub(crate) async fn set_settings(
     }
     if remote_web == Some(false) {
         crate::server::remote::close_browsers(&context.daemon).await;
+    }
+    if agent_work == Some(false) {
+        crate::server::remote::access::close_peers(&context.daemon).await;
     }
     if let Some(prefix) = &branch_prefix {
         context.daemon.agents.set_branch_prefix(prefix);
@@ -960,6 +987,7 @@ fn read_settings(db: &parallax_store::Store) -> Result<HostSettings, ErrorObject
         remote: Some(db.remote().map_err(|e| store_error(&e))?),
         remote_web: Some(db.remote_web().map_err(|e| store_error(&e))?),
         relay: Some(db.relay().map_err(|e| store_error(&e))?),
+        agent_work: Some(db.agent_work().map_err(|e| store_error(&e))?),
         device_name: db.device_name().map_err(|e| store_error(&e))?,
         device_icon: db.device_icon().map_err(|e| store_error(&e))?,
     })

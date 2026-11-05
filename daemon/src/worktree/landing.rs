@@ -56,8 +56,9 @@ impl WorktreeManager {
     }
 
     /// The commit `base` names in `repo_path`'s repository, after fetching it when it is a
-    /// remote-tracking branch such as `origin/main`. A fetch that fails, as offline, is logged,
-    /// and the last fetched commit is used.
+    /// remote-tracking branch such as `origin/main`, or names a branch of one of its remotes that
+    /// hasn't been fetched yet. A fetch that fails, as offline, is logged, and the last fetched
+    /// commit is used.
     ///
     /// # Errors
     ///
@@ -67,10 +68,11 @@ impl WorktreeManager {
         if !self
             .has_ref(&repo_root, &format!("refs/heads/{base}"))
             .await?
-            && self
+            && let Some((remote, branch)) = base.split_once('/')
+            && (self
                 .has_ref(&repo_root, &format!("refs/remotes/{base}"))
                 .await?
-            && let Some((remote, branch)) = base.split_once('/')
+                || self.has_remote(&repo_root, remote).await?)
         {
             let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
             let args = ["fetch", "--quiet", "--no-tags", "--", remote, &refspec];

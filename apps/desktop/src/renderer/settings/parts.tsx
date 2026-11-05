@@ -47,20 +47,25 @@ export function PageTitle({
   );
 }
 
-/** A titled card of settings rows. `action` sits at the end of the title's line. */
+/** A titled card of settings rows. `icon` leads its title, and `action` ends the title's line. */
 export function Section({
   title,
+  icon,
   action,
   children,
 }: {
   title: string;
+  icon?: ReactNode;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section aria-label={title} data-setting={anchorOf(title)} className="mb-10 scroll-mt-6">
       <div className="mb-3 flex min-h-7 items-center justify-between gap-4">
-        <h2 className="text-reading font-semibold">{title}</h2>
+        <h2 className="flex items-center gap-2 text-reading font-semibold [&_svg]:size-4 [&_svg]:shrink-0">
+          {icon}
+          {title}
+        </h2>
         {action}
       </div>
       <div className="rounded-xl border border-border/50 bg-(--pane-card)">{children}</div>

@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
+use crate::peer::RemoteThreadRef;
 use crate::{
     AccountChoice, AgentEffort, AgentPermission, AgentRun, ChosenIcon, PromptImage, RunId, ScopeId,
     TurnId,
@@ -513,6 +514,26 @@ pub struct RepoMatchResult {
     pub repo: Option<Repo>,
 }
 
+/// Params of `repo/fetchBase`: brings a ref a new worktree will start from up to date, for a thread
+/// another computer starts here (0101). Behind `agentWork`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoFetchBaseParams {
+    /// The entry's id.
+    pub repo: RepoId,
+    /// The ref. A remote-tracking branch, such as `origin/develop`, is fetched first. A fetch that
+    /// fails, as offline, leaves what was last fetched.
+    pub base: String,
+}
+
+/// Result of `repo/fetchBase`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoFetchBaseResult {
+    /// The commit `base` names now.
+    pub commit: String,
+}
+
 /// Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
 /// starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
 /// worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
@@ -616,6 +637,17 @@ pub struct ThreadStartParams {
     /// Threads attached to the first message as context, as `agent/start` takes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<RunId>,
+    /// Computers the user named in the first message, by relay id, behind `agentWork` (0101). The
+    /// agent is told them and how to run work there, ahead of the message. `turnStarted` lists
+    /// them, and `text` and the run's `prompt` leave them out. At most `threadContext`'s
+    /// `maxThreads`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub computers: Vec<String>,
+    /// Threads on the user's other computers attached to the first message as references, behind
+    /// `agentWork` (0101). The agent reads each with `thread_read` when it needs it, so attaching
+    /// a long one costs nothing until then. Otherwise as `computers`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_threads: Vec<RemoteThreadRef>,
     /// The model that names the thread once it has started (0058), behind `threadNaming`. plxd
     /// asks it for a title and a branch name from `prompt`, then sets the title unless the thread
     /// has one by then, and renames the worktree's branch while it has no upstream, reporting it

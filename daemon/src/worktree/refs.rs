@@ -97,6 +97,16 @@ impl WorktreeManager {
         Ok(output.lines().map(str::to_owned).collect())
     }
 
+    /// Whether `repo_root`'s repository has a remote named `name`.
+    pub(super) async fn has_remote(
+        &self,
+        repo_root: &Path,
+        name: &str,
+    ) -> Result<bool, WorktreeError> {
+        let output = self.run_git_ok(repo_root, &["remote"]).await?;
+        Ok(output.lines().any(|remote| remote == name))
+    }
+
     /// Whether `name`, a full ref name, exists in `repo_root`.
     pub(super) async fn has_ref(
         &self,

@@ -10,6 +10,7 @@ import type {
   QueuedMessage,
   ThreadRun,
 } from "../protocol/generated/protocol";
+import type { Mentions } from "./threads";
 import { watchThread } from "./threadWatches";
 import { applyEvents, emptyTranscript, rebuild, type Transcript } from "./transcript";
 import { useWatchKey } from "./useWatchKey";
@@ -41,6 +42,7 @@ interface AgentRunView {
     images?: PromptImage[],
     threads?: string[],
     delivery?: AgentDelivery,
+    mentions?: Mentions,
   ) => Promise<RpcError | undefined>;
   /**
    * Stops the run's turn, keeping what waits, held until Resume (`run.interrupt`), or with
@@ -64,10 +66,10 @@ interface Pages {
 }
 
 /**
- * A message this window sent: its text, images, and attached threads' run ids, at hand until the
- * run's log has them.
+ * A message this window sent: its text, images, attached threads' run ids, and what else it names,
+ * at hand until the run's log has them.
  */
-export interface SentMessage {
+export interface SentMessage extends Mentions {
   text: string;
   images: PromptImage[];
   threads?: string[];
@@ -262,19 +264,38 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
       images: PromptImage[] = [],
       threads: string[] = [],
       delivery?: AgentDelivery,
+      { computers = [], remoteThreads = [] }: Mentions = {},
     ) => {
       const turnId = uuidv7();
-      setSent((prev) => new Map(prev).set(turnId, { text, images, threads }));
-      const answer = await window.parallax.request(hostId, "orchestration/dispatch", {
-        type: "message.dispatch",
-        threadId: runId,
-        messageId: turnId,
-        text,
-        ...options,
+      setSent((prev) =>
+        new Map(prev).set(turnId, { text, images, threads, computers, remoteThreads }),
+      );
+      const attached = {
         ...(images.length > 0 && { images }),
         ...(threads.length > 0 && { threads }),
-        dispatchMode: { type: delivery === "steer" ? "steer_active" : "queue_after_active" },
-      });
+      };
+      // `message.dispatch` has no field for what `mentions` names, and `agent/send` does (0101).
+      const answer =
+        computers.length > 0 || remoteThreads.length > 0
+          ? await window.parallax.request(hostId, "agent/send", {
+              runId,
+              turnId,
+              text,
+              ...options,
+              ...attached,
+              ...(computers.length > 0 && { computers }),
+              ...(remoteThreads.length > 0 && { remoteThreads }),
+              ...(delivery && { delivery }),
+            })
+          : await window.parallax.request(hostId, "orchestration/dispatch", {
+              type: "message.dispatch",
+              threadId: runId,
+              messageId: turnId,
+              text,
+              ...options,
+              ...attached,
+              dispatchMode: { type: delivery === "steer" ? "steer_active" : "queue_after_active" },
+            });
       if (!("error" in answer)) return undefined;
       setSent((prev) => {
         const next = new Map(prev);

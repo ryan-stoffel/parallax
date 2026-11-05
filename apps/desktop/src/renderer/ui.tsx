@@ -483,9 +483,11 @@ export function Picker({
   custom,
   footer,
   placeholder,
+  disabled,
 }: {
   id?: string;
   button?: boolean;
+  disabled?: boolean;
   label: string;
   /** What the trigger reads with no option chosen, as when `value` is "". */
   placeholder?: string;
@@ -531,6 +533,7 @@ export function Picker({
         <button
           type="button"
           popoverTarget={menuId}
+          disabled={disabled}
           aria-haspopup="menu"
           aria-label={`${label}: ${current?.label ?? "none"}`}
           title={current?.label}

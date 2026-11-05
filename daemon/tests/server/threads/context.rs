@@ -79,6 +79,78 @@ fn started_with(text: Option<&str>, threads: Vec<RunId>) -> impl Fn(&AgentOutput
     }
 }
 
+/// A named computer and a thread on another computer reach the CLI ahead of the user's text, as
+/// references it can act on (0101), and the transcript keeps them beside the user's own words.
+#[tokio::test]
+async fn a_named_computer_and_a_remote_thread_go_ahead_of_the_message() {
+    let (host, prompts) = recording();
+    let mut client = host.client().await;
+    let computer = "a".repeat(43);
+    let remote_thread = RunId::generate();
+    let params = ThreadStartParams {
+        computers: vec![computer.clone()],
+        remote_threads: vec![parallax_protocol::RemoteThreadRef {
+            computer: computer.clone(),
+            run_id: remote_thread,
+            title: "The \"flaky\" one".to_owned(),
+        }],
+        ..on_other("Hand it over")
+    };
+    let run = client.finished_thread(params).await;
+    client
+        .call::<AgentSend>(AgentSendParams {
+            computers: vec![computer.clone()],
+            ..send_params(run, TurnId::generate(), "And again")
+        })
+        .await
+        .unwrap();
+    client.until(completed(run)).await;
+
+    let sent = prompts.lock().unwrap().clone();
+    let (first, second) = (&sent[0].0, &sent[1].0);
+    assert!(
+        first.contains(&format!("<computer id=\"{computer}\"")),
+        "{first}"
+    );
+    assert!(first.contains("target.computer"), "{first}");
+    assert!(
+        first.contains(&format!("runId=\"{remote_thread}\"")),
+        "{first}"
+    );
+    assert!(first.contains(r#"title="The \"flaky\" one""#), "{first}");
+    assert!(
+        first.ends_with("The user's message:\nHand it over"),
+        "{first}"
+    );
+    assert!(
+        second.contains(&format!("<computer id=\"{computer}\"")),
+        "{second}"
+    );
+    assert!(!second.contains("runId="), "{second}");
+
+    let turns = client.turns_started(run).await;
+    assert!(
+        matches!(&turns[0], AgentOutputItem::TurnStarted { computers, remote_threads, .. }
+            if *computers == [computer.clone()] && remote_threads[0].run_id == remote_thread),
+        "{turns:?}"
+    );
+
+    assert!(
+        matches!(&turns[1], AgentOutputItem::TurnStarted { text, computers, .. }
+            if text.as_deref() == Some("And again") && *computers == [computer.clone()]),
+        "{turns:?}"
+    );
+
+    let refused = client
+        .call::<ThreadStart>(ThreadStartParams {
+            computers: vec!["not an id".to_owned()],
+            ..on_other("Hand it over")
+        })
+        .await
+        .unwrap_err();
+    assert!(refused.message.contains("relay id"), "{refused:?}");
+}
+
 /// An attached thread's summary reaches the CLI ahead of the user's text, on the first message
 /// and on a follow-up that resumes the session, while the run's prompt, the follow-up's
 /// `turnStarted` text, and the transcript keep only the user's words.

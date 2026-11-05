@@ -1,0 +1,147 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "peer/computers",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "computers": [
+        {
+          "id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "name": "Mac mini",
+          "online": true,
+          "thisComputer": true,
+          "takesAgentWork": false,
+          "whyNot": "it's the computer you run on",
+          "runningAgents": 2,
+          "load": {
+            "cpu": 40,
+            "memory": 71,
+            "cores": 10
+          }
+        },
+        {
+          "id": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          "name": "Laptop",
+          "online": true,
+          "thisComputer": false,
+          "takesAgentWork": true,
+          "runningAgents": 0,
+          "load": {
+            "cpu": 3,
+            "memory": 38,
+            "cores": 8
+          }
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "peer/call",
+    "params": {
+      "computer": "Laptop",
+      "method": "agent/list",
+      "params": {}
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "runs": []
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "peer/start",
+    "params": {
+      "computer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "parent": "018f6b3a-1b2c-7d3e-8f4a-5b6c7d8e9f01",
+      "prompt": "Run the slow tests.",
+      "title": "Slow tests",
+      "permission": "edit",
+      "workspace": "worktree",
+      "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+      "base": "origin/develop",
+      "notify": true,
+      "completionWake": "always"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "computer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "computerName": "Laptop",
+      "thread": {
+        "id": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "createdAt": "2026-09-29T12:00:00Z"
+      },
+      "run": {
+        "id": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "prompt": "Why does this dialog overflow?",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/1a2b3c4d",
+        "worktreePath": "/Users/me/Library/Application Support/parallax/worktrees/parallax-5e6f7a8b/01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "createdAt": "2026-09-29T12:00:00Z",
+        "updatedAt": "2026-09-29T12:00:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "peer/task",
+    "params": {
+      "parent": "018f6b3a-1b2c-7d3e-8f4a-5b6c7d8e9f01",
+      "taskId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "acknowledge": true,
+      "dispose": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "task": {
+        "taskId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "computer": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "computerName": "Laptop",
+        "title": "Slow tests",
+        "status": "completed",
+        "summary": "All passed.",
+        "completionWake": "always",
+        "delivery": "acknowledged"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "repo/fetchBase",
+    "params": {
+      "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+      "base": "origin/develop"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "commit": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+]

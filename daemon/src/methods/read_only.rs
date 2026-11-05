@@ -295,6 +295,11 @@ fn is_read(method: RequestName) -> bool {
         | M::BundleBegin
         | M::BundleWrite
         | M::BundleApply
+        | M::RepoFetchBase
+        | M::PeerComputers
+        | M::PeerCall
+        | M::PeerStart
+        | M::PeerTask
         | M::GitStartMerge => false,
     }
 }
