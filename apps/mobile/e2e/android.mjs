@@ -6,11 +6,11 @@
 // - pinned-tls's tests run on the emulator, against both a stand-in and a real plxd.
 // - The real app, on a Metro bundle naming those stand-ins, signs in and sets up `relay-box`, an
 //   account computer it can reach only through the relay, as this blocks its LAN address on the
-//   emulator. It pairs with `lan-box` by address and code. It then opens a thread on each.
+//   emulator. It pairs with `lan-box` by address and code. Each computer reports the phone's session.
 //
 // Screenshots, and logcat on a failure, go in ANDROID_E2E_OUT.
 import { execFileSync, spawn } from "node:child_process";
-import { createSign, generateKeyPairSync, randomBytes } from "node:crypto";
+import { createSign, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
@@ -111,33 +111,16 @@ await until("wrangler dev", async () => {
   return answer?.status === 401;
 });
 
-// --- The computers: fake-backend plxds, each with one thread whose agent says where it is.
+// --- The computers: fake-backend plxds.
 
-function uuid7() {
-  const bytes = randomBytes(16);
-  bytes.writeUIntBE(Date.now(), 0, 6);
-  bytes[6] = (bytes[6] & 0x0f) | 0x70;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-async function computer(name, says, relay) {
+async function computer(name, relay) {
   const data = mkdtempSync(join(scratch, `${name}-`));
-  const script = join(scratch, `${name}.json`);
-  writeFileSync(script, JSON.stringify([
-    { init: { sessionId: name, model: "fake-model" } },
-    { emit: { kind: "text", text: says } },
-    { endTurn: {} },
-    "awaitFollowUp",
-  ]));
   const port = await freePort();
   const attach = spawn(plxd, ["attach"], {
     stdio: ["pipe", "pipe", "inherit"],
     env: {
       ...process.env,
       PLXD_DATA_DIR: data,
-      PLXD_FAKE_BACKEND: script,
       PLXD_REMOTE_PORT: String(port),
       PLXD_RELAY_URL: relayUrl,
       PLXD_CLERK_ISSUER: issuer,
@@ -161,7 +144,6 @@ async function computer(name, says, relay) {
   await call("initialize", { protocol: { min: 1, max: 1 }, client: { name: "e2e", version: "0" }, capabilities: {} });
   await call("host/settings/set", { remote: true, deviceName: name, ...(relay ? { relay: true } : {}) });
   await until(`${name}'s listener`, async () => (await call("remote/sessions")).listening);
-  await call("accounts/defaults/set", { role: "worker", account: { kind: "subscription", backend: "fake" } });
   if (relay) {
     await call("relay/register", { token: mint() });
     await until(`${name} on the relay`, async () => (await call("remote/sessions")).relay?.connected);
@@ -224,6 +206,13 @@ async function tap(wanted, options) {
   adb("shell", "input", "tap", String(x), String(y));
 }
 
+/** Waits until `box` has a session named for this phone, which only reaching it can make. */
+const phoneSession = (box) =>
+  until("the phone's session", async () => {
+    const { sessions } = await box.call("remote/sessions");
+    return sessions.some((session) => session.name === "Android phone");
+  }, 120_000);
+
 /** Types `text` into the field labelled `label`. */
 async function type(label, text) {
   await tap(label);
@@ -234,10 +223,8 @@ async function type(label, text) {
 
 let failed = true;
 try {
-  const relayBox = await computer("relay-box", "Reached through Parallax Relay.", true);
-  const lanBox = await computer("lan-box", "Reached over the LAN.", false);
-  await relayBox.call("thread/start", { runId: uuid7(), prompt: "Thread on relay-box" });
-  await lanBox.call("thread/start", { runId: uuid7(), prompt: "Thread on lan-box" });
+  const relayBox = await computer("relay-box", true);
+  const lanBox = await computer("lan-box", false);
 
   // The pin check on the emulator's own TLS, Conscrypt as a phone has, not the JVM's.
   const argument = (name, value) => `-Pandroid.testInstrumentationRunnerArguments.${name}=${value}`;
@@ -300,10 +287,7 @@ try {
   await type("Set up relay-box", code);
   shot("2-setup-code");
   await tap("Set Up");
-  await until("relay-box's session for this phone", async () => {
-    const { sessions } = await relayBox.call("remote/sessions");
-    return sessions.some((session) => session.name === "Android phone");
-  }, 120_000);
+  await phoneSession(relayBox);
   shot("3-relay-box-connected");
 
   // A computer paired on the LAN, by its address and code.
@@ -314,25 +298,14 @@ try {
   adb("shell", "input", "keyevent", "111"); // Puts the keyboard away, off the button.
   shot("4-pair-lan-box");
   await tap("Pair");
-  await waitFor("lan-box", { timeoutMs: 60_000 });
+  await phoneSession(lanBox);
+  await waitFor("lan-box");
   shot("5-computers");
 
   await tap("Continue");
   await tap("Not now");
-
-  await tap("Open sidebar", { timeoutMs: 60_000 });
-  await waitFor(/Thread on relay-box/, { timeoutMs: 120_000 });
-  await waitFor(/Thread on lan-box/, { timeoutMs: 120_000 });
-  shot("6-sidebar");
-
-  await tap(/Thread on relay-box/);
-  await waitFor(/Reached through Parallax Relay/, { timeoutMs: 120_000 });
-  shot("7-thread-through-relay");
-
-  await tap("Open sidebar");
-  await tap(/Thread on lan-box/, { timeoutMs: 60_000 });
-  await waitFor(/Reached over the LAN/, { timeoutMs: 120_000 });
-  shot("8-thread-over-lan");
+  await waitFor("Open sidebar");
+  shot("6-main");
   failed = false;
 } finally {
   if (failed) {

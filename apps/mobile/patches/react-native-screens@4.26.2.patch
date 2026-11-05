@@ -1,0 +1,33 @@
+diff --git a/android/src/main/cpp/NativeProxy.cpp b/android/src/main/cpp/NativeProxy.cpp
+index 239e03a3dad5591b6a34aaf70e4cc0ce44e3a6f8..02beef57748bfc2ec87bf980702dd6a3b39097d8 100644
+--- a/android/src/main/cpp/NativeProxy.cpp
++++ b/android/src/main/cpp/NativeProxy.cpp
+@@ -32,14 +32,20 @@ void NativeProxy::nativeAddMutationsListener(
+   auto uiManager =
+       fabricUIManager->getBinding()->getScheduler()->getUIManager();
+ 
+-  if (!screenRemovalListener_) {
+-    screenRemovalListener_ =
+-        std::make_shared<RNSScreenRemovalListener>([this](int tag) {
+-          static const auto method =
+-              javaPart_->getClass()->getMethod<void(jint)>(
+-                  "notifyScreenRemoved");
+-          method(javaPart_, tag);
+-        });
++  {
++    // The module's init thread and the UI thread both get here on a cold launch. Unguarded, the
++    // listener can be freed while registered, which crashes in MountingCoordinator::pullTransaction
++    // (react-native-screens#4413, fixed in 4.28.0).
++    std::lock_guard<std::mutex> lock(coordinatorsMutex_);
++    if (!screenRemovalListener_) {
++      screenRemovalListener_ =
++          std::make_shared<RNSScreenRemovalListener>([this](int tag) {
++            static const auto method =
++                javaPart_->getClass()->getMethod<void(jint)>(
++                    "notifyScreenRemoved");
++            method(javaPart_, tag);
++          });
++    }
+   }
+ 
+   cleanupExpiredMountingCoordinators();
