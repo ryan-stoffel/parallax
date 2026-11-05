@@ -771,40 +771,80 @@ body {
   }
 }
 
-/* The workspace is one surface beside the sidebar, including an expanded side panel. */
-.workspace-shell[data-sidebar-open="true"] {
-  border-radius: 16px 0 0 16px;
-  box-shadow: -6px 0 18px -8px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 30%));
+/* A pane's card and its shown tab (ThreadTabs.tsx) are one outline, which shows on a window the
+   same color as the card, as dark mode's true black is. It's a solid color, so overlapping strokes
+   don't brighten where they meet. The tab's foot covers the card's top edge. Its top and sides
+   (.tab-cap) stop where a rounded border at each side curves out to that edge, so a tab of a
+   fractional width has no side left to show past the curve. The curve's shadow, clipped to its box,
+   covers the card's edge beyond it. A flush tab (ThreadTabs.tsx) starts at the card's left edge, so
+   its left side runs straight down into that edge. The focused pane among several has a brighter
+   outline. */
+.pane-edge {
+  --edge: color-mix(in srgb, var(--foreground) 14%, var(--background));
 }
-.workspace-shell[data-sidebar-open="true"]::after {
+.pane-edge[data-marked] {
+  --edge: color-mix(in srgb, var(--foreground) 32%, var(--background));
+}
+/* On glass, a solid outline can match what's behind the window, so it's a tint of the text instead. */
+:root.translucent .pane-edge {
+  --edge: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+:root.translucent .pane-edge[data-marked] {
+  --edge: color-mix(in srgb, var(--foreground) 45%, transparent);
+}
+.pane-card {
+  border: 1px solid var(--edge);
+}
+.tab-cap {
+  position: absolute;
+  inset: 0 0 12px;
+  pointer-events: none;
+  border: 1px solid var(--edge);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+}
+.tab-shown::before,
+.tab-shown::after {
   content: "";
   position: absolute;
-  inset: 0;
-  z-index: 40;
+  bottom: 1px;
+  width: 11px;
+  height: 11px;
   pointer-events: none;
-  border: 1px solid var(--border);
-  border-right: 0;
-  border-radius: inherit;
+  border-bottom: 1px solid var(--edge);
+  box-shadow: 0 0 0 11px var(--pane);
+  clip-path: inset(0);
 }
-/* Underlap the rounded edge by a pixel so its antialiasing never exposes a seam. */
-#sidebar::before {
-  content: "";
-  position: absolute;
-  inset: 0 -24px 0 auto;
-  width: 24px;
-  pointer-events: none;
-  background: inherit;
-  mask:
-    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top left / 17px 17px no-repeat,
-    radial-gradient(circle at 16px 1px, transparent 15px, #000 16px) bottom left / 17px 17px
-      no-repeat;
+.tab-shown::before {
+  left: -10px;
+  border-right: 1px solid var(--edge);
+  border-bottom-right-radius: 11px;
 }
-:root.nightly #sidebar > .night-sky {
-  right: -24px;
-  mask:
-    linear-gradient(#000 0 0) left / calc(100% - 24px) 100% no-repeat,
-    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top right 7px / 17px 17px
-      no-repeat;
+.tab-shown::after {
+  right: -10px;
+  border-left: 1px solid var(--edge);
+  border-bottom-left-radius: 11px;
+}
+.tab-shown[data-flush] .tab-cap {
+  border-top-left-radius: var(--radius-prompt);
+}
+.tab-shown[data-flush]::before {
+  left: 0;
+  bottom: 0;
+  height: 12px;
+  border: 0;
+  border-left: 1px solid var(--edge);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* On glass nothing can cover what's beyond a curve, so the tab sits on the card's line instead. */
+:root.translucent .tab-shown::before,
+:root.translucent .tab-shown::after {
+  display: none;
+}
+:root.translucent .tab-cap {
+  bottom: 1px;
 }
 
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
@@ -1021,6 +1061,7 @@ body {
     fieldset,
     [role="tab"],
     [role="listbox"],
+    .tab-strip,
     [popover],
     browser-action-list
   ) {

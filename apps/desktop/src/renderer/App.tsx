@@ -14,6 +14,9 @@ import {
   SquarePen,
   SunMoon,
   TextSearch,
+  Maximize2,
+  MessageCircleQuestion,
+  Minimize2,
   PanelBottom,
   PanelLeftOpen,
   PanelRight,
@@ -76,6 +79,7 @@ import { browserSettingsAsked } from "./browserSettings";
 import { anchorOf } from "./settings/search";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
+import { WorkingMark } from "./AttentionMark";
 import {
   useAccountAlarms,
   useConnectionAlarms,
@@ -125,9 +129,29 @@ import { keptRemoteControl, MoveRemoteControl } from "./MoveRemoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
-import { evenRatio, maxTiles, ratiosWithout } from "./splitLayout";
 import { SplitTiles } from "./SplitTiles";
-import { draggedThread, threadDragType } from "./threadDrag";
+import type { TabItem } from "./ThreadTabs";
+import {
+  activeTab,
+  closeHostTabs,
+  closeTab,
+  focusedPane,
+  moveTab,
+  moveToZone,
+  navigate,
+  openBeside,
+  openInTab,
+  openInZone,
+  placeView,
+  removeThread,
+  selectTab,
+  shownTab,
+  startWorkspace,
+  stepTab,
+  threadOf,
+  type ThreadTab,
+} from "./tabState";
+import { draggedThread, tabDragType, threadDragType } from "./threadDrag";
 
 /**
  * The main pane: an orchestrator chat, or with `agentId` one of its subagents' chats, a
@@ -149,19 +173,6 @@ export type Selection =
     }
   | { kind: "new"; groupId?: string; draft?: string };
 
-/**
- * Two to four threads on one host tiled side by side (PLX-587, PLX-1082), in their Fibonacci
- * layout's order, with each cut's share (splitLayout.ts): one fewer ratio than threads.
- * Opening another unmaximizes it.
- */
-export interface Split {
-  hostId: string;
-  threadIds: string[];
-  ratios: number[];
-  /** All of them in one tile, the focused one shown, as tabs. */
-  maximized?: boolean;
-}
-
 export type SettingsSection =
   | "general"
   | "threads"
@@ -182,6 +193,42 @@ export type SettingsSection =
   | "beta"
   | "about";
 
+/** What a pane's tabs show for `tab`: a thread waiting on the user or working says so in its icon. */
+function tabItem(tab: ThreadTab, { state }: ThreadsView): TabItem {
+  const { id, selection } = tab;
+  if (selection.kind === "orchestrator") {
+    const orchestrator = state.orchestrators.find((o) => o.id === selection.orchestratorId);
+    return {
+      id,
+      title: orchestrator?.name ?? "Orchestrator",
+      icon: <ProjectIcon icon={orchestrator?.icon} />,
+    };
+  }
+  if (selection.kind === "new") {
+    // With no group, it's the first one, as the page's is.
+    const groupId = selection.groupId ?? groupThreads(state)[0]?.id;
+    const repo = state.repos.find((r) => r.id === groupId);
+    return { id, title: repo?.project ? repo.name : "New thread", icon: <RepoIcon repo={repo} /> };
+  }
+  const { threadId } = selection;
+  const thread = state.threads.find((t) => t.id === threadId);
+  const attention = thread && attentionOf(thread, state.runs[threadId], asksOf(state, threadId));
+  return {
+    id,
+    title: state.titles[threadId] ?? "Thread",
+    icon:
+      attention === "needsYou" ? (
+        <MessageCircleQuestion aria-label="Needs you" className="text-warning" />
+      ) : attention === "working" ? (
+        <span className="text-working">
+          <WorkingMark />
+        </span>
+      ) : (
+        <RepoIcon repo={state.repos.find((r) => r.id === thread?.repo)} />
+      ),
+  };
+}
+
 /**
  * The app frame: sidebar, then the chat or a page, then the side panel, with Settings floating
  * over them.
@@ -193,17 +240,21 @@ export function App() {
   useAppearanceEffects(onboarding);
   const hosts = useHosts();
   useProviderLink(hosts);
-  const [hostId, setHostId] = useState(localId);
-  // The open host, or this computer once the open one is removed.
+  // The window's panes and tabs (PLX-1289). The focused pane's shown tab holds the open host and
+  // selection.
+  const [workspace, setWorkspace] = useState(() => startWorkspace(localId));
+  const { hostId, selection } = activeTab(workspace);
+  // The open host, or this computer until a removed one's tabs close, below.
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
-  const [selection, setSelection] = useState<Selection>({ kind: "new" });
+  const setSelection = useCallback(
+    (next: Selection) => setWorkspace((state) => navigate(state, activeTab(state).hostId, next)),
+    [],
+  );
   // The threads opened in this window, oldest first, and where Back and Forward stand (PLX-789).
   const [history, setHistory] = useState<{
     list: { hostId: string; threadId: string }[];
     at: number;
   }>({ list: [], at: -1 });
-  // Shown while the selection is one of its threads, which is the focused one.
-  const [split, setSplit] = useState<Split>();
   // An orchestrator just created on another host, opened once that host is open and lists it: the
   // check below drops an orchestrator selection the open host's list doesn't have.
   const [opening, setOpening] = useState<{ hostId: string; orchestratorId: string }>();
@@ -405,43 +456,29 @@ export function App() {
   const known = useRef(new Set<string>());
   for (const t of threads.state.threads) known.current.add(t.id);
   for (const p of threads.state.orchestrators) known.current.add(p.id);
-  // Closes a thread's tile. The rest stay tiled, or the last one stays open alone, and a closed
-  // focused tile hands focus to the one before it.
-  const closePane = (threadId: string) => {
-    if (!split) return;
-    const at = split.threadIds.indexOf(threadId);
-    if (at === -1) return;
-    const rest = split.threadIds.filter((id) => id !== threadId);
-    setSplit(
-      rest.length > 1
-        ? { ...split, threadIds: rest, ratios: ratiosWithout(split.ratios, rest.length + 1, at) }
-        : undefined,
-    );
-    if (split.hostId === host.id && selection.kind === "thread" && selection.threadId === threadId)
-      setSelection({ kind: "thread", threadId: rest[Math.max(0, at - 1)]! });
-  };
-  // A split whose computer is removed goes with it.
-  if (split && !hosts.some((h) => h.id === split.hostId)) setSplit(undefined);
-  // A thread in the split that's deleted, maybe by another client, closes its tile.
-  const splitGone =
-    split?.hostId === host.id
-      ? split.threadIds.find(
-          (id) => known.current.has(id) && !threads.state.threads.some((t) => t.id === id),
-        )
-      : undefined;
-  if (splitGone) closePane(splitGone);
-  // The threads the main pane shows: the split's while one of them is open.
-  const tiled =
-    selection.kind === "thread" &&
-    split?.hostId === host.id &&
-    split.threadIds.includes(selection.threadId);
-  const panes = selection.kind !== "thread" ? [] : tiled ? split.threadIds : [selection.threadId];
+  const everyTab = workspace.panes.flatMap((pane) => pane.tabs);
+  // A removed computer's tabs go with it.
+  const removedHost = everyTab.find((t) => !hosts.some((h) => h.id === t.hostId))?.hostId;
+  if (removedHost) setWorkspace(closeHostTabs(workspace, removedHost, hosts[0]!.id));
+  // A thread in a tab that's deleted, maybe by another client, leaves it rather than show a stale
+  // transcript.
+  const gone = everyTab
+    .filter((t) => t.hostId === host.id)
+    .map(threadOf)
+    .find((id) => id && known.current.has(id) && !threads.state.threads.some((t) => t.id === id));
+  if (gone) setWorkspace(removeThread(workspace, host.id, gone));
+  // Whether panes show side by side.
+  const tiled = workspace.panes.length > 1;
+  // The threads the main pane shows on the open host, one for each pane showing one.
+  const panes = workspace.panes.flatMap((pane) => {
+    const tab = shownTab(pane);
+    const threadId = threadOf(tab);
+    return threadId && tab.hostId === host.id ? [threadId] : [];
+  });
   // The open thread's group (Chat's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);
-    // Deleted, maybe by another client: leave it rather than show a stale transcript.
-    if (!open && known.current.has(selection.threadId) && !splitGone) setSelection({ kind: "new" });
     const id = open ? groupOf(threads.state, open) : noRepo;
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
@@ -480,7 +517,7 @@ export function App() {
     !orchestrator &&
     known.current.has(selection.orchestratorId)
   )
-    setSelection({ kind: "new" });
+    setWorkspace(closeTab(workspace, activeTab(workspace).id));
   // With the threads in the orchestrator, as its sidebar row counts them.
   const inOrchestrator = useMemo(() => threadOrchestrators(threads.state), [threads.state]);
   const agents = useOrchestratorAgents(
@@ -642,8 +679,7 @@ export function App() {
 
   const openOnHost = (hostId: string, next: Selection) => {
     setSettings(null);
-    setHostId(hostId);
-    setSelection(next);
+    setWorkspace((state) => navigate(state, hostId, next));
     setOpening(undefined);
   };
   const openHostThread = (hostId: string, threadId: string) =>
@@ -737,13 +773,11 @@ export function App() {
     return lineage.chips[next]?.id;
   };
 
-  // The orchestrator or repository crumb wears its sidebar icon. Under a subagent, the
-  // orchestrator's goes back to the orchestrator. In a thread, the repository's opens New thread on
-  // that repository.
+  // The top right names only what leads elsewhere or isn't plain: the tab and sidebar say which thread
+  // and repository this is. Under a subagent, the orchestrator's crumb goes back to the orchestrator.
   let crumbs: Crumb[];
   if (orchestrator) {
     crumbs = [
-      { label: host.name },
       {
         label: orchestrator.name,
         icon: <ProjectIcon icon={orchestrator.icon} />,
@@ -752,32 +786,17 @@ export function App() {
     ];
     if (agentTitle) crumbs.push({ label: agentTitle });
   } else {
-    // A thread added to a Project names the Project, and opens its page (0090).
-    const addedTo =
-      selection.kind === "thread" && openThread?.project
-        ? threads.state.repos.find((r) => r.id === openThread.project)
-        : undefined;
-    const groupRepo = addedTo ?? threads.state.repos.find((r) => r.id === group.id);
-    const repo = {
-      label: addedTo?.name ?? group.name,
-      icon: <RepoIcon repo={groupRepo} />,
-      onClick:
-        selection.kind === "thread"
-          ? () => setSelection({ kind: "new", groupId: addedTo?.id ?? group.id })
-          : undefined,
-    };
     const page =
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
     // A Claude Remote Control thread runs on another computer, not this host (PLX-1140).
-    const where: Crumb =
+    const where: Crumb[] =
       selection.kind === "thread" && remoteThread
-        ? { label: "Remote Control", icon: <Cloud aria-hidden /> }
-        : { label: host.name };
-    // A Project's page is the Project itself (0090), so its crumbs end there.
-    crumbs =
-      selection.kind === "new" && group.project ? [where, repo] : [where, repo, { label: page }];
+        ? [{ label: "Remote Control", icon: <Cloud aria-hidden /> }]
+        : [];
+    // A Project's page is the Project itself (0090), which its tab names.
+    crumbs = selection.kind === "new" && group.project ? where : [...where, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
@@ -787,9 +806,7 @@ export function App() {
         label: threads.state.titles[parent.id] ?? "Thread",
         onClick: () => openThreadId(parent.id),
       };
-      crumbs = lineage.active
-        ? [crumbs[0]!, repo, back]
-        : [crumbs[0]!, repo, back, { label: page }];
+      crumbs = lineage.active ? [...where, back] : [...where, back, { label: page }];
     }
     // A fork's original, while it's listed, goes before the fork's own crumb (0050).
     const original = threads.state.threads.find((t) => t.id === openThread?.forkedFrom?.run);
@@ -822,8 +839,7 @@ export function App() {
   // that host is open.
   const openOrchestrator = (hostId: string, orchestratorId: string) => {
     if (hostId === host.id) return setSelection({ kind: "orchestrator", orchestratorId });
-    setHostId(hostId);
-    setSelection({ kind: "new" });
+    setWorkspace((state) => navigate(state, hostId, { kind: "new" }));
     setOpening({ hostId, orchestratorId });
   };
 
@@ -880,9 +896,8 @@ export function App() {
       groupId = added.id;
       moved = added;
     }
-    setHostId(id);
+    setWorkspace((state) => navigate(state, id, { kind: "new", groupId, draft }));
     setOpening(undefined);
-    setSelection({ kind: "new", groupId, draft });
     return moved;
   };
 
@@ -1087,37 +1102,36 @@ export function App() {
     const view = views[hostId] ?? idleThreads;
     const error = await view.remove(thread);
     if (error) return error;
-    if (split?.hostId === hostId && split.threadIds.includes(thread.id)) closePane(thread.id);
-    else if (selection.kind === "thread" && selection.threadId === thread.id)
-      setSelection({ kind: "new", groupId: groupOf(view.state, thread) });
+    // The last tab leaves New thread in the thread's group.
+    setWorkspace((state) =>
+      removeThread(state, hostId, thread.id, {
+        kind: "new",
+        groupId: groupOf(view.state, thread),
+      }),
+    );
     return undefined;
   };
-  // Opens `threadId` in the split beside the open thread, at tile `at`: by default a new last tile
-  // while there's room, else the last tile that isn't focused, which it replaces. A thread already
-  // tiled is focused instead.
-  const openBeside = (threadId: string, at?: number) => {
-    if (selection.kind !== "thread" || selection.threadId === threadId) return;
-    const ids = tiled ? [...split.threadIds] : [selection.threadId];
-    const ratios = tiled ? [...split.ratios] : [];
-    if (!ids.includes(threadId)) {
-      const tile =
-        at ??
-        (ids.length < maxTiles ? ids.length : ids.findLastIndex((id) => id !== selection.threadId));
-      if (tile === ids.length) ratios.push(evenRatio);
-      ids[tile] = threadId;
-      setSplit({ hostId: host.id, threadIds: ids, ratios });
-    }
-    setSelection({ kind: "thread", threadId });
-  };
-  // Focuses a tile of the split, reopening it if another view is open, and its composer.
-  const focusPane = (tile: number) => {
-    const threadId = split?.threadIds[tile];
-    if (!threadId) return;
-    openOnHost(split.hostId, { kind: "thread", threadId });
+  // Focuses a pane by its place, showing its tab even if another view is open, and its composer.
+  const focusPane = (side: number) => {
+    const pane = workspace.panes[side];
+    if (!pane) return;
+    setSettings(null);
+    setOpening(undefined);
+    setWorkspace((state) => selectTab(state, pane.active));
     requestAnimationFrame(() =>
-      document.querySelector<HTMLElement>(`[data-pane="${tile}"] .composer-input`)?.focus(),
+      document.querySelector<HTMLElement>(`[data-pane="${side}"] .composer-input`)?.focus(),
     );
   };
+
+  // The window's only tab, on New thread, closes to itself.
+  const closableTab = everyTab.length > 1 || selection.kind !== "new";
+  const shownTitle = tabItem(activeTab(workspace), threads).title;
+  // The crumbs but the last, when the shown tab says the same, as it does for the page.
+  const lastCrumb = crumbs.at(-1);
+  const trail =
+    lastCrumb && !lastCrumb.onClick && lastCrumb.label === shownTitle
+      ? crumbs.slice(0, -1)
+      : crumbs;
 
   const offline = offlineReason(connection);
 
@@ -1177,10 +1191,21 @@ export function App() {
         if (!dialog) picker.current?.open();
       } else if (command === "newOrchestrator") {
         if (!dialog) picker.current?.open("orchestrator");
+      } else if (command === "newTab") {
+        if (dialog || settings) return;
+        setMainPage(undefined);
+        newThread();
+      } else if (command === "closeTab") {
+        // With no tab in view to close, Close Window keeps its keys.
+        if (dialog || settings || mainPage || !closableTab) return;
+        setWorkspace(closeTab(workspace, activeTab(workspace).id));
+      } else if (command === "nextTab" || command === "previousTab") {
+        if (dialog || settings) return;
+        setWorkspace(stepTab(workspace, command === "nextTab" ? 1 : -1));
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
       } else if (command && (tileCommands as readonly string[]).includes(command)) {
-        if (dialog || !split) return;
+        if (dialog || !tiled) return;
         focusPane((tileCommands as readonly string[]).indexOf(command));
       } else if (command === "back" || command === "forward") {
         if (dialog || settings) return;
@@ -1280,8 +1305,8 @@ export function App() {
       return next;
     });
   };
-  // The main pane's top row meets the traffic lights without the sidebar, and
-  // Windows' window buttons without the side panel.
+  // A page's top row meets the traffic lights without the sidebar, and Windows' window buttons
+  // without the side panel.
   const topBarInset = [
     sidebarOpen ? "" : "traffic-light-inset",
     sidePanelOpen ? "" : "window-controls-inset",
@@ -1359,25 +1384,201 @@ export function App() {
       }
     />
   );
-  // Its key for thread `threadId`, which its children and parent share (useThreadDetails).
-  const detailsKeyOf = (threadId: string) => {
-    const thread = threads.state.threads.find((t) => t.id === threadId);
-    return JSON.stringify([
-      host.id,
-      "thread",
-      thread ? rootOf(threads.state, thread).id : threadId,
-    ]);
+
+  // What a sidebar row dragged as `runId` opens: an orchestrator's row drags as its root run.
+  const droppedView = (hostId: string, runId: string): Selection => {
+    const { state } = views[hostId] ?? idleThreads;
+    const dropped = state.orchestrators.find((o) => o.run === runId);
+    if (!dropped) return { kind: "thread", threadId: runId };
+    setShowHome({});
+    return { kind: "orchestrator", orchestratorId: dropped.id };
   };
-  // Tile `index`'s Thread details button: shows or hides its thread's, focusing it to show it.
-  const toggleTileDetails = (index: number) => {
-    const threadId = panes[index]!;
-    const key = detailsKeyOf(threadId);
-    if (selection.kind === "thread" && selection.threadId !== threadId) {
-      openThreadId(threadId);
-      if (details.isOpen(key)) return;
-    }
-    details.toggle(key);
-  };
+  const historyButtons = (
+    <div className="flex shrink-0 items-center">
+      <IconButton
+        label="Back"
+        command="back"
+        disabled={stepTo(-1) === undefined}
+        onClick={() => step(-1)}
+        className={stepButton}
+      >
+        <ChevronLeft />
+      </IconButton>
+      <IconButton
+        label="Forward"
+        command="forward"
+        disabled={stepTo(1) === undefined}
+        onClick={() => step(1)}
+        className={stepButton}
+      >
+        <ChevronRight />
+      </IconButton>
+    </div>
+  );
+  const topControls = (
+    <>
+      {trail.length > 0 && <Breadcrumb items={trail} tight />}
+      {tiled && (
+        <IconButton
+          label={workspace.maximized ? "Restore tiles" : "Maximize thread"}
+          onClick={() => setWorkspace((state) => ({ ...state, maximized: !state.maximized }))}
+        >
+          {workspace.maximized ? <Minimize2 /> : <Maximize2 />}
+        </IconButton>
+      )}
+      {!group.project && (
+        <ThreadDetailsButton open={details.mode !== "hidden"} onToggle={() => details.toggle()} />
+      )}
+      {folder && (
+        <IconButton
+          label={drawerOpen ? "Hide terminal" : "Show terminal"}
+          command="terminal"
+          aria-pressed={drawerOpen}
+          aria-controls="terminal-drawer"
+          onClick={toggleDrawer}
+        >
+          <PanelBottom />
+        </IconButton>
+      )}
+      {/* Shown only while the panel is hidden; its top bar has it otherwise. */}
+      {!panelOpen && (
+        <IconButton
+          label="Show side panel"
+          command="panel"
+          aria-expanded={false}
+          aria-controls="side-panel"
+          onClick={() => setPanelOpen(true)}
+        >
+          <PanelRight />
+        </IconButton>
+      )}
+    </>
+  );
+  // The view of the focused pane's tab, when it isn't a thread.
+  const mainView =
+    selection.kind === "new" ? (
+      <NewThread
+        // Each draft is its own screen, so opening another leaves this one as a draft.
+        key={draft}
+        draftId={draft}
+        hostId={host.id}
+        hosts={hosts}
+        onHostChange={pickHost}
+        groups={groups}
+        groupId={group.id}
+        onGroupChange={(groupId) => setSelection({ kind: "new", groupId, draft })}
+        elsewhere={elsewhere}
+        onPickElsewhere={(hostId, groupId) => openOnHost(hostId, { kind: "new", groupId, draft })}
+        missing={new Set(hosts.filter((h) => lacksRepo(views[h.id], group.name)).map((h) => h.id))}
+        shared={hosts.some(
+          (h) =>
+            h.id !== host.id &&
+            views[h.id]?.state.repos.some((r) => isRepository(r) && r.name === group.name),
+        )}
+        local={host.id === localId}
+        addRepo={threads.addRepo}
+        start={threads.start}
+        runOptions={connected && "runOptions" in connection.capabilities}
+        onStarted={(threadId, background) => {
+          if (!background) setSelection({ kind: "thread", threadId, started: true });
+        }}
+        disabledReason={offline}
+        threadLinks={threadLinks}
+        settingsClosed={settingsClosed.count}
+        header={
+          projectEntry && (
+            <ProjectHeader
+              entry={projectEntry}
+              onBack={() => openMainPage("projects")}
+              pinned={pins.includes(projectEntry.key)}
+              onTogglePin={() => togglePinnedProject(projectEntry.key)}
+              actionsFor={() => orchestratorActions(projectEntry)}
+            />
+          )
+        }
+        tray={
+          projectRepo && (
+            <RunTargetMenu
+              hosts={projectHosts}
+              hostId={host.id}
+              onHostChange={(id) => {
+                const there = views[id]?.state.repos.find(
+                  (r) => r.project && r.name === projectRepo.name,
+                );
+                if (id !== host.id && there)
+                  openOnHost(id, { kind: "new", groupId: there.id, draft });
+              }}
+            />
+          )
+        }
+        aside={
+          projectRepo &&
+          "projectContext" in threads.capabilities && (
+            <ProjectContext hostId={host.id} project={projectRepo} view={threads} />
+          )
+        }
+        below={
+          projectRepo && (
+            <ProjectThreads
+              host={host}
+              project={projectRepo}
+              computers={listed}
+              onOpenThread={openHostThread}
+            />
+          )
+        }
+      />
+    ) : agentId ? (
+      <AgentChat
+        key={`${host.id}/${agentId}`}
+        hostId={host.id}
+        runId={agentId}
+        prompt={agent?.prompt}
+        // An orchestrator's subagents are kept current.
+        going={isRunning(agent?.status)}
+        others={othersAsked(agentId)}
+        orchestratorMode={orchestrator?.permission}
+        threadLinks={threadLinks}
+        strip={
+          orchestrator && {
+            key: "parent",
+            node: (
+              <ChildStrip
+                name={orchestrator.name}
+                icon={<ProjectIcon icon={orchestrator.icon} className="size-3.5 shrink-0" />}
+                onOpenName={() =>
+                  setSelection({
+                    kind: "orchestrator",
+                    orchestratorId: orchestrator.id,
+                  })
+                }
+                onBack={() => openAgent()}
+              />
+            ),
+          }
+        }
+      />
+    ) : (
+      orchestrator && (
+        <OrchestratorChat
+          key={`${host.id}/${orchestrator.id}`}
+          hostId={host.id}
+          orchestrator={orchestrator}
+          prompt={orchestrator.run && threads.state.runs[orchestrator.run]?.prompt}
+          startOrchestrator={threads.startOrchestrator}
+          updateOrchestrator={threads.updateOrchestrator}
+          host={host}
+          repo={threads.state.repos.find((r) => r.path === orchestrator.repoPath)?.id}
+          others={othersAsked(orchestrator.run)}
+          threadLinks={threadLinks}
+          settingsClosed={settingsClosed.count}
+        />
+      )
+    );
+
+  // A full page, as one card on the window's background.
+  const pageCard =
+    "pane-edge pane-card m-1.5 flex min-h-0 flex-1 flex-col overflow-clip rounded-prompt bg-pane";
 
   const page = (
     <div className="flex h-full">
@@ -1489,6 +1690,7 @@ export function App() {
         />
       )}
       <Sidebar
+        history={sidebarOpen && historyButtons}
         width={leftWidth}
         onResize={(width) => resizePanel(0, width)}
         open={sidebarOpen}
@@ -1520,21 +1722,21 @@ export function App() {
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.open()}
-          split={split}
-          onOpenBeside={openBeside}
-          onClosePane={closePane}
+          onOpenBeside={(threadId) => setWorkspace((state) => openBeside(state, host.id, threadId))}
+          onOpenInTab={(hostId, threadId) => {
+            setMainPage(undefined);
+            setSettings(null);
+            setWorkspace((state) => openInTab(state, hostId, threadId));
+          }}
         />
       </Sidebar>
 
-      <div
-        className="workspace-shell relative flex min-w-0 flex-1 overflow-clip"
-        data-sidebar-open={sidebarOpen}
-      >
+      <div className="relative flex min-w-0 flex-1 overflow-clip bg-pane-sidebar">
         {/* An expanded side panel takes the main pane's place. */}
         <OpenDocumentContext value={openDoc}>
-          <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
+          <main hidden={expanded} className="flex min-w-0 flex-1 flex-col">
             {mainPage === "projects" ? (
-              <>
+              <div className={pageCard}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <ProjectsPage
@@ -1548,15 +1750,15 @@ export function App() {
                   actionsFor={orchestratorActions}
                   onNewProject={newProject}
                 />
-              </>
+              </div>
             ) : mainPage === "usage" ? (
-              <>
+              <div className={pageCard}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <UsagePage hosts={hosts} />
-              </>
+              </div>
             ) : mainPage === "pullRequests" ? (
-              <>
+              <div className={pageCard}>
                 {/* The page's own heading names it, so the bar doesn't. */}
                 <TopBar className={topBarInset}>{showSidebar}</TopBar>
                 <PullRequestsPage
@@ -1581,340 +1783,212 @@ export function App() {
                   }}
                   onSetUpGithub={(e) => openSettings("sourceControl", e.hostId)}
                 />
-              </>
+              </div>
             ) : (
               <>
-                <TopBar className={`@container ${topBarInset}`}>
-                  {showSidebar}
-                  <div className="-ml-1 flex shrink-0 items-center">
-                    <IconButton
-                      label="Back"
-                      command="back"
-                      disabled={stepTo(-1) === undefined}
-                      onClick={() => step(-1)}
-                      className={stepButton}
-                    >
-                      <ChevronLeft />
-                    </IconButton>
-                    <IconButton
-                      label="Forward"
-                      command="forward"
-                      disabled={stepTo(1) === undefined}
-                      onClick={() => step(1)}
-                      className={stepButton}
-                    >
-                      <ChevronRight />
-                    </IconButton>
-                  </div>
-                  <Breadcrumb items={crumbs} />
-                  <div className="ml-auto flex shrink-0 items-center gap-2">
-                    {!group.project && !tiled && (
-                      <ThreadDetailsButton
-                        open={details.mode !== "hidden"}
-                        onToggle={() => details.toggle()}
-                      />
-                    )}
-                    {folder && (
-                      <IconButton
-                        label={drawerOpen ? "Hide terminal" : "Show terminal"}
-                        command="terminal"
-                        aria-pressed={drawerOpen}
-                        aria-controls="terminal-drawer"
-                        onClick={toggleDrawer}
-                      >
-                        <PanelBottom />
-                      </IconButton>
-                    )}
-                    {/* Shown only while the panel is hidden; its top bar has it otherwise. */}
-                    {!panelOpen && (
-                      <IconButton
-                        label="Show side panel"
-                        command="panel"
-                        aria-expanded={false}
-                        aria-controls="side-panel"
-                        onClick={() => setPanelOpen(true)}
-                      >
-                        <PanelRight />
-                      </IconButton>
-                    )}
-                  </div>
-                </TopBar>
                 <div ref={details.ref} className="relative flex min-h-0 flex-1">
                   <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                    {selection.kind === "thread" ? (
-                      <div className="relative flex min-h-0 flex-1">
-                        <SplitTiles
-                          tiled={tiled}
-                          focused={panes.indexOf(selection.threadId)}
-                          ratios={tiled ? split.ratios : []}
-                          onResize={(ratios) => split && setSplit({ ...split, ratios })}
-                          maximized={tiled && !!split.maximized}
-                          onMaximize={(maximized) => split && setSplit({ ...split, maximized })}
-                          onFocus={(index) => openThreadId(panes[index]!)}
-                          onClose={(index) => closePane(panes[index]!)}
-                          details={
-                            tiled && !group.project
-                              ? {
-                                  node: threadDetails(
-                                    details.mode === "hidden" ? "hidden" : "floating",
-                                  ),
-                                  open: (index) => details.isOpen(detailsKeyOf(panes[index]!)),
-                                  onToggle: toggleTileDetails,
-                                }
-                              : undefined
-                          }
-                          // A sidebar thread dragged over the open thread, not over a composer,
-                          // which takes it to attach (PLX-378).
-                          drop={{
-                            accepts: (e) =>
-                              !e.defaultPrevented && e.dataTransfer.types.includes(threadDragType),
-                            onDrop: (at, e) => {
-                              const thread = draggedThread(e.dataTransfer);
-                              // A split's threads are one computer's.
-                              if (thread?.hostId === host.id) openBeside(thread.runId, at);
-                            },
-                          }}
-                          items={panes.map((threadId, side) => {
-                            const focused = threadId === selection.threadId;
-                            const paneThread = threads.state.threads.find((t) => t.id === threadId);
-                            const paneParent =
-                              "threadLineage" in threads.capabilities && paneThread
-                                ? lineageOf(threads.state, paneThread)?.parent?.id
-                                : undefined;
-                            const title = threads.state.titles[threadId];
-                            // Keyed, so another run starts from an empty transcript.
-                            return {
-                              key: `${host.id}/${threadId}`,
-                              title: title ?? "Thread",
-                              icon: (
-                                <RepoIcon
-                                  repo={threads.state.repos.find((r) => r.id === paneThread?.repo)}
-                                />
-                              ),
-                              node: (
-                                <section
-                                  data-pane={tiled ? side : undefined}
-                                  data-focused={tiled && focused ? "" : undefined}
-                                  aria-label={tiled ? (title ?? "Thread") : undefined}
-                                  // Clicking or tabbing into a tile focuses it.
-                                  onPointerDownCapture={() => !focused && openThreadId(threadId)}
-                                  // A link to a pull request the thread links opens its view, not GitHub,
-                                  // unless a modifier key asks for the browser; the setting swaps the two.
-                                  onClickCapture={(e) => {
-                                    const href = (e.target as Element)
-                                      .closest?.("a[href]")
-                                      ?.getAttribute("href");
-                                    const pr =
-                                      linksPrs &&
-                                      href &&
-                                      linkedPr(
-                                        href,
-                                        threads.state.runs[threadId]?.pullRequests ?? [],
-                                      );
-                                    const modified = e.metaKey || e.ctrlKey || e.shiftKey;
-                                    const inApp = behaviorPrefs.get().prLinkClick === "parallax";
-                                    if (!pr || modified === inApp) return;
-                                    // Never reaching the link's own handler, which opens the browser.
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    openPr(pr);
-                                  }}
-                                  // Not focus the window or the app gives with nothing focused before, such as a
-                                  // notification's click or an approval card's.
-                                  onFocusCapture={(e) =>
-                                    !focused && e.relatedTarget && openThreadId(threadId)
-                                  }
-                                  className="flex min-h-0 min-w-0 flex-1 flex-col"
-                                >
-                                  <AgentChat
-                                    hostId={host.id}
-                                    runId={threadId}
-                                    prompt={threads.state.runs[threadId]?.prompt}
-                                    // The list's status goes stale once the run moves on, so only a start says so.
-                                    going={focused && selection.started}
-                                    quiet={tiled && !focused}
-                                    voiceFocused={focused}
-                                    listed={threads.state.runs[threadId]}
-                                    compose={focused ? compose : undefined}
-                                    onComposed={composed}
-                                    threadLinks={threadLinks}
-                                    subagent={focused ? selection.subagent : undefined}
-                                    onOpenSubagent={openSubagent}
-                                    onSubagents={reportNative}
-                                    onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
-                                    onDevice={(runId, deviceId) =>
-                                      void showAgentDevice(runId, deviceId)
-                                    }
-                                    strip={
-                                      paneParent
-                                        ? {
-                                            key: "parent",
-                                            node: (
-                                              <ChildStrip
-                                                name={threads.state.titles[paneParent] ?? "Thread"}
-                                                onOpenName={() => openThreadId(paneParent)}
-                                                onBack={() => openThreadId(paneParent)}
-                                              />
-                                            ),
-                                          }
-                                        : undefined
-                                    }
-                                    forked={!!paneThread?.forkedFrom}
-                                    // The open thread's, the one App reads; another pane's chips stay neutral.
-                                    pullRequests={threadRun?.id === threadId ? prs : undefined}
-                                    onOpenChanges={(turn, path) => {
-                                      setPanelOpen(true);
-                                      setShowChanges({ runId: threadId, turn, path });
-                                    }}
-                                    onFork={
-                                      "threadFork" in threads.capabilities
-                                        ? (turnId, choice) => forkThread(threadId, turnId, choice)
-                                        : undefined
-                                    }
-                                  />
-                                </section>
-                              ),
-                            };
-                          })}
-                        />
-                      </div>
-                    ) : selection.kind === "new" ? (
-                      <NewThread
-                        // Each draft is its own screen, so opening another leaves this one as a draft.
-                        key={draft}
-                        draftId={draft}
-                        hostId={host.id}
-                        hosts={hosts}
-                        onHostChange={pickHost}
-                        groups={groups}
-                        groupId={group.id}
-                        onGroupChange={(groupId) => setSelection({ kind: "new", groupId, draft })}
-                        elsewhere={elsewhere}
-                        onPickElsewhere={(hostId, groupId) =>
-                          openOnHost(hostId, { kind: "new", groupId, draft })
-                        }
-                        missing={
-                          new Set(
-                            hosts
-                              .filter((h) => lacksRepo(views[h.id], group.name))
-                              .map((h) => h.id),
+                    <div className="relative flex min-h-0 flex-1 p-[3px]">
+                      <SplitTiles
+                        focused={workspace.panes.indexOf(focusedPane(workspace))}
+                        cuts={workspace.cuts}
+                        onResize={(cuts) => setWorkspace((state) => ({ ...state, cuts }))}
+                        maximized={!!workspace.maximized}
+                        leading={
+                          !sidebarOpen && (
+                            <>
+                              {showSidebar}
+                              {historyButtons}
+                            </>
                           )
                         }
-                        shared={hosts.some(
-                          (h) =>
-                            h.id !== host.id &&
-                            views[h.id]?.state.repos.some(
-                              (r) => isRepository(r) && r.name === group.name,
-                            ),
-                        )}
-                        local={host.id === localId}
-                        addRepo={threads.addRepo}
-                        start={threads.start}
-                        runOptions={connected && "runOptions" in connection.capabilities}
-                        onStarted={(threadId, background) => {
-                          if (!background)
-                            setSelection({ kind: "thread", threadId, started: true });
+                        leadingClass={sidebarOpen ? "" : "traffic-light-inset"}
+                        controls={topControls}
+                        controlsClass={sidePanelOpen ? "" : "window-controls-inset"}
+                        closable={closableTab}
+                        hideTabs={!closableTab && !group.project}
+                        onSelectTab={(tabId) => setWorkspace((state) => selectTab(state, tabId))}
+                        onCloseTab={(tabId) => setWorkspace((state) => closeTab(state, tabId))}
+                        onNewTab={(paneId) => {
+                          if (paneId === workspace.focused) return newThread();
+                          // In another pane, New thread takes that pane's computer and repository.
+                          const tab = shownTab(workspace.panes.find((p) => p.id === paneId)!);
+                          const { state } = views[tab.hostId] ?? idleThreads;
+                          const thread = state.threads.find((t) => t.id === threadOf(tab));
+                          setWorkspace((w) => ({ ...w, focused: paneId }));
+                          openOnHost(tab.hostId, {
+                            kind: "new",
+                            groupId: thread
+                              ? groupOf(state, thread)
+                              : tab.selection.kind === "new"
+                                ? tab.selection.groupId
+                                : undefined,
+                          });
                         }}
-                        disabledReason={offline}
-                        threadLinks={threadLinks}
-                        settingsClosed={settingsClosed.count}
-                        header={
-                          projectEntry && (
-                            <ProjectHeader
-                              entry={projectEntry}
-                              onBack={() => openMainPage("projects")}
-                              pinned={pins.includes(projectEntry.key)}
-                              onTogglePin={() => togglePinnedProject(projectEntry.key)}
-                              actionsFor={() => orchestratorActions(projectEntry)}
-                            />
-                          )
+                        onDropOnTabs={(drop, paneId, before) => {
+                          if (drop.kind === "tab")
+                            return setWorkspace((state) => moveTab(state, drop.id, paneId, before));
+                          const view = droppedView(drop.hostId, drop.runId);
+                          setWorkspace((state) =>
+                            placeView(state, drop.hostId, view, paneId, before),
+                          );
+                        }}
+                        details={
+                          tiled && selection.kind === "thread" && !group.project
+                            ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")
+                            : undefined
                         }
-                        tray={
-                          projectRepo && (
-                            <RunTargetMenu
-                              hosts={projectHosts}
-                              hostId={host.id}
-                              onHostChange={(id) => {
-                                const there = views[id]?.state.repos.find(
-                                  (r) => r.project && r.name === projectRepo.name,
-                                );
-                                if (id !== host.id && there)
-                                  openOnHost(id, { kind: "new", groupId: there.id, draft });
-                              }}
-                            />
-                          )
-                        }
-                        aside={
-                          projectRepo &&
-                          "projectContext" in threads.capabilities && (
-                            <ProjectContext hostId={host.id} project={projectRepo} view={threads} />
-                          )
-                        }
-                        below={
-                          projectRepo && (
-                            <ProjectThreads
-                              host={host}
-                              project={projectRepo}
-                              computers={listed}
-                              onOpenThread={openHostThread}
-                            />
-                          )
-                        }
-                      />
-                    ) : agentId ? (
-                      <AgentChat
-                        key={`${host.id}/${agentId}`}
-                        hostId={host.id}
-                        runId={agentId}
-                        prompt={agent?.prompt}
-                        // An orchestrator's subagents are kept current.
-                        going={isRunning(agent?.status)}
-                        others={othersAsked(agentId)}
-                        orchestratorMode={orchestrator?.permission}
-                        threadLinks={threadLinks}
-                        strip={
-                          orchestrator && {
-                            key: "parent",
-                            node: (
-                              <ChildStrip
-                                name={orchestrator.name}
-                                icon={
-                                  <ProjectIcon
-                                    icon={orchestrator.icon}
-                                    className="size-3.5 shrink-0"
-                                  />
+                        // A tab anywhere, or a sidebar thread not over a composer, which takes it to
+                        // attach (PLX-378).
+                        drop={{
+                          accepts: (e) => {
+                            const { types } = e.dataTransfer;
+                            if (types.includes(tabDragType)) return true;
+                            return !e.defaultPrevented && types.includes(threadDragType);
+                          },
+                          onDrop: (target, e) => {
+                            const tabId = e.dataTransfer.getData(tabDragType);
+                            const thread = draggedThread(e.dataTransfer);
+                            const view = thread && droppedView(thread.hostId, thread.runId);
+                            setWorkspace((state) => {
+                              if (tabId)
+                                return "zone" in target
+                                  ? moveToZone(state, tabId, target.zone)
+                                  : moveTab(state, tabId, target.paneId);
+                              if (!thread || !view) return state;
+                              return "zone" in target
+                                ? openInZone(state, thread.hostId, view, target.zone)
+                                : placeView(state, thread.hostId, view, target.paneId);
+                            });
+                          },
+                        }}
+                        items={workspace.panes.map((pane, side) => {
+                          const tab = shownTab(pane);
+                          const focused = pane.id === workspace.focused;
+                          const view = views[tab.hostId] ?? idleThreads;
+                          const threadId = threadOf(tab);
+                          const paneThread = view.state.threads.find((t) => t.id === threadId);
+                          const paneParent =
+                            "threadLineage" in view.capabilities && paneThread
+                              ? lineageOf(view.state, paneThread)?.parent?.id
+                              : undefined;
+                          const title = threadId ? view.state.titles[threadId] : undefined;
+                          return {
+                            // Keyed, so another run starts from an empty transcript.
+                            key: threadId ? `${tab.hostId}/${threadId}` : `${pane.id}/${tab.id}`,
+                            paneId: pane.id,
+                            cells: pane.cells,
+                            active: tab.id,
+                            tabs: pane.tabs.map((t) => tabItem(t, views[t.hostId] ?? idleThreads)),
+                            node: threadId ? (
+                              <section
+                                data-pane={tiled ? side : undefined}
+                                data-focused={tiled && focused ? "" : undefined}
+                                aria-label={tiled ? (title ?? "Thread") : undefined}
+                                // Clicking or tabbing into a tile focuses it.
+                                onPointerDownCapture={() =>
+                                  !focused && setWorkspace((w) => selectTab(w, tab.id))
                                 }
-                                onOpenName={() =>
-                                  setSelection({
-                                    kind: "orchestrator",
-                                    orchestratorId: orchestrator.id,
-                                  })
+                                // A link to a pull request the thread links opens its view, not GitHub,
+                                // unless a modifier key asks for the browser; the setting swaps the two.
+                                onClickCapture={(e) => {
+                                  const href = (e.target as Element)
+                                    .closest?.("a[href]")
+                                    ?.getAttribute("href");
+                                  const pr =
+                                    linksPrs &&
+                                    href &&
+                                    linkedPr(href, view.state.runs[threadId]?.pullRequests ?? []);
+                                  const modified = e.metaKey || e.ctrlKey || e.shiftKey;
+                                  const inApp = behaviorPrefs.get().prLinkClick === "parallax";
+                                  if (!pr || modified === inApp) return;
+                                  // Never reaching the link's own handler, which opens the browser.
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  openPr(pr);
+                                }}
+                                // Not focus the window or the app gives with nothing focused before, such as a
+                                // notification's click or an approval card's.
+                                onFocusCapture={(e) =>
+                                  !focused &&
+                                  e.relatedTarget &&
+                                  setWorkspace((w) => selectTab(w, tab.id))
                                 }
-                                onBack={() => openAgent()}
-                              />
+                                className="flex min-h-0 min-w-0 flex-1 flex-col"
+                              >
+                                <AgentChat
+                                  hostId={tab.hostId}
+                                  runId={threadId}
+                                  prompt={view.state.runs[threadId]?.prompt}
+                                  // The list's status goes stale once the run moves on, so only a start says so.
+                                  going={
+                                    focused &&
+                                    tab.selection.kind === "thread" &&
+                                    tab.selection.started
+                                  }
+                                  quiet={tiled && !focused}
+                                  voiceFocused={focused}
+                                  listed={view.state.runs[threadId]}
+                                  compose={focused ? compose : undefined}
+                                  onComposed={composed}
+                                  threadLinks={threadLinks}
+                                  subagent={
+                                    focused && tab.selection.kind === "thread"
+                                      ? tab.selection.subagent
+                                      : undefined
+                                  }
+                                  onOpenSubagent={openSubagent}
+                                  onSubagents={reportNative}
+                                  onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
+                                  onDevice={(runId, deviceId) =>
+                                    void showAgentDevice(runId, deviceId)
+                                  }
+                                  strip={
+                                    paneParent
+                                      ? {
+                                          key: "parent",
+                                          node: (
+                                            <ChildStrip
+                                              name={view.state.titles[paneParent] ?? "Thread"}
+                                              onOpenName={() => openThreadId(paneParent)}
+                                              onBack={() => openThreadId(paneParent)}
+                                            />
+                                          ),
+                                        }
+                                      : undefined
+                                  }
+                                  forked={!!paneThread?.forkedFrom}
+                                  // The open thread's, the one App reads; another pane's chips stay neutral.
+                                  pullRequests={threadRun?.id === threadId ? prs : undefined}
+                                  onOpenChanges={(turn, path) => {
+                                    setPanelOpen(true);
+                                    setShowChanges({ runId: threadId, turn, path });
+                                  }}
+                                  onFork={
+                                    "threadFork" in view.capabilities
+                                      ? (turnId, choice) => forkThread(threadId, turnId, choice)
+                                      : undefined
+                                  }
+                                />
+                              </section>
+                            ) : focused ? (
+                              <div className="flex min-h-0 min-w-0 flex-1 flex-col">{mainView}</div>
+                            ) : (
+                              // New thread and an orchestrator's chat read the open selection, so
+                              // only the focused pane shows one.
+                              <button
+                                type="button"
+                                onClick={() => setWorkspace((w) => selectTab(w, tab.id))}
+                                className="flex flex-1 flex-col items-center justify-center gap-2 text-body text-muted-foreground hover:text-foreground [&_svg]:size-5"
+                              >
+                                {tabItem(tab, view).icon}
+                                {tabItem(tab, view).title}
+                              </button>
                             ),
-                          }
-                        }
+                          };
+                        })}
                       />
-                    ) : (
-                      orchestrator && (
-                        <OrchestratorChat
-                          key={`${host.id}/${orchestrator.id}`}
-                          hostId={host.id}
-                          orchestrator={orchestrator}
-                          prompt={orchestrator.run && threads.state.runs[orchestrator.run]?.prompt}
-                          startOrchestrator={threads.startOrchestrator}
-                          updateOrchestrator={threads.updateOrchestrator}
-                          host={host}
-                          repo={
-                            threads.state.repos.find((r) => r.path === orchestrator.repoPath)?.id
-                          }
-                          others={othersAsked(orchestrator.run)}
-                          threadLinks={threadLinks}
-                          settingsClosed={settingsClosed.count}
-                        />
-                      )
-                    )}
+                    </div>
                   </div>
                   {!tiled && threadDetails(group.project ? "hidden" : details.mode)}
                 </div>

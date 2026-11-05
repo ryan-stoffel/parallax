@@ -1,4 +1,4 @@
-import { ClipboardList, Columns2, Maximize2, Minimize2, PanelTop, Rows2, X } from "lucide-react";
+import { PanelTop } from "lucide-react";
 import {
   useLayoutEffect,
   useRef,
@@ -9,20 +9,32 @@ import {
   type ReactNode,
 } from "react";
 
-import { bindingOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
+import { ThreadTabs, type TabDrop, type TabItem } from "./ThreadTabs";
 import {
+  allCells,
   clampRatio,
+  dividersOf,
+  evenCuts,
   evenRatio,
-  fittingTiles,
-  maxTiles,
-  ratioAt,
-  tileAt,
-  tileLayout,
+  fits,
+  rectOf,
+  tilesOf,
+  usedCuts,
+  zoneAt,
+  zoneCells,
+  zoneNames,
+  type Cells,
+  type GridCuts,
   type Rect,
+  type Tile,
+  type Zone,
 } from "./splitLayout";
 
-/** A tile's header height in pixels, `h-9`. */
-const headerHeight = 36;
+/** The gap around a card in pixels, half of what shows between two. */
+const gutter = 3;
+
+/** The height of a card's row of tabs in pixels, `h-10`. */
+const stripHeight = 40;
 
 /** How far an arrow key moves a focused divider. */
 const keyStep = 0.05;
@@ -35,64 +47,81 @@ const placed = (r: Rect, inset = 0, top = 0): CSSProperties => ({
   height: `calc(${r.height * 100}% - ${inset * 2 + top}px)`,
 });
 
-/** One thread in the split: its header's title and icon, and its chat. */
+/** One pane: its tabs, the one it shows, and that tab's view. */
 export interface TileItem {
+  /** The shown tab's view, so another tab starts from a fresh one. */
   key: string;
-  title: string;
-  icon: ReactNode;
+  paneId: string;
+  cells: Cells;
+  tabs: TabItem[];
+  active: string;
   node: ReactNode;
 }
 
-/** Where a thread dragged over the split would open, and the box that previews it. */
-interface DropTarget {
-  at: number;
-  rect: Rect;
-  label: "beside" | "tab" | "replace";
-}
+/** Where a drag over the window would land: a new pane in a zone, or a tab in a pane. */
+export type TileDrop = { zone: Zone } | { paneId: string };
+
+/** A landing, and the box that previews it. */
+type DropTarget = TileDrop & { rect: Rect; cells: Cells; label: string };
 
 /**
- * The split's threads tiled in their Fibonacci layout (splitLayout.ts). With `tiled` off it holds
- * one thread, full size and headerless. Tiled, each tile has a header of tabs, and as many threads
- * tile as keep `minTile`: the rest stack as tabs in the last tile, which shows the focused one, or
- * the last one shown. `maximized` stacks them all in one tile. Chats are siblings keyed by `key`,
- * so a tile coming, going, or stacking never remounts the others, and they glide to their places.
+ * The window's panes, as cards on a grid (splitLayout.ts) on the window's background. Each card has a
+ * row of tabs above it. A card whose only tab has no `leading` before it is one shape with that tab,
+ * from the card's left edge. With `hideTabs`, the card rises to the window's top, around the row.
+ * `leading` starts the first card's row, and `controls` end the top right card's,
+ * giving up their room to its tabs when it's narrow. Columns or rows with no room for `minTile` stack,
+ * their panes in one tile, which shows the focused one, or the last one shown, and lists all their
+ * tabs. `maximized` stacks them all. Views are siblings keyed by `key`, so a tile coming, going, or
+ * stacking never remounts the others, and they glide to their places.
  *
- * A divider on each cut drags or arrow-keys to resize and double-clicks back to even. A drag shows
- * its ratios here and hands them up once it ends, so App doesn't render on every move. `details`
- * floats over the focused thread's tile. A thread `drop` accepts, dragged over, previews where it
- * would open: a new tile while there's room, as a tab once one won't fit, or in place of the tile
- * under the pointer when the split is full.
+ * A divider on each line, showing a short grip under the pointer or keyboard focus, drags or arrow-keys
+ * to resize and double-clicks back to even. A drag shows
+ * its lines here and hands them up once it ends, so App doesn't render on every move. `details` floats
+ * over the focused pane's card. A tab or sidebar thread `drop` accepts, dragged over the window, previews
+ * where it would land: the window's sides, top, bottom, and corners are zones (`zoneAt`), and its
+ * middle adds a tab to the pane under the pointer.
  */
 export function SplitTiles({
   items,
-  tiled,
   focused,
-  ratios,
+  cuts,
   onResize,
   maximized,
-  onMaximize,
-  onFocus,
-  onClose,
+  leading,
+  leadingClass = "",
+  controls,
+  controlsClass = "",
+  closable,
+  hideTabs,
+  onSelectTab,
+  onCloseTab,
+  onNewTab,
+  onDropOnTabs,
   details,
   drop,
 }: {
   items: TileItem[];
-  tiled: boolean;
   focused: number;
-  ratios: number[];
-  onResize: (ratios: number[]) => void;
+  cuts: GridCuts;
+  onResize: (cuts: GridCuts) => void;
   maximized: boolean;
-  onMaximize: (maximized: boolean) => void;
-  onFocus: (index: number) => void;
-  onClose: (index: number) => void;
-  details?: {
-    node: ReactNode;
-    open: (index: number) => boolean;
-    onToggle: (index: number) => void;
+  leading?: ReactNode;
+  leadingClass?: string;
+  controls?: ReactNode;
+  controlsClass?: string;
+  closable: boolean;
+  /** No tabs and no plus, for the window's only tab on plain New thread, whose page says what it is. */
+  hideTabs: boolean;
+  onSelectTab: (tabId: string) => void;
+  onCloseTab: (tabId: string) => void;
+  onNewTab: (paneId: string) => void;
+  onDropOnTabs: (drop: TabDrop, paneId: string, before?: string) => void;
+  details?: ReactNode;
+  drop?: {
+    accepts: (e: DragEvent) => boolean;
+    onDrop: (target: TileDrop, e: DragEvent) => void;
   };
-  drop?: { accepts: (e: DragEvent) => boolean; onDrop: (at: number, e: DragEvent) => void };
 }) {
-  useKeybindings();
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
@@ -103,70 +132,91 @@ export function SplitTiles({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const [live, setLive] = useState<number[]>();
-  // The cut being dragged and its latest ratios, read by pointer events that may land before a render.
-  const drag = useRef<{ cut: number; ratios: number[] }>(undefined);
-  const shown = live ?? ratios;
+  const [live, setLive] = useState<GridCuts>();
+  // The line being dragged and the latest cuts, read by pointer events that may land before a render.
+  const drag = useRef<{ vertical: boolean; cuts: GridCuts }>(undefined);
+  const shown = live ?? cuts;
   const endDrag = () => {
     if (!drag.current) return;
-    onResize(drag.current.ratios);
+    onResize(drag.current.cuts);
     drag.current = undefined;
     setLive(undefined);
   };
 
-  const n = items.length;
-  const fit = (count: number, cuts: readonly number[]) =>
-    fittingTiles(count, cuts, size.width, size.height);
-  // How many tiles show; the last holds the threads from `last` on, as tabs.
-  const visible = !tiled ? n : maximized ? 1 : fit(n, shown);
-  const last = visible - 1;
-  const { tiles, cuts } = tileLayout(visible, shown);
-  // The stack's shown thread: the focused one when it's there, else the one shown last.
-  const stackShown = useRef<string>(undefined);
-  if (focused >= last) stackShown.current = items[focused]?.key;
-  const remembered = items.findIndex((item, i) => i >= last && item.key === stackShown.current);
-  const stackActive = focused >= last ? focused : remembered === -1 ? last : remembered;
-  const tileOf = (i: number) => Math.min(i, last);
-  const activeIn = (tile: number) => (tile === last ? stackActive : tile);
+  const room = fits(shown, size.width, size.height);
+  const tiles: Tile[] = maximized
+    ? [{ cells: allCells, panes: items.map((_, i) => i) }]
+    : tilesOf(
+        items.map((item) => item.cells),
+        room,
+      );
+  const dividers = dividersOf(tiles, shown);
+  // Each stack's shown pane: the focused one when it's there, else the one shown last.
+  const stackShown = useRef(new Map<Cells, string>());
+  const tileOf = (i: number) => tiles.findIndex((tile) => tile.panes.includes(i));
+  const flushOf = (tile: Tile, at: number) =>
+    tile.panes.flatMap((i) => items[i]!.tabs).length === 1 && !(at === 0 && leading);
+  const activeIn = (tile: Tile) => {
+    if (tile.panes.includes(focused)) {
+      stackShown.current.set(tile.cells, items[focused]!.paneId);
+      return focused;
+    }
+    const remembered = stackShown.current.get(tile.cells);
+    return tile.panes.find((i) => items[i]!.paneId === remembered) ?? tile.panes[0]!;
+  };
 
-  // `shown` with cut `cut` at `ratio`, or undefined when that would stack a tile that shows now,
-  // taking away the divider that could bring it back.
-  const resize = (cut: number, ratio: number) => {
-    const next = [...shown];
-    next[cut] = ratio;
-    return fit(n, next) < visible ? undefined : next;
+  // `shown` with a line at `ratio`, or undefined when that would stack tiles that show now, taking
+  // away the divider that could bring them back.
+  const resize = (vertical: boolean, ratio: number) => {
+    const next = vertical ? { ...shown, x: ratio } : { ...shown, y: ratio };
+    const after = fits(next, size.width, size.height);
+    return (room.columns && !after.columns) || (room.rows && !after.rows) ? undefined : next;
   };
 
   const [target, setTarget] = useState<DropTarget>();
   const targetOf = (e: DragEvent<HTMLElement>): DropTarget | undefined => {
-    if (!drop?.accepts(e)) return undefined;
-    if (n < maxTiles) {
-      // A new thread unmaximizes the split, as Open side by side asks for.
-      const next = [...ratios, evenRatio];
-      const fits = fit(n + 1, next);
-      return fits === n + 1
-        ? { at: n, rect: tileLayout(n + 1, next).tiles[n]!, label: "beside" }
-        : { at: n, rect: tileLayout(fits, next).tiles[fits - 1]!, label: "tab" };
-    }
+    // The row of tabs takes its own drops.
+    if (!drop?.accepts(e) || (e.target as Element).closest(".titlebar")) return undefined;
     const r = box.current!.getBoundingClientRect();
-    const tile = tileAt(tiles, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
-    return { at: activeIn(tile), rect: tiles[tile]!, label: "replace" };
+    const x = (e.clientX - r.left) / r.width;
+    const y = (e.clientY - r.top) / r.height;
+    // The lines the drop would land on, so what's previewed is what it does.
+    const landing = usedCuts(
+      items.map((item) => item.cells),
+      shown,
+    );
+    const zone = zoneAt(x, y, fits(landing, size.width, size.height));
+    if (zone) {
+      const cells = zoneCells[zone];
+      return { zone, cells, rect: rectOf(cells, landing), label: zoneNames[zone] };
+    }
+    const under = tiles.find((tile) => {
+      const t = rectOf(tile.cells, shown);
+      return x >= t.left && x < t.left + t.width && y >= t.top && y < t.top + t.height;
+    });
+    const tile = under ?? tiles[0]!;
+    return {
+      paneId: items[activeIn(tile)]!.paneId,
+      cells: tile.cells,
+      rect: rectOf(tile.cells, shown),
+      label: "Add as a tab",
+    };
   };
-  // The cut a new tile makes: side by side after an odd count, top and bottom after an even one.
-  const NewCut = n % 2 === 1 ? Columns2 : Rows2;
+  const over = (e: DragEvent<HTMLElement>) => {
+    const next = targetOf(e);
+    setTarget(next);
+    if (!next) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
 
   return (
     <div
       ref={box}
       data-resizing={live ? "" : undefined}
       className="group/tiles relative min-h-0 min-w-0 flex-1"
-      onDragOver={(e) => {
-        const next = targetOf(e);
-        setTarget(next);
-        if (!next) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-      }}
+      onDragEnter={over}
+      onDragOver={over}
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setTarget(undefined);
       }}
@@ -175,82 +225,117 @@ export function SplitTiles({
         setTarget(undefined);
         if (!next) return;
         e.preventDefault();
-        drop!.onDrop(next.at, e);
+        drop!.onDrop("zone" in next ? { zone: next.zone } : { paneId: next.paneId }, e);
       }}
     >
+      {tiles.map((tile, at) => {
+        const group = tile.panes;
+        const rect = rectOf(tile.cells, shown);
+        const shownPane = items[activeIn(tile)]!;
+        const flush = flushOf(tile, at);
+        // The top right card.
+        const corner = !!(tile.cells & zoneCells.upperRight);
+        return (
+          <div
+            key={`frame-${tile.cells}`}
+            // Into the card, for the shown tab's foot to cover the card's top edge at any display scale.
+            style={{ ...placed(rect, gutter), height: stripHeight + 2 }}
+            className={`titlebar @container absolute z-[2] flex items-stretch transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none`}
+          >
+            <div
+              className={`flex min-w-40 shrink items-center gap-1 pr-1 ${flush ? "" : "-ml-1.5"} ${at === 0 && leading ? `pl-3 ${leadingClass}` : flush ? "" : "pl-[22px]"}`}
+            >
+              {at === 0 && leading}
+              {!hideTabs && (
+                <ThreadTabs
+                  tabs={group.flatMap((i) => items[i]!.tabs)}
+                  active={shownPane.active}
+                  focused={group.includes(focused)}
+                  marked={group.includes(focused) && tiles.length > 1}
+                  onSelect={onSelectTab}
+                  onClose={onCloseTab}
+                  onNew={() => onNewTab(shownPane.paneId)}
+                  onDrop={(tabDrop, before) => {
+                    // Among stacked panes, the one holding the tab it lands before, or the last.
+                    const holder = group.find((i) => items[i]!.tabs.some((t) => t.id === before));
+                    onDropOnTabs(tabDrop, items[holder ?? group.at(-1)!]!.paneId, before);
+                  }}
+                  closable={closable}
+                  flush={flush}
+                />
+              )}
+            </div>
+            <div className="min-w-3 flex-1" />
+            {corner && controls && (
+              <div
+                className={`flex min-w-0 shrink items-center justify-end gap-2 overflow-clip pr-1.5 pb-px pl-3 ${controlsClass}`}
+              >
+                {controls}
+              </div>
+            )}
+          </div>
+        );
+      })}
       {items.map(({ key, node }, i) => {
-        const tile = tileOf(i);
+        const tile = tiles[tileOf(i)]!;
         const active = activeIn(tile) === i;
         return (
           <div
             key={key}
-            // A stacked thread behind its tile's tab stays mounted, out of sight and reach.
+            // A stacked pane's view stays mounted, out of sight and reach.
             inert={!active}
-            style={placed(tiles[tile]!, 0, tiled ? headerHeight : 0)}
-            className={`absolute flex min-h-0 min-w-0 transition-[left,top,width,height,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${active ? "z-[1] bg-pane" : "invisible"} ${tiles[tile]!.left > 0 ? "border-l border-border" : ""}`}
+            style={{
+              ...placed(rectOf(tile.cells, shown), gutter, hideTabs ? 0 : stripHeight),
+              paddingTop: hideTabs ? stripHeight : 0,
+            }}
+            data-marked={tiles.length > 1 && i === focused ? "" : undefined}
+            className={`pane-edge pane-card absolute flex min-h-0 min-w-0 overflow-clip rounded-prompt transition-[left,top,width,height,padding,visibility] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${flushOf(tile, tileOf(i)) && !hideTabs ? "rounded-tl-none" : ""} ${active ? "z-[1] bg-pane" : "invisible"}`}
           >
-            {node}
-            {i === focused && details?.node}
+            <div className="relative flex min-h-0 min-w-0 flex-1">
+              {/* Content scrolled up fades out rather than butting into the card's top edge. */}
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-4 bg-linear-to-b from-pane to-transparent"
+              />
+              {node}
+              {i === focused && details}
+            </div>
           </div>
         );
       })}
-      {tiled &&
-        tiles.map((rect, tile) => {
-          const group = tile === last ? items.map((_, i) => i).slice(last) : [tile];
-          return (
-            <TileHeader
-              key={`header-${tile}`}
-              rect={rect}
-              group={group}
-              items={items}
-              active={activeIn(tile)}
-              focused={focused}
-              maximized={maximized}
-              detailsOpen={!!details && group.includes(focused) && details.open(focused)}
-              onFocus={onFocus}
-              onClose={onClose}
-              onDetails={details && (() => details.onToggle(activeIn(tile)))}
-              onMaximize={() => {
-                if (!group.includes(focused)) onFocus(activeIn(tile));
-                onMaximize(!maximized);
-              }}
-            />
-          );
-        })}
-      {cuts.map((cut, i) => {
-        const t = tiles[i]!;
-        const { region, vertical } = cut;
-        // A strip 9px across centered on the line, along the region it cuts. After the first, it
-        // starts clear of the cut before's strip, which keeps the corner they share.
-        const clear = i > 0 ? 5 : 0;
+      {dividers.map(({ vertical, from, to }) => {
+        const at = vertical ? shown.x : shown.y;
+        // A strip 9px across centered on the line, along what it divides. The horizontal one starts
+        // clear of a vertical one it meets, which keeps the corner they share.
+        const clear = !vertical && from > 0 ? 5 : 0;
         const style: CSSProperties = vertical
           ? {
-              left: `calc(${(t.left + t.width) * 100}% - 4px)`,
-              top: `calc(${region.top * 100}% + ${clear}px)`,
+              left: `calc(${at * 100}% - 4px)`,
+              top: `${from * 100}%`,
               width: 9,
-              height: `calc(${region.height * 100}% - ${clear}px)`,
+              height: `${(to - from) * 100}%`,
             }
           : {
-              top: `calc(${(t.top + t.height) * 100}% - 4px)`,
-              left: `calc(${region.left * 100}% + ${clear}px)`,
+              top: `calc(${at * 100}% - 4px)`,
+              left: `calc(${from * 100}% + ${clear}px)`,
               height: 9,
-              width: `calc(${region.width * 100}% - ${clear}px)`,
+              width: `calc(${(to - from) * 100}% - ${clear}px)`,
             };
         const keyed = (e: KeyboardEvent) => {
           const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
           if (step === undefined) return;
           e.preventDefault();
-          const next = resize(i, clampRatio((shown[i] ?? evenRatio) + step * keyStep));
+          const next = resize(vertical, clampRatio(at + step * keyStep));
           if (next) onResize(next);
         };
         return (
           <div
-            key={`cut-${i}`}
+            key={vertical ? "cut-x" : "cut-y"}
             role="separator"
             tabIndex={0}
             aria-label="Resize threads"
             aria-orientation={vertical ? "vertical" : "horizontal"}
-            aria-valuenow={Math.round((shown[i] ?? evenRatio) * 100)}
+            aria-valuenow={Math.round(at * 100)}
             aria-valuemin={20}
             aria-valuemax={80}
             title="Drag to resize, double-click to even out"
@@ -259,23 +344,24 @@ export function SplitTiles({
               if (e.button !== 0) return;
               e.preventDefault();
               e.currentTarget.setPointerCapture(e.pointerId);
-              drag.current = { cut: i, ratios: shown };
+              drag.current = { vertical, cuts: shown };
               setLive(shown);
             }}
             onPointerMove={(e) => {
-              if (drag.current?.cut !== i) return;
+              if (drag.current?.vertical !== vertical) return;
               const r = box.current!.getBoundingClientRect();
-              const x = (e.clientX - r.left) / r.width;
-              const y = (e.clientY - r.top) / r.height;
-              const next = resize(i, ratioAt(cut, x, y));
+              const ratio = vertical
+                ? (e.clientX - r.left) / r.width
+                : (e.clientY - r.top) / r.height;
+              const next = resize(vertical, clampRatio(ratio));
               if (!next) return;
-              drag.current.ratios = next;
+              drag.current.cuts = next;
               setLive(next);
             }}
             onPointerUp={endDrag}
             onLostPointerCapture={endDrag}
             onDoubleClick={() => {
-              const next = resize(i, evenRatio);
+              const next = resize(vertical, evenRatio);
               if (next) onResize(next);
             }}
             onKeyDown={keyed}
@@ -283,7 +369,7 @@ export function SplitTiles({
           >
             <span
               aria-hidden
-              className={`rounded-full bg-accent opacity-0 transition-opacity duration-150 group-hover/cut:opacity-100 group-focus-visible/cut:opacity-100 group-active/cut:opacity-100 ${vertical ? "h-full w-0.5" : "h-0.5 w-full"}`}
+              className={`rounded-full bg-foreground/25 opacity-0 transition-[opacity,background-color] duration-150 group-hover/cut:opacity-100 group-focus-visible/cut:opacity-100 group-active/cut:bg-foreground/50 group-active/cut:opacity-100 ${vertical ? "h-9 w-1" : "h-1 w-9"}`}
             />
           </div>
         );
@@ -291,16 +377,12 @@ export function SplitTiles({
       {target && (
         <div
           aria-hidden
-          style={placed(target.rect, 8)}
-          className="pointer-events-none absolute z-20 grid place-items-center rounded-xl border-2 border-dashed border-accent bg-background/85 backdrop-blur-sm transition-[left,top,width,height] duration-150 ease-out motion-reduce:transition-none"
+          style={placed(target.rect, gutter, stripHeight)}
+          className="pointer-events-none absolute z-20 grid place-items-center rounded-prompt border border-foreground/35 bg-foreground/[0.07] backdrop-blur-[2px] transition-[left,top,width,height] duration-150 ease-out motion-reduce:transition-none"
         >
-          <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-body font-medium text-accent-foreground [&_svg]:size-4">
-            {target.label === "tab" ? <PanelTop /> : <NewCut />}
-            {target.label === "beside"
-              ? "Open side by side"
-              : target.label === "tab"
-                ? "Open as a tab"
-                : "Open here"}
+          <span className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-body font-medium text-foreground shadow-composer [&_svg]:size-4">
+            {"zone" in target ? <ZoneGlyph cells={target.cells} /> : <PanelTop />}
+            {target.label}
           </span>
         </div>
       )}
@@ -308,158 +390,30 @@ export function SplitTiles({
   );
 }
 
-const headerButton =
-  "grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-3.5";
-
-/**
- * A tile's header: a tab for each thread it holds, each with its repository's icon, title, Focus
- * thread key, and a close button, then Thread details and Maximize or Restore. The tab it shows
- * reads in full; the focused thread's is underlined in the accent. Double-clicking it maximizes.
- */
-function TileHeader({
-  rect,
-  group,
-  items,
-  active,
-  focused,
-  maximized,
-  detailsOpen,
-  onFocus,
-  onClose,
-  onDetails,
-  onMaximize,
-}: {
-  rect: Rect;
-  group: number[];
-  items: TileItem[];
-  active: number;
-  focused: number;
-  maximized: boolean;
-  detailsOpen: boolean;
-  onFocus: (index: number) => void;
-  onClose: (index: number) => void;
-  onDetails?: () => void;
-  onMaximize: () => void;
-}) {
-  const stacked = group.length > 1;
+/** A small map of the grid, with `cells` filled. */
+function ZoneGlyph({ cells }: { cells: Cells }) {
+  const r = rectOf(cells, evenCuts);
+  // 16 by 12, inside a 1px frame.
   return (
-    <div
-      style={{ ...placed(rect), height: headerHeight }}
-      onDoubleClick={(e) => {
-        if (!(e.target as Element).closest("[data-tile-action]")) onMaximize();
-      }}
-      className={`absolute z-[2] flex items-stretch border-b border-border bg-pane transition-[left,top,width] duration-200 ease-out group-data-resizing/tiles:transition-none motion-reduce:transition-none ${rect.left > 0 ? "border-l" : ""} ${rect.top > 0 ? "border-t" : ""}`}
-    >
-      <div role="tablist" aria-label="Threads" className="flex min-w-0 flex-1 items-stretch">
-        {group.map((i) => {
-          const item = items[i]!;
-          const shown = i === active;
-          const isFocused = i === focused;
-          const keys = bindingOf(tileCommands[i]!);
-          return (
-            <div
-              key={item.key}
-              // In a stack, the shown tab takes the most room, and the others' close buttons show over
-              // them on hover, taking none.
-              className={`group/tab relative flex min-w-0 items-center ${stacked ? `max-w-64 border-r border-border last:border-r-0 ${shown ? "flex-[3]" : "flex-1"}` : "flex-1"} ${shown ? "" : "hover:bg-hover"}`}
-            >
-              {isFocused && (
-                <span aria-hidden className="absolute inset-x-0 -bottom-px z-[1] h-0.5 bg-accent" />
-              )}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={shown}
-                title={item.title}
-                onClick={() => onFocus(i)}
-                className={`@container/tab flex h-full min-w-0 flex-1 items-center gap-2 pl-3 text-left text-body transition-colors ${isFocused ? "text-foreground" : shown ? "text-muted-foreground" : "text-faint-foreground"}`}
-              >
-                <span className={`flex shrink-0 ${isFocused ? "" : "opacity-60"}`}>
-                  {item.icon}
-                </span>
-                <span className={`min-w-0 flex-1 truncate ${shown ? "font-medium" : ""}`}>
-                  {item.title}
-                </span>
-                {keys && (
-                  <kbd className="shrink-0 font-sans text-caption text-faint-foreground tabular-nums @max-[10rem]/tab:hidden">
-                    {formatKeybinding(keys)}
-                  </kbd>
-                )}
-              </button>
-              <button
-                type="button"
-                data-tile-action
-                aria-label={`Close ${item.title}`}
-                title="Close this tile"
-                onClick={() => onClose(i)}
-                className={`${headerButton} ${stacked && !shown ? "absolute right-1 bg-pane opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100" : "mx-1"}`}
-              >
-                <X />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <div
-        data-tile-action
-        className="flex shrink-0 items-center gap-0.5 border-l border-border px-1"
-      >
-        {onDetails && (
-          <button
-            type="button"
-            aria-label="Thread details"
-            title="Thread details"
-            aria-pressed={detailsOpen}
-            onClick={onDetails}
-            className={headerButton}
-          >
-            <ClipboardList />
-          </button>
-        )}
-        <button
-          type="button"
-          aria-label={maximized ? "Restore tiles" : "Maximize thread"}
-          title={maximized ? "Restore tiles" : "Maximize thread"}
-          onClick={onMaximize}
-          className={headerButton}
-        >
-          {maximized ? <Minimize2 /> : <Maximize2 />}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** A small map of a split of `count` threads at even sizes, tile `index` filled. */
-export function TileGlyph({ count, index }: { count: number; index: number }) {
-  const { tiles } = tileLayout(count, []);
-  // 16 by 12, its tiles 1px apart inside a 1px frame.
-  const w = 16;
-  const h = 12;
-  return (
-    <svg aria-hidden viewBox={`0 0 ${w} ${h}`} className="h-3 w-4 shrink-0">
+    <svg aria-hidden viewBox="0 0 16 12" className="h-3 w-4 shrink-0">
       <rect
         x={0.5}
         y={0.5}
-        width={w - 1}
-        height={h - 1}
+        width={15}
+        height={11}
         rx={2}
         fill="none"
         stroke="currentColor"
         strokeOpacity={0.45}
       />
-      {tiles.map((t, i) => (
-        <rect
-          key={i}
-          x={2 + t.left * (w - 4) + (t.left > 0 ? 0.5 : 0)}
-          y={2 + t.top * (h - 4) + (t.top > 0 ? 0.5 : 0)}
-          width={t.width * (w - 4) - (t.left > 0 ? 0.5 : 0) - (t.left + t.width < 1 ? 0.5 : 0)}
-          height={t.height * (h - 4) - (t.top > 0 ? 0.5 : 0) - (t.top + t.height < 1 ? 0.5 : 0)}
-          rx={0.75}
-          fill="currentColor"
-          fillOpacity={i === index ? 1 : 0.22}
-        />
-      ))}
+      <rect
+        x={2 + r.left * 12}
+        y={2 + r.top * 8}
+        width={r.width * 12}
+        height={r.height * 8}
+        rx={0.75}
+        fill="currentColor"
+      />
     </svg>
   );
 }

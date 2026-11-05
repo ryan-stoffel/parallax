@@ -1,23 +1,23 @@
-// Where the split's threads tile (PLX-1082): a Fibonacci (dwindle) layout, in which each thread
-// takes its share of what the ones before it left, cutting side by side, then top and bottom, in
-// turn. Two threads are left | right; a third splits the right; a fourth splits the bottom.
+// Where the window's panes tile (PLX-1082, PLX-1289): rectangles on a grid of two columns and two
+// rows, so a pane takes a whole side or half, or one corner. One vertical cut and one horizontal cut
+// set the grid's lines.
 
-/** The most threads a split holds. */
+/** The most panes a window holds, one to a cell. */
 export const maxTiles = 4;
 
-/** The share of a cut the first tile gets until a divider is dragged. */
+/** Where a cut starts. */
 export const evenRatio = 0.5;
 
 /**
- * The smallest a tile gets, in pixels: room for its header, a few lines of transcript, and a
- * compact composer. Threads past the tiles that fit stack as tabs in the last one.
+ * The smallest a tile gets, in pixels: room for its tabs, a few lines of transcript, and a compact
+ * composer. Past that, columns or rows stack, their panes' tabs together in one tile.
  */
 export const minTile = { width: 320, height: 360 };
 
-/** How far a divider can be dragged, as a share of the region it cuts. */
+/** How far a divider can be dragged, as a share of the window. */
 const minRatio = 0.2;
 
-/** A box in the split, each side a fraction of it. */
+/** A box in the window, each side a fraction of it. */
 export interface Rect {
   left: number;
   top: number;
@@ -25,85 +25,211 @@ export interface Rect {
   height: number;
 }
 
-/** A cut between a tile and the tiles after it, which a divider drags. */
-export interface Cut {
-  /** Side by side, cut by a vertical line, or top and bottom. */
-  vertical: boolean;
-  /** The region it cuts: its tile and every tile after it. */
-  region: Rect;
+/** Cells as a bitmask: upper left 1, upper right 2, lower left 4, lower right 8. */
+export type Cells = number;
+
+const upperLeft = 1;
+const upperRight = 2;
+const lowerLeft = 4;
+const lowerRight = 8;
+const leftColumn = upperLeft | lowerLeft;
+const rightColumn = upperRight | lowerRight;
+const topRow = upperLeft | upperRight;
+const bottomRow = lowerLeft | lowerRight;
+
+/** Every cell: a pane alone in the window. */
+export const allCells: Cells = 15;
+
+/** Where a drop places a pane. */
+export type Zone =
+  | "left"
+  | "right"
+  | "top"
+  | "bottom"
+  | "upperLeft"
+  | "upperRight"
+  | "lowerLeft"
+  | "lowerRight";
+
+export const zoneCells: Record<Zone, Cells> = {
+  left: leftColumn,
+  right: rightColumn,
+  top: topRow,
+  bottom: bottomRow,
+  upperLeft,
+  upperRight,
+  lowerLeft,
+  lowerRight,
+};
+
+export const zoneNames: Record<Zone, string> = {
+  left: "Left",
+  right: "Right",
+  top: "Top",
+  bottom: "Bottom",
+  upperLeft: "Upper left",
+  upperRight: "Upper right",
+  lowerLeft: "Lower left",
+  lowerRight: "Lower right",
+};
+
+/** Where the grid's lines sit, as shares of the window. */
+export interface GridCuts {
+  x: number;
+  y: number;
 }
 
-/** Whether cut `i` puts its tile beside the rest (even cuts) or above them (odd cuts). */
-const isVertical = (i: number) => i % 2 === 0;
+export const evenCuts: GridCuts = { x: evenRatio, y: evenRatio };
+
+/** Whether `cells` make a rectangle: one cell, a side, a half, or all of them. */
+export const isRect = (cells: Cells) => [1, 2, 4, 8, 3, 12, 5, 10, 15].includes(cells);
+
+/** The box `cells` cover. */
+export function rectOf(cells: Cells, { x, y }: GridCuts): Rect {
+  const left = cells & leftColumn ? 0 : x;
+  const right = cells & rightColumn ? 1 : x;
+  const top = cells & topRow ? 0 : y;
+  const bottom = cells & bottomRow ? 1 : y;
+  return { left, top, width: right - left, height: bottom - top };
+}
 
 /**
- * The rects of `count` tiles, in order, and the cuts between them. `ratios[i]` is the share of
- * cut `i`'s region its tile takes; a missing one is even.
+ * What a pane keeps of its `cells` once `taken` goes to another. A pane alone that loses a corner
+ * would be an L, so it keeps the column across from that corner.
  */
-export function tileLayout(
-  count: number,
-  ratios: readonly number[],
-): { tiles: Rect[]; cuts: Cut[] } {
-  const tiles: Rect[] = [];
-  const cuts: Cut[] = [];
-  let region: Rect = { left: 0, top: 0, width: 1, height: 1 };
-  for (let i = 0; i < count - 1; i++) {
-    const vertical = isVertical(i);
-    const ratio = ratios[i] ?? evenRatio;
-    cuts.push({ vertical, region });
-    if (vertical) {
-      const width = region.width * ratio;
-      tiles.push({ ...region, width });
-      region = { ...region, left: region.left + width, width: region.width - width };
-    } else {
-      const height = region.height * ratio;
-      tiles.push({ ...region, height });
-      region = { ...region, top: region.top + height, height: region.height - height };
-    }
-  }
-  if (count > 0) tiles.push(region);
-  return { tiles, cuts };
+export function cellsLeft(cells: Cells, taken: Cells): Cells {
+  const left = cells & ~taken;
+  if (isRect(left) || !left) return left;
+  return taken & leftColumn ? rightColumn : leftColumn;
 }
 
-/** `ratio` kept off its region's edges, so no tile gets too small to use. */
+/**
+ * Who takes each of the `freed` cells of a closed pane, as each pane's cells. One pane takes them all
+ * when that stays a rectangle, else they go cell by cell to the neighbor across, then the one above
+ * or below.
+ */
+export function cellsFilled(panes: readonly Cells[], freed: Cells): Cells[] {
+  const whole = panes.findIndex((cells) => isRect(cells | freed));
+  if (whole !== -1) return panes.map((cells, i) => (i === whole ? cells | freed : cells));
+  const next = [...panes];
+  for (const cell of [upperLeft, upperRight, lowerLeft, lowerRight]) {
+    if (!(freed & cell)) continue;
+    const across = cell & leftColumn ? cell << 1 : cell >> 1;
+    const atop = cell & topRow ? cell << 2 : cell >> 2;
+    const taker = [across, atop]
+      .map((neighbor) => next.findIndex((cells) => cells & neighbor && isRect(cells | cell)))
+      .find((i) => i !== -1);
+    if (taker !== undefined) next[taker]! |= cell;
+  }
+  return next;
+}
+
+/** The cell a new pane takes from a pane's `cells`: the right of a whole row, the lower of a column. */
+export function cellSplit(cells: Cells): Cells {
+  if (cells === allCells) return rightColumn;
+  return cells & topRow && cells & bottomRow ? cells & bottomRow : cells & rightColumn;
+}
+
+/** `cuts` for panes on `cells`, with a line none of them use back at even, where a new one starts. */
+export function usedCuts(cells: readonly Cells[], { x, y }: GridCuts): GridCuts {
+  const splits = (side: Cells) => cells.some((c) => !(c & side) || !(c & (allCells & ~side)));
+  return { x: splits(leftColumn) ? x : evenRatio, y: splits(topRow) ? y : evenRatio };
+}
+
+/** Whether two columns, and two rows, each keep `minTile` in a window `width` by `height` pixels. */
+export function fits({ x, y }: GridCuts, width: number, height: number) {
+  // Unmeasured, everything fits.
+  if (width <= 0 || height <= 0) return { columns: true, rows: true };
+  return {
+    columns: Math.min(x, 1 - x) * width >= minTile.width,
+    rows: Math.min(y, 1 - y) * height >= minTile.height,
+  };
+}
+
+/** One tile: the cells it covers, and the panes, by index, that show in it. */
+export interface Tile {
+  cells: Cells;
+  panes: number[];
+}
+
+/**
+ * The tiles of panes on `cells`: one each, unless the columns or rows have no room, when what shared a
+ * row or a column stacks together.
+ */
+export function tilesOf(
+  cells: readonly Cells[],
+  { columns, rows }: { columns: boolean; rows: boolean },
+): Tile[] {
+  const grown = (c: Cells) => {
+    let next = c;
+    if (!columns) {
+      if (next & topRow) next |= topRow;
+      if (next & bottomRow) next |= bottomRow;
+    }
+    if (!rows) {
+      if (next & leftColumn) next |= leftColumn;
+      if (next & rightColumn) next |= rightColumn;
+    }
+    return next;
+  };
+  const tiles: Tile[] = [];
+  cells.forEach((c, i) => {
+    let tile: Tile = { cells: grown(c), panes: [i] };
+    // Anything this overlaps joins it, which may make it overlap more.
+    for (let at = tiles.findIndex((t) => t.cells & tile.cells); at !== -1;) {
+      const [other] = tiles.splice(at, 1);
+      tile = { cells: other!.cells | tile.cells, panes: [...other!.panes, ...tile.panes] };
+      at = tiles.findIndex((t) => t.cells & tile.cells);
+    }
+    tiles.push(tile);
+  });
+  return tiles.sort((a, b) => lowestCell(a.cells) - lowestCell(b.cells));
+}
+
+/** Cells' first in reading order, which orders panes and tiles. */
+export const lowestCell = (cells: Cells) => cells & -cells;
+
+/** A divider between tiles: which line it drags, and the part of that line it covers. */
+export interface Divider {
+  vertical: boolean;
+  from: number;
+  to: number;
+}
+
+/** The dividers between `tiles`. */
+export function dividersOf(tiles: readonly Tile[], { x, y }: GridCuts): Divider[] {
+  const tileAtCell = (cell: Cells) => tiles.find((t) => t.cells & cell);
+  const dividers: Divider[] = [];
+  const upper = tileAtCell(upperLeft) !== tileAtCell(upperRight);
+  const lower = tileAtCell(lowerLeft) !== tileAtCell(lowerRight);
+  if (upper || lower) dividers.push({ vertical: true, from: upper ? 0 : y, to: lower ? 1 : y });
+  const leftSide = tileAtCell(upperLeft) !== tileAtCell(lowerLeft);
+  const rightSide = tileAtCell(upperRight) !== tileAtCell(lowerRight);
+  if (leftSide || rightSide)
+    dividers.push({ vertical: false, from: leftSide ? 0 : x, to: rightSide ? 1 : x });
+  return dividers;
+}
+
+/** `ratio` kept off the window's edges, so no tile gets too small to use. */
 export const clampRatio = (ratio: number) => Math.min(1 - minRatio, Math.max(minRatio, ratio));
 
-/** Cut `cut`'s ratio for a pointer at (`x`, `y`), as fractions of the split, kept off its edges. */
-export function ratioAt({ vertical, region }: Cut, x: number, y: number): number {
-  return clampRatio(vertical ? (x - region.left) / region.width : (y - region.top) / region.height);
-}
-
-/** The tile at (`x`, `y`), as fractions of the split, or the last one when none is. */
-export function tileAt(tiles: readonly Rect[], x: number, y: number): number {
-  const at = tiles.findIndex(
-    (t) => x >= t.left && x < t.left + t.width && y >= t.top && y < t.top + t.height,
-  );
-  return at === -1 ? tiles.length - 1 : at;
-}
+/** How far in from an edge a drop means that side, as a share of the window. */
+const edge = 0.28;
 
 /**
- * How many of `count` threads tile in a split `width` by `height` pixels, the most whose tiles all
- * keep `minTile`, at least one. The rest stack in the last tile. Unmeasured, all of them.
+ * The zone a pointer at (`x`, `y`), as fractions of the window, drops in, or undefined for the middle.
+ * A side with no room for two columns or rows doesn't count.
  */
-export function fittingTiles(
-  count: number,
-  ratios: readonly number[],
-  width: number,
-  height: number,
-): number {
-  if (width <= 0 || height <= 0) return count;
-  for (let k = count; k > 1; k--) {
-    const { tiles } = tileLayout(k, ratios);
-    if (tiles.every((t) => t.width * width >= minTile.width && t.height * height >= minTile.height))
-      return k;
+export function zoneAt(
+  x: number,
+  y: number,
+  { columns, rows }: { columns: boolean; rows: boolean },
+): Zone | undefined {
+  const side = !columns ? undefined : x < edge ? "left" : x > 1 - edge ? "right" : undefined;
+  const end = !rows ? undefined : y < edge ? "top" : y > 1 - edge ? "bottom" : undefined;
+  if (side && end) {
+    const corner = `${end === "top" ? "upper" : "lower"}${side === "left" ? "Left" : "Right"}`;
+    return corner as Zone;
   }
-  return 1;
-}
-
-/**
- * The ratios once tile `index` of `count` closes. The cuts before it keep theirs. Each one after it
- * moves up a place, which turns it from side by side to top and bottom or back, so it starts even.
- */
-export function ratiosWithout(ratios: readonly number[], count: number, index: number): number[] {
-  return Array.from({ length: count - 2 }, (_, i) => (i < index ? ratios[i]! : evenRatio));
+  return side ?? end;
 }

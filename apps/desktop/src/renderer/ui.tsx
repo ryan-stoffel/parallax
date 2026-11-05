@@ -614,18 +614,18 @@ export interface Crumb {
   label: string;
   icon?: ReactNode;
   /**
-   * Makes it a button to that page, such as back to an orchestrator or on to New thread. The last
+   * Makes it a button to that page, such as back to an orchestrator or a parent thread. The last
    * crumb with one isn't the current page.
    */
   onClick?: () => void;
 }
 
 /**
- * Where the user is: host, workspace, then the current page, split by slashes. The host and the
- * workspace keep their names. Crumbs after them, such as a parent thread and the page, shrink down
- * to a few letters. In a narrow `@container`, a trail of three or more drops its host.
+ * A trail of pages, split by slashes. The first two keep their names, and crumbs after them shrink
+ * down to a few letters. In a narrow `@container`, a trail of three or more drops its first crumb,
+ * and with `tight`, a wider one drops its first two, for the tabs beside it.
  */
-export function Breadcrumb({ items }: { items: Crumb[] }) {
+export function Breadcrumb({ items, tight }: { items: Crumb[]; tight?: boolean }) {
   return (
     <nav aria-label="Breadcrumb" className="-ml-1.5 min-w-0 overflow-x-clip">
       <ol className="flex min-w-0 items-center gap-0.5 text-body">
@@ -636,7 +636,7 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
           return (
             <li
               key={i}
-              className={`flex items-center gap-0.5 ${kept ? "max-w-48 shrink-0" : `min-w-16 ${i < items.length - 1 ? "max-w-48" : ""}`} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
+              className={`flex items-center gap-0.5 ${kept ? "max-w-48 shrink-0" : `min-w-16 ${i < items.length - 1 ? "max-w-48" : ""}`} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${tight ? (i < 2 ? "@max-3xl:hidden" : i === 2 ? "@max-3xl:before:hidden" : "") : items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
             >
               <Tag
                 {...(onClick && { type: "button", onClick })}
