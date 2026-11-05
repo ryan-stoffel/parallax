@@ -125,7 +125,9 @@ export function SplitTiles({
   details?: ReactNode;
 }) {
   // `details` as it was when a press began, and the pane it was in, kept until the press ends. A
-  // press with another button may never report its release, as when it opens a native menu.
+  // press may never report its release, as when it opens a native menu, which on a Mac Control-click
+  // does with the primary button. So a menu or the window losing focus ends it too, and another
+  // button never starts one.
   const [held, setHeld] = useState<{ pane: string; details: ReactNode }>();
   const latest = useRef({ pane: items[focused]?.paneId, details });
   latest.current = { pane: items[focused]?.paneId, details };
@@ -139,13 +141,12 @@ export function SplitTiles({
     };
     // After the click that follows the release.
     const release = () => window.setTimeout(() => setHeld(undefined));
+    const ends = ["pointerup", "pointercancel", "contextmenu", "blur"];
     window.addEventListener("pointerdown", press, true);
-    window.addEventListener("pointerup", release, true);
-    window.addEventListener("pointercancel", release, true);
+    for (const end of ends) window.addEventListener(end, release, true);
     return () => {
       window.removeEventListener("pointerdown", press, true);
-      window.removeEventListener("pointerup", release, true);
-      window.removeEventListener("pointercancel", release, true);
+      for (const end of ends) window.removeEventListener(end, release, true);
     };
   }, [several]);
   // A held pane that closed during the press gives way to the focused one.

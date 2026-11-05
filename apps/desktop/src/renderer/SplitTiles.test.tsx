@@ -64,18 +64,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-test("details stays as it is while a press moves focus, and follows once it ends", () => {
-  render(0);
-  expect(panel()).toEqual(["a", "first"]);
-  press(0);
-  render(1);
-  expect(panel()).toEqual(["a", "first"]);
-  act(() => {
-    window.dispatchEvent(new PointerEvent("pointerup"));
-    vi.runAllTimers();
-  });
-  expect(panel()).toEqual(["b", "second"]);
-});
+test.each(["pointerup", "pointercancel", "contextmenu", "blur"])(
+  "details stays as it is while a press moves focus, and follows after %s",
+  (end) => {
+    render(0);
+    expect(panel()).toEqual(["a", "first"]);
+    press(0);
+    render(1);
+    expect(panel()).toEqual(["a", "first"]);
+    act(() => void window.dispatchEvent(new Event(end)));
+    // Not yet: the click that follows a release lands first.
+    expect(panel()).toEqual(["a", "first"]);
+    act(() => void vi.runAllTimers());
+    expect(panel()).toEqual(["b", "second"]);
+  },
+);
 
 test("a press with another button holds nothing, as its release may never come", () => {
   render(0);
