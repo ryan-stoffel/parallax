@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 
 import { same, sha256 } from "./crypto";
 import { type Env, json } from "./index";
+import { logError, logEvent, logged, scrub, short } from "./log";
 
 /** Each frame counts as at least this many bytes, since Cloudflare bills by message, not byte:
  *  a day's budget is at most 131,072 frames. */
@@ -33,6 +34,9 @@ export class StreamRelay extends DurableObject<Env> {
   /** Bytes counted since the last report, read back from the WebSockets' attachments on wake. */
   private unreported?: number;
   private reported = false;
+  /** Whether the relay has begun ending this stream, so a close from here on isn't an end's own.
+   *  In memory, since an end answers a close long before the object could hibernate. */
+  private ending = false;
 
   private armed() {
     return this.ctx.storage.get<Armed>("armed");
@@ -56,6 +60,29 @@ export class StreamRelay extends DurableObject<Env> {
       if (ws.readyState === WebSocket.OPEN) ws.serializeAttachment(bytes);
   }
 
+  /** Which end `ws` is. */
+  private sideOf(ws: WebSocket): Side {
+    return this.ctx.getTags(ws).includes("client") ? "client" : "host";
+  }
+
+  /** What a log line says about this object and, when there is one, the end `ws`: which end, and
+   *  its host and stream from its second tag. */
+  private context(ws?: WebSocket) {
+    return {
+      object: "stream",
+      id: short(this.ctx.id.toString()),
+      side: ws && this.sideOf(ws),
+      stream: ws && this.ctx.getTags(ws).find((tag) => tag.includes("/")),
+    };
+  }
+
+  /** The relay's own close of one end, with why. */
+  private shut(ws: WebSocket, code: number, reason: string) {
+    this.ending = true;
+    logEvent("socket_closing", { ...this.context(ws), by: "relay", code, reason });
+    ws.close(code, reason);
+  }
+
   /** Called by the host's object before it tells plxd or a client about this stream. */
   async arm(armed: Armed) {
     await this.ctx.storage.put("armed", armed);
@@ -65,11 +92,20 @@ export class StreamRelay extends DurableObject<Env> {
    *  reconnected. The host's object has already let the stream go, so nothing is reported. */
   async close(code: number, reason: string) {
     this.reported = true;
-    for (const ws of this.ctx.getWebSockets()) ws.close(code, reason);
+    for (const ws of this.ctx.getWebSockets()) this.shut(ws, code, reason);
     await this.ctx.storage.deleteAll();
   }
 
   async fetch(request: Request): Promise<Response> {
+    return logged(
+      "stream.fetch",
+      () => this.context(),
+      () => this.join(request),
+    );
+  }
+
+  /** Brings one end's WebSocket to this stream. */
+  private async join(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const armed = await this.armed();
     if (!armed) return json(404, { error: "not_found" });
@@ -85,7 +121,8 @@ export class StreamRelay extends DurableObject<Env> {
       side = "host";
     }
     const [theirs, ours] = Object.values(new WebSocketPair());
-    this.ctx.acceptWebSocket(ours!, [side]);
+    // The second tag names the stream in this socket's log lines, with no storage read to fail.
+    this.ctx.acceptWebSocket(ours!, [side, `${short(armed.hostId)}/${short(armed.stream)}`]);
     const other = this.side(side === "client" ? "host" : "client");
     if (other) {
       // Both ends are here: each learns it, plxd's side then dials its own listener.
@@ -99,18 +136,46 @@ export class StreamRelay extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    const [side] = this.ctx.getTags(ws) as [Side];
-    const peer = this.side(side === "client" ? "host" : "client");
-    // Only TLS records, and only once both ends are here.
-    if (typeof message === "string" || !peer) return ws.close(4400, "bad frame");
-    // Sent before any report is awaited, since another frame may be handled during the wait and
-    // must not pass this one.
-    peer.send(message);
-    this.keep(this.pending() + Math.max(message.byteLength, MIN_FRAME_BYTES));
-    if (this.pending() >= REPORT_BYTES) await this.report(false);
+    return logged(
+      "stream.webSocketMessage",
+      () => this.context(ws),
+      async () => {
+        const peer = this.side(this.sideOf(ws) === "client" ? "host" : "client");
+        // Only TLS records, and only once both ends are here.
+        if (typeof message === "string" || !peer) return this.shut(ws, 4400, "bad frame");
+        // Sent before any report is awaited, since another frame may be handled during the wait
+        // and must not pass this one.
+        peer.send(message);
+        this.keep(this.pending() + Math.max(message.byteLength, MIN_FRAME_BYTES));
+        if (this.pending() >= REPORT_BYTES) await this.report(false);
+      },
+    );
   }
 
-  async webSocketClose(ws: WebSocket) {
+  async webSocketClose(ws: WebSocket, code: number, reason: string, clean: boolean) {
+    const context = this.context(ws);
+    const by = this.ending ? "relay" : "peer";
+    logEvent("socket_closed", { ...context, by, code, reason: scrub(reason), clean });
+    return logged(
+      "stream.webSocketClose",
+      () => context,
+      () => this.ended(ws),
+    );
+  }
+
+  async webSocketError(ws: WebSocket, error: unknown) {
+    const context = this.context(ws);
+    logError("stream.webSocketError", context, error);
+    return logged(
+      "stream.webSocketError",
+      () => context,
+      () => this.ended(ws),
+    );
+  }
+
+  /** One end is gone, so the stream is. */
+  private async ended(ws: WebSocket) {
+    this.ending = true;
     // Read before the ends close, in case this woke the object.
     this.pending([ws, ...this.ctx.getWebSockets()]);
     // Completes the closing handshake the other end started, and ends the other side.
@@ -124,15 +189,17 @@ export class StreamRelay extends DurableObject<Env> {
     await this.finish();
   }
 
-  async webSocketError(ws: WebSocket) {
-    await this.webSocketClose(ws);
-  }
-
   /** plxd never joined the client's stream in time. */
   async alarm() {
-    if (this.side("host")) return;
-    for (const ws of this.ctx.getWebSockets()) ws.close(4408, "the host didn't join");
-    await this.finish();
+    return logged(
+      "stream.alarm",
+      () => this.context(),
+      async () => {
+        if (this.side("host")) return;
+        for (const ws of this.ctx.getWebSockets()) this.shut(ws, 4408, "the host didn't join");
+        await this.finish();
+      },
+    );
   }
 
   /**
@@ -147,7 +214,8 @@ export class StreamRelay extends DurableObject<Env> {
     else this.keep(0);
     const host = this.env.HOSTS.get(this.env.HOSTS.idFromName(armed.hostId));
     const within = await host.report(armed.stream, bytes, closed);
-    if (!within && !closed) for (const ws of this.ctx.getWebSockets()) ws.close(4429, "daily limit");
+    if (!within && !closed)
+      for (const ws of this.ctx.getWebSockets()) this.shut(ws, 4429, "daily limit");
     return within;
   }
 

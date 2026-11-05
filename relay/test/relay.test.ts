@@ -1,5 +1,5 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { sha256 } from "../src/crypto";
 import {
@@ -11,6 +11,7 @@ import {
   MAX_STREAMS,
 } from "../src/host";
 import { type Env, network } from "../src/index";
+import { logged } from "../src/log";
 import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay } from "../src/stream";
 import { apnsPayload, MAX_SEALED, sendApns } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
@@ -720,5 +721,72 @@ describe("push", () => {
     // A token both servers refuse is gone.
     const neither = async () => Response.json({ reason: "BadDeviceToken" }, { status: 400 });
     expect(await sendApns(env, device, notification, neither as typeof fetch)).toBe("gone");
+  });
+});
+
+describe("logs", () => {
+  /** The relay's log lines written during `run`, parsed. */
+  async function lines(run: (seen: () => Record<string, unknown>[]) => Promise<void>) {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const seen = () =>
+      spy.mock.calls.flatMap(([line]) =>
+        typeof line === "string" && line.startsWith('{"event"') ? [JSON.parse(line)] : [],
+      );
+    try {
+      await run(seen);
+      return seen();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("say who closed plxd's socket and a stream's ends, with ids cut and no user or token", async () => {
+    const user = `user_${crypto.randomUUID()}`;
+    const { host, token, control } = await online(user);
+    const short = host.id.slice(0, 8);
+    const logs = await lines(async (seen) => {
+      const { client, open } = await stream(host, token, control);
+      opened(await join(host, open));
+      client.ws.close(1000, "client done");
+      await vi.waitFor(() => expect(seen().filter((l) => l.event === "socket_closed")).toHaveLength(2));
+      await connectHost(host);
+      await control.closed;
+      await vi.waitFor(() => expect(seen().filter((l) => l.object === "host")).toHaveLength(3));
+    });
+    expect(logs).toEqual([
+      expect.objectContaining({ event: "socket_closed", side: "client", stream: expect.stringMatching(`^${short}/.{8}$`), by: "peer", code: 1000, reason: "client done", clean: true }),
+      expect.objectContaining({ event: "socket_closed", side: "host", by: "relay", code: 1000, reason: "closed" }),
+      expect.objectContaining({ event: "socket_closing", object: "host", host: short, by: "relay", code: 4409, reason: "replaced" }),
+      expect.objectContaining({ event: "host_connected", host: short, open_before: 1, since_last_ms: expect.any(Number) }),
+      expect.objectContaining({ event: "socket_closed", object: "host", host: short, by: "relay", code: 4409, clean: true }),
+    ]);
+    const text = JSON.stringify(logs);
+    expect(text).not.toContain(host.id);
+    expect(text).not.toContain(user);
+    expect(text).not.toContain(token);
+  });
+
+  it("carry what a handler threw and throw it on, without tokens or JSON.parse's quoted input", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const reset = Object.assign(new Error(`lost ${await session("user_a")} on user_${"x".repeat(27)}`), {
+        durableObjectReset: true,
+        remote: true,
+      });
+      await expect(logged("host.alarm", () => ({ host: "abcd1234" }), () => Promise.reject(reset))).rejects.toBe(reset);
+      const line = JSON.parse(spy.mock.calls[0]![0] as string);
+      expect(line).toMatchObject({ event: "exception", where: "host.alarm", host: "abcd1234", name: "Error", durableObjectReset: true, remote: true });
+      expect(line.message).toBe("lost [cut].[cut].[cut] on [cut]");
+      expect(line.frames[0]).toMatch(/^at /);
+
+      await expect(
+        logged("host.fetch", () => ({}), () => JSON.parse('{"secret payload')),
+      ).rejects.toThrow(SyntaxError);
+      const syntax = spy.mock.calls[1]![0] as string;
+      expect(JSON.parse(syntax).name).toBe("SyntaxError");
+      expect(syntax).not.toContain("secret");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

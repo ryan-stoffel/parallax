@@ -11,6 +11,15 @@ compatibility_date = "2026-10-01"
 routes = [{ pattern = "relay.parallax.codes", custom_domain = true }]
 workers_dev = false
 
+# Workers Logs keeps every console line, which `src/log.ts` keeps free of ids and tokens (PLX-1349).
+[observability]
+enabled = true
+
+# Invocation logs stay off: each holds its request's URL, and those carry full host ids, webhook
+# tokens, and stream tokens.
+[observability.logs]
+invocation_logs = false
+
 [[durable_objects.bindings]]
 name = "HOSTS"
 class_name = "HostRelay"

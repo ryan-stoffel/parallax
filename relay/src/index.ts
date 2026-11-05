@@ -21,6 +21,7 @@ import { verifySession } from "./clerk";
 import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
 import { forwarded, HOOK_METHODS, type HookReply, HostRelay, readCapped } from "./host";
+import { logged, scrub, short } from "./log";
 import { StreamRelay } from "./stream";
 import { UserAccount } from "./user";
 
@@ -107,7 +108,7 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   return streamOf(opened.stream).fetch("https://stream/client", { headers: { upgrade: "websocket" } });
 }
 
-export default {
+const routes = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const parts = new URL(request.url).pathname.split("/").slice(1);
     const [version, kind, id = "", action] = parts;
@@ -196,5 +197,20 @@ export default {
       default:
         return json(404, { error: "not_found" });
     }
+  },
+};
+
+export default {
+  // A Durable Object's reset reaches its callers as an exception, so it's logged here too. Only
+  // the route's kind and a host id: a webhook's path holds its token.
+  fetch(request, env) {
+    return logged(
+      "worker.fetch",
+      () => {
+        const [, kind = "", id = ""] = new URL(request.url).pathname.split("/").slice(1);
+        return { kind: scrub(kind), host: HOST_ID.test(id) ? short(id) : undefined };
+      },
+      () => routes.fetch(request, env),
+    );
   },
 } satisfies ExportedHandler<Env>;
