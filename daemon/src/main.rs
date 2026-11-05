@@ -129,7 +129,7 @@ struct DialArgs {
     /// The device's Tailscale IP, with port 7340 unless one is given, such as `100.87.92.42` or
     /// `[fd7a:115c:a1e0::1]:7340`. With `--remote`, the paired computer's routes, tried in order,
     /// each an IP or host name with port 7341 unless one is given
-    #[arg(value_name = "ADDR", required_unless_present = "discover")]
+    #[arg(value_name = "ADDR", required_unless_present_any = ["discover", "device_key"])]
     addresses: Vec<String>,
 
     /// Reach a computer paired over HTTPS, whose certificate fingerprint this is (PLX-641)
@@ -146,6 +146,15 @@ struct DialArgs {
     /// exit
     #[arg(long, requires = "account", conflicts_with = "pair")]
     sign_in: bool,
+
+    /// With `--sign-in`, for a new computer whose code the user compares: after printing the
+    /// request, read stdin's next line, where `allow` allows it and anything else denies it
+    #[arg(long, requires = "sign_in")]
+    compare: bool,
+
+    /// Print this computer's `DPoP` key thumbprint, which `plx connect --device` names, and exit
+    #[arg(long, conflicts_with_all = ["account", "remote", "discover", "pair"])]
+    device_key: bool,
 
     /// Pair with the computer at the first ADDR that answers, with the code it shows, read from
     /// the first line of stdin so no other user sees it; print its fingerprint, name, and routes
@@ -495,7 +504,12 @@ fn dial(args: &DialArgs) -> ! {
         report(&format!("could not start the runtime: {error}"));
         std::process::exit(1)
     });
-    if args.remote.is_some() || args.account.is_some() || args.pair || args.discover {
+    if args.remote.is_some()
+        || args.account.is_some()
+        || args.pair
+        || args.discover
+        || args.device_key
+    {
         std::process::exit(runtime.block_on(dial_remote(args, &report)));
     }
     let parsed = match args.addresses.as_slice() {
@@ -567,9 +581,13 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             }
         };
     }
+    if args.device_key {
+        return print_device_key(data_dir.root(), report);
+    }
     let name = args.name.as_deref().unwrap_or_default();
     if let (Some(host_id), true) = (&args.account, args.sign_in) {
-        return match dial_sign_in(&args.addresses, host_id, name, data_dir.root()).await {
+        let routes = &args.addresses;
+        return match dial_sign_in(routes, host_id, name, args.compare, data_dir.root()).await {
             Ok(()) => 0,
             Err(Some(error)) => {
                 report(&format!("could not sign in: {error}"));
@@ -632,6 +650,20 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
     }
 }
 
+/// `dial --device-key` (0091): this computer's key, as `plx connect --device` names it.
+fn print_device_key(data_dir: &Path, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    match remote::device_key(data_dir) {
+        Ok(key) => {
+            print_json(&serde_json::json!({ "thumbprint": key.thumbprint() }));
+            0
+        }
+        Err(error) => {
+            report(&format!("could not read this computer's key: {error}"));
+            1
+        }
+    }
+}
+
 /// `dial --probe` (0091): the first route that presents the pinned certificate, with nothing sent.
 async fn dial_probe(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
     let pin = match (&args.account, &args.remote) {
@@ -656,24 +688,61 @@ async fn dial_probe(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) ->
 
 /// `dial --account --sign-in` (0091): signs in to the `account:` host `host_id` with the Clerk token
 /// on stdin's first line and prints where it stands, then, while a request waits, waits for its
-/// approval and prints that. `Err(None)` when stdin has no token.
+/// approval and prints that. With `compare`, it first waits for the user's answer on stdin. Only
+/// `allow` tells the host, and anything else, the end of input included, withdraws the request,
+/// as it does while the host then waits to confirm. `Err(None)` when stdin has no token.
 async fn dial_sign_in(
     routes: &[String],
     host_id: &str,
     name: &str,
+    compare: bool,
     data_dir: &Path,
 ) -> Result<(), Option<remote::Error>> {
     let mut token = String::new();
     if io::stdin().read_line(&mut token).is_err() || token.trim().is_empty() {
         return Err(None);
     }
-    let (route, signed_in) = remote::sign_in(routes, host_id, token.trim(), name, data_dir).await?;
+    let (route, signed_in) =
+        remote::sign_in(routes, host_id, token.trim(), name, compare, data_dir).await?;
     print_json(&signed_in);
     if let remote::SignIn::Pending { request, .. } = &signed_in {
-        let approved = remote::await_approval(&route, host_id, request, data_dir).await?;
-        print_json(&approved);
+        if !compare {
+            let approved = remote::await_approval(&route, host_id, request, data_dir).await?;
+            print_json(&approved);
+            return Ok(());
+        }
+        if next_line().await.as_deref().map(str::trim) != Some("allow") {
+            remote::withdraw(&route, host_id, request, data_dir).await;
+            return Err(Some(remote::Error::Refused));
+        }
+        let allowed = remote::allow(&route, host_id, request, data_dir).await?;
+        print_json(&allowed);
+        if allowed != remote::SignIn::Confirm {
+            return Ok(());
+        }
+        tokio::select! {
+            approved = remote::await_approval(&route, host_id, request, data_dir) => {
+                print_json(&approved?);
+            }
+            _ = next_line() => {
+                remote::withdraw(&route, host_id, request, data_dir).await;
+                return Err(Some(remote::Error::Refused));
+            }
+        }
     }
     Ok(())
+}
+
+/// Stdin's next line, or `None` at its end. On a thread of its own, since a blocking task would
+/// hold up this process's exit until stdin closed.
+async fn next_line() -> Option<String> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let read = io::stdin().read_line(&mut line);
+        let _ = send.send(read.ok().filter(|read| *read > 0).map(|_| line));
+    });
+    receive.await.ok().flatten()
 }
 
 /// Prints `value` as one line of JSON on stdout.

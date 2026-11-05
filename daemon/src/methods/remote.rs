@@ -170,9 +170,16 @@ pub(crate) async fn access_forget_host(
 /// `access/setupCode`: a new computer's code, for `plx connect` or the app to show.
 pub(crate) async fn access_setup_code(
     context: &Context,
-    _: AccessSetupCodeParams,
+    params: AccessSetupCodeParams,
 ) -> Result<AccessSetupCodeResult, ErrorObject> {
-    let (code, expires) = remote::new_setup_code(&context.daemon)
+    if params
+        .device
+        .as_deref()
+        .is_some_and(|device| !crate::remote::is_host_id(device))
+    {
+        return Err(ErrorObject::invalid_params("not a key thumbprint"));
+    }
+    let (code, expires) = remote::new_setup_code(&context.daemon, params.device)
         .await
         .map_err(ErrorObject::invalid_params)?;
     Ok(AccessSetupCodeResult {

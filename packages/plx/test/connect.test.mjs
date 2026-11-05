@@ -88,7 +88,7 @@ test("connect signs in, installs, registers, turns relay and remote on, and ends
     "remote/sessions {}",
   ]);
   assert.match(out, /✓ studio is online on Parallax Connect/);
-  assert.match(out, /^ {2}482 911$/m);
+  assert.match(out, /Type 482 911 in Parallax/);
   assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   fake.done();
 });
@@ -156,7 +156,7 @@ test("a setup code that lapses is replaced, and the next one is shown", async ()
   const fake = fakes({ expiresInMs: 300, pairAfterCodes: 2 });
   const { code, out } = await printed(() => connect.connect(options, fake.deps));
   assert.equal(code, 0, out);
-  assert.match(out, /^ {2}482 911$[\s\S]*The code lapsed\. Here's a new one\.[\s\S]*^ {2}482 912$/m);
+  assert.match(out, /Type 482 911 in Parallax[\s\S]*The code lapsed\. Here's a new one\.[\s\S]*Type 482 912 in Parallax/);
   assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   fake.done();
 });
@@ -250,9 +250,72 @@ test("approve with nothing waiting shows a new setup code and waits for a device
   const fake = fakes({ relay: true, remote: true, registered: true });
   const { code, out } = await printed(() => connect.approve(fake.deps));
   assert.equal(code, 0, out);
-  assert.match(out, /^ {2}482 911$/m);
+  assert.match(out, /Type 482 911 in Parallax/);
   assert.match(out, /✓ Added to Parallax from MacBook Air\./);
   assert.equal(fake.asked.length, 0);
+  fake.done();
+});
+
+const device = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+
+test("a named device's request shows its code here and takes no Enter, as its Allow is enough", async () => {
+  const fake = fakes({ asks: pending, joins: "iPhone", pairInMs: 60 });
+  fake.deps.terminal = true;
+  const { code, out } = await printed(() => connect.connect({ ...options, device }, fake.deps));
+  assert.equal(code, 0, out);
+  assert.equal(fake.asked.length, 0, "no prompt");
+  assert.ok(fake.calls().includes(`access/setupCode {"device":"${device}"}`));
+  assert.match(out, /iPhone asks to use this computer\. It should show 071 344\./);
+  assert.match(out, /Allow it there if it shows the same code\./);
+  assert.match(out, /✓ Added to Parallax from iPhone\./);
+  fake.done();
+});
+
+test("a bare setup takes Enter here for a device's request, after showing its name and code", async () => {
+  const fake = fakes({ asks: pending, joins: "never", pairInMs: 60_000 }, [""]);
+  fake.deps.terminal = true;
+  const { code, out } = await printed(() => connect.connect(options, fake.deps));
+  assert.equal(code, 0, out);
+  assert.match(out, /iPhone asks to use this computer\. It should show 071 344\./);
+  assert.match(fake.asked[0] ?? "", /Allow it there and press Enter here/);
+  assert.ok(fake.calls().includes(`access/approve {"request":"${pending.id}"}`));
+  assert.match(out, /✓ Added to Parallax from iPhone\./);
+  fake.done();
+});
+
+test("n at a bare setup's prompt denies that request and keeps waiting", async () => {
+  const fake = fakes({ asks: pending, joins: "MacBook Air", pairInMs: 80 }, ["n"]);
+  fake.deps.terminal = true;
+  const { code, out } = await printed(() => connect.connect(options, fake.deps));
+  assert.equal(code, 0, out);
+  assert.ok(fake.calls().includes(`access/deny {"request":"${pending.id}"}`));
+  assert.ok(!fake.calls().some((call) => call.startsWith("access/approve")));
+  assert.match(out, /✓ Denied it\./);
+  fake.done();
+});
+
+test("with no terminal, a bare run names no device and approves nothing from input", async () => {
+  const fake = fakes({ asks: pending, joins: "MacBook Air", pairInMs: 60 }, [""]);
+  fake.deps.terminal = false;
+  const { code, out } = await printed(() => connect.connect(options, fake.deps));
+  assert.equal(code, 0, out);
+  assert.equal(fake.asked.length, 0);
+  assert.ok(fake.calls().includes("access/setupCode {}"));
+  assert.ok(!fake.calls().some((call) => call.startsWith("access/approve")));
+  assert.match(out, /^Setup code: 482911 \(works until \S+\)\. Type it in Parallax/m);
+  fake.done();
+});
+
+test("with no terminal, a named device reaches the host, and the run ends at the printed code", async () => {
+  const fake = fakes({ asks: pending, joins: "MacBook Air", pairInMs: 60 }, [""]);
+  fake.deps.terminal = false;
+  const { code, out } = await printed(() => connect.connect({ ...options, device }, fake.deps));
+  assert.equal(code, 0, out);
+  assert.equal(fake.asked.length, 0);
+  assert.ok(fake.calls().includes(`access/setupCode {"device":"${device}"}`));
+  assert.ok(!fake.calls().some((call) => call.startsWith("access/approve")));
+  assert.match(out, /^Setup code: 482911 \(works until \S+\)\. Allow it on the device that gave this command/m);
+  assert.doesNotMatch(out, /Added to Parallax/);
   fake.done();
 });
 

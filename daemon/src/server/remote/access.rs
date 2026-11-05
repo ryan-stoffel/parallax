@@ -10,7 +10,10 @@
 //!   in its first answer, so both show the same [`remote::approval_code`] and neither picked its
 //!   value after seeing the other's. Once a device approves the request (`access/approve`), the
 //!   client's next call gets its session. With `wait`, a call holds for up to
-//!   [`remote::APPROVAL_WAIT`] until that happens.
+//!   [`remote::APPROVAL_WAIT`] until that happens. With `allow`, the device named by the setup
+//!   command approves its own request ([`Access::setup_started`]). No other client's Allow counts,
+//!   since nothing it holds tells it from a client with a caught token. With `deny`, a client drops
+//!   its own request.
 //!
 //! One request waits at a time, at most [`MAX_REQUESTS`] start an hour, and each lapses after
 //! [`remote::REQUEST_LIFETIME`]. A new one doesn't replace a waiting one unless the user denies
@@ -54,6 +57,9 @@ pub(super) struct Lists {
     pub approved_clients: BTreeSet<String>,
     pub removed_clients: BTreeSet<String>,
     approved_hosts: BTreeSet<String>,
+    /// Those added with Allow alone, which clients take no lists from.
+    #[serde(default)]
+    allowed_hosts: BTreeSet<String>,
 }
 
 impl Lists {
@@ -62,6 +68,7 @@ impl Lists {
         self.approved_clients.extend(other.approved_clients);
         self.removed_clients.extend(other.removed_clients);
         self.approved_hosts.extend(other.approved_hosts);
+        self.allowed_hosts.extend(other.allowed_hosts);
         let removed = &self.removed_clients;
         self.approved_clients.retain(|key| !removed.contains(key));
     }
@@ -99,6 +106,10 @@ struct State {
     /// The name of the device the latest setup code approved.
     #[serde(skip)]
     setup_approved: Option<String>,
+    /// The device named for the waiting setup code, and when that code lapses. A setup command is
+    /// the one way from a device to a new computer that the relay can't touch.
+    #[serde(skip)]
+    setup_device: Option<(String, jiff::Timestamp)>,
 }
 
 /// A new device's request.
@@ -170,6 +181,13 @@ impl Access {
     /// host's commitment.
     fn start(&self, thumbprint: &str, name: &str) -> Result<(String, String), &'static str> {
         let mut state = self.live();
+        if state
+            .setup_device
+            .as_ref()
+            .is_some_and(|(device, until)| device != thumbprint && jiff::Timestamp::now() < *until)
+        {
+            return Err("this computer is waiting for another of your devices");
+        }
         if let Some(pending) = &state.pending {
             if pending.thumbprint != thumbprint {
                 return Err("another device's request is waiting");
@@ -257,6 +275,21 @@ impl Access {
         }
     }
 
+    /// The name on request `id`, if `thumbprint` is the device named for the waiting setup code,
+    /// and the request is that key's and has a code to compare.
+    fn named_device(&self, id: &str, thumbprint: &str) -> Option<String> {
+        let state = self.live();
+        let (device, until) = state.setup_device.as_ref()?;
+        if device != thumbprint || jiff::Timestamp::now() >= *until {
+            return None;
+        }
+        state
+            .pending
+            .as_ref()
+            .filter(|p| p.id == id && p.thumbprint == thumbprint && p.client_value.is_some())
+            .map(|p| p.name.clone())
+    }
+
     /// Marks the request for `thumbprint` approved, so its client's next step gets a session.
     fn mark_approved(&self, thumbprint: &str) {
         let mut state = self.live();
@@ -317,9 +350,17 @@ impl Access {
         Ok(())
     }
 
-    /// Forgets which device the last setup code approved, as a new one starts.
-    pub(crate) fn setup_started(&self) {
-        lock(&self.state).setup_approved = None;
+    /// Forgets which device the last setup code approved, as a new one starts, good `until`. With
+    /// `device`, that key's Allow is enough until then, and another key's request is dropped and
+    /// refused, so nobody with a caught token can hold the one waiting slot.
+    pub(crate) fn setup_started(&self, device: Option<String>, until: jiff::Timestamp) {
+        let mut state = lock(&self.state);
+        state.setup_approved = None;
+        if let Some(device) = &device {
+            state.pending.take_if(|p| p.thumbprint != *device);
+        }
+        state.setup_device = device.map(|device| (device, until));
+        drop(state);
         self.changed();
     }
 
@@ -505,6 +546,7 @@ pub(crate) async fn state(
         approved_clients: lists.approved_clients.into_iter().collect(),
         removed_clients: lists.removed_clients.into_iter().collect(),
         approved_hosts: lists.approved_hosts.into_iter().collect(),
+        allowed_hosts: lists.allowed_hosts.into_iter().collect(),
         pending,
         setup_approved,
     })
@@ -520,6 +562,7 @@ pub(crate) async fn merge(
         &params.approved_clients,
         &params.removed_clients,
         &params.approved_hosts,
+        &params.allowed_hosts,
     ];
     if let Some(bad) = all.into_iter().flatten().find(|id| !remote::is_host_id(id)) {
         return Err(ErrorObject::invalid_params(format!(
@@ -530,6 +573,7 @@ pub(crate) async fn merge(
         approved_clients: params.approved_clients.into_iter().collect(),
         removed_clients: params.removed_clients.into_iter().collect(),
         approved_hosts: params.approved_hosts.into_iter().collect(),
+        allowed_hosts: params.allowed_hosts.into_iter().collect(),
     };
     update(daemon, cancel, move |lists| {
         lists.merge(other);
@@ -598,6 +642,7 @@ pub(crate) async fn forget_host(
     info!(%host_id, "forgot a removed computer");
     update(daemon, cancel, move |lists| {
         lists.approved_hosts.remove(&host_id);
+        lists.allowed_hosts.remove(&host_id);
         Ok(())
     })
     .await?;
@@ -739,6 +784,12 @@ pub(super) async fn approval(
         value: Option<String>,
         #[serde(default)]
         wait: bool,
+        /// The user clicked Allow on this client.
+        #[serde(default)]
+        allow: bool,
+        /// The user clicked Deny on this client.
+        #[serde(default)]
+        deny: bool,
     }
     let Ok(body) = serde_json::from_slice::<Approval>(&request.body) else {
         return (400, json!({ "error": "invalid_request" }));
@@ -766,9 +817,17 @@ pub(super) async fn approval(
     if !daemon.remote.first_use(&proven) {
         return refused("a replayed DPoP proof");
     }
+    if body.deny {
+        return match access.deny(&body.request) {
+            Ok(()) => (200, json!({ "status": "denied" })),
+            Err(why) => refused(why),
+        };
+    }
     let deadline = tokio::time::Instant::now() + remote::APPROVAL_WAIT;
     let mut versions = access.version.subscribe();
     let mut value = value.as_deref();
+    let mut allow = body.allow;
+    let mut needs_host = false;
     loop {
         versions.borrow_and_update();
         let step = match access.step(&body.request, &proven.thumbprint, value.take()) {
@@ -779,6 +838,16 @@ pub(super) async fn approval(
             Step::Approved(name) => return session(daemon, &proven, &name).await,
             Step::Waiting(host_value) => host_value,
         };
+        if std::mem::take(&mut allow) {
+            if let Some(name) = access.named_device(&body.request, &proven.thumbprint) {
+                if let Err(refusal) = approve_by_setup(daemon, &proven, &name).await {
+                    return refusal;
+                }
+                continue;
+            }
+            // Allow alone proves nothing from any other key: this computer must confirm too.
+            needs_host = true;
+        }
         let waited = body.wait
             && tokio::time::timeout_at(deadline, versions.changed())
                 .await
@@ -789,6 +858,7 @@ pub(super) async fn approval(
                 json!({
                     "status": "pending",
                     "value": host_value.map(|v| remote::base64url(&v)),
+                    "needsHost": needs_host,
                 }),
             );
         }
@@ -846,6 +916,33 @@ mod tests {
             access.start(KEY, "phone").is_ok(),
             "a denial frees the slot"
         );
+    }
+
+    #[test]
+    fn a_named_device_alone_can_ask_and_allow_while_its_setup_code_lasts() {
+        let access = Access::default();
+        let (other, _) = access.start(OTHER, "laptop").unwrap();
+        let later = jiff::Timestamp::now() + jiff::SignedDuration::from_mins(10);
+        access.setup_started(Some(KEY.to_owned()), later);
+        assert!(access.step(&other, OTHER, None).is_err(), "dropped");
+        assert_eq!(
+            access.start(OTHER, "laptop"),
+            Err("this computer is waiting for another of your devices"),
+            "a caught token can't hold the slot"
+        );
+        let (id, _) = access.start(KEY, "phone").unwrap();
+        assert_eq!(access.named_device(&id, KEY), None, "no code yet");
+        let value = [7; remote::APPROVAL_VALUE_BYTES];
+        access.step(&id, KEY, Some(&value)).unwrap();
+        assert_eq!(access.named_device(&id, KEY).as_deref(), Some("phone"));
+        assert_eq!(access.named_device(&id, OTHER), None);
+
+        // Past the code's life, or with a bare command, nobody's Allow counts.
+        access.setup_started(Some(KEY.to_owned()), jiff::Timestamp::now());
+        assert_eq!(access.named_device(&id, KEY), None);
+        access.setup_started(None, later);
+        assert_eq!(access.named_device(&id, KEY), None);
+        assert!(access.start(OTHER, "laptop").is_err(), "KEY's still waits");
     }
 
     #[test]

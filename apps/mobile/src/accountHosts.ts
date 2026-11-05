@@ -15,9 +15,12 @@ import {
   emptyBook,
   forgetRequest,
   keptValue,
+  listSources,
+  merged,
   newRequest,
   setupRun,
   type HostBook,
+  type Lists,
 } from "./access";
 import type { RelayUsage } from "../../desktop/src/protocol/generated/protocol";
 import { relayCapNotice } from "../../desktop/src/renderer/relayCap";
@@ -62,6 +65,8 @@ interface Stored {
   sessions: Record<string, string>;
   /** The hosts this phone uses: approved with its own code, or listed by one it uses. */
   trusted: string[];
+  /** Those added with Allow alone, here or as a computer it uses said, which it takes no lists from. */
+  allowed?: string[];
   books: Record<string, HostBook>;
   /** Why this phone stopped asking on its own, until the user asks again. */
   askingStopped?: string;
@@ -163,6 +168,11 @@ export class AccountHosts {
     return Object.keys(this.stored.sessions).filter((id) => this.trusts(id));
   }
 
+  /** The hosts added with Allow alone, here or as a computer it uses said, kept for good. */
+  get allowed() {
+    return this.stored.allowed ?? [];
+  }
+
   /** Whether this phone uses `hostId`: approved with its own code, or listed by a host it uses. */
   trusts(hostId: string) {
     return this.stored.trusted.includes(hostId);
@@ -212,12 +222,22 @@ export class AccountHosts {
     return Object.values(this.stored.books).some((book) => book.kept);
   }
 
-  /** Trusts `hostIds` too, as a host this phone uses listed them. */
-  async trust(hostIds: string[]) {
-    const added = hostIds.filter((id) => !this.stored.trusted.includes(id));
-    if (!added.length) return;
-    this.stored = { ...this.stored, trusted: [...this.stored.trusted, ...added] };
-    await this.save();
+  /**
+   * Takes in the lists of the computers this phone reaches: the union to copy back to them, and it
+   * trusts the hosts that union lists. Restrictions are kept here with that trust, in one write, as
+   * the computer that told this phone of one may be offline next time.
+   */
+  async absorb(known: { id: string; lists: Lists }[]): Promise<Lists> {
+    const sources = listSources(known, this.allowed);
+    const union = merged(sources.map((s) => s.lists), this.sessions, this.allowed);
+    const marks = union.allowedHosts ?? [];
+    const trusted = [...new Set([...this.stored.trusted, ...union.approvedHosts, ...marks])];
+    const allowed = [...new Set([...this.allowed, ...marks])];
+    if (trusted.length !== this.stored.trusted.length || allowed.length !== this.allowed.length) {
+      this.stored = { ...this.stored, trusted, allowed };
+      await this.save();
+    }
+    return union;
   }
 
   /**
@@ -417,12 +437,14 @@ export class AccountHosts {
   /**
    * Signs in at `at` with a fresh Clerk token. An approved key gets a session, kept. Otherwise the
    * host holds a request: with a value this phone kept for it, it goes on; with none, it starts
-   * one only when the user `ask`ed, and both ends then show its code.
+   * one only when the user `ask`ed, and both ends then show its code. With `compare`, a host that
+   * answers with a session at once showed no code to compare, so it's refused and nothing is kept.
    */
   private async signIn(
     at: Endpoint,
     hostId: string,
     ask: boolean,
+    compare = false,
   ): Promise<{ session: string } | { gate: Gate; request?: string }> {
     const token = await this.token(true);
     if (!token) throw new Error("Sign in to Parallax again.");
@@ -437,6 +459,7 @@ export class AccountHosts {
     // Already approved: trusted only if it already was, by a code or a host this phone uses, or if
     // this phone asked, and was allowed while it couldn't hear. That Allow may have come from any
     // of them, as it covers them all.
+    if (status === 200 && compare) throw new Denied(NO_CODE);
     if (status === 200) return this.approved(hostId, json, this.askedAny);
     if (status === 401 || status === 403)
       throw new Refused(describeRefusal(json) ?? "That computer refused this phone's sign-in.");
@@ -461,7 +484,10 @@ export class AccountHosts {
       value = started.value;
     }
     const step = await this.approval(at, { request: requestId, value: base64url(value) });
-    if ("session" in step) return this.approved(hostId, step.session, true);
+    if ("session" in step) {
+      if (compare) throw new Denied(NO_CODE);
+      return this.approved(hostId, step.session, true);
+    }
     // Only now does the host show its value, which must be the one it committed to.
     const hostValue = fromBase64url(String(step.pending["value"] ?? ""));
     if (commitment(hostValue) !== committed) throw new WrongHost("Another computer answered for that one.");
@@ -492,15 +518,17 @@ export class AccountHosts {
   /**
    * Keeps the session in `answer`, and trusts its host when the user approved it with a code on
    * this phone: typed it, or matched it on another device. That ends any other request and any
-   * stop, since it covers every computer.
+   * stop, since it covers every computer. `tapped` marks one the user allowed with a tap on its
+   * code alone, which this phone takes no lists from.
    */
-  private async approved(hostId: string, answer: Record<string, unknown>, byCode: boolean) {
+  private async approved(hostId: string, answer: Record<string, unknown>, byCode: boolean, tapped = false) {
     const session = String(answer["accessToken"] ?? "");
     if (!session) throw new Error("That computer sent no session.");
-    const { trusted, books } = this.stored;
+    const { trusted, books, allowed = [] } = this.stored;
     this.stored = {
       ...this.stored,
       sessions: { ...this.stored.sessions, [hostId]: session },
+      ...(tapped && !allowed.includes(hostId) && { allowed: [...allowed, hostId] }),
       ...(byCode && {
         trusted: trusted.includes(hostId) ? trusted : [...trusted, hostId],
         books: Object.fromEntries(Object.entries(books).map(([id, book]) => [id, forgetRequest(book)])),
@@ -514,10 +542,18 @@ export class AccountHosts {
   /**
    * Asks to use `hostId` as a new device, because the user asked: signs in and starts a request,
    * or goes on with the one it kept. Resolves once approved, after `onCode` shows the code to
-   * match on another device. Rejects when it's denied or lapses, with a message for people, which
-   * ends that request: the user may ask again, which starts a new one, counted.
+   * match on another device, or on that computer's own screen. It's given `allow`, for the user's
+   * tap on that computer's code: the device its setup command named gets in on that alone, and any
+   * other gets `onConfirm`, as that computer must confirm too. Rejects when it's denied or lapses,
+   * with a message for people, which ends that request: the user may ask again, which starts a new
+   * one, counted.
    */
-  async ask(hostId: string, learned: string[], onCode: (code: string) => void): Promise<void> {
+  async ask(
+    hostId: string,
+    learned: string[],
+    onCode: (code: string, allow: () => void) => void,
+    onConfirm: () => void = () => {},
+  ): Promise<void> {
     const { at } = await this.first(hostId, ordered(hostId, learned));
     try {
       const signed = await this.signIn(at, hostId, true);
@@ -527,14 +563,65 @@ export class AccountHosts {
         throw new Denied("That computer already approved this phone. Run plx connect on it, and type the code it shows.");
       }
       if (signed.gate.kind !== "waiting" || !signed.request) throw new Error("That computer didn't start a request.");
-      onCode(signed.gate.code);
+      const request = signed.request;
+      let tapped = false;
+      let fromAllow: (session: Record<string, unknown>) => void = () => {};
+      const allowedHere = new Promise<{ session: Record<string, unknown> }>((resolve) => {
+        fromAllow = (session) => resolve({ session });
+      });
+      onCode(signed.gate.code, () => {
+        tapped = true;
+        // Either this call or the wait below gets the session, so losing here is no failure.
+        this.approval(at, { request, allow: true }).then(
+          (step) => {
+            if ("session" in step) fromAllow(step.session);
+            else if (step.pending["needsHost"]) onConfirm();
+          },
+          () => {},
+        );
+      });
       for (;;) {
-        const step = await this.approval(at, { request: signed.request }, true);
+        const step = await Promise.race([this.approval(at, { request }, true), allowedHere]);
         if ("session" in step) {
-          await this.approved(hostId, step.session, true);
+          await this.approved(hostId, step.session, true, tapped);
           return;
         }
       }
+    } catch (e) {
+      if (e instanceof Denied) await this.setBook(hostId, forgetRequest(this.book(hostId)));
+      throw e;
+    } finally {
+      at.close();
+    }
+  }
+
+  /**
+   * Compares codes with new computer `hostId`, which nothing vouches for, so it may be one the relay
+   * made up. It takes no session until `decide` says the user allowed the code, and then marks the
+   * computer `allowed`, so this phone takes no lists from it. Without the Allow it asks nothing more
+   * of the host, which withdraws the request. `onConfirm` says the computer must confirm too, as its
+   * setup named no device. Rejects when it's denied or lapses, with a message for people.
+   */
+  async compare(
+    hostId: string,
+    learned: string[],
+    decide: (code: string) => Promise<boolean>,
+    onConfirm: () => void = () => {},
+  ): Promise<void> {
+    const { at } = await this.first(hostId, ordered(hostId, learned));
+    try {
+      const signed = await this.signIn(at, hostId, true, true);
+      if (!("gate" in signed) || signed.gate.kind !== "waiting" || !signed.request)
+        throw new Error("That computer didn't start a request.");
+      const request = signed.request;
+      if (!(await decide(signed.gate.code))) {
+        await this.approval(at, { request, deny: true }).catch(() => {});
+        throw new Denied("You didn't allow it.");
+      }
+      let step = await this.approval(at, { request, allow: true });
+      if ("pending" in step) onConfirm();
+      while (!("session" in step)) step = await this.approval(at, { request }, true);
+      await this.approved(hostId, step.session, true, true);
     } catch (e) {
       if (e instanceof Denied) await this.setBook(hostId, forgetRequest(this.book(hostId)));
       throw e;
@@ -565,6 +652,8 @@ export class AccountHosts {
     }
   }
 }
+
+const NO_CODE = "That computer showed no code to compare. Type the code it shows.";
 
 /** A sign-in or request the host refused: this phone needs setting up or approving again. */
 class Refused extends Error {}

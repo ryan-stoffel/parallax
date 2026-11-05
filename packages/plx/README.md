@@ -16,7 +16,7 @@ Every download is checked against the SHA-256 its GitHub release reports, and pl
 
 | Command | What it does |
 | --- | --- |
-| `plx connect` | Signs in, installs plxd here, registers it with the relay, and turns on `relay` and `remote`. Once it's online it shows a 6-digit code. Parallax on your other computer asks for it, and once you type it there, plx says so and exits. |
+| `plx connect` | Signs in, installs plxd here, registers it with the relay, and turns on `relay` and `remote`. Once it's online, Parallax on your other device shows a 6-digit code, and so does plx. Allow it there if they match. With the command from that device's Add computer, which names it with `--device`, that's all. Otherwise you also press Enter here. No device at hand? plx also shows a setup code to type on a signed-in device. plx says when a device joined, and exits. |
 | `plx connect add <ssh destination>` | The same on another computer over SSH, with the sign-in here. |
 | `plx connect approve` | Approves a device waiting to sign in, once its code matches, or shows a new code to type on a device. |
 | `plx connect status [--json]` | Prints the account, host id, relay state, and routes. See [Scripts](#scripts) for `--json`. |
@@ -30,6 +30,7 @@ Options:
 
 - `--channel stable|nightly`: which release to install (default `nightly`). `plx connect` stops before sign-in when that release is older than Parallax Relay, and says what to run instead.
 - `--no-browser`: sign in on any device, with a link and a short code printed here. This is automatic over SSH, on Linux without a display, and with no terminal.
+- `--device=<key>`: for `connect` and `connect add`, the signed-in device whose Allow is enough, by its key. Add computer's command fills this in. It isn't a secret. It works because it reaches this computer through you, not the relay.
 - `--user <user>` and `--port <port>`: the SSH user and port for `add`.
 - `--headless`: install plxd alone, without the app, for the Tailscale `add` and `setup`. `connect` always installs plxd alone.
 - `--dry-run`: print the Tailscale steps and install script without installing anything.
@@ -48,7 +49,7 @@ On Windows, don't start `powershell.exe` with `DETACHED_PROCESS` (Node's `detach
 
 - No browser opens. plx prints the sign-in link and a short code, each on its own indented line. Approve on any device and plx carries on, with nothing needed on stdin. When the code expires first, it exits 1.
 - If the grant isn't available to the OAuth application, plx prints the link alone and reads the code from stdin, one line per try, up to 3 tries. When input ends first, it says no code was entered and exits 1. `curl ... | sh` leaves nothing on stdin, so to pipe a code in, download `connect.sh` and run it with `sh connect.sh < codes`.
-- Once the computer is online, plx prints one setup code and exits 0, rather than waiting for a device. plxd keeps the code for 10 minutes, and `plx connect approve` shows a new one.
+- Once the computer is online, plx prints one setup code and exits 0, rather than waiting for a device. plxd keeps the code for 10 minutes, and `plx connect approve` shows a new one. With `--device=<key>`, that device's Allow is also enough while the code lasts. Without it, Allow gets no session, since nobody is here to confirm it, so the code has to be typed.
 - `plx connect approve` with a device waiting reads its answer from stdin too. When input ends first, it exits 1 and neither approves nor denies.
 
 Read these from stdout, along with the exit code: 0 when it worked, 1 when it failed, and 2 for a bad command line.

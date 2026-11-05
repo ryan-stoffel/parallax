@@ -1523,16 +1523,21 @@ pub(crate) async fn new_pairing(daemon: &Daemon) -> Result<(String, jiff::Timest
 }
 
 /// A new computer's setup code (0091), which replaces any pairing code waiting, for a signed-in
-/// client to type. Refused while the listener isn't bound.
-pub(crate) async fn new_setup_code(daemon: &Daemon) -> Result<(String, jiff::Timestamp), String> {
+/// client to type. With `device`, that key's Allow is enough while the code lasts. Refused while
+/// the listener isn't bound.
+pub(crate) async fn new_setup_code(
+    daemon: &Daemon,
+    device: Option<String>,
+) -> Result<(String, jiff::Timestamp), String> {
     let remote = &daemon.remote;
     if !remote.listening.load(Ordering::Relaxed) {
         let problem = lock(&remote.problem).clone();
         return Err(problem.unwrap_or_else(|| "Turn on Reach from anywhere first.".to_owned()));
     }
     let name = host_name(daemon).await;
-    remote.access.setup_started();
-    Ok(remote.new_pairing(&name, true))
+    let (code, expires) = remote.new_pairing(&name, true);
+    remote.access.setup_started(device, expires);
+    Ok((code, expires))
 }
 
 /// A client's name as kept: no control characters, at most 64 characters.

@@ -206,6 +206,25 @@ fn service_installs_reports_and_uninstalls_a_systemd_user_unit() {
     );
 }
 
+/// `plxd dial --device-key` prints this computer's key, the same each time, with no address.
+#[test]
+fn dial_device_key_prints_this_computers_key_with_no_address() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_plxd"))
+            .args(["dial", "--device-key", "--data-dir"])
+            .arg(dir.path())
+            .output()
+            .expect("plxd should run");
+        assert!(output.status.success(), "{output:?}");
+        let answer: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        answer["thumbprint"].as_str().unwrap().to_owned()
+    };
+    let first = key();
+    assert_eq!(first.len(), 43, "{first}");
+    assert_eq!(first, key());
+}
+
 /// `plxd dial` bridges stdin and stdout to a TCP peer, half-closing when stdin ends, and exits 0
 /// once the peer closes (0056).
 #[test]

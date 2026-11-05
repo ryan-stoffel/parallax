@@ -46,6 +46,7 @@ import {
   countPairRun,
   directRoutes,
   lacks,
+  listSources,
   mergeListed,
   parseSignIn,
   relayIdOf,
@@ -282,9 +283,18 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   ipcMain.handle("parallax:showSetupCode", () => showSetupCode());
   ipcMain.handle("parallax:askAgain", (_event, hostId: unknown) => {
     const saved = accountOf(hostId);
-    if (saved && accountAccess.get(accountId(saved.hostId))?.step === "ask")
-      return signIn(accountId(saved.hostId));
+    if (!saved) return;
+    const id = accountId(saved.hostId);
+    const step = accountAccess.get(id)?.step;
+    if (step === "ask") return signIn(id);
+    if (step === "needsCode") return compareCodes(id);
   });
+  ipcMain.handle("parallax:answerCompare", (_event, hostId: unknown, allow: unknown) =>
+    typeof hostId === "string" && typeof allow === "boolean"
+      ? answerCompare(hostId, allow)
+      : "invalid request",
+  );
+  ipcMain.handle("parallax:deviceKey", () => deviceKey());
   ipcMain.handle("parallax:accessRequests", () => accessRequests());
   ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
   ipcMain.handle("parallax:turnOnReach", (_event, hostId: unknown) => turnOnReach(hostId));
@@ -1853,6 +1863,9 @@ function dropAccountConnection(id: string): void {
   accountRoutes.get(id)?.dispose();
   accountRoutes.delete(id);
   signedIn.delete(id);
+  endCompare(id);
+  compared.delete(id);
+  allowing.delete(id);
   setAccess(id, undefined);
 }
 
@@ -2027,6 +2040,7 @@ function followAccess(hostId: string, state: ConnectionState): void {
   if (state.status !== "connected") return;
   if (relayId) {
     signedIn.delete(hostId);
+    allowing.delete(hostId);
     setAccess(hostId, undefined);
     finishMigration(relayId);
     void readRoutes(hostId);
@@ -2058,17 +2072,52 @@ const accessHosts = () =>
   );
 
 /**
- * The relay ids the user's computers vouch for (0091): each connected one's `approvedHosts`, and
- * the `tailnet:` devices', which Tailscale vouches for. Undefined until the local plxd answers.
+ * The relay ids the user's computers vouch for (0091): each connected one's `approvedHosts` and
+ * `allowedHosts`, and the `tailnet:` devices', which Tailscale vouches for. Undefined until the
+ * local plxd answers and has saved every restriction those lists hold.
  */
 async function vouchedHosts(): Promise<Set<string> | undefined> {
   const asked = accessHosts();
   if (!asked.some(([id]) => id === "local")) return undefined;
-  const answers = await Promise.all(asked.map(([, each]) => each.request("access/get", {})));
+  const read = await Promise.all(
+    asked.map(async ([id, each]) => {
+      const answer = await each.request("access/get", {});
+      const relayId = relayIdOf(id) ?? tailnetRelayIds.get(id) ?? "";
+      return "result" in answer ? { id, relayId, state: answer.result } : undefined;
+    }),
+  );
+  const known = read.filter((each) => each !== undefined);
+  const own = known.find((k) => k.id === "local");
+  if (!own) return undefined;
+  const sources = listSources(known, own);
+  // Saved first, or not used: the computer that told of a restriction may be gone by the next sync.
+  const saved = own.state.allowedHosts ?? [];
+  const unsaved = sources
+    .flatMap((each) => each.state.allowedHosts ?? [])
+    .filter((id) => !saved.includes(id));
+  if (unsaved.length && !(await saveRestrictions([...new Set(unsaved)]))) return undefined;
   const vouched = new Set(tailnetRelayIds.values());
-  for (const answer of answers)
-    if ("result" in answer) for (const id of answer.result.approvedHosts) vouched.add(id);
+  for (const each of sources)
+    for (const id of [...each.state.approvedHosts, ...(each.state.allowedHosts ?? [])])
+      vouched.add(id);
   return vouched;
+}
+
+/**
+ * Keeps `allowedHosts` in this computer's plxd, which is what holds them for good (0091). Answers
+ * whether its lists now have them, which an older plxd's don't: a caller must not use those
+ * computers otherwise.
+ */
+async function saveRestrictions(allowedHosts: string[]): Promise<boolean> {
+  const answer = await connections.get("local")?.request("access/merge", {
+    approvedClients: [],
+    removedClients: [],
+    approvedHosts: [],
+    allowedHosts,
+  });
+  if (!answer || "error" in answer) return false;
+  const saved = answer.result.allowedHosts ?? [];
+  return allowedHosts.every((id) => saved.includes(id));
 }
 
 /**
@@ -2083,7 +2132,7 @@ async function beginAccess(id: string): Promise<void> {
   const relayId = relayIdOf(id);
   const vouched = await vouchedHosts();
   if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
-  if (!vouched.has(relayId)) return askForCode(id);
+  if (!vouched.has(relayId) || allowing.has(id)) return askForCode(id);
   if (signedIn.has(id))
     return setAccess(id, { step: "ask", why: "It hasn't let this computer in. Ask again." });
   await signIn(id);
@@ -2095,10 +2144,11 @@ const offlineAccounts = new Set<string>();
 const probing = new Set<string>();
 
 /**
- * Marks new account computer `id` as needing the setup code it shows. The dialog asks
- * for it only once the computer answers: one the relay lists as offline, or none of whose routes
- * presents its key, as an old install's leftover entry never does, stays `offline`, listed in
- * Settings > Connections, where Enter code still asks (0091). Discovery checks again.
+ * What new account computer `id` needs from the user. Once it answers, the first time, that's a
+ * code to compare (`compareCodes`). After that, or while one the relay lists as offline, or none
+ * of whose routes presents its key, as an old install's leftover entry never does, stays `offline`,
+ * it's the setup code it shows, listed in Settings > Connections, where Enter code still asks
+ * (0091). Discovery checks again.
  */
 async function askForCode(id: string): Promise<void> {
   const relayId = relayIdOf(id);
@@ -2110,8 +2160,163 @@ async function askForCode(id: string): Promise<void> {
   probing.delete(id);
   const now = accountAccess.get(id);
   // Something moved on meanwhile, or nothing changed, which keeps a wrong code's error.
-  if ((now && now.step !== "needsCode") || (now && !now.offline === answers)) return;
+  if (now && now.step !== "needsCode") return;
+  if (answers && !compared.has(id)) return compareCodes(id);
+  if (now && !now.offline === answers) return;
   setAccess(id, { step: "needsCode", ...(!answers && { offline: true as const }) });
+}
+
+/** New computers this app started a request with, which starts again only if the user asks. */
+const compared = new Set<string>();
+/** New computers whose code is on screen, with how to answer each, while it waits. */
+const comparing = new Map<string, (allow: boolean) => void>();
+/** What `answerCompare` is waiting on, by computer. */
+const compareDone = new Map<string, (failed: string | undefined) => void>();
+/**
+ * New computers the user clicked Allow on, until one lets this app in. Allow saves their
+ * restriction before it's sent, and that mark is this app's own, so here it vouches for nothing: a
+ * request that then ends leaves the typed code, not a sign-in.
+ */
+const allowing = new Set<string>();
+
+/** Ends the comparison with computer `id`, if one runs, which withdraws its request. */
+function endCompare(id: string): void {
+  const answer = comparing.get(id);
+  comparing.delete(id);
+  answer?.(false);
+  compareDone.get(id)?.(undefined);
+  compareDone.delete(id);
+}
+
+/**
+ * Starts a request at new account computer `id` (0091), through `plxd dial --account --sign-in
+ * --compare`, so both ends show one code, made from values both commit to. The user allows it only
+ * if that computer shows the same. With nothing vouching for the computer, it may be one the relay
+ * made up, so `answerCompare` marks it in `allowedHosts` before Allow reaches it: this app uses it
+ * and takes no lists from it (`listSources`). When anything fails, the user can type its setup code
+ * instead.
+ */
+async function compareCodes(id: string): Promise<void> {
+  const relayId = relayIdOf(id);
+  const routes = accountRoutes.get(id);
+  const plxd = localPlxd();
+  if (!relayId || !routes || !plxd) return;
+  endCompare(id);
+  compared.add(id);
+  const typeInstead = (error?: string) =>
+    setAccess(id, { step: "needsCode", ...(error && { error }) });
+  setAccess(id, { step: "signingIn" });
+  const token = await account?.freshToken();
+  if (!token) {
+    // Nothing started, so a later look may still compare, once signed in.
+    compared.delete(id);
+    return typeInstead();
+  }
+  const relayToken = await account?.accessToken();
+  const child = spawn(
+    plxd,
+    [
+      "dial",
+      `--account=${relayId}`,
+      "--sign-in",
+      "--compare",
+      `--name=${localName()}`,
+      "--",
+      ...routes.dial(),
+    ],
+    {
+      windowsHide: true,
+      env: { ...process.env, ...(relayToken && { PLXD_RELAY_TOKEN: relayToken }) },
+    },
+  );
+  child.stdin.on("error", () => {});
+  child.stdin.write(`${token}\n`);
+  let denied = false;
+  // Its stdin stays open after Allow, since Deny still withdraws while the computer confirms.
+  const answer = (allow: boolean) => {
+    denied = !allow;
+    if (allow) child.stdin.write("allow\n");
+    else child.stdin.end("deny\n");
+  };
+  comparing.set(id, answer);
+  let request: string | undefined;
+  let code = "";
+  let allowed = false;
+  createInterface({ input: child.stdout }).on("line", (line) => {
+    const said = parseSignIn(line);
+    if (said?.status === "pending") {
+      request = said.request;
+      code = said.code;
+      ownRequests.add(request);
+      setAccess(id, { step: "compare", code });
+    } else if (said?.status === "confirm") setAccess(id, { step: "confirm", code });
+    else if (said?.status === "approved") {
+      allowed = true;
+      learn(relayId, said.name, said.routes);
+    }
+  });
+  const exit = await new Promise<number | null>((resolve) => {
+    child.on("error", () => resolve(-1));
+    child.on("close", resolve);
+  });
+  if (request) ownRequests.delete(request);
+  // Typing its code, or another computer vouching for it, took over.
+  if (comparing.get(id) !== answer) return;
+  comparing.delete(id);
+  const done = compareDone.get(id);
+  compareDone.delete(id);
+  child.stdin.end();
+  if (!allowed || exit !== 0) {
+    const why =
+      request && !denied ? "That request ended. Type the code it shows instead." : undefined;
+    typeInstead(why);
+    return done?.(why);
+  }
+  setAccess(id, undefined);
+  connections.get(id)?.retry();
+  done?.(undefined);
+}
+
+/**
+ * `window.parallax.answerCompare`: the user's answer to new computer `hostId`'s code. Allowing
+ * saves the computer's restriction, or withdraws the request if that fails, since once Allow is
+ * sent the computer can leave a session here. It resolves once the computer lets this app in,
+ * which for a bare setup command takes Enter there too. Resolves to an error for people.
+ */
+async function answerCompare(hostId: string, allow: boolean): Promise<string | undefined> {
+  const answer = comparing.get(hostId);
+  const relayId = relayIdOf(hostId);
+  const gone = "That request isn't waiting anymore.";
+  if (!answer || !relayId) return gone;
+  if (allow) {
+    allowing.add(hostId);
+    const saved = await saveRestrictions([relayId]);
+    // It ended while saving, or the user denied it, whose answer is already on its way.
+    if (comparing.get(hostId) !== answer || compareDone.has(hostId)) return gone;
+    if (!saved) {
+      const why = "Parallax couldn't record this here, so it isn't allowed. Type the code instead.";
+      endCompare(hostId);
+      setAccess(hostId, { step: "needsCode", error: why });
+      return why;
+    }
+  }
+  return new Promise((resolve) => {
+    compareDone.set(hostId, resolve);
+    answer(allow);
+  });
+}
+
+/** `window.parallax.deviceKey`: this computer's key, which Add computer's command names. */
+async function deviceKey(): Promise<string | undefined> {
+  const plxd = localPlxd();
+  if (!plxd) return undefined;
+  try {
+    const { stdout } = await dialPlxd(plxd, ["--device-key"]);
+    const { thumbprint } = JSON.parse(stdout) as { thumbprint?: unknown };
+    return typeof thumbprint === "string" ? thumbprint : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -2154,7 +2359,7 @@ async function signIn(id: string): Promise<void> {
       ownRequests.add(request);
       setAccess(id, { step: "pending", code: answer.code });
       void allowOverTailnet(relayId, answer.request);
-    } else if (answer) learn(relayId, answer.name, answer.routes);
+    } else if (answer?.status === "approved") learn(relayId, answer.name, answer.routes);
   });
   const code = await new Promise<number | null>((resolve) => {
     child.on("error", () => resolve(-1));
@@ -2204,6 +2409,8 @@ async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | 
   const fail = (why: string) => (setAccess(id, { step: "needsCode", error: why }), why);
   if (!runs) return fail("That's 5 tries with this computer this hour. Try again later.");
   updateAccount(saved.hostId, (each) => ({ ...each, pairRuns: runs }));
+  // Typing takes over from comparing, so a slot this app's request holds doesn't keep waiting.
+  endCompare(id);
   setAccess(id, { step: "pairing" });
   let stdout: string;
   try {
@@ -2342,9 +2549,16 @@ function watchAccess(hostId: string): void {
       showRequest(hostId, answer.result.pending);
       // Another of the user's computers vouched for one waiting on its code, as the computer it
       // just joined does (`syncAccess`), so it signs in with no code asked for.
-      for (const vouched of answer.result.approvedHosts) {
+      for (const vouched of [
+        ...answer.result.approvedHosts,
+        ...(answer.result.allowedHosts ?? []),
+      ]) {
         const id = accountId(vouched);
-        if (accountAccess.get(id)?.step !== "needsCode") continue;
+        // This app's own save for an Allow isn't another computer vouching.
+        if (allowing.has(id)) continue;
+        const step = accountAccess.get(id)?.step;
+        if (step !== "needsCode" && step !== "compare" && step !== "confirm") continue;
+        endCompare(id);
         setAccess(id, undefined);
         void beginAccess(id);
       }
@@ -2407,26 +2621,33 @@ async function answerAccess(id: string, allow: boolean): Promise<string | undefi
 }
 
 /**
- * Copies who may sign in between the user's computers this app reaches (0091): every connected
- * one's approved and removed keys and approved host ids, and their own relay ids, merged into
- * each that lacks any. A computer that was offline catches up the next time it connects.
+ * Copies who may sign in between the user's computers this app reaches (0091): the approved and
+ * removed keys and approved host ids of every connected one `listSources` takes lists from, and all
+ * their own relay ids, merged into each that lacks any. A computer that was offline catches up the
+ * next time it connects.
  */
 const syncAccess = coalesced(async () => {
   const read = await Promise.all(
-    accessHosts().map(async ([, host]) => {
+    accessHosts().map(async ([id, host]) => {
       const [state, own] = await Promise.all([
         host.request("access/get", {}),
         host.request("relay/id", {}),
       ]);
+      // An account computer is who its connection pins, whatever its answer says. Only this
+      // computer's plxd and Tailscale's authenticated peers say for themselves.
       return "result" in state && "result" in own
-        ? { host, state: state.result, relayId: own.result.hostId }
+        ? { id, host, state: state.result, relayId: relayIdOf(id) ?? own.result.hostId }
         : undefined;
     }),
   );
   const known = read.filter((each) => each !== undefined);
-  if (known.length < 2) return;
+  // This computer's plxd keeps the restrictions, so nothing is copied without it: the computer
+  // that told it of one may be offline, leaving no other way to tell a restricted one.
+  const own = known.find((each) => each.id === "local");
+  if (!own || known.length < 2) return;
+  const sources = listSources(known, own);
   const union = unionLists(
-    known.map((each) => each.state),
+    sources.map((each) => each.state),
     known.map((each) => each.relayId),
   );
   await Promise.all(

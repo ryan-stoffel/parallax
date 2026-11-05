@@ -8766,6 +8766,12 @@ export type AccessState = {
 	 */
 	approvedHosts: Array<string>,
 	/**
+	 * Hosts added with Allow alone (0091), apart from `approved_hosts`, which is all an older
+	 * client reads: clients use them and copy lists to them, but take no keys or host ids from
+	 * them.
+	 */
+	allowedHosts?: Array<string>,
+	/**
 	 * A new device's request, while it waits.
 	 */
 	pending?: AccessRequest,
@@ -8819,6 +8825,10 @@ export type AccessMergeParams = {
 	 * Approved host ids.
 	 */
 	approvedHosts: Array<string>,
+	/**
+	 * Host ids added with Allow alone.
+	 */
+	allowedHosts?: Array<string>,
 };
 
 /**
@@ -8854,7 +8864,13 @@ export type AccessForgetHostParams = {
 /**
  * Params of `access/setupCode`.
  */
-export type AccessSetupCodeParams = Record<symbol, never>;
+export type AccessSetupCodeParams = {
+	/**
+	 * The `DPoP` key thumbprint of the device whose Add computer gave the setup command. While
+	 * the code lasts, that key's Allow is enough, and no other key's request is taken (0091).
+	 */
+	device?: string,
+};
 
 /**
  * Result of `access/setupCode`: the code a new computer shows for a signed-in client to type

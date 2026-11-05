@@ -309,7 +309,9 @@ export class Routes {
 /** What `plxd dial --account --sign-in` prints, a line each. */
 export type SignInAnswer =
   | { status: "approved"; name: string; routes: string[] }
-  | { status: "pending"; request: string; code: string };
+  | { status: "pending"; request: string; code: string }
+  /** The user clicked Allow, and the computer waits for its own screen to confirm too. */
+  | { status: "confirm" };
 
 /** One line of `plxd dial --account --sign-in`'s output, or undefined for anything else. */
 export function parseSignIn(line: string): SignInAnswer | undefined {
@@ -332,24 +334,55 @@ export function parseSignIn(line: string): SignInAnswer | undefined {
     /^\d{6}$/.test(value["code"])
   )
     return { status: "pending", request: value["request"], code: value["code"] };
+  if (value["status"] === "confirm") return { status: "confirm" };
   return undefined;
 }
 
 /** A host's approved and removed keys and approved host ids, as `access/merge` takes them. */
-export type Lists = Pick<AccessState, "approvedClients" | "removedClients" | "approvedHosts">;
+export type Lists = Pick<
+  AccessState,
+  "approvedClients" | "removedClients" | "approvedHosts" | "allowedHosts"
+>;
+
+/**
+ * Which of `known` this app takes lists from (0091), `own` being this computer's plxd, which it
+ * always trusts. A computer added with Allow alone may be a fake one the user clicked through, so
+ * it gets lists but gives none: nothing it says reaches the user's other computers. Marks count
+ * only from a computer that isn't marked itself, so a fake one can't demote the real ones. Each
+ * `relayId` must be what the connection pins, never what the computer says of itself.
+ */
+export function listSources<T extends { relayId: string; state: Lists }>(
+  known: T[],
+  own: T | undefined,
+): T[] {
+  const allowed = new Set(own?.state.allowedHosts ?? []);
+  for (let size = -1; size !== allowed.size;) {
+    size = allowed.size;
+    for (const each of known)
+      if (!allowed.has(each.relayId))
+        for (const id of each.state.allowedHosts ?? []) allowed.add(id);
+  }
+  return known.filter((each) => each === own || !allowed.has(each.relayId));
+}
 
 /**
  * Every list in `states` together, with `hostIds`, the connected hosts' own relay ids, approved
- * too. A key removed anywhere is removed, and not approved, everywhere.
+ * too. A key removed anywhere is removed, and not approved, everywhere. A computer added with Allow
+ * alone stays out of `approvedHosts`, the only list an older client or plxd reads, so neither ever
+ * takes it for a computer the user verified.
  */
 export function unionLists(states: Lists[], hostIds: string[]): Lists {
   const removed = new Set(states.flatMap((s) => s.removedClients));
   const approved = new Set(states.flatMap((s) => s.approvedClients).filter((k) => !removed.has(k)));
-  const hosts = new Set([...states.flatMap((s) => s.approvedHosts), ...hostIds]);
+  const allowed = new Set(states.flatMap((s) => s.allowedHosts ?? []));
+  const hosts = new Set(
+    [...states.flatMap((s) => s.approvedHosts), ...hostIds].filter((id) => !allowed.has(id)),
+  );
   return {
     approvedClients: [...approved].sort(),
     removedClients: [...removed].sort(),
     approvedHosts: [...hosts].sort(),
+    ...(allowed.size > 0 && { allowedHosts: [...allowed].sort() }),
   };
 }
 
@@ -359,7 +392,8 @@ export function lacks(state: Lists, union: Lists): boolean {
   return (
     !has(state.approvedClients, union.approvedClients) ||
     !has(state.removedClients, union.removedClients) ||
-    !has(state.approvedHosts, union.approvedHosts)
+    !has(state.approvedHosts, union.approvedHosts) ||
+    !has(state.allowedHosts ?? [], union.allowedHosts ?? [])
   );
 }
 

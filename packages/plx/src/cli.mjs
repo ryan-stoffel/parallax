@@ -38,6 +38,9 @@ Options:
   --no-browser               Sign in on any device, with a link and a short code printed here,
                              rather than in a browser on this computer. Automatic over SSH,
                              without a display, and with no terminal
+  --device=<key>             For connect and connect add: the signed-in device whose Allow is
+                             enough, as Add computer's command names it. Without it, Allow also
+                             takes Enter in this terminal
   --user <user>              The SSH user for add (default: ssh's own)
   --port <port>              The SSH port for add
   --headless                 Install plxd alone, without the app, for the Tailscale add and setup
@@ -56,10 +59,11 @@ const CONNECT_COMMANDS = new Set(["add", "approve", "status", "unlink", "remove"
  * once input ends, since no answer can come. Piped input keeps one interface for the run, paused
  * between questions so plx can exit: a new one would lose the lines the last one read ahead and
  * never hear of an end that already passed. A terminal gets one per question, since an open one
- * holds raw mode, where Ctrl-C wouldn't stop plx.
+ * holds raw mode, where Ctrl-C wouldn't stop plx, and `signal` withdraws a terminal's question,
+ * which rejects it and leaves later questions working.
  * @param {NodeJS.ReadableStream & { isTTY?: boolean }} input
  * @param {NodeJS.WritableStream & { isTTY?: boolean }} output
- * @returns {(question: string) => Promise<string>}
+ * @returns {(question: string, signal?: AbortSignal) => Promise<string>}
  */
 export function lineReader(input, output) {
   const terminal = input.isTTY === true;
@@ -68,7 +72,7 @@ export function lineReader(input, output) {
   let ended = false;
   // Piped input can end with answers still queued, and Node 24's pause and resume throw once closed.
   let closed = false;
-  return async (question) => {
+  return async (question, signal) => {
     if (ended) throw new Error("Input ended before an answer.");
     if (!open) {
       const reader = createInterface({ input, output, terminal: terminal && output.isTTY === true });
@@ -81,7 +85,14 @@ export function lineReader(input, output) {
       reader.setPrompt(question);
       reader.prompt();
     } else output.write(`${question}\n`);
+    const withdraw = () => reader.close();
+    if (terminal) signal?.addEventListener("abort", withdraw, { once: true });
     const { done, value } = await lines.next();
+    signal?.removeEventListener("abort", withdraw);
+    if (terminal && signal?.aborted) {
+      open = undefined;
+      throw new Error("The question was withdrawn.");
+    }
     if (done) {
       ended = true;
       throw new Error("Input ended before an answer.");
@@ -94,11 +105,15 @@ export function lineReader(input, output) {
   };
 }
 
-/** @type {((question: string) => Promise<string>) | undefined} */
+/** @type {((question: string, signal?: AbortSignal) => Promise<string>) | undefined} */
 let stdinReader;
 
-/** Asks on stdin, which is only touched once something asks. @param {string} question */
-const prompt = (question) => (stdinReader ??= lineReader(process.stdin, process.stdout))(question);
+/**
+ * Asks on stdin, which is only touched once something asks.
+ * @param {string} question
+ * @param {AbortSignal} [signal]
+ */
+const prompt = (question, signal) => (stdinReader ??= lineReader(process.stdin, process.stdout))(question, signal);
 
 /**
  * What `plx connect` reaches: Clerk through the browser, the device grant, or a pasted code, plxd
@@ -148,8 +163,9 @@ export async function main(argv, deps = realDeps) {
   const channel = values.channel ?? "nightly";
   if (channel !== "stable" && channel !== "nightly") return usage(`--channel is stable or nightly, not ${channel}.`);
   if (values.port !== undefined && !/^\d+$/.test(values.port)) return usage(`--port is a number, not ${values.port}.`);
-  /** @type {import("./tailscale-setup.mjs").Options} */
-  const options = { channel, user: values.user, port: values.port, headless: values.headless, dryRun: values["dry-run"] };
+  if (values.device !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(values.device)) return usage(`--device is a device's key, not ${values.device}.`);
+  /** @type {import("./tailscale-setup.mjs").Options & import("./connect.mjs").Options} */
+  const options = { channel, user: values.user, port: values.port, headless: values.headless, dryRun: values["dry-run"], device: values.device };
 
   const [command, ...rest] = positionals;
   switch (command) {
@@ -202,6 +218,7 @@ function parse(argv) {
     allowPositionals: true,
     options: {
       channel: { type: "string" },
+      device: { type: "string" },
       "no-browser": { type: "boolean" },
       user: { type: "string" },
       port: { type: "string" },

@@ -124,24 +124,46 @@ export interface Lists {
   approvedClients: string[];
   removedClients: string[];
   approvedHosts: string[];
+  /** Hosts added with Allow alone, which clients use and take no lists from. */
+  allowedHosts?: string[];
 }
 
 /**
- * Every host's lists in one, with `hosts` (the ones this phone has sessions with) approved too.
- * A key removed anywhere ends up removed and not approved, so the lists merge with no clock.
+ * Which of `known` this phone takes lists from (0091). A computer added with Allow alone may be a
+ * fake one the user clicked through, so it gets lists but gives none: nothing it says reaches the
+ * user's other computers. `allowed` is those this phone allowed itself. Marks count only from a
+ * computer that isn't marked itself, so a fake one can't demote the real ones.
  */
-export function merged(all: Lists[], hosts: string[]): Lists {
+export function listSources<T extends { id: string; lists: Lists }>(known: T[], allowed: string[]): T[] {
+  const marked = new Set(allowed);
+  for (let size = -1; size !== marked.size; ) {
+    size = marked.size;
+    for (const each of known)
+      if (!marked.has(each.id)) for (const id of each.lists.allowedHosts ?? []) marked.add(id);
+  }
+  return known.filter((each) => !marked.has(each.id));
+}
+
+/**
+ * Every host's lists in one, with `hosts` (the ones this phone has sessions with) approved too,
+ * and `allowed` (those it allowed itself) marked. A key removed anywhere ends up removed and not
+ * approved, so the lists merge with no clock. A marked computer stays out of `approvedHosts`, the
+ * only list an older client or plxd reads, so neither takes it for one the user verified.
+ */
+export function merged(all: Lists[], hosts: string[], allowed: string[] = []): Lists {
   const removed = new Set(all.flatMap((l) => l.removedClients));
   const sorted = (items: Iterable<string>) => [...new Set(items)].sort();
+  const marks = sorted([...all.flatMap((l) => l.allowedHosts ?? []), ...allowed]);
   return {
     approvedClients: sorted(all.flatMap((l) => l.approvedClients).filter((k) => !removed.has(k))),
     removedClients: sorted(removed),
-    approvedHosts: sorted([...all.flatMap((l) => l.approvedHosts), ...hosts]),
+    approvedHosts: sorted([...all.flatMap((l) => l.approvedHosts), ...hosts].filter((id) => !marks.includes(id))),
+    ...(marks.length > 0 && { allowedHosts: marks }),
   };
 }
 
 /** Whether `lists` lacks anything in `union`, so the host needs an `access/merge`. */
 export const lacks = (lists: Lists, union: Lists) =>
-  (["approvedClients", "removedClients", "approvedHosts"] as const).some((name) =>
-    union[name].some((item) => !lists[name].includes(item)),
+  (["approvedClients", "removedClients", "approvedHosts", "allowedHosts"] as const).some((name) =>
+    (union[name] ?? []).some((item) => !(lists[name] ?? []).includes(item)),
   );

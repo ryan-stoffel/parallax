@@ -88,7 +88,18 @@ const methods = {
     codes++;
     setupApproved = undefined;
     changed();
-    if (codes === state.pairAfterCodes)
+    if (state.asks) {
+      // A device's request waits, and then, as its own Allow or a typed code does, it joins.
+      setTimeout(() => {
+        state.pending = state.asks;
+        changed();
+      }, 10);
+      setTimeout(() => {
+        state.pending = undefined;
+        setupApproved = state.joins;
+        changed();
+      }, state.pairInMs);
+    } else if (codes === state.pairAfterCodes)
       setTimeout(() => {
         setupApproved = "MacBook Air";
         changed();

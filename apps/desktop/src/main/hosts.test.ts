@@ -52,7 +52,12 @@ const fake = vi.hoisted(() => {
     /** Each `plxd dial` run: its arguments and what it read on stdin. */
     dials: [] as { args: string[]; stdin: string }[],
     /** What the next `plxd dial` run prints, a line each, and its exit code. */
-    dialOutput: { lines: [] as string[], code: 0 },
+    dialOutput: { lines: [] as string[], code: 0 } as {
+      lines: string[];
+      code: number;
+      /** With this, a `--compare` run: it answers these and ends only on "allow" or "deny". */
+      afterAllow?: string[];
+    },
     opened: [] as { runner: unknown; params: unknown }[],
     /** Whether a window is on screen. */
     visible: false,
@@ -109,19 +114,27 @@ vi.mock("node:child_process", async (actual) => {
     return { record, ...fake.dialOutput };
   };
   const spawn = (_file: string, args: string[]) => {
-    const { record, lines, code } = run(args);
+    const { record, lines, afterAllow, code } = run(args);
     const child = Object.assign(new EventEmitter(), {
       stdin: new PassThrough(),
       stdout: new PassThrough(),
       stderr: new PassThrough(),
     });
-    child.stdin.on("data", (chunk: Buffer) => (record.stdin += String(chunk)));
+    const end = (exit: number | null) => {
+      child.stdout.end();
+      child.emit("close", exit);
+    };
+    child.stdin.on("data", (chunk: Buffer) => {
+      record.stdin += String(chunk);
+      if (!afterAllow) return;
+      if (String(chunk).includes("deny")) return end(5);
+      if (!String(chunk).includes("allow")) return;
+      afterAllow.forEach((line) => child.stdout.write(`${line}\n`));
+      setTimeout(() => end(code), 10);
+    });
     // A line every 10 ms, so a test sees where a sign-in stands between them.
     lines.forEach((line, i) => setTimeout(() => child.stdout.write(`${line}\n`), 10 * i));
-    setTimeout(() => {
-      child.stdout.end();
-      child.emit("close", code);
-    }, 10 * lines.length);
+    if (!afterAllow) setTimeout(() => end(code), 10 * lines.length);
     return child;
   };
   const execFile = Object.assign(() => {}, {
@@ -515,8 +528,10 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
     // It answers with its key, so the dialog asks for its code.
     fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
     box.set(refused);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe"]);
+    await vi.advanceTimersByTimeAsync(20);
+    // It shows no code to compare here, so typing is what's left.
+    expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe", `--account=${buildBox}`]);
+    expect(fake.dials[1]?.args).toContain("--compare");
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
 
     const enter = (code: string) =>
@@ -524,7 +539,7 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
         string | undefined
       >;
     expect(await enter("12 34")).toBe("Enter the 6 digits it shows.");
-    expect(fake.dials).toHaveLength(1);
+    expect(fake.dials).toHaveLength(2);
 
     fake.dialOutput = { lines: [], code: 5 };
     const wrong = enter("482 913");
@@ -713,6 +728,349 @@ test("a connecting computer and this one copy approved and removed keys and host
     };
     expect(merged.get(local)).toEqual(union);
     expect(merged.get(connection)).toEqual(union);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The local plxd, connection `local`, as a store: it keeps merged restrictions and answers with
+ * them, and fails while `down`. Other connections answer `access/get` with `others`. `merged` is
+ * every merge asked for, and a merge wakes the watch on `local`.
+ */
+function ownPlxd(local: unknown, others: (connection: unknown) => object = () => ({})) {
+  const plxd = { down: false, allowedHosts: [] as string[], merged: [] as unknown[] };
+  let wake = () => {};
+  const none = { version: 1, approvedClients: [], removedClients: [], approvedHosts: [] };
+  const lists = () => ({ ...none, allowedHosts: plxd.allowedHosts });
+  const restarted = { error: { code: -32000, message: "plxd restarted" } };
+  fake.answers.set("access/get", (params: { after?: number }, c: unknown) => {
+    if (params.after !== undefined)
+      return new Promise((resolve) => {
+        if (c === local) wake = () => resolve({ result: lists() });
+      });
+    if (c !== local) return { result: { ...none, ...others(c) } };
+    return plxd.down ? restarted : { result: lists() };
+  });
+  fake.answers.set("access/merge", (params: { allowedHosts?: string[] }, c: unknown) => {
+    plxd.merged.push(params);
+    if (c !== local) return { result: lists() };
+    if (plxd.down) return restarted;
+    plxd.allowedHosts = [...new Set([...plxd.allowedHosts, ...(params.allowedHosts ?? [])])];
+    wake();
+    return { result: lists() };
+  });
+  return plxd;
+}
+
+/** `plxd dial` answers with each of `runs` in turn, staying on the last. */
+function dialRuns(...runs: { lines: string[]; afterAllow?: string[]; code: number }[]) {
+  fake.dialOutput = {
+    get lines() {
+      return runs[0]!.lines;
+    },
+    get afterAllow() {
+      return runs[0]!.afterAllow;
+    },
+    get code() {
+      return (runs.length > 1 ? runs.shift()! : runs[0]!).code;
+    },
+  };
+}
+
+const offline: ConnectionState = {
+  status: "failed",
+  error: { reason: "unresponsive", message: "It's offline." },
+  retrying: true,
+};
+const pendingLine = '{"status":"pending","request":"r1","code":"482913"}';
+const approvedLine = '{"status":"approved","name":"build-box","routes":[]}';
+
+test("a restriction learned from another computer holds after the relay cuts that computer off", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const local = await start(
+      {
+        localName: "macbook",
+        accounts: [
+          { hostId: studio, name: "studio", routes: [] },
+          { hostId: buildBox, name: "build-box", routes: [] },
+        ],
+      },
+      signedIn().account,
+    );
+    const real = accountConnection(studio)!;
+    const attacker = accountConnection(buildBox)!;
+    let told = false;
+    const plxd = ownPlxd(local, (c) =>
+      c === real && told
+        ? { allowedHosts: [buildBox] }
+        : c === attacker
+          ? { approvedClients: ["attacker"] }
+          : {},
+    );
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === local ? "self" : studio },
+    }));
+    dialRuns({ lines: [approvedLine], code: 0 });
+    local.set(connected({ accountAccess: {} }));
+    real.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Another device adds the fake computer, so the real one, already connected and synced, learns
+    // its mark and vouches for it, and it signs in. The relay then cuts the real one off before
+    // the fake one connects, leaving this computer's plxd as the only word on it.
+    told = true;
+    attacker.set(refused);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fake.dials.filter((d) => d.args.includes("--sign-in"))).toHaveLength(1);
+    real.set(offline);
+    plxd.merged.length = 0;
+    attacker.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(JSON.stringify(plxd.merged)).not.toContain("attacker");
+    expect(plxd.allowedHosts).toEqual([buildBox]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a computer another one restricted gets no sign-in until this computer's plxd has saved that", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const local = await start(
+      {
+        localName: "macbook",
+        accounts: [
+          { hostId: studio, name: "studio", routes: [] },
+          { hostId: buildBox, name: "build-box", routes: [] },
+        ],
+      },
+      signedIn().account,
+    );
+    const real = accountConnection(studio)!;
+    const restricted = accountConnection(buildBox)!;
+    let told = false;
+    const tellsOfIt = (c: unknown) => (c === real && told ? { allowedHosts: [buildBox] } : {});
+    const plxd = ownPlxd(local, tellsOfIt);
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === local ? "self" : studio },
+    }));
+    const signIns = () => fake.dials.filter((d) => d.args.includes("--sign-in"));
+    dialRuns({ lines: [], code: 5 });
+    local.set(connected({ accountAccess: {} }));
+    real.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+
+    // A write that fails, and an older plxd that answers without keeping the list, both block it.
+    told = true;
+    plxd.down = true;
+    restricted.set(refused);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(signIns()).toEqual([]);
+    plxd.down = false;
+    fake.answers.set("access/merge", () => ({ result: { version: 1, approvedHosts: [] } }));
+    restricted.set(refused);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(signIns()).toEqual([]);
+
+    ownPlxd(local, tellsOfIt);
+    restricted.set(refused);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(signIns()).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+/** A signed-in app showing new computer `buildBox`'s code, whose host lists an attacker's key. */
+async function showingCode(run: { afterAllow: string[]; code: number }) {
+  const local = await start(
+    { localName: "macbook", accounts: [{ hostId: buildBox, name: "build-box", routes: [] }] },
+    signedIn().account,
+  );
+  const box = accountConnection(buildBox)!;
+  const plxd = ownPlxd(local, (c) => (c === box ? { approvedClients: ["attacker"] } : {}));
+  fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+    result: { hostId: c === local ? "self" : studio },
+  }));
+  dialRuns({ lines: [`{"route":"relay:${buildBox}"}`], code: 0 }, { lines: [pendingLine], ...run });
+  local.set(connected({ accountAccess: {} }));
+  box.set(refused);
+  await vi.advanceTimersByTimeAsync(5);
+  expect(listed(buildBox)?.access).toEqual({ step: "compare", code: "482913" });
+  const allow = () => fake.handlers.get("parallax:answerCompare")!({}, `account:${buildBox}`, true);
+  return { local, box, plxd, allow };
+}
+
+test("a plxd restart while Allow waits leaves the fake computer restricted when plxd returns", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { local, box, plxd, allow } = await showingCode({ afterAllow: [approvedLine], code: 0 });
+    const answer = allow();
+    // plxd goes down while the separate `plxd dial` waits for the computer's final answer.
+    plxd.down = true;
+    local.set(offline);
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(answer).resolves.toBeUndefined();
+    expect(box.retry).toHaveBeenCalled();
+
+    // The session on disk connects, and plxd comes back.
+    box.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(5);
+    plxd.down = false;
+    plxd.merged.length = 0;
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(JSON.stringify(plxd.merged)).not.toContain("attacker");
+    expect(plxd.allowedHosts).toEqual([buildBox]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("Allow doesn't reach a new computer when its restriction can't be saved", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { box, plxd, allow } = await showingCode({ afterAllow: [approvedLine], code: 0 });
+    plxd.down = true;
+    const answer = allow();
+    await vi.advanceTimersByTimeAsync(30);
+    await expect(answer).resolves.toMatch(/couldn't/i);
+    const dial = fake.dials.find((d) => d.args.includes("--compare"))!;
+    expect(dial.stdin).toContain("deny");
+    expect(dial.stdin).not.toContain("allow");
+    expect(box.retry).not.toHaveBeenCalled();
+    expect(plxd.allowedHosts).toEqual([]);
+    expect(listed(buildBox)?.access).toMatchObject({
+      step: "needsCode",
+      error: expect.stringMatching(/couldn't/i),
+    });
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("saving Allow's restriction leaves the request running, and if it then ends, the typed code", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { box, plxd, allow } = await showingCode({ afterAllow: [], code: 5 });
+    const compare = fake.dials.find((d) => d.args.includes("--compare"))!;
+    const signIns = () => fake.dials.filter((d) => d.args.includes("--sign-in"));
+    const started = signIns().length;
+    const answer = allow();
+    // The save wakes this app's watch on its plxd, which isn't another computer vouching.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(plxd.allowedHosts).toEqual([buildBox]);
+    expect(compare.stdin).toContain("allow");
+    expect(compare.stdin).not.toContain("deny");
+
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(answer).resolves.toMatch(/Type the code/);
+    expect(listed(buildBox)?.access).toMatchObject({ step: "needsCode" });
+
+    // Its own mark vouches for nothing: a look later still asks for the code, with no new sign-in.
+    box.set(refused);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(signIns()).toHaveLength(started);
+    expect(listed(buildBox)?.access).toMatchObject({ step: "needsCode" });
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("with this computer's plxd down, whose lists hold the restrictions, nothing is copied", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    await start({
+      accounts: [
+        { hostId: studio, name: "studio", routes: [] },
+        { hostId: buildBox, name: "build-box", routes: [] },
+      ],
+    });
+    const real = accountConnection(studio)!;
+    const restricted = accountConnection(buildBox)!;
+    fake.answers.set(
+      "access/get",
+      listsBy((c) => (c === restricted ? { approvedClients: ["attacker"] } : {})),
+    );
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === real ? studio : buildBox },
+    }));
+    const merged: unknown[] = [];
+    fake.answers.set("access/merge", (params: unknown) => (merged.push(params), { result: {} }));
+    real.set(connected({ accountAccess: {} }));
+    restricted.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(merged).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a computer added with Allow gives no lists even if it lies about its id, and older clients never see it", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const local = await start({
+      accounts: [
+        { hostId: studio, name: "studio", routes: [] },
+        { hostId: buildBox, name: "build-box", routes: [] },
+      ],
+    });
+    const real = accountConnection(studio)!;
+    const fakeHost = accountConnection(buildBox)!;
+    fake.answers.set(
+      "access/get",
+      listsBy((c) =>
+        c === local
+          ? { allowedHosts: [buildBox] }
+          : c === fakeHost
+            ? {
+                approvedClients: ["attacker"],
+                removedClients: ["my-laptop"],
+                approvedHosts: ["attacker-host"],
+              }
+            : { approvedClients: ["k1"] },
+      ),
+    );
+    // The inner TLS proves this is the computer pinned as build-box, not what its JSON says.
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === local ? "self" : studio },
+    }));
+    const merged: {
+      approvedClients: string[];
+      removedClients: string[];
+      approvedHosts: string[];
+    }[] = [];
+    fake.answers.set("access/merge", (params: never) => (merged.push(params), { result: {} }));
+    local.set(connected({ accountAccess: {} }));
+    real.set(connected({ accountAccess: {} }));
+    fakeHost.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(merged.length).toBeGreaterThan(0);
+    for (const params of merged) {
+      expect(params.approvedClients).not.toContain("attacker");
+      expect(params.removedClients).not.toContain("my-laptop");
+      expect(params.approvedHosts).not.toContain("attacker-host");
+      // An older client reads only this list, so a restricted computer stays out of it.
+      expect(params.approvedHosts).not.toContain(buildBox);
+    }
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
@@ -942,9 +1300,75 @@ test("a new account computer that's offline or doesn't answer waits in Settings,
     // the timer probes it again, with no focus change, and the prompt appears on its own.
     fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
     fake.visible = true;
-    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.advanceTimersByTimeAsync(15_021);
     fake.visible = false;
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a new account computer's code is compared once, and one added by Allow is marked so no lists come from it", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const merged: unknown[] = [];
+    fake.answers.set("access/merge", (params: object) => (merged.push(params), { result: params }));
+    fake.answers.set("access/get", accessState([]));
+    const local = await start(
+      { localName: "macbook", accounts: [{ hostId: buildBox, name: "build-box", routes: [] }] },
+      signedIn().account,
+    );
+    local.set(connected({ accountAccess: {} }));
+    const box = accountConnection(buildBox)!;
+    const pending = '{"status":"pending","request":"r1","code":"482913"}';
+    const approved = `{"status":"approved","name":"build-box","routes":["10.0.0.5:7341"]}`;
+
+    // A request that ends with no Allow leaves the typed code, and doesn't start another. The
+    // probe answers first, then the compare, each with its own output.
+    const runs = [
+      { lines: [`{"route":"relay:${buildBox}"}`], code: 0 },
+      { lines: [pending], code: 5 },
+    ];
+    fake.dialOutput = {
+      get lines() {
+        return (runs[0] ?? { lines: [] }).lines;
+      },
+      get code() {
+        return (runs.length > 1 ? runs.shift()! : (runs[0] ?? { code: 0 })).code;
+      },
+    };
+    box.set(refused);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(listed(buildBox)?.access).toEqual({ step: "compare", code: "482913" });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(listed(buildBox)?.access).toMatchObject({
+      step: "needsCode",
+      error: expect.stringContaining("Type the code"),
+    });
+    expect(merged).toEqual([]);
+    const dials = fake.dials.length;
+    box.set(refused);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fake.dials.filter((d) => d.args.includes("--compare"))).toHaveLength(1);
+    expect(fake.dials.length).toBeLessThanOrEqual(dials + 1);
+
+    // The user asks again: Allow marks the computer, then gets a session.
+    fake.dialOutput = { lines: [pending], afterAllow: [approved], code: 0 };
+    void fake.handlers.get("parallax:askAgain")!({}, `account:${buildBox}`);
+    await vi.advanceTimersByTimeAsync(5);
+    const allowed = fake.handlers.get("parallax:answerCompare")!({}, `account:${buildBox}`, true);
+    await vi.advanceTimersByTimeAsync(30);
+    await expect(allowed).resolves.toBeUndefined();
+    expect(merged).toContainEqual({
+      approvedClients: [],
+      removedClients: [],
+      approvedHosts: [],
+      allowedHosts: [buildBox],
+    });
+    expect(box.retry).toHaveBeenCalled();
+    expect(listed(buildBox)?.access).toBeUndefined();
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });

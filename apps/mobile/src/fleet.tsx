@@ -22,9 +22,9 @@ import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/ren
 import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
-import { lacks, merged, type Lists } from "./access";
+import { lacks, type Lists } from "./access";
 import { listHosts, relayCap, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { allowThisPhone, confirmDevice, setUpComputer, showWaiting } from "./accountPrompts";
+import { allowThisPhone, askToAllow, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
 import { showAlert } from "./dialogStore";
 import { forget } from "./host";
 import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
@@ -66,6 +66,8 @@ interface FleetValue {
   restore: (hostId: string) => void;
   /** Sets up a gated account computer: its code, or an approval from another device. */
   setUp: (id: string) => void;
+  /** This phone's key, which its Add computer command names, so its Allow alone is enough. */
+  deviceKey?: string;
   /**
    * Revokes session `session` on computer `id`. A device signed in with the account also loses its
    * key there, which `share` then copies to every computer this phone uses (0091).
@@ -186,6 +188,8 @@ export function FleetProvider({
   gatesNow.current = gates;
   const asking = useRef(false);
   const shownCode = useRef<string | undefined>(undefined);
+  /** New computers this run has shown a code for. */
+  const compared = useRef(new Set<string>());
   const retries = useRef(new Map<string, number>());
   const gate = (id: string, next: Gate | undefined) =>
     setGates((g) => (JSON.stringify(g[id]) === JSON.stringify(next) ? g : { ...g, [id]: next }));
@@ -240,15 +244,16 @@ export function FleetProvider({
    * request stops it until the user taps a computer.
    */
   async function askOnItsOwn(found: Listed[]) {
+    if (accounts?.usesAny) return compareNew(accounts, found);
     const hosts = accounts ? toAsk(found, accounts.usesAny, latest.current.hidden) : [];
     if (!accounts || !hosts.length || asking.current || accounts.askingStopped) return;
     asking.current = true;
-    const asked = await allowThisPhone(accounts, hosts, (hostId, code) => {
+    const asked = await allowThisPhone(accounts, hosts, (hostId, code, allow) => {
       const id = accountId(hostId);
       gate(id, { kind: "waiting", code });
       if (shownCode.current === code) return;
       shownCode.current = code;
-      showWaiting(latest.current.machines.find((m) => m.id === id)?.name ?? "your computers", code);
+      showWaiting(latest.current.machines.find((m) => m.id === id)?.name ?? "your computers", code, allow);
     });
     asking.current = false;
     setStopped(accounts.askingStopped);
@@ -259,6 +264,42 @@ export function FleetProvider({
         if (fleet.hosts.get(id)?.state.status !== "connected") connect(m);
       } else if (asked !== "allowed" && accounts.askingStopped) gate(id, { kind: "setup" });
     }
+  }
+
+  /**
+   * A phone in use shows a new computer's code to compare (0091), with no tap, once a run for each
+   * one, so a request starts only when the computer appears. One that doesn't start or ends waits
+   * for a tap on its row, which also offers its typed code.
+   */
+  async function compareNew(account: AccountHosts, found: Listed[]) {
+    const hidden = latest.current.hidden ?? [];
+    const next = found.find(
+      (l) =>
+        l.online && !account.trusts(l.hostId) && !hidden.includes(accountId(l.hostId)) && !compared.current.has(l.hostId),
+    );
+    if (!next || asking.current) return;
+    asking.current = true;
+    compared.current.add(next.hostId);
+    const id = accountId(next.hostId);
+    const routes = latest.current.machines.find((m) => m.id === id)?.account?.routes ?? [];
+    await account
+      .compare(
+        next.hostId,
+        routes,
+        (code) => {
+          gate(id, { kind: "waiting", code });
+          return askToAllow(next.name, code);
+        },
+        () => showConfirm(next.name),
+      )
+      .then(
+        () => {
+          const m = latest.current.machines.find((x) => x.id === id);
+          if (m) connect(m);
+        },
+        () => gate(id, { kind: "setup" }),
+      );
+    asking.current = false;
   }
 
   /**
@@ -317,8 +358,7 @@ export function FleetProvider({
       "error" in answer ? [] : [{ id, lists: answer.result as AccessState as Lists }],
     );
     if (!lists.length) return;
-    const union = merged(lists.map((l) => l.lists), accounts.sessions);
-    await accounts.trust(union.approvedHosts);
+    const union = await accounts.absorb(lists.map((l) => ({ id: l.id.replace(/^account:/, ""), lists: l.lists })));
     for (const { id, lists: theirs } of lists)
       if (lacks(theirs, union)) void fleet.hosts.get(id)?.request("access/merge", union);
     // A computer one of them lists connects now.
@@ -444,6 +484,7 @@ export function FleetProvider({
   }
 
   const value: FleetValue = {
+    deviceKey: accounts?.thumbprint,
     computers: list,
     defaultId: defaultOf(setup.machines, setup.defaultId),
     setDefault: (id) => update((s) => ({ ...s, defaultId: id })),
