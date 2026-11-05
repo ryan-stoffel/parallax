@@ -141,12 +141,17 @@ export function SplitTiles({
     };
     // After the click that follows the release.
     const release = () => window.setTimeout(() => setHeld(undefined));
-    const ends = ["pointerup", "pointercancel", "contextmenu", "blur"];
+    const ends = ["pointerup", "pointercancel", "contextmenu"];
     window.addEventListener("pointerdown", press, true);
     for (const end of ends) window.addEventListener(end, release, true);
+    // Not captured, so it's the window's own and not focus moving inside the page, which a press
+    // on a button does.
+    window.addEventListener("blur", release);
     return () => {
       window.removeEventListener("pointerdown", press, true);
       for (const end of ends) window.removeEventListener(end, release, true);
+      window.removeEventListener("blur", release);
+      setHeld(undefined);
     };
   }, [several]);
   // A held pane that closed during the press gives way to the focused one.

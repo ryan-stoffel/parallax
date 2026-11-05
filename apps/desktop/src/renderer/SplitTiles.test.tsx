@@ -80,6 +80,18 @@ test.each(["pointerup", "pointercancel", "contextmenu", "blur"])(
   },
 );
 
+test("focus moving inside the page doesn't end a press's hold", () => {
+  render(0);
+  const input = body().appendChild(document.createElement("input"));
+  press(0);
+  render(1);
+  act(() => {
+    input.dispatchEvent(new FocusEvent("blur"));
+    vi.runAllTimers();
+  });
+  expect(panel()).toEqual(["a", "first"]);
+});
+
 test("a press with another button holds nothing, as its release may never come", () => {
   render(0);
   press(2);
