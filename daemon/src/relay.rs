@@ -1023,8 +1023,8 @@ async fn serve(
         Message::text(json!({ "t": "hooks", "keys": keys }).to_string())
     };
     sink.send(hooks().await).await.map_err(failed)?;
-    // Any removal the last connection didn't send.
-    daemon.relay.removed.notify_one();
+    // Any removal the last connection didn't send. None waiting wakes nothing.
+    daemon.relay.sent_removals(&[]);
     loop {
         // `remote` on with no spare asks for one; `remote` off closes it.
         match (serving(daemon).await, &spare) {
