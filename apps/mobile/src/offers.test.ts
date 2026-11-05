@@ -1,32 +1,12 @@
 import { expect, test, vi } from "vitest";
 
-import { useOffers } from "./offers";
+import { begin } from "./fakeReact";
 import type { Computer } from "./fleet";
+import { useOffers } from "./offers";
 
-// Just enough of React to run the hook's effects, since these tests run without a renderer.
-const react = vi.hoisted(() => {
-  const slots: unknown[] = [];
-  let at = 0;
-  return {
-    begin: () => void (at = 0),
-    useState: (first?: unknown) => {
-      const i = at++;
-      if (!(i in slots)) slots[i] = first;
-      return [slots[i], (next: unknown) => void (slots[i] = next)];
-    },
-    useEffect: (run: () => void, deps: unknown[]) => {
-      const i = at++;
-      const before = slots[i] as unknown[] | undefined;
-      if (before && deps.every((d, j) => Object.is(d, before[j]))) return;
-      slots[i] = deps;
-      run();
-    },
-  };
-});
 vi.mock("react", async (actual) => ({
   ...(await actual<object>()),
-  useState: react.useState,
-  useEffect: react.useEffect,
+  ...(await import("./fakeReact")).hooks,
 }));
 
 test("a computer's provider list asked during a short drop is asked again once it's back", async () => {
@@ -54,7 +34,7 @@ test("a computer's provider list asked during a short drop is asked again once i
       view: { capabilities: { providers: {} } },
     }) as unknown as Computer;
   const render = (connectedNow: boolean) => {
-    react.begin();
+    begin();
     return useOffers(computer(connectedNow));
   };
 

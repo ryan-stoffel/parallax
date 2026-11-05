@@ -17,7 +17,6 @@ import type {
   KeyAccount,
   Provider,
   RemotePairResult,
-  RemoteSessionsResult,
   RepoScript,
   Role,
   ScheduledTask,
@@ -39,6 +38,7 @@ import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Choices } from "./Choices";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { ago, type SettingsScreens } from "./nav";
+import { useRemoteSessions } from "./remoteSessions";
 import { NewThreadsSection, PhoneConnections } from "./Settings";
 import { choiceKey, pages, type SettingsPage } from "./settingsLogic";
 import { ProvidersPage } from "./SettingsProviders";
@@ -787,20 +787,13 @@ const iconNames = { laptop: "Laptop", desktop: "PC", mini: "Mini PC", server: "S
 function ConnectionsPage({ m }: { m: Computer }) {
   const id = m.machine.id;
   const { settings, error, set } = useHostSettings(m);
-  const [status, setStatus] = useState<RemoteSessionsResult>();
   const { revoke: revokeSession } = useFleet();
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [picking, setPicking] = useState(false);
   const connect = can(m, "connect");
   const remote = can(m, "remote");
+  const { status, setStatus, readSessions } = useRemoteSessions(id, remote, m.connectedNow);
   const sessions = status?.sessions ?? [];
-  const readSessions = useCallback(async () => {
-    const answer = await window.parallax.request(id, "remote/sessions", {});
-    if ("result" in answer) setStatus(answer.result);
-  }, [id]);
-  useEffect(() => {
-    if (remote) void readSessions();
-  }, [remote, readSessions]);
   // While a code is up, a computer that pairs shows up here, and the code goes, as it does once
   // plxd ends the pairing: used, locked, or expired.
   const showing = code && sessions.length <= code.before && status?.pairing !== false ? code : undefined;
