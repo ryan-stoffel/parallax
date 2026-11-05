@@ -311,6 +311,7 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
   const diff = run?.diff;
   const view = computer.view;
   const unseen = attention === "done" || attention === "failed";
+  const asleep = !thread.archived && snoozed(thread, attention);
 
   function actions() {
     const list: [string, () => void][] = [
@@ -321,6 +322,10 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
           () => void view.update(thread.id, { snoozedUntil: until.toISOString() }),
         ],
       ),
+      // Waking now ends the snooze, as the desktop's undo does.
+      ...(asleep
+        ? [["Unsnooze", () => void view.update(thread.id, { snoozedUntil: new Date().toISOString() })] as [string, () => void]]
+        : []),
       ...(unseen ? [["Mark as read", () => void view.update(thread.id, { seen: true })] as [string, () => void]] : []),
       [
         "Rename",
@@ -335,22 +340,29 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
     );
   }
 
-  // A run waiting out a usage limit (0049) says when it resumes, as the desktop's row does.
-  const status =
-    run?.status === "waiting" && attention === "settled" && !thread.archived ? (
-      <View style={[styles.line, { gap: 4 }]}>
-        <Icon icon={AlarmClock} size={13} color={c.warning} />
-        <T medium style={{ ...styles.small, color: c.warning }}>
-          {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
-        </T>
-      </View>
-    ) : attention === "settled" ? (
-      <T faint style={styles.small}>
-        {ago(when(thread))}
+  // A snoozed thread says when it wakes, and a run waiting out a usage limit (0049) when it resumes,
+  // as the desktop's row does.
+  const status = asleep ? (
+    <View style={[styles.line, { gap: 4 }]}>
+      <Icon icon={AlarmClock} size={13} color={c.warning} />
+      <T medium style={{ ...styles.small, color: c.warning }}>
+        Wakes {resumeTime(thread.snoozedUntil!)}
       </T>
-    ) : (
-      <AttentionBadge attention={attention} since={attention === "working" ? (thread.lastUserPromptAt ?? thread.lastPromptAt) : undefined} />
-    );
+    </View>
+  ) : run?.status === "waiting" && attention === "settled" && !thread.archived ? (
+    <View style={[styles.line, { gap: 4 }]}>
+      <Icon icon={AlarmClock} size={13} color={c.warning} />
+      <T medium style={{ ...styles.small, color: c.warning }}>
+        {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
+      </T>
+    </View>
+  ) : attention === "settled" ? (
+    <T faint style={styles.small}>
+      {ago(when(thread))}
+    </T>
+  ) : (
+    <AttentionBadge attention={attention} since={attention === "working" ? (thread.lastUserPromptAt ?? thread.lastPromptAt) : undefined} />
+  );
 
   return (
     <Swipe
