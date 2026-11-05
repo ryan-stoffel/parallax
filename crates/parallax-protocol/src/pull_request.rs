@@ -313,6 +313,10 @@ pub struct PrReviewThread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub line: Option<u64>,
+    /// The diff's side `line` is on. Absent from a plxd that doesn't read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub side: Option<PrDiffSide>,
     /// The diff down to its line, from its first comment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -327,6 +331,16 @@ pub struct PrReviewThread {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub truncated: bool,
+}
+
+/// A side of a pull request's diff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PrDiffSide {
+    /// The old lines: what the base has.
+    Left,
+    /// The new lines: what the head has.
+    Right,
 }
 
 /// A comment in a [`PrReviewThread`].

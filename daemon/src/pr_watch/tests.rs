@@ -9,8 +9,8 @@ use super::{
 };
 use crate::pr_write::Refusal;
 use parallax_protocol::{
-    PrCheckState, PrCommentKind, PrMergeMethod, PrMergeState, PrReviewDecision, PrReviewState,
-    PrState, PrStatusCheck, PrStatusFile, PrStatusThread,
+    PrCheckState, PrCommentKind, PrDiffSide, PrMergeMethod, PrMergeState, PrReviewDecision,
+    PrReviewState, PrState, PrStatusCheck, PrStatusFile, PrStatusThread,
 };
 
 fn start() -> Timestamp {
@@ -778,7 +778,7 @@ const FULL: &str = r#"{"data": {
           ]},
           "reviewThreads": {"pageInfo": {"hasPreviousPage": true}, "nodes": [
             {"id": "PRRT_1", "path": "src/main.rs", "line": 12, "originalLine": 10,
-             "isOutdated": false, "isResolved": false, "comments": {
+             "diffSide": "LEFT", "isOutdated": false, "isResolved": false, "comments": {
               "pageInfo": {"hasNextPage": true}, "nodes": [
               {"id": "PRRC_1", "author": {"login": "rev", "avatarUrl": "https://avatars/rev"},
                "body": "nit", "createdAt": "2026-10-09T10:04:00Z", "lastEditedAt": null,
@@ -917,6 +917,7 @@ fn pr_view_s_comments_and_review_threads_carry_their_ids() {
         ),
         ("PRRT_1", Some(12), false, false)
     );
+    assert_eq!(open.side, Some(PrDiffSide::Left));
     assert_eq!(
         open.diff_hunk.as_deref(),
         Some("@@ -8,3 +8,5 @@ fn main() {")
