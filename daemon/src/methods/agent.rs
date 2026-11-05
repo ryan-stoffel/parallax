@@ -89,6 +89,7 @@ pub(crate) async fn send(
 ) -> Result<AgentRunResult, ErrorObject> {
     check_message("text", &params.text, &params.images)?;
     params.threads = agents::attached::check(&context.daemon, params.threads).await?;
+    agents::attached::check_mentions(&params.computers, &params.remote_threads)?;
     let run = context
         .detached(|daemon| agents::send(daemon, params))
         .await?;
@@ -114,6 +115,8 @@ pub(super) fn plain_message(
         account: None,
         images: Vec::new(),
         threads: Vec::new(),
+        computers: Vec::new(),
+        remote_threads: Vec::new(),
         from,
         delivery: None,
     }
@@ -451,6 +454,7 @@ mod tests {
             replies: tokio::sync::mpsc::channel(1).0,
             over_connect: false,
             read_only: false,
+            over_remote: false,
         };
         let (run_id, project) = (RunId::generate(), ScopeId::generate());
         daemon

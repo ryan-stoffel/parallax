@@ -337,6 +337,10 @@ pub(crate) struct Daemon {
     pub remote: remote::Remote,
     /// The connection to Parallax Relay (PLX-652).
     pub relay: crate::relay::Relay,
+    /// The clients of this user's other computers through the relay (0101).
+    pub relay_peers: crate::peer::RelayPeers,
+    /// How busy this computer is, for `host/health` (0101).
+    pub load: crate::load::Load,
     /// Checks the account tokens of clients that sign in (0091).
     pub clerk: crate::clerk::Clerk,
     /// Agents' browser tabs (PLX-639).
@@ -524,6 +528,8 @@ impl Server {
                 config.remote_code_lifetime,
             ),
             relay: crate::relay::Relay::new(config.relay_url.clone()),
+            relay_peers: crate::peer::RelayPeers::default(),
+            load: crate::load::Load::default(),
             clerk: crate::clerk::Clerk::new(config.clerk.clone()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
@@ -677,6 +683,7 @@ impl Server {
             tokio::spawn(crate::schedules::run(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(crate::pr_watch::run(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(crate::relay::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::linked::run(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(remote::access::persist(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(handover),
             tokio::spawn(crate::context::you_sync::run(
@@ -850,6 +857,7 @@ impl Accepted<'_> {
                     self.abort.child_token(),
                     false,
                     false,
+                    false,
                 );
                 self.connections.spawn(
                     async move { serve.await.log(connection::Route::Local) }.instrument(span),
@@ -941,6 +949,8 @@ impl Daemon {
             setup_holds: crate::setup_scripts::Holds::default(),
             remote: remote::Remote::new(crate::remote::PORT, None, None, remote::CODE_LIFETIME),
             relay: crate::relay::Relay::new(crate::relay::DEFAULT_URL.to_owned()),
+            relay_peers: crate::peer::RelayPeers::default(),
+            load: crate::load::Load::default(),
             clerk: crate::clerk::Clerk::new(crate::clerk::Config::from_env()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),

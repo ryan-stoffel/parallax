@@ -15,6 +15,7 @@ import type {
   JsonValue,
   LoggedEvent,
   ParallaxEvent,
+  RemoteThreadRef,
   RunId,
   SecretStatus,
 } from "../protocol/generated/protocol";
@@ -41,6 +42,8 @@ type ItemBody =
       from?: string;
       images?: ImageId[];
       threads?: RunId[];
+      computers?: string[];
+      remoteThreads?: RemoteThreadRef[];
     }
   /** `partial` while it is still arriving as `textDelta`s. */
   | { kind: "assistant"; key: string; text: string; messageId?: string; partial?: boolean }
@@ -675,6 +678,8 @@ function applyOutput(
       const attached = {
         ...(!!item.images?.length && { images: item.images }),
         ...(!!item.threads?.length && { threads: item.threads }),
+        ...(!!item.computers?.length && { computers: item.computers }),
+        ...(!!item.remoteThreads?.length && { remoteThreads: item.remoteThreads }),
       };
       if (item.turnId)
         items.push({
@@ -688,11 +693,11 @@ function applyOutput(
           ...attached,
         });
       else {
-        // The run's first turn has no id; its prompt came with agent.started, and gets its images
-        // and threads.
+        // The run's first turn has no id; its prompt came with agent.started, and gets what was
+        // attached to it.
         const i = items.findIndex((x) => x.kind === "user" && !x.turnId);
         const prompt = items[i];
-        if (prompt?.kind === "user" && (attached.images || attached.threads))
+        if (prompt?.kind === "user" && Object.keys(attached).length > 0)
           items[i] = { ...prompt, ...attached };
       }
       break;

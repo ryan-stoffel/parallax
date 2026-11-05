@@ -985,7 +985,7 @@ pub(crate) async fn start(
         scope: project,
         prompt,
         images,
-        threads,
+        attachments: threads.into(),
         account,
         orchestrator_thread,
         notify: notify.unwrap_or(true),
@@ -1012,8 +1012,8 @@ pub(crate) struct NewRun {
     pub prompt: String,
     /// The prompt's images (PLX-191), already checked.
     pub images: Vec<PromptImage>,
-    /// The threads attached to the prompt (PLX-372), already checked.
-    pub threads: Vec<RunId>,
+    /// What is attached to the prompt (PLX-372, 0101), already checked.
+    pub attachments: attached::Attachments,
     pub account: Option<AccountChoice>,
     /// The orchestrator thread starting the run through `plxd mcp` (#195).
     pub orchestrator_thread: Option<OrchestratorThreadId>,
@@ -1140,7 +1140,7 @@ pub(crate) async fn create_started(
         scope: project,
         prompt,
         images,
-        threads,
+        attachments,
         mut account,
         orchestrator_thread,
         notify,
@@ -1188,7 +1188,7 @@ pub(crate) async fn create_started(
         return Ok(CreatedRun { run, thread: row });
     }
     // The attached threads are read before anything is created, so a failure leaves nothing.
-    let attached = attached::prompt(&daemon, run_id, &threads, &prompt).await?;
+    let attached = attached::prompt(&daemon, run_id, &attachments, &prompt).await?;
     let (sent, seen) = (attached.text, attached.seen);
     // An orchestrator's child goes where its rules say, or waits (0046).
     let requested = account.clone();
@@ -1275,7 +1275,15 @@ pub(crate) async fn create_started(
     }
     if waiting.is_some() {
         let run = agent_run(&row, worktree.as_ref())?;
-        placement::queue(&daemon, &run, prompt, images, threads, requested).await?;
+        placement::queue(
+            &daemon,
+            &run,
+            prompt,
+            images,
+            attachments.threads,
+            requested,
+        )
+        .await?;
         if orchestrator_thread.is_none() {
             wake::started(&daemon, &run);
         }
@@ -1297,7 +1305,7 @@ pub(crate) async fn create_started(
     let mut actor = Actor::new(Arc::clone(&daemon), row, worktree, HashMap::new());
     let task = first_prompt(&sent, &prepared.place)?;
     let paths = Some((cwd, git_common_dir));
-    actor.attach(None, threads);
+    actor.attach(None, attachments);
     let launch = async move |actor: &mut Actor| {
         if actor
             .launch(prepared, task, images, None, None, paths)
@@ -1591,6 +1599,8 @@ async fn deliver(
         account,
         images,
         threads,
+        computers,
+        remote_threads,
         from,
         delivery: _,
     } = params;
@@ -1601,7 +1611,11 @@ async fn deliver(
         turn_id,
         text,
         images,
-        threads,
+        attachments: attached::Attachments {
+            threads,
+            computers,
+            remote_threads,
+        },
         options: RunOptions {
             model,
             effort,
@@ -1751,6 +1765,8 @@ async fn continue_cut(daemon: &Arc<Daemon>, id: RunId) {
         account: None,
         images: Vec::new(),
         threads: Vec::new(),
+        computers: Vec::new(),
+        remote_threads: Vec::new(),
         from: None,
         delivery: None,
     };

@@ -64,6 +64,8 @@ pub(crate) fn tell(
                 account: None,
                 images: Vec::new(),
                 threads: Vec::new(),
+                computers: Vec::new(),
+                remote_threads: Vec::new(),
                 from: None,
                 delivery: Some(AgentDelivery::Queue),
             };

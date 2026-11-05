@@ -26,6 +26,7 @@ import {
   type Host,
   newHost,
   opened,
+  peerHeader,
   register,
   session,
   type Socket,
@@ -265,6 +266,58 @@ describe("connection check", () => {
       answer = JSON.parse((await control.next()) as string) as typeof answer;
     }
     expect(answer).toEqual({ t: "check", error: "rate_limited" });
+  });
+});
+
+describe("a plxd reaches another with its host key", () => {
+  /** Two hosts of one user, the second online. */
+  async function pair(user: string) {
+    const caller = await newHost();
+    const { host: target, token } = await online(user);
+    await register(caller, token);
+    return { caller, target };
+  }
+  const connect = async (caller: Host, target: Host, signer: Host = caller, at = Date.now()) =>
+    socket(`/v1/hosts/${target.id}/connect`, await peerHeader(caller, `connect/${target.id}`, signer, at));
+
+  it("lists its owner's hosts and opens a stream to one, with no token", async () => {
+    const { caller, target } = await pair("user_peers");
+    const listed = await call("/v1/hosts", { headers: await peerHeader(caller, "hosts") });
+    const { hosts } = (await listed.json()) as { hosts: { hostId: string }[] };
+    expect(hosts.map((host) => host.hostId).sort()).toEqual([caller.id, target.id].sort());
+    expect((await connect(caller, target)) instanceof Response).toBe(false);
+  });
+
+  it("refuses a host of another owner as if it weren't there", async () => {
+    const { host: target } = await online("user_theirs");
+    const { host: caller } = await online("user_mine");
+    const refused = await connect(caller, target);
+    expect(refused instanceof Response && refused.status).toBe(404);
+  });
+
+  it("refuses a wrong signature and a proof for another route", async () => {
+    const { caller, target } = await pair("user_forged");
+    const forged = await connect(caller, target, await newHost());
+    expect(forged instanceof Response && forged.status).toBe(401);
+    const list = await call("/v1/hosts", { headers: await peerHeader(caller, "hosts", await newHost()) });
+    expect(list.status).toBe(401);
+    const elsewhere = await socket(`/v1/hosts/${target.id}/connect`, await peerHeader(caller, "hosts"));
+    expect(elsewhere instanceof Response && elsewhere.status).toBe(401);
+  });
+
+  it("refuses a stale proof and answers the relay's time", async () => {
+    const { caller, target } = await pair("user_stale");
+    const stale = await connect(caller, target, caller, Date.now() - 6 * 60_000);
+    if (!(stale instanceof Response)) throw new Error("a stale proof opened a stream");
+    expect(stale.status).toBe(401);
+    expect(((await stale.json()) as { error: string }).error).toBe("clock_skew");
+    expect(Number(stale.headers.get("x-parallax-relay-time"))).toBeGreaterThan(Date.now() - 60_000);
+  });
+
+  it("refuses a host the relay doesn't know", async () => {
+    const stranger = await newHost();
+    const refused = await call("/v1/hosts", { headers: await peerHeader(stranger, "hosts") });
+    expect(refused.status).toBe(401);
   });
 });
 

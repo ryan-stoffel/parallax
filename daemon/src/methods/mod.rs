@@ -20,8 +20,8 @@
 //! `crate::checkpoints`; PLX-648 `delegation`: `task/delegate`, `task/status`, and
 //! `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`: `secret/request` and
 //! `secret/answer` in `crate::secrets`; PLX-746 `providerUpdates`: `provider_updates.rs`; 0057
-//! `peerGit`: `bundle/*` and `git/startMerge` in `bundle.rs`), and `host.rs` advertises the
-//! capability in `initialize`.
+//! `peerGit`: `bundle/*` and `git/startMerge` in `bundle.rs`; 0101 `agentWork`: `peer/*` in
+//! `crate::linked`), and `host.rs` advertises the capability in `initialize`.
 
 mod accounts;
 mod agent;
@@ -50,6 +50,7 @@ mod usage;
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+use futures_util::future::BoxFuture;
 use parallax_protocol::jsonrpc::{
     ErrorObject, INVALID_REQUEST, Notification, Request, RequestId, Response,
 };
@@ -96,6 +97,9 @@ pub(crate) struct Context {
     /// The connection's device is read-only. [`dispatch`] refuses it anything [`read_only`]
     /// doesn't allow.
     pub read_only: bool,
+    /// The connection came through the remote listener, from a paired device or another
+    /// computer's agents (0065, 0101). It may not go on to a third computer with `peer/*`.
+    pub over_remote: bool,
 }
 
 impl Context {
@@ -140,8 +144,13 @@ pub(crate) enum Reply {
     Notification(Notification),
 }
 
-/// Answers a request on an initialized connection.
-pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Reply {
+/// Answers a request on an initialized connection. Boxed, since the future holds every method's
+/// state, which is too large to keep on the stack of what awaits it.
+pub(crate) fn dispatch(context: Context, request: Request) -> BoxFuture<'static, Reply> {
+    Box::pin(answer(context, request))
+}
+
+async fn answer(mut context: Context, mut request: Request) -> Reply {
     if context.read_only && !read_only::allows_request(&request.method) {
         return Reply::Response(Response::error(Some(request.id), read_only::refusal()));
     }
@@ -250,6 +259,10 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RelaySign => |p| remote::relay_sign(context, p),
         RelayHosts => |p| remote::relay_hosts(context, p),
         RelayCheck => |p| remote::relay_check(context, p),
+        PeerComputers => |_| crate::linked::computers(context),
+        PeerCall => |p| crate::linked::call(context, p),
+        PeerStart => |p| crate::linked::start(context, p),
+        PeerTask => |p| crate::linked::task(context, p),
         RelayRemove => |p| remote::relay_remove(context, p),
         RelayId => |p| remote::relay_id(context, p),
         RelayPushKey => |p| remote::relay_push_key(context, p),
@@ -374,6 +387,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RepoRemote => |p| crate::repo_clone::remote(daemon, p),
         RepoLogo => |p| crate::repo_logo::logo(daemon, p),
         RepoMatch => |p| crate::repo_clone::matching(daemon, p),
+        RepoFetchBase => |p| crate::repo_clone::fetch_base(daemon, p),
         RepoUpdate => |p| threads::update_repo(daemon, p),
         ProjectCreate => |p| crate::projects::create(daemon, p),
         ThreadSetProject => |p| crate::projects::set_project(daemon, p),
@@ -586,6 +600,7 @@ mod tests {
             replies: tokio::sync::mpsc::channel(1).0,
             over_connect: false,
             read_only: false,
+            over_remote: false,
         };
         let request = Request {
             id: 1.into(),

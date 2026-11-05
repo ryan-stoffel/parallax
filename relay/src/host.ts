@@ -21,8 +21,9 @@ type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
  *  plxd keeps waiting for the next client (0091). */
 type Streams = Record<string, { spare?: true }>;
 
-/** Why the relay refused a request, with its HTTP status. */
-type Refusal = { status: number; error: string };
+/** Why the relay refused a request, with its HTTP status, and its clock for a proof at the wrong
+ *  time. */
+type Refusal = { status: number; error: string; now?: number };
 
 /** What plxd answers a webhook with. */
 export type HookReply = { status: number; body: unknown };
@@ -108,7 +109,7 @@ const PROOF_PAST = 5 * 60_000;
 const PROOF_FUTURE = 30_000;
 
 /** The header a `clock_skew` refusal carries the relay's time in, in milliseconds. */
-const TIME_HEADER = "x-parallax-relay-time";
+export const TIME_HEADER = "x-parallax-relay-time";
 
 /** The header plxd's proof comes in: `<milliseconds>.<signature>`. */
 export const PROOF_HEADER = "x-parallax-host-proof";
@@ -116,6 +117,15 @@ export const PROOF_HEADER = "x-parallax-host-proof";
 /** The header plxd lists the streams it still holds in, comma-separated, on opening its control
  *  socket. A plxd from before PLX-1419 sends none, as its streams end with its last connection. */
 export const STREAMS_HEADER = "x-parallax-host-streams";
+
+/** The header a plxd's proof of itself comes in on another plxd's routes (0101):
+ *  `<caller host id>.<milliseconds>.<signature>`. */
+export const PEER_HEADER = "x-parallax-peer";
+
+/** What a plxd signs, with the time in milliseconds, to use `route`: `hosts`, or
+ *  `connect/<target host id>`. */
+export const peerMessage = (hostId: string, route: string, at: number) =>
+  `parallax-relay-peer\n${hostId}\n${route}\n${at}`;
 
 /** A webhook URL's key: the SHA-256 of its raw `<hookId>/<token>`, as plxd lists it. */
 export const hookKey = (hookId: string, token: string) => sha256(`${hookId}/${token}`);
@@ -331,6 +341,27 @@ export class HostRelay extends DurableObject<Env> {
     const { day, bytes } = await this.today();
     const usage = { bytes, limit: MAX_DAILY_BYTES, resetsAt: Date.parse(day) + DAY_MS };
     return { hostId: owner.hostId, name: owner.name, online: !!this.host(), usage };
+  }
+
+  /**
+   * The user of this host, when `signature` is its key's over [`peerMessage`] for `route` at `at`,
+   * within [`PROOF_PAST`] and [`PROOF_FUTURE`] of the relay's clock (0101). A proof may be used
+   * again until it's stale, since a plxd opens several streams at once and each only reaches the
+   * target's pinned TLS. A signed proof at the wrong time answers the relay's clock, as
+   * [`hostSocket`] does.
+   */
+  async provePeer(route: string, at: string, signature: string): Promise<Refusal | { user: string }> {
+    const owner = await this.owner();
+    if (!owner) return { status: 401, error: "unauthorized" };
+    const time = Number(at);
+    const signed =
+      /^\d{1,15}$/.test(at) &&
+      (await verifyEs256(owner.jwk, signature, peerMessage(owner.hostId, route, time)));
+    if (!signed) return { status: 401, error: "unauthorized" };
+    const now = Date.now();
+    if (time < now - PROOF_PAST || time > now + PROOF_FUTURE)
+      return { status: 401, error: "clock_skew", now };
+    return { user: owner.user };
   }
 
   /** Whether `user` may open a stream to this host now, which counts against `LIMITS.opens`. */

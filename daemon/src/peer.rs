@@ -3,8 +3,8 @@
 //!
 //! Every call goes through one [`Plxd`], which keeps one connection and sends concurrent calls on
 //! it, matched by id (PLX-488). How it opens a connection is its connector: [`Plxd::local`] for
-//! the local socket, [`Plxd::tailnet`] for a tailnet device's TCP port. When plxd restarts or the
-//! connection drops, the next call opens a new one through the connector and reads plxd's
+//! the local socket, [`Plxd::tailnet`] for a tailnet device's TCP port, [`Plxd::relay`] for another
+//! of the user's computers through the relay (0101). When plxd restarts or the connection drops, the next call opens a new one through the connector and reads plxd's
 //! capabilities again. A call already sent fails with its connection, except `thread_wait`, which
 //! keeps trying until its deadline. A call the MCP client cancels with `notifications/cancelled`
 //! stops, gets no answer, and cancels its plxd request with `$/cancelRequest` (PLX-524). It never
@@ -17,6 +17,14 @@
 //! A tailnet client sends `host/health` every 30 s on it to keep plxd from closing it, and closes
 //! it when plxd stops answering. [`Peers`] keeps one client per device. [`Plxd::receive_bundle`]
 //! and [`Plxd::send_bundle`] move a run's commits to and from a device as git bundles.
+//!
+//! [`Plxd::relay`] needs no account token (0101). It dials only a computer in this host's own
+//! `approved_hosts`, proves itself to the relay with its host key, and runs TLS pinned to the
+//! computer's relay id before anything else goes out, so the relay carries only ciphertext. It gets
+//! a session with `POST /api/auth/peer`, kept in memory, and speaks 0007 over `/ws`, one message
+//! per frame, which [`crate::remote::bridge`] joins to the lines this client reads and writes.
+//! [`RelayPeers`] keeps one client per computer. [`Plxd::on_computer`] gives `plxd mcp` a client
+//! whose calls go through its own plxd's `peer/call` to that computer.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -33,21 +41,27 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::methods::{
     BundleApply, BundleBegin, BundleDrop, BundlePrepare, BundleRead, BundleWrite, CancelRequest,
-    EventsEvent, EventsSubscribe, HostHealth, Initialize, NotificationMethod, RequestMethod,
+    EventsEvent, EventsSubscribe, HostHealth, Initialize, NotificationMethod, PeerCall,
+    RequestMethod,
 };
 use parallax_protocol::{
     BundleApplyParams, BundleBeginParams, BundleDropParams, BundlePrepareParams, BundleReadParams,
     BundleWriteParams, ClientInfo, EventsEventParams, HostHealthParams, InitializeParams,
-    InitializeResult, ProtocolRange, RunId,
+    InitializeResult, ProtocolRange, RelayHost, RunId,
 };
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
+use serde_json::Value;
+use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{FramedRead, FramedWrite};
+use tracing::debug;
 
 use crate::images;
 use crate::methods::host::CHUNK_BYTES;
+use crate::relay::PeerError;
+use crate::remote::{self, PeerRefusal};
+use crate::server::Daemon;
 use crate::tailnet::Tailnet;
 use crate::transport;
 
@@ -119,6 +133,8 @@ pub struct Plxd {
     notify: Notify,
     /// A connection has opened, so the next one is a reconnect.
     opened: Arc<AtomicBool>,
+    /// The computer `peer/call` forwards every call to, set by [`Plxd::on_computer`].
+    computer: Option<String>,
 }
 
 /// One `initialize`d connection to plxd. Its reader task hands each answer to its caller.
@@ -169,6 +185,7 @@ impl Plxd {
             },
             notify: Arc::default(),
             opened: Arc::default(),
+            computer: None,
         }
     }
 
@@ -203,6 +220,27 @@ impl Plxd {
             async move { dial(&*tailnet, &node, port).await }
         });
         client.timing.heartbeat = Some(HEARTBEAT);
+        client
+    }
+
+    /// A client of the computer with relay id `host_id`, through the relay, with no account token:
+    /// see the module documentation. Prefer [`RelayPeers::client`], so a computer has one.
+    pub(crate) fn relay(daemon: Weak<Daemon>, host_id: String, link: Arc<RelayLink>) -> Self {
+        Self::new(move || {
+            let (daemon, host_id, link) = (daemon.clone(), host_id.clone(), Arc::clone(&link));
+            async move {
+                let daemon = daemon.upgrade().ok_or("plxd is stopping")?;
+                dial_relay(&daemon, &host_id, &link).await
+            }
+        })
+    }
+
+    /// This client, with every call sent to the computer `computer` (its relay id or name) through
+    /// this plxd's `peer/call` (0101). It shares this client's connection.
+    #[must_use]
+    pub fn on_computer(&self, computer: &str) -> Self {
+        let mut client = self.clone();
+        client.computer = Some(computer.to_owned());
         client
     }
 
@@ -252,10 +290,46 @@ impl Plxd {
         &self,
         params: M::Params,
     ) -> Result<Result<M::Result, ErrorObject>, String> {
+        let params = crate::commands::with_command_id(M::NAME, params);
+        let response = match &self.computer {
+            Some(computer) => {
+                let forwarded = serde_json::json!({
+                    "computer": computer,
+                    "method": M::NAME,
+                    "params": params,
+                });
+                self.send_request(PeerCall::NAME, forwarded).await?
+            }
+            None => self.send_request(M::NAME, params).await?,
+        };
+        Ok(response.into_result())
+    }
+
+    /// Sends `method` with `params` as they stand: the answer's value, or `Err` when the
+    /// connection fails first. As [`Plxd::request`] for a method only known by name, as `peer/call`
+    /// forwards it.
+    pub(crate) async fn forward(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Result<Value, ErrorObject>, String> {
+        Ok(self.send_request(method, params).await?.into_result())
+    }
+
+    /// Closes the connection, if one is open, so the next call opens a new one: for a connection
+    /// that stopped answering without closing.
+    pub(crate) async fn reset(&self) {
+        if let Some(connection) = self.connection.lock().await.take() {
+            connection.close();
+        }
+    }
+
+    /// See [`Plxd::request`].
+    async fn send_request(&self, method: &str, params: Value) -> Result<Response, String> {
         let request = Request {
             id: next_request_id(&self.next_id),
-            method: M::NAME.to_owned(),
-            params: Some(crate::commands::with_command_id(M::NAME, params)),
+            method: method.to_owned(),
+            params: Some(params),
         };
         let mut retried = false;
         loop {
@@ -267,10 +341,10 @@ impl Plxd {
                     let answered = answer.await;
                     in_flight.0 = None;
                     let response = answered.map_err(|_| lost(&"plxd closed it"))?;
-                    if M::NAME == EventsSubscribe::NAME && response.result.is_ok() {
+                    if method == EventsSubscribe::NAME && response.result.is_ok() {
                         connection.subscribed.store(true, Ordering::Relaxed);
                     }
-                    return Ok(response.into_result());
+                    return Ok(response);
                 }
                 Err(error) if retried => return Err(lost(&error)),
                 Err(_) => {
@@ -673,5 +747,194 @@ impl Peers {
             .entry(node.to_owned())
             .or_insert_with(|| Plxd::tailnet(Arc::clone(&self.tailnet), node.to_owned(), self.port))
             .clone()
+    }
+}
+
+/// What a [`Plxd::relay`] client keeps between connections.
+#[derive(Debug, Default)]
+pub(crate) struct RelayLink {
+    /// The session the computer gave it. Lost with plxd, and asked for again.
+    token: Mutex<Option<String>>,
+    /// Why the computer won't take this one, set by a refusal that lasts until its user changes
+    /// something, and cleared by a connection.
+    refused: Mutex<Option<String>>,
+}
+
+impl RelayLink {
+    /// Why the computer won't take this one, when it said so for good.
+    pub(crate) fn refused(&self) -> Option<String> {
+        lock(&self.refused).clone()
+    }
+}
+
+/// How long opening a connection to another computer may take: two relay streams, TLS, and a
+/// session.
+const RELAY_DIAL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A connection to the computer `id` through the relay, as the module documentation says. `Err`
+/// names the computer and says why, for the model to read.
+async fn dial_relay(
+    daemon: &Arc<Daemon>,
+    id: &str,
+    link: &RelayLink,
+) -> Result<(DuplexStream, ClientInfo), String> {
+    let name = daemon.relay_peers.name_of(daemon, id).await;
+    let opened = tokio::time::timeout(RELAY_DIAL_TIMEOUT, open_relay(daemon, id, link))
+        .await
+        .unwrap_or_else(|_| {
+            Err(RelayFailure::Failed(format!(
+                "it didn't answer within {RELAY_DIAL_TIMEOUT:?}"
+            )))
+        });
+    match opened {
+        Ok(stream) => {
+            *lock(&link.refused) = None;
+            let client = ClientInfo {
+                name: "plxd".to_owned(),
+                version: crate::version().to_owned(),
+                machine_id: None,
+            };
+            Ok((stream, client))
+        }
+        Err(RelayFailure::ForGood(why)) => {
+            *lock(&link.refused) = Some(why.clone());
+            Err(format!("can't work on {name}: {why}"))
+        }
+        Err(RelayFailure::Failed(why)) => Err(format!("can't reach {name}: {why}")),
+    }
+}
+
+/// Why a [`Plxd::relay`] client has no connection.
+enum RelayFailure {
+    /// It will stay this way until the user changes something.
+    ForGood(String),
+    Failed(String),
+}
+
+impl From<PeerError> for RelayFailure {
+    fn from(error: PeerError) -> Self {
+        match error {
+            PeerError::NotOnAccount => Self::ForGood(error.to_string()),
+            other => Self::Failed(other.to_string()),
+        }
+    }
+}
+
+async fn open_relay(
+    daemon: &Arc<Daemon>,
+    id: &str,
+    link: &RelayLink,
+) -> Result<DuplexStream, RelayFailure> {
+    let failed = |error: &dyn std::fmt::Display| RelayFailure::Failed(error.to_string());
+    let approved = crate::server::remote::access::approved_host(daemon, id)
+        .await
+        .map_err(|error| failed(&error.message))?;
+    if !approved {
+        return Err(RelayFailure::ForGood(
+            "this computer hasn't approved it".to_owned(),
+        ));
+    }
+    if !crate::relay::wanted(daemon).await {
+        return Err(RelayFailure::Failed(
+            "Reach from anywhere is off on this computer".to_owned(),
+        ));
+    }
+    let key = crate::relay::signer(daemon).await.map_err(|e| failed(&e))?;
+    let label = crate::server::remote::host_name(daemon).await;
+    // A saved session it no longer takes gets one new try.
+    for _ in 0..2 {
+        let saved = lock(&link.token).clone();
+        let token = if let Some(token) = saved {
+            token
+        } else {
+            let stream: crate::relay::Stream =
+                Box::new(crate::relay::peer_stream(daemon, id).await?);
+            let token = remote::peer_session(stream, id, &key, &label)
+                .await
+                .map_err(|refusal| match refusal {
+                    PeerRefusal::ForGood(why) => RelayFailure::ForGood(why),
+                    PeerRefusal::Failed(error) => failed(&error),
+                })?;
+            *lock(&link.token) = Some(token.clone());
+            token
+        };
+        let stream: crate::relay::Stream = Box::new(crate::relay::peer_stream(daemon, id).await?);
+        match remote::peer_socket(stream, id, &token, &key).await {
+            Ok(socket) => {
+                let (ours, theirs) = tokio::io::duplex(64 * 1024);
+                let (input, output) = tokio::io::split(theirs);
+                tokio::spawn(async move {
+                    if let Err(error) = remote::bridge(socket, input, output).await {
+                        debug!(%error, "a connection to another computer ended");
+                    }
+                });
+                return Ok(ours);
+            }
+            Err(remote::Error::Refused) => *lock(&link.token) = None,
+            Err(error) => return Err(failed(&error)),
+        }
+    }
+    Err(RelayFailure::Failed(
+        "it refused the session it just gave".to_owned(),
+    ))
+}
+
+/// How long the relay's list of this user's computers is used before it's read again.
+const HOSTS_FRESH: Duration = Duration::from_secs(15);
+
+/// The clients of this user's other computers through the relay (0101), one per computer, and the
+/// relay's list of them.
+#[derive(Default)]
+pub(crate) struct RelayPeers {
+    clients: Mutex<HashMap<String, (Plxd, Arc<RelayLink>)>>,
+    hosts: tokio::sync::Mutex<Option<(Instant, Vec<RelayHost>)>>,
+    /// Wakes [`crate::linked::run`] when a remote run needs following.
+    pub followers: tokio::sync::Notify,
+}
+
+impl RelayPeers {
+    /// The client of the computer with relay id `id`: the same one on every call.
+    pub(crate) fn client(&self, daemon: &Arc<Daemon>, id: &str) -> (Plxd, Arc<RelayLink>) {
+        lock(&self.clients)
+            .entry(id.to_owned())
+            .or_insert_with(|| {
+                let link = Arc::new(RelayLink::default());
+                let client = Plxd::relay(Arc::downgrade(daemon), id.to_owned(), Arc::clone(&link));
+                (client, link)
+            })
+            .clone()
+    }
+
+    /// The relay's list of this user's computers, this one marked, read at most every
+    /// [`HOSTS_FRESH`].
+    ///
+    /// # Errors
+    ///
+    /// Why the relay wouldn't say.
+    pub(crate) async fn hosts(&self, daemon: &Daemon) -> Result<Vec<RelayHost>, PeerError> {
+        if !crate::relay::wanted(daemon).await {
+            return Err(PeerError::Failed(
+                "Reach from anywhere is off on this computer".to_owned(),
+            ));
+        }
+        let mut hosts = self.hosts.lock().await;
+        if let Some((at, listed)) = hosts.as_ref()
+            && at.elapsed() < HOSTS_FRESH
+        {
+            return Ok(listed.clone());
+        }
+        let listed = crate::relay::peer_hosts(daemon).await?;
+        *hosts = Some((Instant::now(), listed.clone()));
+        Ok(listed)
+    }
+
+    /// The name of the computer with relay id `id`, or the id when the relay can't say soon.
+    pub(crate) async fn name_of(&self, daemon: &Daemon, id: &str) -> String {
+        let listed = tokio::time::timeout(Duration::from_secs(2), self.hosts(daemon)).await;
+        listed
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|hosts| hosts.into_iter().find(|host| host.host_id == id))
+            .map_or_else(|| id.to_owned(), |host| host.name)
     }
 }

@@ -50,7 +50,8 @@ export function RefMenu({
   preferred?: string;
   /** New worktrees start from the checkout's branch (Settings > Worktrees). */
   fromCurrent?: boolean;
-  onChange: (ref: string) => void;
+  /** `chosen` when the user picked it, not when it's the repository's default base. */
+  onChange: (ref: string, chosen?: boolean) => void;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -103,7 +104,7 @@ export function RefMenu({
 
   const choose = (r: RepoRef) => {
     menu.current?.hidePopover();
-    onChange(r.name);
+    onChange(r.name, true);
   };
 
   return (

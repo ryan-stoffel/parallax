@@ -8,6 +8,7 @@ import { createServer as createTlsServer } from "node:tls";
 
 import { expect, test } from "@playwright/test";
 
+import { uuidv7 } from "../src/renderer/uuidv7";
 import { close, launch, printFailure, stopServe, type Launched } from "./launch";
 
 // An account computer (0091) as the desktop app reaches it: a second fake-backend plxd, "build-box",
@@ -18,6 +19,8 @@ import { close, launch, printFailure, stopServe, type Launched } from "./launch"
 // own plxd terminals (PLX-1164). build-box's home has a fake npm and claude, so nothing installs.
 // Its terminals run /bin/sh, which Windows lacks.
 test.skip(process.platform === "win32", "build-box's terminals run /bin/sh");
+// A step that can't happen fails naming that step, not at the test's own timeout.
+test.use({ actionTimeout: 30_000 });
 
 const desktop = path.join(import.meta.dirname, "..");
 const plxd = process.env["PLXD_PATH"] ?? path.join(desktop, "../../target/debug/plxd");
@@ -42,6 +45,13 @@ test.afterEach(async () => {
   if (boxData) await stopServe(boxData);
 });
 
+/** A `tailscale` in `dir` that always fails, for `dir` to go first on PATH. */
+function writeFakeTailscale(dir: string) {
+  const tailscale = path.join(dir, "tailscale");
+  writeFileSync(tailscale, "#!/bin/sh\nexit 1\n");
+  chmodSync(tailscale, 0o755);
+}
+
 /** build-box's plxd, through `plxd attach`, with a home holding a fake npm and claude. */
 async function startBuildBox(port: number) {
   boxData = mkdtempSync(path.join(tmpdir(), "parallax-e2e-box-"));
@@ -56,10 +66,8 @@ async function startBuildBox(port: number) {
     '#!/bin/sh\n[ "$1" = --version ] && { echo "2.0.0 (Claude Code)"; exit 0; }\necho "build-box claude $*"\n',
   );
   chmodSync(claude, 0o755);
-  // Isolated data folders don't isolate the tailnet: this keeps a real one out of the run.
-  const tailscale = path.join(bin, "tailscale");
-  writeFileSync(tailscale, "#!/bin/sh\nexit 1\n");
-  chmodSync(tailscale, 0o755);
+  // Isolated data folders don't isolate the tailnet, so this plxd never finds the real one.
+  writeFakeTailscale(bin);
   attach = spawn(plxd, ["attach"], {
     env: {
       ...process.env,
@@ -326,4 +334,199 @@ test("a computer waiting on its code stops asking once another computer vouches 
   } finally {
     local.kill();
   }
+});
+
+// Agents across computers (0101), from the app's side, with both plxds real. build-box is added as
+// above. The relay is out of reach, so this shows what the app sends and shows, not a peer session.
+test("the setting, naming a computer and its thread, and the Load Balancer", async () => {
+  test.setTimeout(90_000);
+  const port = await freePort();
+  const box = await startBuildBox(port);
+  const { code } = await box.result<{ code: string }>("access/setupCode", {});
+  const fake = { role: "worker", account: { kind: "subscription", backend: "fake" } };
+  await box.result("accounts/defaults/set", fake);
+  const threadOnBox = uuidv7();
+  await box.result("thread/start", { runId: threadOnBox, prompt: "Fix the flaky upload test" });
+  process.env["PLXD_RELAY_URL"] = "http://127.0.0.1:9";
+  // This computer's listener, for the setting to turn on, away from any real plxd's port.
+  process.env["PLXD_REMOTE_PORT"] = String(await freePort());
+  const bin = mkdtempSync(path.join(tmpdir(), "parallax-e2e-bin-"));
+  writeFakeTailscale(bin);
+  launched = await launch("agent.json", bin, undefined, undefined, false, {
+    localName: "studio",
+    accounts: [{ hostId: box.hostId, name: "build-box", routes: [`127.0.0.1:${port}`] }],
+  });
+  delete process.env["PLXD_REMOTE_PORT"];
+  const { page } = launched;
+  const request = <T>(hostId: string, method: string, params: object) =>
+    page.evaluate(
+      `window.parallax.request(${JSON.stringify(hostId)}, ${JSON.stringify(method)}, ${JSON.stringify(params)})`,
+    ) as Promise<{ result: T }>;
+
+  const dialog = page.getByRole("dialog", { name: "Add build-box" });
+  await dialog.getByRole("textbox", { name: "Code" }).fill(code);
+  await dialog.getByRole("button", { name: "Connect" }).click();
+  await page
+    .getByRole("dialog", { name: "build-box is added" })
+    .getByRole("button", { name: "Done" })
+    .click();
+  await request("local", "accounts/defaults/set", fake);
+  const message = page.getByRole("textbox", { name: "Message" });
+
+  // With agent work off there, `@` lists build-box, off, and none of its threads.
+  const buildBox = page.getByRole("option", { name: /build-box/ }).first();
+  await message.click();
+  await page.keyboard.type("@");
+  await expect(buildBox).toContainText("Agents can't work here");
+  await expect(buildBox).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByRole("option", { name: /Fix the flaky upload test/ })).toBeHidden();
+  await page.keyboard.press("Backspace");
+
+  // The setting: on each computer, and it and pairing change each other.
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Connections" }).click();
+  // The fake tailscale kept the tailnet's real computers out.
+  await expect(page.locator("li[data-device]")).toHaveCount(2);
+  const here = page.getByRole("switch", { name: "Let agents on my other computers work here" });
+  const pairing = page.getByRole("switch", { name: "Pair computers on this network" });
+  await expect(here).not.toBeChecked();
+  await here.click();
+  await expect(here).toBeChecked();
+  await expect(pairing).toBeChecked();
+  await pairing.click();
+  await expect(pairing).not.toBeChecked();
+  await expect(here).not.toBeChecked();
+  const there = page.getByRole("switch", {
+    name: "Let agents on my other computers work on build-box",
+  });
+  await there.click();
+  await expect(there).toBeChecked();
+  expect(await box.result("host/settings/get", {})).toMatchObject({
+    agentWork: true,
+    remote: true,
+  });
+
+  // A provider each can run, since a test machine may have none. A thread still runs on the fake.
+  const runnable = (id: string) => ({
+    instance: {
+      id,
+      kind: "acp",
+      name: id,
+      enabled: true,
+      program: "true",
+      args: [],
+      env: [],
+      models: [{ id: `${id}-model`, name: id }],
+    },
+  });
+  await box.result("providers/save", runnable("both"));
+  await request("local", "providers/save", runnable("both"));
+
+  // The Load Balancer. Both plxds read this one machine, so load can't decide here: each case
+  // leaves one computer that can take the thread, and it may be too busy to, when it says so.
+  await page.getByRole("switch", { name: "Balance new threads across my computers" }).click();
+  await page.getByRole("switch", { name: "Balance new threads onto studio" }).click();
+  await page
+    .getByRole("group", { name: "How often build-box takes new threads" })
+    .getByText("Prefer")
+    .click();
+  // Its summary comes from the same scoring: studio is left out.
+  const summary = page.getByRole("region", { name: "Load Balancer" }).locator("p");
+  await expect(summary).toHaveText(/Next thread goes to build-box|No computer can take/);
+  await page.getByRole("button", { name: "Close settings" }).click();
+
+  // A new draft moves to its pick with no click, and never to a computer left out.
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "New thread in" })
+    .getByRole("option", { name: /^No repo/ })
+    .click();
+  const onBox = page.getByRole("button", { name: /^Runs on: build-box, Load Balancer/ });
+  const none = page.getByRole("button", { name: /^Runs on: Pick a computer, Load Balancer/ });
+  // A busy machine can take its full 6 s to check.
+  const checked = { timeout: 15_000 };
+  await expect(onBox.or(none)).toBeVisible(checked);
+  // A manual pick can still be one left out, and holds.
+  const runsOn = page.getByRole("button", { name: /^Runs on:/ });
+  const balancer = page.getByRole("menuitemradio", { name: /^Load Balancer/ });
+  const studio = page.getByRole("menuitemradio", { name: /^studio/ });
+  const onStudio = page.getByRole("button", { name: "Runs on: studio", exact: true });
+  await runsOn.click();
+  await expect(studio).toContainText("Left out");
+  await studio.click();
+  await expect(onStudio).toBeVisible();
+  await page.waitForTimeout(500);
+  await expect(onStudio).toBeVisible();
+  // Choosing it again checks again.
+  await balancer.click();
+  await expect(onBox.or(none)).toBeVisible(checked);
+  await studio.click();
+  await expect(onStudio).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // `@` now takes build-box and its thread. Each goes to `thread/start`, by relay id.
+  await message.click();
+  await page.keyboard.type("@");
+  await expect(buildBox).not.toHaveAttribute("aria-disabled", "true");
+  await buildBox.click();
+  await page.keyboard.type("@flaky");
+  await page.getByRole("option", { name: /Fix the flaky upload test/ }).click();
+  await page.keyboard.type("compare these");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const transcript = page.getByRole("log", { name: "Transcript" });
+  await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
+  // The chip comes back from plxd's log, as does the thread's, which opens build-box's thread.
+  await expect(transcript.getByTitle("Computer: build-box")).toBeVisible();
+  const openThread = transcript.getByTitle("Open Fix the flaky upload test");
+  await expect(openThread).toBeVisible();
+  await expect(transcript).not.toContainText('@"');
+
+  const { runs } = (await request<{ runs: { id: string }[] }>("local", "agent/list", {})).result;
+  const logged = async () =>
+    JSON.stringify(
+      (await request("local", "agent/events", { runId: runs[0]!.id, after: 0 })).result,
+    );
+  const named = `"computers":["${box.hostId}"]`;
+  const attached = `"remoteThreads":[{"computer":"${box.hostId}","runId":"${threadOnBox}","title":"Fix the flaky upload test"}]`;
+  expect(await logged()).toContain(named);
+  expect(await logged()).toContain(attached);
+
+  // A follow-up names build-box too, through `agent/send`.
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+  await message.click();
+  await page.keyboard.type("@build");
+  await buildBox.click();
+  await page.keyboard.type("and run it there");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(transcript.getByTitle("Computer: build-box")).toHaveCount(2);
+  await expect.poll(async () => (await logged()).split(named).length - 1).toBe(2);
+
+  // The thread's chip opens it on build-box.
+  await openThread.click();
+  await expect(transcript.getByText("Fix the flaky upload test", { exact: true })).toBeVisible();
+  await expect(transcript.getByTitle("Computer: build-box")).toHaveCount(0);
+
+  // A computer that can't run the provider a new thread defaults to is skipped, though it's the
+  // only other one and studio takes part again at Less often.
+  await request("local", "providers/save", runnable("studio-only"));
+  await page.evaluate(`{
+    localStorage.setItem("parallax.newThreads", JSON.stringify({ model: { provider: "studio-only", id: "studio-only-model" } }));
+    const balancer = JSON.parse(localStorage.getItem("parallax.loadBalancer"));
+    localStorage.setItem("parallax.loadBalancer", JSON.stringify({ ...balancer, leftOut: [] }));
+  }`);
+  await page.reload();
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "New thread in" })
+    .getByRole("option", { name: /^No repo/ })
+    .click();
+  const staysHere = page.getByRole("button", { name: /^Runs on: studio, Load Balancer/ });
+  await expect(staysHere.or(none)).toBeVisible(checked);
+  await runsOn.click();
+  // A machine too busy to answer in time leaves it out as well.
+  await expect(page.getByRole("menuitemradio", { name: /^build-box/ })).toContainText(
+    /Provider unavailable|Didn't answer/,
+  );
 });

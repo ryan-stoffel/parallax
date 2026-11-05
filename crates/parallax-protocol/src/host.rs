@@ -29,6 +29,24 @@ pub struct HostHealthResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub queues: Option<HostQueues>,
+    /// How much of the computer is in use, for balancing new threads (0101). An older plxd leaves
+    /// it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub load: Option<HostLoad>,
+}
+
+/// How much of the computer's CPU and memory is in use, as percentages from 0 to 100, and how many
+/// CPU cores it has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostLoad {
+    /// CPU in use across every core, since plxd last measured it.
+    pub cpu: u8,
+    /// Memory in use, not counting what the system can take back, such as file caches.
+    pub memory: u8,
+    /// Logical CPU cores, so a bigger computer can take more.
+    pub cores: u32,
 }
 
 /// The job queue of plxd's database thread, which runs its jobs one at a time.
@@ -309,6 +327,12 @@ pub struct HostSettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub relay: Option<bool>,
+    /// The new `agentWork`, behind the `agentWork` capability (0101). Absent leaves it. On turns
+    /// `remote` on, and `remote` off turns it off, since other computers arrive at that listener.
+    /// Off closes the sessions it gave, and answers with `remote` as it stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_work: Option<bool>,
     /// The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
     /// are dropped and the rest trimmed to at most 64 characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -369,6 +393,12 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub relay: Option<bool>,
+    /// Whether agents on the user's other computers may work here, labelled "Let agents on my
+    /// other computers work here" (0101). Off by default. An older plxd, without the `agentWork`
+    /// capability, leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_work: Option<bool>,
     /// This device's nickname for Parallax Connect, when one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

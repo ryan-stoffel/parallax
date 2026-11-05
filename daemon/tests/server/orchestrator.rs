@@ -557,6 +557,8 @@ async fn runs_finishing_during_a_orchestrator_turn_wake_it_once_with_no_client_c
         from: None,
         images: Vec::new(),
         threads: Vec::new(),
+        computers: Vec::new(),
+        remote_threads: Vec::new(),
     }));
     host.server.stop().await;
 }

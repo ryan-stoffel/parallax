@@ -12,14 +12,15 @@ export const PullRequestsContext = createContext<Pick<PullRequests, "urls" | "ge
   undefined,
 );
 
-// Each kind of mention's colors: a skill in violet, a file in the accent, a thread, an image, or a
-// pull request faintly filled and outlined, and cited text outlined in the accent. A thread's and
-// an image's text is the text's own color, and a pull request's number takes its state's.
+// Each kind of mention's colors: a skill in violet, a file in the accent, an image or a pull request
+// faintly filled and outlined, and cited text outlined in the accent. A thread or computer is only
+// its icon and name, with no box, in the accent when it opens something. An image's text is the
+// text's own color, and a pull request's number takes its state's.
 const tones = {
   pullRequest: "bg-foreground/[0.06] ring-1 ring-foreground/10 ring-inset",
   skill: "bg-project-violet/12 text-project-violet",
   file: "bg-accent/10 text-foreground",
-  thread: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
+  thread: "font-medium text-foreground [&_svg]:text-muted-foreground",
   image: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
   cite: "bg-accent/10 text-foreground ring-1 ring-accent/40 ring-inset",
 };
@@ -27,37 +28,49 @@ const tones = {
 /** A mention in a message, as the composer draws one: icons and a name, kept whole, with `end`
  * muted after the name. Its text is the text around it, at the same size and on the same baseline,
  * with the chip drawn behind it, so a line reads the same with or without one. A long name is cut
- * short. */
+ * short. With `onOpen` it's a button. */
 export function Chip({
   icon,
   tone = "skill",
   title,
   end,
+  onOpen,
   children,
 }: {
   icon: ReactNode;
   tone?: keyof typeof tones;
   title?: string;
   end?: ReactNode;
+  onOpen?: () => void;
   children: ReactNode;
 }) {
+  const Box = onOpen ? "button" : "span";
+  const flat = tone === "thread";
   return (
-    <span
-      contentEditable={false}
+    <Box
+      {...(onOpen ? { type: "button" as const, onClick: onOpen } : { contentEditable: false })}
       title={title}
       // Baseline-aligned items make the chip's baseline its text's. Icons, which have none, sit a
       // little below it, as glyphs do. Its padding stays inside the line's height.
-      className={`group/chip mx-[0.1em] inline-flex max-w-[24em] items-baseline gap-[0.3em] rounded-sm px-[0.35em] py-[0.12em] leading-none whitespace-nowrap [&_img]:relative [&_img]:top-[0.14em] [&_img]:size-3.5 [&_img]:shrink-0 [&_svg]:relative [&_svg]:top-[0.14em] [&_svg]:size-3.5 [&_svg]:shrink-0 ${tones[tone]}`}
+      className={`group/chip mx-[0.1em] inline-flex max-w-[24em] items-baseline gap-[0.3em] rounded-sm py-[0.12em] leading-none whitespace-nowrap [&_img]:relative [&_img]:top-[0.14em] [&_img]:size-3.5 [&_img]:shrink-0 [&_svg]:relative [&_svg]:top-[0.14em] [&_svg]:size-3.5 [&_svg]:shrink-0 ${flat ? "" : "px-[0.35em]"} ${onOpen && !flat ? "hover:bg-foreground/10" : ""} ${onOpen && flat ? "cursor-pointer text-accent! [&_svg]:text-accent!" : ""} ${tones[tone]}`}
     >
       {icon}
-      <span className="min-w-0 truncate">{children}</span>
+      {/* Clipped only across, since `leading-none` leaves descenders outside the line. */}
+      <span
+        className={`min-w-0 overflow-x-clip text-ellipsis ${onOpen && flat ? "underline decoration-transparent decoration-1 underline-offset-[0.2em] group-hover/chip:decoration-current" : ""}`}
+      >
+        {children}
+      </span>
       {end && (
         // Its icons a mark's size (0085), over the sizes they bring with them.
-        <span className="ml-[0.05em] inline-flex shrink-0 items-baseline gap-[0.35em] text-muted-foreground [&>*]:size-3!">
+        // A thread's computer gives way first, so a long name leaves the title readable.
+        <span
+          className={`ml-[0.05em] inline-flex items-baseline gap-[0.35em] font-normal text-muted-foreground [&>:not(span)]:size-3! ${flat ? "min-w-[3em] shrink-[1000] [&>span]:min-w-0 [&>span]:overflow-x-clip [&>span]:text-ellipsis" : "shrink-0"}`}
+        >
           {end}
         </span>
       )}
-    </span>
+    </Box>
   );
 }
 

@@ -2,7 +2,14 @@ import { SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 
 import { base64url, type HostJwk, sha256, thumbprint } from "../src/crypto";
-import { hostMessage, PROOF_HEADER, registerMessage, STREAMS_HEADER } from "../src/host";
+import {
+  hostMessage,
+  PEER_HEADER,
+  peerMessage,
+  PROOF_HEADER,
+  registerMessage,
+  STREAMS_HEADER,
+} from "../src/host";
 import type { Env } from "../src/index";
 
 export const BASE = "https://relay.test";
@@ -129,6 +136,12 @@ let lastProof = 0;
 export async function hostProof(host: Host, signer: Host = host, at?: number) {
   const time = at ?? (lastProof = Math.max(Date.now(), lastProof + 1));
   return `${time}.${await signer.sign(hostMessage(host.id, time))}`;
+}
+
+/** The header of `caller`'s proof for `route` (0101), signed by `signer`, at `at`. */
+export async function peerHeader(caller: Host, route: string, signer: Host = caller, at = Date.now()) {
+  const signature = await signer.sign(peerMessage(caller.id, route, at));
+  return { [PEER_HEADER]: `${caller.id}.${at}.${signature}` };
 }
 
 /** Opens plxd's control socket with `proof`: the socket, or the refusal. `held` lists the streams
