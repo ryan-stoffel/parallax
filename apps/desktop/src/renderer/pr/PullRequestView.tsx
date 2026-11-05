@@ -62,8 +62,10 @@ import {
 } from "./model";
 import { ago, Avatar, BranchChips, DiffStat, StateBadge } from "./parts";
 import { CommentBox } from "./CommentBox";
+import { CommitSuggestions } from "./CommitSuggestions";
 import { ReviewButton, ReviewForm } from "./ReviewForm";
 import { ReviewThread } from "./ReviewThread";
+import type { SuggestionActions } from "./Suggestion";
 import { useViewedFiles } from "./viewedFiles";
 
 /** How long a read stays fresh enough that opening the view doesn't read it again. */
@@ -116,6 +118,9 @@ export function PullRequestView({
     setCommentTarget(undefined);
     setCommentHasText(false);
   };
+  const [suggestionBatch, setSuggestionBatch] = useState<ReadonlySet<string>>(new Set());
+  const [committing, setCommitting] = useState<readonly string[]>([]);
+  const closeCommit = useCallback(() => setCommitting([]), []);
   const [guide, setGuide] = useState<{ url: string; result?: PrGuideResult; error?: string }>();
   // The guide's page, kept here so a trip to Code comes back to it. A new pull request or a new
   // guide starts at the overview.
@@ -232,6 +237,8 @@ export function PullRequestView({
           return failed;
         }, "Couldn't write to the pull request")
     : undefined;
+  // A new head moves what a batch was read from.
+  useEffect(() => setSuggestionBatch(new Set()), [url, pr && more(pr).headSha]);
   const viewedFiles = useViewedFiles({
     url,
     files: pr?.files,
@@ -361,6 +368,20 @@ export function PullRequestView({
           },
         }
       : undefined;
+  const suggestionActions: SuggestionActions = {
+    blocked: !open
+      ? "This pull request is closed"
+      : !more(pr).canApplySuggestions
+        ? "You can't commit to this branch"
+        : undefined,
+    batch: suggestionBatch,
+    onCommit: (id) => setCommitting([id]),
+    onToggleBatch: (id) => {
+      const next = new Set(suggestionBatch);
+      if (!next.delete(id)) next.add(id);
+      setSuggestionBatch(next);
+    },
+  };
   const threadProps = (t: ThreadView) => ({
     thread: t,
     repo: pr.repo,
@@ -379,6 +400,7 @@ export function PullRequestView({
     onDelete: write
       ? (commentId: string) => write({ kind: "deleteReviewComment", commentId })
       : undefined,
+    suggestions: write ? suggestionActions : undefined,
   });
   const checkActions: CheckActions = {
     onOpen: openOnGithub,
@@ -556,6 +578,17 @@ export function PullRequestView({
               actions={
                 write && (
                   <>
+                    {suggestionBatch.size > 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setCommitting([...suggestionBatch])}
+                      >
+                        <icons.commit aria-hidden />
+                        Commit {suggestionBatch.size}{" "}
+                        {suggestionBatch.size === 1 ? "suggestion" : "suggestions"}
+                      </Button>
+                    )}
                     <ReviewButton pending={pendingCount} popover={`${id}-review`} />
                     <div
                       id={`${id}-review`}
@@ -591,6 +624,21 @@ export function PullRequestView({
           reviewId={pendingReviewId}
           pending={pendingCount}
           onOpen={openOnGithub}
+        />
+      )}
+
+      {write && more(pr).headSha && (
+        <CommitSuggestions
+          commentIds={committing}
+          onClose={closeCommit}
+          onCommit={(message) =>
+            write({
+              kind: "applySuggestions",
+              commentIds: [...committing],
+              message,
+              headSha: more(pr).headSha!,
+            })
+          }
         />
       )}
 

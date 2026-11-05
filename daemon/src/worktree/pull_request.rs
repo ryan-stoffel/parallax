@@ -552,6 +552,7 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
         review_threads_truncated: false,
         node_id: None,
         pending_review_id: None,
+        can_apply_suggestions: false,
     })
 }
 

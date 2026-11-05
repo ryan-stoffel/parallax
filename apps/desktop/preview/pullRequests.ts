@@ -194,6 +194,7 @@ function view(url: string): PullRequest {
     headSha: "a41c09d2e3f4",
     reviewThreads: number === 588 ? reviewThreads : [],
     nodeId: `PR_${number}`,
+    canApplySuggestions: number === 588,
     body: number === 588 ? body : "Copy-only change. No behavior moves.",
     comments: [
       {
@@ -528,6 +529,14 @@ export const pullRequestHandlers = {
               { author: "ryan-stoffel", body: w.body, createdAt: new Date().toISOString() },
             ]
           : pr.comments,
+      });
+    }
+    if (w.kind === "applySuggestions") {
+      merge(pr.number, {
+        headSha: `${Date.now().toString(16)}f00`,
+        reviewThreads: threadsOf().map((t) =>
+          t.comments.some((c) => w.commentIds.includes(c.id)) ? { ...t, isResolved: true } : t,
+        ),
       });
     }
     if (w.kind === "setFileViewed")
