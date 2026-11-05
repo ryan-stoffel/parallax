@@ -334,6 +334,11 @@
   background: color-mix(in srgb, var(--diff-removed) var(--diff-tint), transparent);
   box-shadow: inset 2px 0 0 var(--diff-removed);
 }
+/* Lines picked for a comment. */
+.diff-row-picked {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .diff-word-added {
   border-radius: 2px;
   background: color-mix(in srgb, var(--diff-added) calc(var(--diff-tint) * 2.2), transparent);

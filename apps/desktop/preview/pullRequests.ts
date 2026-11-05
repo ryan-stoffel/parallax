@@ -7,6 +7,7 @@ import type {
   PrFile,
   PrGuide,
   PrReviewThread,
+  PrThreadComment,
   PrStatusResult,
   PrWrite,
   PullRequest,
@@ -445,6 +446,70 @@ export const pullRequestHandlers = {
     const pr = view(p.url);
     const w = p.write;
     if (w.kind === "replyToThread" && w.resolve) resolved.add(p.url);
+    const threadsOf = () => pr.reviewThreads ?? [];
+    if (w.kind === "addReviewComment") {
+      merge(pr.number, {
+        pendingReviewId: w.headSha ? pr.pendingReviewId : (pr.pendingReviewId ?? "PRR_preview"),
+        reviewThreads: [
+          ...threadsOf(),
+          {
+            id: `PRRT_${Date.now()}`,
+            path: w.path,
+            line: w.line,
+            side: w.side ?? "right",
+            startLine: w.startLine,
+            isOutdated: false,
+            isResolved: false,
+            comments: [
+              {
+                id: `PRRC_${Date.now()}`,
+                pending: !w.headSha,
+                author: "ryan-stoffel",
+                body: w.body,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          },
+        ],
+      });
+    }
+    const eachComment = (
+      change: (c: PrThreadComment) => PrThreadComment | undefined,
+    ): PrReviewThread[] =>
+      threadsOf()
+        .map((t) => ({
+          ...t,
+          comments: t.comments.flatMap((c) => {
+            const next = change(c);
+            return next ? [next] : [];
+          }),
+        }))
+        .filter((t) => t.comments.length > 0);
+    if (w.kind === "editReviewComment")
+      merge(pr.number, {
+        reviewThreads: eachComment((c) => (c.id === w.commentId ? { ...c, body: w.body } : c)),
+      });
+    if (w.kind === "deleteReviewComment")
+      merge(pr.number, {
+        reviewThreads: eachComment((c) => (c.id === w.commentId ? undefined : c)),
+      });
+    if (w.kind === "discardReview")
+      merge(pr.number, {
+        pendingReviewId: undefined,
+        reviewThreads: eachComment((c) => (c.pending ? undefined : c)),
+      });
+    if (w.kind === "submitReview") {
+      merge(pr.number, {
+        pendingReviewId: undefined,
+        reviewThreads: eachComment((c) => ({ ...c, pending: false })),
+        comments: w.body
+          ? [
+              ...pr.comments,
+              { author: "ryan-stoffel", body: w.body, createdAt: new Date().toISOString() },
+            ]
+          : pr.comments,
+      });
+    }
     if (w.kind === "setFileViewed")
       merge(pr.number, {
         files: pr.files?.map((f) =>

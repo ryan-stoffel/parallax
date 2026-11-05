@@ -317,6 +317,10 @@ pub struct PrReviewThread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub side: Option<PrDiffSide>,
+    /// The first line it covers, when it covers more than `line`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub start_line: Option<u64>,
     /// The diff down to its line, from its first comment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -349,6 +353,10 @@ pub enum PrDiffSide {
 pub struct PrThreadComment {
     /// Its GitHub node id.
     pub id: String,
+    /// Whether it waits in the signed-in reviewer's pending review, seen by no one else.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub pending: bool,
     /// Its web URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -655,6 +663,10 @@ pub struct PullRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub node_id: Option<String>,
+    /// The signed-in reviewer's pending review, started here or on GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pending_review_id: Option<String>,
 }
 
 /// Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's
@@ -712,6 +724,58 @@ pub enum PrWrite {
         /// Whether to resolve the thread, after the reply.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         resolve: bool,
+    },
+    /// A comment on a line, a range of lines, or a whole file: added to the signed-in reviewer's
+    /// pending review, starting one if need be, or with `head_sha` posted at once on its own.
+    AddReviewComment {
+        /// The pull request's node id, as `pr/view` gives it.
+        pull_request_id: String,
+        /// The file's path in the repository.
+        path: String,
+        /// The comment, in Markdown.
+        body: String,
+        /// The line, or the range's last line. Absent comments on the whole file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        line: Option<u64>,
+        /// The range's first line, on the same side and in the same hunk as `line`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        start_line: Option<u64>,
+        /// The diff's side of `line` and `start_line`. Absent means the new side.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        side: Option<PrDiffSide>,
+        /// The head commit to post on at once, instead of adding to the pending review.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        head_sha: Option<String>,
+    },
+    /// A new body for a review comment.
+    EditReviewComment {
+        /// The comment's node id.
+        comment_id: String,
+        /// The new body, in Markdown.
+        body: String,
+    },
+    /// Deletes a review comment.
+    DeleteReviewComment {
+        /// The comment's node id.
+        comment_id: String,
+    },
+    /// Sends the signed-in reviewer's pending review, with its comments, as a verdict.
+    SubmitReview {
+        /// The pending review's id, as `pr/view` gives it.
+        review_id: String,
+        /// Its verdict.
+        event: PrReviewEvent,
+        /// The review's text, in Markdown. May be empty when it has comments.
+        body: String,
+    },
+    /// Deletes the signed-in reviewer's pending review, with its comments.
+    DiscardReview {
+        /// The pending review's id, as `pr/view` gives it.
+        review_id: String,
     },
     /// Marks a file viewed by the signed-in reviewer, or takes that back.
     SetFileViewed {

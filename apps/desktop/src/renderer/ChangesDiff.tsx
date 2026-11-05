@@ -1,14 +1,33 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 
 import { diffBand, diffLook } from "./Approval";
 import { icons } from "./icons";
-import { diffRows, sameRow, type DiffLayout, type Row } from "./diffRows";
+import {
+  diffRows,
+  numberOn,
+  pickRange,
+  sameRow,
+  sideOf,
+  type CommentTarget,
+  type DiffLayout,
+  type DiffSideName,
+  type LineRange,
+  type Row,
+} from "./diffRows";
 import { parseDiff, type DiffFile, type DiffLine } from "./parseDiff";
 import type { ThreadView } from "./pr/model";
 import { DiffStat } from "./pr/parts";
 import { fileTree, FileIcon, type TreeNode } from "./TurnChanges";
-import { Checkbox, Segmented } from "./ui";
+import { Checkbox, IconButton, Segmented } from "./ui";
 
 /** Where the Unified/Split choice is kept, for every diff. */
 const LAYOUT_KEY = "parallax.diffLayout";
@@ -45,6 +64,25 @@ export function focusRow(
   return at < 0 ? header : at;
 }
 
+/** Commenting on a diff's lines: where the box is open, and how to draw it. */
+export type DiffComments = {
+  target?: CommentTarget;
+  /** Whether a new target may replace the open one, which holds no text. */
+  canRetarget: boolean;
+  onTarget: (target: CommentTarget) => void;
+  renderBox: () => ReactNode;
+};
+
+/** A line's gutter: pressing it starts a pick, entering it extends one, unless it's not `active`. */
+type Gutter = {
+  selected: boolean;
+  active: boolean;
+  label: string;
+  onPointerDown: (e: PointerEvent<HTMLElement>) => void;
+  onPointerEnter: () => void;
+  onKeyboard: () => void;
+};
+
 /** Whether `line` of `path` is in `to`'s lines. */
 const focused = (to: DiffFocus | undefined, path: string, line?: DiffLine) =>
   !!to?.line &&
@@ -62,8 +100,10 @@ const focused = (to: DiffFocus | undefined, path: string, line?: DiffLine) =>
  * it marks (a guide's step, PLX-1188). With `onViewed`, each file has Viewed, and a viewed file
  * folds; `changedSinceViewed` names the files viewed before a later commit changed them. A file's
  * header stays at the top while its lines scroll. `threads` sit under their line on their side, or under their file's header when plxd
- * doesn't say the line, drawn by `renderThread`. With `tree`, a file tree that jumps to a file
- * shows beside the diff once its container (an `@container`) is at least 900px wide.
+ * doesn't say the line, drawn by `renderThread`. With `comments`, a line's gutter takes a comment:
+ * its + on hover, a drag or a shift-click for a range, and each file's header for the whole file.
+ * `actions` sit in the bar above the files. With `tree`, a file tree that jumps to a file shows
+ * beside the diff once its container (an `@container`) is at least 900px wide.
  */
 export function ChangesDiff({
   diff,
@@ -74,6 +114,8 @@ export function ChangesDiff({
   onViewed,
   threads = [],
   renderThread,
+  comments,
+  actions,
   tree,
 }: {
   diff: string;
@@ -84,6 +126,8 @@ export function ChangesDiff({
   onViewed?: (path: string, viewed: boolean) => void;
   threads?: readonly ThreadView[];
   renderThread?: (thread: ThreadView) => ReactNode;
+  comments?: DiffComments;
+  actions?: ReactNode;
   tree?: boolean;
 }) {
   const files = useMemo(() => parseDiff(diff), [diff]);
@@ -112,8 +156,9 @@ export function ChangesDiff({
         layout,
         (path) => folded.has(path) || !!viewed?.has(path),
         renderThread ? threads : [],
+        comments?.target,
       ),
-    [files, layout, folded, viewed, threads, renderThread],
+    [files, layout, folded, viewed, threads, renderThread, comments?.target],
   );
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -152,6 +197,54 @@ export function ChangesDiff({
       });
     virtualizer.measure();
   };
+  // A pick of lines in progress, and the line it started from, which a shift-click goes on from.
+  const [picking, setPicking] = useState<{ path: string; range: LineRange }>();
+  const pick = useRef<{ file: DiffFile; side: DiffSideName; from: number; range: LineRange }>(
+    undefined,
+  );
+  const anchor = useRef<{ path: string; side: DiffSideName; from: number }>(undefined);
+  const gutterOf = (file: DiffFile, side: DiffSideName, n?: number): Gutter | undefined => {
+    if (!comments || n === undefined) return undefined;
+    const shown = picking?.path === file.path ? picking.range : undefined;
+    const open = comments.target?.path === file.path ? comments.target.range : undefined;
+    const lit = shown ?? open;
+    const extend = (from: number, to: number) => {
+      const range = pickRange(file.lines, side, from, to);
+      pick.current = { file, side, from, range };
+      setPicking({ path: file.path, range });
+    };
+    return {
+      selected: !!lit && lit.side === side && n >= lit.start && n <= lit.end,
+      active: comments.canRetarget,
+      label: `Comment on line ${n}${side === "left" ? " of the old file" : ""}`,
+      onPointerDown: (e) => {
+        if (e.button !== 0) return;
+        // Not a text selection, and the button's focus would scroll.
+        e.preventDefault();
+        const last = anchor.current;
+        const from = e.shiftKey && last?.path === file.path && last.side === side ? last.from : n;
+        extend(from, n);
+        const end = () => {
+          window.removeEventListener("pointerup", end);
+          window.removeEventListener("pointercancel", end);
+          const done = pick.current;
+          pick.current = undefined;
+          setPicking(undefined);
+          if (!done) return;
+          anchor.current = { path: done.file.path, side: done.side, from: done.from };
+          comments.onTarget({ path: done.file.path, range: done.range });
+        };
+        window.addEventListener("pointerup", end);
+        window.addEventListener("pointercancel", end);
+      },
+      onPointerEnter: () => {
+        const now = pick.current;
+        if (now?.file === file && now.side === side) extend(now.from, n);
+      },
+      onKeyboard: () =>
+        comments.onTarget({ path: file.path, range: pickRange(file.lines, side, n, n) }),
+    };
+  };
   // The header of the file at the top, once its own header has scrolled off.
   const offset = virtualizer.scrollOffset ?? 0;
   const topItem = virtualizer.getVirtualItems().find((item) => item.end > offset);
@@ -179,6 +272,19 @@ export function ChangesDiff({
       >
         {changedSinceViewed?.has(path) && (
           <span className="shrink-0 text-meta text-warning">Changed since viewed</span>
+        )}
+        {comments?.canRetarget && (
+          <IconButton
+            size="sm"
+            label={`Comment on ${file.path}`}
+            onClick={() => {
+              if (shut(path)) toggle(path);
+              comments.onTarget({ path });
+              backToHeader();
+            }}
+          >
+            <icons.comment aria-hidden />
+          </IconButton>
         )}
         {onViewed && (
           <Checkbox
@@ -216,6 +322,7 @@ export function ChangesDiff({
                 {files.filter((f) => viewed?.has(f.path)).length} / {files.length} viewed
               </span>
             )}
+            {actions}
             {narrow && chosen === "split" && (
               <span className="text-meta text-faint-foreground">Too narrow for split</span>
             )}
@@ -268,6 +375,8 @@ export function ChangesDiff({
                 >
                   {row.header ? (
                     fileHeader(row.file)
+                  ) : row.composer ? (
+                    <ComposerRow side={row.composer}>{comments?.renderBox()}</ComposerRow>
                   ) : row.threads ? (
                     <ThreadColumn threads={row.threads} render={renderThread!} edged />
                   ) : row.sides ? (
@@ -281,11 +390,29 @@ export function ChangesDiff({
                     >
                       {row.left || row.right ? (
                         <div className="grid grid-cols-2">
-                          <DiffSide line={row.left} />
-                          <DiffSide line={row.right} divider />
+                          <DiffSide
+                            line={row.left}
+                            gutter={row.left && gutterOf(row.file, "left", row.left.old)}
+                          />
+                          <DiffSide
+                            line={row.right}
+                            gutter={row.right && gutterOf(row.file, "right", row.right.new)}
+                            divider
+                          />
                         </div>
                       ) : row.line ? (
-                        <DiffLineView line={row.line} />
+                        <DiffLineView
+                          line={row.line}
+                          gutter={
+                            row.line.op === "@"
+                              ? undefined
+                              : gutterOf(
+                                  row.file,
+                                  sideOf(row.line),
+                                  numberOn(row.line, sideOf(row.line)),
+                                )
+                          }
+                        />
                       ) : (
                         <p className="px-3 text-faint-foreground">Binary file not shown</p>
                       )}
@@ -349,6 +476,45 @@ export function DiffFileHeader({
   );
 }
 
+/** The comment box's row: across the diff, or under its side of a split row. */
+function ComposerRow({
+  side,
+  children,
+}: {
+  side: "left" | "right" | "across";
+  children: ReactNode;
+}) {
+  if (side === "across")
+    return <div className="border-y border-border bg-background px-3 py-2">{children}</div>;
+  return (
+    <div className="grid grid-cols-2 border-y border-border bg-background">
+      <div
+        className={`min-w-0 px-3 py-2 ${side === "right" ? "col-start-2 border-l border-border" : ""}`}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** A line's + for a comment, shown when its row is hovered or it has focus. */
+function AddComment({ gutter }: { gutter: Gutter }) {
+  return (
+    <button
+      type="button"
+      aria-label={gutter.label}
+      onPointerDown={gutter.onPointerDown}
+      onClick={(e) => {
+        // A press is handled from pointer events: only the keyboard clicks with no pointer.
+        if (e.detail === 0) gutter.onKeyboard();
+      }}
+      className="absolute top-0.5 left-0.5 grid size-4 place-items-center rounded-sm bg-accent text-accent-foreground opacity-0 group-hover/line:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring"
+    >
+      <icons.add aria-hidden strokeWidth={3} className="size-3" />
+    </button>
+  );
+}
+
 /** Threads under a line: across the diff when `edged`, else one side of a split row. */
 function ThreadColumn({
   threads,
@@ -398,13 +564,29 @@ function LineText({ line }: { line: DiffLine }) {
  * One side of a split row: its line number, sign, and text, or a filler where this side has no line.
  * Always wrapping, whatever Settings says, so both sides of a row keep one height.
  */
-function DiffSide({ line, divider }: { line?: DiffLine; divider?: boolean }) {
+function DiffSide({
+  line,
+  gutter,
+  divider,
+}: {
+  line?: DiffLine;
+  gutter?: Gutter;
+  divider?: boolean;
+}) {
   const edge = divider ? "border-l border-border" : "";
   if (!line) return <div aria-hidden className={`min-w-0 bg-hover/40 ${edge}`} />;
   const look = diffLook[line.op as keyof typeof diffLook];
   return (
-    <div className={`flex min-w-0 ${look.row} ${edge}`}>
-      <span aria-hidden className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none">
+    <div
+      className={`group/line relative flex min-w-0 ${look.row} ${edge} ${gutter?.selected ? "diff-row-picked" : ""}`}
+    >
+      {gutter?.active && <AddComment gutter={gutter} />}
+      <span
+        aria-hidden
+        onPointerDown={gutter?.active ? gutter.onPointerDown : undefined}
+        onPointerEnter={gutter?.active ? gutter.onPointerEnter : undefined}
+        className={`w-10 shrink-0 pr-2 text-right text-faint-foreground select-none ${gutter?.active ? "cursor-pointer hover:text-foreground" : ""}`}
+      >
         {divider ? line.new : line.old}
       </span>
       <span aria-hidden className={`w-5 shrink-0 select-none ${look.sign}`}>
@@ -421,16 +603,22 @@ function DiffSide({ line, divider }: { line?: DiffLine; divider?: boolean }) {
 }
 
 /** A diff's line, wrapping, numbered on both sides, its change named for screen readers. */
-export function DiffLineView({ line }: { line: DiffLine }) {
+export function DiffLineView({ line, gutter }: { line: DiffLine; gutter?: Gutter }) {
   return line.op === "@" ? (
     <div className={`${diffBand} code-lines break-all whitespace-pre-wrap`}>{line.text}</div>
   ) : (
-    <div className={`flex ${diffLook[line.op].row}`}>
-      <span aria-hidden className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none">
-        {line.old}
-      </span>
-      <span aria-hidden className="w-10 shrink-0 pr-2 text-right text-faint-foreground select-none">
-        {line.new}
+    <div
+      className={`group/line relative flex ${diffLook[line.op].row} ${gutter?.selected ? "diff-row-picked" : ""}`}
+    >
+      {gutter?.active && <AddComment gutter={gutter} />}
+      <span
+        aria-hidden
+        onPointerDown={gutter?.active ? gutter.onPointerDown : undefined}
+        onPointerEnter={gutter?.active ? gutter.onPointerEnter : undefined}
+        className={`flex shrink-0 text-faint-foreground select-none ${gutter?.active ? "cursor-pointer hover:text-foreground" : ""}`}
+      >
+        <span className="w-10 pr-2 text-right">{line.old}</span>
+        <span className="w-10 pr-2 text-right">{line.new}</span>
       </span>
       <span aria-hidden className={`w-5 shrink-0 select-none ${diffLook[line.op].sign}`}>
         {line.op === "-" ? "−" : line.op}
