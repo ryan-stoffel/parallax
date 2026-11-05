@@ -251,10 +251,12 @@ async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [], field = false
       problem = undefined;
       const found = last.find(matches);
       if (found) return found;
-      // A busy emulator can leave a system "isn't responding" dialog over everything, for any app.
+      // A busy emulator can leave a system "isn't responding" dialog over everything. Wait leaves another
+      // app's window stuck, and the dialog comes back.
       const stuck = last.find((element) => element.label.endsWith("isn't responding"));
+      const answer = stuck?.label.startsWith("Parallax") ? "Wait" : "Close app";
       const obstacle = last.find(
-        (element) => dismiss.includes(element.label) || (stuck && element.label === "Wait"),
+        (element) => dismiss.includes(element.label) || (stuck && element.label === answer),
       );
       if (stuck) log(stuck.label);
       if (obstacle) adb("shell", "input", "tap", String(obstacle.x), String(obstacle.y));
@@ -342,6 +344,9 @@ try {
   const relayBox = await computer("relay-box", true);
   const lanBox = await computer("lan-box", false);
 
+  // An unresponsive app is closed, not asked about in a dialog that takes every tap.
+  adb("shell", "settings", "put", "global", "hide_error_dialogs", "1");
+
   // The pin check on the emulator's own TLS, Conscrypt as a phone has, not the JVM's.
   const argument = (name, value) => `-Pandroid.testInstrumentationRunnerArguments.${name}=${value}`;
   await gradle(
@@ -388,6 +393,8 @@ try {
     return (await answer?.text())?.includes("packager-status:running");
   }, 120_000);
 
+  // The launcher can be stuck from a slow boot, with its dialog up from before the setting above.
+  adb("shell", "am", "force-stop", "com.google.android.apps.nexuslauncher");
   adb("shell", "am", "start", "-n", `${APP}/.MainActivity`);
   await waitFor("Sign in", { timeoutMs: 300_000 });
   shot("1-sign-in");

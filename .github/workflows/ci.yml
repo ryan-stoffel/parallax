@@ -444,12 +444,11 @@ jobs:
           api-level: 34
           arch: x86_64
           target: google_apis
-          profile: pixel_6
           cores: 4
           ram-size: 4096M
           disk-size: 6G
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -skin 412x892 -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: scripts/ci/android-e2e
 
       - name: Upload screenshots and test reports
