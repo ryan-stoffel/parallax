@@ -847,35 +847,11 @@ body {
   bottom: 1px;
 }
 
-/* Linux is square, like the tiling desktops it mostly runs on (Omarchy's Hyprland): the radius
-   scale is 0, so every rounded-sm through rounded-prompt is, and the fixed radii below follow.
-   Circles (rounded-full) stay round. The shown tab drops its curves and sits on the card's line,
-   as on glass. */
-[data-platform="linux"] {
-  --radius-sm: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-xl: 0px;
-  --radius-prompt: 0px;
-}
-[data-platform="linux"]
-  :is(
-    .tab-shown,
-    .tab-cap,
-    .composer-tabs,
-    .composer-bar,
-    .composer-actions,
-    .composer-action,
-    .composer-input pre,
-    .markdown table,
-    .markdown :not(pre) > code
-  ) {
+/* Linux's panes are square, like the windows of the tiling desktops it mostly runs on (Omarchy's
+   Hyprland). What's inside them keeps its corners. The shown tab joins its pane square, without
+   its curves, as on glass. */
+[data-platform="linux"] :is(.pane-card, .tab-shown, .tab-cap) {
   border-radius: 0;
-}
-/* Over inline styles: the voice pill's morph (VoicePill.tsx) and Enriched Markdown's code, tables,
-   and images (AgentChat.tsx). */
-[data-platform="linux"] :is(.composer-pill, .enriched *) {
-  border-radius: 0 !important;
 }
 [data-platform="linux"] .tab-shown::before,
 [data-platform="linux"] .tab-shown::after {
