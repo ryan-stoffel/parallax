@@ -39,6 +39,8 @@ import { AppState, Linking, Pressable, ScrollView, StyleSheet, View } from "reac
 import { appVersion } from "../modules/pinned-tls";
 import { Avatar, nameOf, useAccount } from "./Account";
 import { formatCode } from "./accountPrompts";
+import { restarting, useRestarting } from "./computerUpdate";
+import { ComputerVersion } from "./ComputerVersion";
 import { showAlert } from "./dialogStore";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { useNav, type PhonePage, type SettingsScreens } from "./nav";
@@ -59,6 +61,7 @@ function status(m: Computer): string {
   if (m.gate?.kind === "setup") return "New computer · Needs setup";
   if (m.gate?.kind === "waiting") return `Waiting for approval · ${formatCode(m.gate.code)}`;
   if (m.gate?.kind === "refused") return sentence(m.gate.message);
+  if (restarting(m.machine.id, m.connectedNow)) return "Updating…";
   if (m.state.status === "connected") return `Connected · Parallax ${m.state.plxd}`;
   if (m.state.status === "failed") return m.state.error.message;
   return "Connecting…";
@@ -432,6 +435,7 @@ const pageIcons: Partial<Record<SettingsPage, LucideIcon>> = {
 export function ComputerScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "Computer">) {
   const c = useColors();
   const m = useComputer(route.params.id);
+  const updating = useRestarting(route.params.id, !!m?.connectedNow);
   const { defaultId, setDefault, remove, setUp } = useFleet();
   useEffect(() => navigation.setOptions({ title: m?.machine.name ?? "Computer" }), [m?.machine.name]);
   if (!m) return null;
@@ -448,7 +452,7 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
         <T style={{ fontSize: 20, fontWeight: "600" }}>{m.machine.name}</T>
         <View style={styles.line}>
           <StatusDot m={m} />
-          <T muted>{m.shownConnected ? "Connected" : m.gate ? status(m) : m.state.status === "connecting" ? "Connecting…" : "Not reachable"}</T>
+          <T muted>{updating ? "Updating…" : m.shownConnected ? "Connected" : m.gate ? status(m) : m.state.status === "connecting" ? "Connecting…" : "Not reachable"}</T>
           {isDefault && <Pill label="Default" color={c.accent} />}
         </View>
       </View>
@@ -463,8 +467,8 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
         </Section>
       )}
       <Section>
-        {m.state.status === "connected" && <Row title="Parallax" detail={m.state.plxd} />}
-        {m.state.status === "failed" && <Row title="Last error" detail={m.state.error.message} />}
+        <ComputerVersion m={m} />
+        {m.state.status === "failed" && !updating && <Row title="Last error" detail={m.state.error.message} />}
         {m.machine.account ? (
           <Row title="Routes" detail={routesOf(m)} last />
         ) : (

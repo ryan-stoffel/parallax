@@ -16,10 +16,10 @@ import {
 } from "react";
 import { AppState } from "react-native";
 
-import type { ConnectionState } from "../../desktop/src/preload/bridge";
+import type { ConnectionState, RpcResponse } from "../../desktop/src/preload/bridge";
 import { useShownConnections, useRealConnections } from "../../desktop/src/renderer/ConnectionStatus";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
-import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
+import type { AccessState, HostUpdateResult, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
@@ -71,6 +71,8 @@ interface FleetValue {
    * key there, which `share` then copies to every computer this phone uses (0091).
    */
   revoke: (id: string, session: string) => Promise<RemoteSessionsResult | { error: string }>;
+  /** Sends `host/update` to computer `id`, which only the user's Update does here (0066). */
+  updateHost: (id: string, version: string, now?: boolean) => Promise<RpcResponse<HostUpdateResult>>;
   /** Unsent text, by thread. */
   drafts: Map<string, string>;
 }
@@ -479,6 +481,11 @@ export function FleetProvider({
       if ("error" in answer) return { error: answer.error.message };
       void share();
       return answer.result as RemoteSessionsResult;
+    },
+    async updateHost(id, version, now) {
+      const answer = await fleet.hosts.get(id)?.request("host/update", { version, ...(now && { now }) });
+      if (!answer) return { error: { code: -32602, message: "That computer isn't in Parallax anymore." } };
+      return answer as RpcResponse<HostUpdateResult>;
     },
     drafts,
   };

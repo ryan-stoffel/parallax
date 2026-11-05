@@ -269,9 +269,14 @@ export class WebHost {
       return Promise.resolve({ error: { code: INTERNAL_ERROR, message: "not connected" } });
     }
     // An emulator can take minutes to boot, past plxd's own 3 minute wait, and a cold Mac's
-    // simulators over 30 seconds to list (PLX-886).
+    // simulators over 30 seconds to list (PLX-886). `host/update`, which only the phone sends here,
+    // downloads plxd before it answers, so it gets what the desktop's main gives it (PLX-1366).
     const timeout =
-      method === "device/boot" || method === "device/state" ? 4 * 60_000 : REQUEST_TIMEOUT_MS;
+      method === "host/update"
+        ? 15 * 60_000
+        : method === "device/boot" || method === "device/state"
+          ? 4 * 60_000
+          : REQUEST_TIMEOUT_MS;
     // A plxd from before 0093 takes and answers the old names.
     const legacy = this.legacy;
     const [sent, outgoing] = legacy ? requestToLegacy(method, params) : [method, params];
