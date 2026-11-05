@@ -63,6 +63,17 @@ class RelayBridge(url: String, private val token: String) {
   @Volatile var refused: Int? = null
     private set
 
+  private var newest = 0
+  private var closing: Map<String, Any>? = null
+
+  /**
+   * How the relay closed the newest stream, if it sent a close frame, in the connection log's names.
+   * Set before that stream's connection closes, so whoever sees the connection end can read it. A
+   * connection checks a route on one stream and then runs on the next, so an older stream's close
+   * says nothing about it.
+   */
+  val closedWith: Map<String, Any>? get() = synchronized(this) { closing }
+
   /** Starts taking connections on `port`, until `close`. */
   fun start() {
     thread(isDaemon = true, name = "parallax-relay-accept") {
@@ -161,11 +172,18 @@ class RelayBridge(url: String, private val token: String) {
   ) : WebSocketListener() {
     @Volatile private var socket: WebSocket? = null
     @Volatile private var joined = false
+    /** This stream's place in the bridge's order, once joined. */
+    private var stream = 0
     private val over = AtomicBoolean(false)
 
     override fun onMessage(webSocket: WebSocket, text: String) {
       if (joined) return
       if (text != "ready") return stopBeforeReady(webSocket, null)
+      stream = synchronized(this@RelayBridge) {
+        newest += 1
+        closing = null
+        newest
+      }
       joined = true
       socket = webSocket
       pipes.add(this)
@@ -182,8 +200,15 @@ class RelayBridge(url: String, private val token: String) {
       }
     }
 
+    /** The relay closed the stream, with its code and reason, which the newest stream keeps. */
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-      if (joined) end() else stopBeforeReady(webSocket, null)
+      if (!joined) return stopBeforeReady(webSocket, null)
+      if (!over.get()) {
+        val close = mutableMapOf<String, Any>("relay_code" to code)
+        if (reason.isNotEmpty()) close["relay_reason"] = reason
+        synchronized(this@RelayBridge) { if (newest == stream) closing = close }
+      }
+      end()
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {

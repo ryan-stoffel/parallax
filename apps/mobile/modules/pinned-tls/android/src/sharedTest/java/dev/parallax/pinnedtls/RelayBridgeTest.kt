@@ -35,6 +35,22 @@ class RelayBridgeTest {
   private val firstBytes = CopyOnWriteArrayList<Byte>()
   private val bridges = mutableListOf<RelayBridge>()
 
+  /** Host `idle`'s streams, which reach no host and stay open until a test closes them. */
+  private val idleStreams = CopyOnWriteArrayList<WebSocket>()
+  private val idleBytes = AtomicInteger()
+
+  /** A stream that says `ready`, counts what it's sent, and closes only when a test closes it. */
+  private val idle = object : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+      idleStreams.add(webSocket)
+      webSocket.send("ready")
+    }
+
+    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+      idleBytes.addAndGet(bytes.size)
+    }
+  }
+
   /** Joins the stream to the host on `port` and passes bytes both ways, after saying `ready`. */
   private fun join(port: Int) = object : WebSocketListener() {
     private lateinit var plxd: Socket
@@ -89,6 +105,7 @@ class RelayBridgeTest {
         if (action == "tickets") offlineTicketAsks.incrementAndGet()
         return refuse(503)
       }
+      if (hostKey == "idle") return MockResponse().withWebSocketUpgrade(idle)
       val port = when (hostKey) {
         Fixtures.HOST.id -> host.port
         "tls12" -> old.port
@@ -202,5 +219,40 @@ class RelayBridgeTest {
     assertNull(get(offline).status)
     assertEquals(503, offline.refused)
     assertEquals(0, offlineTicketAsks.get())
+  }
+
+  /** A connection through `through` whose stream has joined: the relay has had its first byte. */
+  private fun joined(through: RelayBridge): Socket {
+    val before = idleBytes.get()
+    val tcp = Socket("127.0.0.1", through.port)
+    tcp.soTimeout = 15_000
+    tcp.getOutputStream().write(through.secret + byteArrayOf(1))
+    val deadline = System.currentTimeMillis() + 15_000
+    while (idleBytes.get() == before) {
+      check(System.currentTimeMillis() < deadline) { "the stream never joined" }
+      Thread.sleep(10)
+    }
+    return tcp
+  }
+
+  @Test
+  fun relayCloseIsKeptForTheNewestStreamOnly() {
+    val through = bridge("/v1/hosts/idle/connect")
+    val older = joined(through)
+    val newer = joined(through)
+
+    // An older stream's close says nothing about the connection on the newer one.
+    idleStreams[0].close(4409, "older")
+    assertEquals(-1, older.getInputStream().read())
+    assertNull(through.closedWith)
+
+    // The newest stream's close is kept before its connection ends, for the connection log.
+    idleStreams[1].close(4409, "replaced")
+    assertEquals(-1, newer.getInputStream().read())
+    assertEquals(mapOf("relay_code" to 4409, "relay_reason" to "replaced"), through.closedWith)
+
+    // A newer stream starts clean.
+    joined(through).close()
+    assertNull(through.closedWith)
   }
 }
