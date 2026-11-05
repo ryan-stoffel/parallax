@@ -1,0 +1,92 @@
+name: Relay probe
+
+# Tests the deployed relay and a published nightly (PLX-1360), with scripts/bench/relay-probe.mjs.
+# A schedule tests the newest nightly, and release.yml calls this for each new nightly, whose notes
+# get the result. The numbers stay in the job summary, a 90-day artifact, and those notes. Without
+# PROBE_CLERK_REFRESH_TOKEN the signed-in part says so and skips, and everything else still runs.
+# With it, the repo variable PROBE_CLERK_USER_ID must name the test account, or that part fails
+# before registering anything. Only a failed check fails a run: a slow number doesn't. PLX-1385 has
+# how to add them.
+on:
+  schedule:
+    # Away from minute zero, when scheduled jobs pile up.
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to test. Empty tests the newest nightly."
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      PROBE_CLERK_REFRESH_TOKEN:
+        required: false
+      PROBE_SECRET_WRITER:
+        required: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # One at a time, since each uses the same test account and refresh token.
+    concurrency:
+      group: relay-probe
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            packages/plx
+            scripts/bench
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # The test account's token reaches only this step.
+      - name: Test the relay
+        env:
+          TAG: ${{ inputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PROBE_CLERK_REFRESH_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN }}
+          PROBE_CLERK_USER_ID: ${{ vars.PROBE_CLERK_USER_ID }}
+          PROBE_ROTATED_FILE: ${{ runner.temp }}/rotated-token
+        run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"}
+
+      # Clerk's docs don't say whether a refresh token changes on use. If it did, this keeps the
+      # next run signed in. The writer reaches only this step.
+      - name: Store a rotated refresh token
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.PROBE_SECRET_WRITER }}
+          GH_REPO: ${{ github.repository }}
+          ROTATED: ${{ runner.temp }}/rotated-token
+        run: |
+          if [ ! -s "$ROTATED" ]; then exit 0; fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::Clerk rotated the refresh token, and PROBE_SECRET_WRITER isn't set to store it. The next signed-in run will fail until relay-probe-enroll.mjs runs again (PLX-1385)."
+          else
+            gh secret set PROBE_CLERK_REFRESH_TOKEN < "$ROTATED"
+          fi
+          rm -f "$ROTATED"
+
+      - name: Keep the numbers
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: relay-probe
+          path: relay-probe
+          if-no-files-found: warn
+          retention-days: 90
