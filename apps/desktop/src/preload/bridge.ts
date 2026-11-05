@@ -579,6 +579,11 @@ export interface ParallaxBridge {
    */
   onConnectNotice(listener: (notice: ConnectNotice | null) => void): () => void;
   /**
+   * Calls `listener` with the account's computers that say what they've used of the relay's daily
+   * cap, now and on every change (PLX-1357). Returns the unsubscribe function.
+   */
+  onRelayUsage(listener: (hosts: RelayHost[]) => void): () => void;
+  /**
    * Opens Clerk's sign-in page in the system browser, or its sign-up page if `create`. Settles once
    * the browser signs the app in, another sign-in replaces it, or it times out. Resolves to an
    * error for people, or undefined.

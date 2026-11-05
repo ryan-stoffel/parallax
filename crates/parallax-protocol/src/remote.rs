@@ -117,6 +117,22 @@ pub struct RelayHost {
     pub online: bool,
     /// Whether it is the plxd that answered: this computer.
     pub this_computer: bool,
+    /// Its traffic against the relay's daily cap. An older relay leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub usage: Option<RelayUsage>,
+}
+
+/// A host's traffic through Parallax Relay today, as the relay counts it (PLX-1357).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayUsage {
+    /// The bytes its streams carried this UTC day, both ways together.
+    pub bytes: u64,
+    /// The bytes a day past which the relay refuses its streams.
+    pub limit: u64,
+    /// When the count starts again, in milliseconds since the epoch: the next 00:00 UTC.
+    pub resets_at: u64,
 }
 
 /// Params of `relay/register`: registers a host with Parallax Relay under the signed-in user.

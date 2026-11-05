@@ -750,6 +750,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
 
     onProfile: (listener) => (listener(null), () => {}),
     onConnectNotice: () => () => {},
+    onRelayUsage: () => () => {},
     signIn: async () => NOT_HERE,
     editProfile: async () => {},
     signOut: async () => {},

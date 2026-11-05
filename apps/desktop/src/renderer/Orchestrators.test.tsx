@@ -133,6 +133,7 @@ beforeEach(() => {
     onHostUpdate: () => () => {},
     onProfile: () => () => {},
     onConnectNotice: () => () => {},
+    onRelayUsage: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) =>

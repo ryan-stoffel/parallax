@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import type { ConnectNotice, ConnectionState, Profile } from "../preload/bridge";
-import type { AgentRun, InboxItem, Thread } from "../protocol/generated/protocol";
+import type { AgentRun, InboxItem, RelayHost, Thread } from "../protocol/generated/protocol";
 import { attentionOf, type Attention } from "./attention";
 import { onConnectionShown, useShownConnections } from "./ConnectionStatus";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
-import { dismiss, notify, type Notice } from "./notifications";
+import { dismiss, notify, update, type Notice } from "./notifications";
+import { relayCapNotice } from "./relayCap";
 import type { HostThreads } from "./Sidebar";
 import { asksOf, waitingOf } from "./threads";
 import { clockOptions } from "./prefs";
@@ -336,6 +337,46 @@ export function useConnectNotices() {
       }),
     [],
   );
+}
+
+/** What to say about `host`'s traffic through Parallax Relay today, if anything. */
+export const relayCapOf = (host: RelayHost) =>
+  relayCapNotice(host.name, host.usage, (at) =>
+    new Date(at).toLocaleTimeString(locale(), clockOptions()),
+  );
+
+/**
+ * A notice when a computer on the account passes 80% of its relay's daily cap, another when it
+ * reaches it, and none once it resets (PLX-1357). A notice the user closed stays closed until the
+ * next of those, while one still shown follows the count.
+ */
+export function useRelayCapNotices() {
+  useEffect(() => {
+    const reached = new Map<string, boolean>();
+    return window.parallax.onRelayUsage((hosts) => {
+      const near = new Set<string>();
+      for (const host of hosts) {
+        const cap = relayCapOf(host);
+        if (!cap) continue;
+        near.add(host.hostId);
+        const notice = {
+          key: `relayCap:${host.hostId}`,
+          tone: cap.reached ? "error" : "info",
+          sticky: true,
+          title: cap.title,
+          body: cap.body,
+        } as const;
+        if (reached.get(host.hostId) === cap.reached) update(notice);
+        else notify(notice);
+        reached.set(host.hostId, cap.reached);
+      }
+      for (const hostId of reached.keys())
+        if (!near.has(hostId)) {
+          reached.delete(hostId);
+          dismiss(`relayCap:${hostId}`);
+        }
+    });
+  }, []);
 }
 
 /** A notification when the user signs in to or out of their Parallax account (0067). */

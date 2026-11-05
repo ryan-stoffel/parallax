@@ -35,6 +35,7 @@ const HOOK_TIMEOUT = 10_000;
 export const MAX_STREAMS = 16;
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
 /** How many webhook URLs plxd may list. */
 const MAX_HOOK_URLS = 1_000;
 /** How long the relay waits for a webhook's body. */
@@ -151,20 +152,27 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * Adds `bytes` to today's traffic, saved at once, and answers whether the host is still within
-   * [`MAX_DAILY_BYTES`]. Streams report every [`REPORT_BYTES`] and when they close, so this saves
-   * no more often than 0068's host object did.
+   * [`MAX_DAILY_BYTES`]. Streams report every [`REPORT_BYTES`], within [`REPORT_AFTER`] of a frame,
+   * and when they close, so this saves about as often as 0068's host object did, plus at most once
+   * per [`REPORT_AFTER`] for each stream carrying frames.
    */
   private async count(bytes: number): Promise<boolean> {
+    const traffic = await this.today();
+    if (bytes > 0) {
+      traffic.bytes += bytes;
+      await this.ctx.storage.put("traffic", traffic);
+    }
+    return traffic.bytes <= MAX_DAILY_BYTES;
+  }
+
+  /** This UTC day's traffic, which starts again from nothing at 00:00 UTC. */
+  private async today() {
     const day = new Date().toISOString().slice(0, 10);
     if (this.traffic?.day !== day) {
       const saved = await this.ctx.storage.get<{ day: string; bytes: number }>("traffic");
       this.traffic = { day, bytes: saved?.day === day ? saved.bytes : 0 };
     }
-    if (bytes > 0) {
-      this.traffic.bytes += bytes;
-      await this.ctx.storage.put("traffic", this.traffic);
-    }
-    return this.traffic.bytes <= MAX_DAILY_BYTES;
+    return this.traffic;
   }
 
   private async streams() {
@@ -276,11 +284,18 @@ export class HostRelay extends DurableObject<Env> {
     return true;
   }
 
-  /** The host as `user` sees it in their list, or null when it isn't theirs. */
+  /**
+   * The host as `user` sees it in their list, or null when it isn't theirs. `usage` is what clients
+   * warn from: past `limit`, [`admit`] answers `daily_limit` until `resetsAt`, in ms since the epoch.
+   * Its `bytes` are what streams reported, so they can be short by under [`REPORT_BYTES`] per open
+   * stream, for at most [`REPORT_AFTER`]. Asking each stream's object would wake it on every list.
+   */
   async status(user: string) {
     const owner = await this.owner();
     if (owner?.user !== user) return null;
-    return { hostId: owner.hostId, name: owner.name, online: !!this.host() };
+    const { day, bytes } = await this.today();
+    const usage = { bytes, limit: MAX_DAILY_BYTES, resetsAt: Date.parse(day) + DAY_MS };
+    return { hostId: owner.hostId, name: owner.name, online: !!this.host(), usage };
   }
 
   /** Whether `user` may open a stream to this host now, which counts against `LIMITS.opens`. */

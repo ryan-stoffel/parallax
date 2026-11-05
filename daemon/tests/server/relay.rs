@@ -295,6 +295,10 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
     let this = listed.iter().find(|h| h.this_computer);
     let this = this.unwrap_or_else(|| panic!("{listed:?}"));
     assert!(this.online, "{listed:?}");
+    assert!(
+        this.usage.as_ref().is_some_and(|usage| usage.limit > 0),
+        "{listed:?}"
+    );
     let left = client
         .call::<RelayRemove>(RelayRemoveParams {
             token: token.clone(),

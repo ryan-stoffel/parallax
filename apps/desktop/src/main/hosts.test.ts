@@ -1128,6 +1128,54 @@ test("a joined key that isn't listed or marked waits for one click, with no sett
   }
 });
 
+test("each read's relay usage reaches the windows when it changes, and an older relay's is nothing", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { account } = signedIn();
+    fake.answers.set("access/get", accessState([]));
+    const local = await start({}, account);
+    local.set(connected({ accountAccess: {} }));
+    const host = { hostId: buildBox, name: "box", online: true, thisComputer: false };
+    const used = { ...host, usage: { bytes: 2, limit: 10, resetsAt: 1_000 } };
+    fake.answers.set("relay/hosts", { result: { hosts: [host], removed: [] } });
+    const discover = fake.handlers.get("parallax:discoverAccount")!;
+
+    await discover();
+    expect(fake.sent.get("parallax:relayUsage")).toBeUndefined();
+    expect(await fake.handlers.get("parallax:relayUsage")!()).toEqual([]);
+
+    fake.answers.set("relay/hosts", { result: { hosts: [used], removed: [] } });
+    await discover();
+    expect(fake.sent.get("parallax:relayUsage")).toEqual([used]);
+    expect(await fake.handlers.get("parallax:relayUsage")!()).toEqual([used]);
+
+    // An older read's answer that lands after a newer one's changes nothing.
+    const spent = { ...host, usage: { bytes: 11, limit: 10, resetsAt: 1_000 } };
+    let answerSlowly: (answer: object) => void = () => {};
+    fake.answers.set("relay/hosts", () => new Promise((resolve) => (answerSlowly = resolve)));
+    const slow = discover();
+    await vi.advanceTimersByTimeAsync(1);
+    const slowAnswer = answerSlowly;
+    fake.answers.set("relay/hosts", { result: { hosts: [spent], removed: [] } });
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fake.sent.get("parallax:relayUsage")).toEqual([spent]);
+    slowAnswer({ result: { hosts: [used], removed: [] } });
+    await slow;
+    expect(fake.sent.get("parallax:relayUsage")).toEqual([spent]);
+    expect(await fake.handlers.get("parallax:relayUsage")!()).toEqual([spent]);
+
+    // Signed out, nothing stays.
+    account.accessToken = async () => undefined as unknown as string;
+    await discover();
+    expect(fake.sent.get("parallax:relayUsage")).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
 test("an outage says what's down and changes no setting; a list naming nothing keeps every computer", async () => {
   vi.useFakeTimers();
   fake.answers.clear();

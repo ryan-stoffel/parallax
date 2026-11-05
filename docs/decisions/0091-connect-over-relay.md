@@ -103,7 +103,7 @@ That leaves the trip to the relay and the TLS handshake inside it, about what a 
 
 ### Limits
 
-- 0068's ceilings hold: 10 hosts per user, 16 open streams and 2 GiB a day per host. Phones and browsers aren't hosts, so they don't count, as in T3. The LAN route keeps most traffic at home off the relay.
+- 0068's ceilings hold: 10 hosts per user, 16 open streams and 2 GiB a day per host. Phones and browsers aren't hosts, so they don't count, as in T3. The LAN route keeps most traffic at home off the relay. Amended 2026-11-04 (PLX-1357): `GET /v1/hosts` gives each host `usage`, its bytes today, the limit, and `resetsAt`, the next 00:00 UTC, when the count starts again. plxd passes it on in `relay/hosts`, and the desktop app and the phone read it from the list they already read every 15 seconds. Both warn from 80% of the cap, and past it say when it resets and that the LAN still works. The `daily_limit` refusal is unchanged, since the list already says this and a refusal only reaches a client that dials. An older relay sends no `usage`, and the apps say nothing. So a slow stream can't keep `usage` short, a stream with counted frames also reports within 5 minutes of the first, on top of every 8 MiB and when it closes. `bytes` can be short by under 8 MiB per open stream for at most that long, and an idle stream reports nothing, so it stays hibernated.
 
 ## Work
 

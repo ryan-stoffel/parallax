@@ -273,6 +273,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // the window's focus and the network do too, and `lookForNewComputers` while a window shows (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
   ipcMain.handle("parallax:connectNotice", () => connectNotice());
+  ipcMain.handle("parallax:relayUsage", () => relayUsage);
   ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
@@ -1867,18 +1868,41 @@ const outageWatch = new NoticeWatch<Outage>(showNotice);
 /** Reads of the account's list that lack this computer's key, with no mark that it was removed. */
 const notListedWatch = new NoticeWatch<"notListed">(showNotice);
 
+/** The account's computers whose last read said what they've used of the relay's daily cap. */
+let relayUsage: RelayHost[] = [];
+/** Reads of the account's list started, and the newest whose answer was shown. */
+let listReads = 0;
+let shownRead = 0;
+/**
+ * Tells the windows what read `read` of the account's list says of each computer's cap, when that
+ * changed. Discovery and the timer can read at once, and an older answer that lands last would
+ * lower a warning and bring back one the user closed, so it's dropped.
+ */
+function showRelayUsage(read: number, hosts: RelayHost[]) {
+  if (read < shownRead) return;
+  shownRead = read;
+  const next = hosts.filter((host) => host.usage);
+  if (JSON.stringify(next) === JSON.stringify(relayUsage)) return;
+  relayUsage = next;
+  broadcast("parallax:relayUsage", relayUsage);
+}
+
 /**
  * The account's list from the local plxd, or undefined when it can't be read. A failure here never
  * changes anything saved, and direct routes keep being dialed. It only says what's down. With no
  * network at all, nothing is. Only reads with a plxd to ask count as reads.
  */
 async function readAccountList(): Promise<RelayHostsResult | undefined> {
+  const read = ++listReads;
   const token = await account?.accessToken();
   if (!token) {
     const unreachable = account?.clerkUnreachable();
     outageWatch.read(net.isOnline() && unreachable ? "clerk" : undefined);
     // Signed out, so no account to be on. With Clerk down, it's unknown, so it stays as it was.
-    if (!unreachable) notListedWatch.read(undefined);
+    if (!unreachable) {
+      notListedWatch.read(undefined);
+      showRelayUsage(read, []);
+    }
     return undefined;
   }
   const local = connections.get("local");
@@ -1889,6 +1913,7 @@ async function readAccountList(): Promise<RelayHostsResult | undefined> {
     return undefined;
   }
   outageWatch.read(undefined);
+  showRelayUsage(read, answer.result.hosts);
   notListedWatch.read(
     joinedNotListed(answer.result, settings.joinedRelay, tokenSubject(token))
       ? "notListed"

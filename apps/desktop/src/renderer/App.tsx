@@ -84,6 +84,7 @@ import { WorkingMark } from "./AttentionMark";
 import {
   useAccountAlarms,
   useConnectNotices,
+  useRelayCapNotices,
   useConnectionAlarms,
   useOutdatedAlarms,
   useHostUpdateAlarms,
@@ -733,6 +734,7 @@ export function App() {
   useHostUpdateAlarms(hosts);
   useAccountAlarms();
   useConnectNotices();
+  useRelayCapNotices();
   useUpdateAlarms();
   const needsYou = useNeedsYouAlarm(listed, (hostId, orchestratorId) =>
     openOnHost(hostId, { kind: "orchestrator", orchestratorId }),
