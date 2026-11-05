@@ -37,6 +37,7 @@ const render = (focused: number) =>
         maximized={false}
         closable
         hideTabs={false}
+        tabs
         onSelectTab={() => {}}
         onCloseTab={() => {}}
         onNewTab={() => {}}
@@ -97,4 +98,35 @@ test("a press with another button holds nothing, as its release may never come",
   press(2);
   render(1);
   expect(panel()).toEqual(["b", "second"]);
+});
+
+test("with tabs off, a maximized split's header still lists each pane", () => {
+  const titled = items.map((i) => ({
+    ...i,
+    tabs: [{ id: `tab-${i.paneId}`, title: `Thread ${i.paneId}`, icon: null }],
+    active: `tab-${i.paneId}`,
+  }));
+  act(() =>
+    root.render(
+      <SplitTiles
+        items={titled}
+        focused={0}
+        cuts={{ x: 0.5, y: 0.5 }}
+        onResize={() => {}}
+        maximized
+        closable
+        hideTabs={false}
+        onSelectTab={() => {}}
+        onCloseTab={() => {}}
+        onNewTab={() => {}}
+        onDropOnTabs={() => {}}
+        tabs={false}
+      />,
+    ),
+  );
+  const header = body().querySelector('[role="tablist"][aria-label="Threads"]')!;
+  expect([...header.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual([
+    "Thread a",
+    "Thread b",
+  ]);
 });

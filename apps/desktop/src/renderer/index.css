@@ -771,6 +771,43 @@ body {
   }
 }
 
+/* With Settings › Beta's Tabs off (App.tsx), the workspace is one surface beside the sidebar,
+   including an expanded side panel. */
+.workspace-shell[data-sidebar-open="true"] {
+  border-radius: 16px 0 0 16px;
+  box-shadow: -6px 0 18px -8px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 30%));
+}
+.workspace-shell[data-sidebar-open="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: inherit;
+}
+/* Underlap the rounded edge by a pixel so its antialiasing never exposes a seam. */
+:root:not(.tabs-beta) #sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0 -24px 0 auto;
+  width: 24px;
+  pointer-events: none;
+  background: inherit;
+  mask:
+    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top left / 17px 17px no-repeat,
+    radial-gradient(circle at 16px 1px, transparent 15px, #000 16px) bottom left / 17px 17px
+      no-repeat;
+}
+:root.nightly:not(.tabs-beta) #sidebar > .night-sky {
+  right: -24px;
+  mask:
+    linear-gradient(#000 0 0) left / calc(100% - 24px) 100% no-repeat,
+    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top right 7px / 17px 17px
+      no-repeat;
+}
+
 /* A pane's card and its shown tab (ThreadTabs.tsx) are one outline, which shows on a window the
    same color as the card, as dark mode's true black is. It's a solid color, so overlapping strokes
    don't brighten where they meet. The tab's foot covers the card's top edge. Its top and sides

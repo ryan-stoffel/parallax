@@ -5,6 +5,7 @@
 // tab at most.
 
 import type { Selection } from "./App";
+import { stored } from "./stored";
 import {
   allCells,
   cellsFilled,
@@ -44,6 +45,14 @@ export interface Workspace {
   /** All the panes in one tile, the focused one shown. */
   maximized?: boolean;
 }
+
+/**
+ * Whether panes hold tabs, in a row above each pane's card. Off, the default, each pane shows one
+ * view under the classic top bar and tile headers (`oneTabEach`). Settings › Beta switches it.
+ */
+export const threadTabs = stored<boolean>("parallax.beta.tabs", false, (raw, fallback) =>
+  typeof raw === "boolean" ? raw : fallback,
+);
 
 let lastId = 0;
 const newTab = (hostId: string, selection: Selection): ThreadTab => ({
@@ -366,4 +375,13 @@ export function stepTab(state: Workspace, step: number): Workspace {
   const tabs = allTabs(state);
   const at = tabs.indexOf(activeTab(state));
   return selectTab(state, tabs[(at + step + tabs.length) % tabs.length]!.id);
+}
+
+/**
+ * Each pane with only its shown tab, as with tabs off (`threadTabs`), so opening a view in a pane
+ * replaces what it showed. `state` itself when that's already so.
+ */
+export function oneTabEach(state: Workspace): Workspace {
+  if (state.panes.every((p) => p.tabs.length === 1)) return state;
+  return { ...state, panes: state.panes.map((p) => ({ ...p, tabs: [shownTab(p)] })) };
 }

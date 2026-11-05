@@ -68,7 +68,7 @@ export const settingsSections: {
     id: "beta",
     name: "Beta",
     group: "System",
-    keywords: "experimental preview labs early features flask",
+    keywords: "experimental preview labs early features flask tabs cards",
   },
   {
     id: "about",

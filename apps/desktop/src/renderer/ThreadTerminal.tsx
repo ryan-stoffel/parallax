@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "rea
 
 import { isRepository, noRepo, type ThreadsState, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
+import { threadTabs } from "./tabState";
 
 // xterm.js loads with the first terminal shown.
 const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
@@ -216,6 +217,7 @@ export function TerminalDrawer({
   deleted: (folder: ThreadFolder) => boolean;
   onClose: () => void;
 }) {
+  const tabbed = threadTabs.use();
   const [height, setHeight] = useState(280);
   const drag = useRef<{ y: number; height: number }>(undefined);
   const resize = (next: number) =>
@@ -280,7 +282,11 @@ export function TerminalDrawer({
       aria-label="Terminal"
       hidden={!open}
       style={{ height }}
-      className="pane-edge pane-card relative mx-1.5 mb-1.5 flex shrink-0 flex-col rounded-prompt bg-pane"
+      className={
+        tabbed
+          ? "pane-edge pane-card relative mx-1.5 mb-1.5 flex shrink-0 flex-col rounded-prompt bg-pane"
+          : "relative flex shrink-0 flex-col border-t border-border bg-background"
+      }
     >
       <div
         role="separator"
