@@ -23,6 +23,7 @@ import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/ren
 import type { AccessState, HostUpdateResult, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import type { RelayCapNotice } from "../../desktop/src/renderer/relayCap";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
+import { logAppEvent } from "./connectionLog";
 import { lacks } from "./access";
 import { listHosts, relayCap, type AccountHosts, type Gate, type Listed } from "./accountHosts";
 import { allowThisPhone, askToAllow, confirmDevice, setUpComputer, showConfirm, showWaiting } from "./accountPrompts";
@@ -449,8 +450,15 @@ export function FleetProvider({
       retries.current.clear();
       void discover();
     };
-    const awake = AppState.addEventListener("change", (s) => s === "active" && again());
-    const network = onNetwork(again);
+    const awake = AppState.addEventListener("change", (s) => {
+      // So a drop the background caused can be told from the rest.
+      logAppEvent("app", { state: s });
+      if (s === "active") again();
+    });
+    const network = onNetwork(() => {
+      logAppEvent("network", { event: "changed" });
+      again();
+    });
     void discover();
     // A computer set up elsewhere changes nothing here. iOS suspends this in the background.
     const look = setInterval(() => void discover(), LOOK_MS);

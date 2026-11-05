@@ -85,6 +85,11 @@ pub struct InitializeResult {
     pub protocol: u32,
     /// plxd's release version.
     pub plxd: String,
+    /// Changes each time plxd starts, so a client that reconnects can tell whether it restarted.
+    /// A plxd from before this field sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub start_id: Option<String>,
     /// Identifies plxd's event log. It changes only when the log starts over, and then every
     /// `seq` the client holds is meaningless.
     pub log_id: LogId,

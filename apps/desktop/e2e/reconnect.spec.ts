@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -103,6 +103,16 @@ test("a dropped connection resumes after the last event, with no fresh snapshot"
   process.kill(attach!, "SIGKILL");
   await expect.poll(state).not.toBe("connected");
   await expect.poll(state).toBe("connected");
+
+  // The connection log says why it dropped and for how long.
+  const userData = await app.evaluate(({ app }) => app.getPath("userData"));
+  const log = () => readFileSync(path.join(userData, "logs", "connection.log"), "utf8");
+  expect(log()).toMatch(
+    /client_disconnect host=local route=local reason=transport_closed lived_ms=\d+ signal=SIGKILL/,
+  );
+  await expect
+    .poll(log)
+    .toMatch(/client_connect host=local route=local .*down_ms=\d+ .*plxd_restarted=false/);
 
   // The deltas streamed while it was down arrive as events, with every one before them kept.
   await expect.poll(async () => (await sent()).includes("event")).toBe(true);

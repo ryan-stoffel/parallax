@@ -42,6 +42,8 @@ export type SettingsScreens = {
   PhoneSettings: { page: PhonePage };
   /** The app's version and links. */
   About: undefined;
+  /** This phone's connection events, to read or copy. */
+  ConnectionLog: undefined;
   Usage: undefined;
   /** The Parallax account, as the desktop's Account dialog has it. */
   Account: undefined;

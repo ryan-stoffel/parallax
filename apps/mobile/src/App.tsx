@@ -55,7 +55,7 @@ import { OrchestratorInboxScreen } from "./OrchestratorInbox";
 import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
 import { ThreadFilesScreen } from "./ThreadFiles";
-import { AboutScreen, AddComputerScreen, ComputerScreen, phonePages, PhoneSettingsScreen, SettingsScreen } from "./Settings";
+import { AboutScreen, AddComputerScreen, ComputerScreen, ConnectionLogScreen, phonePages, PhoneSettingsScreen, SettingsScreen } from "./Settings";
 import { ComputerRoutesScreen } from "./SettingsRoutes";
 import { ComputerSettingsScreen } from "./SettingsComputer";
 import { ProviderScreen } from "./SettingsProviders";
@@ -402,6 +402,11 @@ function SettingsSheet() {
       />
       <SettingsStack.Screen name="Account" component={AccountScreen} options={{ title: "Account" }} />
       <SettingsStack.Screen name="About" component={AboutScreen} options={{ title: "About" }} />
+      <SettingsStack.Screen
+        name="ConnectionLog"
+        component={ConnectionLogScreen}
+        options={{ title: "Connection log" }}
+      />
       {/* Its refresh button is the screen's own (Usage.tsx). */}
       <SettingsStack.Screen name="Usage" component={UsageScreen} options={{ title: "Usage" }} />
       <SettingsStack.Screen name="Computer" component={ComputerScreen} />

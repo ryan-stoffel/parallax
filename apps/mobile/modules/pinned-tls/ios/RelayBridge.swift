@@ -33,6 +33,15 @@ final class RelayBridge {
   /// Set before the refused connection closes, so the request that fails can read it.
   var refused: Int? { lock.withLock { refusal } }
 
+  private var closing: [String: Any]?
+  private var newest = 0
+
+  /// How the relay closed the newest stream, if it has, for the connection log. Set before that
+  /// stream's connection closes, so whoever sees the connection end can read it. A connection
+  /// checks a route on one stream and then runs on the next, so an older stream's close says
+  /// nothing about it.
+  var closedWith: [String: Any]? { lock.withLock { closing } }
+
   init(url: URL, token: String) throws {
     let parameters = NWParameters.tcp
     // Bound to loopback, so only this device reaches it. `acceptLocalOnly` would also reset every
@@ -103,7 +112,15 @@ final class RelayBridge {
         socket.cancel(with: .normalClosure, reason: nil)
         return refused((socket.response as? HTTPURLResponse)?.statusCode)
       }
-      let pipe = Pipe(tcp: connection, socket: socket, queue: self?.queue ?? .main)
+      let stream = self?.lock.withLock { () -> Int in
+        self?.newest += 1
+        self?.closing = nil
+        return self?.newest ?? 0
+      }
+      let pipe = Pipe(tcp: connection, socket: socket, queue: self?.queue ?? .main) { [weak self] close in
+        guard let self else { return }
+        lock.withLock { if self.newest == stream { self.closing = close } }
+      }
       self?.queue.async {
         self?.pipes.removeAll { $0.ended }
         self?.pipes.append(pipe)
@@ -146,11 +163,17 @@ private final class Pipe {
   let queue: DispatchQueue
   private let lock = NSLock()
   private var done = false
+  /// Hears the relay's close code and reason, when it sent them.
+  private let closed: ([String: Any]) -> Void
 
-  init(tcp: NWConnection, socket: URLSessionWebSocketTask, queue: DispatchQueue) {
+  init(
+    tcp: NWConnection, socket: URLSessionWebSocketTask, queue: DispatchQueue,
+    closed: @escaping ([String: Any]) -> Void
+  ) {
     self.tcp = tcp
     self.socket = socket
     self.queue = queue
+    self.closed = closed
   }
 
   var ended: Bool { lock.withLock { done } }
@@ -194,6 +217,15 @@ private final class Pipe {
       case .success:
         downstream()
       case .failure:
+        // `invalid` is URLSession's name for no close frame yet. Once ended, the close is this
+        // side's own.
+        if !ended, socket.closeCode != .invalid {
+          var close: [String: Any] = ["relay_code": socket.closeCode.rawValue]
+          if let reason = socket.closeReason.flatMap({ String(data: $0, encoding: .utf8) }) {
+            close["relay_reason"] = reason
+          }
+          closed(close)
+        }
         end()
       }
     }

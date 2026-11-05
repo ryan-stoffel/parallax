@@ -191,6 +191,12 @@ public class PinnedTlsModule: Module {
       lock.withLock { bridges[id] }?.refused
     }
 
+    /// How the relay last closed one of bridge `id`'s streams, in the connection log's names, or
+    /// nil if it sent no close frame.
+    Function("relayClosedWith") { (id: String) -> [String: Any]? in
+      lock.withLock { bridges[id] }?.closedWith
+    }
+
     /// Closes relay bridge `id` and every stream through it.
     Function("relayClose") { (id: String) in
       lock.withLock { bridges.removeValue(forKey: id) }?.close()

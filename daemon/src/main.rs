@@ -652,9 +652,21 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             return exit(&error);
         }
     };
+    bridge_dialed(dialed, report).await
+}
+
+/// Bridges stdio to a dialed connection until it ends, and reports its route and how it ended.
+async fn bridge_dialed(dialed: remote::Dialed, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
     // The app reads this line to know when it's on the relay, and so re-checks direct routes.
     report(&format!("connected over {}", dialed.route));
-    match remote::bridge(dialed.socket, tokio::io::stdin(), tokio::io::stdout()).await {
+    let bridged = remote::bridge(dialed.socket, tokio::io::stdin(), tokio::io::stdout()).await;
+    // The app logs this with the disconnect (connection.ts).
+    if dialed.route.starts_with(remote::RELAY_ROUTE)
+        && let Some(end) = plxd::relay::client_stream_end()
+    {
+        report(&format!("relay stream ended {end}"));
+    }
+    match bridged {
         Ok(()) => 0,
         Err(error) => {
             report(&format!("the connection failed: {error}"));

@@ -1469,6 +1469,11 @@ export type InitializeResult = {
 	 */
 	plxd: string,
 	/**
+	 * Changes each time plxd starts, so a client that reconnects can tell whether it restarted.
+	 * A plxd from before this field sends none.
+	 */
+	startId?: string,
+	/**
 	 * Identifies plxd's event log. It changes only when the log starts over, and then every
 	 * `seq` the client holds is meaningless.
 	 */

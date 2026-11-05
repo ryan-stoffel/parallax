@@ -80,6 +80,7 @@ pub(crate) fn initialize(
     let result = InitializeResult {
         protocol: version,
         plxd: crate::version().to_owned(),
+        start_id: Some(daemon.start_id.clone()),
         log_id: daemon.log.id(),
         capabilities: capabilities_advertised(daemon.orchestrator_computer),
         max_frame_bytes: u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX),

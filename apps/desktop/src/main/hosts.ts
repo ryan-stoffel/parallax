@@ -2504,7 +2504,7 @@ async function startOver(): Promise<string | undefined> {
   for (const id of computers) {
     setAccess(id, undefined);
     if (proof.allowed.has(relayIdOf(id) ?? "")) typedOnly.add(id);
-    connections.get(id)?.reconnect();
+    connections.get(id)?.reconnect("new_device_key");
   }
   void askAsNewDevice(
     computers,

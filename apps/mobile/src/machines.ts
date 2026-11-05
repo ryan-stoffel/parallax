@@ -9,10 +9,12 @@ import { File } from "expo-file-system";
 
 import type { ConnectionState, ParallaxBridge } from "../../desktop/src/preload/bridge";
 import { inOrder, routesAhead, type RouteChoices } from "../../desktop/src/preload/routeList";
+import { ConnectionLog, routeKind } from "../../desktop/src/protocol/connectionLog";
 import { forgetConnection } from "../../desktop/src/renderer/ConnectionStatus";
 import { WebHost } from "../../desktop/src/renderer/webBridge";
 import { privateFile, type PinnedSocket } from "../modules/pinned-tls";
 import type { AccountHosts, Gate } from "./accountHosts";
+import { writeConnectionLine } from "./connectionLog";
 import { loadSaved, pairedSocket } from "./host";
 import { ordered, RECHECK_MS } from "./routes";
 import { pairedId, upgraded, type Machine, type Setup } from "./setup";
@@ -61,6 +63,7 @@ interface Link {
   recheck?: ReturnType<typeof setInterval>;
   /** The route a re-check found, which the next open dials alone. */
   moveTo?: string;
+  log: ConnectionLog;
 }
 
 /** The phone's connections, one `WebHost` per computer, and the bridge the shared hooks use. */
@@ -104,8 +107,11 @@ export class Fleet {
     if (m.account && !this.account?.hosts.mayConnect(m.account.hostId))
       return this.account?.gated(m.id, { kind: "setup" });
     if (!m.account && !m.paired) return;
-    const open = m.account ? () => this.openAccount(m.id) : () => pairedSocket(m.paired!);
-    const host = new WebHost(open, () => this.signedOut(m));
+    const log = new ConnectionLog(writeConnectionLine, m.name);
+    const open = m.account
+      ? () => this.openAccount(m.id, log)
+      : () => pairedSocket(m.paired!, (route) => (log.route = routeKind(route)));
+    const host = new WebHost(open, () => this.signedOut(m), log);
     // WebHost names its one host `local`; here each is its computer's id.
     host.stateListeners.add((_, state) => {
       for (const listener of this.listeners) listener(m.id, state);
@@ -133,10 +139,10 @@ export class Fleet {
   }
 
   /** Opens the account computer `id`'s socket, racing its routes (accountHosts.ts). */
-  private async openAccount(id: string): Promise<WebSocket | { error: string }> {
+  private async openAccount(id: string, log: ConnectionLog): Promise<WebSocket | { error: string }> {
     const m = this.machines.get(id)!;
     const account = this.account!;
-    const link = this.links.get(id) ?? { failedAt: {} };
+    const link = this.links.get(id) ?? { failedAt: {}, log };
     this.links.set(id, link);
     const only = link.moveTo;
     link.moveTo = undefined;
@@ -158,6 +164,8 @@ export class Fleet {
     const { socket, route } = opened;
     link.route = route;
     link.socket = socket;
+    log.route = routeKind(route);
+    log.detail = () => socket.relayEnd ?? {};
     this.keepChecking(id, link);
     return socket as unknown as WebSocket;
   }
@@ -184,6 +192,7 @@ export class Fleet {
     const better = await this.account.hosts.recheck(m.account.hostId, m.account, link.route, link.failedAt);
     if (better && link.socket === socket) {
       link.moveTo = better;
+      link.log.expect("better_route");
       this.reopen(id, link, socket);
     }
   }
@@ -218,8 +227,10 @@ export class Fleet {
       link.moveTo = undefined;
     }
     if (!link?.socket || !link.route) return void this.hosts.get(id)?.retry();
-    if (!ordered(account.hostId, account).includes(link.route))
+    if (!ordered(account.hostId, account).includes(link.route)) {
+      link.log.expect("route_removed");
       return this.reopen(id, link, link.socket);
+    }
     this.keepChecking(id, link);
     void this.recheck(id);
   }

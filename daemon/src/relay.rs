@@ -46,7 +46,7 @@ use rustls::pki_types::ServerName;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, DuplexStream};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::{self, Instant, MissedTickBehavior};
 use tokio_tungstenite::WebSocketStream;
@@ -509,15 +509,62 @@ impl Keepalive {
     }
 }
 
+/// How the relay's end of a stream ended, when it ended first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StreamEnd {
+    /// A close frame's code and reason, or no code when the WebSocket ended without one.
+    Closed {
+        /// The close code.
+        code: Option<u16>,
+        /// The close reason.
+        reason: String,
+    },
+    /// The WebSocket failed. A transport error, with no bytes of the stream in it.
+    Failed(String),
+}
+
+/// `plxd dial` prints this, and the app parses it (`relayEnd` in the app's connection.ts).
+impl std::fmt::Display for StreamEnd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Closed {
+                code: Some(code),
+                reason,
+            } => write!(f, "code={code} reason={reason:?}"),
+            Self::Closed { code: None, .. } => f.write_str("reason=\"no close frame\""),
+            Self::Failed(error) => write!(f, "error={error:?}"),
+        }
+    }
+}
+
+pub(crate) type EndSlot = Arc<Mutex<Option<StreamEnd>>>;
+
+fn keep(slot: &EndSlot, end: StreamEnd) {
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(end);
+}
+
 /// Joins a WebSocket's binary frames to a byte stream: what's written to the answer goes out in
 /// frames, and frames come out of it. Either side's end ends both, as does `keepalive` finding the
-/// socket dead. A client has its own heartbeat, so needs none.
-fn pipe(socket: WebSocketStream<Stream>, mut keepalive: Option<Keepalive>) -> DuplexStream {
+/// socket dead. A client has its own heartbeat, so needs none. Why the stream ended goes in `end`
+/// before the byte stream ends, so whoever reads the stream's end can read that.
+fn pipe(
+    socket: WebSocketStream<Stream>,
+    mut keepalive: Option<Keepalive>,
+    end: EndSlot,
+) -> DuplexStream {
     let (ours, theirs) = tokio::io::duplex(64 * 1024);
     tokio::spawn(async move {
         let (mut sink, mut frames) = socket.split();
         let (mut reader, mut writer) = tokio::io::split(theirs);
         let heard = keepalive.as_ref().map(|k| Arc::clone(&k.heard));
+        let failed = |error: tungstenite::Error| {
+            keep(&end, StreamEnd::Failed(error.to_string()));
+            io::Error::other(error)
+        };
+        let gave_up = |error: io::Error| {
+            keep(&end, StreamEnd::Failed(error.to_string()));
+            error
+        };
         let outgoing = async {
             let mut buffer = vec![0; 16 * 1024];
             loop {
@@ -533,28 +580,42 @@ fn pipe(socket: WebSocketStream<Stream>, mut keepalive: Option<Keepalive>) -> Du
                         read => Message::binary(buffer[..read].to_vec()),
                     },
                     due = due => {
-                        due?;
+                        due.map_err(gave_up)?;
                         Message::Ping(tungstenite::Bytes::new())
                     }
                 };
                 time::timeout(STREAM_SEND, sink.send(frame))
-                    .await?
-                    .map_err(io::Error::other)?;
+                    .await
+                    .map_err(|elapsed| gave_up(elapsed.into()))?
+                    .map_err(failed)?;
             }
             let _ = sink.close().await;
             Ok::<_, io::Error>(())
         };
         let incoming = async {
+            let mut ended = StreamEnd::Closed {
+                code: None,
+                reason: String::new(),
+            };
             while let Some(frame) = frames.next().await {
                 if let Some(heard) = &heard {
                     heard.store(true, Ordering::Relaxed);
                 }
-                match frame.map_err(io::Error::other)? {
+                match frame.map_err(failed)? {
                     Message::Binary(bytes) => writer.write_all(&bytes).await?,
-                    Message::Close(_) => break,
+                    Message::Close(frame) => {
+                        if let Some(frame) = frame {
+                            ended = StreamEnd::Closed {
+                                code: Some(frame.code.into()),
+                                reason: frame.reason.to_string(),
+                            };
+                        }
+                        break;
+                    }
                     _ => {}
                 }
             }
+            keep(&end, ended);
             writer.shutdown().await
         };
         // `incoming` first, so an answer that's waiting counts before `outgoing` judges a ping.
@@ -568,6 +629,23 @@ fn pipe(socket: WebSocketStream<Stream>, mut keepalive: Option<Keepalive>) -> Du
         }
     });
     ours
+}
+
+/// How this process's last client stream through the relay ended, for `plxd dial` to report.
+static CLIENT_STREAM_END: OnceLock<EndSlot> = OnceLock::new();
+
+fn client_slot() -> EndSlot {
+    Arc::clone(CLIENT_STREAM_END.get_or_init(EndSlot::default))
+}
+
+/// How the last stream [`open_stream`] opened ended, if the relay ended it. That's the stream
+/// `plxd dial` keeps for its session, which it opens after any it used for a request.
+#[must_use]
+pub fn client_stream_end() -> Option<StreamEnd> {
+    client_slot()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
 }
 
 /// A byte stream to the host with relay id `host_id`, through the relay [`sign_in`] named, opened
@@ -601,7 +679,11 @@ async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream
     };
     // The relay says so once the host joined the stream.
     match socket.next().await {
-        Some(Ok(Message::Text(text))) if text.as_str() == "ready" => Ok(pipe(socket, None)),
+        Some(Ok(Message::Text(text))) if text.as_str() == "ready" => {
+            let end = client_slot();
+            *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            Ok(pipe(socket, None, end))
+        }
         _ => Err(Error::Protocol(
             "the host didn't join the relay's stream".to_owned(),
         )),
@@ -644,6 +726,45 @@ pub(crate) struct Relay {
     removals: Mutex<BTreeSet<String>>,
     /// Wakes the connection to send [`Relay::removals`].
     removed: Notify,
+    /// The streams joined to the remote listener, by the address each connects from.
+    streams: Mutex<HashMap<SocketAddr, Arc<RelayStream>>>,
+}
+
+/// A client's stream through the relay, as the remote listener reads it when that client's
+/// connection ends. Its end is set before the listener can see the connection end.
+#[derive(Debug)]
+pub(crate) struct RelayStream {
+    /// Cancelled when `relay` turns off or plxd stops, which ends this stream. It outlives the
+    /// control connection (PLX-1419).
+    pub(crate) stop: CancellationToken,
+    pub(crate) end: EndSlot,
+}
+
+impl RelayStream {
+    /// Whether plxd ended this stream because `relay` turned off.
+    pub(crate) fn relay_off(&self) -> bool {
+        self.stop.is_cancelled()
+    }
+
+    /// How the relay ended it, if it did.
+    pub(crate) fn end(&self) -> Option<StreamEnd> {
+        self.end
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// Keeps a stream listed in [`Relay::streams`] while it's joined.
+struct Listed<'a> {
+    relay: &'a Relay,
+    from: SocketAddr,
+}
+
+impl Drop for Listed<'_> {
+    fn drop(&mut self) {
+        self.relay.listed().remove(&self.from);
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -663,6 +784,7 @@ impl Relay {
             status: Mutex::default(),
             removals: Mutex::default(),
             removed: Notify::new(),
+            streams: Mutex::default(),
         }
     }
 
@@ -691,6 +813,15 @@ impl Relay {
         if !waiting.is_empty() {
             self.removed.notify_one();
         }
+    }
+
+    fn listed(&self) -> std::sync::MutexGuard<'_, HashMap<SocketAddr, Arc<RelayStream>>> {
+        self.streams.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The relay stream connecting to the remote listener from `peer`, if it is one.
+    pub(crate) fn joined(&self, peer: SocketAddr) -> Option<Arc<RelayStream>> {
+        self.listed().get(&peer).cloned()
     }
 
     fn set(&self, status: Status) {
@@ -948,6 +1079,8 @@ enum Ended {
     Off,
     /// The computer woke or changed networks, so the link may be dead.
     Moved,
+    /// The relay link was up, then went. [`connected`] logged why.
+    Lost(Error),
 }
 
 /// The addresses this computer would reach the internet from now, IPv4 then IPv6. None when it has
@@ -1123,6 +1256,54 @@ impl Drop for Streams {
     }
 }
 
+/// Why a relay link was lost, as [`connected`] logs it.
+#[derive(Debug)]
+struct Lost {
+    cause: &'static str,
+    close_code: Option<u16>,
+    close_reason: Option<String>,
+    error: Error,
+}
+
+impl Lost {
+    fn new(cause: &'static str, error: String) -> Self {
+        Self {
+            cause,
+            close_code: None,
+            close_reason: None,
+            error: Error::Protocol(error),
+        }
+    }
+
+    /// The relay closed the link: with its code and reason, such as 4409 when another plxd took
+    /// this host's place, or with no frame.
+    fn closed(frame: Option<tungstenite::protocol::CloseFrame>) -> Self {
+        let error = "the relay closed the connection".to_owned();
+        let Some(frame) = frame else {
+            return Self::new("relay_closed", error);
+        };
+        Self {
+            close_code: Some(frame.code.into()),
+            close_reason: Some(frame.reason.to_string()),
+            ..Self::new("relay_closed", error)
+        }
+    }
+
+    fn from_socket(error: &tungstenite::Error) -> Self {
+        use tungstenite::error::ProtocolError;
+        let cause = match error {
+            tungstenite::Error::Io(io) if io.kind() == io::ErrorKind::ConnectionReset => {
+                "tcp_reset"
+            }
+            tungstenite::Error::Io(_) => "io_error",
+            // The TCP connection ended in order, with no WebSocket close.
+            tungstenite::Error::Protocol(ProtocolError::ResetWithoutClosingHandshake) => "tcp_eof",
+            _ => "websocket_error",
+        };
+        Self::new(cause, error.to_string())
+    }
+}
+
 /// Keeps plxd connected to the relay while `relay` is on, until `stop`.
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let relay = &daemon.relay;
@@ -1164,11 +1345,19 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
                 failures += 1;
                 Some(backoff(failures))
             }
-            Err(error) => {
-                warn!(%error, "lost the relay connection");
+            Ok(Ended::Lost(error)) => {
                 if started.elapsed() >= STEADY {
                     failures = 0;
                 }
+                failures += 1;
+                relay.set(Status {
+                    connected: None,
+                    problem: Some(cant_reach(&error)),
+                });
+                Some(backoff(failures))
+            }
+            Err(error) => {
+                warn!(%error, "could not connect to the relay");
                 failures += 1;
                 relay.set(Status {
                     connected: None,
@@ -1202,7 +1391,20 @@ fn backoff(failures: u32) -> Duration {
 }
 
 /// One connection to the relay: opened with a proof of the host key, then streams, webhooks, and
-/// pushes until it ends.
+/// pushes until it ends. Its end gets one line in `plxd.log`, with stable names so link losses per
+/// day and their causes can be counted:
+///
+/// ```text
+/// relay link lost cause=relay_closed lived_ms=990123 close_code=4409 close_reason="replaced" error="the relay closed the connection"
+/// relay link closed cause=shutdown lived_ms=990123
+/// ```
+///
+/// `relay link lost` is a link that was up and went. Its `cause` is `relay_closed`, `tcp_reset`,
+/// `tcp_eof` (TCP ended with no WebSocket close), `ping_timeout` (nothing heard for a ping's
+/// round), `io_error`, or `websocket_error`. `relay link closed` is plxd ending it, for a
+/// `shutdown`, the setting going `off`, or a wake or network change (`moved`). Clients' streams
+/// outlive the link (PLX-1419), so neither line means a client dropped. An attempt that never linked logs `could not connect to
+/// the relay` instead.
 async fn connected(
     daemon: &Arc<Daemon>,
     stop: &CancellationToken,
@@ -1267,12 +1469,35 @@ async fn connected(
         connected: Some(host_id.clone()),
         problem: None,
     });
+    let linked = Instant::now();
     let ended = serve(daemon, socket, &host_id, stop, pushes, streams, link).await;
     daemon.relay.set(Status::default());
     if matches!(ended, Ok(Ended::Moved) | Err(_)) {
         streams.doubt_link();
     }
-    ended
+    let lived_ms = u64::try_from(linked.elapsed().as_millis()).unwrap_or(u64::MAX);
+    Ok(match ended {
+        Ok(ended) => {
+            let cause = match ended {
+                Ended::Off => "off",
+                Ended::Moved => "moved",
+                Ended::Stopped | Ended::Lost(_) => "shutdown",
+            };
+            info!(cause = %cause, lived_ms, "relay link closed");
+            ended
+        }
+        Err(lost) => {
+            warn!(
+                cause = %lost.cause,
+                lived_ms,
+                close_code = lost.close_code,
+                close_reason = lost.close_reason.as_deref(),
+                error = ?lost.error.to_string(),
+                "relay link lost"
+            );
+            Ended::Lost(lost.error)
+        }
+    })
 }
 
 /// How many keys one removal statement names, which keeps it well under
@@ -1382,7 +1607,7 @@ async fn serve(
     pushes: &mut Pushes,
     streams: &mut Streams,
     link: &mut Link,
-) -> Result<Ended, Error> {
+) -> Result<Ended, Lost> {
     let (mut sink, mut frames) = socket.split();
     let (replies, mut answered) = mpsc::channel::<String>(16);
     let removals = removal_queue(daemon);
@@ -1401,7 +1626,7 @@ async fn serve(
     let mut ping = time::interval_at(Instant::now() + PING, PING);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut heard = true;
-    let failed = |error: tungstenite::Error| Error::Protocol(error.to_string());
+    let failed = |error: tungstenite::Error| Lost::from_socket(&error);
     // The webhook URLs this plxd serves, so the relay refuses the rest for free.
     let hooks = || async {
         let keys = crate::schedules::hook_keys(daemon).await;
@@ -1489,7 +1714,7 @@ async fn serve(
                             serde_json::from_str(&text).unwrap_or(Value::Null)
                         };
                         if message["t"] == "open" && serving(daemon).await {
-                            let url = daemon.relay.url.clone();
+                            let daemon = Arc::clone(daemon);
                             let host_id = host_id.to_owned();
                             let (stop, done) = match &mut streams.spare {
                                 Some(spare) if message["spare"] == true => {
@@ -1502,7 +1727,7 @@ async fn serve(
                             let gone = streams.gone.clone();
                             let check = streams.check.subscribe();
                             let ties = (held, gone, check);
-                            tokio::spawn(stream(url, host_id, message, local, stop, done, ties));
+                            tokio::spawn(stream(daemon, host_id, message, local, stop, done, ties));
                         } else if message["t"] == "removed"
                             && let Some(statement) = message["statement"].as_str()
                         {
@@ -1518,8 +1743,9 @@ async fn serve(
                             }
                         });
                     }
-                    Some(Ok(Message::Close(_))) | None => {
-                        return Err(Error::Protocol("the relay closed the connection".to_owned()));
+                    Some(Ok(Message::Close(frame))) => return Err(Lost::closed(frame)),
+                    None => {
+                        return Err(Lost::new("tcp_eof", "the relay closed the connection".to_owned()));
                     }
                     Some(Ok(_)) => {}
                     Some(Err(error)) => return Err(failed(error)),
@@ -1527,7 +1753,7 @@ async fn serve(
             }
             _ = ping.tick() => {
                 if !heard {
-                    return Err(Error::Protocol("the relay stopped answering".to_owned()));
+                    return Err(Lost::new("ping_timeout", "the relay stopped answering".to_owned()));
                 }
                 heard = false;
                 sink.send(Message::text("ping")).await.map_err(failed)?;
@@ -1542,7 +1768,7 @@ async fn serve(
 /// `held` lists it while this runs, `gone` hears when it ends, and `check` asks it to prove it's
 /// alive.
 async fn stream(
-    url: String,
+    daemon: Arc<Daemon>,
     host_id: String,
     message: Value,
     local: SocketAddr,
@@ -1565,8 +1791,9 @@ async fn stream(
     let holding = Holding::new(held, gone, id);
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
     let mut unused = spare.clone();
+    let relay = &daemon.relay;
     let joined = async {
-        let mut socket = websocket(&url, &path, &[]).await?;
+        let mut socket = websocket(&relay.url, &path, &[]).await?;
         let mut keepalive = Keepalive::new(check);
         if spare.is_some() {
             loop {
@@ -1595,9 +1822,26 @@ async fn stream(
                 let _ = done.send(()).await;
             }
         }
-        let mut tcp = TcpStream::connect(local).await?;
+        // Bound first, so the listener can tell this connection is a relay stream when it accepts.
+        let out = if local.is_ipv4() {
+            TcpSocket::new_v4()?
+        } else {
+            TcpSocket::new_v6()?
+        };
+        out.bind(SocketAddr::new(local.ip(), 0))?;
+        let from = out.local_addr()?;
+        let end = EndSlot::default();
+        relay.listed().insert(
+            from,
+            Arc::new(RelayStream {
+                stop: stop.clone(),
+                end: Arc::clone(&end),
+            }),
+        );
+        let _listed = Listed { relay, from };
+        let mut tcp = out.connect(local).await?;
         let _ = tcp.set_nodelay(true);
-        let mut piped = pipe(socket, Some(keepalive));
+        let mut piped = pipe(socket, Some(keepalive), end);
         tokio::io::copy_bidirectional(&mut piped, &mut tcp).await?;
         Ok::<_, Error>(())
     };
@@ -2198,7 +2442,8 @@ mod tests {
     async fn piped() -> (DuplexStream, WebSocketStream<Stream>, watch::Sender<()>) {
         let (plxd, relay) = socket().await;
         let (check, watched) = watch::channel(());
-        (pipe(plxd, Some(Keepalive::new(watched))), relay, check)
+        let end = EndSlot::default();
+        (pipe(plxd, Some(Keepalive::new(watched)), end), relay, check)
     }
 
     /// Reads `relay` for `time`, as the runtime does: a ping gets a pong. Answers how many came.
@@ -2763,6 +3008,54 @@ mod tests {
                 "POST /v1/hosts/h/tickets HTTP/1.1",
                 "GET /v1/hosts/h/connect?ticket=t1 HTTP/1.1",
             ]
+        );
+    }
+
+    #[test]
+    fn a_lost_link_names_its_cause() {
+        use tungstenite::error::ProtocolError;
+        let cause = |error| Lost::from_socket(&error).cause;
+        let io_error = |kind| tungstenite::Error::Io(io::Error::from(kind));
+        assert_eq!(cause(io_error(io::ErrorKind::ConnectionReset)), "tcp_reset");
+        assert_eq!(cause(io_error(io::ErrorKind::TimedOut)), "io_error");
+        assert_eq!(
+            cause(tungstenite::Error::Protocol(
+                ProtocolError::ResetWithoutClosingHandshake
+            )),
+            "tcp_eof"
+        );
+        assert_eq!(
+            cause(tungstenite::Error::ConnectionClosed),
+            "websocket_error"
+        );
+
+        let frame = tungstenite::protocol::CloseFrame {
+            code: 4409.into(),
+            reason: "replaced".into(),
+        };
+        let closed = Lost::closed(Some(frame));
+        assert_eq!(closed.cause, "relay_closed");
+        assert_eq!(closed.close_code, Some(4409));
+        assert_eq!(closed.close_reason.as_deref(), Some("replaced"));
+        assert_eq!(Lost::closed(None).close_code, None);
+    }
+
+    // The app parses this line (relayEnd in the app's connection.ts).
+    #[test]
+    fn a_stream_end_prints_as_the_app_reads_it() {
+        let closed = StreamEnd::Closed {
+            code: Some(4429),
+            reason: "daily limit".to_owned(),
+        };
+        assert_eq!(closed.to_string(), r#"code=4429 reason="daily limit""#);
+        let none = StreamEnd::Closed {
+            code: None,
+            reason: String::new(),
+        };
+        assert_eq!(none.to_string(), r#"reason="no close frame""#);
+        assert_eq!(
+            StreamEnd::Failed("reset".to_owned()).to_string(),
+            r#"error="reset""#
         );
     }
 
