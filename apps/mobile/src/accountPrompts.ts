@@ -2,6 +2,7 @@
 
 import {  } from "react-native";
 
+import type { RouteChoices } from "../../desktop/src/preload/routeList";
 import { Limited } from "./access";
 import { Denied, type AccountHosts, type Listed } from "./accountHosts";
 import { showAlert, showPrompt } from "./dialogStore";
@@ -36,7 +37,7 @@ export function askSetupCode(name: string, onCode: (code: string) => void, onAsk
  */
 export function setUpComputer(
   accounts: AccountHosts,
-  { hostId, name, routes }: { hostId: string; name: string; routes: string[] },
+  { hostId, name, choices }: { hostId: string; name: string; choices: RouteChoices },
   handlers: { onWaiting: (code: string) => void; done: () => void; failed: (message: string) => void },
 ) {
   const failed = (e: unknown) => {
@@ -47,13 +48,13 @@ export function setUpComputer(
     name,
     (code) => {
       if (code.length !== 6) return failed(new Error("The code has 6 digits."));
-      accounts.setup(hostId, routes, code).then(handlers.done, failed);
+      accounts.setup(hostId, choices, code).then(handlers.done, failed);
     },
     () =>
       void accounts
         .compare(
           hostId,
-          routes,
+          choices,
           (code) => {
             handlers.onWaiting(code);
             return askToAllow(name, code);
@@ -96,7 +97,7 @@ export function enterSetupCode(
       };
       if (code.length !== 6) return showAlert(`Couldn't set up ${name}`, "The code has 6 digits.");
       handlers.started();
-      accounts.setup(hostId, [], code).then(() => {
+      accounts.setup(hostId, { routes: [] }, code).then(() => {
         handlers.ended();
         handlers.done(hostId);
       }, failed);
@@ -126,7 +127,7 @@ export async function allowThisPhone(
     (host) =>
       accounts.ask(
         host.hostId,
-        [],
+        { routes: [] },
         (code, allow) => onWaiting(host.hostId, code, allow),
         () => showConfirm(host.name),
       ),

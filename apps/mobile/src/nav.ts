@@ -46,6 +46,8 @@ export type SettingsScreens = {
   /** The Parallax account, as the desktop's Account dialog has it. */
   Account: undefined;
   Computer: { id: string };
+  /** An account computer's routes, on this phone. */
+  ComputerRoutes: { id: string };
   ComputerSettings: { id: string; page: SettingsPage };
   Provider: { id: string; instance: string };
   AddComputer: undefined;

@@ -21,11 +21,12 @@
 //!   [`device_key`] for every such host, which the host approves once ([`await_approval`]), or
 //!   pairs with its setup code ([`pair_account`]).
 //!
-//! [`dial`] races a host's routes ([`race`], 0091): the direct ones (LAN, Tailscale) at once, the
-//! relay [`RELAY_HEAD_START`] later, and only the first to present the pinned certificate gets the
-//! credential. [`bridge`] joins the WebSocket to `plxd dial`'s stdio. Its credential stays in its
-//! data folder, readable only by this user.
+//! [`dial`] races a host's routes ([`race`], 0091): the direct ones (LAN, Tailscale, any the user
+//! added) at once and the relay [`RELAY_HEAD_START`] later, or each in the user's order, and only
+//! the first to present the pinned certificate gets the credential. [`bridge`] joins the WebSocket
+//! to `plxd dial`'s stdio. Its credential stays in its data folder, readable only by this user.
 
+use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
@@ -1043,7 +1044,19 @@ async fn request(
     headers: &[(&str, &str)],
     body: Option<&serde_json::Value>,
 ) -> Result<(u16, Vec<u8>), Error> {
-    let (mut tls, _) = open_pinned(route, pin).await?;
+    let (tls, _) = open_pinned(route, pin).await?;
+    send(tls, route, method, path, headers, body).await
+}
+
+/// One HTTPS request over `tls`, a connection that presented the pinned certificate.
+async fn send(
+    mut tls: TlsStream<crate::relay::Stream>,
+    route: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&serde_json::Value>,
+) -> Result<(u16, Vec<u8>), Error> {
     let body = body.map(ToString::to_string).unwrap_or_default();
     let mut head = format!(
         "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\n",
@@ -1112,7 +1125,7 @@ pub async fn pair(
 ///
 /// # Errors
 ///
-/// As [`pair`]'s, and [`Error::WrongHost`] when another key answers.
+/// As [`pair`]'s, and [`Error::WrongHost`] when another key answers at the last route it tried.
 pub async fn pair_account(
     routes: &[String],
     host_id: &str,
@@ -1133,9 +1146,19 @@ async fn pair_routes(
     data_dir: &Path,
     host_id: Option<&str>,
 ) -> Result<Paired, Error> {
+    // The first connection learns which certificate answers, of those an `account:` host's id
+    // allows; the later ones must present it.
+    let pin = host_id.map_or(Pin::Any, |id| Pin::HostId(id.to_owned()));
     let mut last = Error::Protocol("no routes".to_owned());
     for route in routes {
-        let pairing = pair_at(route, code, name, data_dir, host_id);
+        let (tls, fp) = match first_connection(route, &pin).await {
+            Ok(opened) => opened,
+            Err(error) => {
+                last = error;
+                continue;
+            }
+        };
+        let pairing = pair_at(tls, fp, route, code, name, data_dir, host_id);
         let attempt = tokio::time::timeout(REQUEST_TIMEOUT, pairing);
         match attempt.await {
             Ok(Ok(mut paired)) => {
@@ -1155,6 +1178,18 @@ async fn pair_routes(
         }
     }
     Err(last)
+}
+
+/// The connection a sign-in or a pairing starts over at `route`, and the certificate it presented.
+/// Failing here, even on a key `pin` refuses, has sent nothing, so the caller moves on to the next
+/// route: a stale address the user added mustn't stop it reaching the host another way.
+async fn first_connection(
+    route: &str,
+    pin: &Pin,
+) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
+    tokio::time::timeout(REQUEST_TIMEOUT, open_pinned(route, pin))
+        .await
+        .map_err(|_| timed_out(route))?
 }
 
 fn timed_out(route: &str) -> Error {
@@ -1195,19 +1230,19 @@ fn answered(path: &str, status: u16, body: &[u8]) -> Result<serde_json::Value, E
 }
 
 async fn pair_at(
+    tls: TlsStream<crate::relay::Stream>,
+    fp: String,
     route: &str,
     code: &str,
     name: &str,
     data_dir: &Path,
     host_id: Option<&str>,
 ) -> Result<Paired, Error> {
-    // The first connection learns which certificate answers, of those an `account:` host's id
-    // allows; the later ones must present it.
-    let pin = host_id.map_or(Pin::Any, |id| Pin::HostId(id.to_owned()));
-    let (_, fp) = open_pinned(route, &pin).await?;
     let (state, first) = pake_client(code, &fp);
     let start = json!({ "pake": base64url(&first) });
-    let started = pairing_step(route, &fp, "/api/pair/start", &[], &start).await?;
+    let path = "/api/pair/start";
+    let (status, answer) = send(tls, route, "POST", path, &[], Some(&start)).await?;
+    let started = answered(path, status, &answer)?;
     let shared = state
         .finish(&field(&started, "pake")?)
         .map_err(|e| Error::Protocol(format!("a bad SPAKE2 answer: {e:?}")))?;
@@ -1394,8 +1429,8 @@ fn client_value(
 /// # Errors
 ///
 /// [`Error::Refused`] when the host refuses the token or this computer's key, or its request
-/// limit is reached, [`Error::WrongHost`] when another key answers or the host's value doesn't
-/// match its commitment, and the last route's error when none answered.
+/// limit is reached, [`Error::WrongHost`] when another key answers at the last route tried or the
+/// host's value doesn't match its commitment, and the last route's error when none answered.
 pub async fn sign_in(
     routes: &[String],
     host_id: &str,
@@ -1408,9 +1443,17 @@ pub async fn sign_in(
         return Err(Error::Protocol(format!("{host_id} isn't a relay id")));
     }
     let key = device_key(data_dir)?;
+    let pin = Pin::HostId(host_id.to_owned());
     let mut last = Error::Protocol("no routes".to_owned());
     for route in routes {
-        let attempt = sign_in_at(route, host_id, token, name, compare, data_dir, &key);
+        let tls = match first_connection(route, &pin).await {
+            Ok((tls, _)) => tls,
+            Err(error) => {
+                last = error;
+                continue;
+            }
+        };
+        let attempt = sign_in_at(tls, route, host_id, token, name, compare, data_dir, &key);
         match tokio::time::timeout(REQUEST_TIMEOUT, attempt).await {
             Ok(Ok(signed_in)) => return Ok((route.clone(), signed_in)),
             Ok(Err(error @ (Error::Refused | Error::WrongHost))) => return Err(error),
@@ -1421,7 +1464,12 @@ pub async fn sign_in(
     Err(last)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one connection and what a sign-in over it needs"
+)]
 async fn sign_in_at(
+    tls: TlsStream<crate::relay::Stream>,
     route: &str,
     host_id: &str,
     token: &str,
@@ -1435,7 +1483,7 @@ async fn sign_in_at(
     let proof = key.proof("POST", &url(route, path), Some(token));
     let body = json!({ "token": token, "clientLabel": name });
     let headers = [("DPoP", proof.as_str())];
-    let (status, answer) = request(route, &pin, "POST", path, &headers, Some(&body)).await?;
+    let (status, answer) = send(tls, route, "POST", path, &headers, Some(&body)).await?;
     let answer: serde_json::Value = match status {
         200 if compare => return Err(Error::Refused),
         200 => return approved(route, host_id, key, data_dir, &json(&answer)?),
@@ -1644,25 +1692,29 @@ pub const RELAY_HEAD_START: Duration = Duration::from_millis(200);
 pub type Opened = (String, TlsStream<crate::relay::Stream>, String);
 
 /// Opens TLS to the first of `routes` that presents a certificate `pin` accepts (0091): the direct
-/// ones (LAN, Tailscale) at once, `relay:` ones [`RELAY_HEAD_START`] later, or as soon as every
-/// direct one failed. Nothing is sent over any of them before its certificate checks out, and the
-/// others are dropped once one does.
+/// ones (LAN, Tailscale, any the user added) at once, `relay:` ones [`RELAY_HEAD_START`] later, or
+/// as soon as every direct one failed. With `in_order`, the user's order: each route starts
+/// [`RELAY_HEAD_START`] after the one above it, or as soon as those above it failed. Nothing is sent
+/// over any of them before its certificate checks out, and the others are dropped once one does.
 ///
 /// # Errors
 ///
 /// The last route's error when none answered with the pinned certificate.
-pub async fn race(routes: &[String], pin: &Pin) -> Result<Opened, Error> {
-    let opened = first(
-        routes,
-        |route| async move { open_pinned(&route, pin).await },
-    )
+pub async fn race(routes: &[String], in_order: bool, pin: &Pin) -> Result<Opened, Error> {
+    let opened = first(routes, in_order, |route| async move {
+        open_pinned(&route, pin).await
+    })
     .await?;
     let (route, (tls, fingerprint)) = opened;
     Ok((route, tls, fingerprint))
 }
 
 /// The first of `routes` that `open` opens, in [`race`]'s order, with the route.
-async fn first<T, F, Opening>(routes: &[String], open: F) -> Result<(String, T), Error>
+async fn first<T, F, Opening>(
+    routes: &[String],
+    in_order: bool,
+    open: F,
+) -> Result<(String, T), Error>
 where
     F: Fn(String) -> Opening,
     Opening: Future<Output = Result<T, Error>>,
@@ -1678,32 +1730,39 @@ where
             (route, opened)
         }
     };
-    let (relayed, direct): (Vec<String>, Vec<String>) = routes
-        .iter()
-        .cloned()
-        .partition(|route| route.starts_with(RELAY_ROUTE));
-    let mut running: FuturesUnordered<_> = direct.into_iter().map(attempt).collect();
-    let head_start = if running.is_empty() {
-        Duration::ZERO
+    // The routes that start together, each group after the one before it.
+    let mut groups: VecDeque<Vec<String>> = if in_order {
+        routes.iter().map(|route| vec![route.clone()]).collect()
     } else {
-        RELAY_HEAD_START
+        let (relayed, direct): (Vec<String>, Vec<String>) = routes
+            .iter()
+            .cloned()
+            .partition(|route| route.starts_with(RELAY_ROUTE));
+        [direct, relayed]
+            .into_iter()
+            .filter(|group| !group.is_empty())
+            .collect()
     };
-    let head_start = tokio::time::sleep(head_start);
+    let mut running = FuturesUnordered::new();
+    let head_start = tokio::time::sleep(Duration::ZERO);
     tokio::pin!(head_start);
-    let mut later = Some(relayed);
     let mut last = Error::Protocol("no routes".to_owned());
     loop {
         if running.is_empty() {
-            match later.take() {
-                Some(relayed) if !relayed.is_empty() => {
-                    running.extend(relayed.into_iter().map(attempt));
-                }
-                _ => return Err(last),
-            }
+            let Some(group) = groups.pop_front() else {
+                return Err(last);
+            };
+            running.extend(group.into_iter().map(&attempt));
+            head_start
+                .as_mut()
+                .reset(tokio::time::Instant::now() + RELAY_HEAD_START);
         }
         tokio::select! {
-            () = &mut head_start, if later.is_some() => {
-                running.extend(later.take().unwrap_or_default().into_iter().map(attempt));
+            () = &mut head_start, if !groups.is_empty() => {
+                running.extend(groups.pop_front().into_iter().flatten().map(&attempt));
+                head_start
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + RELAY_HEAD_START);
             }
             Some((route, opened)) = running.next() => match opened {
                 Ok(opened) => return Ok((route, opened)),
@@ -1720,8 +1779,8 @@ where
 /// # Errors
 ///
 /// As [`race`]'s.
-pub async fn probe(routes: &[String], pin: &Pin) -> Result<String, Error> {
-    race(routes, pin).await.map(|(route, ..)| route)
+pub async fn probe(routes: &[String], in_order: bool, pin: &Pin) -> Result<String, Error> {
+    race(routes, in_order, pin).await.map(|(route, ..)| route)
 }
 
 /// A host's `/ws`, opened, and the route it went over.
@@ -1748,18 +1807,19 @@ impl std::fmt::Debug for Dialed {
 /// [`Error::Refused`] without a credential or with a revoked one, or the last route's error.
 pub async fn dial(routes: &[String], fingerprint: &str, data_dir: &Path) -> Result<Dialed, Error> {
     let pin = Pin::Fingerprint(fingerprint.to_owned());
-    dial_pinned(routes, &pin, fingerprint, data_dir).await
+    dial_pinned(routes, false, &pin, fingerprint, data_dir).await
 }
 
 /// Opens the `account:` host `host_id`'s `/ws` as [`dial`] does, accepting only a certificate
 /// whose key's JWK thumbprint is `host_id` (0091), with the session [`sign_in`] or
-/// [`pair_account`] saved.
+/// [`pair_account`] saved. `in_order` is [`race`]'s.
 ///
 /// # Errors
 ///
 /// As [`dial`]'s.
 pub async fn dial_account(
     routes: &[String],
+    in_order: bool,
     host_id: &str,
     data_dir: &Path,
 ) -> Result<Dialed, Error> {
@@ -1767,11 +1827,12 @@ pub async fn dial_account(
         return Err(Error::Protocol(format!("{host_id} isn't a relay id")));
     }
     let pin = Pin::HostId(host_id.to_owned());
-    dial_pinned(routes, &pin, host_id, data_dir).await
+    dial_pinned(routes, in_order, &pin, host_id, data_dir).await
 }
 
 async fn dial_pinned(
     routes: &[String],
+    in_order: bool,
     pin: &Pin,
     saved_as: &str,
     data_dir: &Path,
@@ -1786,7 +1847,7 @@ async fn dial_pinned(
         .ok()
         .and_then(|pkcs8| DpopKey::from_pkcs8(&pkcs8))
         .ok_or_else(|| Error::Protocol("the saved DPoP key is damaged".to_owned()))?;
-    let (route, tls, _) = race(routes, pin).await?;
+    let (route, tls, _) = race(routes, in_order, pin).await?;
     let token = &credential.token;
     let upgraded = tokio::time::timeout(REQUEST_TIMEOUT, upgrade(&route, tls, token, &key));
     let socket = match upgraded.await.map_err(|_| timed_out(&route))? {
@@ -1942,10 +2003,18 @@ mod tests {
     async fn race_of(
         answers: &[(&str, u64, bool)],
     ) -> (Result<String, String>, Vec<(String, u64)>) {
+        race_in(false, answers).await
+    }
+
+    /// [`race_of`], in the user's order with `in_order`.
+    async fn race_in(
+        in_order: bool,
+        answers: &[(&str, u64, bool)],
+    ) -> (Result<String, String>, Vec<(String, u64)>) {
         let started = Arc::new(Mutex::new(Vec::new()));
         let t0 = tokio::time::Instant::now();
         let routes: Vec<String> = answers.iter().map(|(r, ..)| (*r).to_owned()).collect();
-        let won = first(&routes, |route| {
+        let won = first(&routes, in_order, |route| {
             let (_, after, ok) = *answers.iter().find(|(r, ..)| *r == route).unwrap();
             let at = u64::try_from(t0.elapsed().as_millis()).unwrap();
             started.lock().unwrap().push((route.clone(), at));
@@ -1964,6 +2033,47 @@ mod tests {
             won.map(|(route, ())| route).map_err(|e| e.to_string()),
             started,
         )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_the_users_order_each_route_starts_200_ms_after_the_one_above_it() {
+        let starts = |list: &[(&str, u64)]| -> Vec<(String, u64)> {
+            list.iter().map(|(r, at)| ((*r).to_owned(), *at)).collect()
+        };
+        // The first route wins while it answers within 200 ms, though another would be faster.
+        let (won, started) = race_in(
+            true,
+            &[
+                ("home.example.com:7400", 150, true),
+                ("192.168.1.5", 0, true),
+                ("relay:h", 0, true),
+            ],
+        )
+        .await;
+        assert_eq!(won.as_deref(), Ok("home.example.com:7400"));
+        assert_eq!(started, starts(&[("home.example.com:7400", 0)]));
+
+        // A route above that hangs holds the next back for 200 ms, and the relay can go first.
+        let (won, started) = race_in(
+            true,
+            &[
+                ("relay:h", 5_000, true),
+                ("192.168.1.5", 5_000, true),
+                ("10.0.0.5", 40, true),
+            ],
+        )
+        .await;
+        assert_eq!(won.as_deref(), Ok("10.0.0.5"));
+        assert_eq!(
+            started,
+            starts(&[("relay:h", 0), ("192.168.1.5", 200), ("10.0.0.5", 400)])
+        );
+
+        // A route above that failed starts the next at once.
+        let (won, started) =
+            race_in(true, &[("192.168.1.5", 10, false), ("relay:h", 20, true)]).await;
+        assert_eq!(won.as_deref(), Ok("relay:h"));
+        assert_eq!(started, starts(&[("192.168.1.5", 0), ("relay:h", 10)]));
     }
 
     #[tokio::test(start_paused = true)]

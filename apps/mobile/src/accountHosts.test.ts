@@ -11,6 +11,10 @@ const net = vi.hoisted(() => ({
   ports: [] as string[],
   answers: {} as Record<string, (path: string, body: Record<string, unknown>) => unknown>,
   store: new Map<string, string>(),
+  /** Every request: where it went, its pin, and whether it carried anything but its path. */
+  sent: [] as { hostname: string; pathname: string; pin: string; credential: boolean }[],
+  /** Hosts whose TLS presents a key the pin refuses, as `pinned-tls` reports it. */
+  wrongKey: new Set<string>(),
 }));
 
 vi.mock("expo-secure-store", () => ({
@@ -32,12 +36,14 @@ vi.mock("../modules/pinned-tls", () => ({
     net.ports.push(hostId);
     return { port: net.ports.length - 1, close: () => {}, refused: () => undefined };
   },
-  request: async (url: string, _method: string, _headers: object, body?: Record<string, unknown>) => {
-    const { port, pathname } = new URL(url);
+  request: async (url: string, _method: string, headers: object, body: object | undefined, pin: string) => {
+    const { hostname, port, pathname } = new URL(url);
+    net.sent.push({ hostname, pathname, pin, credential: !!body || Object.keys(headers).length > 0 });
+    if (net.wrongKey.has(hostname)) throw Object.assign(new Error("key"), { code: "ERR_WRONG_HOST" });
     const hostId = net.ports[Number(port)]!;
     const answer = (pathname === "/.well-known/parallax"
       ? { status: 200, json: { name: hostId, routes: [] } }
-      : net.answers[hostId]!(pathname, body ?? {})) as Answer;
+      : net.answers[hostId]!(pathname, (body ?? {}) as Record<string, unknown>)) as Answer;
     if (answer instanceof Error) throw answer;
     return { status: answer.status, body: JSON.stringify(answer.json ?? {}), fingerprint: "fp" };
   },
@@ -65,6 +71,8 @@ beforeEach(() => {
   net.ports.length = 0;
   net.store.clear();
   net.answers = {};
+  net.sent.length = 0;
+  net.wrongKey.clear();
   vi.useRealTimers();
 });
 
@@ -293,7 +301,7 @@ test("comparing takes no session before Allow, even from a host that offers one"
 
   let allow = (_allowed: boolean) => {};
   const decided = new Promise<boolean>((resolve) => (allow = resolve));
-  const running = accounts.compare("fake", [], () => decided);
+  const running = accounts.compare("fake", { routes: [] }, () => decided);
   await vi.waitFor(() => expect(net.ports.length).toBeGreaterThan(0));
   await new Promise((resolve) => setTimeout(resolve, 20));
   // Nothing tapped: it asked nothing more of the host, and trusts it with nothing.
@@ -314,7 +322,7 @@ test("a host that answers a compare with a session at once showed no code, so no
   const accounts = await load();
   const decide = vi.fn(async () => true);
   for (const host of ["signin", "value"]) {
-    await expect(accounts.compare(host, [], decide)).rejects.toThrow(/no code to compare/);
+    await expect(accounts.compare(host, { routes: [] }, decide)).rejects.toThrow(/no code to compare/);
     expect(accounts.trusts(host)).toBe(false);
   }
   expect(decide).not.toHaveBeenCalled();
@@ -329,7 +337,7 @@ test("a computer allowed by comparing is used, and marked so no lists come from 
     return body["allow"] ? session : { status: 202, json: { value: base64url(hostValue) } };
   };
   const accounts = await load();
-  await accounts.compare("a", [], async () => true);
+  await accounts.compare("a", { routes: [] }, async () => true);
   expect(bodies.at(-1)).toMatchObject({ request: "r1", allow: true });
   expect(accounts.trusts("a")).toBe(true);
   expect(accounts.allowed).toEqual(["a"]);
@@ -345,7 +353,7 @@ test("a bare setup's computer takes Allow here and then its own confirmation", a
   };
   const accounts = await load();
   const onConfirm = vi.fn(() => void (confirmed = true));
-  await accounts.compare("a", [], async () => true, onConfirm);
+  await accounts.compare("a", { routes: [] }, async () => true, onConfirm);
   expect(onConfirm).toHaveBeenCalledOnce();
   expect(accounts.allowed).toEqual(["a"]);
 });
@@ -357,8 +365,44 @@ test("a tap on a new phone's own request marks the computer", async () => {
     return { status: 202, json: { value: base64url(hostValue) } };
   };
   const accounts = await load();
-  await accounts.ask("a", [], (_code, allow) => allow());
+  await accounts.ask("a", { routes: [] }, (_code, allow) => allow());
   expect(accounts.allowed).toEqual(["a"]);
+});
+
+test("an added route is pinned to the host, and one with another key gets no credential", async () => {
+  net.wrongKey.add("stale.example.com");
+  net.answers["a"] = holding(() => session);
+  const accounts = await load();
+  const added = { routes: [], addedRoutes: ["stale.example.com:7400"] };
+
+  // The relay after it carries the sign-in.
+  await accounts.ask("a", added, () => {});
+  const stale = net.sent.filter((call) => call.hostname === "stale.example.com");
+  expect(stale.length).toBeGreaterThan(0);
+  expect(stale.every((call) => call.pathname === "/.well-known/parallax" && !call.credential)).toBe(true);
+  expect(net.sent.every((call) => call.pin === "key:a")).toBe(true);
+  expect(net.sent.some((call) => call.pathname === "/api/auth/account" && call.hostname === "127.0.0.1")).toBe(true);
+
+  // In the user's order, with the relay below it, the same.
+  net.sent.length = 0;
+  await accounts.ask("a", { ...added, routeOrder: ["stale.example.com:7400", "relay:a"] }, () => {});
+  expect(net.sent.filter((call) => call.hostname === "stale.example.com" && call.credential)).toEqual([]);
+});
+
+test("a re-check looks only at the routes ahead and sends no credential", async () => {
+  net.wrongKey.add("stale.example.com");
+  const accounts = await load();
+  const choices = { routes: [], addedRoutes: ["stale.example.com:7400"] };
+  expect(await accounts.recheck("a", choices, "relay:a", {})).toBeUndefined();
+  expect(net.sent.map((call) => [call.hostname, call.credential])).toEqual([["stale.example.com", false]]);
+
+  // With the relay at the top, nothing is ahead of it.
+  net.sent.length = 0;
+  const top = { ...choices, routeOrder: ["relay:a", "stale.example.com:7400"] };
+  expect(await accounts.recheck("a", top, "relay:a", {})).toBeUndefined();
+  expect(net.sent).toEqual([]);
+  // And from the added route, the relay is, and it answers.
+  expect(await accounts.recheck("a", top, "stale.example.com:7400", {})).toBe("relay:a");
 });
 
 test("a tap during a wait keeps the request the host still holds", async () => {
@@ -367,10 +411,10 @@ test("a tap during a wait keeps the request the host still holds", async () => {
   net.answers["a"] = holding(() => poll(), values);
   const accounts = await load();
 
-  await expect(accounts.ask("a", [], () => {})).rejects.toThrow();
+  await expect(accounts.ask("a", { routes: [] }, () => {})).rejects.toThrow();
   await accounts.resumeAsking();
   poll = () => session;
-  await accounts.ask("a", [], () => {});
+  await accounts.ask("a", { routes: [] }, () => {});
 
   expect(new Set(values).size).toBe(1);
   expect(accounts.trusts("a")).toBe(true);
@@ -381,8 +425,8 @@ test("once it asked, a sign-in another computer takes counts as the Allow", asyn
   net.answers["b"] = () => session;
   const accounts = await load();
 
-  await expect(accounts.ask("a", [], () => {})).rejects.toThrow();
-  await accounts.ask("b", [], () => {});
+  await expect(accounts.ask("a", { routes: [] }, () => {})).rejects.toThrow();
+  await accounts.ask("b", { routes: [] }, () => {});
 
   expect(accounts.trusts("b")).toBe(true);
   expect(accounts.usesAny).toBe(true);
@@ -393,7 +437,7 @@ test("a sign-in it never asked for grants no trust, and stops asking", async () 
   net.answers["a"] = () => session;
   const accounts = await load();
 
-  await expect(accounts.ask("a", [], () => {})).rejects.toBeInstanceOf(Denied);
+  await expect(accounts.ask("a", { routes: [] }, () => {})).rejects.toBeInstanceOf(Denied);
 
   expect(accounts.trusts("a")).toBe(false);
   expect(accounts.usesAny).toBe(false);
@@ -403,7 +447,7 @@ test("a denied request is forgotten, so the next ask starts a new one", async ()
   net.answers["a"] = holding(() => ({ status: 401 }));
   const accounts = await load();
 
-  await expect(accounts.ask("a", [], () => {})).rejects.toBeInstanceOf(Denied);
+  await expect(accounts.ask("a", { routes: [] }, () => {})).rejects.toBeInstanceOf(Denied);
 
   expect(accounts.asked("a")).toBe(false);
 });
@@ -413,7 +457,7 @@ test("an Allow ends a stop that a losing poll left", async () => {
   const accounts = await load();
   await accounts.stopAsking("That request wasn't allowed.");
 
-  await accounts.ask("a", [], () => {});
+  await accounts.ask("a", { routes: [] }, () => {});
 
   expect(accounts.askingStopped).toBeUndefined();
 });
@@ -421,7 +465,7 @@ test("an Allow ends a stop that a losing poll left", async () => {
 test("a request past its lifetime is no longer worth waiting for, but still counts as asked", async () => {
   net.answers["a"] = holding(() => new Error("lost"));
   const accounts = await load();
-  await expect(accounts.ask("a", [], () => {})).rejects.toThrow();
+  await expect(accounts.ask("a", { routes: [] }, () => {})).rejects.toThrow();
   expect(accounts.waiting("a")).toBe(true);
 
   vi.useFakeTimers({ now: Date.now() + REQUEST_LIFETIME_MS + 1 });

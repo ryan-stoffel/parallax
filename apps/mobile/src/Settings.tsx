@@ -51,6 +51,7 @@ import { accessLevels } from "../../desktop/src/renderer/catalog";
 import { allAccess } from "./offers";
 import { setPrefs, usePrefs, type Prefs } from "./prefs";
 import { askForNotifications, notificationsOn, notify, registerWithRelay } from "./push";
+import { isRelay, ordered } from "./routes";
 import { pages, type SettingsPage } from "./settingsLogic";
 import { Action, can, Page, Section, SelectRow, SwitchRow } from "./SettingsParts";
 import { DeviceIcon, Dot, GitHubLogo, Icon, Mark, Row, T, useColors } from "./ui";
@@ -71,7 +72,8 @@ function status(m: Computer): string {
 const sentence = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`;
 
 /** An account computer's routes, best first, as 0091 tries them. */
-const routesOf = (m: Computer) => [...(m.machine.account?.routes.filter((r) => !r.startsWith("relay:")) ?? []), "Parallax Relay"].join(" · ");
+const routesOf = ({ machine: { account } }: Computer) =>
+  account ? ordered(account.hostId, account).map((r) => (isRelay(r) ? "Parallax Relay" : r)).join(" · ") : "";
 
 function StatusDot({ m }: { m: Computer }) {
   const c = useColors();
@@ -470,7 +472,13 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
         <ComputerVersion m={m} />
         {m.state.status === "failed" && !updating && <Row title="Last error" detail={m.state.error.message} />}
         {m.machine.account ? (
-          <Row title="Routes" detail={routesOf(m)} last />
+          <Row
+            title="Routes"
+            detail={routesOf(m)}
+            chevron
+            last
+            onPress={() => navigation.navigate("ComputerRoutes", { id: m.machine.id })}
+          />
         ) : (
           <Row title="Paired on this Wi‑Fi" detail={m.machine.paired?.routes[0] ?? ""} last />
         )}

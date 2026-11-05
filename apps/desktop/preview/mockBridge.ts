@@ -2265,6 +2265,7 @@ export const mockBridge: ParallaxBridge = {
     connectChanged();
     return delay(undefined);
   },
+  editRoutes: async () => undefined,
   removeDevice: (hostId) => {
     const device = deviceOf(hostId);
     if (device) device.removed = true;

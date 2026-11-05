@@ -172,6 +172,12 @@ struct DialArgs {
     #[arg(long, conflicts_with_all = ["pair", "sign_in", "discover"])]
     probe: bool,
 
+    /// With `--account`, try the ADDRs in the user's order: each starts 200 ms after the one
+    /// before it, or as soon as those before it failed, instead of the direct ones together and
+    /// the relay 200 ms later (0091)
+    #[arg(long, requires = "account", conflicts_with_all = ["pair", "sign_in", "discover"])]
+    in_order: bool,
+
     /// This computer's name, sent with `--pair`
     #[arg(long, value_name = "NAME")]
     name: Option<String>,
@@ -627,7 +633,7 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
         return dial_probe(args, report).await;
     }
     let dialed = if let Some(host_id) = &args.account {
-        remote::dial_account(&args.addresses, host_id, data_dir.root()).await
+        remote::dial_account(&args.addresses, args.in_order, host_id, data_dir.root()).await
     } else {
         let fingerprint = args.remote.as_deref().unwrap_or_default();
         remote::dial(&args.addresses, fingerprint, data_dir.root()).await
@@ -674,7 +680,7 @@ async fn dial_probe(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) ->
             return 2;
         }
     };
-    match remote::probe(&args.addresses, &pin).await {
+    match remote::probe(&args.addresses, args.in_order, &pin).await {
         Ok(route) => {
             print_json(&serde_json::json!({ "route": route }));
             0

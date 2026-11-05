@@ -7,6 +7,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Route,
   Trash2,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -29,6 +30,7 @@ import { notify } from "../notifications";
 import { useProfile } from "../profile";
 import { menuItem, menuPanel } from "../ui";
 import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./parts";
+import { RoutesDialog } from "./RoutesDialog";
 
 /** What's wrong with Parallax Connect, at the top of its section, with what to do about it. */
 function NoticeRow({
@@ -56,8 +58,8 @@ function NoticeRow({
  * on the Parallax account, each with its health. Signed in, Add computer sets one up, and Show
  * setup code is this computer's side of being added from another. Signed out, Sign in is here.
  * Opening it asks the account for its computers. A device's switch says whether this app uses it,
- * and its menu changes its icon, renames it on the device's own plxd, or removes it from this
- * app's list.
+ * and its menu changes its icon, renames it on the device's own plxd, changes an account computer's
+ * routes in this app, or removes it from this app's list.
  */
 export function ConnectSettings({ onSettingsChanged }: { onSettingsChanged: () => void }) {
   const connect = useConnect();
@@ -273,7 +275,7 @@ function DeviceCard({
   onEnterCode,
 }: {
   device: Pick<DeviceHost, "id" | "name" | "icon"> &
-    Partial<Pick<DeviceHost, "ip" | "os" | "access">>;
+    Partial<Pick<DeviceHost, "ip" | "os" | "access" | "routes" | "addedRoutes" | "route">>;
   /** The icon its host name suggests, marked in the Icon menu. */
   detected: DeviceIconName;
   enabled?: boolean;
@@ -300,6 +302,7 @@ function DeviceCard({
   const menu = useRef<HTMLDivElement>(null);
   const icons = useRef<HTMLDivElement>(null);
   const removeDialog = useRef<HTMLDialogElement>(null);
+  const routesDialog = useRef<HTMLDialogElement>(null);
 
   const save = async (look: { name?: string; icon?: DeviceIconName }) => {
     const failed =
@@ -472,6 +475,17 @@ function DeviceCard({
           <Pencil aria-hidden />
           Rename
         </button>
+        {device.routes && (
+          <button
+            type="button"
+            role="menuitem"
+            className={`${menuItem} [&_svg]:size-4`}
+            onClick={choose(() => routesDialog.current?.showModal())}
+          >
+            <Route aria-hidden />
+            Routes
+          </button>
+        )}
         {!local && (
           <>
             <div role="separator" className="my-1 border-t border-border" />
@@ -511,6 +525,7 @@ function DeviceCard({
           </button>
         ))}
       </div>
+      {device.routes && <RoutesDialog ref={routesDialog} device={device} connected={connected} />}
       {!local && (
         <dialog
           ref={removeDialog}

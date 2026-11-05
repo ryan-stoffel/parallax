@@ -1,9 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { createServer as createTlsServer } from "node:tls";
 
 import { expect, test } from "@playwright/test";
 
@@ -55,6 +56,10 @@ async function startBuildBox(port: number) {
     '#!/bin/sh\n[ "$1" = --version ] && { echo "2.0.0 (Claude Code)"; exit 0; }\necho "build-box claude $*"\n',
   );
   chmodSync(claude, 0o755);
+  // Isolated data folders don't isolate the tailnet: this keeps a real one out of the run.
+  const tailscale = path.join(bin, "tailscale");
+  writeFileSync(tailscale, "#!/bin/sh\nexit 1\n");
+  chmodSync(tailscale, 0o755);
   attach = spawn(plxd, ["attach"], {
     env: {
       ...process.env,
@@ -86,7 +91,32 @@ async function startBuildBox(port: number) {
     .poll(async () => (await call("remote/sessions", {}))["result"])
     .toMatchObject({ listening: true });
   const { hostId } = await result<{ hostId: string }>("relay/id", {});
-  return { hostId, result };
+  return { hostId, result, bin };
+}
+
+/**
+ * A TLS server with a key of its own, as a stale or hostile address the user added would be: its
+ * port, how many clients connected, and how many bytes any sent once TLS was up.
+ */
+async function wrongKeyServer() {
+  const dir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-wrong-key-"));
+  const [key, cert] = [path.join(dir, "key.pem"), path.join(dir, "cert.pem")];
+  execFileSync(
+    "openssl",
+    "req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=parallax -days 1"
+      .split(" ")
+      .concat("-keyout", key, "-out", cert),
+    { stdio: "ignore" },
+  );
+  const seen = { connections: 0, bytes: 0 };
+  const server = createTlsServer({ key: readFileSync(key), cert: readFileSync(cert) }, (socket) => {
+    socket.on("data", (data) => (seen.bytes += data.length));
+    socket.on("error", () => {});
+  });
+  server.on("connection", () => (seen.connections += 1));
+  server.on("tlsClientError", () => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { port: (server.address() as AddressInfo).port, seen, close: () => server.close() };
 }
 
 /** Runs terminal `target` in the app's window and answers what it printed, once it exits. */
@@ -110,7 +140,7 @@ test("a new account computer takes its code in a dialog, then installs and signs
   const hostId = `account:${box.hostId}`;
   // The relay is out of reach, so only the loopback route answers.
   process.env["PLXD_RELAY_URL"] = "http://127.0.0.1:9";
-  launched = await launch("agent.json", undefined, undefined, undefined, false, {
+  launched = await launch("agent.json", box.bin, undefined, undefined, false, {
     accounts: [{ hostId: box.hostId, name: "build-box", routes: [`127.0.0.1:${port}`] }],
   });
   const { page } = launched;
@@ -150,12 +180,111 @@ test("a new account computer takes its code in a dialog, then installs and signs
   await expect(card).toContainText("Connected");
 });
 
+test("an added route reaches a computer, a reorder moves it, and another key gets nothing", async () => {
+  const port = await freePort();
+  const box = await startBuildBox(port);
+  const stranger = await wrongKeyServer();
+  const hostId = `account:${box.hostId}`;
+  // The relay is out of reach and it has no route, so at first nothing reaches it.
+  process.env["PLXD_RELAY_URL"] = "http://127.0.0.1:9";
+  launched = await launch("agent.json", box.bin, undefined, undefined, false, {
+    accounts: [{ hostId: box.hostId, name: "build-box", routes: [] }],
+  });
+  const { page, app } = launched;
+
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Connections" }).click();
+  const card = page.locator(`li[data-device="${hostId}"]`);
+  await card.getByRole("button", { name: "build-box options" }).click();
+  await card.getByRole("menuitem", { name: "Routes" }).click();
+  const dialog = page.getByRole("dialog", { name: "Routes to build-box" });
+  const shot = (name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
+  const row = (route: string) => dialog.locator(`li[data-route="${route}"]`);
+  const address = dialog.getByRole("textbox", { name: "Address" });
+  const add = async (text: string) => {
+    await address.fill(text);
+    await dialog.getByRole("button", { name: "Add route" }).click();
+  };
+
+  // Bad input says what's wrong, and the relay can't be removed.
+  await add("");
+  await expect(dialog.getByRole("alert")).toHaveText(/Enter an address/);
+  await add("https://build-box.example.com");
+  await expect(dialog.getByRole("alert")).toHaveText(/no https:\/\/ or path/);
+  await expect(row(`relay:${box.hostId}`)).toContainText("Parallax Relay");
+  await expect(dialog.getByRole("button", { name: "Remove Parallax Relay" })).toHaveCount(0);
+  await shot("routes-bad-input");
+
+  // A DNS name is what first reaches it: its code is asked for, and it connects over that.
+  const named = `localhost:${port}`;
+  await add(named);
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  const { code } = await box.result<{ code: string }>("access/setupCode", {});
+  const prompt = page.getByRole("dialog", { name: "Add build-box" });
+  await prompt.getByRole("textbox", { name: "Code" }).fill(code);
+  await prompt.getByRole("button", { name: "Connect" }).click();
+  await page
+    .getByRole("dialog", { name: "build-box is added" })
+    .getByRole("button", { name: "Done" })
+    .click();
+  await expect(dialog.getByText("Connected")).toBeVisible();
+  await expect(row(named)).toContainText("Added");
+
+  // With no order, the LAN route build-box now reports races it and may win. In an order, with the
+  // relay on top, which fails at once here, the name is next and the connection moves to it.
+  const moveToTop = (route: string) =>
+    expect(async () => {
+      if ((await dialog.locator("li").first().getAttribute("data-route")) === route) return;
+      await row(route).getByRole("button", { name: /up$/ }).click({ timeout: 1000 });
+      throw new Error("one step up");
+    }).toPass();
+  await moveToTop(named);
+  await moveToTop(`relay:${box.hostId}`);
+  await expect(row(named)).toContainText("Connected");
+  await shot("routes-connected-over-added");
+
+  // Another address of it goes to the top: the connection moves there.
+  const direct = `127.0.0.1:${port}`;
+  await add(direct);
+  await moveToTop(direct);
+  await expect(row(direct)).toContainText("Connected");
+  await shot("routes-moved-after-reorder");
+
+  // A server with another key, put first, gets a TLS handshake and nothing else. Moving the route
+  // in use below the other address makes a real dial past it, which lands on that address.
+  const wrong = `127.0.0.1:${stranger.port}`;
+  await add(wrong);
+  await moveToTop(wrong);
+  await expect.poll(() => stranger.seen.connections).toBeGreaterThan(0);
+  await moveToTop(named);
+  await moveToTop(wrong);
+  await expect(row(named)).toContainText("Connected");
+  await shot("routes-wrong-key-first");
+  expect(stranger.seen.connections).toBeGreaterThan(1);
+  expect(stranger.seen.bytes).toBe(0);
+  stranger.close();
+
+  // Only an added route is removed, and the order and the rest stay, saved in this app.
+  await row(wrong)
+    .getByRole("button", { name: `Remove ${wrong}` })
+    .click();
+  await expect(row(wrong)).toHaveCount(0);
+  await expect(row(named)).toContainText("Connected");
+  const userData = await app.evaluate(({ app }) => app.getPath("userData"));
+  const saved = JSON.parse(readFileSync(path.join(userData, "settings.json"), "utf8")) as {
+    accounts: { addedRoutes: string[]; routeOrder: string[] }[];
+  };
+  expect(saved.accounts[0]!.addedRoutes).toEqual([named, direct]);
+  expect(saved.accounts[0]!.routeOrder.slice(0, 2)).toEqual([named, direct]);
+});
+
 test("a computer waiting on its code stops asking once another computer vouches for it", async () => {
   const port = await freePort();
   const box = await startBuildBox(port);
   // The relay is out of reach, so only the loopback route answers.
   process.env["PLXD_RELAY_URL"] = "http://127.0.0.1:9";
-  launched = await launch("agent.json", undefined, undefined, undefined, false, {
+  launched = await launch("agent.json", box.bin, undefined, undefined, false, {
     accounts: [{ hostId: box.hostId, name: "build-box", routes: [`127.0.0.1:${port}`] }],
   });
   const { page, dataDir } = launched;
