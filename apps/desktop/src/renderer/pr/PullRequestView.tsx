@@ -493,31 +493,32 @@ export function PullRequestView({
   const branches = (
     <BranchChips head={pr.headBranch} base={pr.baseBranch} issue={baseIssue(pr, status)} />
   );
-  // Reading code wants the room: the header folds to a line, in full view on the Code tab, and in
-  // the side panel once its diff has scrolled.
+  // In the side panel, reading code wants the room: the header folds to a line once the diff has
+  // scrolled. The full view has room, so its header stays the same on every tab.
   const onCode = tab === "code";
   const header = fullView ? (
-    <header className="shrink-0 border-b border-border px-4 pt-3 pb-2.5">
-      <div className="flex items-center gap-2">
-        {onCode && <StateBadge pr={pr} />}
-        <h2 className="min-w-0 flex-1 truncate text-reading font-semibold" title={pr.title}>
+    <header className="shrink-0 border-b border-border px-3 pt-4 pb-3">
+      <div className="flex items-center gap-3">
+        <h2 className="min-w-0 flex-1 truncate text-heading font-semibold" title={pr.title}>
           {pr.title}{" "}
           <span className="font-normal text-faint-foreground tabular-nums">#{pr.number}</span>
         </h2>
-        {openInGithub}
-        {headerActions}
+        <div className="flex shrink-0 items-center gap-2">
+          {openInGithub}
+          {headerActions}
+        </div>
       </div>
-      {!onCode && (
-        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
+      <div className="mt-3 flex min-w-0 items-center gap-4">
+        <Tabs tab={tab} onTab={setTab} tabs={tabs} className="w-fit shrink-0 [&_[role=tab]]:px-4" />
+        <div className="ml-auto flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
           <StateBadge pr={pr} />
           <Avatar login={pr.author} />
           <span className="shrink-0 font-medium text-foreground">{pr.author}</span>
           {pr.createdAt && <span className="shrink-0">{ago(pr.createdAt)}</span>}
           <DiffStat added={pr.additions} removed={pr.deletions} title={breakdown || undefined} />
-          <span className="ml-auto flex min-w-0 justify-end">{branches}</span>
+          <span className="flex min-w-0 pl-1">{branches}</span>
         </div>
-      )}
-      <Tabs tab={tab} onTab={setTab} tabs={tabs} className="mx-auto mt-2.5 max-w-xl" />
+      </div>
     </header>
   ) : (
     <header className="shrink-0 border-b border-border px-4 pt-4 pb-3">
@@ -566,7 +567,7 @@ export function PullRequestView({
           tab={tab}
           onTab={setTab}
           tabs={tabs}
-          className={onCode && diffScrolled ? "mt-2" : ""}
+          className={onCode && diffScrolled ? "mt-2" : "mt-3"}
         />
       </div>
     </header>
@@ -830,7 +831,7 @@ function Tabs({
   tab,
   onTab,
   tabs,
-  className = "",
+  className = "mt-3",
 }: {
   tab: Tab;
   onTab: (tab: Tab) => void;
@@ -864,7 +865,7 @@ function Tabs({
         onTab(next.id);
         list.current?.querySelector<HTMLElement>(`[data-tab="${next.id}"]`)?.focus();
       }}
-      className={`relative mt-3 grid auto-cols-fr grid-flow-col rounded-lg bg-hover p-0.5 ${className}`}
+      className={`relative grid auto-cols-fr grid-flow-col rounded-lg bg-hover p-0.5 ${className}`}
     >
       {thumb && (
         <span
