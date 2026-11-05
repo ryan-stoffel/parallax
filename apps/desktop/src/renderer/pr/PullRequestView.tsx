@@ -329,7 +329,7 @@ export function PullRequestView({
           target: commentTarget?.url === url ? commentTarget.target : undefined,
           canRetarget: !commentHasText || commentTarget?.url !== url,
           onTarget: (target) => setCommentTarget({ url, target }),
-          renderBox: () => {
+          renderBox: (lines) => {
             const target = commentTarget?.target;
             return (
               target && (
@@ -337,6 +337,7 @@ export function PullRequestView({
                   target={target}
                   draftKey={commentDraftKey}
                   pending={!!pendingReviewId}
+                  lines={lines}
                   onText={setCommentHasText}
                   onCancel={closeComment}
                   onSend={async (body, single) => {

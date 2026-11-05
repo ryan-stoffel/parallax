@@ -130,6 +130,26 @@ const reviewThreads: PrReviewThread[] = [
     ],
   },
   {
+    id: "PRRT_suggest",
+    path: "apps/desktop/src/main/updater.ts",
+    line: 88,
+    startLine: 87,
+    side: "right",
+    diffHunk:
+      '@@ -84,3 +86,5 @@ export function startUpdater(app: App) {\n+/** Where electron-builder wrote the build\'s update metadata. */\n+export function feedPath(app: App) {\n+  return `${app.getPath("userData")}/app-update.yml`;',
+    isOutdated: false,
+    isResolved: false,
+    comments: [
+      {
+        id: "PRRC_suggest",
+        url: "https://github.com/ryan-stoffel/parallax/pull/588#discussion_r3",
+        author: "claude-reviewer",
+        body: 'Join the path, so Windows gets its own separator:\n\n```suggestion\nexport function feedPath(app: App) {\n  return join(app.getPath("userData"), "app-update.yml");\n```',
+        createdAt: at(12),
+      },
+    ],
+  },
+  {
     id: "PRRT_old",
     path: "apps/desktop/src/main/updater.ts",
     line: 81,

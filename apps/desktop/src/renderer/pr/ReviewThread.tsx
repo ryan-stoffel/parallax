@@ -5,6 +5,8 @@ import { useSticky } from "../sticky";
 import { Badge, Button, IconButton } from "../ui";
 import { GithubMarkdown } from "./GithubMarkdown";
 import type { ThreadView } from "./model";
+import { Suggestion } from "./Suggestion";
+import { linesUnderThread, splitSuggestions } from "./suggestions";
 import { ago } from "./parts";
 
 /**
@@ -70,6 +72,7 @@ export function ReviewThread({
           <ThreadComment
             key={c.id ?? i}
             comment={c}
+            thread={thread}
             repo={repo}
             onOpen={onOpen}
             onEdit={onEdit}
@@ -126,12 +129,14 @@ export function ReviewThread({
 /** One comment of a thread, editable in place while it's pending. */
 function ThreadComment({
   comment: c,
+  thread,
   repo,
   onOpen,
   onEdit,
   onDelete,
 }: {
   comment: ThreadView["comments"][number];
+  thread: ThreadView;
   repo: string;
   onOpen: (url: string) => void;
   onEdit?: (commentId: string, body: string) => Promise<boolean>;
@@ -211,8 +216,22 @@ function ThreadComment({
           </div>
         </form>
       ) : (
-        <div className="mt-1 text-body [&_.markdown]:text-body">
-          <GithubMarkdown text={c.body} repo={repo} onOpen={onOpen} />
+        <div className="mt-1 flex flex-col gap-2 text-body [&_.markdown]:text-body">
+          {splitSuggestions(c.body).map((part, i) =>
+            "markdown" in part ? (
+              <GithubMarkdown key={i} text={part.markdown} repo={repo} onOpen={onOpen} />
+            ) : (
+              <Suggestion
+                key={i}
+                before={linesUnderThread(
+                  thread.diffHunk,
+                  thread.startLine && thread.line ? thread.line - thread.startLine + 1 : 1,
+                )}
+                after={part.suggestion}
+                start={thread.startLine ?? thread.line ?? 1}
+              />
+            ),
+          )}
         </div>
       )}
     </li>

@@ -21,6 +21,7 @@ export interface ReviewThreadData {
   line?: number;
   side?: "left" | "right";
   startLine?: number;
+  diffHunk?: string;
   isOutdated?: boolean;
   isResolved?: boolean;
   comments: {
@@ -470,6 +471,8 @@ export interface ThreadView {
   side?: "left" | "right";
   /** The first line it covers, when it covers more than `line`. */
   startLine?: number;
+  /** The diff down to `line`, for what a suggestion replaces. */
+  diffHunk?: string;
   /** Every comment waits in the viewer's pending review, so no one else sees it yet. */
   pending?: boolean;
   outdated?: boolean;
@@ -498,6 +501,7 @@ export function threadsOf(pr: PullRequest, status?: PrStatusResult): ThreadView[
       line: t.line,
       side: t.side,
       startLine: t.startLine,
+      diffHunk: t.diffHunk,
       pending: t.comments.length > 0 && t.comments.every((c) => c.pending),
       outdated: t.isOutdated,
       resolved: !!t.isResolved,

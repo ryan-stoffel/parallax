@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { CommentTarget } from "../diffRows";
+import { icons } from "../icons";
 import { useSticky } from "../sticky";
 import { Button } from "../ui";
+import { suggestionBlock } from "./suggestions";
 
 /** What a comment box's lines are called. */
 export function targetName(target: CommentTarget) {
@@ -16,12 +18,13 @@ export function targetName(target: CommentTarget) {
  * The box for a new comment under a diff's lines. Its primary starts or adds to the pending review,
  * and with no pending review it can also post the comment alone, as GitHub's page offers. Its text
  * outlives the row, under `draftKey`. `onSend` resolves to whether it worked: the text stays until
- * it does.
+ * it does. With `lines`, the new-side text it's on, Suggest inserts a suggestion block to edit.
  */
 export function CommentBox({
   target,
   draftKey,
   pending,
+  lines,
   onText,
   onSend,
   onCancel,
@@ -30,6 +33,7 @@ export function CommentBox({
   draftKey: string;
   /** Whether a pending review is already open. */
   pending: boolean;
+  lines?: readonly string[];
   /** Told whether the box holds text, which stops a click on another line replacing it. */
   onText: (hasText: boolean) => void;
   onSend: (body: string, single: boolean) => Promise<boolean>;
@@ -42,6 +46,19 @@ export function CommentBox({
   const text = body.trim();
   // Not cleared when the row scrolls away: its text waits under `draftKey` for these lines.
   useEffect(() => onText(!!text), [text, onText]);
+  const suggest = () => {
+    const el = field.current!;
+    const at = el.selectionStart;
+    const before = body.slice(0, at);
+    const block = suggestionBlock(lines!, before);
+    setBody(before + block + body.slice(el.selectionEnd));
+    // Inside the block, on its last line, ready to edit.
+    const caret = before.length + block.lastIndexOf("\n```");
+    requestAnimationFrame(() => {
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(caret, caret);
+    });
+  };
   const send = async (how: "review" | "single") => {
     if (!text || sending) return;
     setSending(how);
@@ -75,7 +92,6 @@ export function CommentBox({
       <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border px-2 py-2">
         <Button
           size="sm"
-          className="mr-auto"
           disabled={!!sending}
           onClick={() => {
             setBody("");
@@ -84,6 +100,13 @@ export function CommentBox({
         >
           Cancel
         </Button>
+        {lines && (
+          <Button size="sm" disabled={!!sending} onClick={suggest}>
+            <icons.suggest aria-hidden />
+            Suggest
+          </Button>
+        )}
+        <span className="flex-1" />
         {!pending && (
           <Button
             size="sm"

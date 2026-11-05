@@ -95,6 +95,16 @@ export function pairLines(lines: readonly DiffLine[]): Pick<Row, "line" | "left"
   return rows;
 }
 
+/** The text of `range`'s lines, when they're on the new side: all a suggestion can change. */
+export function linesInRange(file: DiffFile, range?: LineRange): string[] | undefined {
+  if (range?.side !== "right") return undefined;
+  return file.lines
+    .filter(
+      (l) => l.op !== "@" && l.new !== undefined && l.new >= range.start && l.new <= range.end,
+    )
+    .map((l) => l.text);
+}
+
 /** Whether `thread` is on `line`, by its side: a left one by the old number, else by the new. */
 const isOn = (thread: Pick<ThreadView, "side" | "line">, line: DiffLine) =>
   thread.side === "left"
