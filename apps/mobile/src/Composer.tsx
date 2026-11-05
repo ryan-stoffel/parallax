@@ -1,6 +1,6 @@
 // The thread's message box, as the desktop's Composer, for a phone: the text, written as Markdown
 // that shows formatted as it's typed, photos and files to attach, and the model, reasoning effort,
-// and access for what follows, in one sheet.
+// and access for what follows, in one sheet. A microphone dictates into it, as on the desktop.
 // Photos go to the agent as images and are saved on the computer too, and files are saved there
 // with `host/upload` and listed after the text (0071), as the desktop sends them.
 import * as DocumentPicker from "expo-document-picker";
@@ -20,6 +20,7 @@ import {
   Hand,
   ListChecks,
   LockOpen,
+  Mic,
   Plus,
   Sparkles,
   X,
@@ -59,6 +60,7 @@ import {
   type Model,
 } from "../../desktop/src/renderer/catalog";
 import { imageCaps } from "../../desktop/src/renderer/images";
+import { cleanDictation, voiceText } from "../../desktop/src/renderer/voiceText";
 import { defaultBackend } from "../../desktop/src/renderer/settings/shared";
 import type { ThreadStart } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
@@ -69,11 +71,13 @@ import { GlassButton } from "./Glass";
 import { openLightbox } from "./Lightbox";
 import { ProviderLogo } from "./logos";
 import { allAccess, useOffers, type Offer } from "./offers";
-import { usePrefs } from "./prefs";
+import { getPrefs, usePrefs } from "./prefs";
 import { byName, slashAt } from "./slash";
 import { SendButton } from "./SendButton";
 import { Sheet, sheetTitle } from "./Sheet";
 import { Icon, T, useColors } from "./ui";
+import { useVoice } from "./useVoice";
+import { VoicePill } from "./VoicePill";
 
 /**
  * A file picked to send: an image (shown, and sent as one), with the library photo's id when it was
@@ -725,6 +729,18 @@ export function Composer({
       pickCommand(matches[0], slash.to + 1);
   };
 
+  const voice = useVoice({
+    // At the cursor, kept apart from the words around it. The keyboard is down, so it isn't raised.
+    inserted: (text) => {
+      const { start, end } = selection;
+      input.current?.setSelection(start, end);
+      input.current?.insertText(voiceText(text, plain.slice(0, start), plain.slice(end)));
+    },
+    clean: async (text) =>
+      getPrefs().cleanDictation ? cleanDictation(text, hostId, { backend: shownProvider, repo, runId }) : text,
+  });
+  const dictating = voice.phase !== "idle";
+
   return (
     <View style={{ paddingHorizontal: 10, paddingBottom: bottom, paddingTop: 6 }}>
       {menu && (
@@ -767,7 +783,10 @@ export function Composer({
           {error}
         </T>
       )}
-      <View style={[styles.box, { borderColor: c.border, backgroundColor: c.surface }]}>
+      <View
+        pointerEvents={dictating ? "none" : "auto"}
+        style={[styles.box, { borderColor: c.border, backgroundColor: c.surface }, dictating && { opacity: 0 }]}
+      >
         {attached.length > 0 && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
             {attached.map((a) => (
@@ -879,6 +898,19 @@ export function Composer({
             </Pressable>
           )}
           <View style={{ flex: 1 }} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Voice input"
+            hitSlop={8}
+            onPress={() => {
+              Keyboard.dismiss();
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              voice.start();
+            }}
+            style={({ pressed }) => [styles.round, { backgroundColor: pressed ? c.hover : c.selected }]}
+          >
+            <Icon icon={Mic} size={18} color={c.foreground} />
+          </Pressable>
           {working && !ready && (
             <SendButton
               stop
@@ -905,6 +937,7 @@ export function Composer({
           )}
         </View>
       </View>
+      {dictating && <VoicePill {...voice} bottom={bottom} />}
       <AttachSheet
         open={attaching}
         onClose={() => setAttaching(false)}

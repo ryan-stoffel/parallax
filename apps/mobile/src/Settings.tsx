@@ -1,7 +1,7 @@
 // Settings, a sheet from the sidebar's profile picture, laid out as the desktop's: the account's
 // row, which opens Account (AccountScreen.tsx), then the desktop's sections with its plain icons,
 // each a page pushed inside the sheet. General and Appearance are this phone's own: its
-// notifications, by kind with a test, and its theme. The others are a computer's, with a picker
+// notifications, by kind with a test, its dictation, and its theme. The others are a computer's, with a picker
 // for another (SettingsComputer.tsx), and Connections also has this phone's computers. About,
 // from the sheet's info button, has the version and links. What the desktop's Settings keeps on
 // the desktop itself, such as its browser, keybinds, window, fonts, editors, terminal, and
@@ -245,6 +245,25 @@ function GeneralPage() {
   );
 }
 
+/** Dictation: whether what's dictated is tidied up, and where its audio goes. */
+function DictationSection() {
+  const { cleanDictation } = usePrefs();
+  return (
+    <Section
+      title="Dictation"
+      footer="iOS turns your voice into text, on this iPhone where it can for your language and otherwise through Apple."
+    >
+      <SwitchRow
+        title="Clean up dictation"
+        detail="A small model from a computer's providers removes filler words, fixes punctuation, and restores code names. It receives the text and the names of files you mention, never your audio. Off, dictation goes in as transcribed."
+        value={cleanDictation}
+        onChange={(v) => setPrefs({ cleanDictation: v })}
+        last
+      />
+    </Section>
+  );
+}
+
 /** Appearance: which theme this phone shows. */
 function AppearancePage() {
   const prefs = usePrefs();
@@ -268,7 +287,18 @@ function AppearancePage() {
 
 /** One of this phone's own settings pages. */
 export function PhoneSettingsScreen({ route }: NativeStackScreenProps<SettingsScreens, "PhoneSettings">) {
-  return <Page>{route.params.page === "general" ? <GeneralPage /> : <AppearancePage />}</Page>;
+  return (
+    <Page>
+      {route.params.page === "general" ? (
+        <>
+          <GeneralPage />
+          <DictationSection />
+        </>
+      ) : (
+        <AppearancePage />
+      )}
+    </Page>
+  );
 }
 
 /** Threads' settings of this phone's own: the computer new threads start on, and their access. */

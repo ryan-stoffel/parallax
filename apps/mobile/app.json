@@ -46,7 +46,7 @@
         {
           "photosPermission": "Parallax attaches the photos you pick to your messages.",
           "cameraPermission": "Parallax attaches the photos you take to your messages.",
-          "microphonePermission": false
+          "microphonePermission": "Parallax listens while you dictate a message."
         }
       ],
       [
@@ -55,6 +55,13 @@
           "photosPermission": "Parallax shows your recent photos so you can attach them to your messages.",
           "savePhotosPermission": false,
           "isAccessMediaLocationEnabled": false
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Parallax listens while you dictate a message.",
+          "speechRecognitionPermission": "Parallax turns what you say into text for your message."
         }
       ],
       "./plugins/withSceneLifecycle"
