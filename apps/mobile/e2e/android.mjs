@@ -216,6 +216,8 @@ function screen() {
     const attribute = (name) => node.match(new RegExp(` ${name}="([^"]*)"`))?.[1] ?? "";
     const [, x1, y1, x2, y2] = attribute("bounds").match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/) ?? [];
     return {
+      right: Number(x2),
+      height: Number(y2) - Number(y1),
       label: attribute("text") || attribute("content-desc"),
       description: attribute("content-desc"),
       field: attribute("class") === "android.widget.EditText",
@@ -265,7 +267,27 @@ async function waitFor(wanted, { timeoutMs = 60_000, dismiss = [], field = false
   }
 }
 
+/** The screen now, or nothing while uiautomator can't read it. */
+function readScreen() {
+  try {
+    return screen();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Closes a debug build's warning toast, whose body opens the debugger and which covers the bottom of
+ * the screen. Its close button is a square at its right end.
+ */
+function closeToast() {
+  const toast = readScreen().find((element) => element.label.endsWith("Open debugger to view warnings."));
+  if (toast)
+    adb("shell", "input", "tap", String(toast.right - (toast.height >> 1)), String(toast.y));
+}
+
 async function tap(wanted, options) {
+  closeToast();
   const { x, y } = await waitFor(wanted, options);
   log(`tapping ${wanted}`);
   adb("shell", "input", "tap", String(x), String(y));
@@ -279,13 +301,7 @@ const phoneSession = (box) =>
   until(`${box.name} to report this phone's session`, async () => {
     const { sessions } = await box.call("remote/sessions");
     if (sessions.some((session) => session.name === "Android phone")) return true;
-    const elements = (() => {
-      try {
-        return screen();
-      } catch {
-        return [];
-      }
-    })();
+    const elements = readScreen();
     const refusal = elements.findIndex((element) => /^(Couldn't|Parallax couldn't)/.test(element.label));
     if (refusal >= 0) {
       shot("refused");
@@ -294,13 +310,20 @@ const phoneSession = (box) =>
     return false;
   }, 120_000);
 
-/** Replaces what's in the field labelled `label` with `text`, and waits to see it there. */
+/**
+ * Replaces what's in the field labelled `label` with `text`, waits to see it in that field, then puts
+ * the keyboard away, as it covers the rest of the form and takes taps meant for what's under it.
+ */
 async function type(label, text) {
   await tap(label, { field: true });
   await sleep(500);
   adb("shell", "input", "keyevent", "KEYCODE_MOVE_END", ...Array(40).fill("KEYCODE_DEL"));
   adb("shell", "input", "text", text);
-  await waitFor(text, { field: true, timeoutMs: 15_000 });
+  await until(`${text} in the field ${label}`, () =>
+    readScreen().some((element) => element.field && element.description === label && element.label === text),
+  15_000);
+  adb("shell", "input", "keyevent", "KEYCODE_ESCAPE");
+  await sleep(500);
 }
 
 let failed = true;
@@ -387,7 +410,6 @@ try {
   shot("4-found-on-this-network");
   await type("Address", `${RUNNER}:${lanBox.port}`);
   await type("Code", pairing.replaceAll("-", ""));
-  adb("shell", "input", "keyevent", "111"); // Puts the keyboard away, off the button.
   shot("5-pair-lan-box");
   await tap("Pair");
   await phoneSession(lanBox);
@@ -402,7 +424,7 @@ try {
 } finally {
   clearTimeout(watchdog);
   if (failed) {
-    log(`failed. In front: ${focused()}`);
+    log(`failed. In front: ${focused()}. On screen: ${readScreen().map((e) => e.label).filter(Boolean).join(" | ")}`);
     try {
       shot("failed");
       writeFileSync(join(out, "logcat.txt"), adbWithin(60_000, "logcat", "-d"));
