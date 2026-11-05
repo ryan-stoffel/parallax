@@ -21,6 +21,9 @@ export type VerifyOptions = {
 /** Whom a token speaks for: a Clerk user id, and its session or OAuth application. */
 export type Verified = { userId: string; sessionId?: string; clientId?: string };
 
+/** The instance's keys couldn't be read, so the token is unchecked, not refused: Clerk is down. */
+export class KeysUnavailable extends Error {}
+
 type Claims = Record<string, unknown>;
 
 type KeySet = { ttl: number; keys: Map<string, CryptoKey> };
@@ -34,7 +37,10 @@ const TTL_MS = 60 * 60_000;
 // Clock skew allowed on `exp` and `nbf`.
 const SKEW_S = 5;
 
-/** Resolves to whom `token` speaks for, or throws why it doesn't count. */
+/**
+ * Resolves to whom `token` speaks for, or throws why it doesn't count, or `KeysUnavailable` when
+ * the JWKS can't be read and none is cached.
+ */
 export async function verifyClerkToken(token: string, options: VerifyOptions): Promise<Verified> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("Not a JWT.");
@@ -115,8 +121,10 @@ async function signingKey(options: VerifyOptions, kid: string): Promise<CryptoKe
 }
 
 async function loadKeys(options: VerifyOptions, url: string): Promise<KeySet> {
-  const res = await (options.fetch ?? fetch)(url);
-  if (!res.ok) throw new Error(`JWKS answered ${res.status}.`);
+  const res = await (options.fetch ?? fetch)(url).catch((error: unknown) => {
+    throw new KeysUnavailable(`JWKS fetch failed: ${String(error)}`);
+  });
+  if (!res.ok) throw new KeysUnavailable(`JWKS answered ${res.status}.`);
   const maxAge = /max-age=(\d+)/.exec(res.headers.get("cache-control") ?? "")?.[1];
   const ttl = maxAge ? Math.max(Number(maxAge) * 1000, REFETCH_MS) : TTL_MS;
   const { keys } = (await res.json()) as { keys?: (JsonWebKey & { kid?: string })[] };

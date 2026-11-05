@@ -61,7 +61,38 @@
       "hosts": [
         { "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE", "name": "Ryan's Mac Mini", "online": true, "thisComputer": true },
         { "hostId": "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o", "name": "Ryan's Mac Mini", "online": false, "thisComputer": false }
-      ]
+      ],
+      "removed": ["Q2s9vX1k7d0b8Lr4mT6pWc3eYh5uNz2aFgJ_iK-oPqR"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 41,
+    "method": "relay/hosts",
+    "params": { "token": "<clerk session token>" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 41,
+    "error": {
+      "code": -32000,
+      "message": "Parallax couldn't reach the relay: connection refused",
+      "data": { "kind": "relayUnreachable" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 42,
+    "method": "relay/hosts",
+    "params": { "token": "<clerk session token>" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 42,
+    "error": {
+      "code": -32000,
+      "message": "The relay can't reach Clerk to check this sign-in.",
+      "data": { "kind": "clerkUnreachable" }
     }
   },
   {

@@ -52,6 +52,7 @@ beforeEach(() => {
   states = { local: connected, [mini.id]: untrusted };
   window.parallax = {
     onProfile: () => () => {},
+    onOutage: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async (hostId) => states[hostId]!,

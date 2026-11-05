@@ -9,6 +9,8 @@ export const USER_LIMITS = { requests: 120, pushes: 120 };
 
 /** How many hosts one user may register, so one account's cost has a ceiling (0068). */
 export const MAX_HOSTS = 10;
+/** How many removed hosts one user's list keeps, newest last, so its size has a ceiling. */
+const MAX_REMOVED = 100;
 const MAX_DEVICES = 20;
 /** An APNs device token: 32 or more bytes in hex. */
 const DEVICE_TOKEN = /^[0-9a-f]{64,200}$/;
@@ -48,6 +50,32 @@ export class UserAccount extends DurableObject<Env> {
       "hosts",
       this.hosts().filter((id) => id !== hostId),
     );
+  }
+
+  /**
+   * The hosts that left this user's account, by Remove or by moving to another user, until they
+   * register under this user again. The only proof that a host left: a list without it may come
+   * from a relay that lost its data, whose marks are gone too, so nothing reads as removed.
+   */
+  removed(): string[] {
+    return this.ctx.storage.kv.get<string[]>("removed") ?? [];
+  }
+
+  /** `hostId` left this account: its slot is free, and `removed` lists it. */
+  left(hostId: string) {
+    this.release(hostId);
+    const removed = this.removed().filter((id) => id !== hostId);
+    this.ctx.storage.kv.put("removed", [...removed, hostId].slice(-MAX_REMOVED));
+  }
+
+  /** `hostId` registered under this user, so it's back on the account. */
+  joined(hostId: string) {
+    const removed = this.removed();
+    if (removed.includes(hostId))
+      this.ctx.storage.kv.put(
+        "removed",
+        removed.filter((id) => id !== hostId),
+      );
   }
 
   /** Registers an iOS device's APNs token for push. False when it isn't one. */

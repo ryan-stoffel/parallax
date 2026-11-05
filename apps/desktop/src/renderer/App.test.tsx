@@ -33,6 +33,7 @@ const bridge: Partial<ParallaxBridge> = {
   terminalApps: async () => [],
   terminalApp: async () => null,
   onProfile: () => () => {},
+  onOutage: () => () => {},
 };
 window.parallax = bridge as ParallaxBridge;
 // happy-dom has no popovers. `togglePopover` marks an open one `data-open`.

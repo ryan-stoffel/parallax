@@ -8619,6 +8619,13 @@ export type RelayHostsResult = {
 	 * The user's hosts on the relay.
 	 */
 	hosts: Array<RelayHost>,
+	/**
+	 * The relay ids of hosts that left the account, by Remove or by moving to another user, until
+	 * they register under this user again (PLX-1351). The only proof a host left: not being in
+	 * `hosts` proves nothing, since a relay that lost its data lists nothing. An older relay
+	 * leaves it out, which says nothing either way.
+	 */
+	removed?: Array<string>,
 };
 
 /**
@@ -11976,7 +11983,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits" | "relayUnreachable" | "clerkUnreachable";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

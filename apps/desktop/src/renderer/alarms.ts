@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import type { ConnectionState, Profile } from "../preload/bridge";
+import type { ConnectionState, Outage, Profile } from "../preload/bridge";
 import type { AgentRun, InboxItem, Thread } from "../protocol/generated/protocol";
 import { attentionOf, type Attention } from "./attention";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
-import { notify, type Notice } from "./notifications";
+import { dismiss, notify, type Notice } from "./notifications";
 import type { HostThreads } from "./Sidebar";
 import { asksOf, waitingOf } from "./threads";
 import { clockOptions } from "./prefs";
@@ -291,6 +291,30 @@ export function useHostUpdateAlarms(hosts: Host[]) {
             body: event.error,
             action: { label: "Retry", run: () => void window.parallax.retryHostUpdate(hostId) },
           });
+      }),
+    [],
+  );
+}
+
+/** What each outage means, for people: what's down, and what still works (PLX-1351). */
+export const OUTAGE_TEXT: Record<Outage, { title: string; body: string }> = {
+  relay: {
+    title: "Can't reach Parallax Relay",
+    body: "Computers on this network keep working. The rest reconnect when the relay is back.",
+  },
+  clerk: {
+    title: "Can't reach Clerk sign-in",
+    body: "Computers on this network keep working. New relay connections and sign-ins wait until it's back.",
+  },
+};
+
+/** Says what's down while Parallax Relay or Clerk can't be reached, until it's back. */
+export function useOutageAlarms() {
+  useEffect(
+    () =>
+      window.parallax.onOutage((outage) => {
+        if (outage) notify({ key: "outage", tone: "error", ...OUTAGE_TEXT[outage] });
+        else dismiss("outage");
       }),
     [],
   );

@@ -1,4 +1,4 @@
-import { verifyClerkToken } from "@parallax/clerk-verify";
+import { KeysUnavailable, verifyClerkToken } from "@parallax/clerk-verify";
 
 import type { Env } from "./index";
 
@@ -13,7 +13,8 @@ const list = (value?: string) =>
  * The Clerk user id of a Parallax account token (0067): a session token from Clerk's web or Expo
  * SDK, or the desktop app's OAuth access token. Null when it isn't one. The JWKS is
  * `CLERK_JWKS` inline (tests and `wrangler dev`), else fetched from `CLERK_JWKS_URL`, else from
- * the issuer's `/.well-known/jwks.json`.
+ * the issuer's `/.well-known/jwks.json`. Throws `KeysUnavailable` when Clerk's keys can't be read,
+ * so an outage isn't taken for a bad token (PLX-1351).
  */
 export async function verifySession(env: Env, token: string): Promise<string | null> {
   // No instance configured: every token is refused, so a deploy can't trust the dev instance.
@@ -32,7 +33,8 @@ export async function verifySession(env: Env, token: string): Promise<string | n
       ...(jwks && { fetch: jwks }),
     });
     return verified.userId;
-  } catch {
+  } catch (error) {
+    if (error instanceof KeysUnavailable) throw error;
     return null;
   }
 }

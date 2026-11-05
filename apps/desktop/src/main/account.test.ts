@@ -62,6 +62,8 @@ const clerk = {
   },
   issued: 0,
   pictureDown: false,
+  /** How the token endpoint fails, if it does: a refused connection or a 503. */
+  tokenDown: undefined as "refused" | "503" | undefined,
 };
 function issue(refreshToken = `rt${++clerk.issued}`) {
   const accessToken = `at${clerk.issued}`;
@@ -81,6 +83,10 @@ vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
   if (url.host === "img.clerk.test")
     return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
   if (url.host !== "clerk.parallax.test") return realFetch(input, init);
+  if (url.pathname === "/oauth/token" && clerk.tokenDown === "refused")
+    throw new TypeError("fetch failed");
+  if (url.pathname === "/oauth/token" && clerk.tokenDown === "503")
+    return new Response(null, { status: 503 });
   const form = new URLSearchParams(init?.body as URLSearchParams | undefined);
   if (form.get("client_id") !== null && form.get("client_id") !== "desktop")
     return oauthError("invalid_client");
@@ -230,6 +236,34 @@ test("a restart shows the saved profile at once, then refreshes it; sign-out rev
   expect(clerk.revoked).toEqual([after.refreshToken]);
   expect(fs.existsSync(savedFile())).toBe(false);
   await settle();
+});
+
+test("Clerk not answering isn't signed out; it says so until a refresh works", async () => {
+  const signIn = startAccount();
+  const answer = call("parallax:signIn", false);
+  await vi.waitFor(() => expect(electron.opened).toHaveLength(1));
+  await signInInBrowser(electron.opened[0]!);
+  await answer;
+
+  const failing = startAccount();
+  await vi.waitFor(() => expect(failing.clerkUnreachable()).toBe(false));
+  clerk.tokenDown = "refused";
+  expect(await failing.freshToken()).toBeUndefined();
+  expect(failing.clerkUnreachable()).toBe(true);
+  clerk.tokenDown = "503";
+  expect(await failing.freshToken()).toBeUndefined();
+  expect(failing.clerkUnreachable()).toBe(true);
+  expect(fs.existsSync(savedFile())).toBe(true);
+
+  clerk.tokenDown = undefined;
+  expect(await failing.freshToken()).toBeDefined();
+  expect(failing.clerkUnreachable()).toBe(false);
+  expect(signIn.clerkUnreachable()).toBe(false);
+
+  // Clerk refusing the token answered, so it isn't an outage.
+  clerk.refresh.clear();
+  expect(await failing.freshToken()).toBeUndefined();
+  expect(failing.clerkUnreachable()).toBe(false);
 });
 
 test("a refresh token revoked elsewhere signs this computer out", async () => {

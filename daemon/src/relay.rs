@@ -29,9 +29,10 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
+use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentOutcome, AgentOutputItem, AgentStatus, ParallaxEvent, RelayHost, RelaySignResult,
-    RelayStatus, RunId,
+    AgentOutcome, AgentOutputItem, AgentStatus, ErrorKind, ParallaxEvent, RelayHost,
+    RelayHostsResult, RelaySignResult, RelayStatus, RunId,
 };
 use rustls::pki_types::ServerName;
 use serde::Deserialize;
@@ -670,21 +671,45 @@ pub(crate) async fn register(
 }
 
 /// `relay/hosts`: the hosts the user of the Clerk session `token` has on the relay, this one
-/// marked. Answers why not, for people.
-pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<Vec<RelayHost>, String> {
+/// marked, and those that left the account, as the relay says. An outage answers with its own
+/// [`ErrorKind`], so an app can say what's down (PLX-1351). Anything else answers why not, for
+/// people.
+pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<RelayHostsResult, ErrorObject> {
     let own = signer(daemon).await.ok().map(|key| key.thumbprint());
     let answered = http(&daemon.relay.url, "GET", "/v1/hosts", Some(token), None).await;
     let body = match answered {
         Ok((200, body)) => body,
-        Ok((401, _)) => return Err(SIGN_IN_REFUSED.to_owned()),
-        Ok((status, _)) => return Err(format!("The relay answered {status}.")),
-        Err(error) => return Err(cant_reach(&error)),
+        Ok((401, _)) => return Err(ErrorObject::invalid_params(SIGN_IN_REFUSED)),
+        Ok((503, body)) if body["error"] == "clerk_unreachable" => {
+            return Err(ErrorObject::parallax(
+                ErrorKind::ClerkUnreachable,
+                "The relay can't reach Clerk to check this sign-in.",
+            ));
+        }
+        Ok((status @ 500.., _)) => {
+            return Err(ErrorObject::parallax(
+                ErrorKind::RelayUnreachable,
+                format!("The relay answered {status}."),
+            ));
+        }
+        Ok((status, _)) => {
+            return Err(ErrorObject::invalid_params(format!(
+                "The relay answered {status}."
+            )));
+        }
+        Err(error) => {
+            return Err(ErrorObject::parallax(
+                ErrorKind::RelayUnreachable,
+                cant_reach(&error),
+            ));
+        }
     };
-    // Not an empty list: an app takes not being listed to mean this computer was removed.
     let Some(listed) = body["hosts"].as_array() else {
-        return Err("The relay's answer didn't list any hosts.".to_owned());
+        return Err(ErrorObject::invalid_params(
+            "The relay's answer didn't list any hosts.",
+        ));
     };
-    Ok(listed
+    let hosts = listed
         .iter()
         .filter_map(|host| {
             let host_id = host["hostId"].as_str()?.to_owned();
@@ -695,7 +720,13 @@ pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<Vec<RelayHost>
                 host_id,
             })
         })
-        .collect())
+        .collect();
+    let removed = body["removed"].as_array().map(|ids| {
+        ids.iter()
+            .filter_map(|id| id.as_str().map(str::to_owned))
+            .collect()
+    });
+    Ok(RelayHostsResult { hosts, removed })
 }
 
 /// `relay/remove`: removes the user's host `host_id` from the relay, which frees its place. One

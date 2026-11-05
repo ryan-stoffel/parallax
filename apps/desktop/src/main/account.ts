@@ -43,11 +43,12 @@ type User = {
 /** What the app keeps, encrypted: the refresh token, and the user, to show before Clerk answers. */
 type Session = { refreshToken: string; user: User };
 
-/** A failed call to Clerk. `revoked` if Clerk refused the refresh token itself. */
+/** A failed call to Clerk. `revoked` if Clerk refused the refresh token itself, `down` for a 5xx. */
 class ClerkError extends Error {
   constructor(
     message: string,
     readonly revoked = false,
+    readonly down = false,
   ) {
     super(message);
   }
@@ -101,6 +102,8 @@ export type Account = {
   freshToken(): Promise<string | undefined>;
   /** Calls `listener` each time someone signs in here. */
   onSignIn(listener: () => void): void;
+  /** Whether the last refresh failed because Clerk didn't answer, rather than being signed out. */
+  clerkUnreachable(): boolean;
 };
 
 /**
@@ -154,6 +157,7 @@ export function startAccount(): Account {
       throw new ClerkError(
         why ?? `Clerk answered ${res.status}.`,
         body["error"] === "invalid_grant",
+        res.status >= 500,
       );
     }
     const expiresIn = typeof body["expires_in"] === "number" ? body["expires_in"] : 3600;
@@ -163,12 +167,15 @@ export function startAccount(): Account {
     };
   }
 
+  // Whether the last refresh failed because Clerk didn't answer, while signed in (PLX-1351).
+  let unreachable = false;
   // One refresh at a time, in turn: Clerk may rotate the refresh token on each use.
   let turn: Promise<unknown> = Promise.resolve();
   /** A new access token from the refresh token, or undefined signed out or failed. */
   function refresh(): Promise<{ token: string; expiresAt: number } | undefined> {
     const next = turn.then(async () => {
       const held = epoch;
+      unreachable = false;
       if (!session) return undefined;
       try {
         const fresh = await token({
@@ -179,6 +186,8 @@ export function startAccount(): Account {
         if (fresh.refreshToken) save({ ...session, refreshToken: fresh.refreshToken });
         return fresh.access;
       } catch (error) {
+        // A refused connection, a timeout, or a 5xx, while a token it refused says nothing of that.
+        unreachable = epoch === held && (!(error instanceof ClerkError) || error.down);
         // Revoked, such as by signing out everywhere: signed out here too.
         if (error instanceof ClerkError && error.revoked && epoch === held) {
           epoch++;
@@ -356,5 +365,6 @@ export function startAccount(): Account {
     },
     freshToken: async () => (await refresh())?.token,
     onSignIn: (listener) => void signedIn.push(listener),
+    clerkUnreachable: () => unreachable && !!session,
   };
 }

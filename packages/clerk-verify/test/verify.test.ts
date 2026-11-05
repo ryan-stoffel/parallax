@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { verifyClerkToken, type VerifyOptions } from "../src/verify.ts";
+import { KeysUnavailable, verifyClerkToken, type VerifyOptions } from "../src/verify.ts";
 
 const algorithm = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" } as const;
 
@@ -148,5 +148,16 @@ test("while the JWKS is down, a forged kid can't drop the keys already fetched",
   assert.equal(fetches(), 2);
   await verifyClerkToken(good, at(122_000));
   assert.equal(fetches(), 3);
+  setDown(false);
+});
+
+test("a JWKS that's down with none cached throws KeysUnavailable, unlike a refused token", async () => {
+  const issuer = "https://clerk.five.test";
+  const { options, sign, setDown } = await instance(issuer);
+  const good = await sign({ iss: issuer, sub: "user_1", sid: "sess_1", exp: now + 3600 });
+  setDown(true);
+  await assert.rejects(verifyClerkToken(good, options), KeysUnavailable);
+  const refused = { ...options, fetch: () => Promise.reject(new TypeError("fetch failed")) };
+  await assert.rejects(verifyClerkToken(good, refused), KeysUnavailable);
   setDown(false);
 });

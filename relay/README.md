@@ -4,7 +4,7 @@ A Cloudflare Worker with Durable Objects that lets a user's devices reach their 
 
 - `src/index.ts` routes requests and checks Clerk tokens (`src/clerk.ts`, on `packages/clerk-verify`).
 - `src/host.ts` is one host: its registration, plxd's connection, client streams, and held webhooks.
-- `src/user.ts` is one user: their hosts, push devices, and request budget. `src/push.ts` sends pushes through APNs.
+- `src/user.ts` is one user: their hosts, the hosts that left their account, push devices, and request budget. `src/push.ts` sends pushes through APNs.
 - `src/log.ts` writes the log lines that say why a connection closed, and how to read them.
 - `wrangler.toml` is the deploy config.
 

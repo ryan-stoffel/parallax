@@ -12,7 +12,8 @@
  *   (0065), so the relay carries only ciphertext. Clients from before 0091 get a ticket first
  *   (`POST /v1/hosts/<id>/tickets`) and open `/connect?ticket=<ticket>`.
  * - `/v1/hooks/<id>/<hookId>/<token>` goes to plxd over its WebSocket, or is held while it's away.
- * - A user removes a host of theirs with `DELETE /v1/hosts/<id>`, which frees its slot.
+ * - A user removes a host of theirs with `DELETE /v1/hosts/<id>`, which frees its slot and lists it
+ *   as `removed` in `GET /v1/hosts` until it registers under them again (PLX-1351).
  * - Mobile devices register for push at `/v1/devices`.
  *
  * Every route but the WebSockets plxd opens and the webhooks needs a Clerk session token.
@@ -100,7 +101,8 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
     opened = await host.redeem(ticket);
   } else {
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
-    const user = token ? await verifySession(env, token) : null;
+    // Clerk being down refuses this stream as a bad sign-in does. The account's list tells them apart.
+    const user = token ? await verifySession(env, token).catch(() => null) : null;
     if (!user) return json(401, { error: "unauthorized" });
     opened = await host.open(user);
   }
@@ -143,7 +145,12 @@ const routes = {
     }
 
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
-    const user = token ? await verifySession(env, token) : null;
+    let user: string | null;
+    try {
+      user = token ? await verifySession(env, token) : null;
+    } catch {
+      return json(503, { error: "clerk_unreachable" }, { "retry-after": "60" });
+    }
     if (!token || !user) return json(401, { error: "unauthorized" });
     const account = env.USERS.get(env.USERS.idFromName(user));
     if (!(await account.allow()))
@@ -166,18 +173,20 @@ const routes = {
           if (slot === "reserved" && (!result || "error" in result)) await account.release(hostId);
         }
         if ("error" in result) return json(result.status, { error: result.error });
+        await account.joined(hostId);
         return json(200, result);
       }
       case "GET /hosts": {
         const ids = await account.hosts();
         const hosts = await Promise.all(ids.map((hostId) => host(hostId).status(user)));
-        return json(200, { hosts: hosts.filter(Boolean) });
+        return json(200, { hosts: hosts.filter(Boolean), removed: await account.removed() });
       }
       case "DELETE /hosts/:id": {
         if (!HOST_ID.test(id)) return json(404, { error: "not_found" });
         const removed = await host(id).unregister(user);
         // Its slot is free either way: a host that's gone, or moved to another user, isn't theirs.
-        await account.release(id);
+        // It's marked either way too, so a Remove after the relay lost its data still holds.
+        await account.left(id);
         return removed ? json(200, { ok: true }) : json(404, { error: "not_found" });
       }
       case "POST /hosts/:id/tickets": {
