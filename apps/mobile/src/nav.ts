@@ -18,6 +18,8 @@ export type Screens = {
   StartThread: { hostId?: string; groupId?: string } | undefined;
   /** Search every thread, as a sheet. */
   Search: undefined;
+  /** A thread's folder to browse, as a sheet. */
+  ThreadFiles: { hostId: string; runId: string };
   /** Settings, as a sheet that pushes its pages inside itself. */
   Settings: NavigatorScreenParams<SettingsScreens> | undefined;
   /** Every pull request, as a sheet that pushes each one inside itself. */

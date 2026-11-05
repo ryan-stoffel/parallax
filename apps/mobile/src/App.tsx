@@ -40,6 +40,7 @@ import { notify, onOpened, registerWithRelay } from "./push";
 import { LightboxHost } from "./Lightbox";
 import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
+import { ThreadFilesScreen } from "./ThreadFiles";
 import { AboutScreen, AddComputerScreen, ComputerScreen, phonePages, PhoneSettingsScreen, SettingsScreen } from "./Settings";
 import { ComputerSettingsScreen } from "./SettingsComputer";
 import { ProviderScreen } from "./SettingsProviders";
@@ -452,6 +453,7 @@ function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
             {/* Its title is the page's own: a native header here leaves the list's foot under the screen's edge. */}
             <Stack.Screen name="NewThread" component={NewThreadScreen} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen name="Search" component={SearchScreen} options={{ ...sheet(c), headerShown: false }} />
+            <Stack.Screen name="ThreadFiles" component={ThreadFilesScreen} options={{ ...sheet(c), headerShown: false }} />
             {/* The sheet's grabber is its own; each page's header is its stack's. */}
             <Stack.Screen name="Settings" component={SettingsSheet} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen name="PullRequests" component={PullRequestsSheet} options={{ ...sheet(c), headerShown: false }} />

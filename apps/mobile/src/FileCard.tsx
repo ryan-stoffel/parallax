@@ -173,7 +173,7 @@ const kinds: [Kind, RegExp][] = [
 ];
 
 /** A file's kind, by its extension. */
-const kindOf = (name: string): Kind => {
+export const kindOf = (name: string): Kind => {
   const ext = /\.([^./]+)$/.exec(name)?.[1]?.toLowerCase() ?? "";
   return kinds.find(([, test]) => test.test(ext))?.[0] ?? "file";
 };

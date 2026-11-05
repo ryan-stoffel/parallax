@@ -538,6 +538,16 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                 label: "Thread",
                 inline: true,
                 items: [
+                  ...(computer?.connected && "files" in (computer.view.capabilities ?? {})
+                    ? [
+                        {
+                          type: "action" as const,
+                          label: "Files",
+                          icon: symbol("folder"),
+                          onPress: () => navigation.navigate("ThreadFiles", { hostId, runId }),
+                        },
+                      ]
+                    : []),
                   {
                     type: "action",
                     label: "Thread details",
