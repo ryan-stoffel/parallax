@@ -29,10 +29,17 @@ const buildBox: DeviceHost = {
 };
 const phone: AccessPrompt = { id: "r1", name: "Ryan's iPhone", code: "731905", host: "studio" };
 
+/** Tells the rendered prompts of a change to the devices. */
+let showDevices = (_devices: DeviceHost[]) => {};
+
 /** Renders the prompts over a bridge that lists `devices` and `requests`. */
 async function render(devices: DeviceHost[], requests: AccessPrompt[]) {
   const parallax = {
-    onDevices: (listener: (d: DeviceHost[]) => void) => (listener(devices), () => {}),
+    onDevices: (listener: (d: DeviceHost[]) => void) => (
+      (showDevices = listener),
+      listener(devices),
+      () => {}
+    ),
     onAccessRequests: (listener: (r: AccessPrompt[]) => void) => (listener(requests), () => {}),
     enterSetupCode: vi.fn(async (_id: string, code: string) =>
       code === "482913" ? undefined : "That code is wrong, used, or expired.",
@@ -85,6 +92,14 @@ test("a new computer's code can be denied, or typed instead", async () => {
   await act(async () => button("Deny").click());
   expect(again.answerCompare).toHaveBeenCalledWith(buildBox.id, false);
   expect(parallax.answerCompare).not.toHaveBeenCalled();
+});
+
+test("a comparison that ends with a reason shows it on the typed code's form", async () => {
+  await render([{ ...buildBox, access: { step: "compare", code: "482913" } }], []);
+  const why = "Parallax couldn't record this here, so it isn't allowed. Type the code instead.";
+  await act(async () => showDevices([{ ...buildBox, access: { step: "needsCode", error: why } }]));
+  expect(dialog()!.querySelector('input[aria-label="Code"]')).not.toBeNull();
+  expect(dialog()!.querySelector('[role="alert"]')?.textContent).toBe(why);
 });
 
 test("after Allow, a bare setup command's computer says to confirm there", async () => {

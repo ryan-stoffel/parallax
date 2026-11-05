@@ -1865,6 +1865,7 @@ function dropAccountConnection(id: string): void {
   signedIn.delete(id);
   endCompare(id);
   compared.delete(id);
+  allowing.delete(id);
   setAccess(id, undefined);
 }
 
@@ -2039,6 +2040,7 @@ function followAccess(hostId: string, state: ConnectionState): void {
   if (state.status !== "connected") return;
   if (relayId) {
     signedIn.delete(hostId);
+    allowing.delete(hostId);
     setAccess(hostId, undefined);
     finishMigration(relayId);
     void readRoutes(hostId);
@@ -2070,8 +2072,9 @@ const accessHosts = () =>
   );
 
 /**
- * The relay ids the user's computers vouch for (0091): each connected one's `approvedHosts`, and
- * the `tailnet:` devices', which Tailscale vouches for. Undefined until the local plxd answers.
+ * The relay ids the user's computers vouch for (0091): each connected one's `approvedHosts` and
+ * `allowedHosts`, and the `tailnet:` devices', which Tailscale vouches for. Undefined until the
+ * local plxd answers and has saved every restriction those lists hold.
  */
 async function vouchedHosts(): Promise<Set<string> | undefined> {
   const asked = accessHosts();
@@ -2086,11 +2089,35 @@ async function vouchedHosts(): Promise<Set<string> | undefined> {
   const known = read.filter((each) => each !== undefined);
   const own = known.find((k) => k.id === "local");
   if (!own) return undefined;
+  const sources = listSources(known, own);
+  // Saved first, or not used: the computer that told of a restriction may be gone by the next sync.
+  const saved = own.state.allowedHosts ?? [];
+  const unsaved = sources
+    .flatMap((each) => each.state.allowedHosts ?? [])
+    .filter((id) => !saved.includes(id));
+  if (unsaved.length && !(await saveRestrictions([...new Set(unsaved)]))) return undefined;
   const vouched = new Set(tailnetRelayIds.values());
-  for (const each of listSources(known, own))
+  for (const each of sources)
     for (const id of [...each.state.approvedHosts, ...(each.state.allowedHosts ?? [])])
       vouched.add(id);
   return vouched;
+}
+
+/**
+ * Keeps `allowedHosts` in this computer's plxd, which is what holds them for good (0091). Answers
+ * whether its lists now have them, which an older plxd's don't: a caller must not use those
+ * computers otherwise.
+ */
+async function saveRestrictions(allowedHosts: string[]): Promise<boolean> {
+  const answer = await connections.get("local")?.request("access/merge", {
+    approvedClients: [],
+    removedClients: [],
+    approvedHosts: [],
+    allowedHosts,
+  });
+  if (!answer || "error" in answer) return false;
+  const saved = answer.result.allowedHosts ?? [];
+  return allowedHosts.every((id) => saved.includes(id));
 }
 
 /**
@@ -2105,7 +2132,7 @@ async function beginAccess(id: string): Promise<void> {
   const relayId = relayIdOf(id);
   const vouched = await vouchedHosts();
   if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
-  if (!vouched.has(relayId)) return askForCode(id);
+  if (!vouched.has(relayId) || allowing.has(id)) return askForCode(id);
   if (signedIn.has(id))
     return setAccess(id, { step: "ask", why: "It hasn't let this computer in. Ask again." });
   await signIn(id);
@@ -2145,6 +2172,12 @@ const compared = new Set<string>();
 const comparing = new Map<string, (allow: boolean) => void>();
 /** What `answerCompare` is waiting on, by computer. */
 const compareDone = new Map<string, (failed: string | undefined) => void>();
+/**
+ * New computers the user clicked Allow on, until one lets this app in. Allow saves their
+ * restriction before it's sent, and that mark is this app's own, so here it vouches for nothing: a
+ * request that then ends leaves the typed code, not a sign-in.
+ */
+const allowing = new Set<string>();
 
 /** Ends the comparison with computer `id`, if one runs, which withdraws its request. */
 function endCompare(id: string): void {
@@ -2159,8 +2192,9 @@ function endCompare(id: string): void {
  * Starts a request at new account computer `id` (0091), through `plxd dial --account --sign-in
  * --compare`, so both ends show one code, made from values both commit to. The user allows it only
  * if that computer shows the same. With nothing vouching for the computer, it may be one the relay
- * made up, so once it answers it's marked in `allowedHosts`: this app uses it and takes no lists
- * from it (`listSources`). When anything fails, the user can type its setup code instead.
+ * made up, so `answerCompare` marks it in `allowedHosts` before Allow reaches it: this app uses it
+ * and takes no lists from it (`listSources`). When anything fails, the user can type its setup code
+ * instead.
  */
 async function compareCodes(id: string): Promise<void> {
   const relayId = relayIdOf(id);
@@ -2238,26 +2272,34 @@ async function compareCodes(id: string): Promise<void> {
     typeInstead(why);
     return done?.(why);
   }
-  // Before the merge, so its change doesn't read as another computer vouching mid-comparison.
   setAccess(id, undefined);
-  await connections.get("local")?.request("access/merge", {
-    approvedClients: [],
-    removedClients: [],
-    approvedHosts: [],
-    allowedHosts: [relayId],
-  });
   connections.get(id)?.retry();
   done?.(undefined);
 }
 
 /**
  * `window.parallax.answerCompare`: the user's answer to new computer `hostId`'s code. Allowing
- * resolves once the computer lets this app in, which for a bare setup command takes Enter there
- * too. Resolves to an error for people.
+ * saves the computer's restriction, or withdraws the request if that fails, since once Allow is
+ * sent the computer can leave a session here. It resolves once the computer lets this app in,
+ * which for a bare setup command takes Enter there too. Resolves to an error for people.
  */
-function answerCompare(hostId: string, allow: boolean): Promise<string | undefined> {
+async function answerCompare(hostId: string, allow: boolean): Promise<string | undefined> {
   const answer = comparing.get(hostId);
-  if (!answer) return Promise.resolve("That request isn't waiting anymore.");
+  const relayId = relayIdOf(hostId);
+  const gone = "That request isn't waiting anymore.";
+  if (!answer || !relayId) return gone;
+  if (allow) {
+    allowing.add(hostId);
+    const saved = await saveRestrictions([relayId]);
+    // It ended while saving, or the user denied it, whose answer is already on its way.
+    if (comparing.get(hostId) !== answer || compareDone.has(hostId)) return gone;
+    if (!saved) {
+      const why = "Parallax couldn't record this here, so it isn't allowed. Type the code instead.";
+      endCompare(hostId);
+      setAccess(hostId, { step: "needsCode", error: why });
+      return why;
+    }
+  }
   return new Promise((resolve) => {
     compareDone.set(hostId, resolve);
     answer(allow);
@@ -2512,6 +2554,8 @@ function watchAccess(hostId: string): void {
         ...(answer.result.allowedHosts ?? []),
       ]) {
         const id = accountId(vouched);
+        // This app's own save for an Allow isn't another computer vouching.
+        if (allowing.has(id)) continue;
         const step = accountAccess.get(id)?.step;
         if (step !== "needsCode" && step !== "compare" && step !== "confirm") continue;
         endCompare(id);

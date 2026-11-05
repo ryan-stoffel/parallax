@@ -129,9 +129,10 @@ export function Modal({
 export function useSetupCode(computer: Pick<DeviceHost, "id" | "access">, onPaired: () => void) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(
-    computer.access?.step === "needsCode" ? computer.access.error : undefined,
-  );
+  const [typedError, setError] = useState<string>();
+  // Why a comparison ended, which can happen while this form is already mounted.
+  const error =
+    typedError ?? (computer.access?.step === "needsCode" ? computer.access.error : undefined);
   const digits = code.replace(/\D/g, "");
   const ready = digits.length === 6 && !busy;
   const submit = async (e: FormEvent<HTMLFormElement>) => {
