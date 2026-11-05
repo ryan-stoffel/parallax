@@ -97,6 +97,45 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+test.each([
+  ["whole", ["plxd dial: connected over 10.0.0.2:7341\n"]],
+  ["with the prefix apart", ["plxd dial: ", "connected over 10.0.0.2:7341\n"]],
+  ["with the newline apart", ["plxd dial: connected over 10.0.0.2:7341", "\n"]],
+  ["cut inside the route", ["plxd dial: connected over 10.0", ".0.2:7341\n"]],
+  ["after another line", ["plxd dial: starting\nplxd dial: connected over 10.0.0.2:7341\n"]],
+])("hears the route plxd dial connected over, %s, once", (_name, chunks) => {
+  const heard: string[] = [];
+  new Connection({
+    command: () => ["/bin/plxd", "dial"],
+    clientVersion: "0.0.1",
+    onState: () => {},
+    onRoute: (route) => heard.push(route),
+    spawn: () => {
+      children.push(new FakeChild());
+      return child() as unknown as ChildProcessWithoutNullStreams;
+    },
+  }).start();
+  for (const chunk of chunks) child().stderr.emit("data", Buffer.from(chunk));
+  child().stderr.emit("data", Buffer.from("plxd dial: something later\n"));
+  expect(heard).toEqual(["10.0.0.2:7341"]);
+});
+
+test("takes no route from a line that only mentions one", () => {
+  const heard: string[] = [];
+  new Connection({
+    command: () => ["/bin/plxd", "dial"],
+    clientVersion: "0.0.1",
+    onState: () => {},
+    onRoute: (route) => heard.push(route),
+    spawn: () => {
+      children.push(new FakeChild());
+      return child() as unknown as ChildProcessWithoutNullStreams;
+    },
+  }).start();
+  child().stderr.emit("data", Buffer.from("a shell said connected over 10.0.0.9\n"));
+  expect(heard).toEqual([]);
+});
+
 test.each([false, true])(
   "replaces the old daemon before publishing its handshake (incompatible: %s)",
   async (mismatch) => {

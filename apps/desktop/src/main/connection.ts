@@ -548,12 +548,19 @@ export class Connection {
     this.client = client;
 
     let stderr = ""; // This run's, capped, so an earlier run's line is never reported.
+    let routeHeard = false;
     child.stdin.on("error", ignore); // EPIPE once attach exits; "close" reports that.
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString("utf8")).slice(-4000);
-      // `plxd dial: connected over <route>`, once, before plxd's frames.
-      const route = /connected over (\S+)/.exec(chunk.toString("utf8"))?.[1];
-      if (route && child === this.child) this.options.onRoute?.(route);
+      // `plxd dial: connected over <route>`, once, before plxd's frames. plxd writes a line in
+      // several writes, so a chunk can hold any part of it: this reads whole lines of the run's.
+      const route = routeHeard
+        ? undefined
+        : /^plxd dial: connected over (\S+)\n/m.exec(stderr)?.[1];
+      if (route && child === this.child) {
+        routeHeard = true;
+        this.options.onRoute?.(route);
+      }
     });
     child.stdout.on("data", (chunk: Buffer) => {
       if (child !== this.child) return;
