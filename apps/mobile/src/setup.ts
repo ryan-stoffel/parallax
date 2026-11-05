@@ -51,15 +51,22 @@ export function upgraded(read: { machines: { id: string; name: string }[] } & Pa
 }
 
 /**
- * `known` with the account's computers the relay `listed` that it lacks, unless removed from this
- * phone. A known one keeps the name it reports itself, and one the relay no longer lists stays,
- * as an offline one does.
+ * `known` less the computers that left the account (`removed`), with the account's computers the
+ * relay `listed` that it lacks, unless removed from this phone (`hidden`). A known one keeps the
+ * name it reports itself. One the relay doesn't list and doesn't mark stays, as an offline one
+ * does, since that list may come from a relay that lost its data (0091).
  */
-export function withListed(known: Machine[], listed: Listed[], hidden: string[] = []): Machine[] {
+export function withListed(
+  known: Machine[],
+  listed: Listed[],
+  hidden: string[] = [],
+  removed: string[] = [],
+): Machine[] {
+  const kept = known.filter((m) => !removed.some((hostId) => m.id === accountId(hostId)));
   const added = listed
-    .filter((l) => !hidden.includes(accountId(l.hostId)) && !known.some((m) => m.id === accountId(l.hostId)))
+    .filter((l) => !hidden.includes(accountId(l.hostId)) && !kept.some((m) => m.id === accountId(l.hostId)))
     .map((l) => ({ id: accountId(l.hostId), name: l.name || "Computer", account: { hostId: l.hostId, routes: [] } }));
-  return added.length ? [...known, ...added] : known;
+  return added.length || kept.length < known.length ? [...kept, ...added] : known;
 }
 
 /**
