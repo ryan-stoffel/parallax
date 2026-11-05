@@ -7,7 +7,7 @@ import type { ParallaxBridge } from "../preload/bridge";
 import type { ThreadRun } from "../protocol/generated/protocol";
 import { ChangesPanel } from "./ChangesPanel";
 
-// happy-dom has no popovers. The Turn menu's items are in the DOM either way.
+// happy-dom has no popovers. The picker's items are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
 
 vi.mock("./providers", () => ({
@@ -71,6 +71,22 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
     return { logId: "l", result: { diff: largePatch ?? patch("a.txt") + patch("b.txt") } };
   if (method === "orchestration/getTurnDiff")
     return { logId: "l", result: { diff: patch(params["to"] === 2 ? "b.txt" : "a.txt") } };
+  if (method === "git/reviewCommits")
+    return {
+      logId: "l",
+      result: {
+        hasBase: true,
+        commits: [
+          {
+            sha: "abc1234def",
+            subject: "One commit",
+            author: "R",
+            committedAt: "2026-11-01T00:00:00Z",
+          },
+        ],
+      },
+    };
+  if (method === "git/reviewDiff") return { logId: "l", result: { diff: patch("scoped.txt") } };
   return { logId: "l", result: { seq: 9 } };
 });
 const compose = vi.fn();
@@ -118,10 +134,10 @@ const settle = async () => {
 };
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name)!;
-// The Turn menu's options (ui.tsx's Picker).
+// The picker's options (ui.tsx's Picker).
 const turnItems = () => [
   ...document.querySelectorAll<HTMLElement>(
-    '[role="menu"][aria-label="Turn"] [role="menuitemradio"]',
+    '[role="menu"][aria-label="Show"] [role="menuitemradio"]',
   ),
 ];
 const selectTurn = async (ordinal: number) => {
@@ -183,4 +199,44 @@ test("rollback never targets an unready checkpoint", async () => {
   await settle();
   await selectTurn(4);
   expect(button("Edit from here").disabled).toBe(true);
+});
+
+test("with reviewScopes the picker offers the branch, uncommitted changes, and each commit", async () => {
+  renderPanel({ reviewScopes: true });
+  await settle();
+  expect(turnItems().map((o) => o.textContent)).toEqual([
+    "Changes",
+    "Uncommitted",
+    "abc1234 One commit",
+    "All turns",
+    expect.stringMatching(/^Turn 1:/),
+    expect.stringMatching(/^Turn 2:/),
+  ]);
+  await act(async () => turnItems()[2]!.click());
+  await settle();
+  expect(request).toHaveBeenCalledWith("h", "git/reviewDiff", {
+    threadId: "r",
+    scope: { kind: "commit", sha: "abc1234def" },
+  });
+  expect(document.body.textContent).toContain("scoped.txt");
+});
+
+test("without reviewScopes the picker keeps to the turns", async () => {
+  expect(turnItems().map((o) => o.textContent)).toEqual([
+    "All turns",
+    expect.stringMatching(/^Turn 1:/),
+    expect.stringMatching(/^Turn 2:/),
+  ]);
+  expect(request).not.toHaveBeenCalledWith("h", "git/reviewCommits", expect.anything());
+});
+
+test("a thread with no turn yet shows its branch", async () => {
+  listedRuns = [];
+  renderPanel({ reviewScopes: true, version: 1 });
+  await settle();
+  expect(request).toHaveBeenCalledWith("h", "git/reviewDiff", {
+    threadId: "r",
+    scope: { kind: "branch" },
+  });
+  expect(document.body.textContent).toContain("scoped.txt");
 });
