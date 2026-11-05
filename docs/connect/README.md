@@ -24,7 +24,7 @@ Windows:
 powershell -c "irm https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/connect.ps1 | iex; Connect-Parallax --channel nightly"
 ```
 
-The command signs you in, installs `plxd`, the Parallax daemon, with its background service, and connects the computer to your account. Then it shows a 6-digit code. Parallax on your other device shows the same code, and you allow it there.
+The command signs you in, installs `plxd`, the Parallax daemon, with its background service, and connects the computer to your account. Then it shows a 6-digit code. Parallax on your other device shows the same code, and you allow it there. `npx plx-cli connect` typed by hand also needs Enter in its terminal. The command from Add computer names your device, so Allow there is enough.
 
 ## Docs
 
