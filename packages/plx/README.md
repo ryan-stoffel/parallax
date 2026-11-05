@@ -29,7 +29,7 @@ Until the release after this one, the Tailscale commands stay: `plx devices [--j
 Options:
 
 - `--channel stable|nightly`: which release to install (default `nightly`). `plx connect` stops before sign-in when that release is older than Parallax Relay, and says what to run instead.
-- `--no-browser`: sign in on any device and paste the code here. This is automatic over SSH and on Linux without a display.
+- `--no-browser`: sign in on any device, with a link and a short code printed here. This is automatic over SSH and on Linux without a display.
 - `--user <user>` and `--port <port>`: the SSH user and port for `add`.
 - `--headless`: install plxd alone, without the app, for the Tailscale `add` and `setup`. `connect` always installs plxd alone.
 - `--dry-run`: print the Tailscale steps and install script without installing anything.
@@ -37,7 +37,7 @@ Options:
 
 ## Sign-in
 
-`plx connect` uses the Parallax app's Clerk OAuth application, with PKCE. With a browser on this computer, sign-in returns to a listener on 127.0.0.1. Otherwise plx prints a link: open it on any device, sign in, and paste the code `relay.parallax.codes/connect/code` shows. The code works only with the verifier plx holds. The token goes to plxd once, to register, and nothing keeps it.
+`plx connect` uses the Parallax app's Clerk OAuth application. With a browser on this computer, sign-in uses PKCE and returns to a listener on 127.0.0.1. Otherwise plx uses Clerk's device authorization grant: it prints a link and a short code, you approve on any device, and plx carries on by itself. The code is useless without the device code plx holds. If the OAuth application doesn't have that grant, plx prints a link instead, and you paste the code `relay.parallax.codes/connect/code` shows, which works only with the verifier plx holds. The token goes to plxd once, to register, and nothing keeps it.
 
 ## Doctor
 

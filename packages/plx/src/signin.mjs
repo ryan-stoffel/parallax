@@ -1,19 +1,24 @@
 // @ts-check
-// Signing in to the Parallax account (0067, 0091) with the desktop app's Clerk OAuth application:
-// authorization code with PKCE. With a browser here, Clerk redirects to a loopback listener (RFC
-// 8252). Without one, the user signs in on any device, the relay's /connect/code page shows the
-// code, and the user pastes it here. Either way only this process holds the PKCE verifier, so the
-// code is useless anywhere else. The access token is handed to plxd once and never saved.
+// Signing in to the Parallax account (0067, 0091) with the desktop app's Clerk OAuth application.
+// With a browser here: authorization code with PKCE, redirected to a loopback listener (RFC 8252).
+// Without one: Clerk's device authorization grant (RFC 8628), where the user approves a short code
+// on any device and this process polls for the token. While the grant isn't enabled on the OAuth
+// application: PKCE again, with the code shown by the relay's /connect/code page and pasted here.
+// In every flow only this process holds what redeems the code (the PKCE verifier or the device
+// code), so a code seen elsewhere is useless. The access token is handed to plxd once and never
+// saved.
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { setTimeout as wait } from "node:timers/promises";
 
 // The Clerk instance and OAuth application the desktop app signs in with (account.ts). Both are
 // public. PLX_CLERK_PUBLISHABLE_KEY and PLX_CLERK_CLIENT_ID point at another instance, as there.
 const PUBLISHABLE_KEY = "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
 const CLIENT_ID = "SXDueyOLOJ2v4Vmq";
 const SCOPES = "profile email";
+const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
 /**
  * The page the browser lands on after a loopback sign-in, styled as the relay's /connect/code page
@@ -174,6 +179,7 @@ export async function redeem(clerk, { code, verifier, redirectUri }) {
  * @property {(url: string) => Promise<boolean>} open Opens `url` in a browser here.
  * @property {(question: string) => Promise<string>} prompt Asks the user for a line.
  * @property {number} [timeoutMs] How long the loopback sign-in waits.
+ * @property {(ms: number) => Promise<unknown>} [sleep] Waits between device grant polls. Unlike connect's unref'd sleep, this one keeps plx running.
  */
 
 /**
@@ -181,14 +187,122 @@ export async function redeem(clerk, { code, verifier, redirectUri }) {
  * @param {SignInOptions} options
  * @returns {Promise<string>}
  */
-export function signIn(options) {
-  return options.browser ? signInHere(options) : signInElsewhere(options);
+export async function signIn(options) {
+  if (options.browser) return signInHere(options);
+  const device = await startDeviceGrant(options.clerk);
+  return device ? finishDeviceGrant(device, options) : signInElsewhere(options);
 }
 
 /**
- * The paste flow: prints the link, reads the code the relay's page shows, and redeems it. A code
- * Clerk refuses can be pasted again, up to 3 times, since a mistyped one doesn't use up the real
- * one.
+ * @typedef {object} DeviceGrant
+ * @property {string} tokenEndpoint
+ * @property {string} clientId
+ * @property {string} deviceCode What redeems the approval. Stays in this process and is never printed.
+ * @property {string} userCode The short code the user checks or types.
+ * @property {string} verificationUri
+ * @property {string} [verificationUriComplete] `verificationUri` with the user code already filled in.
+ * @property {number} expiresIn Seconds.
+ * @property {number} interval Seconds between polls.
+ */
+
+/**
+ * Asks Clerk for a device code, or resolves to undefined when this sign-in has to use the paste
+ * flow. Clerk's discovery document only says the instance offers the grant. Whether this OAuth
+ * application has it shows when the device endpoint answers: it refuses one that doesn't. Any
+ * failure here is the same answer, since the user has seen nothing yet and the paste flow works
+ * without the grant.
+ * @param {Clerk} clerk
+ * @returns {Promise<DeviceGrant | undefined>}
+ */
+async function startDeviceGrant(clerk) {
+  try {
+    const found = await fetch(`${clerk.api}/.well-known/oauth-authorization-server`, { signal: AbortSignal.timeout(5_000) });
+    const metadata = /** @type {Record<string, unknown>} */ (await found.json());
+    const endpoint = metadata["device_authorization_endpoint"];
+    const tokenEndpoint = metadata["token_endpoint"];
+    const grants = metadata["grant_types_supported"];
+    if (typeof endpoint !== "string" || typeof tokenEndpoint !== "string") return undefined;
+    if (!Array.isArray(grants) || !grants.includes(DEVICE_GRANT)) return undefined;
+    const res = await fetch(endpoint, {
+      method: "POST",
+      body: new URLSearchParams({ client_id: clerk.clientId, scope: SCOPES }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    const body = /** @type {Record<string, unknown>} */ (await res.json());
+    const { device_code: deviceCode, user_code: userCode, verification_uri: verificationUri, verification_uri_complete: complete, expires_in: expiresIn, interval } = body;
+    if (!res.ok || typeof deviceCode !== "string" || typeof userCode !== "string" || typeof verificationUri !== "string" || typeof expiresIn !== "number") return undefined;
+    return {
+      tokenEndpoint,
+      clientId: clerk.clientId,
+      deviceCode,
+      userCode,
+      verificationUri,
+      ...(typeof complete === "string" ? { verificationUriComplete: complete } : {}),
+      expiresIn,
+      // RFC 8628 3.2: 5 seconds when the server names none.
+      interval: typeof interval === "number" && interval > 0 ? interval : 5,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Prints the link and the short code, then polls Clerk's token endpoint until the user approves,
+ * as RFC 8628 3.5 sets out: the first poll waits one interval, `slow_down` adds 5 seconds for good,
+ * and a connection failure or a server error doubles the interval. Once the code is on screen a
+ * failure is an error for the user, not a fallback, since they may already be approving it.
+ * @param {DeviceGrant} device
+ * @param {SignInOptions} options
+ * @returns {Promise<string>}
+ */
+async function finishDeviceGrant(device, { sleep = wait }) {
+  const { tokenEndpoint, clientId, deviceCode, userCode, verificationUri, verificationUriComplete, expiresIn } = device;
+  const ask = verificationUriComplete
+    ? `Open this link in a browser on any device, sign in, and allow this computer if it shows this code:\n\n  ${verificationUriComplete}\n\n  Code: ${userCode}\n`
+    : `Open this link in a browser on any device, sign in, enter this code, and allow this computer:\n\n  ${verificationUri}\n\n  Code: ${userCode}\n`;
+  console.log(ask);
+  const expired = new Error("The code expired before it was approved. Run it again.");
+  const deadline = Date.now() + expiresIn * 1000;
+  let { interval } = device;
+  for (;;) {
+    await sleep(Math.max(0, Math.min(interval * 1000, deadline - Date.now())));
+    if (Date.now() >= deadline) throw expired;
+    /** @type {Response} */
+    let res;
+    try {
+      res = await fetch(tokenEndpoint, {
+        method: "POST",
+        body: new URLSearchParams({ client_id: clientId, grant_type: DEVICE_GRANT, device_code: deviceCode }),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      interval *= 2;
+      continue;
+    }
+    const body = /** @type {Record<string, unknown>} */ (await res.json().catch(() => ({})));
+    if (res.ok && typeof body["access_token"] === "string") return body["access_token"];
+    const error = body["error"];
+    if (error === "authorization_pending") continue;
+    if (error === "slow_down") {
+      interval += 5;
+      continue;
+    }
+    if (error === "access_denied") throw new Error("The sign-in was denied. Run it again to try once more.");
+    if (error === "expired_token") throw expired;
+    if (typeof error !== "string" && (res.status >= 500 || res.status === 429)) {
+      interval *= 2;
+      continue;
+    }
+    const why = [body["error_description"], error].find((v) => typeof v === "string");
+    throw new Error(`Clerk didn't finish the sign-in: ${why ?? `it answered ${res.status}`}.`);
+  }
+}
+
+/**
+ * The paste flow, for when the device grant isn't enabled: prints the link, reads the code the
+ * relay's page shows, and redeems it. A code Clerk refuses can be pasted again, up to 3 times, since
+ * a mistyped one doesn't use up the real one.
  * @param {SignInOptions} options
  */
 async function signInElsewhere({ clerk, codePage, prompt }) {
