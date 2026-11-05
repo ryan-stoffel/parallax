@@ -1,9 +1,7 @@
 import {
   ChevronRight,
-  Copy,
+  ListCollapse,
   Ellipsis,
-  Eye,
-  EyeOff,
   File,
   FilePlus,
   FileSymlink,
@@ -12,13 +10,12 @@ import {
   FolderPlus,
   FolderTree,
   Search,
-  WrapText,
   X,
 } from "lucide-react";
 import {
+  type CSSProperties,
   type KeyboardEvent,
-  lazy,
-  Suspense,
+  type PointerEvent,
   useEffect,
   useRef,
   useState,
@@ -26,38 +23,33 @@ import {
 } from "react";
 
 import type { RpcError } from "../preload/bridge";
-import type { AgentEntry } from "../protocol/generated/protocol";
-import { setAppearance, useAppearance } from "./appearance";
-import type { Cursor } from "./CodeEditor";
+import type { AgentEntry, GrepMatch } from "../protocol/generated/protocol";
+import { Marked } from "./CommandMenu";
 import { rank } from "./commandSearch";
 import { useConnectedNow } from "./ConnectionStatus";
-import { readWorking } from "./documents";
 import { describeError } from "./errors";
-import { DownloadButton } from "./FileCards";
-import { CHECK_EVERY_MS, type OpenFile, type OpenFiles, openFilesOf } from "./openFiles";
-import { GithubMarkdown } from "./pr/GithubMarkdown";
+import { FileEditor } from "./FileEditor";
+import { useShortcutLabel } from "./keybindings";
+import { CHECK_EVERY_MS, type OpenFile, openFilesOf } from "./openFiles";
 import { FileIcon } from "./TurnChanges";
-import {
-  Button,
-  ConfirmDialog,
-  IconButton,
-  Menu,
-  menuItem,
-  openOnContextMenu,
-  searchField,
-} from "./ui";
+import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu, searchField } from "./ui";
 
-// The editor and its languages load when a file first opens.
-const CodeEditor = lazy(() => import("./CodeEditor"));
-
-/** From this wide, the tree sits beside the file instead of taking turns with it. */
+/** From this wide, the tree sits beside the file, and a split Markdown view has room. */
 const TREE_BESIDE_WIDTH = 720;
 const TREE_WIDTH = 256;
+const TREE_MIN_WIDTH = 170;
+/** What the file keeps however wide the tree is dragged. */
+const FILE_MIN_WIDTH = 360;
+const TREE_WIDTH_KEY = "parallax.files.treeWidth";
 /** How often the open folders are listed again, for what the agent changes. */
 const RELIST_EVERY_MS = 5000;
+/** How far a tree's level indents. */
+const INDENT = 12;
+/** How long a search waits after typing before it asks plxd about file contents. */
+const GREP_AFTER_MS = 250;
 
 /** A folder's entries once listed, or why they couldn't be. */
-type Listing = { entries: AgentEntry[]; truncated: boolean } | { error: string };
+type Listing = { entries: AgentEntry[]; truncated: boolean; folder?: string } | { error: string };
 
 /** A name being typed in the tree: a new entry in `folder`, or a new name for `path`. */
 type Draft = { folder: string; isFolder: boolean } | { path: string };
@@ -89,16 +81,14 @@ async function listFolder(hostId: string, runId: string, folder: string): Promis
   return "error" in listed ? { error: describeError(listed.error) } : listed.result;
 }
 
-/** Whether `path` shows as rendered Markdown when asked. */
-const isMarkdown = (path: string) => /\.(md|mdx|markdown)$/i.test(path);
-
 /**
  * The side panel's Files view (PLX-296, PLX-1428): a run's folder on its host, its worktree or a
  * Current checkout thread's checkout, as a tree beside an editor, or taking turns with it when
  * narrow. A folder lists from `agent/files`, and open folders list again every few seconds, so the
  * agent's new files show. Files open in tabs, which `openFiles` keeps and saves: on a plxd with
- * `fileWrite`, `writable` edits them. `unavailable` says why it can't load, such as a plxd without
- * the `files` capability.
+ * `fileWrite`, `writable` edits them. A single click opens a file in a preview tab, which the next
+ * one replaces, and a double-click or an edit keeps it, as in VS Code and Zed. `unavailable` says why
+ * it can't load, such as a plxd without the `files` capability.
  *
  * `editable`, on a plxd with `fileEdit` (PLX-590), adds New file and New folder above the tree
  * and a menu on each entry, on right-click or its `…`: New file, New folder, Rename, and Delete.
@@ -113,6 +103,7 @@ export function FilesPanel({
   unavailable,
   editable,
   writable,
+  grep,
   reveal,
 }: {
   hostId: string;
@@ -120,6 +111,8 @@ export function FilesPanel({
   unavailable?: string;
   editable?: boolean;
   writable?: boolean;
+  /** Whether this plxd searches file contents (`repoGrep`). */
+  grep?: boolean;
   reveal?: { path: string };
 }) {
   // Each listed folder by path, the root's as "".
@@ -144,15 +137,60 @@ export function FilesPanel({
   }, [!unavailable]);
   const beside = width >= TREE_BESIDE_WIDTH;
   const [treeBeside, setTreeBeside] = useState(true);
-  // When narrow, whether the tree is on screen rather than the file.
-  const [treeTurn, setTreeTurn] = useState(false);
+  // When narrow, whether the tree is drawn over the file.
+  const [treeDrawer, setTreeDrawer] = useState(false);
+  const [treeWidth, setTreeWidth] = useState(
+    () => Number(localStorage.getItem(TREE_WIDTH_KEY)) || TREE_WIDTH,
+  );
+  const treeMax = Math.max(TREE_MIN_WIDTH, width - FILE_MIN_WIDTH);
+  const shownTreeWidth = Math.min(treeWidth, treeMax);
+  const setWidthOfTree = (next: number) => {
+    const clamped = Math.min(Math.max(next, TREE_MIN_WIDTH), treeMax);
+    setTreeWidth(clamped);
+    localStorage.setItem(TREE_WIDTH_KEY, String(clamped));
+  };
+  const dragSash = (e: PointerEvent<HTMLElement>) => {
+    const start = e.clientX - shownTreeWidth;
+    const sash = e.currentTarget;
+    sash.setPointerCapture(e.pointerId);
+    const move = (event: globalThis.PointerEvent) => setWidthOfTree(event.clientX - start);
+    sash.addEventListener("pointermove", move);
+    sash.addEventListener(
+      "lostpointercapture",
+      () => sash.removeEventListener("pointermove", move),
+      {
+        once: true,
+      },
+    );
+  };
   const [closing, setClosing] = useState<OpenFile>();
   const closeDialog = useRef<HTMLDialogElement>(null);
 
-  /** Opens `path` from the tree, and when narrow, goes to it. */
-  const openFile = (path: string, link = false) => {
-    store.open(path, link);
-    setTreeTurn(false);
+  /** Opens `path` from the tree or a search, and when narrow, goes to it. */
+  const openFile = (path: string, options?: Parameters<typeof store.open>[1]) => {
+    store.open(path, options);
+    setTreeDrawer(false);
+  };
+  const treeRef = useRef<HTMLDivElement>(null);
+  /** Opens the folders above `path` and scrolls its row into view. */
+  const revealInTree = (path: string) => {
+    const folders = path
+      .split("/")
+      .slice(0, -1)
+      .map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+    setExpanded((prev) => new Set([...prev, ...folders]));
+    void relist(...folders).then(() =>
+      requestAnimationFrame(() =>
+        treeRef.current
+          ?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+          ?.scrollIntoView?.({ block: "nearest" }),
+      ),
+    );
+  };
+  const showInFiles = (path: string) => {
+    if (beside) setTreeBeside(true);
+    else setTreeDrawer(true);
+    revealInTree(path);
   };
   const closeTab = async (tab: OpenFile) => {
     if (await store.close(tab.id)) return;
@@ -198,19 +236,21 @@ export function FilesPanel({
     return () => clearInterval(timer);
   }, [store, activeId, unavailable, connectedNow]);
 
-  // A new `reveal` opens its file, with the folders above it open in the tree.
+  // A new `reveal` opens its file, kept, with the folders above it open in the tree.
   useEffect(() => {
     if (!reveal || store.revealed === reveal) return;
     store.revealed = reveal;
     openFile(reveal.path);
-    const folders = reveal.path
-      .split("/")
-      .slice(0, -1)
-      .map((_, i, parts) => parts.slice(0, i + 1).join("/"));
-    setExpanded((prev) => new Set([...prev, ...folders]));
-    void relist(...folders);
+    revealInTree(reveal.path);
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- on a new reveal only
   }, [reveal, store]);
+
+  // The tree follows the tab on screen when it sits beside it, as VS Code's Explorer does.
+  const activePath = file?.path;
+  useEffect(() => {
+    if (activePath && beside && treeBeside) revealInTree(activePath);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- on another file only
+  }, [activePath, beside, treeBeside]);
 
   const toggle = (folder: string) => {
     if (expanded.has(folder))
@@ -293,11 +333,12 @@ export function FilesPanel({
 
   if (unavailable) return <Empty title="Files aren't available" hint={unavailable} />;
   const top = listings[""];
+  const rootFolder = top && "folder" in top ? top.folder : undefined;
   const empty = top && "entries" in top && top.entries.length === 0 && !draft;
 
   /** The field a name is typed in, in place of a row, with why the last save failed under it. */
   const nameField = (d: Draft, depth: number, isFolder: boolean, initial = "") => {
-    const indent = { paddingLeft: `${10 + depth * 14}px` };
+    const indent = { paddingLeft: `${4 + depth * INDENT}px` };
     const Icon = isFolder ? Folder : File;
     return (
       <div>
@@ -340,7 +381,7 @@ export function FilesPanel({
   const tree = (folder: string, depth: number) => {
     const listing = listings[folder];
     if (!listing) return null;
-    const indent = { paddingLeft: `${10 + depth * 14}px` };
+    const indent = { paddingLeft: `${4 + depth * INDENT}px` };
     if ("error" in listing)
       return (
         <p role="alert" style={indent} className="py-1 pr-2 text-body text-danger">
@@ -348,7 +389,16 @@ export function FilesPanel({
         </p>
       );
     return (
-      <ul role="group">
+      // A guide runs down each open folder's entries, under its chevron.
+      <ul
+        role="group"
+        style={{ "--guide": `${depth * INDENT - 3}px` } as CSSProperties}
+        className={
+          depth
+            ? "relative before:absolute before:inset-y-0 before:left-[var(--guide)] before:w-px before:bg-border/60"
+            : ""
+        }
+      >
         {draft && "folder" in draft && draft.folder === folder && (
           <li>{nameField(draft, depth, draft.isFolder)}</li>
         )}
@@ -360,7 +410,12 @@ export function FilesPanel({
           const FolderIcon = open ? FolderOpen : Folder;
           const renaming = draft && "path" in draft && draft.path === path;
           return (
-            <li key={entry.name} role="treeitem" aria-expanded={isFolder ? open : undefined}>
+            <li
+              key={entry.name}
+              role="treeitem"
+              aria-expanded={isFolder ? open : undefined}
+              data-path={path}
+            >
               {renaming ? (
                 nameField(draft, depth, isFolder, entry.name)
               ) : (
@@ -370,8 +425,22 @@ export function FilesPanel({
                   <button
                     type="button"
                     style={indent}
-                    onClick={() => (isFolder ? toggle(path) : openFile(path, link))}
-                    onKeyDown={(e) => onRowKey(e, { path, isFolder })}
+                    data-row
+                    onClick={() =>
+                      isFolder ? toggle(path) : openFile(path, { link, transient: true })
+                    }
+                    onDoubleClick={() => {
+                      if (!isFolder) openFile(path, { link });
+                    }}
+                    onKeyDown={(e) => {
+                      onRowKey(e, { path, isFolder });
+                      // Right opens a folder, then Left closes it or goes up, as in any tree.
+                      if (e.key === "ArrowRight" && isFolder && !open) toggle(path);
+                      if (e.key === "ArrowLeft" && isFolder && open) {
+                        e.stopPropagation();
+                        toggle(path);
+                      }
+                    }}
                     onContextMenu={
                       editable
                         ? (e) =>
@@ -382,7 +451,7 @@ export function FilesPanel({
                         : undefined
                     }
                     aria-current={file?.path === path ? "true" : undefined}
-                    className={`flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-body hover:bg-hover aria-[current]:bg-selected ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
+                    className={`flex h-6.5 w-full items-center gap-1.5 rounded-md pr-2 text-left text-body hover:bg-hover aria-[current]:bg-selected ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
                   >
                     <ChevronRight
                       aria-hidden
@@ -437,75 +506,156 @@ export function FilesPanel({
     menu.current?.hidePopover();
     action();
   };
-  const treeOnScreen = beside ? treeBeside : treeTurn || !file;
-  const treeButton = (
-    <IconButton
-      size="sm"
-      label={treeOnScreen ? "Hide files" : "Show files"}
-      aria-pressed={treeOnScreen}
-      onClick={() => (beside ? setTreeBeside(!treeBeside) : setTreeTurn(!treeTurn))}
+  // With no file, the tree is the whole view when narrow. Wide, it stays where it is.
+  const treeOnScreen = beside ? treeBeside : treeDrawer || !file;
+  const drawer = !beside && !!file && treeDrawer;
+  /** Down and Up move through the tree's visible rows, and Left from a closed row goes to its folder. */
+  const onTreeKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("button[data-row]")];
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown") rows[at + 1]?.focus();
+    else if (e.key === "ArrowUp") rows[Math.max(at - 1, 0)]?.focus();
+    else if (e.key === "ArrowLeft") {
+      const parent = (document.activeElement as HTMLElement | null)
+        ?.closest('[role="group"]')
+        ?.closest('[role="treeitem"]')
+        ?.querySelector<HTMLElement>("button[data-row]");
+      parent?.focus();
+    } else return;
+    e.preventDefault();
+  };
+  const explorer = (
+    <section
+      aria-label="Explorer"
+      style={beside && (file || treeBeside) ? { width: shownTreeWidth } : undefined}
+      className={`flex min-h-0 flex-col files-chrome ${
+        drawer
+          ? "absolute inset-y-0 left-0 z-30 w-[min(20rem,88%)] border-r border-border shadow-xl"
+          : beside
+            ? "relative shrink-0 border-r border-border/60"
+            : "min-w-0 flex-1"
+      }`}
     >
-      <FolderTree aria-hidden />
-    </IconButton>
-  );
-  return (
-    <div ref={root} className="flex min-h-0 flex-1">
-      {treeOnScreen && (
-        <section
-          aria-label="Files"
-          style={beside && file ? { width: TREE_WIDTH } : undefined}
-          className={`flex min-h-0 flex-col ${beside && file ? "shrink-0 border-r border-border/60" : "min-w-0 flex-1"}`}
+      <div className="flex h-9 shrink-0 items-center gap-0.5 pr-1 pl-3">
+        <h2
+          title={rootFolder}
+          className="min-w-0 flex-1 truncate text-meta font-medium tracking-wide text-muted-foreground uppercase"
         >
-          <div className="flex shrink-0 items-center gap-0.5 px-2 pb-1.5">
-            {tabs.length > 0 && !beside && treeButton}
-            <FileSearch hostId={hostId} runId={runId} onOpen={openFile} enabled={connectedNow} />
-            {editable && (
-              <>
-                <IconButton
-                  label="New file"
-                  onClick={() => startDraft({ folder: "", isFolder: false })}
-                >
-                  <FilePlus />
-                </IconButton>
-                <IconButton
-                  label="New folder"
-                  onClick={() => startDraft({ folder: "", isFolder: true })}
-                >
-                  <FolderPlus />
-                </IconButton>
-              </>
-            )}
-          </div>
-          {empty ? (
-            <Empty title="No files" hint="This thread's folder is empty." />
-          ) : (
-            <div
-              role="tree"
-              aria-label="Files"
-              className="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
+          {rootFolder ? nameOf(rootFolder) : "Files"}
+        </h2>
+        {editable && (
+          <>
+            <IconButton
+              size="sm"
+              label="New file"
+              onClick={() => startDraft({ folder: "", isFolder: false })}
             >
-              {tree("", 0)}
-            </div>
-          )}
-        </section>
-      )}
-      {file && (beside || !treeOnScreen) && (
-        <FileColumn
-          store={store}
-          file={file}
-          tabs={tabs}
-          treeButton={treeButton}
-          onClose={(tab) => void closeTab(tab)}
-          hostId={hostId}
-          runId={runId}
+              <FilePlus aria-hidden />
+            </IconButton>
+            <IconButton
+              size="sm"
+              label="New folder"
+              onClick={() => startDraft({ folder: "", isFolder: true })}
+            >
+              <FolderPlus aria-hidden />
+            </IconButton>
+          </>
+        )}
+        <IconButton
+          size="sm"
+          label="Collapse folders"
+          disabled={expanded.size === 0}
+          onClick={() => setExpanded(() => new Set())}
+        >
+          <ListCollapse aria-hidden />
+        </IconButton>
+        {drawer && (
+          <IconButton size="sm" label="Hide files" onClick={() => setTreeDrawer(false)}>
+            <X aria-hidden />
+          </IconButton>
+        )}
+      </div>
+      <FileSearch
+        hostId={hostId}
+        runId={runId}
+        enabled={connectedNow}
+        grep={!!grep}
+        onOpen={(path, line) => openFile(path, { transient: true, ...(line && { line }) })}
+      >
+        {empty ? (
+          <Empty title="No files" hint="This thread's folder is empty." />
+        ) : (
+          <div
+            ref={treeRef}
+            role="tree"
+            aria-label="Files"
+            onKeyDown={onTreeKey}
+            className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
+          >
+            {tree("", 0)}
+          </div>
+        )}
+      </FileSearch>
+      {beside && (
+        <div
+          role="separator"
+          aria-label="Resize files"
+          aria-orientation="vertical"
+          aria-valuenow={shownTreeWidth}
+          aria-valuemin={TREE_MIN_WIDTH}
+          aria-valuemax={treeMax}
+          tabIndex={0}
+          onPointerDown={dragSash}
+          onDoubleClick={() => setWidthOfTree(TREE_WIDTH)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") setWidthOfTree(shownTreeWidth - 16);
+            else if (e.key === "ArrowRight") setWidthOfTree(shownTreeWidth + 16);
+          }}
+          className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize transition-colors hover:bg-accent/30 focus-visible:bg-accent/30 focus-visible:outline-none active:bg-accent/40"
         />
       )}
-      {!file && beside && width > 0 && !treeBeside && (
-        <div className="flex flex-1 flex-col px-2">
-          <div>{treeButton}</div>
-          <Empty title="No file open" hint="Open a file from the tree." />
-        </div>
+    </section>
+  );
+  return (
+    <div ref={root} className="relative flex min-h-0 flex-1 overflow-hidden">
+      {treeOnScreen && explorer}
+      {drawer && (
+        <button
+          type="button"
+          aria-label="Hide files"
+          tabIndex={-1}
+          onClick={() => setTreeDrawer(false)}
+          className="absolute inset-0 z-20 bg-black/30"
+        />
       )}
+      {file
+        ? (beside || !treeOnScreen || drawer) && (
+            <FileEditor
+              store={store}
+              file={file}
+              tabs={tabs}
+              wide={beside}
+              treeOpen={treeOnScreen}
+              onToggleTree={() =>
+                beside ? setTreeBeside(!treeBeside) : setTreeDrawer(!treeDrawer)
+              }
+              onReveal={showInFiles}
+              onClose={(tab) => void closeTab(tab)}
+              hostId={hostId}
+              runId={runId}
+            />
+          )
+        : beside && (
+            <NoFile
+              treeButton={
+                !treeBeside && (
+                  <IconButton size="sm" label="Show files" onClick={() => setTreeBeside(true)}>
+                    <FolderTree aria-hidden />
+                  </IconButton>
+                )
+              }
+            />
+          )}
       <ConfirmDialog
         ref={closeDialog}
         title={<>Close “{closing && nameOf(closing.path)}” without saving?</>}
@@ -588,25 +738,51 @@ export function FilesPanel({
   );
 }
 
-/** One line's search over every file in the thread's folder, from `repo/files`. */
+/**
+ * A search over the thread's folder above `children`, the tree, which its results stand in for while
+ * there's a query: files by name from `repo/files`, then lines from `repo/grep`, as VS Code's Quick
+ * Open and Search are, in one box. Enter opens the first result.
+ */
 function FileSearch({
   hostId,
   runId,
   onOpen,
   enabled,
+  grep,
+  children,
 }: {
   hostId: string;
   runId: string;
-  onOpen: (path: string) => void;
+  onOpen: (path: string, line?: number) => void;
   enabled: boolean;
+  grep: boolean;
+  children: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [paths, setPaths] = useState<string[] | { error: string }>();
+  const [lines, setLines] = useState<{ query: string; matches: GrepMatch[] }>();
   const load = async () => {
     const answer = await window.parallax.request(hostId, "repo/files", { runId });
     setPaths("error" in answer ? { error: describeError(answer.error) } : answer.result.files);
   };
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const trimmed = query.trim();
+  useEffect(() => {
+    if (!grep || trimmed.length < 2) return setLines(undefined);
+    let stopped = false;
+    const timer = setTimeout(() => {
+      void window.parallax
+        .request(hostId, "repo/grep", { runId, query: trimmed })
+        .then((answer) => {
+          if (!stopped && !("error" in answer))
+            setLines({ query: trimmed, matches: answer.result.matches });
+        });
+    }, GREP_AFTER_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [hostId, runId, grep, trimmed]);
+  const words = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
   const found =
     Array.isArray(paths) && words.length
       ? rank(paths, words, (path) => [
@@ -615,63 +791,111 @@ function FileSearch({
         ]).slice(0, 50)
       : [];
   const clear = () => setQuery("");
+  const open = (path: string, line?: number) => {
+    onOpen(path, line);
+    clear();
+  };
+  const matches = lines?.matches ?? [];
+  const byFile = Map.groupBy(matches, (m) => m.path);
+  const heading = "px-2 pt-2 pb-1 text-meta font-medium text-faint-foreground";
+  const row =
+    "flex h-6.5 w-full items-center gap-1.5 rounded-md px-2 text-left text-body hover:bg-hover";
   return (
-    <div className="relative min-w-0 flex-1">
-      <label className={`${searchField} h-7`}>
-        <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-        <input
-          type="search"
-          aria-label="Search files"
-          placeholder="Search files"
-          value={query}
-          disabled={!enabled}
-          onFocus={() => void load()}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") clear();
-            if (e.key === "Enter" && found[0]) {
-              onOpen(found[0].item);
-              clear();
-            }
-          }}
-          className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-faint-foreground [&::-webkit-search-cancel-button]:hidden"
-        />
-      </label>
-      {words.length > 0 && (
-        <ul
-          aria-label="Matching files"
-          className="absolute inset-x-0 top-full z-20 mt-1 max-h-96 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg"
+    <>
+      <div className="shrink-0 px-2 pb-1.5">
+        <label className={`${searchField} h-7!`}>
+          <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+          <input
+            type="search"
+            aria-label="Search files"
+            placeholder={grep ? "Search names and contents" : "Search files"}
+            value={query}
+            disabled={!enabled}
+            onFocus={() => void load()}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") clear();
+              if (e.key !== "Enter") return;
+              const first = found[0]?.item ?? matches[0]?.path;
+              if (first) open(first, found[0] ? undefined : matches[0]?.line);
+            }}
+            className="min-w-0 flex-1 bg-transparent text-meta outline-none placeholder:text-faint-foreground [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={clear}
+              className="text-faint-foreground hover:text-foreground"
+            >
+              <X aria-hidden className="size-3.5" />
+            </button>
+          )}
+        </label>
+      </div>
+      {words.length === 0 ? (
+        children
+      ) : (
+        <div
+          role="group"
+          aria-label="Search results"
+          className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
         >
           {paths && "error" in paths && (
-            <li role="alert" className="px-2 py-1 text-body text-danger">
+            <p role="alert" className="px-2 py-1 text-body text-danger">
               {paths.error}
-            </li>
+            </p>
           )}
-          {Array.isArray(paths) && found.length === 0 && (
-            <li className="px-2 py-1 text-body text-muted-foreground">No files match.</li>
-          )}
+          {found.length > 0 && <h3 className={heading}>Files</h3>}
           {found.map(({ item: path }) => (
-            <li key={path}>
-              <button
-                type="button"
-                title={path}
-                onClick={() => {
-                  onOpen(path);
-                  clear();
-                }}
-                className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-body hover:bg-hover"
-              >
+            <button
+              key={path}
+              type="button"
+              title={path}
+              onClick={() => open(path)}
+              className={row}
+            >
+              <FileIcon path={path} />
+              <span className="shrink-0">{nameOf(path)}</span>
+              <span className="min-w-0 truncate text-meta text-faint-foreground">
+                {parentOf(path)}
+              </span>
+            </button>
+          ))}
+          {byFile.size > 0 && <h3 className={heading}>In files</h3>}
+          {[...byFile].map(([path, inFile]) => (
+            <div key={path}>
+              <div title={path} className="flex h-6.5 items-center gap-1.5 px-2 text-body">
                 <FileIcon path={path} />
                 <span className="shrink-0">{nameOf(path)}</span>
-                <span className="min-w-0 truncate text-meta text-faint-foreground">
+                <span className="min-w-0 flex-1 truncate text-meta text-faint-foreground">
                   {parentOf(path)}
                 </span>
-              </button>
-            </li>
+                <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
+                  {inFile.length}
+                </span>
+              </div>
+              {inFile.map((match) => (
+                <button
+                  key={match.line}
+                  type="button"
+                  onClick={() => open(path, match.line)}
+                  className="flex h-6 w-full items-center gap-2 rounded-md pr-2 pl-7 text-left text-meta hover:bg-hover"
+                >
+                  <span className="shrink-0 text-faint-foreground tabular-nums">{match.line}</span>
+                  <span className="min-w-0 truncate font-mono text-muted-foreground">
+                    <Marked text={match.text.trim()} words={[trimmed.toLowerCase()]} />
+                  </span>
+                </button>
+              ))}
+            </div>
           ))}
-        </ul>
+          {Array.isArray(paths) && found.length === 0 && byFile.size === 0 && (
+            <p className="px-2 py-2 text-body text-muted-foreground">No results.</p>
+          )}
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -685,243 +909,28 @@ function Empty({ title, hint }: { title: string; hint: string }) {
   );
 }
 
-/** Whether tab `file` has edits that aren't on disk yet, for the mark on its tab. */
-const unsavedMark = (file: OpenFile) => file.save !== "saved" || !!file.conflict;
-
-/** The open files' tabs, a file's path and actions, the file, and its status line. */
-function FileColumn({
-  store,
-  file,
-  tabs,
-  treeButton,
-  onClose,
-  hostId,
-  runId,
-}: {
-  store: OpenFiles;
-  file: OpenFile;
-  tabs: readonly OpenFile[];
-  treeButton: React.ReactNode;
-  onClose: (tab: OpenFile) => void;
-  hostId: string;
-  runId: string;
-}) {
-  const { wordWrap } = useAppearance();
-  const [cursor, setCursor] = useState<Cursor>();
-  const folder = parentOf(file.path);
-  const text = file.body.kind === "text" ? file.body : undefined;
-  const markdown = !!text && isMarkdown(file.path);
-  const preview = markdown && file.preview;
+/** The full view with no file open: what you can do from here, with its keys, as VS Code shows. */
+function NoFile({ treeButton }: { treeButton: React.ReactNode }) {
+  const goToFile = useShortcutLabel("goToFile");
+  const contents = useShortcutLabel("searchContents");
+  const menu = useShortcutLabel("commandMenu");
   return (
-    <section aria-label={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
-        {treeButton}
-        <ul
-          role="tablist"
-          aria-label="Open files"
-          className="scrollbar-none flex min-w-0 flex-1 gap-0.5 overflow-x-auto"
-        >
-          {tabs.map((tab) => (
-            <li key={tab.id} className="group/tab relative shrink-0">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab.id === file.id}
-                title={tab.path}
-                onClick={() => store.activate(tab.id)}
-                onAuxClick={(e) => {
-                  if (e.button === 1) onClose(tab);
-                }}
-                className="flex h-7 max-w-44 items-center gap-1.5 rounded-md pr-6 pl-2 text-meta text-muted-foreground hover:bg-hover hover:text-foreground aria-selected:bg-selected aria-selected:text-foreground"
-              >
-                <FileIcon path={tab.path} />
-                <span className="truncate">{nameOf(tab.path)}</span>
-              </button>
-              <button
-                type="button"
-                aria-label={`Close ${nameOf(tab.path)}`}
-                title="Close"
-                onClick={() => onClose(tab)}
-                className="absolute top-1.5 right-1 grid size-4 place-items-center rounded-sm text-muted-foreground hover:bg-hover hover:text-foreground"
-              >
-                {unsavedMark(tab) ? (
-                  <span
-                    aria-label="Not saved yet"
-                    className="size-2 rounded-full bg-foreground/70 group-hover/tab:hidden"
-                  />
-                ) : null}
-                <X
-                  aria-hidden
-                  className={`size-3 ${unsavedMark(tab) ? "hidden group-hover/tab:block" : "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100"} ${tab.id === file.id ? "opacity-100" : ""}`}
-                />
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="flex h-7 shrink-0 items-center gap-1 border-y border-border/60 pr-1 pl-3">
-        <span title={file.path} className="flex min-w-0 flex-1 text-meta">
-          {folder && <span className="min-w-0 truncate text-faint-foreground">{folder}/</span>}
-          <span className="shrink-0 text-foreground">{nameOf(file.path)}</span>
-        </span>
-        {markdown && (
-          <IconButton
-            size="sm"
-            label={preview ? "Show source" : "Show preview"}
-            aria-pressed={preview}
-            onClick={() => store.setPreview(file.id, !preview)}
-          >
-            {preview ? <EyeOff aria-hidden /> : <Eye aria-hidden />}
-          </IconButton>
-        )}
-        {text && !preview && (
-          <IconButton
-            size="sm"
-            label="Word wrap"
-            aria-pressed={wordWrap}
-            onClick={() => setAppearance({ wordWrap: !wordWrap })}
-          >
-            <WrapText aria-hidden />
-          </IconButton>
-        )}
-        <IconButton
-          size="sm"
-          label="Copy path"
-          onClick={() => void navigator.clipboard.writeText(file.path)}
-        >
-          <Copy aria-hidden />
-        </IconButton>
-      </div>
-      <FileBanner store={store} file={file} onClose={onClose} />
-      {preview ? (
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          <GithubMarkdown text={store.textNow(file.id)} repo="" />
-        </div>
-      ) : text ? (
-        <Suspense fallback={<div className="flex-1" />}>
-          <CodeEditor store={store} file={file} wrap={wordWrap} onCursor={setCursor} />
-        </Suspense>
-      ) : (
-        <NonText file={file} hostId={hostId} runId={runId} />
-      )}
-      {text && (
-        <div className="flex h-6 shrink-0 items-center gap-3 border-t border-border/60 px-3 text-meta text-faint-foreground">
-          <span className="min-w-0 flex-1 truncate">{saveLabel(file)}</span>
-          {!preview && cursor && (
-            <span className="shrink-0 tabular-nums">
-              Ln {cursor.line}, Col {cursor.column}
-              {cursor.selected > 0 && ` (${cursor.selected} selected)`}
-            </span>
-          )}
-          {text.eol === "\r\n" && <span className="shrink-0">CRLF</span>}
-          {cursor?.language && <span className="shrink-0">{cursor.language}</span>}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/** The status line's word on a file's edits. */
-function saveLabel(file: OpenFile): string {
-  if (file.body.kind === "text" && file.body.readOnly) return "Read-only";
-  if (file.conflict) return "Not saved";
-  return { saved: "Saved", edited: "Edited", saving: "Saving…", failed: "Not saved" }[file.save];
-}
-
-/** What needs a decision on a file, or why it can't be edited, over its text. */
-function FileBanner({
-  store,
-  file,
-  onClose,
-}: {
-  store: OpenFiles;
-  file: OpenFile;
-  onClose: (tab: OpenFile) => void;
-}) {
-  const row =
-    "flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/60 px-3 py-1.5 text-meta";
-  const message = "min-w-0 flex-1 basis-40";
-  if (file.body.kind !== "text") return null;
-  if (file.conflict)
-    return (
-      <div role="alert" className={`${row} bg-warning/10`}>
-        <span className={message}>
-          {file.conflict.sha256
-            ? "This file changed on disk since your edits."
-            : "This file was deleted from disk."}
-        </span>
-        <Button size="sm" onClick={() => void store.overwrite(file.id)}>
-          {file.conflict.sha256 ? "Overwrite" : "Save again"}
-        </Button>
-        {file.conflict.sha256 ? (
-          <Button size="sm" onClick={() => void store.reload(file.id)}>
-            Reload
-          </Button>
-        ) : (
-          <Button size="sm" onClick={() => onClose(file)}>
-            Close
-          </Button>
-        )}
-      </div>
-    );
-  if (file.save === "failed")
-    return (
-      <div role="alert" className={`${row} bg-danger/10`}>
-        <span className={message}>Couldn't save: {file.saveError}</span>
-        <Button size="sm" onClick={() => void store.save(file.id)}>
-          Try again
-        </Button>
-      </div>
-    );
-  if (file.body.readOnly)
-    return (
-      <div className={`${row} text-muted-foreground`}>
-        <span className={message}>{file.body.readOnly}</span>
-      </div>
-    );
-  return null;
-}
-
-/** A tab that isn't text: an image or video, a note with Download, or why it couldn't be read. */
-function NonText({ file, hostId, runId }: { file: OpenFile; hostId: string; runId: string }) {
-  const { body, path } = file;
-  // The share of a large file read so far, while Download reads it.
-  const [share, setShare] = useState<number>();
-  if (body.kind === "loading" || body.kind === "text") return <div className="flex-1" />;
-  if (body.kind === "media")
-    return (
-      <div className="grid min-h-0 flex-1 place-items-center overflow-auto p-4">
-        {body.video ? (
-          <video src={body.url} controls className="max-h-full max-w-full rounded-md" />
-        ) : (
-          <img src={body.url} alt={nameOf(path)} className="max-h-full max-w-full rounded-md" />
-        )}
-      </div>
-    );
-  const bytes = body.kind === "note" ? body.bytes : undefined;
-  const save = bytes
-    ? async () => bytes
-    : body.kind === "note" && body.large
-      ? () => readWorking(hostId, runId, path, setShare).finally(() => setShare(undefined))
-      : undefined;
-  return (
-    <div className="px-4 pt-3">
-      <p
-        role={body.kind === "error" ? "alert" : undefined}
-        className={`text-body ${body.kind === "error" ? "text-danger" : "text-muted-foreground"}`}
-      >
-        {body.kind === "error" ? body.error : body.note}
-      </p>
-      {save && (
-        <div className="-ml-2 flex items-center gap-2 pt-1">
-          <DownloadButton name={nameOf(path)} read={save} />
-          {share !== undefined && (
-            <span className="text-body text-muted-foreground tabular-nums">
-              {Math.round(share * 100)}%
-            </span>
-          )}
-        </div>
-      )}
+    <div className="relative flex min-w-0 flex-1 flex-col items-center justify-center pb-16">
+      {treeButton && <div className="absolute top-1.5 left-2">{treeButton}</div>}
+      <dl className="grid grid-cols-[auto_auto] gap-x-6 gap-y-2.5 text-body">
+        {(
+          [
+            ["Go to file", goToFile],
+            ["Search contents", contents],
+            ["Command menu", menu],
+          ] as const
+        ).map(([name, keys]) => (
+          <div key={name} className="contents">
+            <dt className="text-right text-muted-foreground">{name}</dt>
+            <dd className="text-faint-foreground">{keys}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

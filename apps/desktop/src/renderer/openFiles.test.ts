@@ -83,6 +83,7 @@ beforeEach(() => {
   holdWrite = undefined;
   failWrite = undefined;
   request.mockClear();
+  localStorage.clear();
   window.parallax = {
     request,
     connectionState: async () => ({ status: "connected" }),
@@ -250,7 +251,7 @@ test("a file that mixes line endings, a link, or an older plxd opens read-only a
 
   const links = new OpenFiles("local", "run-1");
   links.writable = true;
-  const link = links.open("a.ts", true);
+  const link = links.open("a.ts", { link: true });
   await settle();
   expect(textBody(links, link).readOnly).toMatch(/link/);
 
@@ -292,9 +293,68 @@ test("an image shows as an image, and a link's target stays text whatever its na
     video: false,
   });
   const links = new OpenFiles("local", "run-1");
-  const link = links.open("logo.png", true);
+  const link = links.open("logo.png", { link: true });
   await settle();
   expect(tab(links, link)?.body.kind).toBe("text");
+});
+
+test("a transient tab gives way to the next, unless it was edited or kept", async () => {
+  disk.set("b.ts", "b\n");
+  disk.set("c.ts", "c\n");
+  disk.set("d.ts", "d\n");
+  const store = new OpenFiles("local", "run-1");
+  store.writable = true;
+  const a = store.open("a.ts", { transient: true });
+  await settle();
+  const b = store.open("b.ts", { transient: true });
+  await settle();
+  // In its place, not beside it.
+  expect(store.get().tabs.map((f) => f.path)).toEqual(["b.ts"]);
+  expect(tab(store, a)).toBeUndefined();
+
+  // An edit keeps it.
+  store.edited(b, () => "edited\n");
+  expect(tab(store, b)?.transient).toBe(false);
+  const c = store.open("c.ts", { transient: true });
+  await settle();
+  expect(store.get().tabs.map((f) => f.path)).toEqual(["b.ts", "c.ts"]);
+
+  // So does opening it for good, as a double-click does.
+  store.open("c.ts");
+  expect(tab(store, c)?.transient).toBe(false);
+  store.open("d.ts", { transient: true });
+  await settle();
+  expect(store.get().tabs.map((f) => f.path)).toEqual(["b.ts", "c.ts", "d.ts"]);
+});
+
+test("Compare shows what's on disk until it's stopped or settled", async () => {
+  const { store, id } = await opened();
+  store.edited(id, () => "mine\n");
+  disk.set("a.ts", "the agent's\n");
+  await store.check(id);
+  await store.toggleCompare(id);
+  expect(tab(store, id)?.compare).toBe("the agent's\n");
+  await store.toggleCompare(id);
+  expect(tab(store, id)?.compare).toBeUndefined();
+  await store.toggleCompare(id);
+  await store.overwrite(id);
+  await settle();
+  expect(tab(store, id)?.compare).toBeUndefined();
+  expect(disk.get("a.ts")).toBe("mine\n");
+});
+
+test("closing all leaves a tab whose edits can't land", async () => {
+  disk.set("b.ts", "b\n");
+  const store = new OpenFiles("local", "run-1");
+  store.writable = true;
+  const a = store.open("a.ts");
+  const b = store.open("b.ts");
+  await settle();
+  store.edited(a, () => "mine\n");
+  disk.set("a.ts", "the agent's\n");
+  await store.closeAll();
+  expect(store.get().tabs.map((f) => f.id)).toEqual([a]);
+  expect(tab(store, b)).toBeUndefined();
 });
 
 test("a binary file offers its bytes, and a missing one says so", async () => {
