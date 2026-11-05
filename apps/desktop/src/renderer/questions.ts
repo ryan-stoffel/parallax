@@ -40,6 +40,9 @@ export interface Filled {
   answers: string[];
 }
 
+/** What the agent reads when the user skips, since no answer may otherwise read as a denial. */
+export const SKIPPED = "The user skipped this question. Continue without an answer.";
+
 const claude = "AskUserQuestion";
 const codex = "request_user_input";
 const recommended = /\s*\(recommended\)\s*$/i;

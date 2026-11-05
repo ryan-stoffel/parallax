@@ -16,6 +16,7 @@ import { DiffView } from "./Diff";
 import { editRows } from "./diffLogic";
 import { GlassButton } from "./Glass";
 import { openLightbox } from "./Lightbox";
+import { questionLine } from "./questionLogic";
 import { Sheet } from "./Sheet";
 import { font } from "./theme";
 import { Dot, Icon, KindIcon, Markdown, T, useColors, WorkingMark } from "./ui";
@@ -90,7 +91,7 @@ export function titleOf(item: Item, root: string | undefined, live: boolean): st
     case "assistant":
       return "Message";
     case "approval":
-      return `${item.resolved ? (item.resolved.decision === "allowed" ? "Allowed" : item.resolved.decision === "denied" ? "Denied" : "Ended") : "Waiting for you:"} ${item.request.toolName}`;
+      return questionLine(item)?.title ?? `${item.resolved ? (item.resolved.decision === "allowed" ? "Allowed" : item.resolved.decision === "denied" ? "Denied" : "Ended") : "Waiting for you:"} ${item.request.toolName}`;
     case "compaction":
       return item.done ? "Compacted the conversation" : "Compacting…";
     case "notice":
