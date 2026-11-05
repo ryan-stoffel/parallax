@@ -5,8 +5,9 @@ name: Relay probe
 # get the result. The numbers stay in the job summary, a 90-day artifact, and those notes. Without
 # PROBE_CLERK_REFRESH_TOKEN the signed-in part says so and skips, and everything else still runs.
 # With it, the repo variable PROBE_CLERK_USER_ID must name the test account, or that part fails
-# before registering anything. Only a failed check fails a run: a slow number doesn't. PLX-1385 has
-# how to add them.
+# before registering anything. Only a failed check fails a run: a slow number doesn't. A call from
+# release.yml passes advisory, so a failed check shows on this job and in the notes but leaves the
+# Release run's conclusion to the release itself (PLX-1431). PLX-1385 has how to add them.
 on:
   schedule:
     # Away from minute zero, when scheduled jobs pile up.
@@ -22,6 +23,11 @@ on:
       tag:
         required: true
         type: string
+      advisory:
+        description: "A failed check fails this job but not the calling run."
+        required: false
+        type: boolean
+        default: false
     secrets:
       PROBE_CLERK_REFRESH_TOKEN:
         required: false
@@ -39,6 +45,7 @@ jobs:
   probe:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    continue-on-error: ${{ inputs.advisory == true }}
     # One at a time, since each uses the same test account and refresh token.
     concurrency:
       group: relay-probe
