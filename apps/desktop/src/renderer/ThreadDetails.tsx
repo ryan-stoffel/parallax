@@ -245,8 +245,8 @@ export function ThreadDetails({
       aria-label="Thread details"
       hidden={mode === "hidden"}
       data-mode={mode}
-      // Docked, it takes room in the thread's row; floating, it hovers over the thread's right,
-      // short of the composer. Either way it's opaque cards sized to their rows, scrolling past
+      // Docked, it takes room in the thread's row; floating, it hovers over the thread's card at
+      // the right, below the tabs' row and short of the composer. Either way it's opaque cards sized to their rows, scrolling past
       // their room.
       className={`flex w-72 flex-col py-2 pr-3 ${
         mode === "floating"

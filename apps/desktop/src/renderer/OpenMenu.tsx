@@ -9,7 +9,15 @@ import ghosttyIcon from "./assets/ghostty.svg";
 import alacrittyIcon from "./assets/alacritty.svg";
 import { useShortcutLabel } from "./keybindings";
 import { icons } from "./icons";
-import { appShortcut, Button, Dialog, Menu, menuItem, splitChevron } from "./ui";
+import {
+  appShortcut,
+  Button,
+  Dialog,
+  Menu,
+  menuItem,
+  splitChevron,
+  toolbarMenuDivider,
+} from "./ui";
 
 /** Where the last target chosen is kept; Settings > General sets it too. */
 export const OPEN_TARGET_KEY = "parallax.openTarget";
@@ -57,8 +65,8 @@ const muted = (icon: ReactNode) => (
  * hovered. Disabled while there's no folder, and absent while nothing can open one.
  *
  * On another computer, editors open the folder over Remote SSH and terminals run an ssh session
- * in it (PLX-1343). A third row says the ssh destination and changes it, in a dialog that also
- * asks when main can't tell where the computer is.
+ * in it, wherever main works out the computer is (PLX-1343). A dialog asks when it can't tell, and
+ * each chevron's menu opens it to change that.
  */
 export function OpenMenu({
   hostId,
@@ -84,24 +92,13 @@ export function OpenMenu({
     return () => window.removeEventListener(TERMINAL_CHOSEN, onChosen);
   }, []);
   const local = hostId === "local";
-  const [destination, setDestination] = useState<string>();
   const destinationDialog = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState("");
   const [destinationError, setDestinationError] = useState<string>();
   // What to open once the dialog has a destination, when opening is what asked for one.
   const pending = useRef<() => void>(undefined);
-  useEffect(() => {
-    if (local || !folder) return setDestination(undefined);
-    let live = true;
-    void window.parallax.sshDestination(hostId, folder).then((found) => {
-      if (live) setDestination(found);
-    });
-    return () => {
-      live = false;
-    };
-  }, [local, hostId, folder]);
-  const askDestination = () => {
-    setDraft(destination ?? "");
+  const askDestination = async () => {
+    setDraft((folder && (await window.parallax.sshDestination(hostId, folder))) || "");
     setDestinationError(undefined);
     destinationDialog.current?.showModal();
   };
@@ -126,7 +123,7 @@ export function OpenMenu({
     const answer = await window.parallax.openFolder(hostId, target, folder, terminalPath);
     if (answer !== "noDestination") return;
     pending.current = () => void open(target, terminalPath);
-    askDestination();
+    void askDestination();
   };
   const saveDestination = async () => {
     const error = await window.parallax.setSshDestination(hostId, draft);
@@ -134,7 +131,6 @@ export function OpenMenu({
     // Taken first, since closing the dialog forgets it.
     const then = pending.current;
     destinationDialog.current?.close();
-    if (folder) setDestination(await window.parallax.sshDestination(hostId, folder));
     then?.();
   };
   useEffect(() => {
@@ -164,6 +160,26 @@ export function OpenMenu({
     : !terminal
       ? "No installed terminal found"
       : undefined;
+  // On another computer, how to change where it's reached.
+  const destinationItem = !local && (
+    <>
+      <hr className={toolbarMenuDivider} />
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!folder}
+        onClick={() => {
+          menu.current?.hidePopover();
+          terminalMenu.current?.hidePopover();
+          void askDestination();
+        }}
+        className={`${menuItem} disabled:opacity-50`}
+      >
+        <icons.ssh aria-hidden />
+        <span className="flex-1">SSH destination…</span>
+      </button>
+    </>
+  );
   return (
     <>
       {current && (
@@ -211,6 +227,7 @@ export function OpenMenu({
             )}
           </button>
         ))}
+        {destinationItem}
       </Menu>
       <div className="flex items-center">
         <button
@@ -256,23 +273,8 @@ export function OpenMenu({
             {app.name === terminal?.name && <Check aria-hidden className="text-muted-foreground" />}
           </button>
         ))}
+        {destinationItem}
       </Menu>
-      {!local && (
-        <button
-          type="button"
-          onClick={askDestination}
-          disabled={!folder}
-          title="Where editors and terminals reach this computer over ssh"
-          aria-label={`SSH destination: ${destination ?? "not set"}`}
-          className={`${menuItem} group/ssh text-muted-foreground hover:text-foreground disabled:opacity-50`}
-        >
-          <icons.ssh aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-meta">
-            {destination ?? "Set SSH destination"}
-          </span>
-          <icons.edit aria-hidden className="opacity-0 group-hover/ssh:opacity-100" />
-        </button>
-      )}
       {/* In the body, since the Open shortcut can ask while the panel or this row is hidden, where
           a modal would block the window unseen. */}
       {createPortal(

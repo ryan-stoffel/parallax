@@ -141,6 +141,8 @@ test("a destination saved after being asked for still opens what asked", async (
   await act(async () => {
     terminal.click();
     await later(0);
+    // The dialog opens once the destination it starts from answers.
+    await later(0);
   });
   expect(opened).toEqual([undefined]);
   const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="SSH destination"]')!;
@@ -182,6 +184,34 @@ test("a card takes the place of the one it's dropped on, in either direction", (
   expect(order()).toEqual(["git", "context", "lineage", "prs"]);
   act(() => moveCard("prs", "git"));
   expect(order()).toEqual(["prs", "git", "context", "lineage"]);
+});
+
+test("another computer's panel doesn't show how it's reached until asked", async () => {
+  Object.assign(window.parallax, {
+    openTargets: async () => [{ target: "cursor", name: "Cursor" }],
+    sshDestination: async () => "me@100.64.0.9",
+  });
+  const body = show(
+    <ThreadDetails mode="docked" host={{ id: "lan:x", name: "mini" }} folder="/Users/me/repo" />,
+  );
+  await act(async () => {});
+  const aside = body.querySelector("aside")!;
+  // What's on screen: the panel without its closed menus.
+  const shown = aside.cloneNode(true) as HTMLElement;
+  for (const menu of shown.querySelectorAll("[popover]")) menu.remove();
+  expect(shown.textContent).toContain("Open in Cursor");
+  expect(shown.textContent).not.toMatch(/100\.64|ssh/i);
+  const item = [...aside.querySelectorAll<HTMLElement>('[popover] [role="menuitem"]')].find((el) =>
+    el.textContent?.includes("SSH destination"),
+  )!;
+  Object.assign(HTMLElement.prototype, { hidePopover() {} });
+  await act(async () => {
+    item.click();
+    await Promise.resolve();
+  });
+  const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="SSH destination"]')!;
+  expect(dialog.open).toBe(true);
+  expect(dialog.querySelector("input")!.value).toBe("me@100.64.0.9");
 });
 
 test("the destination dialog isn't inside the panel, which can be hidden when it asks", () => {

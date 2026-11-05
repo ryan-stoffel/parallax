@@ -73,7 +73,6 @@ beforeEach(() => {
     setZoom: () => {},
     version: async () => "1.0.0",
     openTargets: async () => [],
-    sshDestination: async () => undefined,
     terminalApps: async () => [],
     command: async () => ({ state: "unavailable", path: "", onPath: true }),
     terminalApp: async () => null,

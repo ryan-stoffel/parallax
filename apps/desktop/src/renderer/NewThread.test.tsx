@@ -113,7 +113,6 @@ beforeEach(() => {
     },
     setZoom: () => {},
     openTargets: async () => [],
-    sshDestination: async () => undefined,
     terminalApps: async () => [],
     terminalApp: async () => null,
     openTargetIcons: async () => ({}),

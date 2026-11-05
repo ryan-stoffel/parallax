@@ -1320,6 +1320,10 @@ export function App() {
     sidePanelOpen ? "" : "window-controls-inset",
   ].join(" ");
 
+  // A split always floats Thread details in its tile. One tile docks it beside the row when there's
+  // room, and floats it in the tile otherwise.
+  const detailsInTile =
+    !group.project && (tiled ? selection.kind === "thread" : details.mode === "floating");
   // The PR view takes over from Thread details when it opens a pull request.
   const openPrFromDetails = (url?: string) => {
     openPr(url);
@@ -1848,8 +1852,9 @@ export function App() {
                             placeView(state, drop.hostId, view, paneId, before),
                           );
                         }}
+                        // Floating, it sits in the card, below the tabs' row and its buttons.
                         details={
-                          tiled && selection.kind === "thread" && !group.project
+                          detailsInTile
                             ? threadDetails(details.mode === "hidden" ? "hidden" : "floating")
                             : undefined
                         }
@@ -2006,7 +2011,9 @@ export function App() {
                       />
                     </div>
                   </div>
-                  {!tiled && threadDetails(group.project ? "hidden" : details.mode)}
+                  {!tiled &&
+                    !detailsInTile &&
+                    threadDetails(group.project ? "hidden" : details.mode)}
                 </div>
               </>
             )}
