@@ -7,8 +7,10 @@ import { GitHubLogo } from "./logos";
 import { lookOf } from "./pr/parts";
 import type { PullRequests } from "./PullRequests";
 
-/** The open thread's pull requests, for the `#` menu and the state each chip of one shows. */
-export const PullRequestsContext = createContext<PullRequests | undefined>(undefined);
+/** A thread's pull requests, for the `#` menu and the state each chip of one shows. */
+export const PullRequestsContext = createContext<Pick<PullRequests, "urls" | "get"> | undefined>(
+  undefined,
+);
 
 // Each kind of mention's colors: a skill in violet, a file in the accent, a thread or an image in
 // the text's own color, faintly filled and outlined, cited text outlined in the accent, and a pull

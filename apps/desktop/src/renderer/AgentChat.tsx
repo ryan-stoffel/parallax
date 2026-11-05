@@ -696,6 +696,13 @@ export function AgentChat({
   // The run as the composer shows it: the transcript's, or until that loads, the thread list's, so
   // the box opens as it will look.
   const box = run ?? listed;
+  // Every pane knows its thread's pull requests, but only the open thread's states are read, so
+  // another pane's chips stay neutral. Undefined without any, so the rows' memo holds.
+  const linked = (listed ?? run)?.pullRequests;
+  const linkedPrs = useMemo(
+    () => linked && { urls: linked, get: (url: string) => pullRequests?.get(url) },
+    [linked, pullRequests],
+  );
   // A Claude Remote Control thread (PLX-1140): its messages go to a session on another computer,
   // as text, with nothing to choose about how it runs.
   const remote = isRemoteControl(box);
@@ -957,7 +964,7 @@ export function AgentChat({
   // With a transcript, the composer floats over its bottom, which scrolls under it.
   const hasRows = rows.length > 0 || !!editing;
   return (
-    <PullRequestsContext value={pullRequests}>
+    <PullRequestsContext value={linkedPrs}>
       <SubagentsContext value={subagents}>
         {/* A container, so in a narrow window or split tile the column and composer compact. */}
         <div className="@container relative flex min-h-0 flex-1 flex-col">

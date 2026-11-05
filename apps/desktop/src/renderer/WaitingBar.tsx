@@ -121,9 +121,9 @@ export function WaitingBar({
             className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground"
           />
           <span className="min-w-0 truncate font-medium">{title}</span>
-          {/* In a short line the labels give way first. The chips take what's left, down to one. */}
+          {/* Only what the chips leave, so in a short line the labels give way first. */}
           {labels && (
-            <span className="min-w-0 shrink-[10000] truncate text-muted-foreground">{labels}</span>
+            <span className="min-w-0 flex-[1_1_0] truncate text-muted-foreground">{labels}</span>
           )}
           {watching.length > 0 && (
             <FittingChips details={`${id}-details`}>{watching.map(pullRequest)}</FittingChips>
@@ -199,7 +199,8 @@ function FittingChips({ details, children }: { details: string; children: ReactE
   }, [children.length]);
   const fit = children.length - wrapped;
   return (
-    <div className="flex min-w-24 flex-1 items-center gap-1">
+    // It gives up room before the title does, and always holds one chip and the count.
+    <div className="flex min-w-28 flex-[0_1000000_auto] items-center gap-1">
       {/* Beside `+N` once there's one, so the count reads as theirs. */}
       <div
         ref={row}
