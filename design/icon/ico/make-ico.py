@@ -2,11 +2,13 @@
 # requires-python = ">=3.10"
 # dependencies = ["resvg-py==0.2.6", "pillow==12.0.0"]
 # ///
-"""Renders the Windows icons, Parallax.ico and Parallax-nightly.ico, from the full-bleed masters.
+"""Renders the Windows icons, Parallax.ico and Parallax-nightly.ico, from the full-bleed masters,
+and the Linux nightly's, png/Parallax-nightly/.
 
-Windows draws an icon as is, with no mask of its own, so each is the master's tile with rounded
-corners and a little room around it, rendered at every size Explorer, the taskbar, and the
-installer ask for. Run from anywhere with `uv run design/icon/ico/make-ico.py`.
+Windows and Linux draw an icon as is, with no mask of their own, so each is the master's tile with
+rounded corners and a little room around it: the .ico at every size Explorer, the taskbar, and the
+installer ask for, and a PNG per hicolor size, named as electron-builder's `linux.icon` folder
+expects, which the AppImage installs. Run from anywhere with `uv run design/icon/ico/make-ico.py`.
 """
 
 import io
@@ -42,3 +44,10 @@ for name, master in [("Parallax", "Parallax-dark-full"), ("Parallax-nightly", "P
     out = HERE / f"{name}.ico"
     images[-1].save(out, sizes=[(s, s) for s in SIZES], append_images=images[:-1])
     print(f"wrote {out}")
+
+pngs = HERE.parent / "png" / "Parallax-nightly"
+pngs.mkdir(parents=True, exist_ok=True)
+nightly = tile((MASTERS / "Parallax-nightly-full.svg").read_text())
+for size in [16, 24, 32, 48, 64, 128, 256, 512]:
+    render(nightly, size).save(pngs / f"{size}x{size}.png")
+print(f"wrote {pngs}")

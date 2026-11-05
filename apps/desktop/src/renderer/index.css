@@ -847,6 +847,37 @@ body {
   bottom: 1px;
 }
 
+/* Linux's panes are square, like the windows of the tiling desktops it mostly runs on (Omarchy's
+   Hyprland). What's inside them keeps its corners. The shown tab joins its pane square, without
+   its curves, as on glass. */
+/* :root matches the flush tab's .tab-shown[data-flush] .tab-cap, so this wins by coming after it. */
+:root[data-platform="linux"] :is(.pane-card, .tab-shown, .tab-cap) {
+  border-radius: 0;
+}
+[data-platform="linux"] .tab-shown::before,
+[data-platform="linux"] .tab-shown::after {
+  display: none;
+}
+[data-platform="linux"] .tab-cap {
+  bottom: 1px;
+}
+/* With Tabs off, the workspace is square too and meets the window's edges, which the desktop
+   outlines, so its only line is the one by the sidebar. */
+:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"] {
+  border-radius: 0;
+}
+:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"]::after {
+  border-block: 0;
+}
+/* No round corners for the sidebar to fill behind, which would show through a see-through window. */
+:root[data-platform="linux"]:not(.tabs-beta) #sidebar::before {
+  content: none;
+}
+:root.nightly[data-platform="linux"]:not(.tabs-beta) #sidebar > .night-sky {
+  right: 0;
+  mask: none;
+}
+
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
    through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather

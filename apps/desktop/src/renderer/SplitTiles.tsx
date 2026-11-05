@@ -191,8 +191,11 @@ export function SplitTiles({
   // Each stack's shown pane: the focused one when it's there, else the one shown last.
   const stackShown = useRef(new Map<Cells, string>());
   const tileOf = (i: number) => tiles.findIndex((tile) => tile.panes.includes(i));
+  // Linux's tabs have no curves to make room for (index.css), so its first tab is always flush.
   const flushOf = (tile: Tile, at: number) =>
-    tile.panes.flatMap((i) => items[i]!.tabs).length === 1 && !(at === 0 && leading);
+    (window.parallax.platform === "linux" ||
+      tile.panes.flatMap((i) => items[i]!.tabs).length === 1) &&
+    !(at === 0 && leading);
   const activeIn = (tile: Tile) => {
     if (tile.panes.includes(focused)) {
       stackShown.current.set(tile.cells, items[focused]!.paneId);
