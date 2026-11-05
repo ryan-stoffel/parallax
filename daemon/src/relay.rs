@@ -933,6 +933,42 @@ async fn connected(
 /// [`remote::MAX_REMOVAL_BYTES`].
 const MAX_REMOVALS: usize = 100;
 
+/// How many removal statements from the relay wait while one is checked. The rest are dropped, and
+/// their computers learn of those removals from a client.
+const MAX_WAITING_REMOVALS: usize = 16;
+
+/// The longest text frame plxd reads from the relay: a removal statement of
+/// [`remote::MAX_REMOVAL_BYTES`], with each character escaped at worst.
+const MAX_TEXT_FRAME: usize = 2 * remote::MAX_REMOVAL_BYTES + 64;
+
+/// A queue of the relay's removal statements, checked one at a time until the sender drops. A relay
+/// sending many therefore costs one task, a bounded amount of memory, and one store read at a time.
+fn removal_queue(daemon: &Arc<Daemon>) -> mpsc::Sender<String> {
+    let (queue, mut statements) = mpsc::channel::<String>(MAX_WAITING_REMOVALS);
+    let daemon = Arc::clone(daemon);
+    tokio::spawn(async move {
+        while let Some(statement) = statements.recv().await {
+            crate::server::remote::access::receive_removal(&daemon, &statement).await;
+        }
+    });
+    queue
+}
+
+/// Queues `statement` unless it's too long or `queue` is full: whether it did. Nothing is copied
+/// for one it refuses.
+fn queue_removal(queue: &mpsc::Sender<String>, statement: &str) -> bool {
+    if statement.len() > remote::MAX_REMOVAL_BYTES {
+        debug!("ignored a device's removal too long to check");
+        return false;
+    }
+    let Ok(place) = queue.try_reserve() else {
+        debug!("dropped a device's removal: too many are waiting");
+        return false;
+    };
+    place.send(statement.to_owned());
+    true
+}
+
 /// The next removal statement to send, with the keys it names. None with nothing waiting. With no
 /// account to sign for, the keys are dropped, and other computers learn of them from a client.
 async fn next_removal(daemon: &Daemon) -> Option<(Vec<String>, Message)> {
@@ -1001,6 +1037,7 @@ async fn serve(
 ) -> Result<Ended, Error> {
     let (mut sink, mut frames) = socket.split();
     let (replies, mut answered) = mpsc::channel::<String>(16);
+    let removals = removal_queue(daemon);
     // The streams close with this connection.
     let streams = stop.child_token();
     let _streams = streams.clone().drop_guard();
@@ -1093,7 +1130,12 @@ async fn serve(
                 heard = true;
                 match frame {
                     Some(Ok(Message::Text(text))) => {
-                        let message: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                        // No frame the relay sends plxd is this long, so none costs a parse.
+                        let message: Value = if text.len() > MAX_TEXT_FRAME {
+                            Value::Null
+                        } else {
+                            serde_json::from_str(&text).unwrap_or(Value::Null)
+                        };
                         if message["t"] == "open" && serving(daemon).await {
                             let url = daemon.relay.url.clone();
                             let host_id = host_id.to_owned();
@@ -1107,12 +1149,7 @@ async fn serve(
                         } else if message["t"] == "removed"
                             && let Some(statement) = message["statement"].as_str()
                         {
-                            let daemon = Arc::clone(daemon);
-                            let statement = statement.to_owned();
-                            tokio::spawn(async move {
-                                crate::server::remote::access::receive_removal(&daemon, &statement)
-                                    .await;
-                            });
+                            queue_removal(&removals, statement);
                         }
                     }
                     Some(Ok(Message::Binary(frame))) => {
@@ -1893,6 +1930,79 @@ mod tests {
             assert!(ended.is_err());
             assert_eq!(pushes.next_due(), None);
         }
+    }
+
+    #[test]
+    fn the_removal_queue_refuses_what_is_too_long_and_what_it_has_no_room_for() {
+        let (queue, _statements) = mpsc::channel(2);
+        let too_long = "x".repeat(remote::MAX_REMOVAL_BYTES + 1);
+        assert!(!queue_removal(&queue, &too_long));
+        assert!(queue_removal(&queue, "one"));
+        assert!(queue_removal(&queue, "two"), "the long one took no room");
+        assert!(!queue_removal(&queue, "three"));
+    }
+
+    /// A compromised relay floods plxd with statements, each costing a signature check and store
+    /// reads. They run one at a time, and a real one still lands once there's room.
+    #[tokio::test]
+    async fn a_flood_of_removals_from_the_relay_is_checked_one_at_a_time() {
+        use crate::server::remote::access;
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        access::record_account(&daemon, "user").await.unwrap();
+        let computer = DpopKey::generate();
+        let phone = DpopKey::generate().thumbprint();
+        let tablet = DpopKey::generate().thumbprint();
+        let lists = parallax_protocol::AccessMergeParams {
+            approved_clients: vec![phone.clone(), tablet.clone()],
+            approved_hosts: vec![computer.thumbprint()],
+            ..Default::default()
+        };
+        access::merge(&daemon, &stop, lists).await.unwrap();
+        let frame =
+            |statement: String| json!({ "t": "removed", "statement": statement }).to_string();
+        let stranger = DpopKey::generate();
+        let forged = frame(remote::signed_removal(
+            &stranger,
+            "user",
+            std::slice::from_ref(&phone),
+        ));
+        let huge = frame("x".repeat(4 * remote::MAX_REMOVAL_BYTES));
+        let real = frame(remote::signed_removal(
+            &computer,
+            "user",
+            std::slice::from_ref(&tablet),
+        ));
+        let mut pushes = Pushes::new(daemon.log.head());
+        let (plxd, mut relay) = socket().await;
+        let (ended, ()) = tokio::join!(serve(&daemon, plxd, "host", &stop, &mut pushes), async {
+            assert_eq!(next_json(&mut relay).await.unwrap()["t"], "hooks");
+            let metrics = tokio::runtime::Handle::current().metrics();
+            let mut most = 0;
+            for sent in 0..2000 {
+                let flood = if sent % 100 == 0 { &huge } else { &forged };
+                relay.send(Message::text(flood.as_str())).await.unwrap();
+                most = most.max(metrics.num_alive_tasks());
+            }
+            assert!(most <= 2, "{most} tasks were alive at once");
+            let removed = |state: &parallax_protocol::AccessState, key: &str| {
+                state.removed_clients.iter().any(|k| k == key)
+            };
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                relay.send(Message::text(real.as_str())).await.unwrap();
+                let state = access::state(&daemon, None, &stop).await.unwrap();
+                if removed(&state, &tablet) {
+                    assert!(!removed(&state, &phone), "the flood changed nothing");
+                    break;
+                }
+                assert!(Instant::now() < deadline, "the real one never landed");
+                time::sleep(Duration::from_millis(10)).await;
+            }
+            drop(relay);
+        });
+        assert!(ended.is_err());
     }
 
     /// A relay from before 0091, on loopback: `/connect` without a ticket is 401, `POST
