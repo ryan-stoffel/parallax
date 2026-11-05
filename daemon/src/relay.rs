@@ -78,7 +78,8 @@ const PING: Duration = Duration::from_secs(15);
 /// answers without waking the stream's object or charging for it. Slower than [`PING`], since ending
 /// a working stream is what a client would see, and its answer can queue behind a transfer.
 const STREAM_PING: Duration = Duration::from_secs(30);
-/// How long a stream has to answer a ping after a wake or a change of network.
+/// How long a stream has to answer a ping once the link is in doubt: after a wake, a change of
+/// network, or a failed control connection.
 const STREAM_CHECK: Duration = Duration::from_secs(10);
 /// The longest one stream frame may take to send before the link counts as dead. A ping can't tell
 /// while a send is stuck, since the socket's writes go in order.
@@ -474,7 +475,7 @@ async fn upgrade(
 struct Keepalive {
     tick: time::Interval,
     heard: Arc<AtomicBool>,
-    /// Marked after a wake or a change of network, when a stream may have died with the link.
+    /// Marked when the link is in doubt, as a stream may have died with it.
     check: watch::Receiver<()>,
 }
 
@@ -1038,19 +1039,22 @@ fn listed(held: &Held) -> String {
         .join(",")
 }
 
-/// A stream's place in [`Held`], while its task runs.
+/// A stream's place in [`Held`], while its task runs. Giving it up says the stream is gone, which
+/// the control socket passes on to the relay.
 struct Holding {
     held: Held,
+    gone: mpsc::UnboundedSender<String>,
     id: String,
 }
 
 impl Holding {
-    fn new(held: Held, id: &str) -> Self {
+    fn new(held: Held, gone: mpsc::UnboundedSender<String>, id: &str) -> Self {
         held.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id.to_owned());
         Self {
             held,
+            gone,
             id: id.to_owned(),
         }
     }
@@ -1062,6 +1066,7 @@ impl Drop for Holding {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.id);
+        let _ = self.gone.send(std::mem::take(&mut self.id));
     }
 }
 
@@ -1075,11 +1080,17 @@ struct Streams {
     /// Told when the spare stream is taken or ends.
     spare_done: mpsc::Sender<()>,
     spare_ended: mpsc::Receiver<()>,
+    /// The ids of streams whose tasks ended, for the relay. No stream opens while control is down,
+    /// so what waits for the next connection is bounded by the streams that were open, and the
+    /// next connection's list has already left them out.
+    gone: mpsc::UnboundedSender<String>,
+    ended: mpsc::UnboundedReceiver<String>,
 }
 
 impl Streams {
     fn new(stop: &CancellationToken) -> Self {
         let (spare_done, spare_ended) = mpsc::channel(4);
+        let (gone, ended) = mpsc::unbounded_channel();
         Self {
             stop: stop.child_token(),
             held: Held::default(),
@@ -1087,12 +1098,22 @@ impl Streams {
             spare: None,
             spare_done,
             spare_ended,
+            gone,
+            ended,
         }
     }
 
-    /// Asks every stream to answer a ping soon, as it may have died with the link.
-    fn check(&self) {
+    /// The link may have died: every stream answers a ping soon, and the spare, which has no client
+    /// to lose, goes, so the relay can't hand it to the next client while it's dead. A spare a
+    /// client took while control was down is that client's stream now, so it's only forgotten.
+    fn doubt_link(&mut self) {
         self.check.send_replace(());
+        while self.spare_ended.try_recv().is_ok() {
+            self.spare = None;
+        }
+        if let Some(spare) = self.spare.take() {
+            spare.stop.cancel();
+        }
     }
 }
 
@@ -1130,7 +1151,6 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             }
             Ok(Ended::Moved) => {
                 failures = 0;
-                streams.check();
                 continue;
             }
             // Waits for `relay/register` here, or tries again on backoff, since another computer
@@ -1162,7 +1182,7 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             () = relay.changed.notified() => failures = 0,
             () = link.changed() => {
                 failures = 0;
-                streams.check();
+                streams.doubt_link();
             }
             () = time::sleep(wait.unwrap_or_default()), if wait.is_some() => {}
         }
@@ -1249,6 +1269,9 @@ async fn connected(
     });
     let ended = serve(daemon, socket, &host_id, stop, pushes, streams, link).await;
     daemon.relay.set(Status::default());
+    if matches!(ended, Ok(Ended::Moved) | Err(_)) {
+        streams.doubt_link();
+    }
     ended
 }
 
@@ -1421,6 +1444,10 @@ async fn serve(
                 }
             }
             Some(()) = streams.spare_ended.recv() => streams.spare = None,
+            Some(stream) = streams.ended.recv() => {
+                let gone = json!({ "t": "gone", "stream": stream }).to_string();
+                sink.send(Message::text(gone)).await.map_err(failed)?;
+            }
             () = link.changed() => return Ok(Ended::Moved),
             Some(reply) = answered.recv() => sink.send(Message::text(reply)).await.map_err(failed)?,
             () = daemon.relay.hooks_changed.notified() => {
@@ -1472,8 +1499,10 @@ async fn serve(
                                 _ => (streams.stop.clone(), None),
                             };
                             let held = Arc::clone(&streams.held);
+                            let gone = streams.gone.clone();
                             let check = streams.check.subscribe();
-                            tokio::spawn(stream(url, host_id, message, local, stop, done, (held, check)));
+                            let ties = (held, gone, check);
+                            tokio::spawn(stream(url, host_id, message, local, stop, done, ties));
                         } else if message["t"] == "removed"
                             && let Some(statement) = message["statement"].as_str()
                         {
@@ -1510,7 +1539,8 @@ async fn serve(
 /// Joins a client's stream, which the relay announced with `message`, to the remote listener at
 /// `local`, until either ends or `stop`. The spare stream, with `spare` to say when it's taken or
 /// ended, waits for the relay's `ready`, sent when a client joins it, before it dials `local`.
-/// `held` lists it while this runs, and `check` asks it to prove it's alive.
+/// `held` lists it while this runs, `gone` hears when it ends, and `check` asks it to prove it's
+/// alive.
 async fn stream(
     url: String,
     host_id: String,
@@ -1518,7 +1548,7 @@ async fn stream(
     local: SocketAddr,
     stop: CancellationToken,
     spare: Option<mpsc::Sender<()>>,
-    (held, check): (Held, watch::Receiver<()>),
+    (held, gone, check): (Held, mpsc::UnboundedSender<String>, watch::Receiver<()>),
 ) {
     let id = message["stream"].as_str().unwrap_or_default();
     let token = message["token"].as_str().unwrap_or_default();
@@ -1532,7 +1562,7 @@ async fn stream(
     if !plain(id, b"-") || !plain(token, b"-_") {
         return warn!("the relay announced a stream with a bad id or token");
     }
-    let holding = Holding::new(held, id);
+    let holding = Holding::new(held, gone, id);
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
     let mut unused = spare.clone();
     let joined = async {
@@ -1546,8 +1576,11 @@ async fn stream(
                         keepalive.heard.store(true, Ordering::Relaxed);
                         match frame {
                             Some(Ok(Message::Text(text))) if text.as_str() == "ready" => break,
+                            // Not waiting for the socket to end, which can take the relay 10 s.
+                            Some(Ok(Message::Close(_)) | Err(_)) | None => {
+                                return Err(Error::Protocol("the spare stream closed".to_owned()));
+                            }
                             Some(Ok(_)) => {}
-                            _ => return Err(Error::Protocol("the spare stream closed".to_owned())),
                         }
                     }
                     due = keepalive.due() => {
@@ -1576,13 +1609,15 @@ async fn stream(
     }
     drop(holding);
     // A spare that ended before a client took it is asked for again, after a pause so a relay
-    // that keeps refusing it isn't asked in a loop. One that was stopped is already forgotten, and
-    // saying so could clear the spare after it.
-    if let Some(done) = unused
-        && !stop.is_cancelled()
-    {
-        time::sleep(FIRST_BACKOFF).await;
-        let _ = done.send(()).await;
+    // that keeps refusing it isn't asked in a loop. One that was stopped, even during the pause, is
+    // already forgotten, and saying so could clear the spare after it.
+    if let Some(done) = unused {
+        tokio::select! {
+            () = stop.cancelled() => {}
+            () = time::sleep(FIRST_BACKOFF) => {
+                let _ = done.send(()).await;
+            }
+        }
     }
 }
 
@@ -2236,7 +2271,8 @@ mod tests {
         let looked = Arc::clone(&source);
         let mut link = Link::new(Box::new(move || (*looked.lock().unwrap(), None)));
         let mut streams = Streams::new(&stop);
-        let holding = Holding::new(Arc::clone(&streams.held), "kept");
+        let gone = streams.gone.clone();
+        let holding = Holding::new(Arc::clone(&streams.held), gone, "kept");
         let (plxd, mut relay) = socket().await;
         let serving = serve(
             &daemon,
@@ -2261,6 +2297,63 @@ mod tests {
         assert_eq!(listed(&streams.held), "kept");
         drop(holding);
         assert_eq!(listed(&streams.held), "");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_relay_hears_of_a_stream_that_ended_on_this_connection_or_between_two() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let stop = CancellationToken::new();
+        let mut pushes = Pushes::new(daemon.log.head());
+        let (mut streams, mut link) = lasting(&stop);
+        let hold = |id| Holding::new(Arc::clone(&streams.held), streams.gone.clone(), id);
+        let (live, between) = (hold("live"), hold("between"));
+        drop(between);
+        let (plxd, mut relay) = socket().await;
+        let serving = serve(
+            &daemon,
+            plxd,
+            "host",
+            &stop,
+            &mut pushes,
+            &mut streams,
+            &mut link,
+        );
+        let (ended, ()) = tokio::join!(serving, async move {
+            assert_eq!(next_frame(&mut relay).await["t"], "hooks");
+            let told = next_frame(&mut relay).await;
+            assert_eq!(told, json!({ "t": "gone", "stream": "between" }));
+            drop(live);
+            let told = next_frame(&mut relay).await;
+            assert_eq!(told, json!({ "t": "gone", "stream": "live" }));
+            drop(relay);
+        });
+        assert!(ended.is_err());
+        assert_eq!(listed(&streams.held), "");
+    }
+
+    #[test]
+    fn doubting_the_link_stops_an_idle_spare_and_leaves_a_taken_one_running() {
+        let stop = CancellationToken::new();
+        let mut streams = Streams::new(&stop);
+        let idle = streams.stop.child_token();
+        streams.spare = Some(Spare {
+            stop: idle.clone(),
+            opened: true,
+        });
+        streams.doubt_link();
+        assert!(idle.is_cancelled());
+        assert!(streams.spare.is_none());
+
+        let taken = streams.stop.child_token();
+        streams.spare = Some(Spare {
+            stop: taken.clone(),
+            opened: true,
+        });
+        streams.spare_done.try_send(()).unwrap();
+        streams.doubt_link();
+        assert!(!taken.is_cancelled());
+        assert!(streams.spare.is_none());
     }
 
     #[tokio::test(start_paused = true)]

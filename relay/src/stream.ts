@@ -12,7 +12,8 @@ export const REPORT_BYTES = 8 * 1_048_576;
 /** The longest a stream that stays open keeps counted bytes before it reports them, so the host's
  *  usage, which clients warn from, can't stay short by a slow stream's count (PLX-1357). */
 export const REPORT_AFTER = 5 * 60_000;
-/** How long a client waits for plxd to join its stream before the stream closes. */
+/** How long a client waits for plxd to join its stream, or a spare a client took waits for that
+ *  client, before the stream closes. */
 export const JOIN_TIMEOUT = 30_000;
 
 /** What the host's object armed this stream with. */
@@ -118,6 +119,22 @@ export class StreamRelay extends DurableObject<Env> {
    *  this object's sockets with no close to report. */
   async hostJoined() {
     return !!this.side("host");
+  }
+
+  /** A client took this stream as the spare, and the Worker is bringing it here. If it hung up or
+   *  the Worker failed, nothing else would end this stream, since plxd's end stays open. */
+  async taken() {
+    await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT);
+  }
+
+  /** plxd says its end is gone, which it can know long before this object does, since a dead
+   *  link's close may never arrive. The client learns now, and the stream reports and frees its
+   *  place as if plxd's close had come. */
+  async hostGone() {
+    // Read before the ends close, in case this woke the object.
+    this.pending();
+    for (const ws of this.ctx.getWebSockets()) this.shut(ws, 1000, "the host's end is gone");
+    await this.finish();
   }
 
   /** Closes both ends, as the host's object asks when its budget is spent, it's removed, or plxd
@@ -238,18 +255,20 @@ export class StreamRelay extends DurableObject<Env> {
   }
 
   /** Both ends are here, so it's time to report what's counted. Otherwise plxd never joined the
-   *  client's stream in time. */
+   *  client's stream in time, or the client that took the spare never came. */
   async alarm() {
     return logged(
       "stream.alarm",
       () => this.context(),
       async () => {
-        if (this.side("host")) {
+        const host = this.side("host");
+        if (host && this.side("client")) {
           this.reportDue = false;
           if (this.pending() > 0) await this.report(false);
           return;
         }
-        for (const ws of this.ctx.getWebSockets()) this.shut(ws, 4408, "the host didn't join");
+        const reason = host ? "the client didn't arrive" : "the host didn't join";
+        for (const ws of this.ctx.getWebSockets()) this.shut(ws, 4408, reason);
         await this.finish();
       },
     );
