@@ -144,8 +144,14 @@ async function computer(name, relay) {
       PLXD_EXIT_WITH: String(process.pid),
     },
   });
-  cleanups.push(() => attach.kill());
   const waiting = new Map();
+  // Why the connection ended, for every call after it, as nothing would answer them.
+  let gone;
+  attach.stdin.on("error", () => {}); // A write after it ended: `gone` says why.
+  attach.on("exit", (code, signal) => {
+    gone = `${name}'s plxd attach ended with ${code ?? signal}`;
+    for (const settle of waiting.values()) settle({ error: gone });
+  });
   createInterface({ input: attach.stdout }).on("line", (line) => {
     const message = JSON.parse(line);
     if (message.id !== undefined) waiting.get(message.id)?.(message);
@@ -153,14 +159,23 @@ async function computer(name, relay) {
   let id = 0;
   const call = (method, params = {}) =>
     new Promise((resolve, reject) => {
+      if (gone) return reject(new Error(`${method}: ${gone}`));
       const timer = setTimeout(() => reject(new Error(`${name} didn't answer ${method} in 30s`)), 30_000);
-      waiting.set(++id, (message) => {
+      const asked = ++id;
+      waiting.set(asked, (message) => {
         clearTimeout(timer);
+        waiting.delete(asked);
         if (message.error) reject(new Error(`${name}: ${method}: ${JSON.stringify(message.error)}`));
         else resolve(message.result);
       });
-      attach.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      attach.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: asked, method, params })}\n`);
     });
+  // plxd closes a connection silent for 90 seconds, so this says something as the app does.
+  const heartbeat = setInterval(() => void call("host/health").catch(() => {}), 30_000);
+  cleanups.push(() => {
+    clearInterval(heartbeat);
+    attach.kill();
+  });
   await call("initialize", { protocol: { min: 1, max: 1 }, client: { name: "e2e", version: "0" }, capabilities: {} });
   await call("host/settings/set", { remote: true, deviceName: name, ...(relay ? { relay: true } : {}) });
   await until(`${name}'s listener`, async () => (await call("remote/sessions")).listening);
@@ -174,13 +189,20 @@ async function computer(name, relay) {
 
 // --- Driving the emulator.
 
+/** Runs a Gradle task, without blocking this process, whose connections to plxd need their heartbeats. */
 function gradle(...args) {
   log(`gradle ${args[0]}`);
-  execFileSync("./gradlew", ["--console=plain", "-PreactNativeArchitectures=x86_64", ...args], {
-    cwd: join(mobile, "android"),
-    stdio: "inherit",
-    timeout: 10 * 60_000,
-    killSignal: "SIGKILL",
+  return new Promise((resolve, reject) => {
+    const run = spawn("./gradlew", ["--console=plain", "-PreactNativeArchitectures=x86_64", ...args], {
+      cwd: join(mobile, "android"),
+      stdio: "inherit",
+    });
+    const limit = setTimeout(() => run.kill("SIGKILL"), 10 * 60_000);
+    run.on("exit", (code, signal) => {
+      clearTimeout(limit);
+      if (code === 0) resolve();
+      else reject(new Error(`gradle ${args[0]} ended with ${code ?? signal}`));
+    });
   });
 }
 
@@ -266,7 +288,7 @@ try {
 
   // The pin check on the emulator's own TLS, Conscrypt as a phone has, not the JVM's.
   const argument = (name, value) => `-Pandroid.testInstrumentationRunnerArguments.${name}=${value}`;
-  gradle(
+  await gradle(
     ":pinned-tls:connectedDebugAndroidTest",
     argument("hostId", relayBox.hostId),
     argument("lanPort", relayBox.port),
