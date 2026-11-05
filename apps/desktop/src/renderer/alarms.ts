@@ -195,7 +195,8 @@ export function useThreadAlarms(
 
 /**
  * A notification when a host that was connected drops (it reconnects by itself), when it comes
- * back, and when it stops retrying, with Retry. Connecting at launch is never news.
+ * back, and when it stops retrying, with Retry. Connecting at launch is never news, and neither is
+ * a restart for an update, unless it isn't back in time.
  */
 export function useConnectionAlarms(hosts: Host[]) {
   const names = useRef(hosts);
@@ -238,7 +239,8 @@ export function useConnectionAlarms(hosts: Host[]) {
           body: state.error.message,
           action: { label: "Retry", run: () => void window.parallax.retry(hostId) },
         });
-      } else if (before?.status === "connected") {
+      } else if (!state.updating && (before?.status === "connected" || before?.updating)) {
+        // A restart for an update isn't a drop, until it runs out of time.
         troubled.add(hostId);
         notify({ key, tone: "error", title: `Lost connection to ${name}`, body: "Reconnecting…" });
       }

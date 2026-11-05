@@ -44,6 +44,7 @@ import {
   requestToLegacy,
   resultFromLegacy,
 } from "../protocol/legacyNames";
+import { UpdateNotice } from "../protocol/updateNotice";
 import { RpcClient } from "./rpc";
 
 // 0007's client rules.
@@ -259,6 +260,10 @@ export class Connection {
   private readonly deviceStreams = new Map<string, (message: DeviceStreamMessage) => void>();
   private readonly reconnectWaiters = new Set<() => void>();
 
+  private readonly updateNotice = new UpdateNotice(() => {
+    if (this.state.updating) this.setState(this.state);
+  });
+
   constructor(private readonly options: ConnectionOptions) {}
 
   start(): void {
@@ -287,6 +292,7 @@ export class Connection {
    * so whoever keeps one opens it again on the host's next connection.
    */
   dispose(): void {
+    this.updateNotice.stop();
     this.subscriptions.clear();
     const watches = [...this.watches];
     this.watches.clear();
@@ -717,6 +723,7 @@ export class Connection {
   }
 
   private onNotification(method: string, params: unknown): void {
+    if (method === "host/updating") return this.updateNotice.heard();
     if (method === "device/data") {
       const { streamId, data, text } = params as DeviceDataParams;
       this.deviceStreams.get(streamId)?.({
@@ -833,8 +840,8 @@ export class Connection {
   }
 
   private setState(state: ConnectionState): void {
-    this.state = state;
-    this.options.onState(state);
+    this.state = this.updateNotice.mark(state);
+    this.options.onState(this.state);
   }
 }
 

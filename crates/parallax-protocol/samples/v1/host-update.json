@@ -47,5 +47,21 @@
       "runningAgents": 2,
       "message": "Installed plxd 2610.10912.13045-nightly. plxd restarts into it now, interrupting its 2 running agents."
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "host/announceUpdate",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "host/updating",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
   }
 ]

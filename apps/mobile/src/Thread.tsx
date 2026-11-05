@@ -734,7 +734,11 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           <View style={[styles.banner, { top: 6, backgroundColor: c.surface, borderColor: c.border }]}>
             <Icon icon={WifiOff} size={14} color={c.mutedForeground} />
             <T muted style={{ fontSize: 13 }}>
-              {computer ? `Reconnecting to ${computer.machine.name}…` : "This computer was removed."}
+              {!computer
+                ? "This computer was removed."
+                : computer.state.updating
+                  ? `${computer.machine.name} is restarting for an update…`
+                  : `Reconnecting to ${computer.machine.name}…`}
             </T>
           </View>
         )}

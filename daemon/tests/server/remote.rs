@@ -219,6 +219,7 @@ async fn a_read_only_device_reads_threads_and_is_refused_writes_and_terminals() 
     );
     let refused = [
         ("host/settings/set", r#"{"autoResume":false}"#),
+        ("host/announceUpdate", "{}"),
         (
             "terminal/open",
             r#"{"threadId":"t","terminalId":"t","cwd":"/","cols":80,"rows":24}"#,

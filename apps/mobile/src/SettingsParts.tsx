@@ -140,7 +140,7 @@ export function ComputerPicker({ m, onChange }: { m: Computer; onChange: (id: st
       <Row
         leading={<DeviceIcon name={m.machine.name} size={18} color={c.mutedForeground} />}
         title={m.machine.name}
-        detail={restarting(m.machine.id, m.connectedNow) ? "Updating…" : m.shownConnected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
+        detail={m.state.updating || restarting(m.machine.id, m.connectedNow) ? "Updating…" : m.shownConnected ? "Connected" : m.state.status === "failed" ? m.state.error.message : "Connecting…"}
         last
         onPress={more ? () => setOpen(true) : undefined}
         right={more ? <Icon icon={ChevronsUpDown} size={16} color={c.faintForeground} /> : undefined}

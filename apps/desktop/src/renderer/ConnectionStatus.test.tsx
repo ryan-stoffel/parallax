@@ -4,7 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
-import { useShownConnections, useForgetRemoved } from "./ConnectionStatus";
+import {
+  offlineReason,
+  statusLabel,
+  useConnectedNow,
+  useForgetRemoved,
+  useShownConnections,
+} from "./ConnectionStatus";
 import { RECONNECT_GRACE_MS } from "./reconnectGrace";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -20,10 +26,12 @@ const connecting: ConnectionState = { status: "connecting" };
 let root: Root | undefined;
 let changed: (hostId: string, state: ConnectionState) => void;
 let shown: (ConnectionState | undefined)[];
+let real: boolean;
 
 // As the phone's fleet reads its computers, and the desktop forgets a removed host.
 function Hosts({ hosts }: { hosts: { id: string }[] }) {
   shown = useShownConnections(hosts.map((host) => host.id));
+  real = useConnectedNow("a");
   useForgetRemoved(hosts);
   return null;
 }
@@ -50,6 +58,16 @@ test("a drop shows as connected until its grace ends, and its real state after",
   expect(shown[0]).toEqual(connected);
   await act(async () => void vi.advanceTimersByTime(1));
   expect(shown[0]).toEqual(connecting);
+});
+
+test("a restart for an update shows as Updating, while the real state stays down", async () => {
+  await act(async () => changed("a", { status: "connecting", updating: true }));
+  expect(statusLabel(shown[0]!)).toBe("Updating…");
+  expect(offlineReason(shown[0])).toBe("plxd is restarting for an update…");
+  expect(real).toBe(false);
+  await act(async () => changed("a", connected));
+  expect(shown[0]).toEqual(connected);
+  expect(real).toBe(true);
 });
 
 test("a removed host added back is a first connect, shown at once", async () => {

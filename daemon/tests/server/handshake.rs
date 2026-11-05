@@ -1,16 +1,19 @@
 //! `initialize` and the host methods.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
+use parallax_protocol::jsonrpc::Message;
 use parallax_protocol::methods::{
-    HostHealth, HostSettingsGet, HostSettingsSet, HostUpdate, HostVersion, OrchestratorList,
+    HostAnnounceUpdate, HostHealth, HostSettingsGet, HostSettingsSet, HostUpdate, HostUpdating,
+    HostVersion, NotificationMethod, OrchestratorList,
 };
 use parallax_protocol::{
-    Capabilities, ErrorKind, HostHealthParams, HostSettingsGetParams, HostSettingsSetParams,
-    HostUpdateParams, HostUpdateRestart, HostVersionParams, IncompatibleProtocolDetail,
-    OrchestratorListParams, ProtocolRange, StoreState,
+    Capabilities, ErrorKind, HostAnnounceUpdateParams, HostHealthParams, HostSettingsGetParams,
+    HostSettingsSetParams, HostUpdateParams, HostUpdateRestart, HostVersionParams,
+    IncompatibleProtocolDetail, OrchestratorListParams, ProtocolRange, StoreState,
 };
 use serde_json::json;
 
@@ -225,6 +228,47 @@ async fn the_branch_prefix_is_saved_and_a_bad_one_is_refused() {
     assert_eq!(refused.code, INVALID_PARAMS);
     let cleared = set("").await.unwrap();
     assert_eq!(cleared.branch_prefix.as_deref(), Some(""));
+}
+
+/// `host/updating` follows the answer to `initialize`, since `service install`'s probe reads that
+/// answer as the first line, and comes once per connection (PLX-1418).
+#[tokio::test]
+async fn an_update_announcement_reaches_each_connection_once_after_its_handshake() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut listening = Client::ready(&plxd.socket).await;
+    let mut before_handshake = Client::connect(&plxd.socket).await;
+    let mut announcing = Client::ready(&plxd.socket).await;
+
+    let updating = |message: Option<Message>| match message {
+        Some(Message::Notification(notification)) => {
+            assert_eq!(notification.method, HostUpdating::NAME);
+        }
+        other => panic!("expected host/updating, got {other:?}"),
+    };
+    announcing
+        .send::<HostAnnounceUpdate>(HostAnnounceUpdateParams {})
+        .await;
+    updating(listening.next().await);
+    listening.stays_quiet(Duration::from_millis(200)).await;
+    before_handshake
+        .stays_quiet(Duration::from_millis(200))
+        .await;
+
+    before_handshake.initialize().await.unwrap();
+    updating(before_handshake.next().await);
+
+    // The one who asked hears it too, and a second announcement says nothing new.
+    let mut heard = [announcing.next().await, announcing.next().await];
+    heard.sort_by_key(|message| matches!(message, Some(Message::Response(_))));
+    let [notice, answer] = heard;
+    updating(notice);
+    assert!(matches!(answer, Some(Message::Response(_))), "{answer:?}");
+    announcing
+        .call::<HostAnnounceUpdate>(HostAnnounceUpdateParams {})
+        .await
+        .unwrap();
+    listening.stays_quiet(Duration::from_millis(200)).await;
 }
 
 #[tokio::test]

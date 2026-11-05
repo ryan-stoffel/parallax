@@ -160,9 +160,10 @@ pub use handshake::{
     Capabilities, ClientInfo, InitializeParams, InitializeProtocol, InitializeResult, ProtocolRange,
 };
 pub use host::{
-    HostFolder, HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult,
-    HostQueues, HostReadUploadParams, HostReadUploadResult, HostSettings, HostSettingsGetParams,
-    HostSettingsSetParams, HostUpdateParams, HostUpdateRestart, HostUpdateResult, HostUploadParams,
+    HostAnnounceUpdateParams, HostAnnounceUpdateResult, HostFolder, HostFoldersParams,
+    HostFoldersResult, HostHealthParams, HostHealthResult, HostQueues, HostReadUploadParams,
+    HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
+    HostUpdateParams, HostUpdateRestart, HostUpdateResult, HostUpdatingParams, HostUploadParams,
     HostUploadResult, HostVersionParams, HostVersionResult, QueueStats, StoreState, UploadId,
 };
 pub use hub::{

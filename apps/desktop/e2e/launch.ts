@@ -11,7 +11,7 @@ import { expect, _electron, type ElectronApplication, type Page } from "@playwri
 // Never point it at an installed plxd: without the feature, serve refuses to start.
 
 const desktop = path.join(import.meta.dirname, "..");
-const plxd = process.env["PLXD_PATH"] ?? path.join(desktop, "../../target/debug/plxd");
+export const plxd = process.env["PLXD_PATH"] ?? path.join(desktop, "../../target/debug/plxd");
 
 /** A launched app, and the folder its plxd keeps its data and log in. */
 export interface Launched {
@@ -27,7 +27,8 @@ export interface Launched {
  * an earlier launch's, for plxd to start from its data again. plxd stops when the app exits
  * (PLX-990), unless `outliveApp`, for a test that reopens the app on a plxd still running: then it
  * stops when this test process exits, or at `close`. `settings`, when given, is the app's
- * settings.json to start from, such as hosts it already has.
+ * settings.json to start from, such as hosts it already has. `program`, when given, is the plxd to
+ * run instead of `plxd`, such as a copy that can update itself.
  */
 export async function launch(
   script: string,
@@ -36,11 +37,12 @@ export async function launch(
   dataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-")),
   outliveApp = false,
   settings?: object,
+  program = plxd,
 ): Promise<Launched> {
-  if (!existsSync(plxd)) throw new Error(`no plxd at ${plxd}; see the top of launch.ts`);
+  if (!existsSync(program)) throw new Error(`no plxd at ${program}; see the top of launch.ts`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PLXD_PATH: plxd,
+    PLXD_PATH: program,
     PLXD_DATA_DIR: dataDir,
     PLXD_FAKE_BACKEND: path.resolve(import.meta.dirname, script),
     PLX_SKIP_ONBOARDING: "1",

@@ -57,6 +57,7 @@ pub(crate) fn allows_notification(method: &str) -> bool {
         Some(
             NotificationName::EventsEvent
             | NotificationName::EventsResync
+            | NotificationName::HostUpdating
             | NotificationName::TerminalWrite
             | NotificationName::TerminalResize
             | NotificationName::TerminalDetach
@@ -128,6 +129,7 @@ fn is_read(method: RequestName) -> bool {
         | M::AccessGet => true,
 
         M::HostUpdate
+        | M::HostAnnounceUpdate
         | M::HostFolders
         | M::HostUpload
         | M::HostSettingsSet

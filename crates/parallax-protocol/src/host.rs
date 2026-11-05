@@ -93,6 +93,21 @@ pub struct HostVersionResult {
     pub arch: String,
 }
 
+/// Params of `host/announceUpdate`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostAnnounceUpdateParams {}
+
+/// Result of `host/announceUpdate`: plxd told its connections, and had time to send it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostAnnounceUpdateResult {}
+
+/// Params of `host/updating`. It says nothing but that plxd is about to restart for an update.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostUpdatingParams {}
+
 /// Params of `host/update`, behind the `hostUpdate` capability (PLX-700, decision 0066): install
 /// plxd `version` from its GitHub release and restart into it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
