@@ -46,6 +46,7 @@ export function ConfirmDialog({
   error,
   onConfirm,
   alternate,
+  safe,
   children,
 }: {
   ref: Ref<HTMLDialogElement>;
@@ -57,6 +58,8 @@ export function ConfirmDialog({
   onConfirm: () => void;
   /** A second way to go ahead, as a plain button before `action`'s. */
   alternate?: { action: string; onConfirm: () => void };
+  /** `action` destroys nothing, so it isn't drawn as if it did. */
+  safe?: boolean;
   children: ReactNode;
 }) {
   const titleId = useId();
@@ -81,7 +84,7 @@ export function ConfirmDialog({
               {alternate.action}
             </Button>
           )}
-          <Button variant="danger" disabled={!!busy} onClick={onConfirm}>
+          <Button variant={safe ? "primary" : "danger"} disabled={!!busy} onClick={onConfirm}>
             {busy || action}
           </Button>
         </div>

@@ -87,6 +87,7 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
     pullRequest(number: $number) {
       id
+      viewerCanApplySuggestion
       number
       url
       title
@@ -1487,7 +1488,7 @@ async fn graphql(
 }
 
 /// `https://github.com/<owner>/<name>/pull/<number>`'s parts.
-fn parts(url: &str) -> Result<(&str, &str, u64), PrError> {
+pub(crate) fn parts(url: &str) -> Result<(&str, &str, u64), PrError> {
     let found = || {
         let mut parts = url.strip_prefix("https://github.com/")?.split('/');
         let (owner, name) = (parts.next()?, parts.next()?);
@@ -1723,6 +1724,7 @@ fn pr_view(
         review_threads_truncated: pr.review_threads.cut(),
         node_id: pr.id.clone(),
         pending_review_id,
+        can_apply_suggestions: pr.viewer_can_apply_suggestion,
     })
 }
 
@@ -1989,6 +1991,8 @@ impl Repository {
 #[serde(rename_all = "camelCase")]
 struct PullRequest {
     id: Option<String>,
+    #[serde(default)]
+    viewer_can_apply_suggestion: bool,
     number: Option<u64>,
     url: Option<String>,
     #[serde(default)]
