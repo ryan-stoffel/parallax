@@ -1,9 +1,20 @@
 import { SquareSlash } from "lucide-react";
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
+
+import type { PullRequest } from "../protocol/generated/protocol";
+import { numberOf } from "./github";
+import { GitHubLogo } from "./logos";
+import { lookOf } from "./pr/parts";
+import type { PullRequests } from "./PullRequests";
+
+/** The open thread's pull requests, for the `#` menu and the state each chip of one shows. */
+export const PullRequestsContext = createContext<PullRequests | undefined>(undefined);
 
 // Each kind of mention's colors: a skill in violet, a file in the accent, a thread or an image in
-// the text's own color, faintly filled and outlined, and cited text outlined in the accent.
+// the text's own color, faintly filled and outlined, cited text outlined in the accent, and a pull
+// request bare, since its number takes its state's color.
 const tones = {
+  pullRequest: "",
   skill: "bg-project-violet/12 text-project-violet",
   file: "bg-accent/10 text-foreground",
   thread: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
@@ -116,9 +127,27 @@ export function fileIcon(path: string): ReactNode {
   return <img src={icon(look)} alt="" />;
 }
 
-/** A `/skill` or `@path` token as a chip: the skill's name, or the file's name with its path on
- * hover. What the token says is what's sent; the chip only draws it. */
+/** A pull request as a chip: GitHub's mark and its number, the number's text in its state's color,
+ * with its title on hover. One not read yet is neutral. */
+export function PullRequestChip({ url, pr }: { url: string; pr?: PullRequest }) {
+  return (
+    <Chip
+      tone="pullRequest"
+      title={pr?.title ?? url}
+      icon={<GitHubLogo className="text-foreground" />}
+    >
+      <span className={`font-medium tabular-nums ${lookOf(pr).color}`}>#{numberOf(url)}</span>
+    </Chip>
+  );
+}
+
+/** A `/skill`, `@path`, or pull request URL token as a chip: the skill's name, the file's name with
+ * its path on hover, or the pull request's. What the token says is what's sent; the chip only draws
+ * it. */
 export function Mention({ token }: { token: string }) {
+  const pullRequests = useContext(PullRequestsContext);
+  if (token.startsWith("https://"))
+    return <PullRequestChip url={token} pr={pullRequests?.get(token)?.pr} />;
   if (token[0] === "/") {
     // A plugin's skill, `plugin:name`, shows its plugin dimmed.
     const at = token.lastIndexOf(":");
@@ -137,15 +166,16 @@ export function Mention({ token }: { token: string }) {
   );
 }
 
-/** `/name` and `@path` tokens in sent text: a slash command or skill (no further `/`), or a path
- * ending in an extension, so `/usr/bin`, `@someone`, and `@types/node` stay text. Either may end a
- * sentence or clause. */
-const tokens = /(?<=^|\s)(\/[\w:-]+|@[\w./-]*\.\w+)(?=$|\s|[,;:!?)]|\.(?:\s|$))/g;
+/** `/name`, `@path`, and pull request URL tokens in sent text: a slash command or skill (no further
+ * `/`), a path ending in an extension, so `/usr/bin`, `@someone`, and `@types/node` stay text, or
+ * a pull request's GitHub URL. Any may end a sentence or clause. */
+const tokens =
+  /(?<=^|\s)(\/[\w:-]+|@[\w./-]*\.\w+|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+)(?=$|\s|[,;:!?)]|\.(?:\s|$))/g;
 
-/** The `/skill` and `@path` tokens in sent text. */
+/** The `/skill`, `@path`, and pull request URL tokens in sent text. */
 export const mentionsOf = (text: string) => text.match(tokens) ?? [];
 
-/** A sent prompt's text with its `known` `/skill` and `@path` tokens drawn as chips. */
+/** A sent prompt's text with its `known` tokens drawn as chips. */
 export function withMentions(text: string, known: (token: string) => boolean): ReactNode[] {
   return text
     .split(tokens)
