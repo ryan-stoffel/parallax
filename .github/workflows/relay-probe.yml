@@ -86,7 +86,7 @@ jobs:
         run: |
           if [ "$HAS_TOKEN" != true ] || [ -z "$WRITER" ]; then exit 0; fi
           attempt="repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
-          started=$(gh api "$attempt" --jq .run_started_at) || started=
+          started=$(gh api "$attempt" --jq '.run_started_at // empty') || started=
           stored=$(GH_TOKEN="$WRITER" gh api "repos/$GH_REPO/actions/secrets/PROBE_CLERK_REFRESH_TOKEN" --jq .updated_at) || stored=
           echo "Attempt started $started, refresh token stored $stored."
           if [ -z "$started" ] || [ -z "$stored" ]; then
