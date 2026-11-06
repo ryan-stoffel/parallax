@@ -6,6 +6,8 @@ The home page and privacy policy at `https://parallax.codes`, which Google needs
 - `public/_headers` sets a content security policy that allows no scripts and no requests to other servers, and sends no referrer.
 - `wrangler.toml` routes `parallax.codes` to the Worker as a custom domain, with no `workers.dev` URL.
 
+The privacy policy's contact email is a placeholder for Ryan to fill in. Once it's in, turn off Email Address Obfuscation on the `parallax.codes` zone: it hides each address behind a script it injects, which the content security policy blocks, so the page would show no address.
+
 The privacy policy states what the code does. Update it in the same PR as a change to what the apps, `plxd`, or the relay keep or send.
 
 ## Local
