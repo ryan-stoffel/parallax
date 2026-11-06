@@ -2392,8 +2392,7 @@ export function Composer({
           {...dropTarget}
           ref={bar}
           onBlur={leave}
-          // Hidden while the box steps back (index.css), so a menu it opened stays open, and held in
-          // place with the box while the pill stands in for them.
+          // Stays below the folded box and fades with it while the voice pill stands in for them.
           inert={voice.phase !== "idle"}
           data-back={back || undefined}
           data-voice={voice.phase !== "idle" || undefined}
