@@ -1664,6 +1664,12 @@ body {
   background-color: var(--raised);
   backdrop-filter: none;
 }
+/* The bars over and under the box are one frame with it: their labels share the controls' weight,
+   and a bar's own titles stay heavier (ComposerTabs.tsx). */
+.composer-tabs,
+.composer-bar {
+  font-weight: 450;
+}
 /* The tabs, on a bar tucked behind the box's top edge, the mirror of the bar under it. */
 .composer-tabs {
   interpolate-size: allow-keywords;
