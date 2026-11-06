@@ -1441,12 +1441,16 @@ body {
 .composer-shell .composer-send.send-sky {
   margin-left: 2px;
 }
-.composer-shell .composer-send.send-sky:enabled {
+/* Over .composer-action's own colors. A nightly's sky keeps its white arrow (.send-sky). */
+:root:not(.nightly) .composer-shell .composer-send.send-sky:enabled {
   color: var(--send-foreground);
 }
-.composer-shell .composer-send.send-sky:enabled:hover {
+:root:not(.nightly) .composer-shell .composer-send.send-sky:enabled:hover {
   background-color: var(--send);
   filter: brightness(1.1);
+}
+:root.nightly .composer-shell .composer-send.send-sky {
+  color: #ffffff;
 }
 :root:not(.nightly) .composer-shell .composer-actions .composer-send.send-sky:disabled {
   background: color-mix(in oklab, var(--foreground) 8%, transparent);
