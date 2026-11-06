@@ -2,7 +2,16 @@
 // Times T3 Connect and the Parallax relay from this computer, on whatever network it's on (PLX-1167,
 // weakness 5 of PLX-1347). Run it on each network being compared.
 //
-//     node scripts/bench/t3-compare.mjs [--connects 30] [--trips 50] [--version latest] [--out file]
+// Once per computer, enroll the relay's test account into a local file. Open the link it prints in
+// a private window and sign in as the test account:
+//
+//     node scripts/bench/relay-probe-enroll.mjs --file ~/.config/parallax/probe-token
+//
+// Then, on each network:
+//
+//     node scripts/bench/t3-compare.mjs --token-file ~/.config/parallax/probe-token --out t3-compare.jsonl
+//
+// Other options: [--connects 30] [--trips 50] [--version latest].
 //
 // T3 side: it signs in with T3's device grant, which prints a link and a code to approve, and links
 // one computer, which holds one of the T3 account's 3 free slots while it runs. It runs `t3 serve` in
@@ -10,27 +19,34 @@
 // and with no provider CLI on PATH, so no AI usage. It times this computer reaching that server
 // through its Cloudflare tunnel, then unlinks, signs out, and deletes the home. With T3CODE_HOME set
 // it uses that home and keeps it. Both ends of the tunnel are on this computer, so a slow network
-// counts twice.
+// counts twice. t3-tunnel.mjs finds the tunnel. When it doesn't answer within 4 minutes, the error
+// names the last step reached and T3's own verdict from `t3 connect status`.
 //
 // A connect is a ticket POST on a new connection, then a WebSocket on another, which is T3's path for
 // a client that already holds a session. It skips the relay call a client makes to get its first
 // session. The first event is the first chunk of subscribeServerLifecycle, and a round trip is
 // server.probe on one open socket.
 //
-// Parallax side: it runs relay-probe.mjs. With no PROBE_CLERK_REFRESH_TOKEN that times only the
-// relay's Worker and stream objects, not a stream to a computer (PLX-1385).
+// Parallax side: it runs relay-probe.mjs. With --token-file, relay-probe signs in as the test
+// account with that file's refresh token and times a real stream to a throwaway computer. A token
+// Clerk rotates is written back to the same file. PROBE_CLERK_USER_ID names the test account, from
+// the environment or else the repo variable, as for enrolling. The file is its own Clerk session, so
+// CI's stored token isn't rotated away. With no token, relay-probe times only the relay's Worker and
+// stream objects, not a stream to a computer (PLX-1385).
 //
 // Nothing printed or written holds a token or ticket, and the tunnel's name stays out of the results.
 // A failure or crash at any point still signs out, stops T3, and removes the temporary home.
-import { execFile, execFileSync, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+import { tunnelHost } from "./t3-tunnel.mjs";
 
 const { values: options } = parseArgs({
   options: {
@@ -38,8 +54,33 @@ const { values: options } = parseArgs({
     trips: { type: "string", default: "50" },
     version: { type: "string", default: "latest" },
     out: { type: "string" },
+    "token-file": { type: "string" },
   },
 });
+
+// Read before T3 starts, so a missing file or account fails in seconds, not after T3's run.
+const probeEnv = {};
+if (options["token-file"]) {
+  const tokenFile = absolute(options["token-file"]);
+  let token = "";
+  try {
+    token = readFileSync(tokenFile, "utf8").trim();
+  } catch {}
+  if (!token) {
+    console.error(`No token in ${tokenFile}. Run: node scripts/bench/relay-probe-enroll.mjs --file ${tokenFile}`);
+    process.exit(1);
+  }
+  let user = process.env.PROBE_CLERK_USER_ID?.trim();
+  if (!user) {
+    const variable = spawnSync("gh", ["variable", "get", "PROBE_CLERK_USER_ID", "--repo", "ryan-stoffel/parallax"], { encoding: "utf8" });
+    user = variable.status === 0 ? variable.stdout.trim() : "";
+  }
+  if (!user) {
+    console.error("Set PROBE_CLERK_USER_ID, or the repo variable of that name, to the test account's Clerk user id.");
+    process.exit(1);
+  }
+  Object.assign(probeEnv, { PROBE_CLERK_REFRESH_TOKEN: token, PROBE_ROTATED_FILE: tokenFile, PROBE_CLERK_USER_ID: user });
+}
 
 const scratch = mkdtempSync(join(tmpdir(), "t3-compare-"));
 const home = process.env.T3CODE_HOME ?? join(scratch, "t3");
@@ -100,48 +141,15 @@ const freePort = () =>
     });
   });
 
-/** The pid of the cloudflared `root` started, or null while it hasn't. */
-function connectorOf(root) {
-  const rows = execFileSync("ps", ["-axo", "pid=,ppid=,comm="], { encoding: "utf8" })
-    .split("\n")
-    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
-    .filter(Boolean)
-    .map(([, pid, ppid, comm]) => ({ pid: Number(pid), ppid: Number(ppid), comm }));
-  const family = new Set([root]);
-  for (let grew = true; grew; ) {
-    grew = false;
-    for (const row of rows) {
-      if (family.has(row.ppid) && !family.has(row.pid)) {
-        family.add(row.pid);
-        grew = true;
-      }
-    }
+/** What `t3 connect status` says of the tunnel: only its verdict and cause, which never name it. */
+async function connectVerdict() {
+  try {
+    const { reachability } = JSON.parse(await within(60_000, "t3 connect status", quiet(t3, ["connect", "status", "--json"])));
+    if (!reachability) return "T3 didn't check the tunnel";
+    return `T3 says it's ${reachability.status}${reachability.cause ? ` (${reachability.cause})` : ""}`;
+  } catch {
+    return "T3's own status couldn't be read";
   }
-  return rows.find((row) => family.has(row.pid) && row.comm.endsWith("cloudflared"))?.pid ?? null;
-}
-
-/** Waits for the tunnel to be up and answering, and returns its public hostname. */
-async function tunnelHost(serverPid) {
-  const deadline = Date.now() + 240_000;
-  for (; Date.now() < deadline; await sleep(1000)) {
-    const pid = connectorOf(serverPid);
-    if (!pid) continue;
-    let listing = "";
-    try {
-      // lsof exits 1 until the connector listens on its metrics port.
-      listing = execFileSync("lsof", ["-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"], { encoding: "utf8" });
-    } catch {
-      continue;
-    }
-    const port = /:(\d+)$/m.exec(listing)?.[1];
-    if (!port) continue;
-    const config = await fetch(`http://127.0.0.1:${port}/config`).then((answer) => answer.json()).catch(() => null);
-    const hostname = config?.config?.ingress?.find((rule) => rule.hostname)?.hostname;
-    if (!hostname) continue;
-    const answer = await fetch(`https://${hostname}/.well-known/t3/environment`).catch(() => null);
-    if (answer?.status === 200) return hostname;
-  }
-  throw new Error("T3's tunnel didn't answer in 4 minutes");
 }
 
 /** Posts for a ticket on a new connection, with no keep-alive to reuse. */
@@ -310,9 +318,13 @@ try {
   const work = join(scratch, "work");
   mkdirSync(work);
   // Its output holds a pairing token, so it goes nowhere.
-  server = spawn(t3, ["serve", "--port", String(await freePort()), "--no-browser", work], { env, stdio: "ignore" });
+  const port = await freePort();
+  server = spawn(t3, ["serve", "--port", String(port), "--no-browser", work], { env, stdio: "ignore" });
   console.log("Waiting for T3's tunnel...");
-  const base = `https://${await tunnelHost(server.pid)}`;
+  const host = await tunnelHost(port).catch(async (error) => {
+    throw new Error(`${error.message}. ${await connectVerdict()}`);
+  });
+  const base = `https://${host}`;
   const issued = await quiet(t3, ["auth", "session", "issue", "--token-only", "--ttl", "1h", "--label", "t3-compare"]);
   const token = issued.split("\n").find((line) => line.trim() && !line.includes(" ")).trim();
   secrets.add(token);
@@ -338,14 +350,14 @@ try {
 }
 
 console.log("\nParallax relay:");
-if (!process.env.PROBE_CLERK_REFRESH_TOKEN) {
-  console.log("No PROBE_CLERK_REFRESH_TOKEN, so these times stop at the relay's Worker and stream objects. They time no stream to a computer, so they aren't comparable with T3's numbers (PLX-1385).");
+if (!probeEnv.PROBE_CLERK_REFRESH_TOKEN && !process.env.PROBE_CLERK_REFRESH_TOKEN) {
+  console.log("No --token-file, so these times stop at the relay's Worker and stream objects. They time no stream to a computer, so they aren't comparable with T3's numbers (PLX-1385).");
 }
 const probeFile = join(dirname(fileURLToPath(import.meta.url)), "relay-probe.mjs");
 const outDir = mkdtempSync(join(tmpdir(), "t3-compare-probe-"));
 try {
   execFileSync(process.execPath, [probeFile, "--out", outDir], {
-    env: { ...process.env, PATH: env.PATH },
+    env: { ...process.env, ...probeEnv, PATH: env.PATH },
     stdio: "inherit",
   });
 } catch {
