@@ -23,7 +23,7 @@ const item =
  * more than one, the mark, then how many beside the state icon of most of them, in its color, as
  * the sidebar shows them, which opens them all (`onOpenPrs`).
  * With none, Create PR once it has a commit (`canOpenPr`). Create PR runs `agent/openPr` and hands the pull request to `onPrOpened`; one that
- * fails for `gh` offers `onSetUpGithub` (PLX-423). `prs` reads each one's state for its chip.
+ * fails for `gh` offers `onSetUpGithub` (PLX-423). `prs` reads each one's state for its color.
  */
 export function ThreadBar({
   hostId,
