@@ -1468,10 +1468,6 @@ body {
   background-color: var(--hover);
   color: var(--foreground);
 }
-.composer-compact:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-}
 /* Solid red, with a soft shadow under it, and a small white square. */
 .composer-stop {
   background-color: #e43b45;
