@@ -1394,7 +1394,8 @@ body {
 }
 /* The model's name, a step heavier than the reasoning and access beside it. */
 .composer-controls .composer-model {
-  font-weight: 500;
+  font-size: var(--text-reading);
+  font-weight: 600;
   color: var(--foreground);
 }
 /* Attach, voice, and send or stop at the end of the controls' row: round buttons of one size, part
@@ -1820,7 +1821,7 @@ body {
    end of the arc; then it's still. */
 .effort-needle {
   transform-box: view-box;
-  transform-origin: 12px 14px;
+  transform-origin: 12px 13px;
   rotate: var(--needle);
 }
 @keyframes effort-rattle {
