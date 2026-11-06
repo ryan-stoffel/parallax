@@ -553,14 +553,15 @@ const MAX_STREAM_FRAME: usize = 64 * 1024;
 /// Joins a WebSocket's binary frames to a byte stream: what's written to the answer goes out in
 /// frames, and frames come out of it. Either side's end ends both, as does `keepalive` finding the
 /// socket dead. A client has its own heartbeat, so needs none. Why the stream ended goes in `end`
-/// before the byte stream ends, so whoever reads the stream's end can read that.
+/// before the byte stream ends, so whoever reads the stream's end can read that. The task ends once
+/// the socket's last frames went and, at plxd's end, the relay answered its close or didn't in time.
 fn pipe(
     socket: WebSocketStream<Stream>,
     mut keepalive: Option<Keepalive>,
     end: EndSlot,
-) -> DuplexStream {
+) -> (DuplexStream, tokio::task::JoinHandle<()>) {
     let (ours, theirs) = tokio::io::duplex(MAX_STREAM_FRAME);
-    tokio::spawn(async move {
+    let piping = tokio::spawn(async move {
         let (mut sink, mut frames) = socket.split();
         let (mut reader, mut writer) = tokio::io::split(theirs);
         let heard = keepalive.as_ref().map(|k| Arc::clone(&k.heard));
@@ -646,7 +647,7 @@ fn pipe(
             debug!(%error, "a relay stream ended");
         }
     });
-    ours
+    (ours, piping)
 }
 
 /// How this process's last client stream through the relay ended, for `plxd dial` to report.
@@ -698,7 +699,7 @@ async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream
     joined(&mut socket).await?;
     let end = client_slot();
     *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
-    Ok(pipe(socket, None, end))
+    Ok(pipe(socket, None, end).0)
 }
 
 /// Waits for the relay to say the host joined a client's stream.
@@ -1896,14 +1897,19 @@ async fn stream(
         let _listed = Listed { relay, from };
         let mut tcp = out.connect(local).await?;
         let _ = tcp.set_nodelay(true);
-        let mut piped = pipe(socket, Some(keepalive), Arc::clone(&end));
-        tokio::io::copy_bidirectional_with_sizes(
+        let (mut piped, piping) = pipe(socket, Some(keepalive), Arc::clone(&end));
+        let copied = tokio::io::copy_bidirectional_with_sizes(
             &mut piped,
             &mut tcp,
             MAX_STREAM_FRAME,
             MAX_STREAM_FRAME,
         )
-        .await?;
+        .await;
+        // Even when the listener's side failed, what it wrote still goes, and the relay's answer to
+        // the close decides `gone` (PLX-1456).
+        drop(piped);
+        let _ = piping.await;
+        copied?;
         Ok::<_, Error>(())
     };
     tokio::select! {
@@ -2504,7 +2510,11 @@ mod tests {
         let (plxd, relay) = socket().await;
         let (check, watched) = watch::channel(());
         let end = EndSlot::default();
-        (pipe(plxd, Some(Keepalive::new(watched)), end), relay, check)
+        (
+            pipe(plxd, Some(Keepalive::new(watched)), end).0,
+            relay,
+            check,
+        )
     }
 
     /// Reads `relay` for `time`, as the runtime does: a ping gets a pong. Answers how many came.
@@ -2561,7 +2571,7 @@ mod tests {
             let (plxd, mut relay) = socket().await;
             let (_check, watched) = watch::channel(());
             let end = EndSlot::default();
-            let mut ours = pipe(plxd, Some(Keepalive::new(watched)), Arc::clone(&end));
+            let (mut ours, _) = pipe(plxd, Some(Keepalive::new(watched)), Arc::clone(&end));
             let (gone, mut told) = mpsc::unbounded_channel();
             let holding = Holding::new(Held::default(), gone, "s", Arc::clone(&end));
             ours.write_all(b"answer").await.unwrap();

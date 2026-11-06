@@ -783,6 +783,80 @@ struct ProxyShared {
     /// How many milliseconds later than the control connection's plxd's bytes on a stream reach
     /// the relay, as when that socket's path is slower.
     stream_lag_ms: AtomicU64,
+    /// The text and close frames that crossed, in the order the proxy read them.
+    frames: std::sync::Mutex<Vec<Seen>>,
+}
+
+/// One WebSocket frame the proxy read: when, on which stream (none for control), which way, and
+/// its opcode and unmasked payload.
+#[derive(Clone, Debug)]
+struct Seen {
+    at: Instant,
+    stream: Option<String>,
+    from_plxd: bool,
+    opcode: u8,
+    payload: Vec<u8>,
+}
+
+/// Reads one direction of a proxied connection as WebSocket frames, after its HTTP head, and keeps
+/// its text and close frames in [`ProxyShared::frames`].
+struct Tap {
+    shared: Arc<ProxyShared>,
+    stream: Option<String>,
+    from_plxd: bool,
+    past_head: bool,
+    buffer: Vec<u8>,
+}
+
+impl Tap {
+    fn feed(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
+        if !self.past_head {
+            let Some(at) = self.buffer.windows(4).position(|w| w == b"\r\n\r\n") else {
+                return;
+            };
+            self.buffer.drain(..at + 4);
+            self.past_head = true;
+        }
+        while let Some((opcode, payload, used)) = ws_frame(&self.buffer) {
+            self.buffer.drain(..used);
+            if matches!(opcode, 1 | 8) {
+                self.shared.frames.lock().unwrap().push(Seen {
+                    at: Instant::now(),
+                    stream: self.stream.clone(),
+                    from_plxd: self.from_plxd,
+                    opcode,
+                    payload,
+                });
+            }
+        }
+    }
+}
+
+/// The first whole WebSocket frame in `bytes`: its opcode, unmasked payload, and length.
+fn ws_frame(bytes: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
+    let (first, second) = (*bytes.first()?, *bytes.get(1)?);
+    let (mut len, mut at) = (usize::from(second & 0x7f), 2);
+    if len == 126 {
+        len = usize::from(u16::from_be_bytes(bytes.get(2..4)?.try_into().ok()?));
+        at = 4;
+    } else if len == 127 {
+        len = usize::try_from(u64::from_be_bytes(bytes.get(2..10)?.try_into().ok()?)).ok()?;
+        at = 10;
+    }
+    let mask: Option<[u8; 4]> = if second & 0x80 == 0 {
+        None
+    } else {
+        at += 4;
+        Some(bytes.get(at - 4..at)?.try_into().ok()?)
+    };
+    let mut payload = bytes.get(at..at + len)?.to_vec();
+    if let Some(mask) = mask {
+        for (i, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[i % 4];
+        }
+    }
+    Some((first & 0x0f, payload, at + len))
 }
 
 impl Proxy {
@@ -812,6 +886,51 @@ impl Proxy {
             sleep(Duration::from_millis(20)).await;
         }
     }
+
+    /// Each stream plxd's end closed, with how long after plxd's close the relay's close came back
+    /// through the proxy and its code, once each has one or 10 s passed.
+    async fn answered_closes(&self) -> Vec<(String, Option<(Duration, Option<u16>)>)> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let frames = self.shared.frames.lock().unwrap().clone();
+            let answers: Vec<_> = frames
+                .iter()
+                .filter(|frame| frame.from_plxd && frame.opcode == 8)
+                .filter_map(|closed| {
+                    let answer = frames.iter().find(|frame| {
+                        !frame.from_plxd
+                            && frame.opcode == 8
+                            && frame.stream == closed.stream
+                            && frame.at >= closed.at
+                    });
+                    let answer = answer.map(|answer| {
+                        let code = answer
+                            .payload
+                            .get(..2)
+                            .map(|c| u16::from_be_bytes([c[0], c[1]]));
+                        (answer.at - closed.at, code)
+                    });
+                    Some((closed.stream.clone()?, answer))
+                })
+                .collect();
+            if answers.iter().all(|(_, answer)| answer.is_some()) || Instant::now() >= deadline {
+                return answers;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Whether plxd sent `gone` for `stream` on a control connection.
+    fn told_gone(&self, stream: &str) -> bool {
+        let named = format!(r#""stream":"{stream}""#);
+        let frames = self.shared.frames.lock().unwrap();
+        frames.iter().any(|frame| {
+            frame.from_plxd
+                && frame.stream.is_none()
+                && frame.opcode == 1
+                && String::from_utf8_lossy(&frame.payload).contains(&named)
+        })
+    }
 }
 
 /// One connection through a [`Proxy`]. Its request's first line says whether it's the control
@@ -819,16 +938,29 @@ impl Proxy {
 async fn carry(plxd: TcpStream, relay: String, shared: Arc<ProxyShared>) {
     let number = shared.connections.fetch_add(1, Ordering::SeqCst);
     let mut head = [0; 512];
-    let control = loop {
+    let line = loop {
         let Ok(peeked) = plxd.peek(&mut head).await else {
             return;
         };
         let text = String::from_utf8_lossy(&head[..peeked]);
         if let Some((line, _)) = text.split_once("\r\n") {
-            break line.contains("/host ");
+            break line.to_owned();
         }
         sleep(Duration::from_millis(1)).await;
     };
+    let control = line.contains("/host ");
+    let stream = line
+        .split_once("/streams/")
+        .and_then(|(_, rest)| rest.split(['?', ' ']).next())
+        .map(str::to_owned);
+    let tap = |from_plxd| Tap {
+        shared: Arc::clone(&shared),
+        stream: stream.clone(),
+        from_plxd,
+        past_head: false,
+        buffer: Vec::new(),
+    };
+    let (mut outward_tap, mut inward_tap) = (tap(true), tap(false));
     if control {
         shared.controls.fetch_add(1, Ordering::SeqCst);
         if shared.refusing.load(Ordering::SeqCst) {
@@ -852,15 +984,15 @@ async fn carry(plxd: TcpStream, relay: String, shared: Arc<ProxyShared>) {
     });
     let outward = async {
         if lag.is_zero() {
-            one_way(&mut plxd_in, &mut relay_out, &silent).await;
+            one_way(&mut plxd_in, &mut relay_out, &silent, &mut outward_tap).await;
         } else {
-            lagging(&mut plxd_in, &mut relay_out, &silent, lag).await;
+            lagging(&mut plxd_in, &mut relay_out, &silent, lag, &mut outward_tap).await;
         }
     };
     tokio::select! {
         () = cut, if control => {}
         () = outward => {}
-        () = one_way(&mut relay_in, &mut plxd_out, &silent) => {}
+        () = one_way(&mut relay_in, &mut plxd_out, &silent, &mut inward_tap) => {}
     }
 }
 
@@ -870,6 +1002,7 @@ async fn lagging(
     to: &mut OwnedWriteHalf,
     silent: &impl Fn() -> bool,
     lag: Duration,
+    tap: &mut Tap,
 ) {
     let (send, mut receive) = tokio::sync::mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
     let reading = async move {
@@ -881,6 +1014,7 @@ async fn lagging(
             let Ok(read @ 1..) = from.read(&mut buffer).await else {
                 return;
             };
+            tap.feed(&buffer[..read]);
             let due = Instant::now() + lag;
             if send.send((due, buffer[..read].to_vec())).is_err() {
                 return;
@@ -901,7 +1035,12 @@ async fn lagging(
     tokio::join!(reading, writing);
 }
 
-async fn one_way(from: &mut OwnedReadHalf, to: &mut OwnedWriteHalf, silent: &impl Fn() -> bool) {
+async fn one_way(
+    from: &mut OwnedReadHalf,
+    to: &mut OwnedWriteHalf,
+    silent: &impl Fn() -> bool,
+    tap: &mut Tap,
+) {
     let mut buffer = vec![0; 64 * 1024];
     loop {
         while silent() {
@@ -910,6 +1049,7 @@ async fn one_way(from: &mut OwnedReadHalf, to: &mut OwnedWriteHalf, silent: &imp
         let Ok(read @ 1..) = from.read(&mut buffer).await else {
             return;
         };
+        tap.feed(&buffer[..read]);
         while silent() {
             sleep(Duration::from_millis(20)).await;
         }
@@ -1042,6 +1182,18 @@ async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_sp
         .await
         .unwrap();
     lag.store(0, Ordering::SeqCst);
+    // The relay answers each of those closes with its own, in well under the 10 s plxd waits for
+    // one, so those streams get no `gone` and don't hold a place for long.
+    let closes = proxy.answered_closes().await;
+    assert!(closes.len() >= 2, "{closes:?}");
+    sleep(Duration::from_millis(500)).await;
+    for (stream, answer) in closes {
+        let (waited, code) = answer.expect("the relay answered plxd's close");
+        eprintln!("the relay answered plxd's close in {waited:?}, with {STREAM_LAG_MS} ms of lag");
+        assert_eq!(code, Some(1000));
+        assert!(waited < Duration::from_secs(1), "{waited:?}");
+        assert!(!proxy.told_gone(&stream), "a `gone` for {stream}");
+    }
     let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
         .await
         .unwrap();

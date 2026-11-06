@@ -335,7 +335,7 @@ async fn through_relay(daemon: &Daemon, host_id: &str) -> Result<(), Failure> {
         return Err(failure(Stream, didnt_join, FIX_STREAM));
     }
     let pin = Pin::HostId(host_id.to_owned());
-    let stream: super::Stream = Box::new(pipe(socket, None, super::EndSlot::default()));
+    let stream: super::Stream = Box::new(pipe(socket, None, super::EndSlot::default()).0);
     match within(remote::read_descriptor(stream, &pin)).await {
         Some(Ok(_)) => Ok(()),
         Some(Err(Error::WrongHost)) => Err(failure(
