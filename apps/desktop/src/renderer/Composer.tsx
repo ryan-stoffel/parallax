@@ -10,6 +10,7 @@ import {
   LoaderCircle,
   MessagesSquare,
   Mic,
+  Minimize2,
   Paperclip,
   Pencil,
   Quote,
@@ -80,7 +81,13 @@ import type {
 import { lastPrompt } from "./attention";
 import { sizeOf } from "./documents";
 import type { ComposerContents } from "./drafts";
-import { threadUsageOf, UsageRing, type ComposerUsageData } from "./ComposerUsage";
+import {
+  staleContext,
+  threadUsageOf,
+  tokensShort,
+  UsageRing,
+  type ComposerUsageData,
+} from "./ComposerUsage";
 import type { RequestUsage, ThreadUsage } from "./transcript";
 import { EffortMenu } from "./EffortMenu";
 import { accessPrefs } from "./accessPrefs";
@@ -1121,6 +1128,34 @@ export function Composer({
       ...(target !== backend && { account }),
     };
   if (orchestratorMode) delete options.permission;
+  // A Claude thread back from a break past its prompt cache: the next message compacts its context
+  // first, unless Keep is picked (T3 Code's "When you return"). A minute clock keeps it current.
+  // The run's own latest request, whichever model is picked now.
+  const claudeUsage =
+    connected && target === backend && run?.kind === "claude" ? requestUsage : undefined;
+  const [now, setNow] = useState(Date.now);
+  const lastAt = claudeUsage?.at;
+  useEffect(() => {
+    if (lastAt === undefined) return;
+    // Current at once, too, such as after waking or reconnecting.
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [lastAt]);
+  const stale = onStop ? undefined : staleContext(claudeUsage, now);
+  const [keepHistory, setKeepHistory] = useState(false);
+  // An open Claude or Codex thread compacts on `/compact`, which plxd runs (PLX-638).
+  const compactable =
+    !!onSend &&
+    !disabledReason &&
+    !onStop &&
+    !!started &&
+    target === backend &&
+    (run?.kind === "claude" || run?.kind === "codex");
+  const compactNow = async () => {
+    const failed = await onSend!("/compact", options, [], []);
+    if (failed) notify({ tone: "error", title: "Couldn't compact the context", body: failed });
+  };
   // The `/`, `@`, and `#` menus: what's typed, the lists, and the highlighted row. Esc closes the
   // menu until what opened it goes.
   const [trigger, setTrigger] = useState<Trigger>();
@@ -1536,13 +1571,23 @@ export function Composer({
     // Only what's sent: images added during an upload stay.
     setImages((all) => all.filter((i) => !sentImages.includes(i)));
     setAttachError(undefined);
-    const failed = await (steer ? onSteer! : background ? onSendInBackground! : onSend)(
-      sentText,
-      options,
-      sentImages,
-      sentThreads,
-    );
+    // Compacting first, the message queues behind `/compact` as any message sent mid-turn does.
+    const compactFirst =
+      stale !== undefined &&
+      !keepHistory &&
+      !steer &&
+      !background &&
+      !/^\/compact(?:\s|$)/i.test(sentText);
+    const failed =
+      (compactFirst ? await onSend!("/compact", options, [], []) : undefined) ??
+      (await (steer ? onSteer! : background ? onSendInBackground! : onSend)(
+        sentText,
+        options,
+        sentImages,
+        sentThreads,
+      ));
     if (failed === undefined) {
+      setKeepHistory(false);
       setFiles((all) => all.filter((f) => !sentFiles.includes(f)));
       void countSentPrompt();
     } else if (!editor.isDestroyed) {
@@ -2269,7 +2314,12 @@ export function Composer({
             />
             {/* Attach, voice, and send or stop, as one group of round buttons at the row's end. */}
             <div className="composer-actions">
-              {usage?.summary && !narrow && <UsageRing data={usage} />}
+              {usage?.summary && !narrow && (
+                <UsageRing
+                  data={usage}
+                  onCompact={compactable ? () => void compactNow() : undefined}
+                />
+              )}
               <button
                 type="button"
                 aria-label="Attach files"
@@ -2289,6 +2339,25 @@ export function Composer({
               >
                 <Mic />
               </button>
+              {/* T3 Code's toggle: on, the next message compacts the stale context first. */}
+              {stale !== undefined && !showStop && (
+                <button
+                  type="button"
+                  aria-pressed={!keepHistory}
+                  aria-label={`Compact ${tokensShort(stale)} tokens of history before sending`}
+                  title={
+                    keepHistory
+                      ? `Next send keeps all ${tokensShort(stale)} tokens. Click to compact first.`
+                      : `Next send compacts ${tokensShort(stale)} tokens first. Click to keep the full history.`
+                  }
+                  onClick={() => setKeepHistory((keep) => !keep)}
+                  className="composer-compact"
+                >
+                  <Minimize2 aria-hidden />
+                  <span className="composer-detail">{keepHistory ? "Keep" : "Compact"}</span>
+                  <span className="text-muted-foreground">{tokensShort(stale)}</span>
+                </button>
+              )}
               {showStop ? (
                 <button
                   type="button"

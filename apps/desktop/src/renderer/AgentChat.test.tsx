@@ -669,6 +669,66 @@ test("/effort and /permissions open their own menus", async () => {
   expect(model).not.toHaveBeenCalled();
 });
 
+test("a stale Claude thread compacts before the next message, unless Keep is picked", async () => {
+  const onSend = vi.fn(async (_text: string): Promise<string | undefined> => undefined);
+  render(
+    <Composer
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+      onSend={onSend}
+      connected
+      contextAndFast
+      // Long past Claude's hour of prompt cache.
+      requestUsage={{
+        kind: "requestUsage",
+        backend: "claude",
+        accountId: "claude",
+        at: "2026-10-11T00:00:00Z",
+        usage: { model: "claude-opus-5-5", contextTokens: 415_000, contextWindow: 1_000_000 },
+      }}
+    />,
+  );
+  const toggle = () =>
+    document.querySelector<HTMLButtonElement>(
+      '[aria-label="Compact 415k tokens of history before sending"]',
+    )!;
+  const send = async (text: string) => {
+    type(text);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
+    );
+  };
+  expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  await send("Pick up where we left off");
+  expect(onSend.mock.calls.map(([text]) => text)).toEqual([
+    "/compact",
+    "Pick up where we left off",
+  ]);
+  // A `/compact` of its own, with instructions or not, isn't compacted first.
+  onSend.mockClear();
+  await send("/compact keep the API notes");
+  expect(onSend.mock.calls.map(([text]) => text)).toEqual(["/compact keep the API notes"]);
+
+  onSend.mockClear();
+  act(() => toggle().click());
+  expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(toggle().textContent).toContain("Keep");
+  await send("Keep going");
+  expect(onSend.mock.calls.map(([text]) => text)).toEqual(["Keep going"]);
+
+  // Another model doesn't share the cache either, so the offer stays.
+  const menu = document.getElementById(
+    document.querySelector('[aria-label="Model: Claude Opus 5.5"]')!.getAttribute("popovertarget")!,
+  )!;
+  await act(async () =>
+    [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
+      .find((m) => m.textContent?.startsWith("Claude Sonnet 5.5"))!
+      .click(),
+  );
+  expect(document.querySelector('[aria-label="Model: Claude Sonnet 5.5"]')).not.toBeNull();
+  expect(toggle()).not.toBeNull();
+});
+
 test("an open thread's new Access goes to the running run at once", async () => {
   const onPermission = vi.fn();
   render(
