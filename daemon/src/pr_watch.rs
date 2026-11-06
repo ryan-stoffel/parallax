@@ -33,10 +33,10 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ParallaxEvent, PrCheck, PrCheckState, PrComment, PrCommentKind, PrCommit, PrFile, PrLabel,
-    PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewDecision, PrReviewState,
-    PrReviewThread, PrState, PrStatusCheck, PrStatusFile, PrStatusResult, PrStatusThread,
-    PrThreadComment, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
+    ParallaxEvent, PrCheck, PrCheckState, PrComment, PrCommentKind, PrCommit, PrDiffSide, PrFile,
+    PrLabel, PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewDecision,
+    PrReviewState, PrReviewThread, PrState, PrStatusCheck, PrStatusFile, PrStatusResult,
+    PrStatusThread, PrThreadComment, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
     PullRequest as PrView, RunId, ScopeId, TurnId, WakeReason,
 };
 use parallax_store::Store;
@@ -140,7 +140,7 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
         id author { login avatarUrl } body state submittedAt lastEditedAt url
       } }
       reviewThreads(last: 100) { pageInfo { hasPreviousPage } nodes {
-        id path line originalLine isOutdated isResolved comments(first: 50) {
+        id path line originalLine diffSide isOutdated isResolved comments(first: 50) {
           pageInfo { hasNextPage } nodes {
             id author { login avatarUrl } body createdAt lastEditedAt url diffHunk
           }
@@ -1800,6 +1800,11 @@ fn review_thread(thread: &Thread) -> PrReviewThread {
         id: thread.id.clone(),
         path: thread.path.clone(),
         line: thread.line.or(thread.original_line),
+        side: match thread.diff_side.as_deref() {
+            Some("LEFT") => Some(PrDiffSide::Left),
+            Some("RIGHT") => Some(PrDiffSide::Right),
+            _ => None,
+        },
         diff_hunk: thread
             .comments
             .iter()
@@ -2260,6 +2265,7 @@ struct Thread {
     /// Null once the thread is outdated, or for a thread on the whole file.
     line: Option<u64>,
     original_line: Option<u64>,
+    diff_side: Option<String>,
     #[serde(default)]
     is_outdated: bool,
     #[serde(default)]

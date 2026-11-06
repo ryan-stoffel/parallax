@@ -7831,6 +7831,10 @@ export type PrReviewThread = {
 	 */
 	line?: number,
 	/**
+	 * The diff's side `line` is on. Absent from a plxd that doesn't read it.
+	 */
+	side?: PrDiffSide,
+	/**
 	 * The diff down to its line, from its first comment.
 	 */
 	diffHunk?: string,
@@ -7851,6 +7855,11 @@ export type PrReviewThread = {
 	 */
 	truncated?: boolean,
 };
+
+/**
+ * A side of a pull request's diff.
+ */
+export type PrDiffSide = "left" | "right";
 
 /**
  * A comment in a [`PrReviewThread`].
