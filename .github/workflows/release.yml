@@ -331,7 +331,7 @@ jobs:
   probe:
     needs: [plan, finish]
     if: ${{ !cancelled() && needs.plan.outputs.build == 'true' && needs.plan.outputs.channel == 'nightly' && needs.plan.outputs.dry_run != '1' }}
-    # The probe reads when this run was created (PLX-1460).
+    # The probe reads when this attempt started (PLX-1460).
     permissions:
       contents: read
       actions: read

@@ -70,11 +70,12 @@ jobs:
         with:
           node-version: 24
 
-      # GitHub gives a run its secrets when the run is created, and a job keeps them however long it
-      # waits (PLX-1460). When another run stored a rotated token after this run was created, this
-      # run holds the older one, which Clerk already replaced, and Clerk revokes the account's
-      # tokens when one is used again, so the signed-in part skips. Without the writer this can't
-      # tell, and the store step below already warns.
+      # GitHub gives each attempt of a run its secrets when the attempt starts, and a job keeps them
+      # however long it waits (PLX-1460). A re-run is a new attempt and gets the current ones. When
+      # another run stored a rotated token after this attempt started, this one holds the older
+      # token, which Clerk already replaced, and Clerk revokes the account's tokens when one is used
+      # again, so the signed-in part skips. It skips too when either time can't be read. Without the
+      # writer this can't tell, and the store step below already warns.
       - name: Check the refresh token is current
         id: token
         env:
@@ -84,13 +85,14 @@ jobs:
           WRITER: ${{ secrets.PROBE_SECRET_WRITER }}
         run: |
           if [ "$HAS_TOKEN" != true ] || [ -z "$WRITER" ]; then exit 0; fi
-          created=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID" --jq .created_at) || created=
+          attempt="repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+          started=$(gh api "$attempt" --jq .run_started_at) || started=
           stored=$(GH_TOKEN="$WRITER" gh api "repos/$GH_REPO/actions/secrets/PROBE_CLERK_REFRESH_TOKEN" --jq .updated_at) || stored=
-          echo "Run created $created, refresh token stored $stored."
-          if [ -z "$created" ] || [ -z "$stored" ]; then
-            echo "::warning::Couldn't read when this run was created or when the refresh token was stored, so the signed-in part runs anyway (PLX-1460)."
-          elif [[ ! "$stored" < "$created" ]]; then
-            echo "stale=1" >> "$GITHUB_OUTPUT"
+          echo "Attempt started $started, refresh token stored $stored."
+          if [ -z "$started" ] || [ -z "$stored" ]; then
+            echo "skip=unchecked" >> "$GITHUB_OUTPUT"
+          elif [[ ! "$stored" < "$started" ]]; then
+            echo "skip=stale" >> "$GITHUB_OUTPUT"
           fi
 
       # The test account's token reaches only this step.
@@ -101,7 +103,7 @@ jobs:
           PROBE_CLERK_REFRESH_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN }}
           PROBE_CLERK_USER_ID: ${{ vars.PROBE_CLERK_USER_ID }}
           PROBE_ROTATED_FILE: ${{ runner.temp }}/rotated-token
-          PROBE_TOKEN_STALE: ${{ steps.token.outputs.stale }}
+          PROBE_SKIP_SIGNIN: ${{ steps.token.outputs.skip }}
         run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"}
 
       # Clerk replaces the refresh token on each use, so this keeps the next run signed in. The
