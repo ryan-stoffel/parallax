@@ -2285,7 +2285,7 @@ export function Composer({
                 title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
                 disabled={!onSend || !!disabledReason || uploading}
                 onClick={voice.start}
-                className="composer-action"
+                className="composer-action composer-mic"
               >
                 <Mic />
               </button>

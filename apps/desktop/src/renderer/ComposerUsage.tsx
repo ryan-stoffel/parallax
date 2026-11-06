@@ -238,7 +238,7 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
         onClick={() => (kept ? close() : setKept(true))}
         className={`grid size-9 place-items-center rounded-full hover:bg-hover ${open ? "bg-hover" : ""} ${ringTone[summary.tone]}`}
       >
-        <svg aria-hidden viewBox="0 0 20 20" className="size-5 -rotate-90">
+        <svg aria-hidden viewBox="0 0 20 20" className="size-6 -rotate-90">
           <circle
             cx="10"
             cy="10"
