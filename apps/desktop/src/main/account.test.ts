@@ -44,7 +44,8 @@ vi.mock("./windows", () => ({
   broadcast: (_channel: string, profile: Profile | null) => published.push(profile),
 }));
 
-const { accountPortal, frontendApi, passwordStore, startAccount } = await import("./account");
+const { accountPortal, frontendApi, issuedBy, passwordStore, startAccount } =
+  await import("./account");
 
 // A mocked Clerk instance at https://clerk.parallax.test: the OAuth endpoints the app calls, as
 // Clerk documents them, with a public client that must use PKCE (S256).
@@ -287,7 +288,10 @@ test("an unreadable or older (Supabase) session file is signed out, and removed"
   expect(fs.existsSync(savedFile())).toBe(false);
 });
 
-test("a session from another Clerk instance, or from before the app kept one, is signed out (PLX-1049)", async () => {
+test("a session from another Clerk instance is signed out, and one saved before the app kept its instance is development's (PLX-1049)", async () => {
+  const dev = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+  expect(issuedBy({})).toBe(dev);
+  expect(issuedBy({ api: "https://clerk.parallax.codes" })).toBe("https://clerk.parallax.codes");
   const user = { given_name: "Ryan" };
   for (const saved of [
     { refreshToken: "rt_old", user },

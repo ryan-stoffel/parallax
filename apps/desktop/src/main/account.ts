@@ -8,12 +8,20 @@ import { serveCallback, type Callback } from "./loopback";
 import { broadcast } from "./windows";
 
 // The Clerk instance that holds Parallax accounts (0067), named by its publishable key, and the
-// app's OAuth application there: production's (PLX-1049). Both are public.
-// PLX_CLERK_PUBLISHABLE_KEY and PLX_CLERK_CLIENT_ID point a dev build at another instance, such as
-// the development one.
+// app's OAuth application there: the development instance's, until the move to production's
+// (`pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk`, `mp9Q72aAbB0LC83O`) ships (PLX-1465). Both are public.
+// PLX_CLERK_PUBLISHABLE_KEY and PLX_CLERK_CLIENT_ID point a dev build at another instance.
 const PUBLISHABLE_KEY =
-  process.env["PLX_CLERK_PUBLISHABLE_KEY"] ?? "pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk";
-const CLIENT_ID = process.env["PLX_CLERK_CLIENT_ID"] ?? "mp9Q72aAbB0LC83O";
+  process.env["PLX_CLERK_PUBLISHABLE_KEY"] ??
+  "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
+const CLIENT_ID = process.env["PLX_CLERK_CLIENT_ID"] ?? "SXDueyOLOJ2v4Vmq";
+
+/** The development instance's Frontend API, which issued every session saved before the app kept one. */
+const DEVELOPMENT_API = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+
+/** The Frontend API that issued a saved session (PLX-1049). */
+export const issuedBy = (saved: { api?: unknown }) =>
+  typeof saved.api === "string" ? saved.api : DEVELOPMENT_API;
 const SCOPES = "profile email offline_access";
 
 /** The Frontend API a publishable key names: `pk_test_` or `pk_live_`, then base64 of `<host>$`. */
@@ -133,7 +141,7 @@ export function startAccount(): Account {
   try {
     const saved = persist && JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));
     if (typeof saved?.refreshToken === "string" && saved.user) {
-      if (saved.api === api) session = saved;
+      if (issuedBy(saved) === api) session = { ...saved, api };
       else moved = true;
     }
   } catch {

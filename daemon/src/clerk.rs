@@ -13,13 +13,19 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::warn;
 
-/// The Clerk instance the desktop app signs in with by default: production's (0067, PLX-1049).
-/// `PLXD_CLERK_ISSUER` names another, such as the development instance.
-pub const DEFAULT_ISSUER: &str = "https://clerk.parallax.codes";
+/// The Clerk instance the desktop app signs in with by default (0067): the development instance,
+/// until the move to production's, `https://clerk.parallax.codes`, ships (PLX-1465).
+/// `PLXD_CLERK_ISSUER` names another.
+pub const DEFAULT_ISSUER: &str = DEVELOPMENT_ISSUER;
 
-/// The desktop app's OAuth application, whose access tokens count. `PLXD_CLERK_CLIENT_IDS` lists
-/// others, separated by commas.
-pub const DEFAULT_CLIENT_ID: &str = "mp9Q72aAbB0LC83O";
+/// Clerk's development instance, the only one before plxd kept the issuer with its account, so an
+/// account recorded without one is on it (PLX-1049).
+pub const DEVELOPMENT_ISSUER: &str = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+
+/// The desktop app's OAuth application, whose access tokens count: the development instance's
+/// until PLX-1465 (production's is `mp9Q72aAbB0LC83O`). `PLXD_CLERK_CLIENT_IDS` lists others,
+/// separated by commas.
+pub const DEFAULT_CLIENT_ID: &str = "SXDueyOLOJ2v4Vmq";
 
 /// Clock skew allowed on `exp` and `nbf`, as clerk-verify's.
 const SKEW_SECONDS: f64 = 5.0;

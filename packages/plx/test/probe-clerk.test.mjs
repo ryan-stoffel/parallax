@@ -1,6 +1,6 @@
 // @ts-check
 // scripts/bench/probe-clerk.mjs: the relay probe stays on Clerk's development instance, where its
-// test account is, while plx defaults to production (PLX-1049, PLX-1457).
+// test account is, whatever plx defaults to (PLX-1049, PLX-1457).
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -9,8 +9,8 @@ import { plxdTrusts, probeClerk } from "../../../scripts/bench/probe-clerk.mjs";
 
 const DEV = "https://adjusted-mastodon-8705.clerk.accounts.dev";
 
-test("the probe and the plxd it runs use the development instance, while plx uses production", () => {
-  assert.deepEqual(clerkOf({}), { api: "https://clerk.parallax.codes", clientId: "mp9Q72aAbB0LC83O" });
+test("the probe and the plxd it runs use the development instance, as plx does until PLX-1465", () => {
+  assert.deepEqual(clerkOf({}), { api: DEV, clientId: "SXDueyOLOJ2v4Vmq" });
   const clerk = probeClerk({});
   assert.deepEqual(clerk, { api: DEV, clientId: "SXDueyOLOJ2v4Vmq" });
   assert.deepEqual(plxdTrusts(clerk), { PLXD_CLERK_ISSUER: DEV, PLXD_CLERK_CLIENT_IDS: "SXDueyOLOJ2v4Vmq" });

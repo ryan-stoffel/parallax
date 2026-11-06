@@ -27,13 +27,13 @@ No workflow deploys the relay. Ryan deploys it by hand once these exist:
 1. **The domain.** `parallax.codes` is registered through Cloudflare Registrar, so it is already a zone on the account. `wrangler.toml` routes `relay.parallax.codes` to the Worker as a custom domain, and the deploy creates its DNS record and certificate.
 2. **A Cloudflare API token**: My Profile > API Tokens > Create Token > Create Custom Token, not the "Edit Cloudflare Workers" template, which adds KV, R2, Pages, and Tail. Give it exactly these four permissions: Account > Workers Scripts > Edit, Account > Account Settings > Read, Zone > Workers Routes > Edit, and Zone > DNS > Edit. Under Account Resources include only Ryan's account, under Zone Resources only `parallax.codes`, and set an expiry. Durable Objects need the Workers Paid plan.
 3. **The account id**, from the Cloudflare dashboard's Workers & Pages overview.
-4. **Clerk's production instance** (0067). The top level of `wrangler.toml` sets it:
+4. **Clerk's production instance** (0067), ready but not yet the apps' default. The top level of `wrangler.toml` sets it:
    - `CLERK_ISSUER`: `https://clerk.parallax.codes`.
    - `CLERK_JWKS_URL`: `https://clerk.parallax.codes/.well-known/jwks.json`.
    - `CLERK_CLIENT_IDS`: the desktop OAuth application's client id, `mp9Q72aAbB0LC83O`.
    - `CLERK_AUTHORIZED_PARTIES` isn't set: the web client's origins, comma-separated, once there is one. Unset, browsers' session tokens are refused. The mobile app's carry no origin and pass.
 
-   `CLERK_ISSUER`, `CLERK_JWKS_URL`, and `CLERK_CLIENT_IDS` are comma lists in the same order, one entry per instance, and a token is checked against the instance its `iss` names and only that instance's client ids. Several client ids for one instance are separated by spaces. While accounts move from the development instance (PLX-1049), the deploy below adds that instance with `--var`, so an app that hasn't updated, and the relay probe's test account, keep working. Drop it only once the probe's account is on production (PLX-1457) and a stable release carries the move: then deploy without the three `--var` values to take production alone.
+   `CLERK_ISSUER`, `CLERK_JWKS_URL`, and `CLERK_CLIENT_IDS` are comma lists in the same order, one entry per instance, and a token is checked against the instance its `iss` names and only that instance's client ids. Several client ids for one instance are separated by spaces. The apps still sign in to the development instance until the account move ships (PLX-1465), so the deploy below adds that instance with `--var`. Drop it only once the move has shipped, the probe's account is on production (PLX-1457), and a stable release carries both: then deploy without the three `--var` values to take production alone.
 
 ### When to deploy
 
