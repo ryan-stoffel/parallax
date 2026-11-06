@@ -20,8 +20,8 @@ const item =
  * A thread's bar under the composer (PLX-1459), as a new thread's shows where it will run: the
  * computer and checkout the thread runs in and its branch, then its pull request, GitHub's mark and
  * its number in its state's color, which opens in the app as the thread's other PR links do. With
- * more than one, the mark, then how many beside the state icon of most of them, in its color, as
- * the sidebar shows them, which opens them all (`onOpenPrs`).
+ * more than one, the mark, then how many, such as `2 PRs`, beside the state icon of most of them,
+ * in its color, as the sidebar shows them, which opens them all (`onOpenPrs`).
  * With none, Create PR once it has a commit (`canOpenPr`). Create PR runs `agent/openPr` and hands the pull request to `onPrOpened`; one that
  * fails for `gh` offers `onSetUpGithub` (PLX-423). `prs` reads each one's state for its color.
  */
@@ -114,7 +114,7 @@ export function ThreadBar({
             <GitHubLogo aria-hidden className="text-foreground" />
             <span className={`flex items-center gap-1 tabular-nums ${most.color}`}>
               <most.Icon aria-hidden />
-              {urls.length}
+              {urls.length} PRs
             </span>
           </button>
         )}
