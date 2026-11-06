@@ -46,7 +46,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     continue-on-error: ${{ inputs.advisory == true }}
-    # One at a time, since each uses the same test account and refresh token.
+    # For "Check the refresh token is current". A call from release.yml grants it there too.
+    permissions:
+      contents: read
+      actions: read
+    # One at a time, since each uses the test account's refresh token and Clerk replaces it on each
+    # use (PLX-1460). The group is a fixed name, not one built from github.*, which a call from
+    # release.yml fills with the caller's values, so the schedule, a manual run, and release.yml's
+    # call all wait in this one group. A run waiting here isn't cancelled by the one running, but
+    # GitHub keeps one waiting run per group, so a newer one replaces it.
     concurrency:
       group: relay-probe
       cancel-in-progress: false
@@ -62,6 +70,29 @@ jobs:
         with:
           node-version: 24
 
+      # GitHub gives a run its secrets when the run is created, and a job keeps them however long it
+      # waits (PLX-1460). When another run stored a rotated token after this run was created, this
+      # run holds the older one, which Clerk already replaced, and Clerk revokes the account's
+      # tokens when one is used again, so the signed-in part skips. Without the writer this can't
+      # tell, and the store step below already warns.
+      - name: Check the refresh token is current
+        id: token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HAS_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN != '' }}
+          WRITER: ${{ secrets.PROBE_SECRET_WRITER }}
+        run: |
+          if [ "$HAS_TOKEN" != true ] || [ -z "$WRITER" ]; then exit 0; fi
+          created=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID" --jq .created_at) || created=
+          stored=$(GH_TOKEN="$WRITER" gh api "repos/$GH_REPO/actions/secrets/PROBE_CLERK_REFRESH_TOKEN" --jq .updated_at) || stored=
+          echo "Run created $created, refresh token stored $stored."
+          if [ -z "$created" ] || [ -z "$stored" ]; then
+            echo "::warning::Couldn't read when this run was created or when the refresh token was stored, so the signed-in part runs anyway (PLX-1460)."
+          elif [[ ! "$stored" < "$created" ]]; then
+            echo "stale=1" >> "$GITHUB_OUTPUT"
+          fi
+
       # The test account's token reaches only this step.
       - name: Test the relay
         env:
@@ -70,10 +101,11 @@ jobs:
           PROBE_CLERK_REFRESH_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN }}
           PROBE_CLERK_USER_ID: ${{ vars.PROBE_CLERK_USER_ID }}
           PROBE_ROTATED_FILE: ${{ runner.temp }}/rotated-token
+          PROBE_TOKEN_STALE: ${{ steps.token.outputs.stale }}
         run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"}
 
-      # Clerk's docs don't say whether a refresh token changes on use. If it did, this keeps the
-      # next run signed in. The writer reaches only this step.
+      # Clerk replaces the refresh token on each use, so this keeps the next run signed in. The
+      # writer reaches only this step and the check above.
       - name: Store a rotated refresh token
         if: ${{ !cancelled() }}
         env:
