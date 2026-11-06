@@ -8,7 +8,7 @@ import { numberOf } from "./github";
 import { GitHubLogo } from "./logos";
 import { lookOf } from "./pr/parts";
 import { notify } from "./notifications";
-import { majorityLook, type PullRequests } from "./PullRequests";
+import { ChecksMark, checksOf, majorityLook, type PullRequests } from "./PullRequests";
 import { hostIcon } from "./RunTargetMenu";
 import { titleOf } from "./threads";
 
@@ -18,10 +18,10 @@ const item =
 
 /**
  * A thread's bar under the composer (PLX-1459), as a new thread's shows where it will run: the
- * computer and checkout the thread runs in and its branch, then its pull request, GitHub's mark and
- * its number in its state's color, which opens in the app as the thread's other PR links do. With
- * more than one, the mark, then how many, such as `2 PRs`, beside the state icon of most of them,
- * in its color, as the sidebar shows them, which opens them all (`onOpenPrs`).
+ * computer and checkout the thread runs in and its branch, then its pull requests, marked as the
+ * sidebar marks them after GitHub's: the state icon of most of them in its color, then the one's
+ * number, which opens in the app as the thread's other PR links do, or `+N` more, which opens them
+ * all (`onOpenPrs`), then their checks.
  * With none, Create PR once it has a commit (`canOpenPr`). Create PR runs `agent/openPr` and hands the pull request to `onPrOpened`; one that
  * fails for `gh` offers `onSetUpGithub` (PLX-423). `prs` reads each one's state for its color.
  */
@@ -52,6 +52,7 @@ export function ThreadBar({
   const place = run.checkout ? "Local checkout" : "Worktree";
   // Neutral in a pane that isn't focused, which reads no pull requests' state.
   const most = prs ? majorityLook(prs) : lookOf();
+  const checks = prs && checksOf(prs);
   const openPr = async () => {
     setOpening(true);
     const prTitle = title ?? titleOf(run);
@@ -90,34 +91,41 @@ export function ThreadBar({
         )}
       </span>
       <span className="flex shrink-0 items-center gap-1">
-        {urls.length === 1 && (
-          // The thread's pane opens a linked pull request in the app.
-          <a
-            href={urls[0]}
-            title={prs?.get(urls[0]!)?.pr?.title ?? urls[0]}
-            className={`${item} hover:bg-hover`}
-          >
-            <GitHubLogo aria-hidden className="text-foreground" />
-            <span className={`tabular-nums ${lookOf(prs?.get(urls[0]!)?.pr).color}`}>
-              #{numberOf(urls[0]!)}
-            </span>
-          </a>
-        )}
-        {urls.length > 1 && (
-          <button
-            type="button"
-            aria-label={`${urls.length} pull requests`}
-            title={urls.map((url) => `#${numberOf(url)}`).join(", ")}
-            onClick={onOpenPrs}
-            className={`${item} hover:bg-hover hover:text-foreground`}
-          >
-            <GitHubLogo aria-hidden className="text-foreground" />
-            <span className={`flex items-center gap-1 tabular-nums ${most.color}`}>
-              <most.Icon aria-hidden />
-              {urls.length} PRs
-            </span>
-          </button>
-        )}
+        {urls.length > 0 &&
+          (() => {
+            // As the sidebar marks them: the state icon of most of them, then the one's number or
+            // how many more, then their checks.
+            const mark = (
+              <>
+                <GitHubLogo aria-hidden className="text-foreground" />
+                <span className={`flex items-center gap-0.5 tabular-nums ${most.color}`}>
+                  <most.Icon aria-hidden />
+                  {urls.length > 1 ? `+${urls.length - 1}` : `#${numberOf(urls[0]!)}`}
+                </span>
+                {checks && <ChecksMark state={checks} className="size-3.5!" />}
+              </>
+            );
+            return urls.length === 1 ? (
+              // The thread's pane opens a linked pull request in the app.
+              <a
+                href={urls[0]}
+                title={prs?.get(urls[0]!)?.pr?.title ?? urls[0]}
+                className={`${item} hover:bg-hover`}
+              >
+                {mark}
+              </a>
+            ) : (
+              <button
+                type="button"
+                aria-label={`${urls.length} pull requests`}
+                title={urls.map((url) => `#${numberOf(url)}`).join(", ")}
+                onClick={onOpenPrs}
+                className={`${item} hover:bg-hover`}
+              >
+                {mark}
+              </button>
+            );
+          })()}
         {urls.length === 0 && canOpenPr && (
           <button
             type="button"

@@ -84,7 +84,7 @@ test("several pull requests take the color of most of them", () => {
   render({ run: { ...run, pullRequests: urls }, canOpenPr: false, prs });
   const count = document.querySelector('[aria-label="3 pull requests"] span')!;
   expect(count.className).toContain("text-project-violet");
-  expect(count.textContent).toBe("3 PRs");
+  expect(count.textContent).toBe("+2");
 });
 
 test("Create PR opens one titled like the thread and hands it on", async () => {
