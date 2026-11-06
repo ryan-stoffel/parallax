@@ -29,9 +29,10 @@
 //
 // Parallax side: it runs relay-probe.mjs. With --token-file, relay-probe signs in as the test
 // account with that file's refresh token and times a real stream to a throwaway computer. A token
-// Clerk rotates is written back to the same file. PROBE_CLERK_USER_ID names the test account, from
-// the environment or else the repo variable, as for enrolling. The file is its own Clerk session, so
-// CI's stored token isn't rotated away. With no token, relay-probe times only the relay's Worker and
+// Clerk rotates is written back to the same file. The test account's id comes from the repo
+// variable PROBE_CLERK_USER_ID through `gh`, which is where enroll reads it, unless the environment
+// sets PROBE_CLERK_USER_ID. The file is its own Clerk session, so CI's stored token isn't rotated
+// away. With no token, relay-probe times only the relay's Worker and
 // stream objects, not a stream to a computer (PLX-1385).
 //
 // Nothing printed or written holds a token or ticket, and the tunnel's name stays out of the results.
@@ -141,12 +142,17 @@ const freePort = () =>
     });
   });
 
-/** What `t3 connect status` says of the tunnel: only its verdict and cause, which never name it. */
+/**
+ * What `t3 connect status` says of the tunnel. T3's status and cause are labels such as
+ * "unreachable" and "dns_failed", and anything else is left out, so no hostname can be printed.
+ */
 async function connectVerdict() {
+  const label = (/** @type {unknown} */ value) => (typeof value === "string" && /^[a-z_]{1,40}$/.test(value) ? value : null);
   try {
     const { reachability } = JSON.parse(await within(60_000, "t3 connect status", quiet(t3, ["connect", "status", "--json"])));
     if (!reachability) return "T3 didn't check the tunnel";
-    return `T3 says it's ${reachability.status}${reachability.cause ? ` (${reachability.cause})` : ""}`;
+    const cause = label(reachability.cause);
+    return `T3 says it's ${label(reachability.status) ?? "in an unknown state"}${cause ? ` (${cause})` : ""}`;
   } catch {
     return "T3's own status couldn't be read";
   }
@@ -321,7 +327,7 @@ try {
   const port = await freePort();
   server = spawn(t3, ["serve", "--port", String(port), "--no-browser", work], { env, stdio: "ignore" });
   console.log("Waiting for T3's tunnel...");
-  const host = await tunnelHost(port).catch(async (error) => {
+  const host = await tunnelHost(port, home).catch(async (error) => {
     throw new Error(`${error.message}. ${await connectVerdict()}`);
   });
   const base = `https://${host}`;

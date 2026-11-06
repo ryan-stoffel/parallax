@@ -2,11 +2,14 @@
 // scripts/bench/t3-tunnel.mjs against fake relay clients on loopback (PLX-1452). Their answers copy
 // cloudflared 2026.10.4's metrics server, which before its first config has only a catch-all rule.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
-import { loopbackListeners, tunnelHost } from "../../../scripts/bench/t3-tunnel.mjs";
+import { listenersUnder, loopbackListeners, tunnelHost } from "../../../scripts/bench/t3-tunnel.mjs";
 
 const CATCH_ALL = { hostname: "", service: "http_status:503" };
 
@@ -49,7 +52,7 @@ test("finds the client whose ingress serves this port, once it's configured", ls
   await serve(client("ours.example", serverPort, () => configured), t);
   /** @type {string[]} */
   const asked = [];
-  const host = await tunnelHost(serverPort, {
+  const host = await tunnelHost(serverPort, "unused", {
     limit: 15_000,
     listeners: own,
     answers: async (hostname) => (asked.push(hostname), 200),
@@ -62,7 +65,7 @@ test("names the furthest step on timeout, never the hostname", lsof, async (t) =
   await serve(client("real-t3.example", 40_002), t);
   await serve(client("ours.example", 40_001), t);
   await assert.rejects(
-    tunnelHost(40_001, { limit: 2500, listeners: own, answers: async () => 530 }),
+    tunnelHost(40_001, "unused", { limit: 2500, listeners: own, answers: async () => 530 }),
     (error) => {
       const { message } = /** @type {Error} */ (error);
       assert.match(message, /its public address last answered 530/);
@@ -70,5 +73,25 @@ test("names the furthest step on timeout, never the hostname", lsof, async (t) =
       return true;
     },
   );
-  await assert.rejects(tunnelHost(40_003, { limit: 1500, listeners: own }), /no relay client had a hostname for this server's port/);
+  await assert.rejects(tunnelHost(40_003, "unused", { limit: 1500, listeners: own }), /no relay client had a hostname for this server's port/);
+});
+
+test("looks only at listeners of processes started from T3CODE_HOME", lsof, async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "t3-tunnel-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, "tools"));
+  // A node started through a link inside the home stands in for T3's relay client.
+  const inside = join(home, "tools", "relay-client");
+  symlinkSync(process.execPath, inside);
+  const child = spawn(inside, ["-e", 'require("http").createServer().listen(0, "127.0.0.1", () => console.log("up"))'], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  await new Promise((resolve) => child.stdout.once("data", resolve));
+  // A listener of this process, which isn't inside the home.
+  await serve({}, t);
+
+  const found = listenersUnder(home);
+  assert.equal(found.length, 1);
+  assert.equal(found[0]?.pid, String(child.pid));
 });
