@@ -50,8 +50,8 @@ type User = {
 
 /**
  * What the app keeps, encrypted: the refresh token, the user, to show before Clerk answers, and
- * the Frontend API that issued them. A session from another instance, or saved before the app
- * kept one, is signed out, as after the move to production (PLX-1049).
+ * the Frontend API that issued them. One saved before the app kept it is the development
+ * instance's, and kept. A session from another instance is signed out (PLX-1049).
  */
 type Session = { refreshToken: string; user: User; api: string };
 
