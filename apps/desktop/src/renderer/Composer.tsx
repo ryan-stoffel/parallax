@@ -1638,7 +1638,7 @@ export function Composer({
           }),
         // One row beside its actions, growing up to seven before it scrolls, never beneath them.
         class:
-          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.375rem))] min-h-[calc(1.625em+1.375rem)] overflow-y-auto px-4 pt-3.5 pb-2 focus-visible:outline-none",
+          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.625rem))] min-h-[calc(1.625em+1.625rem)] overflow-y-auto px-4.5 pt-4 pb-2.5 focus-visible:outline-none",
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -2176,7 +2176,7 @@ export function Composer({
               <fieldset
                 // Locked while files upload: what's there now is what's sent.
                 disabled={uploading}
-                className="composer-attachments m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
+                className="composer-attachments m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4.5 pt-4"
               >
                 {images.map((image, i) => (
                   <span key={i} className="relative">
@@ -2236,7 +2236,7 @@ export function Composer({
               {!text && (
                 <p
                   aria-hidden
-                  className="composer-placeholder animate-fade-in pointer-events-none absolute inset-x-4 top-3.5 truncate text-reading leading-relaxed text-faint-foreground"
+                  className="composer-placeholder animate-fade-in pointer-events-none absolute inset-x-4.5 top-4 truncate text-reading leading-relaxed text-faint-foreground"
                 >
                   {placeholder}
                 </p>
@@ -2300,7 +2300,7 @@ export function Composer({
                   {stopping ? (
                     <LoaderCircle className="size-4 animate-spin" />
                   ) : (
-                    <span className="size-3.5 rounded-[3px] bg-current" />
+                    <span className="size-2.5 rounded-[2.5px] bg-current" />
                   )}
                 </button>
               ) : (

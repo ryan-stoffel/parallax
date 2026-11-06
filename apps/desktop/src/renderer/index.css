@@ -1410,8 +1410,8 @@ body {
 .composer-action {
   display: grid;
   place-items: center;
-  width: 2rem;
-  height: 2rem;
+  width: 2.25rem;
+  height: 2.25rem;
   border-radius: 9999px;
   color: var(--muted-foreground);
   transition:
@@ -1430,13 +1430,15 @@ body {
 .composer-action:disabled {
   opacity: 0.4;
 }
+/* Solid red, with a soft shadow under it, and a small white square. */
 .composer-stop {
-  background-color: color-mix(in oklab, var(--danger) 14%, transparent);
-  color: var(--danger);
+  background-color: #e43b45;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
 }
 .composer-stop:enabled:hover {
-  background-color: color-mix(in oklab, var(--danger) 22%, transparent);
-  color: var(--danger);
+  background-color: color-mix(in oklab, #e43b45 90%, white);
+  color: #ffffff;
 }
 .composer-shell .composer-send.send-sky {
   margin-left: 2px;
@@ -1453,8 +1455,8 @@ body {
   color: #ffffff;
 }
 :root:not(.nightly) .composer-shell .composer-actions .composer-send.send-sky:disabled {
-  background: color-mix(in oklab, var(--foreground) 8%, transparent);
-  color: var(--faint-foreground);
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+  color: var(--muted-foreground);
   box-shadow: none;
   filter: none;
   opacity: 1;
@@ -1506,7 +1508,7 @@ body {
   align-items: center;
   gap: 0.25rem;
   min-width: 0;
-  padding: 0 6px 6px;
+  padding: 2px 8px 8px;
   pointer-events: none;
   transition:
     margin-top var(--transition-duration-base) var(--ease-out),
@@ -1567,8 +1569,8 @@ body {
   }
 }
 [data-back] > .composer-controls {
-  margin-top: -2.625rem;
-  padding-bottom: 4px;
+  margin-top: -2.8125rem;
+  padding-bottom: 7px;
 }
 /* On the one line, only the model stays at the start, in the placeholder's place, and voice and
    send or stop at the end. A model name longer than --beside, such as a raw id, is cut. */
