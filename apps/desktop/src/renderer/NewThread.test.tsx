@@ -483,11 +483,14 @@ describe("with plxd's run options", () => {
     await pick("Claude Fable 5.1");
     await pick("Plan");
     const effort = (level: string) =>
-      act(() =>
-        [...document.querySelectorAll<HTMLElement>('main [aria-label="Reasoning"] button')]
-          .find((b) => b.textContent === level)!
-          .click(),
-      );
+      act(() => {
+        const slider = document.querySelector<HTMLInputElement>('main input[type="range"]')!;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          slider,
+          String(["Low", "Medium", "High", "Extra high", "Max"].indexOf(level)),
+        );
+        slider.dispatchEvent(new Event("input", { bubbles: true }));
+      });
     effort("Max");
     await send("Plan the settings split");
     expect(notice()?.[1]).toBe("the claude backend can't run with effort max");

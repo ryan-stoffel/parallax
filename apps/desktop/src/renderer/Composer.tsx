@@ -1965,44 +1965,41 @@ export function Composer({
           : accessOptions[p],
       )}
       panelClassName="w-[25rem]"
-      align="end"
       className="composer-access"
     />
   );
-  // The run's model, effort, and access, beside Send, or their own menus without a model.
+  // The run's model, effort, and access, each its own menu, at the start of the controls' row.
   const pickers = run && (
     // A disabled fieldset turns off every control in it, and its title says why.
     <fieldset
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      className="flex min-w-0 items-center gap-1"
+      className="composer-pickers flex min-w-0 items-center gap-0.5"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
-      {model ? (
+      {model && (
         <ModelMenu
           key={backend}
           catalog={catalog}
           unavailable={blocked}
           value={model}
           onChange={setModel}
-          options={{
-            ...(efforts && { effort }),
-            onEffort: setEffort,
-            contexts: efforts ? contexts : [],
-            ...(context !== undefined && { context }),
-            onContext: setContext,
-            ...(efforts && hasFast && { fast }),
-            onFast: setFast,
-            access: accessPicker,
-          }}
         />
-      ) : (
-        <>
-          {efforts && <EffortMenu value={effort} onChange={setEffort} />}
-          {accessPicker}
-        </>
       )}
+      {efforts && (
+        <EffortMenu
+          value={effort}
+          onChange={setEffort}
+          contexts={contexts}
+          context={context}
+          onContext={setContext}
+          fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
+          fast={fast}
+          onFast={setFast}
+        />
+      )}
+      {accessPicker}
     </fieldset>
   );
 
@@ -2262,8 +2259,9 @@ export function Composer({
               <ScrollThumb target={editorDom} />
             </div>
           </div>
-          {/* Attach on the left, and what the message runs on beside voice and send or stop. */}
+          {/* What the message runs on at the start, and attach, voice, and send or stop at the end. */}
           <div className="composer-controls">
+            {pickers}
             <input
               ref={filePicker}
               type="file"
@@ -2274,28 +2272,25 @@ export function Composer({
                 e.target.value = "";
               }}
             />
-            <button
-              type="button"
-              aria-label="Attach files"
-              title="Attach files"
-              onClick={() => filePicker.current?.click()}
-              className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-hover hover:text-foreground [&_svg]:size-4"
-            >
-              <Paperclip />
-            </button>
-            <div className="composer-run ml-auto flex min-w-0 items-center gap-1">
-              {usage?.summary && !narrow && <UsageRing data={usage} />}
-              {pickers}
-            </div>
-            {/* Voice and send or stop share one heavy box at the row's end. */}
+            {/* Attach, voice, and send or stop, as one group of round buttons at the row's end. */}
             <div className="composer-actions">
+              {usage?.summary && !narrow && <UsageRing data={usage} />}
+              <button
+                type="button"
+                aria-label="Attach files"
+                title="Attach files"
+                onClick={() => filePicker.current?.click()}
+                className="composer-action composer-attach"
+              >
+                <Paperclip />
+              </button>
               <button
                 type="button"
                 aria-label="Voice input"
                 title={voice.hotkey ? "Voice input (hold Fn)" : "Voice input"}
                 disabled={!onSend || !!disabledReason || uploading}
                 onClick={voice.start}
-                className="composer-action text-foreground/80 enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
+                className="composer-action"
               >
                 <Mic />
               </button>
@@ -2305,7 +2300,7 @@ export function Composer({
                   aria-label={stopping ? "Stopping" : "Stop"}
                   disabled={stopping}
                   onClick={() => void stop()}
-                  className="composer-pop composer-action text-danger enabled:hover:bg-hover disabled:opacity-50"
+                  className="composer-pop composer-action composer-stop"
                 >
                   {stopping ? (
                     <LoaderCircle className="size-4 animate-spin" />
