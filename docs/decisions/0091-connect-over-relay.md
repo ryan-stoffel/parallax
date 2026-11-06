@@ -141,6 +141,8 @@ Once connected, a message makes one trip either way, so the relay matches T3's t
 
 That leaves the trip to the relay and the TLS handshake inside it, about what a T3 client spends reaching Cloudflare and opening its tunnel connection. Measured on 2026-10-29, with the host on an iPhone hotspot and the client at home: Tailscale's direct path took 73–125 ms a round trip, and the two legs through Cloudflare's Los Angeles point of presence took 33–116 ms and about 22 ms, so about 55–138 ms through the relay. Work 7 measures the real paths.
 
+Amended 2026-11-06 (PLX-1466): optional diagnostics (`PLXD_CONNECT_TIMINGS=1`) add bounded numeric stderr checkpoints. An opted-in authenticated relay upgrade can return numeric `Server-Timing` durations and a spare-selection flag in response headers, without changing stream payloads, authentication or limits. See [the timer audit](../../scripts/bench/connect-timings.md) for exact boundaries and comparison caveats. Production speed and the remaining T3 gap are not established by local diagnostics.
+
 ### Installs and sign-ins go through plxd
 
 - Agent CLI installs and sign-ins on an `account:` host run in that host's plxd terminals (0064), as its shell already does. `sshOf`'s Connect branch goes away.

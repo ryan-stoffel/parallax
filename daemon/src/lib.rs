@@ -59,6 +59,7 @@ mod ci_logs;
 pub mod clerk;
 mod commands;
 mod computer;
+pub mod connect_timing;
 mod context;
 mod delegation;
 mod detect;

@@ -101,6 +101,10 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
     const url = `https://stream/host?host=${hostId}&token=${encodeURIComponent(token)}`;
     return object.fetch(url, { headers: { upgrade: "websocket" } });
   }
+  // Only a successful authenticated client open exposes numeric durations, never logs or IDs.
+  const timed = request.headers.get("x-parallax-timing") === "1";
+  const times: string[] = [];
+  const record = (name: string, start: number) => times.push(`${name};dur=${(performance.now() - start).toFixed(3)}`);
   const ticket = new URL(request.url).searchParams.get("ticket");
   let opened: Awaited<ReturnType<HostRelay["open"]>>;
   if (ticket !== null) {
@@ -108,14 +112,27 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   } else {
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
     // Clerk being down refuses this stream as a bad sign-in does. The account's list tells them apart.
+    const authStart = performance.now();
     const user = token ? await verifySession(env, token).catch(() => null) : null;
+    if (timed) record("auth", authStart);
     if (!user) return json(401, { error: "unauthorized" });
-    opened = await host.open(user);
+    const openStart = performance.now();
+    opened = await host.open(user, timed);
+    if (timed) record("host_open", openStart);
   }
   if ("error" in opened) return json(opened.status, { error: opened.error });
   const object = streamObject(env, hostId, opened.stream);
   if (!object) return json(404, { error: "not_found" });
-  return object.fetch("https://stream/client", { headers: { upgrade: "websocket" } });
+  const joinStart = performance.now();
+  const response = await object.fetch("https://stream/client", { headers: { upgrade: "websocket" } });
+  if (!timed || response.status !== 101) return response;
+  record("stream_join", joinStart);
+  if (opened.timing) {
+    times.push(`admit;dur=${opened.timing.admitMs.toFixed(3)}`, `take;dur=${opened.timing.takeMs.toFixed(3)}`, `spare;dur=${opened.timing.spare ? 1 : 0}`);
+  }
+  const headers = new Headers(response.headers);
+  headers.set("server-timing", times.join(", "));
+  return new Response(null, { status: 101, webSocket: response.webSocket, headers });
 }
 
 const routes = {

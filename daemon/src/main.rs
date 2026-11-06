@@ -281,6 +281,7 @@ struct InstallOptions {
 }
 
 fn main() -> ExitCode {
+    plxd::connect_timing::mark("main");
     // Run as the `gh` shim on an agent's `PATH` (PLX-1023), before anything slower.
     let mut args = std::env::args_os();
     if plxd::gh_shim::invoked(args.next().as_deref()) {
@@ -510,6 +511,7 @@ const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Runs `dial` and exits with `std::process::exit`, for the same reason as [`attach`].
 fn dial(args: &DialArgs) -> ! {
+    plxd::connect_timing::mark("dial_start");
     let report = reporter("dial");
     let runtime = current_thread_runtime().unwrap_or_else(|error| {
         report(&format!("could not start the runtime: {error}"));
@@ -658,6 +660,7 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
 /// Bridges stdio to a dialed connection until it ends, and reports its route and how it ended.
 async fn bridge_dialed(dialed: remote::Dialed, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
     // The app reads this line to know when it's on the relay, and so re-checks direct routes.
+    plxd::connect_timing::mark("connected");
     report(&format!("connected over {}", dialed.route));
     let bridged = remote::bridge(dialed.socket, tokio::io::stdin(), tokio::io::stdout()).await;
     // The app logs this with the disconnect (connection.ts).

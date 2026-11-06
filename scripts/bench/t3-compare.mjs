@@ -11,6 +11,8 @@
 //
 //     node scripts/bench/t3-compare.mjs --token-file ~/.config/parallax/probe-token --out t3-compare.jsonl
 //
+// Other options: [--parallax-tag <exact-release-tag>] [--gap-ms 2200]
+// Sampling gap defaults to 2200 ms on both sides to respect the relay's 30 opens/minute.
 // Other options: [--connects 30] [--trips 50] [--version latest].
 //
 // T3 side: it signs in with T3's device grant, which prints a link and a code to approve, and links
@@ -47,17 +49,25 @@ import { dirname, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { count, summary } from "./timing-summary.mjs";
 import { tunnelHost } from "./t3-tunnel.mjs";
 
 const { values: options } = parseArgs({
   options: {
     connects: { type: "string", default: "30" },
     trips: { type: "string", default: "50" },
+    timings: { type: "boolean", default: false },
+    "parallax-tag": { type: "string" },
+    "gap-ms": { type: "string", default: "2200" },
     version: { type: "string", default: "latest" },
     out: { type: "string" },
     "token-file": { type: "string" },
   },
 });
+
+count(options.connects, "connects");
+count(options.trips, "trips");
+count(options["gap-ms"], "gap-ms", 60000);
 
 // Read before T3 starts, so a missing file or account fails in seconds, not after T3's run.
 const probeEnv = {};
@@ -241,21 +251,13 @@ async function connectOnce(base, token) {
   return { session, connectMs, firstEventMs: await within(30_000, "the first event", firstEvent) };
 }
 
-function summary(samples) {
-  const sorted = samples.toSorted((a, b) => a - b);
-  const middle = sorted.length / 2;
-  const median = sorted.length % 2 ? sorted[Math.floor(middle)] : (sorted[middle - 1] + sorted[middle]) / 2;
-  const p95 = sorted[Math.max(0, Math.ceil(0.95 * sorted.length) - 1)];
-  return { n: sorted.length, medianMs: Math.round(median), p95Ms: Math.round(p95) };
-}
-
 /** Times `connects` connects with their first events, then `trips` round trips on one socket. */
 async function measure(base, token) {
   const [connects, firstEvents, trips] = [[], [], []];
   // One warm-up, not counted, so a cold DNS lookup doesn't land in the samples.
   (await connectOnce(base, token)).session.socket.close();
   for (let run = 0; run < Number(options.connects); run++) {
-    await sleep(500);
+    await sleep(Number(options["gap-ms"]));
     const { session, connectMs, firstEventMs } = await connectOnce(base, token);
     connects.push(connectMs);
     firstEvents.push(firstEventMs);
@@ -340,9 +342,13 @@ try {
     at: new Date().toISOString(),
     t3Version: version,
     route: "this computer, Cloudflare tunnel, this computer",
+    sampling: { connects: Number(options.connects), trips: Number(options.trips), gapMs: Number(options["gap-ms"]), warmups: 1 },
     caveats: [
       "Both ends of the tunnel are on this computer, so a slow network counts twice.",
       "A connect skips the relay call a client makes to get its first session.",
+      "Parallax includes a new dial process per connect, pinned inner TLS and DPoP. T3 uses this existing Node process and Cloudflare terminates TLS.",
+      "First events and RPCs differ: T3 lifecycle/server.probe; Parallax event replay/host/health. Setup, approval and tunnel provisioning are excluded.",
+      "One warm-up precedes counted connects and RPCs. OS DNS and host state may be warm; each Parallax dial starts fresh. Spares are not guaranteed by a fixed gap.",
     ],
     ...(await measure(base, token)),
   };
@@ -362,13 +368,17 @@ if (!probeEnv.PROBE_CLERK_REFRESH_TOKEN && !process.env.PROBE_CLERK_REFRESH_TOKE
 const probeFile = join(dirname(fileURLToPath(import.meta.url)), "relay-probe.mjs");
 const outDir = mkdtempSync(join(tmpdir(), "t3-compare-probe-"));
 try {
-  execFileSync(process.execPath, [probeFile, "--out", outDir], {
+  execFileSync(process.execPath, [probeFile, "--out", outDir, "--connects", options.connects, "--trips", options.trips, "--gap-ms", options["gap-ms"], ...(options.timings ? ["--timings"] : []), ...(options["parallax-tag"] ? ["--tag", options["parallax-tag"]] : [])], {
     env: { ...process.env, ...probeEnv, PATH: env.PATH },
     stdio: "inherit",
   });
 } catch {
   failed = true;
 } finally {
+  try {
+    const result = JSON.parse(readFileSync(join(outDir, "relay-probe.json"), "utf8"));
+    if (options.out) writeFileSync(options.out, `${JSON.stringify({ product: "parallax", ...result })}\n`, { flag: "a" });
+  } catch {}
   rmSync(outDir, { recursive: true, force: true });
 }
 process.exit(failed ? 1 : 0);

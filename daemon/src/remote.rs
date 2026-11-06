@@ -1062,6 +1062,7 @@ async fn tls_over(
     stream: crate::relay::Stream,
     pin: &Pin,
 ) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
+    crate::connect_timing::mark("pinned_tls_start");
     let provider = provider();
     let seen = Arc::new(Mutex::new(None));
     let verifier = Pinned {
@@ -1090,6 +1091,7 @@ async fn tls_over(
                 Error::Io(error)
             }
         })?;
+    crate::connect_timing::mark("pinned_tls_ready");
     let presented = seen
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -2070,6 +2072,7 @@ async fn dial_pinned(
         .ok_or_else(|| Error::Protocol("the saved DPoP key is damaged".to_owned()))?;
     let (route, tls, _) = race(routes, in_order, pin).await?;
     let token = &credential.token;
+    crate::connect_timing::mark("ws_upgrade_start");
     let upgraded = tokio::time::timeout(REQUEST_TIMEOUT, upgrade(&route, tls, token, &key));
     let socket = match upgraded.await.map_err(|_| timed_out(&route))? {
         // A host from before 0091 takes only a ticket, and says whether the session still works.
@@ -2079,6 +2082,7 @@ async fn dial_pinned(
         }
         other => other?,
     };
+    crate::connect_timing::mark("ws_upgrade_ready");
     Ok(Dialed { socket, route })
 }
 
@@ -2173,9 +2177,14 @@ where
         Ok::<_, io::Error>(())
     };
     let incoming = async {
+        let mut first = true;
         while let Some(frame) = frames.next().await {
             match frame.map_err(io::Error::other)? {
                 Message::Text(text) => {
+                    if first {
+                        crate::connect_timing::mark("first_frame");
+                        first = false;
+                    }
                     output.write_all(text.as_bytes()).await?;
                     output.write_all(b"\n").await?;
                     output.flush().await?;
