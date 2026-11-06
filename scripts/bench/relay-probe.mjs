@@ -58,8 +58,18 @@ const HOST_NAMES = new Set([PROBE_NAME, "relay-objects bench"]);
 const STREAMS = 5;
 const ROUND_TRIPS = 6;
 
+// relay-probe.yml sets PROBE_SKIP_SIGNIN to stale when another run stored a rotated token after this
+// attempt started, so this one holds a token Clerk already replaced, and Clerk revokes the
+// account's tokens when one is used again. It sets unchecked when it couldn't read either time, so
+// the token may be that older one. Either way the signed-in part skips (PLX-1460).
+const SKIP_REASONS = {
+  stale: "another run stored a newer refresh token after this run started",
+  unchecked: "this run couldn't check that its refresh token is the newest",
+};
+const skipReason = SKIP_REASONS[/** @type {keyof typeof SKIP_REASONS} */ (process.env.PROBE_SKIP_SIGNIN ?? "")];
+const withoutToken = skipReason ?? "PROBE_CLERK_REFRESH_TOKEN isn't set";
 // Out of the environment plxd and relay-objects inherit.
-let refreshToken = process.env.PROBE_CLERK_REFRESH_TOKEN;
+let refreshToken = skipReason ? undefined : process.env.PROBE_CLERK_REFRESH_TOKEN;
 const github = process.env.GITHUB_TOKEN;
 const rotatedFile = process.env.PROBE_ROTATED_FILE;
 const expectedUser = process.env.PROBE_CLERK_USER_ID;
@@ -262,7 +272,13 @@ async function clerkToken() {
   });
   const body = await answer.json().catch(() => ({}));
   if (!answer.ok || typeof body.access_token !== "string") {
-    const why = body.error === "invalid_grant" ? `it no longer accepts the stored refresh token. Run relay-probe-enroll.mjs again (${SETUP_ISSUE})` : `it answered ${answer.status}`;
+    // Clerk answers invalid_grant with one description for a malformed, expired, or revoked token
+    // (PLX-1460), and a token already used can't be told apart from those, so this quotes Clerk.
+    const said = typeof body.error_description === "string" ? ` ("${body.error_description}")` : "";
+    const why =
+      body.error === "invalid_grant"
+        ? `it refused the stored refresh token with invalid_grant${said}. That answer doesn't say whether the token was already used, which points to two runs at once, or expired or was revoked. Run relay-probe-enroll.mjs again (${SETUP_ISSUE})`
+        : `it answered ${answer.status}`;
     throw new Error(`Clerk gave no token: ${why}`);
   }
   secrets.add(body.access_token);
@@ -534,8 +550,12 @@ function report(release, signedIn) {
   const run = process.env.GITHUB_RUN_ID
     ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
     : undefined;
-  const skipped = "PROBE_CLERK_REFRESH_TOKEN isn't set, so real sign-in, approval, and streams weren't tested";
-  const verdict = `Connect check: ${ok ? "passed" : "FAILED"}`;
+  const revokes = skipReason ? ", and an older token would make Clerk revoke the test account's tokens" : "";
+  const skipped = `${withoutToken}${revokes}, so real sign-in, approval, and streams weren't tested`;
+  // A run without the signed-in part didn't test sign-in, approval, or streams, so it doesn't say
+  // passed, and it says why (PLX-1460).
+  const outcome = ok ? (signedIn ? "passed" : "signed-in test skipped") : signedIn ? "FAILED" : "FAILED, signed-in test skipped";
+  const verdict = `Connect check: ${outcome}${signedIn ? "" : ` (${withoutToken})`}`;
   const objects = metrics.objects ?? {};
   const relayLine = line(
     number(objects["Worker alone (no object)"], "Worker"),
@@ -565,7 +585,7 @@ function report(release, signedIn) {
     "",
     `${relay}, ${new Date().toISOString()}${release ? `, ${release.tag_name}` : ""}`,
     "",
-    ...(signedIn ? [] : [`**Signed-in test skipped:** ${skipped}. Setup is on ${SETUP_ISSUE}.`, ""]),
+    ...(signedIn ? [] : [`**Signed-in test skipped:** ${skipped}. ${skipReason ? "See PLX-1460" : `Setup is on ${SETUP_ISSUE}`}.`, ""]),
     ...(rotated ? ["Clerk rotated the refresh token on this run.", ""] : []),
     "| Check | Result | Detail |",
     "| --- | --- | --- |",
@@ -605,8 +625,8 @@ if (signedIn && release) {
   usable = await checkSignedIn(release);
   if (usable) token = await clerkToken().catch(() => undefined);
 } else if (!signedIn) {
-  const where = process.env.GITHUB_ACTIONS ? "::notice::" : "";
-  console.log(`${where}Signed-in test skipped: PROBE_CLERK_REFRESH_TOKEN isn't set (${SETUP_ISSUE}).`);
+  const where = process.env.GITHUB_ACTIONS ? (skipReason ? "::warning::" : "::notice::") : "";
+  console.log(`${where}Signed-in test skipped: ${withoutToken} (${skipReason ? "PLX-1460" : SETUP_ISSUE}).`);
 }
 await checkObjects(token);
 if (usable) {
