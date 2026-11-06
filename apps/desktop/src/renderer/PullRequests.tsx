@@ -1,4 +1,3 @@
-import { CircleCheck, CircleDashed, CircleX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
@@ -45,42 +44,6 @@ export function majorityLook(prs: PullRequests) {
     if (n >= top) [best, top] = [pr, n];
   }
   return lookOf(best);
-}
-
-/**
- * A thread's open pull requests' checks, as one, as the sidebar and the thread's bar mark them:
- * failed if any failed, else running if any are, else passed once all have.
- */
-export function checksOf(prs: PullRequests) {
-  const checks = prs.urls.flatMap((url) => {
-    const pr = prs.get(url)?.pr;
-    return pr?.state === "open" && pr.checksState ? [pr.checksState] : [];
-  });
-  return checks.includes("failed")
-    ? "failed"
-    : checks.includes("pending")
-      ? "pending"
-      : checks.length && checks.every((c) => c === "passed")
-        ? "passed"
-        : undefined;
-}
-
-const checksLook = {
-  passed: { Icon: CircleCheck, color: "text-added", label: "Checks passed" },
-  failed: { Icon: CircleX, color: "text-danger", label: "Checks failed" },
-  pending: { Icon: CircleDashed, color: "text-warning", label: "Checks running" },
-};
-
-/** A pull request's checks, as one mark beside its number. `className` sizes it. */
-export function ChecksMark({
-  state,
-  className = "size-3",
-}: {
-  state: keyof typeof checksLook;
-  className?: string;
-}) {
-  const { Icon, color, label } = checksLook[state];
-  return <Icon role="img" aria-label={label} className={`ml-0.5 ${className} ${color}`} />;
 }
 
 /** A thread's linked pull requests (PLX-318), as `usePullRequests` keeps them. */

@@ -8,7 +8,7 @@ import { numberOf } from "./github";
 import { GitHubLogo } from "./logos";
 import { lookOf } from "./pr/parts";
 import { notify } from "./notifications";
-import { ChecksMark, checksOf, majorityLook, type PullRequests } from "./PullRequests";
+import { majorityLook, type PullRequests } from "./PullRequests";
 import { hostIcon } from "./RunTargetMenu";
 import { titleOf } from "./threads";
 
@@ -21,7 +21,7 @@ const item =
  * computer and checkout the thread runs in and its branch, then its pull requests, marked as the
  * sidebar marks them after GitHub's: the state icon of most of them in its color, then the one's
  * number, which opens in the app as the thread's other PR links do, or `+N` more, which opens them
- * all (`onOpenPrs`), then their checks.
+ * all (`onOpenPrs`).
  * With none, Create PR once it has a commit (`canOpenPr`). Create PR runs `agent/openPr` and hands the pull request to `onPrOpened`; one that
  * fails for `gh` offers `onSetUpGithub` (PLX-423). `prs` reads each one's state for its color.
  */
@@ -52,7 +52,6 @@ export function ThreadBar({
   const place = run.checkout ? "Local checkout" : "Worktree";
   // Neutral in a pane that isn't focused, which reads no pull requests' state.
   const most = prs ? majorityLook(prs) : lookOf();
-  const checks = prs && checksOf(prs);
   const openPr = async () => {
     setOpening(true);
     const prTitle = title ?? titleOf(run);
@@ -94,7 +93,7 @@ export function ThreadBar({
         {urls.length > 0 &&
           (() => {
             // As the sidebar marks them: the state icon of most of them, then the one's number or
-            // how many more, then their checks.
+            // how many more.
             const mark = (
               <>
                 <GitHubLogo aria-hidden className="text-foreground" />
@@ -102,7 +101,6 @@ export function ThreadBar({
                   <most.Icon aria-hidden />
                   {urls.length > 1 ? `+${urls.length - 1}` : `#${numberOf(urls[0]!)}`}
                 </span>
-                {checks && <ChecksMark state={checks} className="size-3.5!" />}
               </>
             );
             return urls.length === 1 ? (

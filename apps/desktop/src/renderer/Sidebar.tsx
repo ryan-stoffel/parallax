@@ -11,9 +11,11 @@ import {
   Columns2,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
   CircleDot,
   CirclePause,
   CircleSlash,
+  CircleX,
   Ellipsis,
   FileDiff,
   FlaskConical,
@@ -182,7 +184,7 @@ import {
 } from "./ui";
 import { PanelResize } from "./PanelResize";
 import { numberOf } from "./github";
-import { ChecksMark, checksOf, majorityLook, usePullRequests } from "./PullRequests";
+import { majorityLook, usePullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
@@ -3039,7 +3041,19 @@ function useRowDetails({
   }, [hostId, statusRun, runStatus]);
   if (compact) return {};
   const prLook = majorityLook(prs);
-  const checksState = checksOf(prs);
+  // The open pull requests' checks, as one: failed if any failed, else running if any are, else
+  // passed once all have.
+  const checks = prs.urls.flatMap((url) => {
+    const pr = prs.get(url)?.pr;
+    return pr?.state === "open" && pr.checksState ? [pr.checksState] : [];
+  });
+  const checksState = checks.includes("failed")
+    ? "failed"
+    : checks.includes("pending")
+      ? "pending"
+      : checks.length && checks.every((c) => c === "passed")
+        ? "passed"
+        : undefined;
   const changed = !!git && !!(git.ahead || git.changes);
   // A pin isn't a detail: it sits in the row's top-right, so pinning doesn't change its height.
   const hasDetails = changed || prs.urls.length > 0 || providers.length > 0 || !!device?.icon;
@@ -3848,6 +3862,18 @@ function GitCounts({ git }: { git: GitStatus }) {
       )}
     </>
   );
+}
+
+const checksLook = {
+  passed: { Icon: CircleCheck, color: "text-added", label: "Checks passed" },
+  failed: { Icon: CircleX, color: "text-danger", label: "Checks failed" },
+  pending: { Icon: CircleDashed, color: "text-warning", label: "Checks running" },
+};
+
+/** A pull request's checks, as one mark beside its number. */
+function ChecksMark({ state }: { state: keyof typeof checksLook }) {
+  const { Icon, color, label } = checksLook[state];
+  return <Icon role="img" aria-label={label} className={`ml-0.5 size-3 ${color}`} />;
 }
 
 /** A menu item's key, at its end. */
