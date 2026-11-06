@@ -123,6 +123,11 @@ const MAX_HOOK_BYTES: usize = 1024 * 1024;
 const MAX_PENDING: usize = 16;
 const MAX_PENDING_PER_IP: usize = 6;
 
+/// How long a kept connection waits for a sign-in's next step (PLX-1462). Its steps follow each
+/// other at once, and through the relay a waiting connection holds one of the host's 16 streams,
+/// so it's short, though longer than a client reuses one for ([`remote::KEEP_IDLE`]).
+const KEPT_WAIT: Duration = Duration::from_secs(2);
+
 /// How many of the web client's files may be on their way at once, and to one address: as many as
 /// a browser fetches from one host at a time. Every client of `tailscale serve` comes from
 /// loopback, so they share one address's share.
@@ -526,7 +531,7 @@ pub(super) async fn run(serving: Serving, stop: CancellationToken) {
                         continue;
                     };
                     let bound = bound.as_ref().expect("accepted");
-                    serving.admit_remote(stream, peer, bound, check, connection_id);
+                    serving.admit_remote(stream, peer, bound, (check, checks.clone()), connection_id);
                 }
                 Err(error) => {
                     warn!(%error, "could not accept a remote connection");
@@ -870,15 +875,16 @@ fn refused(why: &str) -> (u16, serde_json::Value) {
 }
 
 impl Serving {
-    /// Runs TLS and reads one request, then answers it, and then the next while they are a
-    /// sign-in's steps that ask to keep the connection. `check` is held until the first request is
-    /// read. It runs as one of the server's connections, so shutdown waits for it.
+    /// Runs TLS and reads one request, then answers it, and then the next while a sign-in's step
+    /// answered 202 and asked to keep the connection. `check` is held until the first request is
+    /// read, and a slot of `checks` while each next one is awaited. It runs as one of the server's
+    /// connections, so shutdown waits for it.
     fn admit_remote(
         &self,
         stream: TcpStream,
         peer: SocketAddr,
         bound: &Bound,
-        check: Check,
+        (check, checks): (Check, Checks),
         id: u64,
     ) {
         let daemon = Arc::clone(&self.daemon);
@@ -947,18 +953,24 @@ impl Serving {
                         warn!(%peer, path = route, status, "refused a remote request");
                     }
                     // A sign-in's steps follow each other on one connection, so through the relay
-                    // they take one stream (PLX-1462). Any other answer ends the connection.
-                    let again = request.keeps_alive() && matches!(route, "/api/auth/account" | "/api/auth/approval");
-                    let answered = respond_kept(&mut stream, status, &body, again);
+                    // they take one stream (PLX-1462): only a 202 has a next step. Waiting for it
+                    // takes a pending slot, as a new connection's request does, and with none free
+                    // the connection ends. Any other answer ends it too.
+                    let sign_in = matches!(route, "/api/auth/account" | "/api/auth/approval");
+                    let waiting = (sign_in && status == 202 && request.keeps_alive())
+                        .then(|| checks.start(peer.ip()))
+                        .flatten();
+                    let answered = respond_kept(&mut stream, status, &body, waiting.is_some());
                     let answered = time::timeout(remote::REQUEST_TIMEOUT, answered).await;
-                    if !again || !matches!(answered, Ok(Ok(()))) {
+                    if waiting.is_none() || !matches!(answered, Ok(Ok(()))) {
                         return;
                     }
                     let next = tokio::select! {
-                        next = time::timeout(remote::REQUEST_TIMEOUT, read_request(&mut stream)) => next,
+                        next = time::timeout(KEPT_WAIT, read_request(&mut stream)) => next,
                         () = closing.cancelled() => return,
                         () = stop_reading.cancelled() => return,
                     };
+                    drop(waiting);
                     match next {
                         Ok(Ok(Some(next))) => request = next,
                         _ => return debug!(%peer, "closed a kept-alive remote connection"),

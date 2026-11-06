@@ -1112,9 +1112,9 @@ async fn request(
 }
 
 /// How long a sign-in's connection may wait for its next step and still carry it. The steps follow
-/// each other at once, so a longer gap is a pause for the user, and the host waits only
-/// [`REQUEST_TIMEOUT`] for a next request.
-const KEEP_IDLE: Duration = Duration::from_secs(2);
+/// each other at once, so a longer gap is a pause for the user. The host waits 2 s for a next
+/// request, so this stays under that.
+pub const KEEP_IDLE: Duration = Duration::from_secs(1);
 
 /// A pinned connection a sign-in step left open for the next, and since when.
 struct Kept {

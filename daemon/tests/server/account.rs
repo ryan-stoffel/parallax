@@ -568,6 +568,31 @@ async fn a_sign_in_takes_one_connection_from_its_request_to_its_approval() {
     server.stop().await;
 }
 
+/// Only a sign-in step's 202 keeps its connection: a refusal closes it, so a bad token can't hold
+/// connections open.
+#[tokio::test]
+async fn a_refused_sign_in_closes_its_connection_and_a_waiting_one_stays() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, _) = host(dir.path(), &issuer).await;
+    set_relay(&mut client, true).await;
+    let port: u16 = route.rsplit(':').next().unwrap().parse().unwrap();
+    let ask = async |token: &str| {
+        let key = remote::DpopKey::generate();
+        let path = "/api/auth/account";
+        let proof = key.proof("POST", &format!("https://{route}{path}"), Some(token));
+        let body = json!({ "token": token, "clientLabel": "x" }).to_string();
+        let headers = [("DPoP", proof.as_str()), ("Connection", "keep-alive")];
+        let (status, headers, _) = https(port, "POST", path, &headers, &body).await;
+        (status, headers["connection"].clone())
+    };
+    let refused = ask(&token(&issuer, "user_2")).await;
+    assert_eq!(refused, (401, "close".to_owned()));
+    let waiting = ask(&token(&issuer, USER)).await;
+    assert_eq!(waiting, (202, "keep-alive".to_owned()));
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn the_device_a_setup_command_names_needs_only_its_allow_and_a_caught_token_gets_nothing() {
     let issuer = clerk().await;

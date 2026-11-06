@@ -208,8 +208,9 @@ impl Base {
         };
         let connector = tokio_rustls::TlsConnector::from(config);
         match connector.connect(name.clone(), tcp).await {
-            // A certificate only the OS vouches for, such as a TLS-inspecting proxy's.
-            Err(error) if retry && unknown_issuer(&error) => {
+            // A certificate Mozilla's roots refuse for any reason, such as a TLS-inspecting
+            // proxy's, gets what it got before: the same full check against both sets of roots.
+            Err(error) if retry && refused_certificate(&error) => {
                 let connector = tokio_rustls::TlsConnector::from(relay_tls().await?);
                 Ok(Box::new(connector.connect(name, self.tcp().await?).await?))
             }
@@ -234,17 +235,12 @@ impl Base {
     }
 }
 
-/// Whether a TLS handshake failed because no root vouched for the certificate's issuer.
-fn unknown_issuer(error: &io::Error) -> bool {
+/// Whether a TLS handshake failed on the server's certificate, rather than on the network.
+fn refused_certificate(error: &io::Error) -> bool {
     let rustls = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<rustls::Error>());
-    matches!(
-        rustls,
-        Some(rustls::Error::InvalidCertificate(
-            rustls::CertificateError::UnknownIssuer
-        ))
-    )
+    matches!(rustls, Some(rustls::Error::InvalidCertificate(_)))
 }
 
 /// Which root certificates a connection's TLS is checked against (0091).
