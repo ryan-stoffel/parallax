@@ -1,10 +1,12 @@
-import { GitBranch, GitPullRequestArrow, LoaderCircle } from "lucide-react";
+import { GitBranch, GitPullRequest, GitPullRequestArrow, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
 import { describeError, githubProblem } from "./errors";
 import type { Host } from "./hosts";
-import { PullRequestChip } from "./Mention";
+import { numberOf } from "./github";
+import { GitHubLogo } from "./logos";
+import { lookOf } from "./pr/parts";
 import { notify } from "./notifications";
 import type { PullRequests } from "./PullRequests";
 import { hostIcon } from "./RunTargetMenu";
@@ -16,9 +18,10 @@ const item =
 
 /**
  * A thread's bar under the composer (PLX-1459), as a new thread's shows where it will run: the
- * computer and checkout the thread runs in and its branch, then its pull requests, which open in
- * the app as the thread's other PR links do, or Create PR once it has a commit and none yet
- * (`canOpenPr`). Create PR runs `agent/openPr` and hands the pull request to `onPrOpened`; one that
+ * computer and checkout the thread runs in and its branch, then its pull request, GitHub's mark and
+ * its number in its state's color, which opens in the app as the thread's other PR links do. With
+ * more than one, the mark, a pull request icon, and how many, which opens them all (`onOpenPrs`).
+ * With none, Create PR once it has a commit (`canOpenPr`). Create PR runs `agent/openPr` and hands the pull request to `onPrOpened`; one that
  * fails for `gh` offers `onSetUpGithub` (PLX-423). `prs` reads each one's state for its chip.
  */
 export function ThreadBar({
@@ -29,6 +32,7 @@ export function ThreadBar({
   prs,
   canOpenPr,
   onPrOpened,
+  onOpenPrs,
   onSetUpGithub,
 }: {
   hostId: string;
@@ -39,6 +43,7 @@ export function ThreadBar({
   prs?: PullRequests;
   canOpenPr: boolean;
   onPrOpened: (url: string) => void;
+  onOpenPrs: () => void;
   onSetUpGithub?: () => void;
 }) {
   const [opening, setOpening] = useState(false);
@@ -82,16 +87,32 @@ export function ThreadBar({
         )}
       </span>
       <span className="flex shrink-0 items-center gap-1">
-        {urls.map((url) => (
+        {urls.length === 1 && (
           // The thread's pane opens a linked pull request in the app.
           <a
-            key={url}
-            href={url}
-            className="flex shrink-0 items-center rounded-md px-1 hover:bg-hover"
+            href={urls[0]}
+            title={prs?.get(urls[0]!)?.pr?.title ?? urls[0]}
+            className={`${item} hover:bg-hover`}
           >
-            <PullRequestChip url={url} pr={prs?.get(url)?.pr} />
+            <GitHubLogo aria-hidden className="text-foreground" />
+            <span className={`tabular-nums ${lookOf(prs?.get(urls[0]!)?.pr).color}`}>
+              #{numberOf(urls[0]!)}
+            </span>
           </a>
-        ))}
+        )}
+        {urls.length > 1 && (
+          <button
+            type="button"
+            aria-label={`${urls.length} pull requests`}
+            title={urls.map((url) => `#${numberOf(url)}`).join(", ")}
+            onClick={onOpenPrs}
+            className={`${item} hover:bg-hover hover:text-foreground`}
+          >
+            <GitHubLogo aria-hidden className="text-foreground" />
+            <GitPullRequest aria-hidden />
+            <span className="tabular-nums">{urls.length}</span>
+          </button>
+        )}
         {urls.length === 0 && canOpenPr && (
           <button
             type="button"

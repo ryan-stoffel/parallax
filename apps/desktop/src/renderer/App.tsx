@@ -2005,6 +2005,11 @@ export function App() {
                                 onPrOpened={(url) =>
                                   linksPrs ? openPr(url) : void window.open(url, "_blank")
                                 }
+                                onOpenPrs={() =>
+                                  linksPrs
+                                    ? openPr()
+                                    : void window.open(paneRun.pullRequests![0], "_blank")
+                                }
                                 onSetUpGithub={setUpGithub}
                               />
                             );
@@ -2095,6 +2100,7 @@ export function App() {
                                   }
                                   forked={!!paneThread?.forkedFrom}
                                   tab={threadBar || undefined}
+                                  barShowsPrs={!!threadBar && !!paneRun?.pullRequests?.length}
                                   // The open thread's, the one App reads; another pane's chips stay neutral.
                                   pullRequests={threadRun?.id === threadId ? prs : undefined}
                                   onOpenChanges={(turn, path) => {

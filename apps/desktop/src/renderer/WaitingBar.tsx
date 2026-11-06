@@ -15,7 +15,8 @@ import { presentWaiting } from "./waiting";
  * only how many, opening the details and Stop above itself, for a place beside other tabs. Each
  * watched pull request shows as the composer's chip, its state from `pullRequests`, a link the
  * thread's pane opens as it opens any of the thread's pull requests. Those that don't fit the line
- * count as `+N`, which opens the details, where they're all listed.
+ * count as `+N`, which opens the details, where they're all listed. With `barShowsPrs`, the
+ * thread's bar under the composer shows them, so the line doesn't, and only the details list them.
  */
 export function WaitingBar({
   hostId,
@@ -25,6 +26,7 @@ export function WaitingBar({
   agentsShown,
   compact,
   pullRequests,
+  barShowsPrs,
 }: {
   hostId: string;
   runId: string;
@@ -35,6 +37,8 @@ export function WaitingBar({
   compact?: boolean;
   /** The thread's pull requests as the app reads them, for each watched one's state. */
   pullRequests?: PullRequests;
+  /** Whether the thread's bar under the composer shows its pull requests (ThreadBar.tsx). */
+  barShowsPrs?: boolean;
 }) {
   const [stopping, setStopping] = useState(false);
   const id = useId();
@@ -125,7 +129,7 @@ export function WaitingBar({
           {labels && (
             <span className="min-w-0 flex-[1_1_0] truncate text-muted-foreground">{labels}</span>
           )}
-          {watching.length > 0 && (
+          {watching.length > 0 && !barShowsPrs && (
             <FittingChips details={`${id}-details`}>{watching.map(pullRequest)}</FittingChips>
           )}
           <button

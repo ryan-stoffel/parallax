@@ -278,6 +278,7 @@ export function AgentChat({
   going,
   listed,
   tab,
+  barShowsPrs,
   strip,
   others,
   orchestratorMode,
@@ -316,6 +317,8 @@ export function AgentChat({
    * repository.
    */
   tab?: ReactNode;
+  /** Whether `tab` shows the thread's pull requests, so the waiting line over the box doesn't. */
+  barShowsPrs?: boolean;
   /** The composer's back tab, behind the plan's, such as an orchestrator's agents. */
   strip?: ComposerTab;
   /**
@@ -838,6 +841,7 @@ export function AgentChat({
         watching={watching}
         compact={compact}
         pullRequests={pullRequests}
+        barShowsPrs={barShowsPrs}
       />
     );
     tabs.push({ key: "waiting", node: bar(false), compact: bar(true) });

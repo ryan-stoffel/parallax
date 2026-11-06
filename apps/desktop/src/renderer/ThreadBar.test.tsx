@@ -29,7 +29,12 @@ const run: AgentRun = {
   diff: { commit: "abc", files: 1, insertions: 1, deletions: 0 },
 };
 const host = { id: localId, name: "macbook" } as Host;
-const render = (props: { run: AgentRun; canOpenPr: boolean; onPrOpened?: (url: string) => void }) =>
+const render = (props: {
+  run: AgentRun;
+  canOpenPr: boolean;
+  onPrOpened?: (url: string) => void;
+  onOpenPrs?: () => void;
+}) =>
   act(() => {
     root ??= createRoot(document.body.appendChild(document.createElement("div")));
     root.render(
@@ -38,20 +43,33 @@ const render = (props: { run: AgentRun; canOpenPr: boolean; onPrOpened?: (url: s
         host={host}
         title="Add a README"
         onPrOpened={() => {}}
+        onOpenPrs={() => {}}
         {...props}
       />,
     );
   });
 
-test("it names where the thread runs and its branch, then links its pull requests", () => {
+test("it names where the thread runs and its branch, then its pull request, or how many", () => {
   const url = "https://github.com/acme/web/pull/41";
   render({ run: { ...run, pullRequests: [url] }, canOpenPr: true });
   const text = document.body.textContent;
   expect(text).toContain("macbook·Worktree");
   expect(text).toContain("parallax/readme");
-  expect(document.querySelector(`a[href="${url}"]`)?.textContent).toContain("#41");
+  expect(document.querySelector(`a[href="${url}"]`)?.textContent).toBe("#41");
   // A thread with a pull request has no Create PR.
   expect(document.body.textContent).not.toContain("Create PR");
+
+  const onOpenPrs = vi.fn();
+  render({
+    run: { ...run, pullRequests: [url, "https://github.com/acme/web/pull/43"] },
+    canOpenPr: true,
+    onOpenPrs,
+  });
+  expect(document.querySelector("a[href]")).toBeNull();
+  const all = document.querySelector<HTMLButtonElement>('[aria-label="2 pull requests"]')!;
+  expect(all.title).toBe("#41, #43");
+  act(() => all.click());
+  expect(onOpenPrs).toHaveBeenCalledOnce();
 });
 
 test("Create PR opens one titled like the thread and hands it on", async () => {
