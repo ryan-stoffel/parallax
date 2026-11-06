@@ -388,7 +388,21 @@ export function useAccountAlarms() {
     return window.parallax.onProfile((profile) => {
       const before = last;
       last = profile;
-      if (before === undefined) return;
+      if (before === undefined) {
+        // Signed out at launch because accounts moved to another Clerk instance (PLX-1049).
+        if (!profile)
+          void window.parallax.accountMoved().then(
+            (moved) =>
+              moved &&
+              notify({
+                key: "account",
+                tone: "info",
+                title: "Sign in to Parallax again",
+                body: "Parallax accounts moved. Sign in again, then set up each of your computers again.",
+              }),
+          );
+        return;
+      }
       if (profile && !before)
         notify({
           key: "account",

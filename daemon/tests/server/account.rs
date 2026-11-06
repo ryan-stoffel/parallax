@@ -1370,6 +1370,14 @@ async fn a_clock_the_relay_says_is_off_refuses_sign_ins_and_registering_records_
         Some("user_registered")
     );
     server.stop().await;
+
+    // Trusting another Clerk instance, as after the move to production (PLX-1049), this host has
+    // no account: it can't check that one's tokens, so it's set up again.
+    let other = "https://clerk.other.test";
+    let server = InProcess::start(config(dir.path(), other, &relay, free_port()));
+    let mut client = Client::ready(&server.socket).await;
+    assert_eq!(access(&mut client).await.account, None);
+    server.stop().await;
 }
 
 #[tokio::test]

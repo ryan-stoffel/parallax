@@ -38,15 +38,17 @@ export interface Env {
   /** Anonymous requests (webhooks and the WebSockets that prove themselves) per address and
    *  host, before they reach a host's object. */
   ANON: RateLimit;
-  /** The Clerk instance's issuer, the `iss` every session token must have. Unset, the relay
-   *  refuses every token: only `[env.dev]` sets the development instance. */
+  /** The Clerk instances' issuers, comma-separated: a token's `iss` must be one of them. Two
+   *  while accounts move from one instance to another (PLX-1049). Unset, the relay refuses every
+   *  token. */
   CLERK_ISSUER?: string;
-  /** Where the Clerk instance publishes its JWKS. Unset, the issuer's `/.well-known/jwks.json`. */
+  /** Where each of those instances publishes its JWKS, comma-separated in the same order. Unset,
+   *  each issuer's `/.well-known/jwks.json`. */
   CLERK_JWKS_URL?: string;
-  /** The JWKS itself, as JSON, in place of fetching it. Tests and local runs. */
+  /** The JWKS itself, as JSON, in place of fetching it, for every issuer. Tests and local runs. */
   CLERK_JWKS?: string;
   /** The OAuth applications whose access tokens count, by client id, comma-separated: the
-   *  desktop app's (0067). */
+   *  desktop app's on each instance (0067). */
   CLERK_CLIENT_IDS?: string;
   /** The origins a browser session token's `azp` may name, comma-separated. Unset accepts no
    *  browser. Native apps' tokens carry no `azp`. */

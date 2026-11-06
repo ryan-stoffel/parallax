@@ -1,8 +1,7 @@
 # Parallax Relay (PLX-652, decision 0068). README.md has the deploy steps and what they need.
 #
-# The top level is production. It sets no Clerk instance, so a deploy refuses every token until
-# production's values are added below. `pnpm dev` runs `[env.dev]`, against Clerk's development
-# instance.
+# The top level is production, against Clerk's production instance. `pnpm dev` runs `[env.dev]`,
+# which also takes the development instance's tokens.
 name = "parallax-relay"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
@@ -10,6 +9,14 @@ compatibility_date = "2026-10-01"
 # relay.parallax.codes, on the account's parallax.codes zone, and no workers.dev URL.
 routes = [{ pattern = "relay.parallax.codes", custom_domain = true }]
 workers_dev = false
+
+# Clerk's production instance (0067). Its issuer, JWKS, and client id are public. A deploy that
+# still takes the development instance's tokens passes both with `--var` (README.md).
+[vars]
+CLERK_ISSUER = "https://clerk.parallax.codes"
+CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json"
+# The desktop app's OAuth application, whose access tokens the relay accepts.
+CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O"
 
 # Workers Logs keeps every console line, which `src/log.ts` keeps free of ids and tokens (PLX-1349).
 [observability]
@@ -47,16 +54,16 @@ new_sqlite_classes = ["HostRelay", "UserAccount"]
 tag = "v2"
 new_sqlite_classes = ["StreamRelay"]
 
-# Clerk's development instance (0067), for `wrangler dev`. Its issuer and JWKS are public.
+# For `wrangler dev`: Clerk's production instance and its development one (0067), in that order,
+# so builds signed in to either work against it.
 [env.dev]
 workers_dev = true
 routes = []
 
 [env.dev.vars]
-CLERK_ISSUER = "https://adjusted-mastodon-8705.clerk.accounts.dev"
-CLERK_JWKS_URL = "https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
-# The desktop app's OAuth application, whose access tokens the relay accepts.
-CLERK_CLIENT_IDS = "SXDueyOLOJ2v4Vmq"
+CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
+CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
+CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq"
 
 [[env.dev.durable_objects.bindings]]
 name = "HOSTS"

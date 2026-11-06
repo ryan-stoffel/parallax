@@ -19,14 +19,12 @@ use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::time::{self, Instant};
-use tokio_util::sync::CancellationToken;
 
 use super::{
     Relay, Status, cant_reach, http, joined, local_listener, pipe, serving, signer, upgrade, wanted,
 };
 use crate::remote::{self, Error, Pin};
 use crate::server::Daemon;
-use crate::store::store_error;
 
 /// How long a check waits for plxd to connect to the relay, which it asks to try at once.
 const CONNECTING: Duration = Duration::from_secs(5);
@@ -105,14 +103,7 @@ impl Relay {
 pub(crate) async fn run(daemon: &Daemon, token: Option<&str>) -> RelayCheckResult {
     let _running = daemon.relay.check_running.lock().await;
     let outcome = parts(daemon, token).await;
-    let account = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.relay_account().map_err(|e| store_error(&e))
-        })
-        .await
-        .ok()
-        .flatten();
+    let account = crate::server::remote::access::account(daemon).await;
     let sessions = crate::server::remote::listed_with_status(daemon, Vec::new());
     let host_id = signer(daemon).await.ok().map(|key| key.thumbprint());
     let facts = Facts {

@@ -52,7 +52,7 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 
 ### Deploy
 
-- `relay/wrangler.toml` is the infrastructure: the Worker, both Durable Object classes and their migration, the rate limit, and the `relay.parallax.codes` custom domain with no `workers.dev` URL. Its top level sets no Clerk instance, so a deploy refuses every token until production's issuer, JWKS URL, and the desktop app's client id are added. Clerk's development instance is only in `[env.dev]`, which `pnpm dev` runs. `relay/README.md` lists what Ryan provides and the deploy commands, with a custom API token of exactly the four permissions the deploy needs. No workflow deploys it.
+- `relay/wrangler.toml` is the infrastructure: the Worker, both Durable Object classes and their migration, the rate limit, and the `relay.parallax.codes` custom domain with no `workers.dev` URL. Its top level sets no Clerk instance, so a deploy refuses every token until production's issuer, JWKS URL, and the desktop app's client id are added. Clerk's development instance is only in `[env.dev]`, which `pnpm dev` runs. `relay/README.md` lists what Ryan provides and the deploy commands, with a custom API token of exactly the four permissions the deploy needs. No workflow deploys it. Amended 2026-11-06 (PLX-1049): the top level now sets Clerk's production instance, and `[env.dev]` takes both instances. `CLERK_ISSUER` and `CLERK_JWKS_URL` are comma lists in the same order, and a token is checked only against the instance its `iss` names, so a deploy can take both while accounts move ([0067](0067-clerk-accounts.md)).
 - CI type-checks the Worker and runs its tests in Miniflare, and the Linux Rust job runs plxd against `wrangler dev` end to end.
 
 ## Consequences

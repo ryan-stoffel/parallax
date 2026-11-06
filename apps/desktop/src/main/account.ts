@@ -8,12 +8,12 @@ import { serveCallback, type Callback } from "./loopback";
 import { broadcast } from "./windows";
 
 // The Clerk instance that holds Parallax accounts (0067), named by its publishable key, and the
-// app's OAuth application there. Both are public. PLX_CLERK_PUBLISHABLE_KEY and
-// PLX_CLERK_CLIENT_ID point a dev build at another instance.
+// app's OAuth application there: production's (PLX-1049). Both are public.
+// PLX_CLERK_PUBLISHABLE_KEY and PLX_CLERK_CLIENT_ID point a dev build at another instance, such as
+// the development one.
 const PUBLISHABLE_KEY =
-  process.env["PLX_CLERK_PUBLISHABLE_KEY"] ??
-  "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
-const CLIENT_ID = process.env["PLX_CLERK_CLIENT_ID"] ?? "SXDueyOLOJ2v4Vmq";
+  process.env["PLX_CLERK_PUBLISHABLE_KEY"] ?? "pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk";
+const CLIENT_ID = process.env["PLX_CLERK_CLIENT_ID"] ?? "mp9Q72aAbB0LC83O";
 const SCOPES = "profile email offline_access";
 
 /** The Frontend API a publishable key names: `pk_test_` or `pk_live_`, then base64 of `<host>$`. */
@@ -40,8 +40,12 @@ type User = {
   picture?: string;
 };
 
-/** What the app keeps, encrypted: the refresh token, and the user, to show before Clerk answers. */
-type Session = { refreshToken: string; user: User };
+/**
+ * What the app keeps, encrypted: the refresh token, the user, to show before Clerk answers, and
+ * the Frontend API that issued them. A session from another instance, or saved before the app
+ * kept one, is signed out, as after the move to production (PLX-1049).
+ */
+type Session = { refreshToken: string; user: User; api: string };
 
 /** A failed call to Clerk. `revoked` if Clerk refused the refresh token itself, `down` for a 5xx. */
 class ClerkError extends Error {
@@ -123,9 +127,15 @@ export function startAccount(): Account {
     (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
 
   let session: Session | undefined;
+  // Whether launch dropped a session from another instance, so the app can say why it's signed
+  // out. A sign-in clears it.
+  let moved = false;
   try {
     const saved = persist && JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));
-    if (typeof saved?.refreshToken === "string" && saved.user) session = saved;
+    if (typeof saved?.refreshToken === "string" && saved.user) {
+      if (saved.api === api) session = saved;
+      else moved = true;
+    }
   } catch {
     // None yet, or unreadable: signed out.
   }
@@ -280,6 +290,7 @@ export function startAccount(): Account {
   let page: Callback | undefined;
 
   ipcMain.handle("parallax:profile", () => profile);
+  ipcMain.handle("parallax:accountMoved", () => moved);
 
   ipcMain.handle("parallax:signIn", async (_event, create: boolean) => {
     // One sign-in at a time, so a late one can't switch accounts.
@@ -298,7 +309,8 @@ export function startAccount(): Account {
       if (page !== current) return "Sign-in was cancelled.";
       epoch++;
       access = fresh.access;
-      save({ refreshToken: fresh.refreshToken, user });
+      save({ refreshToken: fresh.refreshToken, user, api });
+      moved = false;
       fetchedAt = Date.now();
       show(user);
       for (const listener of signedIn) listener();

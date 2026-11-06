@@ -48,6 +48,9 @@ const REMOTE_SESSIONS: &str = "remote_sessions";
 /// The `host_settings` key for the Clerk user id this host registered with the relay under (0091).
 const RELAY_ACCOUNT: &str = "relay_account";
 
+/// The `host_settings` key for the Clerk instance that account is on, by issuer (PLX-1049).
+const RELAY_ACCOUNT_ISSUER: &str = "relay_account_issuer";
+
 /// The `host_settings` key for the account's approved and removed client keys and approved host
 /// ids, as plxd's JSON (0091).
 const ACCOUNT_ACCESS: &str = "account_access";
@@ -340,12 +343,17 @@ impl Store {
         self.set_text(REMOTE_SESSIONS, sessions)
     }
 
-    /// The Clerk user id this host registered with the relay under, if it has (0091).
+    /// The Clerk user id this host registered with the relay under, if it has (0091), and on the
+    /// instance `issuer`. One on another instance, or recorded before plxd kept the instance, is
+    /// none: its tokens can't be checked here, so the host is set up again (PLX-1049).
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn relay_account(&self) -> Result<Option<String>, StoreError> {
+    pub fn relay_account(&self, issuer: &str) -> Result<Option<String>, StoreError> {
+        if self.text(RELAY_ACCOUNT_ISSUER)?.as_deref() != Some(issuer) {
+            return Ok(None);
+        }
         self.text(RELAY_ACCOUNT)
     }
 
@@ -399,13 +407,14 @@ impl Store {
         Ok(())
     }
 
-    /// Records the Clerk user id this host registered under.
+    /// Records the Clerk user id this host registered under, on the instance `issuer`.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn set_relay_account(&self, user: &str) -> Result<(), StoreError> {
-        self.set_text(RELAY_ACCOUNT, Some(user))
+    pub fn set_relay_account(&self, user: &str, issuer: &str) -> Result<(), StoreError> {
+        self.set_text(RELAY_ACCOUNT, Some(user))?;
+        self.set_text(RELAY_ACCOUNT_ISSUER, Some(issuer))
     }
 
     /// Who may sign in with the account, as plxd's JSON, if anyone was approved or removed (0091).
@@ -614,5 +623,33 @@ mod tests {
         assert!(store.continue_after_restart().unwrap());
         assert!(!store.auto_resume().unwrap());
         assert!(store.remote().unwrap());
+    }
+
+    /// The account counts only on the Clerk instance it was recorded on (PLX-1049): one from
+    /// another instance, or from before plxd kept the instance, reads as none.
+    #[test]
+    fn the_relay_account_is_none_on_another_clerk_instance() {
+        const DEV: &str = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+        const PROD: &str = "https://clerk.parallax.codes";
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
+        store
+            .set_text(super::RELAY_ACCOUNT, Some("user_old"))
+            .unwrap();
+        assert_eq!(store.relay_account(DEV).unwrap(), None);
+
+        store.set_relay_account("user_dev", DEV).unwrap();
+        assert_eq!(
+            store.relay_account(DEV).unwrap().as_deref(),
+            Some("user_dev")
+        );
+        assert_eq!(store.relay_account(PROD).unwrap(), None);
+
+        store.set_relay_account("user_prod", PROD).unwrap();
+        assert_eq!(
+            store.relay_account(PROD).unwrap().as_deref(),
+            Some("user_prod")
+        );
+        assert_eq!(store.relay_account(DEV).unwrap(), None);
     }
 }

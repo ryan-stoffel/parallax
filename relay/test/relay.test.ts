@@ -91,8 +91,45 @@ describe("sign-in", () => {
     }
     expect((await call("/v1/hosts")).status).toBe(401);
     expect((await call("/v1/hosts", { token: await session("user_a") })).status).toBe(200);
-    const desktop = await session("user_a", { sid: undefined, client_id: "SXDueyOLOJ2v4Vmq" });
+    const desktop = await session("user_a", { sid: undefined, client_id: "mp9Q72aAbB0LC83O" });
     expect((await call("/v1/hosts", { token: desktop })).status).toBe(200);
+  });
+
+  it("takes two Clerk instances at once, each checked against its own JWKS (PLX-1049)", async () => {
+    const env = {
+      ...testEnv,
+      CLERK_JWKS: undefined,
+      CLERK_ISSUER: "https://clerk-next.test, https://clerk-old.test",
+      CLERK_JWKS_URL: "https://keys.test/next, https://keys.test/old",
+      CLERK_CLIENT_IDS: "next_app",
+    } as Env;
+    // The new instance's keys are served; the old one's JWKS is down.
+    const fetched: string[] = [];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input instanceof Request ? input.url : input);
+      fetched.push(url);
+      if (url === "https://keys.test/next") return new Response(testEnv.CLERK_JWKS);
+      throw new TypeError("fetch failed");
+    });
+    const list = async (claims: Record<string, unknown>) =>
+      (
+        await worker.fetch(
+          new Request(`${BASE}/v1/hosts`, {
+            headers: { authorization: `Bearer ${await session("user_two", claims)}` },
+          }),
+          env,
+        )
+      ).status;
+    try {
+      expect(await list({ iss: "https://clerk-next.test" })).toBe(200);
+      expect(await list({ iss: "https://clerk-next.test", sid: undefined, client_id: "next_app" })).toBe(200);
+      // Each issuer has its own keys: the old one's outage is its own, and a third fetches nothing.
+      expect(await list({ iss: "https://clerk-old.test" })).toBe(503);
+      expect(await list({ iss: "https://clerk.test" })).toBe(401);
+      expect(fetched).toEqual(["https://keys.test/next", "https://keys.test/old"]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -922,7 +959,7 @@ describe("a Clerk outage", () => {
         new Request(`${BASE}/v1/hosts`, { headers: { authorization: `Bearer ${token}` } }),
         env,
       );
-    const down = await list(await session("user_clerk_down"));
+    const down = await list(await session("user_clerk_down", { iss: "https://clerk-down.test" }));
     expect(down.status).toBe(503);
     expect(await down.json()).toEqual({ error: "clerk_unreachable" });
     expect((await list("not-a-jwt")).status).toBe(401);

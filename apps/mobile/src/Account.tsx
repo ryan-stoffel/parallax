@@ -21,7 +21,7 @@ import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { authorize } from "../modules/pinned-tls";
 import { keychain } from "./host";
-import { ClerkError, refreshOrSignOut } from "./clerkSession";
+import { ClerkError, MOVED, refreshOrSignOut, restore } from "./clerkSession";
 import { base64url } from "./pairing";
 import { forgetThreadStatus } from "./push";
 import { UserRound } from "lucide-react-native";
@@ -34,9 +34,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, Icon, Mark, SkyBanner, T, useColors } from "./ui";
 
 // The Clerk instance and the desktop app's OAuth application there, both public (desktop:
-// main/account.ts). The phone signs in as the same application.
-const PUBLISHABLE_KEY = "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
-const CLIENT_ID = "SXDueyOLOJ2v4Vmq";
+// main/account.ts): production's (PLX-1049). The phone signs in as the same application.
+// EXPO_PUBLIC_CLERK_API and EXPO_PUBLIC_CLERK_CLIENT_ID point a build at another instance, such as
+// the development one.
+const PUBLISHABLE_KEY = "pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk";
+const CLIENT_ID = process.env.EXPO_PUBLIC_CLERK_CLIENT_ID ?? "mp9Q72aAbB0LC83O";
 const SCOPES = "profile email offline_access";
 const KEY = "account";
 /** Where Clerk sends the sign-in back: one of the OAuth application's redirect URIs. */
@@ -61,9 +63,11 @@ interface User {
   picture?: string;
 }
 
+/** What the Keychain keeps, with the Frontend API that issued it (PLX-1049). */
 interface Session {
   refreshToken: string;
   user: User;
+  api: string;
 }
 
 async function token(params: Record<string, string>) {
@@ -94,6 +98,8 @@ async function userinfo(bearer: string): Promise<User> {
 interface AccountValue {
   /** Undefined while the Keychain is read, null signed out. */
   user: User | null | undefined;
+  /** Why the phone is signed out, when it wasn't the user's doing. */
+  notice?: string;
   signIn: (create: boolean) => Promise<string | undefined>;
   signOut: () => Promise<void>;
   /**
@@ -108,6 +114,7 @@ export const useAccount = () => useContext(AccountContext)!;
 
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>();
+  const [notice, setNotice] = useState<string>();
   // The latest session and token, for refreshes from callbacks that outlive a render, and the
   // refresh under way: one at a time, so a rotated refresh token is never used twice.
   const latest = useRef<{ session?: Session | null; access?: { token: string; expiresAt: number } }>({});
@@ -134,13 +141,20 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void SecureStore.getItemAsync(KEY, keychain).then(
-      (raw) => setSession(raw ? (JSON.parse(raw) as Session) : null),
+      async (raw) => {
+        const { session, moved } = restore<Session>(raw, API);
+        if (!moved) return setSession(session);
+        // Signed in to another Clerk instance, as before the move to production: signed out.
+        setNotice(MOVED);
+        await endSession();
+      },
       () => setSession(null),
     );
   }, []);
 
   const value: AccountValue = {
     user: session === undefined ? undefined : (session?.user ?? null),
+    notice,
 
     async signIn(create) {
       const verifier = base64url(randomBytes(32));
@@ -181,7 +195,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         if (!fresh.refreshToken) return "Clerk sent no refresh token.";
         const user = await userinfo(fresh.access.token);
         setAccess(fresh.access);
-        await save({ refreshToken: fresh.refreshToken, user });
+        setNotice(undefined);
+        await save({ refreshToken: fresh.refreshToken, user, api: API });
         return undefined;
       } catch (e) {
         return (e as Error).message;
@@ -216,7 +231,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       setAccess(answer.access);
       // Each refresh also refreshes the profile, so a sign-in from before the picture gets it.
       const user = await userinfo(answer.access.token).catch(() => session.user);
-      await save({ user, refreshToken: answer.refreshToken ?? session.refreshToken });
+      await save({ ...session, user, refreshToken: answer.refreshToken ?? session.refreshToken });
       return answer.access.token;
     }, endSession);
   }
@@ -225,7 +240,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
 export function SignIn() {
   const c = useColors();
-  const { signIn } = useAccount();
+  const { signIn, notice } = useAccount();
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -262,10 +277,16 @@ export function SignIn() {
         >
           <T style={{ fontSize: 15, color: c.accent }}>Create an account</T>
         </Pressable>
-        {error && (
+        {error ? (
           <T alert style={{ color: c.danger, fontSize: 14, textAlign: "center" }}>
             {error}
           </T>
+        ) : (
+          notice && (
+            <T muted style={{ fontSize: 14, textAlign: "center" }}>
+              {notice}
+            </T>
+          )
         )}
       </View>
     </View>

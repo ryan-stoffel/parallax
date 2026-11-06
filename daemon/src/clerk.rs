@@ -13,13 +13,13 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::warn;
 
-/// The Clerk instance the desktop app signs in with by default (0067), until production's
-/// (PLX-1049). `PLXD_CLERK_ISSUER` names another.
-pub const DEFAULT_ISSUER: &str = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+/// The Clerk instance the desktop app signs in with by default: production's (0067, PLX-1049).
+/// `PLXD_CLERK_ISSUER` names another, such as the development instance.
+pub const DEFAULT_ISSUER: &str = "https://clerk.parallax.codes";
 
 /// The desktop app's OAuth application, whose access tokens count. `PLXD_CLERK_CLIENT_IDS` lists
 /// others, separated by commas.
-pub const DEFAULT_CLIENT_ID: &str = "SXDueyOLOJ2v4Vmq";
+pub const DEFAULT_CLIENT_ID: &str = "mp9Q72aAbB0LC83O";
 
 /// Clock skew allowed on `exp` and `nbf`, as clerk-verify's.
 const SKEW_SECONDS: f64 = 5.0;
@@ -277,6 +277,11 @@ impl Clerk {
             config,
             keys: Mutex::default(),
         }
+    }
+
+    /// The issuer whose tokens count, which the host's account is recorded under.
+    pub(crate) fn issuer(&self) -> &str {
+        &self.config.issuer
     }
 
     /// Whom `token` speaks for, at `now`, after every check of [`check`].

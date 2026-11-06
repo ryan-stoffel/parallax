@@ -15,7 +15,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           CLERK_ISSUER: "https://clerk.test",
-          CLERK_CLIENT_IDS: "SXDueyOLOJ2v4Vmq",
+          CLERK_CLIENT_IDS: "mp9Q72aAbB0LC83O",
           CLERK_JWKS: JSON.stringify({ keys: [{ ...publicKey.export({ format: "jwk" }), kid, alg: "RS256" }] }),
           TEST_CLERK_KEY: JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }),
         },

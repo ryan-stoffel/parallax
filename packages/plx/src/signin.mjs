@@ -13,10 +13,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { setTimeout as wait } from "node:timers/promises";
 
-// The Clerk instance and OAuth application the desktop app signs in with (account.ts). Both are
-// public. PLX_CLERK_PUBLISHABLE_KEY and PLX_CLERK_CLIENT_ID point at another instance, as there.
-const PUBLISHABLE_KEY = "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
-const CLIENT_ID = "SXDueyOLOJ2v4Vmq";
+// The Clerk instance and OAuth application the desktop app signs in with (account.ts):
+// production's (PLX-1049). Both are public. PLX_CLERK_PUBLISHABLE_KEY and PLX_CLERK_CLIENT_ID
+// point at another instance, as there.
+const PUBLISHABLE_KEY = "pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk";
+const CLIENT_ID = "mp9Q72aAbB0LC83O";
 const SCOPES = "profile email";
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
