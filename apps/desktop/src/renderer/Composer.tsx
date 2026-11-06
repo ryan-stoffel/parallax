@@ -1130,14 +1130,17 @@ export function Composer({
   if (orchestratorMode) delete options.permission;
   // A Claude thread back from a break past its prompt cache: the next message compacts its context
   // first, unless Keep is picked (T3 Code's "When you return"). A minute clock keeps it current.
+  // The run's own latest request, whichever model is picked now.
+  const claudeUsage =
+    connected && target === backend && run?.kind === "claude" ? requestUsage : undefined;
   const [now, setNow] = useState(Date.now);
-  const lastAt = usage?.lastRequest?.at;
+  const lastAt = claudeUsage?.at;
   useEffect(() => {
     if (lastAt === undefined) return;
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
   }, [lastAt]);
-  const stale = onStop ? undefined : staleContext(usage, now);
+  const stale = onStop ? undefined : staleContext(claudeUsage, now);
   const [keepHistory, setKeepHistory] = useState(false);
   // An open Claude or Codex thread compacts on `/compact`, which plxd runs (PLX-638).
   const compactable =

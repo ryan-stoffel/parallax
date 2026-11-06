@@ -71,8 +71,6 @@ export interface ComposerUsageData {
   totals?: Totals;
   /** What the ring shows. Absent while there is nothing to say. */
   summary?: Summary;
-  /** A Claude thread's latest request: its context tokens and when it was reported, in ms. */
-  lastRequest?: { tokens: number; at: number };
 }
 
 // T3 Code's numbers: a Claude thread this full is offered compaction once its prompt cache, an
@@ -81,12 +79,15 @@ const compactFrom = 200_000;
 const cacheGone = 70 * 60_000;
 
 /**
- * The context tokens to compact before the next message, `at` ms since the epoch: a Claude
- * thread's, once they're at least 200k and its prompt cache has gone. Else undefined.
+ * The context tokens to compact before the next message, `now` ms since the epoch: a Claude
+ * thread's latest request's, once they're at least 200k and its prompt cache has gone. Else
+ * undefined. Any model counts, since another model doesn't share the cache either.
  */
-export function staleContext(data: ComposerUsageData | undefined, at: number) {
-  const last = data?.lastRequest;
-  return last && last.tokens >= compactFrom && at - last.at >= cacheGone ? last.tokens : undefined;
+export function staleContext(usage: RequestUsage | undefined, now: number) {
+  const tokens = usage?.usage.contextTokens;
+  return tokens !== undefined && tokens >= compactFrom && now - Date.parse(usage!.at) >= cacheGone
+    ? tokens
+    : undefined;
 }
 
 /** Tokens as T3 Code writes them beside its Compact button, such as `415k` or `1.2m`. */
@@ -192,11 +193,6 @@ export function threadUsageOf({
           : "Output speed unavailable. This provider does not report model timing, and turn wall-clock time would include tool runs.",
     totals: shownTotals,
     summary,
-    ...(kind === "claude" &&
-      usage &&
-      measured?.contextTokens !== undefined && {
-        lastRequest: { tokens: measured.contextTokens, at: Date.parse(usage.at) },
-      }),
   };
 }
 

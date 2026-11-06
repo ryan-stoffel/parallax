@@ -711,6 +711,18 @@ test("a stale Claude thread compacts before the next message, unless Keep is pic
   expect(toggle().textContent).toContain("Keep");
   await send("Keep going");
   expect(onSend.mock.calls.map(([text]) => text)).toEqual(["Keep going"]);
+
+  // Another model doesn't share the cache either, so the offer stays.
+  const menu = document.getElementById(
+    document.querySelector('[aria-label="Model: Claude Opus 5.5"]')!.getAttribute("popovertarget")!,
+  )!;
+  await act(async () =>
+    [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
+      .find((m) => m.textContent?.startsWith("Claude Sonnet 5.5"))!
+      .click(),
+  );
+  expect(document.querySelector('[aria-label="Model: Claude Sonnet 5.5"]')).not.toBeNull();
+  expect(toggle()).not.toBeNull();
 });
 
 test("an open thread's new Access goes to the running run at once", async () => {

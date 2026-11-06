@@ -60,23 +60,13 @@ test("another provider or account, or a disconnect, can't show this request's me
 });
 
 test("a Claude thread offers compaction from 200k tokens once its prompt cache has gone", () => {
-  const of = (contextTokens: number, kind = "claude") =>
-    threadUsageOf({
-      connected: true,
-      backend: kind,
-      accountId: kind,
-      kind,
-      usage: {
-        ...usage,
-        backend: kind,
-        accountId: kind,
-        usage: { ...usage.usage, contextTokens, contextWindow: 1_000_000 },
-      },
-    });
+  const of = (contextTokens: number) => ({
+    ...usage,
+    usage: { ...usage.usage, contextTokens, contextWindow: 1_000_000 },
+  });
   const minutes = (n: number) => Date.parse(usage.at) + n * 60_000;
   expect(staleContext(of(415_000), minutes(70))).toBe(415_000);
   expect(staleContext(of(415_000), minutes(60))).toBeUndefined();
   expect(staleContext(of(199_000), minutes(120))).toBeUndefined();
-  expect(staleContext(of(415_000, "codex"), minutes(120))).toBeUndefined();
   expect(tokensShort(415_000)).toBe("415k");
 });
