@@ -19,10 +19,11 @@
 // if the relay refuses or still lists one. It also fails if the account lists a computer at the end,
 // since hosts left behind would fill the account's ten slots.
 //
-// When Clerk rotates the refresh token, the new one goes to PROBE_ROTATED_FILE, for the workflow to
-// store. Tokens reach plxd only through its stdin and environment, and nothing printed or written
-// to --out holds one. Exits 1 when a check failed. Slow numbers alone don't fail it, since a
-// runner's network varies. Results: relay-probe.json, relay-probe.md, and relay-probe-notes.md.
+// When Clerk rotates the refresh token, the new one replaces PROBE_ROTATED_FILE in one rename, mode
+// 0600, for the workflow or t3-compare.mjs to keep (PLX-1452). Tokens reach plxd only through its
+// stdin and environment, and nothing printed or written to --out holds one. Exits 1 when a check
+// failed. Slow numbers alone don't fail it, since a runner's network varies. Results:
+// relay-probe.json, relay-probe.md, and relay-probe-notes.md.
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, getRandomValues, randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -39,6 +40,7 @@ import { parseArgs } from "node:util";
 import { attach } from "../../packages/plx/src/plxd.mjs";
 import { pickAsset, pickRelease, withSha256 } from "../../packages/plx/src/releases.mjs";
 import { clerkOf } from "../../packages/plx/src/signin.mjs";
+import { replacePrivately } from "./private-file.mjs";
 
 const { values: options } = parseArgs({
   options: {
@@ -268,7 +270,7 @@ async function clerkToken() {
     refreshToken = body.refresh_token;
     secrets.add(refreshToken);
     rotated = true;
-    if (rotatedFile) writeFileSync(rotatedFile, refreshToken, { mode: 0o600 });
+    if (rotatedFile) replacePrivately(rotatedFile, refreshToken);
   }
   return body.access_token;
 }

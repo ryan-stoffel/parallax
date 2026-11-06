@@ -8,11 +8,29 @@
 //
 //     gh variable set PROBE_CLERK_USER_ID --repo ryan-stoffel/parallax --body <user id>
 //     node scripts/bench/relay-probe-enroll.mjs
+//
+// With --file, the token goes to a new file readable only by you, for t3-compare.mjs --token-file
+// on this computer, instead of to GitHub (PLX-1452). Each enroll is its own Clerk session, so a file
+// and CI's secret don't rotate each other's token away. It won't overwrite an existing file.
+//
+//     node scripts/bench/relay-probe-enroll.mjs --file ~/.config/parallax/probe-token
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { dirname, resolve } from "node:path";
+import { parseArgs } from "node:util";
 
 import { authorizeUrl, clerkOf } from "../../packages/plx/src/signin.mjs";
+
+const { values: options } = parseArgs({ options: { file: { type: "string" } } });
+const file = options.file && resolve(options.file);
+if (file && existsSync(file)) {
+  console.error(`${file} already exists. Remove it first to enroll again.`);
+  process.exit(1);
+}
+// Before sign-in, so a missing folder doesn't waste one.
+if (file) mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 
 const REPO = "ryan-stoffel/parallax";
 // offline_access is what makes Clerk give a refresh token, as for the desktop app.
@@ -58,6 +76,12 @@ const user = await fetch(`${clerk.api}/oauth/userinfo`, {
 if (user.sub !== expected) {
   console.error("That sign-in isn't the account PROBE_CLERK_USER_ID names. Nothing stored.");
   process.exit(1);
+}
+if (file) {
+  // wx: only a file this creates, so its 0600 mode holds. relay-probe keeps that mode when it rotates.
+  writeFileSync(file, tokens.refresh_token, { mode: 0o600, flag: "wx" });
+  console.log(`Stored the test account's refresh token in ${file}.`);
+  process.exit(0);
 }
 const stored = spawnSync("gh", ["secret", "set", "PROBE_CLERK_REFRESH_TOKEN", "--repo", REPO], {
   input: tokens.refresh_token,
