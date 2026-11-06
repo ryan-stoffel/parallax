@@ -1,9 +1,7 @@
-import { Check, ChevronDown, Network, Search, SearchX, Star, Zap } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode, type ToggleEvent } from "react";
+import { Check, ChevronDown, Network, Search, SearchX, Star } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
-import type { AgentEffort } from "../protocol/generated/protocol";
-import { effortLevels, isNew } from "./catalog";
-import { tokens } from "./EffortMenu";
+import { isNew } from "./catalog";
 import {
   prefsKey,
   toggleFavorite,
@@ -16,21 +14,7 @@ import {
 import { ensureHubs, useHubs } from "./hubs";
 import { PlanLabel } from "./PlanLabel";
 import { kindOf, listedProviders, loadProviders, logoOf } from "./providers";
-import { menuButton, menuPanel, moveFocus, Picker, Segmented } from "./ui";
-
-/** What the composer's picker sets beside the model. Each that's absent isn't offered. */
-export interface RunOptions {
-  effort?: AgentEffort;
-  onEffort: (effort: AgentEffort) => void;
-  /** The context windows the model offers, in tokens. */
-  contexts: number[];
-  context?: number;
-  onContext: (tokens: number) => void;
-  fast?: boolean;
-  onFast: (fast: boolean) => void;
-  /** The access picker. */
-  access?: ReactNode;
-}
+import { menuButton, menuPanel, moveFocus, Segmented } from "./ui";
 
 /** Who an instance signs in as: its own account, or a hub's enabled accounts of its kind. */
 interface Account {
@@ -77,23 +61,20 @@ const railButton =
  * above the button when there's no room below. The models of instances in `unavailable` aren't
  * listed, and the rail and the control show those instances disabled, saying why on hover.
  * Opening it asks the host again, so it follows Settings > Providers. Favorites are kept on this
- * device, per host. With `options`, the composer's, the button also names the reasoning level and
- * shows a bolt in fast mode, and the panel adds a Reasoning column and a footer with the speed,
- * context window, and access. Choosing those leaves it open, and choosing a model closes it.
+ * device, per host. In the composer, the model's name is heavier and the panel opens off the box
+ * (index.css).
  */
 export function ModelMenu({
   catalog,
   unavailable = {},
   value: chosen,
   onChange,
-  options,
 }: {
   catalog: Catalog;
   /** Instances whose models can't be picked here, by why. */
   unavailable?: Partial<Record<Provider, string>>;
   value: Model;
   onChange: (model: Model) => void;
-  options?: RunOptions;
 }) {
   const all = catalog.models.filter((m) =>
     catalog.instances.some((i) => i.id === m.provider && i.enabled),
@@ -169,10 +150,6 @@ export function ModelMenu({
     menu.current?.hidePopover();
   };
   const shortName = chosen.name.replace(/^Claude /, "");
-  const effortName = effortLevels.find((l) => l.value === options?.effort)?.name;
-  const speed = options?.fast !== undefined;
-  // One context window is no choice, so there's nothing to show.
-  const hasContexts = options?.context !== undefined && options.contexts.length > 1;
 
   return (
     <>
@@ -180,33 +157,18 @@ export function ModelMenu({
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={`Model: ${chosen.name}${effortName ? `, reasoning ${effortName}` : ""}${options?.fast ? ", fast" : ""}`}
+        aria-label={`Model: ${chosen.name}`}
         className={`${menuButton} min-w-0 [&>svg]:-translate-y-[0.5px]`}
       >
         <Logo />
-        <span className={`min-w-0 truncate ${options ? "text-foreground" : ""}`}>{shortName}</span>
-        {effortName && <span className="composer-model-effort shrink-0">{effortName}</span>}
-        {options?.fast && <Zap aria-hidden className="composer-pop fill-current" />}
-        {!options && <ChevronDown aria-hidden className="opacity-70" />}
+        <span className="composer-model min-w-0 truncate">{shortName}</span>
+        <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div
         ref={menu}
         id={id}
         popover="auto"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          // A nested picker's, such as Access's: this panel stays as it is. A closing one still
-          // holds focus while it fades out, and would drop it, so focus comes back here.
-          if (e.target !== e.currentTarget) {
-            const panel = e.currentTarget;
-            const active = document.activeElement;
-            if (
-              e.newState === "closed" &&
-              panel.matches(":popover-open") &&
-              ((e.target as Element).contains(active) || !panel.contains(active))
-            )
-              search.current?.focus();
-            return;
-          }
           if (e.newState === "open") {
             setTab(group(chosen.provider));
             setAccount(chosen.provider);
@@ -220,7 +182,7 @@ export function ModelMenu({
           if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault();
           moveFocus(e);
         }}
-        className={`${menuPanel(options ? "end" : "start")} model-menu pop-in h-[26rem] ${options ? "w-[42rem] max-w-[90vw]" : "w-[30rem]"} flex-col overflow-hidden p-0 [&:popover-open]:flex`}
+        className={`${menuPanel()} model-menu pop-in h-[26rem] w-[30rem] flex-col overflow-hidden p-0 [&:popover-open]:flex`}
       >
         <div className="flex min-h-0 flex-1">
           <div className="model-menu-rail flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border py-2">
@@ -421,70 +383,7 @@ export function ModelMenu({
               )}
             </ul>
           </div>
-          {options?.effort && (
-            <div className="model-menu-reasoning flex w-48 shrink-0 flex-col border-l border-border">
-              <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-4 text-body text-muted-foreground">
-                Reasoning
-                <span className="model-menu-for truncate text-meta text-faint-foreground">
-                  {shortName}
-                </span>
-              </div>
-              <ul aria-label="Reasoning" className="min-h-0 flex-1 overflow-y-auto p-1.5">
-                {effortLevels.map((l) => {
-                  const current = l.value === options.effort;
-                  return (
-                    <li key={l.value}>
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={current}
-                        title={l.blurb}
-                        onClick={() => options.onEffort(l.value)}
-                        className={`flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body hover:bg-hover [&_svg]:size-4 [&_svg]:shrink-0 ${current ? "bg-selected font-medium" : ""}`}
-                      >
-                        <span className="min-w-0 flex-1 truncate">{l.name}</span>
-                        {current && <Check aria-hidden className="text-accent" />}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
         </div>
-        {(speed || hasContexts || options?.access) && (
-          <div className="flex h-11 shrink-0 items-center gap-2 border-t border-border px-2">
-            {speed && (
-              <Segmented
-                label="Speed"
-                value={options.fast ? "fast" : "standard"}
-                onChange={(next) => options.onFast(next === "fast")}
-                options={[
-                  { value: "standard", name: "Standard" },
-                  {
-                    value: "fast",
-                    name: (
-                      <>
-                        <Zap aria-hidden className="fill-current" />
-                        Fast
-                      </>
-                    ),
-                  },
-                ]}
-              />
-            )}
-            {hasContexts && (
-              <Picker
-                label="Context window"
-                value={String(options.context)}
-                onChange={(v) => options.onContext(Number(v))}
-                options={options.contexts.map((n) => ({ value: String(n), label: tokens(n) }))}
-                panelClassName="min-w-28"
-              />
-            )}
-            {options?.access && <div className="ml-auto">{options.access}</div>}
-          </div>
-        )}
       </div>
     </>
   );

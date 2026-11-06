@@ -6,7 +6,6 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import type { Hub } from "../protocol/generated/protocol";
 import { loadHubs, setHubAccountEnabled } from "./hubs";
 import { ModelMenu } from "./ModelMenu";
-import { Picker } from "./ui";
 import type { Catalog, Instance, Model } from "./models";
 import { planOf } from "./PlanLabel";
 import { loadProviders } from "./providers";
@@ -340,64 +339,6 @@ test("opening the picker asks a host with listed providers for them again", asyn
   });
 });
 
-test("with options, it offers reasoning, speed, and a context window, and shows them on its button", () => {
-  root = createRoot(document.body.appendChild(document.createElement("div")));
-  const onEffort = vi.fn();
-  const onFast = vi.fn();
-  const options = {
-    effort: "high" as const,
-    onEffort,
-    contexts: [200_000, 1_000_000],
-    context: 200_000,
-    onContext: () => {},
-    fast: true,
-    onFast,
-  };
-  act(() =>
-    root!.render(
-      <ModelMenu
-        catalog={catalog}
-        value={catalog.models[0]!}
-        onChange={() => {}}
-        options={options}
-      />,
-    ),
-  );
-  const trigger = document.querySelector('[aria-label^="Model: "]')!;
-  expect(trigger.getAttribute("aria-label")).toMatch(/, reasoning High, fast$/);
-  const levels = [...document.querySelectorAll<HTMLElement>('[aria-label="Reasoning"] button')];
-  expect(levels.map((l) => l.textContent)).toEqual(["Low", "Medium", "High", "Extra high", "Max"]);
-  expect(levels.find((l) => l.getAttribute("aria-checked") === "true")?.textContent).toBe("High");
-  act(() => levels[4]!.click());
-  expect(onEffort).toHaveBeenCalledExactlyOnceWith("max");
-  act(() => choice("Standard")!.click());
-  expect(onFast).toHaveBeenCalledExactlyOnceWith(false);
-  expect(document.querySelector('[aria-label^="Context window"]')).not.toBeNull();
-});
-
-test("what a model doesn't have isn't offered", () => {
-  root = createRoot(document.body.appendChild(document.createElement("div")));
-  const options = {
-    onEffort: () => {},
-    contexts: [],
-    onContext: () => {},
-    onFast: () => {},
-  };
-  act(() =>
-    root!.render(
-      <ModelMenu
-        catalog={catalog}
-        value={catalog.models[0]!}
-        onChange={() => {}}
-        options={options}
-      />,
-    ),
-  );
-  expect(document.querySelector('[aria-label="Reasoning"]')).toBeNull();
-  expect(document.querySelector('[aria-label="Speed"]')).toBeNull();
-  expect(document.querySelector('[aria-label^="Context window"]')).toBeNull();
-});
-
 test("Enter picks a searched model, but with nothing typed it keeps the model and sends nothing", () => {
   root = createRoot(document.body.appendChild(document.createElement("div")));
   const onChange = vi.fn();
@@ -423,36 +364,4 @@ test("Enter picks a searched model, but with nothing typed it keeps the model an
   });
   expect(enter().defaultPrevented).toBe(true);
   expect(onChange).toHaveBeenCalledExactlyOnceWith(catalog.models[0]);
-});
-
-test("a nested picker closing leaves the panel's search as it is", () => {
-  root = createRoot(document.body.appendChild(document.createElement("div")));
-  const options = {
-    onEffort: () => {},
-    contexts: [],
-    onContext: () => {},
-    onFast: () => {},
-    access: <Picker label="Access" value="a" options={[{ value: "a", label: "A" }]} />,
-  };
-  act(() =>
-    root!.render(
-      <ModelMenu
-        catalog={catalog}
-        value={catalog.models[0]!}
-        onChange={() => {}}
-        options={options}
-      />,
-    ),
-  );
-  const search = document.querySelector<HTMLInputElement>('input[type="search"]')!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "son");
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  const nested = document.querySelector('[role="menu"][aria-label="Access"]')!;
-  act(() => {
-    const event = Object.assign(new Event("toggle", { bubbles: true }), { newState: "closed" });
-    nested.dispatchEvent(event);
-  });
-  expect(search.value).toBe("son");
 });

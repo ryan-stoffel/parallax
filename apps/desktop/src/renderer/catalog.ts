@@ -100,7 +100,7 @@ export const models: Model[] = [
   { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "claude", contexts: [200_000] },
   {
     id: "gpt-6.1-sol",
-    name: "GPT-6.1 Sol",
+    name: "GPT 6.1 Sol",
     provider: "codex",
     released: "2026-09-29",
     contexts: codex872K,

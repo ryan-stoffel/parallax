@@ -596,20 +596,20 @@ test("an open thread's composer picks within its provider and sends only what ch
   const off = (label: string) => control(label).closest("fieldset")!.disabled;
 
   open("The model, effort, and access can change once it finishes");
-  expect(off("Model: Claude Opus 5.5, reasoning Extra high")).toBe(true);
+  expect(off("Model: Claude Opus 5.5")).toBe(true);
+  expect(off("Reasoning effort: Extra high")).toBe(true);
   expect(off("Access: Plan")).toBe(true);
   act(() => unmount());
 
   open();
-  expect(off("Model: Claude Opus 5.5, reasoning Extra high")).toBe(false);
+  expect(off("Model: Claude Opus 5.5")).toBe(false);
+  expect(off("Reasoning effort: Extra high")).toBe(false);
   expect(off("Access: Plan")).toBe(false);
   // The model menu lists only Claude's models; Codex is in the rail, disabled, saying why.
   const menu = document.getElementById(
-    control("Model: Claude Opus 5.5, reasoning Extra high").getAttribute("popovertarget")!,
+    control("Model: Claude Opus 5.5").getAttribute("popovertarget")!,
   )!;
-  const listed = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].filter(
-    (m) => !m.closest('[aria-label="Reasoning"], [role="menu"]'),
-  );
+  const listed = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
   expect(listed.every((m) => m.textContent?.includes("Claude"))).toBe(true);
   expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Claude"]')!.disabled).toBe(
     false,
@@ -619,11 +619,11 @@ test("an open thread's composer picks within its provider and sends only what ch
   await act(async () =>
     listed.find((m) => m.textContent?.startsWith("Claude Sonnet 5.5"))!.click(),
   );
-  act(() =>
-    [...menu.querySelectorAll<HTMLElement>('[aria-label="Reasoning"] button')]
-      .find((b) => b.textContent === "Low")!
-      .click(),
-  );
+  act(() => {
+    const slider = document.querySelector<HTMLInputElement>('input[type="range"]')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider, "0");
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   type("Just the summary");
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
@@ -635,6 +635,38 @@ test("an open thread's composer picks within its provider and sends only what ch
     [],
     [],
   );
+});
+
+test("/effort and /permissions open their own menus", async () => {
+  fakeBridge(1);
+  render(
+    <Composer
+      menus={{ hostId: "local" }}
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+      onSend={async () => undefined}
+    />,
+  );
+  const opened = (label: string) => {
+    const button = document.querySelector<HTMLButtonElement>(`[aria-label^="${label}"]`)!;
+    const click = vi.fn();
+    button.addEventListener("click", click);
+    return click;
+  };
+  const model = opened("Model:");
+  for (const [command, label] of [
+    ["effort", "Reasoning effort:"],
+    ["permissions", "Access:"],
+  ] as const) {
+    const control = opened(label);
+    act(() => void composer().editor!.chain().focus().insertContent(`/${command}`).run());
+    const entry = [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) =>
+      o.textContent?.startsWith(`/${command}`),
+    )!;
+    await act(async () => entry.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    expect(control).toHaveBeenCalledOnce();
+  }
+  expect(model).not.toHaveBeenCalled();
 });
 
 test("an open thread's new Access goes to the running run at once", async () => {
@@ -675,7 +707,7 @@ test("another provider's model moves an open thread there, with every option and
   );
   const control = (label: string) => document.querySelector(`[aria-label="${label}"]`);
   const menu = document.getElementById(
-    control("Model: Claude Opus 5.5, reasoning Extra high")!.getAttribute("popovertarget")!,
+    control("Model: Claude Opus 5.5")!.getAttribute("popovertarget")!,
   )!;
   expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!.disabled).toBe(false);
   act(() => menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!.click());

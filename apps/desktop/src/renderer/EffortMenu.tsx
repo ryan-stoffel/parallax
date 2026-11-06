@@ -13,18 +13,18 @@ const at = (i: number) => `calc(${thumb} / 2 + (100% - ${thumb}) * ${i / last})`
 // A little overshoot, so the thumb and fill spring into place together.
 const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 
-// Where the gauge's needle points at each level, in degrees clockwise from straight up. High is
-// lucide's own Gauge, and Max is the end of the arc.
+// The needle moves clockwise through the dial, leaving room before either rounded arc end.
 const needle: Record<AgentEffort, number> = {
-  low: -80,
-  medium: -20,
-  high: 45,
-  xhigh: 80,
-  max: 120,
+  low: -110,
+  medium: -55,
+  high: 0,
+  xhigh: 55,
+  max: 110,
 };
 
 /**
- * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
+ * A balanced dial with a shared center for its arc, hub, and needle. The `lucide` class keeps
+ * its lines at 1.5px.
  * The needle springs to each level, and turned up to Max it rattles against the end of the arc
  * before it settles (index.css). Opening a thread already at Max shows it settled.
  */
@@ -45,8 +45,9 @@ function EffortGauge({ value }: { value: AgentEffort }) {
       className={lit ? "lucide effort-lit" : "lucide"}
       style={{ "--needle": `${needle[value]}deg` } as CSSProperties}
     >
-      <path d="M3.34 19a10 10 0 1 1 17.32 0" />
-      <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
+      <path d="M5.46 19.54a9.25 9.25 0 1 1 13.08 0" />
+      <path d="M12 13V7" className={`effort-needle transition-[rotate] ${spring}`} />
+      <circle cx="12" cy="13" r="1.5" fill="currentColor" stroke="none" />
     </svg>
   );
 }

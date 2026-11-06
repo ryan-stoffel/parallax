@@ -1378,10 +1378,10 @@ body {
     opacity var(--transition-duration-base) var(--ease-out);
 }
 /* The model picker opens off the box rather than its button, so it covers neither the text nor
-   the box's row: above it, lined up with its right edge, and as tall as there's room for. */
+   the box's row: above it, lined up with its left edge, and as tall as there's room for. */
 .composer-shell .model-menu {
   position-anchor: --composer;
-  position-area: top span-left;
+  position-area: top span-right;
   position-try-fallbacks:
     flip-block,
     flip-inline,
@@ -1390,47 +1390,79 @@ body {
   min-height: 10rem;
   max-width: calc(100vw - 1rem);
   margin: 0 0 0.5rem;
-  transform-origin: bottom right;
-  container: model-menu / inline-size;
+  transform-origin: bottom left;
 }
-/* In a narrow window, the models keep their names: the Reasoning column and Access give way. */
-@container model-menu (width < 30rem) {
-  .model-menu-reasoning {
-    width: 8.5rem;
-  }
-  .model-menu-for,
-  .composer-access > span {
-    display: none;
-  }
+/* The model's name, a step heavier than the reasoning and access beside it. */
+.composer-controls .composer-model {
+  font-size: var(--text-reading);
+  font-weight: 600;
+  color: var(--foreground);
 }
-/* The heavy box at the end of the controls' row, holding voice and send or stop as wide tiles whose
-   corners follow its own (Composer.tsx). With nothing to send, Send is only its arrow, except
-   in a nightly, which keeps its sky. */
+/* Attach, voice, and send or stop at the end of the controls' row: round buttons of one size, part
+   of the box rather than a box of their own (Composer.tsx). Send is filled, and with nothing to
+   send it's a quiet disc, except in a nightly, which keeps its sky. */
 .composer-actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 2px;
-  padding: 2px;
-  border: 1px solid
-    light-dark(color-mix(in oklab, var(--foreground) 12%, transparent), rgb(255 255 255 / 16%));
-  border-radius: 12px;
-  background-color: light-dark(color-mix(in oklab, var(--foreground) 7%, var(--surface)), #050505);
-  box-shadow: 0 1px 2px
-    light-dark(color-mix(in oklab, var(--foreground) 10%, transparent), rgb(0 0 0 / 70%));
+  margin-left: auto;
 }
 .composer-action {
   display: grid;
   place-items: center;
   width: 2.25rem;
-  height: 2rem;
-  border-radius: 9px;
+  height: 2.25rem;
+  border-radius: 9999px;
+  color: var(--muted-foreground);
   transition:
     background-color var(--transition-duration-fast) var(--ease-out),
+    color var(--transition-duration-fast) var(--ease-out),
     scale var(--transition-duration-fast) var(--ease-out);
+  > svg {
+    width: 1rem;
+    height: 1rem;
+  }
+}
+.composer-attach > svg,
+.composer-mic > svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.composer-action:enabled:hover {
+  background-color: var(--hover);
+  color: var(--foreground);
+}
+.composer-action:disabled {
+  opacity: 0.4;
+}
+/* Solid red, with a soft shadow under it, and a small white square. */
+.composer-stop {
+  background-color: #e43b45;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+}
+.composer-stop:enabled:hover {
+  background-color: color-mix(in oklab, #e43b45 90%, white);
+  color: #ffffff;
+}
+.composer-shell .composer-send.send-sky {
+  margin-left: 2px;
+}
+/* Over .composer-action's own colors. A nightly's sky keeps its white arrow (.send-sky). */
+:root:not(.nightly) .composer-shell .composer-send.send-sky:enabled {
+  color: var(--send-foreground);
+}
+:root:not(.nightly) .composer-shell .composer-send.send-sky:enabled:hover {
+  background-color: var(--send);
+  filter: brightness(1.1);
+}
+:root.nightly .composer-shell .composer-send.send-sky {
+  color: #ffffff;
 }
 :root:not(.nightly) .composer-shell .composer-actions .composer-send.send-sky:disabled {
-  background: transparent;
-  color: var(--faint-foreground);
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+  color: var(--muted-foreground);
   box-shadow: none;
   filter: none;
   opacity: 1;
@@ -1482,7 +1514,7 @@ body {
   align-items: center;
   gap: 0.25rem;
   min-width: 0;
-  padding: 0 6px 6px;
+  padding: 2px 8px 8px;
   pointer-events: none;
   transition:
     margin-top var(--transition-duration-base) var(--ease-out),
@@ -1494,19 +1526,14 @@ body {
       visibility var(--transition-duration-fast);
   }
 }
-.composer-controls > button,
-.composer-actions {
-  flex-shrink: 0;
-}
 /* Quiet until the box is hovered or holds focus. */
-.composer-shell:not(:focus-within, :hover) > .composer-controls > :not(.composer-actions) {
-  opacity: 0.75;
+.composer-shell:not(:focus-within, :hover) > .composer-controls > .composer-pickers {
+  opacity: 0.9;
 }
 .composer-shell:hover:not(:focus-within, .border-ring) {
   border-color: color-mix(in oklab, var(--foreground) 14%, transparent);
 }
 /* A press gives a little, and what joins the box opens its room as it arrives. */
-.composer-controls > button:active,
 .composer-controls button[aria-haspopup]:not([popover] *):active,
 .composer-action:enabled:active {
   scale: 0.94;
@@ -1548,34 +1575,24 @@ body {
   }
 }
 [data-back] > .composer-controls {
-  margin-top: -2.625rem;
-  padding-bottom: 4px;
-  > button {
-    opacity: 0;
-    visibility: hidden;
-  }
-  > .composer-run > :not(fieldset) {
-    display: none;
-  }
+  margin-top: -2.8125rem;
+  padding-bottom: 7px;
 }
-/* Beside the text, the model keeps its whole name, and the placeholder gives way to it. A name
-   longer than this, such as a raw id, is cut. --beside is what's left of the box's width after
-   voice and send or stop. */
+/* On the one line, only the model stays at the start, in the placeholder's place, and voice and
+   send or stop at the end. A model name longer than --beside, such as a raw id, is cut. */
 [data-back] {
-  --beside: min(14rem, 100cqw - 7rem);
+  --beside: min(14rem, 100cqw - 6rem);
 }
-[data-back] .composer-run {
+[data-back] .composer-pickers {
   max-width: var(--beside);
   overflow: clip;
-}
-[data-back] .composer-placeholder {
-  right: calc(var(--beside) + 6rem);
-}
-/* With no model, its standalone menus are only their icons in a narrow box. */
-@container composer (width < 28rem) {
-  [data-back] :is(.composer-effort, .composer-access > span) {
+  > button:not(:first-child) {
     display: none;
   }
+}
+[data-back] :is(.composer-attach, .composer-actions > :not(.composer-action)),
+[data-back] .composer-placeholder {
+  display: none;
 }
 /* Over glass, the box, its bars, and the voice pill are one thin pane that lets the wallpaper's color
    through, rather than the denser fill of what holds rows of text. Clear is denser than Blurred,
@@ -1614,17 +1631,6 @@ body {
 :root.translucent .composer-shell > .shadow-composer.bg-surface {
   background-color: var(--raised);
   backdrop-filter: none;
-}
-/* The heavy box stays heavy, as a dark pane of the glass rather than a black hole in it. */
-:root.translucent .composer-actions {
-  border-color: light-dark(
-    color-mix(in oklab, var(--foreground) 12%, transparent),
-    rgb(255 255 255 / 12%)
-  );
-  background-color: light-dark(
-    color-mix(in oklab, var(--foreground) 7%, transparent),
-    rgb(0 0 0 / 50%)
-  );
 }
 /* The tabs, on a bar tucked behind the box's top edge, the mirror of the bar under it. */
 .composer-tabs {
@@ -1677,6 +1683,18 @@ body {
     display: none;
   }
 }
+/* In the box's own row, they're as tall as the round buttons at its end and share their corners,
+   so every hover lines up. Icons sit on the text's center, with no nudge. */
+.composer-controls button[aria-haspopup]:not([popover] *) {
+  height: 2.25rem;
+  padding-inline: 0.625rem;
+  border-radius: 10px;
+  font-weight: 500;
+  color: color-mix(in oklab, var(--foreground) 85%, transparent);
+  > svg {
+    translate: none;
+  }
+}
 /* Labels give way to their icons as the box narrows, least needed first. Each keeps its title. */
 @container composer (width < 36rem) {
   .composer-detail {
@@ -1689,14 +1707,13 @@ body {
     display: none;
   }
 }
-@container composer (width < 22rem) {
-  .composer-effort {
+@container composer (width < 30rem) {
+  .composer-access > span {
     display: none;
   }
 }
-/* The model button's reasoning level goes only when the name beside it runs out of room. */
-@container composer (width < 16.25rem) {
-  .composer-model-effort {
+@container composer (width < 22rem) {
+  .composer-effort {
     display: none;
   }
 }
@@ -1810,7 +1827,7 @@ body {
    end of the arc; then it's still. */
 .effort-needle {
   transform-box: view-box;
-  transform-origin: 12px 14px;
+  transform-origin: 12px 13px;
   rotate: var(--needle);
 }
 @keyframes effort-rattle {

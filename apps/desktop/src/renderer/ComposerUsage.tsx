@@ -183,9 +183,9 @@ const ringTone = {
 };
 
 /**
- * A ring and its percent by the attach button, filled to the open thread's context, amber from
- * 75% and red from 90%. The percent beside it keeps the partial ring from reading as a loading
- * spinner; with no context reported yet, there's only the empty ring. Hovering or focusing it
+ * A ring by the attach button, filled to the open thread's context, amber from 75% and red from
+ * 90%; with no context reported yet, there's only the empty ring. Its tooltip says the percent.
+ * Hovering or focusing it
  * peeks at a card with the context, then the latest request's speed and cache hit, then the
  * thread's tokens and cost; a click keeps the card open. Each row's tooltip says what it measures.
  * Nothing shows until there is something to say.
@@ -236,16 +236,16 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
         aria-controls={card}
         title={open ? undefined : summary.label}
         onClick={() => (kept ? close() : setKept(true))}
-        className={`flex h-7 items-center gap-1.5 rounded-full px-2 text-meta tabular-nums hover:bg-hover ${open ? "bg-hover" : ""} ${ringTone[summary.tone]}`}
+        className={`grid size-9 place-items-center rounded-full hover:bg-hover ${open ? "bg-hover" : ""} ${ringTone[summary.tone]}`}
       >
-        <svg aria-hidden viewBox="0 0 20 20" className="size-3.5 -rotate-90">
+        <svg aria-hidden viewBox="0 0 20 20" className="size-6 -rotate-90">
           <circle
             cx="10"
             cy="10"
             r="7.5"
             fill="none"
-            strokeWidth="3"
-            className="stroke-faint-foreground/30"
+            strokeWidth="2.5"
+            className="stroke-foreground/20"
           />
           {summary.used > 0 && (
             <circle
@@ -254,13 +254,13 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
               r="7.5"
               fill="none"
               stroke="currentColor"
-              strokeWidth="3"
+              strokeWidth="2.5"
+              strokeLinecap="round"
               pathLength={100}
               strokeDasharray={`${Math.max(summary.used, 3)} 100`}
             />
           )}
         </svg>
-        {data.context !== undefined && <span aria-hidden>{data.context}</span>}
       </button>
       <div
         id={card}

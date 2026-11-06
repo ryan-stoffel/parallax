@@ -936,6 +936,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   updater.backends = ["claude", "codex"];
   updater.backend = "codex";
   updater.accountId = "codex";
+  updater.model = GPT;
   log(updater)
     .out(
       ago(300),
