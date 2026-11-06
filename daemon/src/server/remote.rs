@@ -626,6 +626,13 @@ impl Request {
         self.headers.get(name).map(String::as_str)
     }
 
+    /// Whether the client asked to keep the connection for another request. Clients from before
+    /// PLX-1462 send `Connection: close`.
+    fn keeps_alive(&self) -> bool {
+        self.header("connection")
+            .is_some_and(|value| value.eq_ignore_ascii_case("keep-alive"))
+    }
+
     /// The query parameter `name`.
     fn query(&self, name: &str) -> Option<&str> {
         let (_, query) = self.path.split_once('?')?;
@@ -813,6 +820,16 @@ async fn respond<S: AsyncWrite + Unpin>(
     status: u16,
     body: &serde_json::Value,
 ) -> io::Result<()> {
+    respond_kept(stream, status, body, false).await
+}
+
+/// Writes a JSON answer with `status`, and closes the connection unless `keep_alive`.
+async fn respond_kept<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    status: u16,
+    body: &serde_json::Value,
+    keep_alive: bool,
+) -> io::Result<()> {
     let reason = match status {
         200 => "OK",
         202 => "Accepted",
@@ -828,8 +845,9 @@ async fn respond<S: AsyncWrite + Unpin>(
     };
     let body = body.to_string();
     let mut answer = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
-        body.len()
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: {}\r\n",
+        body.len(),
+        if keep_alive { "keep-alive" } else { "close" }
     );
     if status == 401 {
         answer.push_str("WWW-Authenticate: DPoP algs=\"ES256\"\r\n");
@@ -837,7 +855,11 @@ async fn respond<S: AsyncWrite + Unpin>(
     answer.push_str("\r\n");
     answer.push_str(&body);
     stream.write_all(answer.as_bytes()).await?;
-    stream.shutdown().await
+    if keep_alive {
+        stream.flush().await
+    } else {
+        stream.shutdown().await
+    }
 }
 
 fn refused(why: &str) -> (u16, serde_json::Value) {
@@ -848,7 +870,8 @@ fn refused(why: &str) -> (u16, serde_json::Value) {
 }
 
 impl Serving {
-    /// Runs TLS and reads one request, then answers it. `check` is held until the request is
+    /// Runs TLS and reads one request, then answers it, and then the next while they are a
+    /// sign-in's steps that ask to keep the connection. `check` is held until the first request is
     /// read. It runs as one of the server's connections, so shutdown waits for it.
     fn admit_remote(
         &self,
@@ -876,53 +899,71 @@ impl Serving {
                     () = closing.cancelled() => return,
                 };
                 drop(check);
-                let (mut stream, request) = match read {
+                let (mut stream, mut request) = match read {
                     Ok(Ok(Some(read))) => read,
                     Ok(Ok(None)) => return debug!(%peer, "closed a remote connection without a request"),
                     Ok(Err(error)) => return debug!(%peer, %error, "a remote connection failed"),
                     Err(_) => return debug!(%peer, "closed a remote connection that sent no request in time"),
                 };
-                let route = request.path.split('?').next().unwrap_or_default();
-                let guarded = route == "/ws" || route.starts_with("/api/pair/") || route.starts_with("/api/auth/");
-                let (status, body) = match (request.method.as_str(), route) {
-                    _ if guarded && !same_origin(&request) => {
-                        (403, json!({ "error": "forbidden", "error_description": "another origin" }))
+                loop {
+                    let route = request.path.split('?').next().unwrap_or_default();
+                    let guarded = route == "/ws" || route.starts_with("/api/pair/") || route.starts_with("/api/auth/");
+                    let (status, body) = match (request.method.as_str(), route) {
+                        _ if guarded && !same_origin(&request) => {
+                            (403, json!({ "error": "forbidden", "error_description": "another origin" }))
+                        }
+                        ("GET", "/ws") => {
+                            return serve_socket(stream, &request, daemon, stop_reading, &closing, peer).await;
+                        }
+                        ("GET", path) if web_file(path).is_some() && web_on(&daemon).await => {
+                            let Some(slot) = files.start(peer.ip()) else {
+                                let busy = json!({ "error": "busy" });
+                                let _ = time::timeout(remote::REQUEST_TIMEOUT, respond(&mut stream, 503, &busy)).await;
+                                return debug!(%peer, "refused a web client file: too many on their way");
+                            };
+                            let file = web_file(path).expect("a web file");
+                            serve_file(stream, &daemon, &file, peer).await;
+                            return drop(slot);
+                        }
+                        ("GET", "/.well-known/parallax") => (200, descriptor(&daemon, &key).await),
+                        ("POST", "/api/pair/start") => start_pairing(&daemon, &key, &request),
+                        ("POST", "/api/pair/finish") => finish_pairing(&daemon, &key, &request).await,
+                        ("POST", "/api/pair/browser") if web_on(&daemon).await => {
+                            pair_browser(&daemon, &request).await
+                        }
+                        ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
+                        ("POST", "/api/auth/account") => access::sign_in(&daemon, &key, &request).await,
+                        ("POST", "/api/auth/approval") => access::approval(&daemon, &key, &request).await,
+                        _ if request.too_large => (413, json!({ "error": "body_too_large" })),
+                        (method, hook) if hook.starts_with("/api/hooks/") => {
+                            let Request { path, headers, body, .. } = &request;
+                            crate::schedules::hook(&daemon, method, path, headers, body, None).await
+                        }
+                        _ => (404, json!({ "error": "not_found" })),
+                    };
+                    // A webhook's path holds its token, so the log names only the route.
+                    let route = if route.starts_with("/api/hooks/") { "/api/hooks/…" } else { route };
+                    if !matches!(status, 200 | 202) {
+                        warn!(%peer, path = route, status, "refused a remote request");
                     }
-                    ("GET", "/ws") => {
-                        return serve_socket(stream, &request, daemon, stop_reading, &closing, peer).await;
+                    // A sign-in's steps follow each other on one connection, so through the relay
+                    // they take one stream (PLX-1462). Any other answer ends the connection.
+                    let again = request.keeps_alive() && matches!(route, "/api/auth/account" | "/api/auth/approval");
+                    let answered = respond_kept(&mut stream, status, &body, again);
+                    let answered = time::timeout(remote::REQUEST_TIMEOUT, answered).await;
+                    if !again || !matches!(answered, Ok(Ok(()))) {
+                        return;
                     }
-                    ("GET", path) if web_file(path).is_some() && web_on(&daemon).await => {
-                        let Some(slot) = files.start(peer.ip()) else {
-                            let busy = json!({ "error": "busy" });
-                            let _ = time::timeout(remote::REQUEST_TIMEOUT, respond(&mut stream, 503, &busy)).await;
-                            return debug!(%peer, "refused a web client file: too many on their way");
-                        };
-                        let file = web_file(path).expect("a web file");
-                        serve_file(stream, &daemon, &file, peer).await;
-                        return drop(slot);
+                    let next = tokio::select! {
+                        next = time::timeout(remote::REQUEST_TIMEOUT, read_request(&mut stream)) => next,
+                        () = closing.cancelled() => return,
+                        () = stop_reading.cancelled() => return,
+                    };
+                    match next {
+                        Ok(Ok(Some(next))) => request = next,
+                        _ => return debug!(%peer, "closed a kept-alive remote connection"),
                     }
-                    ("GET", "/.well-known/parallax") => (200, descriptor(&daemon, &key).await),
-                    ("POST", "/api/pair/start") => start_pairing(&daemon, &key, &request),
-                    ("POST", "/api/pair/finish") => finish_pairing(&daemon, &key, &request).await,
-                    ("POST", "/api/pair/browser") if web_on(&daemon).await => {
-                        pair_browser(&daemon, &request).await
-                    }
-                    ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
-                    ("POST", "/api/auth/account") => access::sign_in(&daemon, &key, &request).await,
-                    ("POST", "/api/auth/approval") => access::approval(&daemon, &key, &request).await,
-                    _ if request.too_large => (413, json!({ "error": "body_too_large" })),
-                    (method, hook) if hook.starts_with("/api/hooks/") => {
-                        let Request { path, headers, body, .. } = &request;
-                        crate::schedules::hook(&daemon, method, path, headers, body, None).await
-                    }
-                    _ => (404, json!({ "error": "not_found" })),
-                };
-                // A webhook's path holds its token, so the log names only the route.
-                let route = if route.starts_with("/api/hooks/") { "/api/hooks/…" } else { route };
-                if !matches!(status, 200 | 202) {
-                    warn!(%peer, path = route, status, "refused a remote request");
                 }
-                let _ = time::timeout(remote::REQUEST_TIMEOUT, respond(&mut stream, status, &body)).await;
             }
             .instrument(info_span!("remote", id)),
         );

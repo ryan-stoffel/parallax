@@ -192,6 +192,34 @@ impl Base {
     /// A connection to this host: through `HTTPS_PROXY` unless `NO_PROXY` names it or it's this
     /// computer, with TLS checked against `roots`, or plain to loopback.
     async fn connect(&self, roots: Roots) -> io::Result<Stream> {
+        let tcp = self.tcp().await?;
+        if !self.tls {
+            return Ok(Box::new(tcp));
+        }
+        let name = ServerName::try_from(self.host.clone()).map_err(io::Error::other)?;
+        // Mozilla's roots first, unless this process already needed the OS's: reading the OS's
+        // store took 69 ms of each `plxd dial` on macOS (PLX-1462).
+        let with_os = matches!(roots, Roots::WithOs);
+        let read = OS_ROOTS.get().cloned().filter(|_| with_os);
+        let retry = with_os && read.is_none();
+        let config = match read {
+            Some(config) => config,
+            None => tls_config(mozilla_roots())?,
+        };
+        let connector = tokio_rustls::TlsConnector::from(config);
+        match connector.connect(name.clone(), tcp).await {
+            // A certificate only the OS vouches for, such as a TLS-inspecting proxy's.
+            Err(error) if retry && unknown_issuer(&error) => {
+                let connector = tokio_rustls::TlsConnector::from(relay_tls().await?);
+                Ok(Box::new(connector.connect(name, self.tcp().await?).await?))
+            }
+            tls => Ok(Box::new(tls?)),
+        }
+    }
+
+    /// A TCP connection to this host, through `HTTPS_PROXY` unless `NO_PROXY` names it or it's
+    /// this computer.
+    async fn tcp(&self) -> io::Result<TcpStream> {
         let through = if local_host(&self.host) {
             None
         } else {
@@ -202,19 +230,21 @@ impl Base {
             None => TcpStream::connect((self.host.as_str(), self.port)).await?,
         };
         let _ = tcp.set_nodelay(true);
-        if !self.tls {
-            return Ok(Box::new(tcp));
-        }
-        let config = match roots {
-            Roots::Mozilla => tls_config(mozilla_roots())?,
-            Roots::WithOs => relay_tls().await?,
-        };
-        let name = ServerName::try_from(self.host.clone()).map_err(io::Error::other)?;
-        let tls = tokio_rustls::TlsConnector::from(config)
-            .connect(name, tcp)
-            .await?;
-        Ok(Box::new(tls))
+        Ok(tcp)
     }
+}
+
+/// Whether a TLS handshake failed because no root vouched for the certificate's issuer.
+fn unknown_issuer(error: &io::Error) -> bool {
+    let rustls = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>());
+    matches!(
+        rustls,
+        Some(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::UnknownIssuer
+        ))
+    )
 }
 
 /// Which root certificates a connection's TLS is checked against (0091).
@@ -243,14 +273,16 @@ fn tls_config(roots: rustls::RootCertStore) -> io::Result<Arc<rustls::ClientConf
     Ok(Arc::new(config))
 }
 
-/// The config for [`Roots::WithOs`], made once, since reading the OS's store can take a moment and
-/// reconnects shouldn't wait on it. A root added later counts once plxd restarts. `SSL_CERT_FILE`
-/// and `SSL_CERT_DIR` replace the OS's store when set. A store that can't be read leaves
-/// Mozilla's roots.
+/// [`relay_tls`]'s config, once a connection needed the OS's roots.
+static OS_ROOTS: tokio::sync::OnceCell<Arc<rustls::ClientConfig>> =
+    tokio::sync::OnceCell::const_new();
+
+/// The config for [`Roots::WithOs`] when Mozilla's roots alone refused the relay: the OS's roots
+/// beside them, read once, so reconnects don't wait on the store again. A root added later counts
+/// once plxd restarts. `SSL_CERT_FILE` and `SSL_CERT_DIR` replace the OS's store when set. A store
+/// that can't be read leaves Mozilla's roots.
 async fn relay_tls() -> io::Result<Arc<rustls::ClientConfig>> {
-    static CONFIG: tokio::sync::OnceCell<Arc<rustls::ClientConfig>> =
-        tokio::sync::OnceCell::const_new();
-    let config = CONFIG.get_or_try_init(|| async {
+    let config = OS_ROOTS.get_or_try_init(|| async {
         let os = tokio::task::spawn_blocking(rustls_native_certs::load_native_certs)
             .await
             .map_err(io::Error::other)?;

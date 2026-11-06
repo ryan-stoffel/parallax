@@ -515,6 +515,59 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
     server.stop().await;
 }
 
+/// A route to `to` through loopback that counts the connections made through it.
+async fn counting_route(to: String) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let route = listener.local_addr().unwrap().to_string();
+    let count = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&count);
+    tokio::spawn(async move {
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            counted.fetch_add(1, Ordering::Relaxed);
+            let mut outbound = tokio::net::TcpStream::connect(&to).await.unwrap();
+            tokio::spawn(async move {
+                let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+            });
+        }
+    });
+    (route, count)
+}
+
+/// Through the relay each connection is a stream, so a new device's sign-in, its request's value,
+/// and its wait for approval take one (PLX-1462).
+#[tokio::test]
+async fn a_sign_in_takes_one_connection_from_its_request_to_its_approval() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    set_relay(&mut client, true).await;
+    let (route, connections) = counting_route(route).await;
+    let phone = temp_dir();
+
+    let (route, signed_in) = sign_in(&issuer, &[route], &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    let SignIn::Pending { request, .. } = signed_in else {
+        panic!("a new device waits: {signed_in:?}");
+    };
+    let waiting = {
+        let (request, dir, host_id) = (request.clone(), phone.path().to_owned(), host_id.clone());
+        tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
+    };
+    sleep(Duration::from_millis(200)).await;
+    client
+        .call::<AccessApprove>(AccessRequestParams { request })
+        .await
+        .unwrap();
+    let approved = waiting.await.unwrap();
+    assert!(
+        matches!(approved, Ok(SignIn::Approved { .. })),
+        "{approved:?}"
+    );
+    assert_eq!(connections.load(Ordering::Relaxed), 1);
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn the_device_a_setup_command_names_needs_only_its_allow_and_a_caught_token_gets_nothing() {
     let issuer = clerk().await;
