@@ -80,6 +80,7 @@ import { NewChatProject, ProjectsPage } from "./ProjectsPage";
 import { projectEntries, type ProjectEntry } from "./projectList";
 import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
 import { RunTargetMenu } from "./RunTargetMenu";
+import { ThreadBar } from "./ThreadBar";
 import { ProjectContext, ProjectHeader, ProjectThreads } from "./ProjectHome";
 import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
@@ -1979,6 +1980,39 @@ export function App() {
                               ? lineageOf(view.state, paneThread)?.parent?.id
                               : undefined;
                           const title = threadId ? view.state.titles[threadId] : undefined;
+                          // A repository thread's bar under its composer: where it runs, its branch,
+                          // and its pull requests (PLX-1459). Chat, a Project, and Remote Control have none.
+                          const paneRun = threadId ? view.state.runs[threadId] : undefined;
+                          const paneRepo = view.state.repos.find((r) => r.id === paneThread?.repo);
+                          const paneHost = hosts.find((h) => h.id === tab.hostId);
+                          const threadBar = paneRun &&
+                            paneHost &&
+                            paneRepo &&
+                            isRepository(paneRepo) &&
+                            !isRemoteControl(paneRun) && (
+                              <ThreadBar
+                                hostId={tab.hostId}
+                                host={paneHost}
+                                run={paneRun}
+                                title={title}
+                                prs={threadRun?.id === threadId ? prs : undefined}
+                                canOpenPr={
+                                  "openPr" in view.capabilities &&
+                                  !!paneRun.diff &&
+                                  !isRunning(paneRun.status) &&
+                                  paneRun.status !== "accepted"
+                                }
+                                onPrOpened={(url) =>
+                                  linksPrs ? openPr(url) : void window.open(url, "_blank")
+                                }
+                                onOpenPrs={() =>
+                                  linksPrs
+                                    ? openPr()
+                                    : void window.open(paneRun.pullRequests![0], "_blank")
+                                }
+                                onSetUpGithub={setUpGithub}
+                              />
+                            );
                           return {
                             // Keyed, so another run starts from an empty transcript.
                             key: threadId ? `${tab.hostId}/${threadId}` : `${pane.id}/${tab.id}`,
@@ -2065,6 +2099,8 @@ export function App() {
                                       : undefined
                                   }
                                   forked={!!paneThread?.forkedFrom}
+                                  tab={threadBar || undefined}
+                                  barShowsPrs={!!threadBar && !!paneRun?.pullRequests?.length}
                                   // The open thread's, the one App reads; another pane's chips stay neutral.
                                   pullRequests={threadRun?.id === threadId ? prs : undefined}
                                   onOpenChanges={(turn, path) => {

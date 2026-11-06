@@ -18,7 +18,7 @@ import { icons } from "./icons";
 import { newThreadPrefs, type NewThreadPrefs } from "./prefs";
 import { listedProviders } from "./providers";
 import type { PrActExtra, PrActionMore } from "./pr/model";
-import { ago, PrRow } from "./pr/parts";
+import { ago, lookOf, PrRow } from "./pr/parts";
 import { menuItem } from "./ui";
 
 export { lookOf } from "./pr/parts";
@@ -29,6 +29,21 @@ export interface Linked {
   pr?: PullRequest;
   at?: string;
   error?: RpcError;
+}
+
+/**
+ * The look of a thread's linked pull requests, as the sidebar and the thread's bar show them: that of the most common state among those read,
+ * and the newest linked one on a tie.
+ */
+export function majorityLook(prs: PullRequests) {
+  const read = prs.urls.flatMap((url) => prs.get(url)?.pr ?? []);
+  let best: (typeof read)[number] | undefined;
+  let top = 0;
+  for (const pr of read) {
+    const n = read.filter((p) => p.state === pr.state).length;
+    if (n >= top) [best, top] = [pr, n];
+  }
+  return lookOf(best);
 }
 
 /** A thread's linked pull requests (PLX-318), as `usePullRequests` keeps them. */

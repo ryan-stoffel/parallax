@@ -278,6 +278,7 @@ export function AgentChat({
   going,
   listed,
   tab,
+  barShowsPrs,
   strip,
   others,
   orchestratorMode,
@@ -312,10 +313,12 @@ export function AgentChat({
   /** The run as the thread list has it, which the composer shows until the transcript loads. */
   listed?: AgentRun;
   /**
-   * The bar under the composer, such as an orchestrator's repository. A thread's own has
-   * none: where it runs and its branch show in Thread details, as a new thread's picker did.
+   * The bar under the composer: a repository thread's `ThreadBar`, or an orchestrator's
+   * repository.
    */
   tab?: ReactNode;
+  /** Whether `tab` shows the thread's pull requests, so the waiting line over the box doesn't. */
+  barShowsPrs?: boolean;
   /** The composer's back tab, behind the plan's, such as an orchestrator's agents. */
   strip?: ComposerTab;
   /**
@@ -838,6 +841,7 @@ export function AgentChat({
         watching={watching}
         compact={compact}
         pullRequests={pullRequests}
+        barShowsPrs={barShowsPrs}
       />
     );
     tabs.push({ key: "waiting", node: bar(false), compact: bar(true) });

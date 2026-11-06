@@ -1664,6 +1664,12 @@ body {
   background-color: var(--raised);
   backdrop-filter: none;
 }
+/* The bars over and under the box are one frame with it: their labels share the controls' weight,
+   and a bar's own titles stay heavier (ComposerTabs.tsx). */
+.composer-tabs,
+.composer-bar {
+  font-weight: 450;
+}
 /* The tabs, on a bar tucked behind the box's top edge, the mirror of the bar under it. */
 .composer-tabs {
   interpolate-size: allow-keywords;
@@ -1679,14 +1685,14 @@ body {
   clip-path: inset(0 0 1rem);
 }
 /* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
-   its corners following the box's. */
+   its corners following the box's. It stays visible when the box folds to one line. */
 .composer-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
   min-width: 0;
-  /* Always this tall, whatever it holds, for the slide behind the box below. */
+  /* Includes the inset behind the box, whatever the bar holds. */
   height: 3.0625rem;
   margin: -1rem 0.75rem 0;
   padding: calc(1rem + 2px) 0.25rem 2px;
@@ -1697,12 +1703,6 @@ body {
     margin-top var(--transition-duration-base) var(--ease-out),
     opacity var(--transition-duration-base) var(--ease-out),
     visibility var(--transition-duration-base);
-}
-/* It slides up behind the box while the box steps back, unless one of its menus is open. */
-.composer-bar[data-back]:not(:has(:popover-open)) {
-  margin-top: -3.0625rem;
-  opacity: 0;
-  visibility: hidden;
 }
 /* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
    calm text, without a chevron after each. */
