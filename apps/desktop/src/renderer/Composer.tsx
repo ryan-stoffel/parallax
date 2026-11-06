@@ -1249,8 +1249,7 @@ export function Composer({
             name: "effort",
             description: "Set the reasoning effort",
             icon: <Brain />,
-            // Without a model, the effort menu stands alone.
-            act: () => openControl(model ? "Model:" : "Reasoning effort:"),
+            act: () => openControl("Reasoning effort:"),
           },
           efforts &&
             hasFast && {
@@ -1263,11 +1262,7 @@ export function Composer({
             name: "permissions",
             description: "Choose what it may do without asking",
             icon: <LockOpen />,
-            act: () => {
-              // Inside the model picker, which has to open first.
-              if (model) openControl("Model:");
-              openControl("Access:");
-            },
+            act: () => openControl("Access:"),
           },
         ].filter((c) => !!c);
   let entries: MenuEntry[] = [];

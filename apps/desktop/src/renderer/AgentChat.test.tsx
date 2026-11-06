@@ -637,6 +637,38 @@ test("an open thread's composer picks within its provider and sends only what ch
   );
 });
 
+test("/effort and /permissions open their own menus", async () => {
+  fakeBridge(1);
+  render(
+    <Composer
+      menus={{ hostId: "local" }}
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+      onSend={async () => undefined}
+    />,
+  );
+  const opened = (label: string) => {
+    const button = document.querySelector<HTMLButtonElement>(`[aria-label^="${label}"]`)!;
+    const click = vi.fn();
+    button.addEventListener("click", click);
+    return click;
+  };
+  const model = opened("Model:");
+  for (const [command, label] of [
+    ["effort", "Reasoning effort:"],
+    ["permissions", "Access:"],
+  ] as const) {
+    const control = opened(label);
+    act(() => void composer().editor!.chain().focus().insertContent(`/${command}`).run());
+    const entry = [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) =>
+      o.textContent?.startsWith(`/${command}`),
+    )!;
+    await act(async () => entry.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    expect(control).toHaveBeenCalledOnce();
+  }
+  expect(model).not.toHaveBeenCalled();
+});
+
 test("an open thread's new Access goes to the running run at once", async () => {
   const onPermission = vi.fn();
   render(
