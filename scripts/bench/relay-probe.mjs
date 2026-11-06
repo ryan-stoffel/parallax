@@ -387,10 +387,9 @@ function stderrOf(child) {
 }
 
 /** One new stream: plxd dial over the relay, timed from its start. Answers the open connection. */
-async function openStream(dial, token) {
+async function openStream(dial, token, stages = []) {
   const started = performance.now();
   const child = dial([], token);
-  const stages = [];
   let diagnostic = "";
   child.stderr.on("data", (chunk) => {
     diagnostic = (diagnostic + chunk).slice(-8192);
@@ -420,12 +419,20 @@ async function openStream(dial, token) {
       text = text.slice(-30);
     });
   });
-  const app = await within(30_000, "the stream's first answer", Promise.race([attach(child), exited]));
-  const connectMs = await within(30_000, "connecting", Promise.race([connected, exited]));
-  await app.call("events/subscribe", { after: 0 });
-  const firstEventMs = await within(30_000, "the first event", Promise.race([firstEvent, exited]));
+  // Handle exit even when an RPC fails before the next race with this promise.
   exited.catch(() => {});
-  return { app, connectMs, firstEventMs, stages };
+  let app;
+  try {
+    app = await within(30_000, "the stream's first answer", Promise.race([attach(child), exited]));
+    const connectMs = await within(30_000, "connecting", Promise.race([connected, exited]));
+    await app.call("events/subscribe", { after: 0 });
+    const firstEventMs = await within(30_000, "the first event", Promise.race([firstEvent, exited]));
+    return { app, connectMs, firstEventMs, stages };
+  } catch (error) {
+    if (app) app.close();
+    else child.kill();
+    throw error;
+  }
 }
 
 /**
@@ -518,37 +525,44 @@ async function checkSignedIn(release) {
       makeRepo(repo);
       await host.call("orchestrator/create", { id: uuid7(), name: PROBE_NAME, repoPath: repo });
       const relayToken = await clerkToken();
-      const [connect, firstEvent] = [[], []];
+      const [connect, firstEvent, trips] = [[], [], []];
       const stageSamples = [];
-      await sleep(GAP_MS);
-      (await openStream(dial, relayToken)).app.close(); // One uncounted warm-up, as on T3.
-
-      for (let run = 0; run < STREAMS; run++) {
-        // As in the relay's budget test: the app connects long after plxd opened its spare stream.
+      try {
         await sleep(GAP_MS);
-        const { app, connectMs, firstEventMs, stages } = await openStream(dial, relayToken);
-        stageSamples.push(stages);
-        connect.push(connectMs);
-        firstEvent.push(firstEventMs);
-        if (run === STREAMS - 1) {
-          await app.call("host/health"); // One uncounted RPC warm-up, as on T3.
-          const trips = [];
-          for (let trip = 0; trip < ROUND_TRIPS; trip++) {
-            await sleep(100);
-            const sent = performance.now();
-            await within(15_000, "a round trip", app.call("host/health"));
-            trips.push(performance.now() - sent);
+        (await openStream(dial, relayToken)).app.close(); // One uncounted warm-up, as on T3.
+
+        for (let run = 0; run < STREAMS; run++) {
+          // As in the relay's budget test: the app connects long after plxd opened its spare stream.
+          await sleep(GAP_MS);
+          const stages = [];
+          if (options.timings) stageSamples.push(stages);
+          const { app, connectMs, firstEventMs } = await openStream(dial, relayToken, stages);
+          connect.push(connectMs);
+          firstEvent.push(firstEventMs);
+          try {
+            if (run === STREAMS - 1) {
+              await app.call("host/health"); // One uncounted RPC warm-up, as on T3.
+              for (let trip = 0; trip < ROUND_TRIPS; trip++) {
+                await sleep(100);
+                const sent = performance.now();
+                await within(15_000, "a round trip", app.call("host/health"));
+                trips.push(performance.now() - sent);
+              }
+            }
+          } finally {
+            app.close();
           }
-          metrics.roundTrip = summary(trips);
-          metrics.roundTripMs = metrics.roundTrip.medianMs;
         }
-        app.close();
+      } finally {
+        // A failed attempt must not discard earlier measurements or its own stage evidence.
+        if (options.timings) metrics.stages = stageSamples;
+        for (const [name, samples] of [["connect", connect], ["firstEvent", firstEvent], ["roundTrip", trips]]) {
+          if (samples.length) {
+            metrics[name] = summary(samples);
+            metrics[`${name}Ms`] = metrics[name].medianMs;
+          }
+        }
       }
-      if (options.timings) metrics.stages = stageSamples;
-      metrics.connect = summary(connect);
-      metrics.firstEvent = summary(firstEvent);
-      metrics.connectMs = metrics.connect.medianMs;
-      metrics.firstEventMs = metrics.firstEvent.medianMs;
       return `medians of ${STREAMS} streams and ${ROUND_TRIPS} round trips`;
     });
     return true;
@@ -600,7 +614,8 @@ function report(release, signedIn) {
     number(metrics.firstEventMs, "first event"),
     number(metrics.roundTripMs, "round trip"),
     number(metrics.approvalMs, "approval"),
-    metrics.connect && `p95 connect ${metrics.connect.p95Ms} ms, first event ${metrics.firstEvent.p95Ms} ms, round trip ${metrics.roundTrip?.p95Ms} ms`,
+    metrics.connect && `p95 connect ${metrics.connect.p95Ms} ms, first event ${metrics.firstEvent.p95Ms} ms`,
+    metrics.roundTrip && `p95 round trip ${metrics.roundTrip.p95Ms} ms`,
   );
 
   const notes = [
