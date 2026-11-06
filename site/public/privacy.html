@@ -30,7 +30,7 @@
 <h2>Parallax Relay</h2>
 <p>The relay runs on Cloudflare Workers. It lets your devices reach your computers, gives a computer's webhooks a public address, and sends notifications to your iPhone.</p>
 <p><strong>It can't read your threads.</strong> Your device gets the list of your computers from the relay. Each computer's id there is a hash of its public key, and your device runs TLS to <code>plxd</code> through the relay, accepting only a certificate whose key matches that id. So the relay only ever sees encrypted traffic for the computer your device connects to, and it can't pose as one of your computers or read or change what goes through. It passes those encrypted bytes along without keeping them.</p>
-<p>The relay does choose which computers are listed. A compromised relay could list a fake computer of its own, which would show up as an extra computer on your devices, and could delay or drop any connection.</p>
+<p>The relay does choose which computers are listed. A compromised relay could list a fake computer of its own, which would show up as an extra computer on your devices and could read anything you send to it. It could also delay or drop any connection.</p>
 <p>What the relay stores:</p>
 <ul>
 <li><strong>For each computer you add:</strong> your account's Clerk user id, the computer's id (a hash of its public key), that public key, the computer's name, the time it last connected, the ids of its open connections, a hash of each webhook address it serves, and how many bytes its connections carried in the current UTC day, which starts over each day. All of it is kept until you remove the computer in Settings &gt; Connections, which deletes it.</li>
