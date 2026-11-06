@@ -1436,18 +1436,20 @@ body {
 .composer-action:disabled {
   opacity: 0.4;
 }
-/* Compact before the next send (Composer.tsx): a soft tile while on, plain text while it keeps the
-   history. Its icon and token count are muted. */
+/* Compact before the next send (Composer.tsx), a small control beside Send: a quiet tile while
+   on, plain while keeping history. Its icon and token count stay muted. */
 .composer-compact {
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  height: 2.25rem;
-  margin-right: 2px;
-  padding: 0 0.625rem;
-  border-radius: 10px;
-  color: color-mix(in oklab, var(--foreground) 85%, transparent);
+  height: 1.75rem;
+  margin-right: 4px;
+  padding: 0 0.5rem;
+  border-radius: 8px;
+  color: color-mix(in oklab, var(--foreground) 80%, transparent);
+  font-size: var(--text-reading);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   transition:
     background-color var(--transition-duration-fast) var(--ease-out),
@@ -1459,11 +1461,16 @@ body {
   }
 }
 .composer-compact[aria-pressed="true"] {
-  background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+  background-color: color-mix(in oklab, var(--hover) 60%, transparent);
+  color: var(--foreground);
 }
 .composer-compact:hover {
   background-color: var(--hover);
   color: var(--foreground);
+}
+.composer-compact:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 /* Solid red, with a soft shadow under it, and a small white square. */
 .composer-stop {
