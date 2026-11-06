@@ -39,8 +39,8 @@ import { parseArgs } from "node:util";
 
 import { attach } from "../../packages/plx/src/plxd.mjs";
 import { pickAsset, pickRelease, withSha256 } from "../../packages/plx/src/releases.mjs";
-import { clerkOf } from "../../packages/plx/src/signin.mjs";
 import { replacePrivately } from "./private-file.mjs";
+import { plxdTrusts, probeClerk } from "./probe-clerk.mjs";
 
 const { values: options } = parseArgs({
   options: {
@@ -249,8 +249,8 @@ function checkObjects(token) {
   );
 }
 
-// PROBE_CLERK_API names another Clerk, for a run against a local relay.
-const clerk = { ...clerkOf(process.env), ...(process.env.PROBE_CLERK_API && { api: process.env.PROBE_CLERK_API }) };
+// The test account's instance, development's until PLX-1457 (probe-clerk.mjs).
+const clerk = probeClerk(process.env);
 let rotated = false;
 
 /** A new Clerk token for the test account, and the next refresh token if Clerk rotated it. */
@@ -422,7 +422,8 @@ async function checkSignedIn(release) {
     if (!(await check(`Host: download ${release.tag_name}'s plxd`, async () => {
       plxd = await downloadPlxd(release, scratch);
     }))) return true;
-    const env = { ...process.env, PLXD_RELAY_URL: relay, PLXD_RELAY_TOKEN: undefined };
+    // The release's plxd takes the test account's tokens, whatever instance it defaults to.
+    const env = { ...process.env, ...plxdTrusts(clerk), PLXD_RELAY_URL: relay, PLXD_RELAY_TOKEN: undefined };
 
     const online = await check("Host: registers and comes online on the relay", async () => {
       const started = performance.now();

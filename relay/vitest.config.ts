@@ -14,8 +14,10 @@ export default defineConfig({
       wrangler: { configPath: "./wrangler.toml" },
       miniflare: {
         bindings: {
-          CLERK_ISSUER: "https://clerk.test",
-          CLERK_CLIENT_IDS: "mp9Q72aAbB0LC83O",
+          // Two instances, as while accounts move to production (PLX-1049): tokens are this
+          // test's, and the development instance's for the tests of keeping them apart.
+          CLERK_ISSUER: "https://clerk.test,https://adjusted-mastodon-8705.clerk.accounts.dev",
+          CLERK_CLIENT_IDS: "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq",
           CLERK_JWKS: JSON.stringify({ keys: [{ ...publicKey.export({ format: "jwk" }), kid, alg: "RS256" }] }),
           TEST_CLERK_KEY: JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }),
         },

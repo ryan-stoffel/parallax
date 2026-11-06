@@ -33,7 +33,7 @@ No workflow deploys the relay. Ryan deploys it by hand once these exist:
    - `CLERK_CLIENT_IDS`: the desktop OAuth application's client id, `mp9Q72aAbB0LC83O`.
    - `CLERK_AUTHORIZED_PARTIES` isn't set: the web client's origins, comma-separated, once there is one. Unset, browsers' session tokens are refused. The mobile app's carry no origin and pass.
 
-   `CLERK_ISSUER` and `CLERK_JWKS_URL` are comma lists in the same order, and a token is checked against the instance its `iss` names. While accounts move from the development instance (PLX-1049), the deploy below adds that instance with `--var`, so a nightly that hasn't updated keeps working. Once nightlies have updated, deploy without the three `--var` values to take production alone.
+   `CLERK_ISSUER`, `CLERK_JWKS_URL`, and `CLERK_CLIENT_IDS` are comma lists in the same order, one entry per instance, and a token is checked against the instance its `iss` names and only that instance's client ids. Several client ids for one instance are separated by spaces. While accounts move from the development instance (PLX-1049), the deploy below adds that instance with `--var`, so an app that hasn't updated, and the relay probe's test account, keep working. Drop it only once the probe's account is on production (PLX-1457) and a stable release carries the move: then deploy without the three `--var` values to take production alone.
 
 ### When to deploy
 

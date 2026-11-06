@@ -21,13 +21,29 @@ function claimedIssuer(token: string): string | undefined {
 }
 
 /**
- * The Clerk user id of a Parallax account token (0067): a session token from Clerk's web or Expo
- * SDK, or the desktop app's OAuth access token. Null when it isn't one. `CLERK_ISSUER` lists the
- * instances whose tokens count, so a move between instances can take both (PLX-1049), and the
- * token's own `iss` picks which one checks it. That instance's JWKS is `CLERK_JWKS` inline (tests
- * and `wrangler dev`), else its entry in `CLERK_JWKS_URL`, listed in the same order, else its
- * issuer's `/.well-known/jwks.json`. Throws `KeysUnavailable` when those keys can't be read, so an
- * outage isn't taken for a bad token (PLX-1351).
+ * Clerk's development instance. Its users were registered under their bare user id before the move
+ * to production (PLX-1049), so they keep it, and their hosts and devices with it.
+ */
+export const DEVELOPMENT = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+
+/**
+ * The relay's name for user `userId` of the Clerk instance `issuer`, which keys their account and
+ * owns their hosts: `<issuer>|<user id>`, so the same user id from another instance is another
+ * account. The development instance's stay bare.
+ */
+export const accountOf = (issuer: string, userId: string) =>
+  issuer === DEVELOPMENT ? userId : `${issuer}|${userId}`;
+
+/**
+ * The relay account of a Parallax account token (0067), by [`accountOf`]: a session token from
+ * Clerk's web or Expo SDK, or the desktop app's OAuth access token. Null when it isn't one.
+ * `CLERK_ISSUER` lists the instances whose tokens count, so a move between instances can take
+ * both (PLX-1049), and the token's own `iss` picks which one checks it. `CLERK_JWKS_URL` and
+ * `CLERK_CLIENT_IDS` list each one's JWKS and OAuth applications in the same order, so a token
+ * counts only with its own instance's applications. The JWKS is `CLERK_JWKS` inline (tests and
+ * `wrangler dev`), else its `CLERK_JWKS_URL` entry, else its issuer's `/.well-known/jwks.json`.
+ * Throws `KeysUnavailable` when those keys can't be read, so an outage isn't taken for a bad token
+ * (PLX-1351).
  */
 export async function verifySession(env: Env, token: string): Promise<string | null> {
   // An issuer that isn't listed is refused before any key is fetched, and with none configured a
@@ -45,11 +61,12 @@ export async function verifySession(env: Env, token: string): Promise<string | n
   try {
     const verified = await verifyClerkToken(token, {
       issuer,
-      clientIds: list(env.CLERK_CLIENT_IDS),
+      // Several for one instance are separated by spaces.
+      clientIds: (list(env.CLERK_CLIENT_IDS)[at] ?? "").split(/\s+/).filter(Boolean),
       authorizedParties: list(env.CLERK_AUTHORIZED_PARTIES),
       ...(jwks && { fetch: jwks }),
     });
-    return verified.userId;
+    return accountOf(issuer, verified.userId);
   } catch (error) {
     if (error instanceof KeysUnavailable) throw error;
     return null;

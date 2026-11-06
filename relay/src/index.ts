@@ -47,8 +47,9 @@ export interface Env {
   CLERK_JWKS_URL?: string;
   /** The JWKS itself, as JSON, in place of fetching it, for every issuer. Tests and local runs. */
   CLERK_JWKS?: string;
-  /** The OAuth applications whose access tokens count, by client id, comma-separated: the
-   *  desktop app's on each instance (0067). */
+  /** The OAuth applications whose access tokens count, by client id: the desktop app's (0067).
+   *  One entry per issuer, comma-separated in `CLERK_ISSUER`'s order, so a token counts only with
+   *  its own instance's applications. Several for one instance are separated by spaces. */
   CLERK_CLIENT_IDS?: string;
   /** The origins a browser session token's `azp` may name, comma-separated. Unset accepts no
    *  browser. Native apps' tokens carry no `azp`. */
