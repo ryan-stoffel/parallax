@@ -7,7 +7,7 @@
 //! but for the older relay's test, whose relay is its own.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -761,7 +761,8 @@ async fn connecting_through_the_relay_stays_within_its_budget() {
 }
 
 /// A proxy between plxd and the local relay that fails links the ways a network does: it cuts
-/// plxd's control connection alone, refuses new ones, or silences connections, leaving them open.
+/// plxd's control connection alone, refuses new ones, silences connections, leaving them open, or
+/// slows plxd's streams.
 /// A client goes to the relay directly, so only plxd's link fails.
 struct Proxy {
     url: String,
@@ -779,6 +780,9 @@ struct ProxyShared {
     /// Streams among the first this many connections are silent, and any opened after aren't.
     silent_streams: AtomicUsize,
     cut: Notify,
+    /// How many milliseconds later than the control connection's plxd's bytes on a stream reach
+    /// the relay, as when that socket's path is slower.
+    stream_lag_ms: AtomicU64,
 }
 
 impl Proxy {
@@ -841,11 +845,60 @@ async fn carry(plxd: TcpStream, relay: String, shared: Arc<ProxyShared>) {
         shared.silent.load(Ordering::SeqCst)
             || (!control && number < shared.silent_streams.load(Ordering::SeqCst))
     };
+    let lag = Duration::from_millis(if control {
+        0
+    } else {
+        shared.stream_lag_ms.load(Ordering::SeqCst)
+    });
+    let outward = async {
+        if lag.is_zero() {
+            one_way(&mut plxd_in, &mut relay_out, &silent).await;
+        } else {
+            lagging(&mut plxd_in, &mut relay_out, &silent, lag).await;
+        }
+    };
     tokio::select! {
         () = cut, if control => {}
-        () = one_way(&mut plxd_in, &mut relay_out, &silent) => {}
+        () = outward => {}
         () = one_way(&mut relay_in, &mut plxd_out, &silent) => {}
     }
+}
+
+/// [`one_way`], with each read arriving `lag` after it was read, in order.
+async fn lagging(
+    from: &mut OwnedReadHalf,
+    to: &mut OwnedWriteHalf,
+    silent: &impl Fn() -> bool,
+    lag: Duration,
+) {
+    let (send, mut receive) = tokio::sync::mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
+    let reading = async move {
+        let mut buffer = vec![0; 64 * 1024];
+        loop {
+            while silent() {
+                sleep(Duration::from_millis(20)).await;
+            }
+            let Ok(read @ 1..) = from.read(&mut buffer).await else {
+                return;
+            };
+            let due = Instant::now() + lag;
+            if send.send((due, buffer[..read].to_vec())).is_err() {
+                return;
+            }
+        }
+    };
+    let writing = async move {
+        while let Some((due, bytes)) = receive.recv().await {
+            tokio::time::sleep_until(due).await;
+            while silent() {
+                sleep(Duration::from_millis(20)).await;
+            }
+            if to.write_all(&bytes).await.is_err() {
+                return;
+            }
+        }
+    };
+    tokio::join!(reading, writing);
 }
 
 async fn one_way(from: &mut OwnedReadHalf, to: &mut OwnedWriteHalf, silent: &impl Fn() -> bool) {
@@ -961,6 +1014,10 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
 /// client must have heard: plxd's 10 s check, and some room for a busy test machine.
 const DEAD_STREAM_TOLD: Duration = Duration::from_secs(13);
 
+/// How much later than the control connection's plxd's bytes on a stream reach the relay while
+/// the next test pairs.
+const STREAM_LAG_MS: u64 = 100;
+
 #[tokio::test]
 async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_spare() {
     let (Ok(url), Ok(token)) = (
@@ -970,6 +1027,8 @@ async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_sp
         return;
     };
     let proxy = Proxy::start(&url).await;
+    let lag = &proxy.shared.stream_lag_ms;
+    lag.store(STREAM_LAG_MS, Ordering::SeqCst);
     let dir = temp_dir();
     let (server, mut client, host_id) = online_through(dir.path(), &proxy, &token).await;
     relay::sign_in(url.clone(), token.clone());
@@ -977,9 +1036,12 @@ async fn a_client_hears_its_stream_is_gone_and_a_redial_does_not_get_the_dead_sp
     let code = new_code(&mut client).await;
     let phone = temp_dir();
     let routes = std::slice::from_ref(&route);
+    // Each pairing request has a stream of its own, which plxd's end closes once it answered. With
+    // `gone` faster than the stream, the relay must still pass on the answer first (PLX-1456).
     let paired = remote::pair(routes, &code, "phone", phone.path())
         .await
         .unwrap();
+    lag.store(0, Ordering::SeqCst);
     let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
         .await
         .unwrap();

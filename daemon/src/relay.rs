@@ -625,11 +625,22 @@ fn pipe(
             keep(&end, ended);
             writer.shutdown().await
         };
+        tokio::pin!(incoming);
         // `incoming` first, so an answer that's waiting counts before `outgoing` judges a ping.
-        let ended = tokio::select! {
+        let (ended, closed_here) = tokio::select! {
             biased;
-            ended = incoming => ended,
-            ended = outgoing => ended,
+            ended = &mut incoming => (ended, false),
+            ended = outgoing => (ended, true),
+        };
+        // plxd's end closed the stream. The relay's object answers that close only once it has
+        // passed on every frame before it, so the answer, kept in `end`, says the client got them
+        // and needs no `gone` (PLX-1456). A dead link never answers.
+        let ended = if closed_here && ended.is_ok() && heard.is_some() {
+            time::timeout(STREAM_CHECK, incoming)
+                .await
+                .unwrap_or(Ok(()))
+        } else {
+            ended
         };
         if let Err(error) = ended {
             debug!(%error, "a relay stream ended");
@@ -1196,15 +1207,18 @@ fn listed(held: &Held) -> String {
 }
 
 /// A stream's place in [`Held`], while its task runs. Giving it up says the stream is gone, which
-/// the control socket passes on to the relay.
+/// the control socket passes on to the relay, unless `end` holds the relay's own close. The relay
+/// then knows already, and `gone`, which travels on another socket, could overtake the stream's
+/// last frames and end the client's end before they arrive (PLX-1456).
 struct Holding {
     held: Held,
     gone: mpsc::UnboundedSender<String>,
     id: String,
+    end: EndSlot,
 }
 
 impl Holding {
-    fn new(held: Held, gone: mpsc::UnboundedSender<String>, id: &str) -> Self {
+    fn new(held: Held, gone: mpsc::UnboundedSender<String>, id: &str, end: EndSlot) -> Self {
         held.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id.to_owned());
@@ -1212,6 +1226,7 @@ impl Holding {
             held,
             gone,
             id: id.to_owned(),
+            end,
         }
     }
 }
@@ -1222,7 +1237,10 @@ impl Drop for Holding {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.id);
-        let _ = self.gone.send(std::mem::take(&mut self.id));
+        let end = self.end.lock().unwrap_or_else(PoisonError::into_inner);
+        if !matches!(*end, Some(StreamEnd::Closed { code: Some(_), .. })) {
+            let _ = self.gone.send(std::mem::take(&mut self.id));
+        }
     }
 }
 
@@ -1825,7 +1843,8 @@ async fn stream(
     if !plain(id, b"-") || !plain(token, b"-_") {
         return warn!("the relay announced a stream with a bad id or token");
     }
-    let holding = Holding::new(held, gone, id);
+    let end = EndSlot::default();
+    let holding = Holding::new(held, gone, id, Arc::clone(&end));
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
     let mut unused = spare.clone();
     let relay = &daemon.relay;
@@ -1867,7 +1886,6 @@ async fn stream(
         };
         out.bind(SocketAddr::new(local.ip(), 0))?;
         let from = out.local_addr()?;
-        let end = EndSlot::default();
         relay.listed().insert(
             from,
             Arc::new(RelayStream {
@@ -1878,7 +1896,7 @@ async fn stream(
         let _listed = Listed { relay, from };
         let mut tcp = out.connect(local).await?;
         let _ = tcp.set_nodelay(true);
-        let mut piped = pipe(socket, Some(keepalive), end);
+        let mut piped = pipe(socket, Some(keepalive), Arc::clone(&end));
         tokio::io::copy_bidirectional_with_sizes(
             &mut piped,
             &mut tcp,
@@ -2537,6 +2555,34 @@ mod tests {
         assert!(started.elapsed() <= STREAM_CHECK, "{:?}", started.elapsed());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_stream_plxd_closes_is_gone_only_when_the_relay_never_answers_the_close() {
+        for answers in [true, false] {
+            let (plxd, mut relay) = socket().await;
+            let (_check, watched) = watch::channel(());
+            let end = EndSlot::default();
+            let mut ours = pipe(plxd, Some(Keepalive::new(watched)), Arc::clone(&end));
+            let (gone, mut told) = mpsc::unbounded_channel();
+            let holding = Holding::new(Held::default(), gone, "s", Arc::clone(&end));
+            ours.write_all(b"answer").await.unwrap();
+            ours.shutdown().await.unwrap();
+            let frame = relay.next().await.unwrap().unwrap();
+            assert_eq!(frame.into_data(), &b"answer"[..]);
+            if answers {
+                // As the stream's object does, once it passed the answer on.
+                let closed = tungstenite::protocol::CloseFrame {
+                    code: 1000.into(),
+                    reason: "closed".into(),
+                };
+                relay.close(Some(closed)).await.unwrap();
+            }
+            // The stream's task ends with the byte stream, and gives up its place.
+            let _ = ours.read_to_end(&mut Vec::new()).await;
+            drop(holding);
+            assert_eq!(told.try_recv().is_ok(), !answers, "answered: {answers}");
+        }
+    }
+
     #[test]
     fn only_a_big_jump_of_the_wall_clock_counts_as_a_wake() {
         let before = SystemTime::now();
@@ -2560,7 +2606,7 @@ mod tests {
         let mut link = Link::new(Box::new(move || (*looked.lock().unwrap(), None)));
         let mut streams = Streams::new(&stop);
         let gone = streams.gone.clone();
-        let holding = Holding::new(Arc::clone(&streams.held), gone, "kept");
+        let holding = Holding::new(Arc::clone(&streams.held), gone, "kept", EndSlot::default());
         let (plxd, mut relay) = socket().await;
         let serving = serve(
             &daemon,
@@ -2594,7 +2640,10 @@ mod tests {
         let stop = CancellationToken::new();
         let mut pushes = Pushes::new(daemon.log.head());
         let (mut streams, mut link) = lasting(&stop);
-        let hold = |id| Holding::new(Arc::clone(&streams.held), streams.gone.clone(), id);
+        let hold = |id| {
+            let (held, gone) = (Arc::clone(&streams.held), streams.gone.clone());
+            Holding::new(held, gone, id, EndSlot::default())
+        };
         let (live, between) = (hold("live"), hold("between"));
         drop(between);
         let (plxd, mut relay) = socket().await;
