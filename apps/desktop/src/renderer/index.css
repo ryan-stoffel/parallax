@@ -1393,7 +1393,7 @@ body {
   transform-origin: bottom left;
 }
 /* The model's name, a step heavier than the reasoning and access beside it. */
-.composer-model {
+.composer-controls .composer-model {
   font-weight: 500;
   color: var(--foreground);
 }
@@ -1675,6 +1675,17 @@ body {
   white-space: nowrap;
   > svg.lucide-chevron-down {
     display: none;
+  }
+}
+/* In the box's own row, they're as tall as the round buttons at its end and share their corners,
+   so every hover lines up. Icons sit on the text's center, with no nudge. */
+.composer-controls button[aria-haspopup]:not([popover] *) {
+  height: 2.25rem;
+  padding-inline: 0.625rem;
+  border-radius: 10px;
+  font-weight: 450;
+  > svg {
+    translate: none;
   }
 }
 /* Labels give way to their icons as the box narrows, least needed first. Each keeps its title. */
