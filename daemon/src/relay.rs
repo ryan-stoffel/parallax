@@ -192,7 +192,9 @@ impl Base {
     /// A connection to this host: through `HTTPS_PROXY` unless `NO_PROXY` names it or it's this
     /// computer, with TLS checked against `roots`, or plain to loopback.
     async fn connect(&self, roots: Roots) -> io::Result<Stream> {
+        crate::connect_timing::mark("outer_connect_start");
         let tcp = self.tcp().await?;
+        crate::connect_timing::mark("outer_tcp_proxy_ready");
         if !self.tls {
             return Ok(Box::new(tcp));
         }
@@ -468,6 +470,7 @@ async fn upgrade(
         .connect(Roots::WithOs)
         .await
         .map_err(|e| (None, e.into()))?;
+    crate::connect_timing::mark("outer_tls_ready");
     let scheme = if base.tls { "wss" } else { "ws" };
     let address = format!("{scheme}://{}{path}", base.authority());
     let mut request = address
@@ -479,8 +482,13 @@ async fn upgrade(
             .map_err(|_| (None, Error::Protocol(format!("a bad {name} header"))))?;
         request.headers_mut().insert(*name, value);
     }
+    if crate::connect_timing::enabled() {
+        request
+            .headers_mut()
+            .insert("x-parallax-timing", "1".parse().expect("a header"));
+    }
     let config = Some(remote::websocket_config());
-    let (socket, _) = tokio_tungstenite::client_async_with_config(request, stream, config)
+    let (socket, response) = tokio_tungstenite::client_async_with_config(request, stream, config)
         .await
         .map_err(|error| {
             let tungstenite::Error::Http(response) = error else {
@@ -498,6 +506,14 @@ async fn upgrade(
             };
             (Some(status), error)
         })?;
+    if crate::connect_timing::enabled()
+        && let Some(value) = response
+            .headers()
+            .get("server-timing")
+            .and_then(|h| h.to_str().ok())
+    {
+        crate::connect_timing::server(value);
+    }
     Ok(socket)
 }
 
@@ -724,7 +740,9 @@ async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream
         Err((Some(401 | 404 | 426), _)) => ticketed(url, token, host_id).await?,
         Err((_, error)) => return Err(error),
     };
+    crate::connect_timing::mark("relay_upgrade_ready");
     joined(&mut socket).await?;
+    crate::connect_timing::mark("stream_ready");
     let end = client_slot();
     *end.lock().unwrap_or_else(PoisonError::into_inner) = None;
     Ok(pipe(socket, None, end).0)

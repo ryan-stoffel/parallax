@@ -1,3 +1,4 @@
+import { SELF } from "cloudflare:test";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
@@ -398,6 +399,30 @@ describe("streams", () => {
     expect(await side.next()).toBe("ready");
     client.ws.send(new Uint8Array([1, 2, 3]));
     expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it("returns numeric timing headers only on opted-in authenticated upgrades", async () => {
+    const { host, token, control } = await online();
+    for (const timed of [false, true]) {
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, spare));
+      const response = await SELF.fetch(`${BASE}/v1/hosts/${host.id}/connect`, {
+        headers: { upgrade: "websocket", authorization: `Bearer ${token}`, ...(timed ? { "x-parallax-timing": "1" } : {}) },
+      });
+      expect(response.status).toBe(101);
+      const timing = response.headers.get("server-timing");
+      if (timed) {
+        expect(timing).toMatch(/^auth;dur=[\d.]+, host_open;dur=[\d.]+, stream_join;dur=[\d.]+, admit;dur=[\d.]+, take;dur=[\d.]+, spare;dur=1$/);
+      } else expect(timing).toBeNull();
+      response.webSocket!.accept();
+      expect(await side.next()).toBe("ready");
+      response.webSocket!.close();
+      side.ws.close();
+    }
+    const refused = await SELF.fetch(`${BASE}/v1/hosts/${host.id}/connect`, { headers: { upgrade: "websocket", "x-parallax-timing": "1" } });
+    expect(refused.status).toBe(401);
+    expect(refused.headers.get("server-timing")).toBeNull();
   });
 
   it("joins a client to plxd's spare stream without asking plxd first", async () => {

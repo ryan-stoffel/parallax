@@ -349,8 +349,14 @@ export class HostRelay extends DurableObject<Env> {
    * spare plxd keeps when there is one, so plxd isn't asked first, else a new one plxd is asked to
    * join. The Worker then brings the client's WebSocket to the stream's object.
    */
-  async open(user: string): Promise<Refusal | { stream: string }> {
-    return (await this.admit(user)) ?? this.take();
+  async open(user: string, timed = false): Promise<Refusal | { stream: string; timing?: { admitMs: number; takeMs: number; spare: boolean } }> {
+    const start = performance.now();
+    const refused = await this.admit(user);
+    if (refused) return refused;
+    const admitted = performance.now();
+    const taken = await this.take(timed);
+    if ("error" in taken || !timed) return taken;
+    return { stream: taken.stream, timing: { admitMs: admitted - start, takeMs: performance.now() - admitted, spare: taken.spare === true } };
   }
 
   /**
@@ -379,7 +385,7 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** The spare stream, else a new one within [`MAX_STREAMS`]. */
-  private async take(): Promise<Refusal | { stream: string }> {
+  private async take(timed = false): Promise<Refusal | { stream: string; spare?: boolean }> {
     const owner = (await this.owner())!;
     const streams = await this.streams();
     const spare = Object.keys(streams).find((id) => streams[id]?.spare);
@@ -389,7 +395,7 @@ export class HostRelay extends DurableObject<Env> {
       await streamObject(this.env, owner.hostId, spare)
         ?.taken()
         .catch((error) => logError("host.take", this.context(), error));
-      return { stream: spare };
+      return { stream: spare, ...(timed ? { spare: true } : {}) };
     }
     if (Object.keys(streams).length >= MAX_STREAMS)
       return { status: 429, error: "too_many_streams" };

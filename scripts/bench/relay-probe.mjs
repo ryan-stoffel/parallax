@@ -37,6 +37,7 @@ import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { count, summary } from "./timing-summary.mjs";
 import { attach } from "../../packages/plx/src/plxd.mjs";
 import { pickAsset, pickRelease, withSha256 } from "../../packages/plx/src/releases.mjs";
 import { replacePrivately } from "./private-file.mjs";
@@ -45,6 +46,10 @@ import { plxdTrusts, probeClerk } from "./probe-clerk.mjs";
 const { values: options } = parseArgs({
   options: {
     relay: { type: "string", default: "https://relay.parallax.codes" },
+    connects: { type: "string", default: "5" },
+    trips: { type: "string", default: "6" },
+    "gap-ms": { type: "string", default: "2200" },
+    timings: { type: "boolean", default: false },
     tag: { type: "string" },
     out: { type: "string", default: "." },
   },
@@ -55,8 +60,9 @@ const SETUP_ISSUE = "PLX-1385";
 /** What this test names the hosts it makes, which it alone may remove. */
 const PROBE_NAME = "relay-probe";
 const HOST_NAMES = new Set([PROBE_NAME, "relay-objects bench"]);
-const STREAMS = 5;
-const ROUND_TRIPS = 6;
+const STREAMS = count(options.connects, "connects");
+const ROUND_TRIPS = count(options.trips, "trips");
+const GAP_MS = count(options["gap-ms"], "gap-ms", 60000);
 
 // relay-probe.yml sets PROBE_SKIP_SIGNIN to stale when another run stored a rotated token after this
 // attempt started, so this one holds a token Clerk already replaced, and Clerk revokes the
@@ -87,7 +93,6 @@ function clean(text) {
 const checks = [];
 const metrics = {};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const median = (values) => values.toSorted((a, b) => a - b)[Math.floor(values.length / 2)];
 const ms = (value) => Math.round(value);
 
 /** Runs one named check, records how it went, and answers whether it passed. */
@@ -385,6 +390,17 @@ function stderrOf(child) {
 async function openStream(dial, token) {
   const started = performance.now();
   const child = dial([], token);
+  const stages = [];
+  let diagnostic = "";
+  child.stderr.on("data", (chunk) => {
+    diagnostic = (diagnostic + chunk).slice(-8192);
+    const lines = diagnostic.split("\n");
+    diagnostic = lines.pop();
+    for (const line of lines) {
+      const match = /^(connect-(?:server-)?timing) ([a-z_]{1,40}) (\d{1,6}\.\d{3})$/.exec(line);
+      if (match && stages.length < 64) stages.push({ kind: match[1], stage: match[2], ms: Number(match[3]), observedMs: ms(performance.now() - started) });
+    }
+  });
   const said = stderrOf(child);
   const exited = new Promise((_, reject) =>
     child.once("exit", (code) => reject(new Error(`plxd dial exited ${code}: ${said()}`))),
@@ -409,7 +425,7 @@ async function openStream(dial, token) {
   await app.call("events/subscribe", { after: 0 });
   const firstEventMs = await within(30_000, "the first event", Promise.race([firstEvent, exited]));
   exited.catch(() => {});
-  return { app, connectMs, firstEventMs };
+  return { app, connectMs, firstEventMs, stages };
 }
 
 /**
@@ -439,7 +455,10 @@ async function checkSignedIn(release) {
       plxd = await downloadPlxd(release, scratch);
     }))) return true;
     // The release's plxd takes the test account's tokens, whatever instance it defaults to.
-    const env = { ...process.env, ...plxdTrusts(clerk), PLXD_RELAY_URL: relay, PLXD_RELAY_TOKEN: undefined };
+    const fakes = join(scratch, "bin");
+    mkdirSync(fakes);
+    writeFileSync(join(fakes, "tailscale"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const env = { ...process.env, PATH: `${fakes}:${process.env.PATH}`, ...plxdTrusts(clerk), PLXD_RELAY_URL: relay, PLXD_RELAY_TOKEN: undefined };
 
     const online = await check("Host: registers and comes online on the relay", async () => {
       const started = performance.now();
@@ -467,7 +486,7 @@ async function checkSignedIn(release) {
     const dial = (args, relayToken) =>
       spawn(plxd, ["dial", route, `--account=${hostId}`, "--data-dir", clientDir, ...args], {
         stdio: "pipe",
-        env: { ...env, PLXD_RELAY_TOKEN: relayToken },
+        env: { ...env, PLXD_RELAY_TOKEN: relayToken, PLXD_CONNECT_TIMINGS: options.timings ? "1" : undefined },
       });
 
     const approved = await check("Approval: a new device waits, then is approved with a matching code", async () => {
@@ -500,25 +519,36 @@ async function checkSignedIn(release) {
       await host.call("orchestrator/create", { id: uuid7(), name: PROBE_NAME, repoPath: repo });
       const relayToken = await clerkToken();
       const [connect, firstEvent] = [[], []];
+      const stageSamples = [];
+      await sleep(GAP_MS);
+      (await openStream(dial, relayToken)).app.close(); // One uncounted warm-up, as on T3.
+
       for (let run = 0; run < STREAMS; run++) {
         // As in the relay's budget test: the app connects long after plxd opened its spare stream.
-        await sleep(500);
-        const { app, connectMs, firstEventMs } = await openStream(dial, relayToken);
+        await sleep(GAP_MS);
+        const { app, connectMs, firstEventMs, stages } = await openStream(dial, relayToken);
+        stageSamples.push(stages);
         connect.push(connectMs);
         firstEvent.push(firstEventMs);
         if (run === STREAMS - 1) {
+          await app.call("host/health"); // One uncounted RPC warm-up, as on T3.
           const trips = [];
           for (let trip = 0; trip < ROUND_TRIPS; trip++) {
+            await sleep(100);
             const sent = performance.now();
             await within(15_000, "a round trip", app.call("host/health"));
             trips.push(performance.now() - sent);
           }
-          metrics.roundTripMs = ms(median(trips));
+          metrics.roundTrip = summary(trips);
+          metrics.roundTripMs = metrics.roundTrip.medianMs;
         }
         app.close();
       }
-      metrics.connectMs = ms(median(connect));
-      metrics.firstEventMs = ms(median(firstEvent));
+      if (options.timings) metrics.stages = stageSamples;
+      metrics.connect = summary(connect);
+      metrics.firstEvent = summary(firstEvent);
+      metrics.connectMs = metrics.connect.medianMs;
+      metrics.firstEventMs = metrics.firstEvent.medianMs;
       return `medians of ${STREAMS} streams and ${ROUND_TRIPS} round trips`;
     });
     return true;
@@ -570,6 +600,7 @@ function report(release, signedIn) {
     number(metrics.firstEventMs, "first event"),
     number(metrics.roundTripMs, "round trip"),
     number(metrics.approvalMs, "approval"),
+    metrics.connect && `p95 connect ${metrics.connect.p95Ms} ms, first event ${metrics.firstEvent.p95Ms} ms, round trip ${metrics.roundTrip?.p95Ms} ms`,
   );
 
   const notes = [
@@ -593,13 +624,13 @@ function report(release, signedIn) {
     "",
     "| Number | Milliseconds |",
     "| --- | --- |",
-    ...Object.entries({ ...metrics, objects: undefined, ...objects })
+    ...Object.entries({ ...metrics, stages: undefined, objects: undefined, ...objects })
       .filter(([, value]) => value !== undefined)
-      .map(([name, value]) => `| ${name} | ${value} |`),
+      .map(([name, value]) => `| ${name} | ${typeof value === "object" ? JSON.stringify(value) : value} |`),
     "",
   ];
 
-  const json = { at: new Date().toISOString(), relay, release: release?.tag_name, ok, signedIn, rotated, checks, metrics };
+  const json = { sampling: { connects: STREAMS, trips: ROUND_TRIPS, gapMs: GAP_MS, warmups: 1 }, at: new Date().toISOString(), relay, release: release?.tag_name, ok, signedIn, rotated, checks, metrics };
   mkdirSync(options.out, { recursive: true });
   writeFileSync(join(options.out, "relay-probe.json"), clean(`${JSON.stringify(json, null, 2)}\n`));
   writeFileSync(join(options.out, "relay-probe.md"), clean(table.join("\n")));
