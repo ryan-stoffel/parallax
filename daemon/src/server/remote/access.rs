@@ -467,25 +467,31 @@ async fn lists(daemon: &Daemon) -> Result<Lists, ErrorObject> {
         .await
 }
 
+/// The Clerk user id this host registered under (0091), if it's on the Clerk instance plxd checks
+/// tokens against. One recorded on another instance is none, so the host is set up again
+/// (PLX-1049).
 pub(crate) async fn account(daemon: &Daemon) -> Option<String> {
+    let issuer = daemon.clerk.issuer().to_owned();
     daemon
         .reader
-        .run(&CancellationToken::new(), |db| {
-            db.relay_account().map_err(|e| store_error(&e))
+        .run(&CancellationToken::new(), move |db| {
+            db.relay_account(&issuer).map_err(|e| store_error(&e))
         })
         .await
         .ok()
         .flatten()
 }
 
-/// Records `user`, a Clerk user id, as the account this host registered under (0091). Only a
-/// trusted caller names it, never the relay.
+/// Records `user`, a Clerk user id, as the account this host registered under (0091), on the Clerk
+/// instance plxd checks tokens against. Only a trusted caller names it, never the relay.
 pub(crate) async fn record_account(daemon: &Daemon, user: &str) -> Result<(), String> {
     let owned = user.to_owned();
+    let issuer = daemon.clerk.issuer().to_owned();
     daemon
         .store
         .run(&CancellationToken::new(), move |db| {
-            db.set_relay_account(&owned).map_err(|e| store_error(&e))
+            db.set_relay_account(&owned, &issuer)
+                .map_err(|e| store_error(&e))
         })
         .await
         .map_err(|e| e.message)?;

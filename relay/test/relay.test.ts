@@ -1,6 +1,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
+import { accountOf, DEVELOPMENT } from "../src/clerk";
 import { sha256 } from "../src/crypto";
 import {
   hookKey,
@@ -32,6 +33,9 @@ import {
   socket,
   testEnv,
 } from "./helpers";
+
+/** The relay's account for `user` of this test's Clerk instance. */
+const account = (user: string) => accountOf("https://clerk.test", user);
 
 /** A registered, connected host for `user`, a new one by default, and that user's token. */
 async function online(user = `user_${crypto.randomUUID()}`) {
@@ -91,8 +95,45 @@ describe("sign-in", () => {
     }
     expect((await call("/v1/hosts")).status).toBe(401);
     expect((await call("/v1/hosts", { token: await session("user_a") })).status).toBe(200);
-    const desktop = await session("user_a", { sid: undefined, client_id: "SXDueyOLOJ2v4Vmq" });
+    const desktop = await session("user_a", { sid: undefined, client_id: "mp9Q72aAbB0LC83O" });
     expect((await call("/v1/hosts", { token: desktop })).status).toBe(200);
+  });
+
+  it("takes two Clerk instances at once, each checked against its own JWKS (PLX-1049)", async () => {
+    const env = {
+      ...testEnv,
+      CLERK_JWKS: undefined,
+      CLERK_ISSUER: "https://clerk-next.test, https://clerk-old.test",
+      CLERK_JWKS_URL: "https://keys.test/next, https://keys.test/old",
+      CLERK_CLIENT_IDS: "next_app",
+    } as Env;
+    // The new instance's keys are served; the old one's JWKS is down.
+    const fetched: string[] = [];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input instanceof Request ? input.url : input);
+      fetched.push(url);
+      if (url === "https://keys.test/next") return new Response(testEnv.CLERK_JWKS);
+      throw new TypeError("fetch failed");
+    });
+    const list = async (claims: Record<string, unknown>) =>
+      (
+        await worker.fetch(
+          new Request(`${BASE}/v1/hosts`, {
+            headers: { authorization: `Bearer ${await session("user_two", claims)}` },
+          }),
+          env,
+        )
+      ).status;
+    try {
+      expect(await list({ iss: "https://clerk-next.test" })).toBe(200);
+      expect(await list({ iss: "https://clerk-next.test", sid: undefined, client_id: "next_app" })).toBe(200);
+      // Each issuer has its own keys: the old one's outage is its own, and a third fetches nothing.
+      expect(await list({ iss: "https://clerk-old.test" })).toBe(503);
+      expect(await list({ iss: "https://clerk.test" })).toBe(401);
+      expect(fetched).toEqual(["https://keys.test/next", "https://keys.test/old"]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -198,6 +239,37 @@ describe("clock creep", () => {
 });
 
 describe("one user can't reach another user's host", () => {
+  it("keeps the same user id from two Clerk instances apart, and development's bare (PLX-1049)", async () => {
+    const { host } = await online("user_same");
+    const dev = await session("user_same", { iss: DEVELOPMENT });
+    // The development instance's user with the same id sees no host, and can't open one.
+    const list = async (token: string) =>
+      ((await (await call("/v1/hosts", { token })).json()) as { hosts: { hostId: string }[] }).hosts;
+    expect(await list(dev)).toEqual([]);
+    expect((await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token: dev })).status).toBe(404);
+    expect(((await connect(host, dev)) as Response).status).toBe(404);
+    // Theirs isn't this instance's either, and is kept under the bare id hosts registered before.
+    const theirs = await newHost();
+    expect((await register(theirs, dev)).status).toBe(200);
+    expect((await list(dev)).map((h) => h.hostId)).toEqual([theirs.id]);
+    expect((await list(await session("user_same"))).map((h) => h.hostId)).toEqual([host.id]);
+    const owner = (id: string) =>
+      runInDurableObject(hosts.get(hosts.idFromName(id)), (_: HostRelay, state) =>
+        state.storage.get<{ user: string }>("owner"),
+      );
+    expect((await owner(theirs.id))?.user).toBe("user_same");
+    expect((await owner(host.id))?.user).toBe("https://clerk.test|user_same");
+  });
+
+  it("takes an OAuth token only with its own instance's client id (PLX-1049)", async () => {
+    const status = async (claims: Record<string, unknown>) =>
+      (await call("/v1/hosts", { token: await session("user_app", { sid: undefined, ...claims }) })).status;
+    expect(await status({ client_id: "mp9Q72aAbB0LC83O" })).toBe(200);
+    expect(await status({ iss: DEVELOPMENT, client_id: "SXDueyOLOJ2v4Vmq" })).toBe(200);
+    expect(await status({ client_id: "SXDueyOLOJ2v4Vmq" })).toBe(401);
+    expect(await status({ iss: DEVELOPMENT, client_id: "mp9Q72aAbB0LC83O" })).toBe(401);
+  });
+
   it("hides the host and refuses tickets for another user", async () => {
     const { host } = await online("user_listed");
     const intruder = await session("user_b");
@@ -370,7 +442,7 @@ describe("streams", () => {
     };
     const stuck = await spare();
     // What the Worker does for a client, which here hangs up before it reaches the stream.
-    await hosts.get(hosts.idFromName(host.id)).open(user);
+    await hosts.get(hosts.idFromName(host.id)).open(account(user));
     expect(await openStreams(host)).toEqual({ [stuck.open.stream]: {} });
     expect(await runDurableObjectAlarm(streamObject(stuck.open.stream))).toBe(true);
     expect(await stuck.side.closed).toBe(4408);
@@ -922,7 +994,7 @@ describe("a Clerk outage", () => {
         new Request(`${BASE}/v1/hosts`, { headers: { authorization: `Bearer ${token}` } }),
         env,
       );
-    const down = await list(await session("user_clerk_down"));
+    const down = await list(await session("user_clerk_down", { iss: "https://clerk-down.test" }));
     expect(down.status).toBe(503);
     expect(await down.json()).toEqual({ error: "clerk_unreachable" });
     expect((await list("not-a-jwt")).status).toBe(401);
@@ -1052,7 +1124,7 @@ describe("push", () => {
     control.ws.send(JSON.stringify({ t: "push", run: "run-1", state: "needsYou" }));
     control.ws.send(JSON.stringify({ t: "push", run: "run-1", state: "secret text" }));
     const outbox = (user: string) =>
-      runInDurableObject(users.get(users.idFromName(user)), (account: UserAccount) => account.outbox);
+      runInDurableObject(users.get(users.idFromName(account(user))), (it: UserAccount) => it.outbox);
     await expect.poll(() => outbox("user_a")).toHaveLength(1);
     const [sent] = await outbox("user_a");
     expect(sent!.device).toBe(mine);
@@ -1067,7 +1139,7 @@ describe("push", () => {
     const sealed = "not-base64!".repeat(10);
     control.ws.send(JSON.stringify({ t: "push", run: "run-1", state: "done", sealed }));
     control.ws.send(JSON.stringify({ t: "push", run: "run-2", state: "done", sealed: "x".repeat(MAX_SEALED + 1) }));
-    const outbox = () => runInDurableObject(users.get(users.idFromName("user_c")), (account: UserAccount) => account.outbox);
+    const outbox = () => runInDurableObject(users.get(users.idFromName(account("user_c"))), (it: UserAccount) => it.outbox);
     await expect.poll(outbox).toHaveLength(2);
     const [opened, plain] = await outbox();
     expect(opened!.notification.sealed).toBe(sealed);

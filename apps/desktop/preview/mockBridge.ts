@@ -2397,9 +2397,10 @@ export const mockBridge: ParallaxBridge = {
 
   onProfile: (listener) => {
     profileListeners.add(listener);
-    listener(onboarding || location.hash.includes("signedout") ? null : profile);
+    listener(onboarding || /signedout|moved/.test(location.hash) ? null : profile);
     return () => profileListeners.delete(listener);
   },
+  accountMoved: () => delay(location.hash.includes("moved")),
   // The browser's sign-in, done a moment later.
   onConnectNotice: () => () => {},
   onRelayUsage: () => () => {},

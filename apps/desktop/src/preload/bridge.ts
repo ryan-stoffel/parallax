@@ -610,6 +610,11 @@ export interface ParallaxBridge {
    */
   onProfile(listener: (profile: Profile | null) => void): () => void;
   /**
+   * Whether this launch signed the app out because its sign-in was from another Clerk instance, as
+   * after the move to production (PLX-1049), until the next sign-in.
+   */
+  accountMoved(): Promise<boolean>;
+  /**
    * Calls `listener` with what the app says about Parallax Connect, or null, now and on every change
    * (PLX-1351). Returns the unsubscribe function.
    */

@@ -774,6 +774,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     removeCommand: async () => NOT_HERE,
 
     onProfile: (listener) => (listener(null), () => {}),
+    accountMoved: async () => false,
     onConnectNotice: () => () => {},
     onRelayUsage: () => () => {},
     signIn: async () => NOT_HERE,

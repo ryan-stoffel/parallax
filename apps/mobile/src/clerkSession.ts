@@ -25,3 +25,20 @@ export async function refreshOrSignOut<T>(
     return undefined;
   }
 }
+
+/** What the sign-in screen says after a session from another Clerk instance is dropped. */
+export const MOVED = "Parallax accounts moved. Sign in again, then set up each computer again.";
+
+/**
+ * The session the Keychain held as `raw`, if the Clerk instance at `api` issued it. One from
+ * another instance, or saved before the app kept one, as before the move to production
+ * (PLX-1049), is `moved`: its tokens mean nothing here, so the phone is signed out.
+ */
+export function restore<T extends { api: string }>(
+  raw: string | null,
+  api: string,
+): { session: T | null; moved: boolean } {
+  if (!raw) return { session: null, moved: false };
+  const saved = JSON.parse(raw) as Partial<T>;
+  return saved.api === api ? { session: saved as T, moved: false } : { session: null, moved: true };
+}

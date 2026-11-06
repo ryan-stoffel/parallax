@@ -21,7 +21,8 @@ import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-import { authorizeUrl, clerkOf } from "../../packages/plx/src/signin.mjs";
+import { authorizeUrl } from "../../packages/plx/src/signin.mjs";
+import { probeClerk } from "./probe-clerk.mjs";
 
 const { values: options } = parseArgs({ options: { file: { type: "string" } } });
 const file = options.file && resolve(options.file);
@@ -35,8 +36,8 @@ if (file) mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 const REPO = "ryan-stoffel/parallax";
 // offline_access is what makes Clerk give a refresh token, as for the desktop app.
 const SCOPES = "profile email offline_access";
-// PROBE_CLERK_API names another Clerk, for trying this against a local one.
-const clerk = { ...clerkOf(process.env), ...(process.env.PROBE_CLERK_API && { api: process.env.PROBE_CLERK_API }) };
+// The test account's instance, development's until PLX-1457 (probe-clerk.mjs).
+const clerk = probeClerk(process.env);
 const verifier = randomBytes(32).toString("base64url");
 const state = randomBytes(16).toString("base64url");
 

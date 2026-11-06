@@ -287,6 +287,34 @@ test("an unreadable or older (Supabase) session file is signed out, and removed"
   expect(fs.existsSync(savedFile())).toBe(false);
 });
 
+test("a session from another Clerk instance, or from before the app kept one, is signed out (PLX-1049)", async () => {
+  const user = { given_name: "Ryan" };
+  for (const saved of [
+    { refreshToken: "rt_old", user },
+    { refreshToken: "rt_old", user, api: "https://adjusted-mastodon-8705.clerk.accounts.dev" },
+  ]) {
+    // This instance would take the token, so only the saved instance signs it out.
+    clerk.refresh.add("rt_old");
+    fs.writeFileSync(savedFile(), electron.safeStorage.encryptString(JSON.stringify(saved)));
+    startAccount();
+    expect(await call("parallax:profile")).toBeNull();
+    expect(await call("parallax:accountMoved")).toBe(true);
+    expect(fs.existsSync(savedFile())).toBe(false);
+    expect(clerk.refresh.has("rt_old")).toBe(true);
+  }
+  // One this instance issued stays signed in.
+  fs.writeFileSync(
+    savedFile(),
+    electron.safeStorage.encryptString(
+      JSON.stringify({ refreshToken: "rt_old", user, api: "https://clerk.parallax.test" }),
+    ),
+  );
+  startAccount();
+  expect(await call("parallax:profile")).toMatchObject({ firstName: "Ryan" });
+  expect(await call("parallax:accountMoved")).toBe(false);
+  await settle();
+});
+
 test("Linux's basic_text backend, a hardcoded password, keeps the session in memory", async () => {
   const platform = process.platform;
   Object.defineProperty(process, "platform", { value: "linux" });

@@ -14,7 +14,7 @@ A Cloudflare Worker with Durable Objects that lets a user's devices reach their 
 corepack pnpm install --frozen-lockfile
 corepack pnpm check        # type-check
 corepack pnpm test         # the Worker's tests, in Miniflare, with a local JWKS
-corepack pnpm dev          # wrangler dev --env dev on :8787, against Clerk's development instance
+corepack pnpm dev          # wrangler dev --env dev on :8787, against Clerk's production and development instances
 node scripts/e2e.mjs       # plxd's relay test (daemon/tests/server/relay.rs) against wrangler dev
 ```
 
@@ -27,11 +27,13 @@ No workflow deploys the relay. Ryan deploys it by hand once these exist:
 1. **The domain.** `parallax.codes` is registered through Cloudflare Registrar, so it is already a zone on the account. `wrangler.toml` routes `relay.parallax.codes` to the Worker as a custom domain, and the deploy creates its DNS record and certificate.
 2. **A Cloudflare API token**: My Profile > API Tokens > Create Token > Create Custom Token, not the "Edit Cloudflare Workers" template, which adds KV, R2, Pages, and Tail. Give it exactly these four permissions: Account > Workers Scripts > Edit, Account > Account Settings > Read, Zone > Workers Routes > Edit, and Zone > DNS > Edit. Under Account Resources include only Ryan's account, under Zone Resources only `parallax.codes`, and set an expiry. Durable Objects need the Workers Paid plan.
 3. **The account id**, from the Cloudflare dashboard's Workers & Pages overview.
-4. **Clerk's production instance** (0067). The top level of `wrangler.toml` sets no Clerk instance, and the development instance is only in `[env.dev]`, so a deploy must pass these with `--var`, or it refuses every token:
-   - `CLERK_ISSUER`: the instance's Frontend API URL, such as `https://clerk.parallax.codes`.
-   - `CLERK_JWKS_URL`: `<CLERK_ISSUER>/.well-known/jwks.json`.
-   - `CLERK_CLIENT_IDS`: the production desktop OAuth application's client id.
-   - `CLERK_AUTHORIZED_PARTIES`: the web client's origins, comma-separated, once there is one. Unset, browsers' session tokens are refused. The mobile app's carry no origin and pass.
+4. **Clerk's production instance** (0067). The top level of `wrangler.toml` sets it:
+   - `CLERK_ISSUER`: `https://clerk.parallax.codes`.
+   - `CLERK_JWKS_URL`: `https://clerk.parallax.codes/.well-known/jwks.json`.
+   - `CLERK_CLIENT_IDS`: the desktop OAuth application's client id, `mp9Q72aAbB0LC83O`.
+   - `CLERK_AUTHORIZED_PARTIES` isn't set: the web client's origins, comma-separated, once there is one. Unset, browsers' session tokens are refused. The mobile app's carry no origin and pass.
+
+   `CLERK_ISSUER`, `CLERK_JWKS_URL`, and `CLERK_CLIENT_IDS` are comma lists in the same order, one entry per instance, and a token is checked against the instance its `iss` names and only that instance's client ids. Several client ids for one instance are separated by spaces. While accounts move from the development instance (PLX-1049), the deploy below adds that instance with `--var`, so an app that hasn't updated, and the relay probe's test account, keep working. Drop it only once the probe's account is on production (PLX-1457) and a stable release carries the move: then deploy without the three `--var` values to take production alone.
 
 ### When to deploy
 
@@ -45,7 +47,7 @@ From `relay/`, with the values filled in. These have no `#` comments, because zs
 export CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ACCOUNT_ID=<account id>
 corepack pnpm install --frozen-lockfile
 corepack pnpm test
-corepack pnpm exec wrangler deploy --env="" --var CLERK_ISSUER:<issuer> --var CLERK_JWKS_URL:<issuer>/.well-known/jwks.json --var CLERK_CLIENT_IDS:<client id>
+corepack pnpm exec wrangler deploy --env="" --var CLERK_ISSUER:https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev --var CLERK_JWKS_URL:https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json --var CLERK_CLIENT_IDS:mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq
 curl -s -o /dev/null -w '%{http_code}\n' https://relay.parallax.codes/v1/hosts
 ```
 
