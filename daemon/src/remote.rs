@@ -1108,7 +1108,71 @@ async fn request(
     body: Option<&serde_json::Value>,
 ) -> Result<(u16, Vec<u8>), Error> {
     let (tls, _) = open_pinned(route, pin).await?;
-    send(tls, route, method, path, headers, body).await
+    send(tls, route, None, method, path, headers, body).await
+}
+
+/// How long a sign-in's connection may wait for its next step and still carry it. The steps follow
+/// each other at once, so a longer gap is a pause for the user. The host waits 2 s for a next
+/// request, so this stays under that.
+pub const KEEP_IDLE: Duration = Duration::from_secs(1);
+
+/// A pinned connection a sign-in step left open for the next, and since when.
+struct Kept {
+    route: String,
+    pin: Pin,
+    since: tokio::time::Instant,
+    tls: TlsStream<crate::relay::Stream>,
+}
+
+/// The connections sign-in steps left open (PLX-1462): one, as `plxd dial` signs in to one host.
+static KEPT: Mutex<Vec<Kept>> = Mutex::new(Vec::new());
+
+/// Leaves `tls`, checked against `pin`, open for the next sign-in step to `route`, in place of one
+/// left there before, which a new sign-in may have outlived.
+fn leave_open(route: &str, pin: &Pin, tls: TlsStream<crate::relay::Stream>) {
+    let since = tokio::time::Instant::now();
+    let (route, pin) = (route.to_owned(), pin.clone());
+    let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+    kept.retain(|each| each.route != route || each.pin != pin);
+    kept.push(Kept {
+        route,
+        pin,
+        since,
+        tls,
+    });
+}
+
+/// A connection a sign-in step left open to `route` with `pin` within [`KEEP_IDLE`]. Older ones
+/// are closed here, so they don't hold a relay stream.
+fn kept(route: &str, pin: &Pin) -> Option<TlsStream<crate::relay::Stream>> {
+    let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+    kept.retain(|each| each.since.elapsed() < KEEP_IDLE);
+    let at = kept
+        .iter()
+        .position(|each| each.route == route && each.pin == *pin)?;
+    Some(kept.swap_remove(at).tls)
+}
+
+/// A request's connection failed before any of its answer came back, which a kept connection the
+/// host already closed does. It keeps the network's error, and says what it says.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct Unanswered(io::Error);
+
+/// [`Unanswered`], as the error a request answers with.
+fn unanswered(error: io::Error) -> Error {
+    Error::Io(io::Error::other(Unanswered(error)))
+}
+
+/// Whether `error` is [`Unanswered`].
+fn is_unanswered(error: &Error) -> bool {
+    let Error::Io(error) = error else {
+        return false;
+    };
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<Unanswered>())
+        .is_some()
 }
 
 /// The [`Descriptor`] of the host at the end of `stream`, over TLS to the certificate `pin`
@@ -1119,16 +1183,19 @@ pub(crate) async fn read_descriptor(
 ) -> Result<Descriptor, Error> {
     let (tls, _) = tls_over(stream, pin).await?;
     let path = "/.well-known/parallax";
-    match send(tls, "parallax", "GET", path, &[], None).await? {
+    match send(tls, "parallax", None, "GET", path, &[], None).await? {
         (200, body) => json(&body),
         (status, _) => Err(Error::Protocol(format!("plxd answered {status}"))),
     }
 }
 
-/// One HTTPS request over `tls`, a connection that presented the pinned certificate.
+/// One HTTPS request over `tls`, a connection that presented the pinned certificate. With `keep`,
+/// the pin `tls` was checked against, it asks the host to keep the connection, and leaves it for
+/// the next sign-in step when the host did and answered 202, which a next step follows.
 async fn send(
     mut tls: TlsStream<crate::relay::Stream>,
     route: &str,
+    keep: Option<&Pin>,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
@@ -1136,8 +1203,13 @@ async fn send(
 ) -> Result<(u16, Vec<u8>), Error> {
     let body = body.map(ToString::to_string).unwrap_or_default();
     let mut head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\n",
+        "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: {}\r\nContent-Length: {}\r\n",
         with_port(route),
+        if keep.is_some() {
+            "keep-alive"
+        } else {
+            "close"
+        },
         body.len()
     );
     if !body.is_empty() {
@@ -1147,25 +1219,65 @@ async fn send(
         let _ = write!(head, "{name}: {value}\r\n");
     }
     head.push_str("\r\n");
-    tls.write_all(head.as_bytes()).await?;
-    tls.write_all(body.as_bytes()).await?;
-    tls.flush().await?;
-    let mut answer = Vec::new();
-    match tls.read_to_end(&mut answer).await {
-        Ok(_) => {}
-        // A peer that closes without TLS's close_notify still sent the whole answer.
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {}
-        Err(error) => return Err(error.into()),
+    tls.write_all(head.as_bytes()).await.map_err(unanswered)?;
+    tls.write_all(body.as_bytes()).await.map_err(unanswered)?;
+    tls.flush().await.map_err(unanswered)?;
+    let (status, answer, open) = read_answer(&mut tls).await?;
+    if let Some(pin) = keep.filter(|_| open && status == 202) {
+        leave_open(route, pin, tls);
     }
-    let mut headers = [httparse::EMPTY_HEADER; 16];
-    let mut response = httparse::Response::new(&mut headers);
-    match response.parse(&answer) {
-        Ok(httparse::Status::Complete(length)) => {
-            Ok((response.code.unwrap_or(0), answer[length..].to_vec()))
+    Ok((status, answer))
+}
+
+/// The status and body of the answer on `tls`, read to its `Content-Length`, or to the end without
+/// one, and whether the host keeps the connection open after it. [`Unanswered`] when the connection
+/// ended before the answer's first byte.
+async fn read_answer(
+    tls: &mut TlsStream<crate::relay::Stream>,
+) -> Result<(u16, Vec<u8>, bool), Error> {
+    let not_http = || Error::Protocol("plxd sent an answer that isn't HTTP".to_owned());
+    let mut answer = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        let read = match tls.read(&mut chunk).await {
+            Ok(read) => read,
+            // A peer that closes without TLS's close_notify still sent the whole answer.
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => 0,
+            Err(error) if answer.is_empty() => return Err(unanswered(error)),
+            Err(error) => return Err(error.into()),
+        };
+        if read == 0 && answer.is_empty() {
+            let ended = io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "plxd closed the connection without answering",
+            );
+            return Err(unanswered(ended));
         }
-        _ => Err(Error::Protocol(
-            "plxd sent an answer that isn't HTTP".to_owned(),
-        )),
+        answer.extend_from_slice(&chunk[..read]);
+        let mut headers = [httparse::EMPTY_HEADER; 16];
+        let mut response = httparse::Response::new(&mut headers);
+        let length = match response.parse(&answer) {
+            Ok(httparse::Status::Complete(length)) => length,
+            Ok(httparse::Status::Partial) if read > 0 => continue,
+            _ => return Err(not_http()),
+        };
+        let header = |name: &str| {
+            response
+                .headers
+                .iter()
+                .find(|h| h.name.eq_ignore_ascii_case(name))
+                .map(|h| String::from_utf8_lossy(h.value).into_owned())
+        };
+        let status = response.code.unwrap_or(0);
+        let open = header("connection").is_some_and(|v| v.eq_ignore_ascii_case("keep-alive"));
+        match header("content-length").and_then(|v| v.trim().parse::<usize>().ok()) {
+            Some(size) if answer.len() >= length + size => {
+                return Ok((status, answer[length..length + size].to_vec(), open));
+            }
+            Some(_) if read == 0 => return Err(not_http()),
+            None if read == 0 => return Ok((status, answer[length..].to_vec(), false)),
+            _ => {}
+        }
     }
 }
 
@@ -1318,7 +1430,7 @@ async fn pair_at(
     let (state, first) = pake_client(code, &fp);
     let start = json!({ "pake": base64url(&first) });
     let path = "/api/pair/start";
-    let (status, answer) = send(tls, route, "POST", path, &[], Some(&start)).await?;
+    let (status, answer) = send(tls, route, None, "POST", path, &[], Some(&start)).await?;
     let started = answered(path, status, &answer)?;
     let shared = state
         .finish(&field(&started, "pake")?)
@@ -1563,7 +1675,8 @@ async fn sign_in_at(
     let proof = key.proof("POST", &url(route, path), Some(token));
     let body = json!({ "token": token, "clientLabel": name });
     let headers = [("DPoP", proof.as_str())];
-    let (status, answer) = send(tls, route, "POST", path, &headers, Some(&body)).await?;
+    let (status, answer) =
+        send(tls, route, Some(&pin), "POST", path, &headers, Some(&body)).await?;
     let answer: serde_json::Value = match status {
         200 if compare => return Err(Error::Refused),
         200 => return approved(route, host_id, key, data_dir, &json(&answer)?),
@@ -1603,7 +1716,11 @@ async fn sign_in_at(
     })
 }
 
-/// One call to `/api/auth/approval` with `body`: 200 with a session, or 202 while it waits.
+/// One call to `/api/auth/approval` with `body`: 200 with a session, or 202 while it waits. It goes
+/// on the connection the last sign-in step left open when there is one, so a sign-in through the
+/// relay takes one stream (PLX-1462). Pinning holds, since a connection is kept with its pin. A kept
+/// connection the host already closed gets no answer, and then the call goes once more on a new
+/// one, with a new proof. Sending the same step twice is safe.
 async fn approval_step(
     route: &str,
     pin: &Pin,
@@ -1611,9 +1728,22 @@ async fn approval_step(
     body: &serde_json::Value,
 ) -> Result<(u16, serde_json::Value), Error> {
     let path = "/api/auth/approval";
-    let proof = key.proof("POST", &url(route, path), None);
-    let headers = [("DPoP", proof.as_str())];
-    let (status, answer) = request(route, pin, "POST", path, &headers, Some(body)).await?;
+    let call = async |tls| {
+        let proof = key.proof("POST", &url(route, path), None);
+        let headers = [("DPoP", proof.as_str())];
+        send(tls, route, Some(pin), "POST", path, &headers, Some(body)).await
+    };
+    let reused = match kept(route, pin) {
+        Some(tls) => match call(tls).await {
+            Err(error) if is_unanswered(&error) => None,
+            sent => Some(sent?),
+        },
+        None => None,
+    };
+    let (status, answer) = match reused {
+        Some(answered) => answered,
+        None => call(open_pinned(route, pin).await?.0).await?,
+    };
     match status {
         200 | 202 => Ok((status, json(&answer)?)),
         401 | 403 => Err(Error::Refused),
