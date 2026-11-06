@@ -1,0 +1,98 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "land/queue",
+    "params": { "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e1" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "landing": {
+        "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "status": "waiting",
+        "queuedAt": "2026-10-04T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "land/approve",
+    "params": { "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e1" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "landing": {
+        "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
+        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "status": "queued",
+        "queuedAt": "2026-10-04T12:01:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "land/sendBack",
+    "params": {
+      "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e2",
+      "text": "Keep the old endpoint working too."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "landing": {
+        "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e2",
+        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "status": "sentBack",
+        "queuedAt": "2026-10-04T12:00:30Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "land/queue",
+    "params": { "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e3" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "run 01a0f755-f200-74dd-8cfc-06d0b225c5e3 was started with explore, so it never lands",
+      "data": { "kind": "landRefused" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "project/update",
+    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0", "autoLand": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "project": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "name": "app",
+        "repoPath": "/Users/me/src/app",
+        "branch": "main",
+        "permission": "auto",
+        "baseBranch": "main",
+        "integrationBranch": "parallax/app",
+        "autoLand": true,
+        "createdAt": "2026-10-04T11:00:00Z",
+        "updatedAt": "2026-10-04T11:00:00Z"
+      }
+    }
+  }
+]

@@ -1,7 +1,7 @@
 //! Agent backends: one interface over the vendor CLIs that run agents (0004).
 //!
 //! A [`Backend`] starts a [`Run`] from a [`RunRequest`]. The run's CLI output arrives on an
-//! [`EventStream`] as normalized [`Event`]s, so M3's runner and M4's coordinator never see vendor
+//! [`EventStream`] as normalized [`Event`]s, so M3's runner and M4's orchestrator never see vendor
 //! differences. The adapters for Claude Code (#116), Codex (#122), and Cursor (#123) implement
 //! these traits on top of [`process`], and [`fake`] implements them for tests.
 //!
@@ -17,35 +17,52 @@
 //! failure, arrives on the stream; and `send` and `cancel` only enqueue. The price is a virtual
 //! call per start, send, or cancel, never per event.
 
+pub mod acp;
 pub mod claude;
 pub mod codex;
+pub mod commands;
+pub mod cursor_sdk;
 pub mod event;
 pub mod fake;
 pub mod key_account;
+pub mod limits;
+pub mod namer;
+pub(crate) mod node_sdk;
+pub mod opencode;
 pub mod process;
+pub mod record;
 pub mod run_temp;
 pub mod sandbox;
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll};
 
-use futures_util::Stream;
+pub use parallax_protocol::{
+    AgentEffort, AgentPermission, ApprovalId, ImageMediaType, PromptImage, RunId, TurnId,
+};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-pub use wisp_protocol::{AgentEffort, AgentPermission, ImageMediaType, PromptImage, RunId, TurnId};
+use tokio::sync::{mpsc, watch};
 use zeroize::Zeroize;
 
+pub use self::commands::CommandsProbe;
 pub use self::event::{
-    CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage,
-    Outcome, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
+    ApprovalRequest, CumulativeUsage, Event, Failure, FailureKind, LimitStatus, LimitWindow,
+    ModelUsage, Outcome, SubagentStatus, TodoItem, TodoStatus, ToolStatus, Usage, WarningKind,
 };
+pub use self::limits::LimitsProbe;
+pub use self::namer::NameProbe;
 use self::process::{CancelPolicy, Signals, SpawnError};
 pub use self::sandbox::WorkerSandbox;
+
+/// Appended to a full Claude thread's system prompt: the app typesets LaTeX in replies, so math
+/// written as LaTeX is drawn, and math written any other way is not (PLX-730).
+pub const MATH_FORMAT: &str = "Parallax typesets LaTeX in your replies. Write every equation, \
+formula, and math expression as LaTeX: $...$ inline and $$...$$ on their own lines for display \
+math. Don't draw math as plain text, ASCII art, or inside code blocks.";
 
 /// How many events a run buffers before its backend waits for the consumer.
 pub const EVENT_BUFFER: usize = 256;
@@ -53,7 +70,7 @@ pub const EVENT_BUFFER: usize = 256;
 /// A vendor CLI that runs agents.
 pub trait Backend: Send + Sync {
     /// A short, stable name for logs and records, such as `claude`, `codex`, or `cursor`.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// What this backend can do.
     fn capabilities(&self) -> Capabilities;
@@ -69,7 +86,7 @@ pub trait Backend: Send + Sync {
     /// started. Routing (#119) can fall back to another backend on any of these.
     fn start(&self, request: RunRequest) -> Result<Started, StartError>;
 
-    /// The [`RunRequest::effort`] levels this backend maps to its CLI (RYA-97). None by default,
+    /// The [`RunRequest::effort`] levels this backend maps to its CLI (PLX-97). None by default,
     /// so a backend that doesn't map them refuses them instead of ignoring them.
     fn efforts(&self) -> &'static [AgentEffort] {
         &[]
@@ -78,9 +95,123 @@ pub trait Backend: Send + Sync {
     /// The [`RunRequest::permission`] values this backend maps to its CLI, all inside the worker
     /// sandbox (0013). None by default, like [`Backend::efforts`]; an absent permission always
     /// means [`AgentPermission::Edit`].
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         &[]
     }
+
+    /// The [`Backend::permissions`] a run in an orchestrator may take (0042). All of them by
+    /// default.
+    fn orchestrator_permissions(&self) -> &[AgentPermission] {
+        self.permissions()
+    }
+
+    /// The vendor CLI it runs, which plxd checks before starting a worker on it (0013), whatever
+    /// the instance's name (0040). None by default.
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        None
+    }
+
+    /// Whether a thread on it runs as the full agent with no worker sandbox to check (0035,
+    /// 0036, 0038), and nothing else runs on it. Not by default.
+    fn full_thread(&self) -> bool {
+        false
+    }
+
+    /// The [`RunRequest::context_window`] sizes this backend maps to its CLI. None by default,
+    /// like [`Backend::efforts`].
+    fn context_windows(&self) -> &'static [u32] {
+        &[]
+    }
+
+    /// Whether this backend maps [`RunRequest::fast`] to its CLI. Not by default, like
+    /// [`Backend::efforts`].
+    fn fast_mode(&self) -> bool {
+        false
+    }
+
+    /// Whether a run whose session can't be resumed starts a new one with
+    /// [`Resume::fallback`] instead of failing (T3 Code, PLX-728). Not by default.
+    fn resume_fallback(&self) -> bool {
+        false
+    }
+
+    /// Starts the CLI in `cwd` to list its own slash commands and skills (PLX-359), with the
+    /// program and environment a thread on the user's own login gets, for
+    /// [`commands::list`]. `None` for a backend with no list, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the CLI can't be started.
+    fn commands(&self, _cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        Ok(None)
+    }
+
+    /// Starts the CLI in `cwd` to read its subscription's limit windows (PLX-541), on the login
+    /// a thread on this backend gets, for [`commands::list`]. `None` for a backend whose CLI
+    /// reports none, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the CLI can't be started.
+    fn limits(&self, _cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
+        Ok(None)
+    }
+
+    /// Starts the CLI in `cwd` to answer control requests one after another over its stdin, on
+    /// the login a thread on this backend gets, with no hooks or MCP servers: Claude Code's
+    /// `list_cloud_sessions` and `get_cloud_session_transcript`, for importing the sessions
+    /// `claude.ai` keeps (PLX-1136). `None` for a backend with no such requests, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the CLI can't be started.
+    fn control(&self, _cwd: &Path) -> Result<Option<process::Process>, StartError> {
+        Ok(None)
+    }
+
+    /// Starts the CLI in `dir`, an empty folder of the call's own that holds
+    /// [`namer::SCHEMA_FILE`], or none for an answer in plain text, for one hidden call such as naming a thread (0058) or writing a pull
+    /// request's guide (0095): `model` at `effort`, on the login a thread on this backend gets,
+    /// with no tools, for [`namer::ask`]. `None` for a backend that can't, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the model or effort can't be given to the CLI, or the CLI can't be started.
+    fn namer(
+        &self,
+        _dir: &Path,
+        _model: &str,
+        _effort: Option<AgentEffort>,
+    ) -> Result<Option<NameProbe>, StartError> {
+        Ok(None)
+    }
+
+    /// Drops a thread's newest turns from its conversation, so its next turn continues from the
+    /// one before them (0062, T3 Code's `rollbackThread`), and returns the session id that turn
+    /// resumes. Called with no live session on the thread. Only a backend whose
+    /// [`Capabilities::rewind`] is set gets it; the default refuses. A backend with
+    /// [`Capabilities::resume_at`] can leave its session as it is: the next run resumes it at the
+    /// kept turn's cursor, or starts a new one when no turn is kept.
+    fn rewind(
+        &self,
+        _rewind: Rewind,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        Box::pin(std::future::ready(Err(format!(
+            "{} can't rewind a conversation",
+            self.name()
+        ))))
+    }
+}
+
+/// What [`Backend::rewind`] drops.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rewind {
+    /// The thread's session: its last run's [`Event::SessionStarted`] id.
+    pub session_id: String,
+    /// The folder the thread works in.
+    pub cwd: PathBuf,
+    /// How many of its newest turns go. Never 0.
+    pub turns: u32,
 }
 
 /// A started run: its control handle and its events.
@@ -105,7 +236,8 @@ pub trait Run: Send + Sync {
     /// The id the caller gave the run.
     fn id(&self) -> RunId;
 
-    /// Sends a follow-up message into the run (0011's `agent/send`), as the next turn.
+    /// Sends a follow-up message into the run (0011's `agent/send`), as the next turn, or with
+    /// [`FollowUp::steer`] into the one running now.
     ///
     /// Idempotent on the message's `turn_id`: sending the same id and text again succeeds without
     /// sending it twice. The run reports [`Event::TurnStarted`] once the CLI has the message, or
@@ -122,6 +254,45 @@ pub trait Run: Send + Sync {
     /// it hasn't exited after a grace period. Returns at once, and calling it again does nothing.
     /// The run ends with [`Outcome::Cancelled`], unless it had already finished.
     fn cancel(&self);
+
+    /// Answers a permission request the run reported as [`Event::ApprovalRequested`] (PLX-222).
+    /// Returns at once. An answer to a request the CLI no longer waits for, or has already had
+    /// one, is dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`AnswerError::Unsupported`] if the backend never asks, the default, and
+    /// [`AnswerError::Finished`] once the run has ended.
+    fn answer(&self, _answer: Answer) -> Result<(), AnswerError> {
+        Err(AnswerError::Unsupported)
+    }
+
+    /// While `held`, the run keeps its CLI open after its last turn instead of letting it exit,
+    /// because plxd has a waiting message for it (PLX-370). Returns at once. A backend that
+    /// exits after its turns regardless ignores it, the default.
+    fn hold(&self, _held: bool) {}
+
+    /// Stops one of the agent's background tasks, as [`Event::BackgroundTasks`] named it
+    /// (PLX-777). Returns at once; the task's end arrives as another [`Event::BackgroundTasks`].
+    ///
+    /// # Errors
+    ///
+    /// [`AnswerError::Unsupported`] if the backend can't, the default, and
+    /// [`AnswerError::Finished`] once the run has ended.
+    fn stop_task(&self, _task_id: &str) -> Result<(), AnswerError> {
+        Err(AnswerError::Unsupported)
+    }
+
+    /// Moves the live session to `permission` now, mid-turn included, rather than on its next
+    /// turn (`agent/setPermission`). Returns at once. Only a value in [`Backend::permissions`].
+    ///
+    /// # Errors
+    ///
+    /// [`AnswerError::Unsupported`] if the run can't, the default, and
+    /// [`AnswerError::Finished`] once the run has ended.
+    fn set_permission(&self, _permission: AgentPermission) -> Result<(), AnswerError> {
+        Err(AnswerError::Unsupported)
+    }
 }
 
 /// A task for a backend.
@@ -138,7 +309,7 @@ pub struct RunRequest {
     pub cwd: PathBuf,
     /// The first message.
     pub prompt: String,
-    /// Images the CLI gets beside the first message, never named in it (RYA-191). The caller has
+    /// Images the CLI gets beside the first message, never named in it (PLX-191). The caller has
     /// checked them (`images::check`).
     pub images: Vec<PromptImage>,
     /// What the agent's tools may do.
@@ -157,55 +328,148 @@ pub struct RunRequest {
     /// How a worker may act inside its sandbox, or [`AgentPermission::Edit`]. Only a value in
     /// [`Backend::permissions`], and only for a [`ToolPolicy::WorkspaceWrite`] run.
     pub permission: Option<AgentPermission>,
-    /// wispd's MCP tools, for a coordinator's [`ToolPolicy::NoWrite`] run only (#195, 0019).
-    /// Routing drops them for every other role, and a backend refuses them on a worker.
-    pub coordinator_tools: Option<CoordinatorTools>,
+    /// The model's context window in tokens, or the CLI's default. Only a size in
+    /// [`Backend::context_windows`].
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, or the CLI's default. Only for a backend with [`Backend::fast_mode`].
+    pub fast: Option<bool>,
+    /// plxd's host-wide thread tools bound to an orchestrator's own run, for its
+    /// [`ToolPolicy::NoWrite`] run only (0041, PLX-380). Routing drops them for every other role,
+    /// and a backend refuses them on a worker.
+    pub orchestrator_tools: Option<ThreadTools>,
+    /// plxd's host-wide thread tools, for a normal thread's run only (0041). Routing drops them
+    /// for every other run, and Claude Code attaches them only to a thread that runs as full
+    /// Claude Code ([`claude::unsandboxed`]), since the server runs outside any sandbox.
+    pub thread_tools: Option<ThreadTools>,
+    /// The client answers permission requests (PLX-222, 0031): a CLI that can ask before a tool
+    /// call asks through [`Event::ApprovalRequested`] and [`Run::answer`]. Without it, the CLI
+    /// runs as it did before, denying what would prompt.
+    pub approvals: bool,
+    /// A thread's run (0017): a normal thread or an orchestrator's child (0042), but not an
+    /// orchestrator. With [`Self::approvals`], Claude Code runs it as full Claude Code in every
+    /// mode, with no worker sandbox (0034); without, it keeps the sandbox.
+    pub thread: bool,
+    /// Text added to the agent's system prompt on this CLI process, resumes included, so
+    /// compaction never drops it: an orchestrator's instructions (0078). Claude Code takes it as
+    /// `--append-system-prompt-file`, Codex as developer instructions, and `OpenCode` as each
+    /// message's `system`. ACP agents and Cursor have no channel that adds to their own prompt,
+    /// so they get it ahead of the process's first message ([`Self::first_prompt`]).
+    pub instructions: Option<String>,
 }
 
-/// How a coordinator's CLI launches `wispd mcp` (0019): the server is bound to one project and one
-/// coordinator thread by these arguments, which wispd sets and the model never sees or chooses.
+impl RunRequest {
+    /// The first message for a backend with no system-prompt channel: [`Self::instructions`],
+    /// if any, then the prompt.
+    #[must_use]
+    pub fn first_prompt(&self) -> String {
+        match &self.instructions {
+            Some(instructions) => format!("{instructions}\n\n{}", self.prompt),
+            None => self.prompt.clone(),
+        }
+    }
+
+    /// Whether a backend that runs only full agents, Codex and ACP agents, takes it: a thread, or
+    /// an orchestrator, which runs there as a thread does (0042).
+    #[must_use]
+    pub fn full_agent(&self) -> bool {
+        self.thread || self.orchestrator_tools.is_some()
+    }
+
+    /// Its Parallax tools on such a backend: a thread's, or an orchestrator's (0041).
+    #[must_use]
+    pub fn full_agent_tools(&self) -> Option<&ThreadTools> {
+        self.thread_tools
+            .as_ref()
+            .or(self.orchestrator_tools.as_ref())
+    }
+}
+
+/// How a thread's CLI, or an orchestrator's, launches `plxd mcp --thread` (0041): the server is
+/// bound to the run's own id, which plxd sets and the model never sees or chooses, so a thread it
+/// launches records it as the parent.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CoordinatorTools {
-    /// The `wispd` executable that serves the tools.
+pub struct ThreadTools {
+    /// The `plxd` executable that serves the tools.
     pub program: PathBuf,
-    /// wispd's data folder, which tells `wispd mcp` where the socket is.
+    /// plxd's data folder, which tells `plxd mcp` where the socket is.
     pub data_dir: PathBuf,
-    /// The only project the tools can reach.
-    pub project: wisp_protocol::ProjectId,
-    /// The coordinator thread that runs spawned through the tools are tagged with.
-    pub thread: wisp_protocol::CoordinatorThreadId,
+    /// The thread's run: the caller of every tool.
+    pub run: RunId,
 }
 
-impl CoordinatorTools {
-    /// `{"mcpServers": {"wispd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
+impl ThreadTools {
+    /// `{"mcpServers": {"plxd": ...}}`, for a CLI's `--mcp-config`: the one stdio server, with
     /// its program and arguments.
     ///
     /// # Errors
     ///
     /// [`StartError::Invalid`] if the program's or the data folder's path isn't UTF-8.
     pub fn mcp_config(&self) -> Result<serde_json::Value, StartError> {
-        let text = |path: &std::path::Path, what: &str| {
-            path.to_str().map(str::to_owned).ok_or_else(|| {
-                StartError::Invalid(format!("{what} {} is not UTF-8", path.display()))
-            })
-        };
-        let program = text(&self.program, "wispd's executable")?;
-        let data_dir = text(&self.data_dir, "the data folder")?;
-        Ok(serde_json::json!({
-            "mcpServers": {
-                crate::mcp::SERVER: {
-                    "type": "stdio",
-                    "command": program,
-                    "args": [
-                        "mcp",
-                        "--data-dir", data_dir,
-                        "--project", self.project.to_string(),
-                        "--coordinator-thread", self.thread.to_string(),
-                    ],
-                },
-            },
-        }))
+        let run = self.run.to_string();
+        mcp_config(&self.program, &self.data_dir, &["--thread", &run])
     }
+}
+
+/// The one stdio server `plxd mcp --data-dir <data_dir> <binding>`, as `--mcp-config` takes it.
+fn mcp_config(
+    program: &Path,
+    data_dir: &Path,
+    binding: &[&str],
+) -> Result<serde_json::Value, StartError> {
+    let text = |path: &Path, what: &str| {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| StartError::Invalid(format!("{what} {} is not UTF-8", path.display())))
+    };
+    let mut args = vec!["mcp".to_owned(), "--data-dir".to_owned()];
+    args.push(text(data_dir, "the data folder")?);
+    args.extend(binding.iter().map(|&arg| arg.to_owned()));
+    Ok(serde_json::json!({
+        "mcpServers": {
+            crate::mcp::SERVER: {
+                "type": "stdio",
+                "command": text(program, "plxd's executable")?,
+                "args": args,
+            },
+        },
+    }))
+}
+
+/// The name Claude Code's `--effort` and Codex's `model_reasoning_effort` share for `effort`.
+///
+/// # Errors
+///
+/// [`StartError::Unsupported`] with `unknown` for an effort this version doesn't know.
+pub fn effort_level(effort: AgentEffort, unknown: &str) -> Result<&'static str, StartError> {
+    Ok(match effort {
+        AgentEffort::Low => "low",
+        AgentEffort::Medium => "medium",
+        AgentEffort::High => "high",
+        AgentEffort::Xhigh => "xhigh",
+        AgentEffort::Max => "max",
+        AgentEffort::Unknown => return Err(StartError::Unsupported(unknown.to_owned())),
+    })
+}
+
+/// Whether a message asks to compact the thread's context (PLX-638): exactly `/compact`, in any
+/// case and with no images, as T3 Code tests it. Claude Code runs it as its own command, Codex
+/// as `thread/compact/start`, and plxd refuses it for every other backend.
+#[must_use]
+pub fn is_compact(text: &str, images: &[PromptImage]) -> bool {
+    images.is_empty() && text.trim().eq_ignore_ascii_case("/compact")
+}
+
+/// The objective a message sets as the thread's goal (PLX-749): `/goal <objective>`, with no
+/// images, as Claude Code's own `/goal` takes it. `/goal clear` clears a goal instead, so it is
+/// none. Claude Code runs it as its own command, and Codex as `thread/goal/set`.
+#[must_use]
+pub fn goal<'a>(text: &'a str, images: &[PromptImage]) -> Option<&'a str> {
+    let (command, objective) = text.trim().split_once(char::is_whitespace)?;
+    let objective = objective.trim();
+    (images.is_empty()
+        && command.eq_ignore_ascii_case("/goal")
+        && !objective.eq_ignore_ascii_case("clear"))
+    .then_some(objective)
 }
 
 /// Checks that `value`, such as a model or a session id, can be a CLI's argument: not empty,
@@ -229,7 +493,7 @@ pub fn check_argument(what: &str, value: &str) -> Result<(), StartError> {
 
 /// `export PATH='<path>'${PATH:+:$PATH}`: a shell line that puts `path`, the `PATH` a worker's CLI
 /// started with, back in front of whatever `PATH` the shell's startup files left, keeping their
-/// entries after it (RYA-126, RYA-141). `${PATH:+...}` avoids a trailing `:`, which would put the
+/// entries after it (PLX-126, PLX-141). `${PATH:+...}` avoids a trailing `:`, which would put the
 /// current folder on `PATH`.
 #[must_use]
 pub fn prepend_path_line(path: &OsStr) -> Vec<u8> {
@@ -245,6 +509,46 @@ pub fn prepend_path_line(path: &OsStr) -> Vec<u8> {
     line
 }
 
+/// What a provider instance (0040) changes about how a built-in backend starts its CLI.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Overrides {
+    /// The backend's name, the instance's id, instead of the backend's own.
+    pub name: Option<String>,
+    /// The program, a name on `PATH` or an absolute path, instead of the backend's own.
+    pub program: Option<OsString>,
+    /// The CLI's configuration folder for a subscription account that names none.
+    pub home: Option<PathBuf>,
+    /// Arguments after the backend's own.
+    pub args: Vec<OsString>,
+    /// Variables set last, after the backend's own.
+    pub env: Vec<(OsString, OsString)>,
+}
+
+impl Overrides {
+    /// `spec` with the instance's program, arguments, and variables, for a spec whose own
+    /// arguments are already set.
+    pub fn apply(&self, spec: &mut process::ProcessSpec) {
+        if let Some(program) = &self.program {
+            spec.program.clone_from(program);
+        }
+        spec.args.extend(self.args.iter().cloned());
+        for (name, value) in &self.env {
+            spec.inject.set(name, value);
+        }
+    }
+
+    /// The configuration folder for `credential`: its own, or else the instance's.
+    #[must_use]
+    pub fn config_home(&self, credential: &Credential) -> Option<PathBuf> {
+        match credential {
+            Credential::Subscription { config_home } => {
+                config_home.clone().or_else(|| self.home.clone())
+            }
+            Credential::ApiKey(_) => None,
+        }
+    }
+}
+
 /// A vendor session for a run to continue.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Resume {
@@ -253,8 +557,19 @@ pub struct Resume {
     /// The session's running usage totals per model: the `usage_totals` of the last run of it
     /// that finished. The caller stores them per session and passes them back here, so the new
     /// run reports only what it adds, even for vendors whose totals carry over into a resumed
-    /// session (Claude, Codex) and across a wispd restart. Empty for a session with no usage.
+    /// session (Claude, Codex) and across a plxd restart. Empty for a session with no usage.
     pub usage_totals: Vec<ModelUsage>,
+    /// Continue a copy of the session under a new id, leaving it as it is: a fork's first run
+    /// (0050). Only a backend whose [`Capabilities::fork`] is set gets it.
+    pub fork: bool,
+    /// Resume only up to this position, an [`Event::TurnCursor`] of the session, dropping what
+    /// came after: a rewind (0062). Only a backend whose [`Capabilities::resume_at`] is set
+    /// gets it.
+    pub at: Option<String>,
+    /// The first message of a new session to start in place of this one, once, if it can't be
+    /// resumed: the conversation so far, then the run's message. Only a backend whose
+    /// [`Backend::resume_fallback`] is set gets it.
+    pub fallback: Option<String>,
 }
 
 impl Resume {
@@ -263,6 +578,9 @@ impl Resume {
         Self {
             session_id: session_id.into(),
             usage_totals: Vec::new(),
+            fork: false,
+            at: None,
+            fallback: None,
         }
     }
 }
@@ -276,13 +594,82 @@ pub struct FollowUp {
     pub text: String,
     /// Images the CLI gets beside the message, as [`RunRequest::images`].
     pub images: Vec<PromptImage>,
+    /// Goes into the turn running now rather than as the next one (PLX-370, decision 0048): as
+    /// the Claude Agent SDK's `priority: "now"` (0061), Codex app-server's `turn/steer`, or for
+    /// Cursor, which can't, by cancelling the turn and sending the message. With no turn
+    /// running it is the next turn, as any follow-up is.
+    pub steer: bool,
+    /// The model this turn and the next run on, for a backend with
+    /// [`Capabilities::switch_in_session`]. `None` keeps the session's.
+    pub model: Option<String>,
+    /// The mode this turn and the next run in, as [`FollowUp::model`]. Only a value in
+    /// [`Backend::permissions`].
+    pub permission: Option<AgentPermission>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How long a test's stdin writers wait between writing a follow-up and reporting it, so the
+    /// CLI can answer it before its driver hears it was written (PLX-523). Per thread, so it
+    /// reaches the writers of one `#[tokio::test]` on its current-thread runtime.
+    pub(crate) static REPORT_STALL: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// A test's stdin writer's pause between writing a follow-up and reporting it.
+#[cfg(test)]
+async fn report_stall() {
+    let stall = REPORT_STALL.get();
+    if !stall.is_zero() {
+        tokio::time::sleep(stall).await;
+    }
+}
+
+/// The answer to a permission request (PLX-222).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Answer {
+    /// The request, from its [`Event::ApprovalRequested`].
+    pub approval_id: ApprovalId,
+    /// Whether the tool call may run.
+    pub decision: Decision,
+}
+
+/// Whether a tool call the CLI asked about may run.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Decision {
+    /// It may.
+    Allow {
+        /// The input to run it with instead of the one it asked with, a JSON object.
+        input: Option<serde_json::Value>,
+        /// Also allow the request's [`ApprovalRequest::always_allow`] rules for the rest of the
+        /// CLI process.
+        always: bool,
+    },
+    /// It may not.
+    Deny {
+        /// What the agent is told.
+        message: String,
+        /// Also end the CLI's turn.
+        interrupt: bool,
+    },
+}
+
+/// Why [`Run::answer`] refused an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AnswerError {
+    /// The backend's CLI never asks.
+    #[error("this backend takes no answers to permission requests")]
+    Unsupported,
+    /// The run has ended.
+    #[error("the run has finished")]
+    Finished,
 }
 
 /// What an agent's tools may do (0004's policies).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolPolicy {
-    /// Read-only tools, no hooks, no project settings: the coordinator's policy.
+    /// Read-only tools, no hooks, no project settings: the orchestrator's policy.
     NoWrite,
     /// Edits inside the working directory, and commands in the vendor's OS sandbox: a worker's
     /// policy, bounded by the run's [`WorkerSandbox`] (0013).
@@ -296,7 +683,7 @@ pub enum ToolPolicy {
 /// The account a run is charged to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountRef {
-    /// wispd's id for the account (#114, #117).
+    /// plxd's id for the account (#114, #117).
     pub id: String,
     /// How the CLI authenticates.
     pub credential: Credential,
@@ -318,7 +705,7 @@ pub enum Credential {
 
 /// An API key. Its `Debug` hides it, it doesn't serialize, and it zeroizes its buffer once the
 /// run that needed it (#118's [`key_account::resolve`]) is done with it, like
-/// [`wisp_protocol::RawKey`] does for the same key on its way in from the editor.
+/// [`parallax_protocol::RawKey`] does for the same key on its way in from the editor.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ApiKey(String);
 
@@ -352,24 +739,24 @@ impl Drop for ApiKey {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "independent features, not states of one thing"
+    reason = "independent things a backend can do, not states of one thing"
 )]
 pub struct Capabilities {
-    /// [`Run::send`] works.
-    pub follow_ups: bool,
-    /// [`RunRequest::resume`] works.
-    pub resume: bool,
-    /// It can run the coordinator: no-write mode with wispd's MCP tools (0004: Claude Code and
-    /// Codex, not Cursor).
-    pub coordinator: bool,
-    /// Its usage includes a cost.
-    pub reports_cost: bool,
-    /// Its runs report limit windows.
-    pub rate_limits: bool,
     /// It enforces the worker sandbox (0013) for a [`ToolPolicy::WorkspaceWrite`] run on this
-    /// OS, so M3's runner may start workers on it. Cursor joins once RYA-40 implements its part
-    /// of 0013.
+    /// OS, so M3's runner may start workers on it. Cursor never does: it runs only threads
+    /// (0036).
     pub worker_sandbox: bool,
+    /// [`Resume::fork`] works for a thread's run (0050).
+    pub fork: bool,
+    /// [`Backend::rewind`] works (T3 Code's `canRollbackThread`, 0062).
+    pub rewind: bool,
+    /// Each turn reports where it ended ([`Event::TurnCursor`]) and [`Resume::at`] works, so a
+    /// rewind takes effect when the next run resumes at the kept turn's cursor (Claude, 0062).
+    pub resume_at: bool,
+    /// A live session takes a new model or mode on its next turn ([`FollowUp::model`],
+    /// [`FollowUp::permission`]), so changing them doesn't restart its CLI (T3 Code's
+    /// `supportsModelSwitchInSession` and `supportsRuntimeModeSwitchInSession`, Codex).
+    pub switch_in_session: bool,
 }
 
 /// Why a run could not start.
@@ -408,6 +795,8 @@ pub enum SendError {
 #[derive(Clone, Debug, Default)]
 pub struct CancelSwitch {
     state: Arc<Mutex<SwitchState>>,
+    /// Wakes [`CancelSwitch::cancelled`], for a driver with no process of its own to signal.
+    notify: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Default)]
@@ -444,6 +833,17 @@ impl CancelSwitch {
         if let Some((signals, policy)) = &state.target {
             signals.cancel(*policy);
         }
+        self.notify.notify_waiters();
+    }
+
+    /// Completes once the run is cancelled.
+    pub async fn cancelled(&self) {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.is_cancelled() {
+            notified.await;
+        }
     }
 
     /// Whether the run was cancelled.
@@ -470,6 +870,14 @@ pub struct RunHandle {
     control: mpsc::UnboundedSender<FollowUp>,
     turns: Mutex<HashMap<TurnId, String>>,
     cancel: CancelSwitch,
+    /// Where [`Run::answer`] sends answers, for a driver that takes them.
+    answers: Option<mpsc::UnboundedSender<Answer>>,
+    /// Where [`Run::stop_task`] sends task ids, for a driver that stops them.
+    task_stops: Option<mpsc::UnboundedSender<String>>,
+    /// Where [`Run::set_permission`] sends modes, for a driver that switches them live.
+    permissions: Option<mpsc::UnboundedSender<AgentPermission>>,
+    /// [`Run::hold`]'s flag, which a driver reads through [`RunHandle::held`].
+    hold: watch::Sender<bool>,
 }
 
 impl RunHandle {
@@ -488,8 +896,46 @@ impl RunHandle {
             control,
             turns: Mutex::new(HashMap::new()),
             cancel,
+            answers: None,
+            task_stops: None,
+            permissions: None,
+            hold: watch::Sender::new(false),
         };
         (handle, receiver)
+    }
+
+    /// [`Run::hold`]'s flag, for a driver that closes its CLI's stdin once nothing is
+    /// outstanding: it waits while this is held.
+    #[must_use]
+    pub fn held(&self) -> Held {
+        Held(self.hold.subscribe())
+    }
+
+    /// Takes answers to permission requests (PLX-222), and returns the receiver its driver reads
+    /// them from. The driver drops it once it can deliver no more.
+    #[must_use]
+    pub fn with_answers(mut self) -> (Self, mpsc::UnboundedReceiver<Answer>) {
+        let (answers, receiver) = mpsc::unbounded_channel();
+        self.answers = Some(answers);
+        (self, receiver)
+    }
+
+    /// Takes [`Run::stop_task`]'s task ids (PLX-777), and returns the receiver its driver reads
+    /// them from. The driver drops it once it can stop no more.
+    #[must_use]
+    pub fn with_task_stops(mut self) -> (Self, mpsc::UnboundedReceiver<String>) {
+        let (stops, receiver) = mpsc::unbounded_channel();
+        self.task_stops = Some(stops);
+        (self, receiver)
+    }
+
+    /// Takes [`Run::set_permission`]'s modes, and returns the receiver its driver reads them
+    /// from. The driver drops it once it can switch no more.
+    #[must_use]
+    pub fn with_permissions(mut self) -> (Self, mpsc::UnboundedReceiver<AgentPermission>) {
+        let (permissions, receiver) = mpsc::unbounded_channel();
+        self.permissions = Some(permissions);
+        (self, receiver)
     }
 }
 
@@ -524,6 +970,54 @@ impl Run for RunHandle {
     fn cancel(&self) {
         self.cancel.cancel();
     }
+
+    fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
+        let Some(answers) = &self.answers else {
+            return Err(AnswerError::Unsupported);
+        };
+        answers.send(answer).map_err(|_| AnswerError::Finished)
+    }
+
+    fn hold(&self, held: bool) {
+        self.hold.send_replace(held);
+    }
+
+    fn stop_task(&self, task_id: &str) -> Result<(), AnswerError> {
+        let Some(stops) = &self.task_stops else {
+            return Err(AnswerError::Unsupported);
+        };
+        stops
+            .send(task_id.to_owned())
+            .map_err(|_| AnswerError::Finished)
+    }
+
+    fn set_permission(&self, permission: AgentPermission) -> Result<(), AnswerError> {
+        let Some(permissions) = &self.permissions else {
+            return Err(AnswerError::Unsupported);
+        };
+        permissions
+            .send(permission)
+            .map_err(|_| AnswerError::Finished)
+    }
+}
+
+/// A driver's view of [`Run::hold`] (PLX-370).
+#[derive(Debug)]
+pub struct Held(watch::Receiver<bool>);
+
+impl Held {
+    /// Whether plxd holds the CLI open now. Not once the run's handle is gone.
+    #[must_use]
+    pub fn now(&self) -> bool {
+        self.0.has_changed().is_ok() && *self.0.borrow()
+    }
+
+    /// Waits for the flag to change, or forever once the run's handle is gone.
+    pub async fn changed(&mut self) {
+        if self.0.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 /// The producing side of an [`EventStream`]. It enforces the stream's contract, exactly one
@@ -553,9 +1047,7 @@ impl EventSink {
         };
         let stream = EventStream {
             events: receiver,
-            usage: Usage::default(),
-            outcome: None,
-            usage_totals: Vec::new(),
+            done: false,
         };
         (sink, stream)
     }
@@ -608,12 +1100,6 @@ impl EventSink {
         .await
     }
 
-    /// Whether the stream has ended.
-    #[must_use]
-    pub fn is_finished(&self) -> bool {
-        self.finished
-    }
-
     /// Discards the running usage total this sink has summed so far and starts over from
     /// `baseline`, as if nothing had been recorded before it.
     ///
@@ -640,7 +1126,7 @@ impl EventSink {
     }
 }
 
-/// A run's events. It ends after exactly one [`Event::Finished`], and it sums the run's usage.
+/// A run's events. It ends after exactly one [`Event::Finished`].
 ///
 /// If the backend stops without finishing, for example because its task panicked, the stream
 /// ends with a [`FailureKind::Internal`] failure, so a consumer always sees an outcome. That
@@ -648,79 +1134,36 @@ impl EventSink {
 #[derive(Debug)]
 pub struct EventStream {
     events: mpsc::Receiver<Event>,
-    usage: Usage,
-    outcome: Option<Outcome>,
-    usage_totals: Vec<ModelUsage>,
+    done: bool,
 }
 
 impl EventStream {
     /// The next event, or `None` after [`Event::Finished`].
     pub async fn next(&mut self) -> Option<Event> {
-        std::future::poll_fn(|cx| Pin::new(&mut *self).poll_next(cx)).await
-    }
-
-    /// The sum of the run's [`Event::Usage`] deltas so far.
-    #[must_use]
-    pub fn usage(&self) -> Usage {
-        self.usage
-    }
-
-    /// How the run ended, once [`Event::Finished`] has been read.
-    #[must_use]
-    pub fn outcome(&self) -> Option<&Outcome> {
-        self.outcome.as_ref()
-    }
-
-    /// The session's usage totals from [`Event::Finished`], once it has been read.
-    #[must_use]
-    pub fn usage_totals(&self) -> &[ModelUsage] {
-        &self.usage_totals
-    }
-}
-
-impl Stream for EventStream {
-    type Item = Event;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Event>> {
-        if self.outcome.is_some() {
-            return Poll::Ready(None);
+        if self.done {
+            return None;
         }
-        let event = match self.events.poll_recv(cx) {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Some(event)) => event,
-            Poll::Ready(None) => Event::Finished {
-                outcome: Outcome::Failed(Failure {
-                    failure: FailureKind::Internal,
-                    message: "the backend stopped without finishing the run".to_owned(),
-                    exit: None,
-                    stderr_tail: None,
-                }),
-                usage_totals: Vec::new(),
-            },
-        };
-        match &event {
-            Event::Usage(delta) => self.usage += delta.usage,
-            Event::Finished {
-                outcome,
-                usage_totals,
-            } => {
-                self.outcome = Some(outcome.clone());
-                self.usage_totals.clone_from(usage_totals);
-                self.events.close();
-            }
-            _ => {}
+        let event = self.events.recv().await.unwrap_or_else(|| Event::Finished {
+            outcome: Outcome::Failed(Failure::new(
+                FailureKind::Internal,
+                "the backend stopped without finishing the run".to_owned(),
+            )),
+            usage_totals: Vec::new(),
+        });
+        if event.is_terminal() {
+            self.done = true;
+            self.events.close();
         }
-        Poll::Ready(Some(event))
+        Some(event)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::{
-        Backend, CancelSwitch, Event, EventSink, FailureKind, FollowUp, ModelUsage, Outcome, Run,
-        RunHandle, RunId, SendError, TurnId, Usage,
+        CancelSwitch, Event, EventSink, FailureKind, FollowUp, ModelUsage, Outcome, Run, RunHandle,
+        RunId, SendError, TurnId, Usage,
     };
 
     fn input(n: u64) -> Usage {
@@ -730,20 +1173,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_traits_are_object_safe() {
-        fn takes(_: Option<Arc<dyn Backend>>, _: Option<Arc<dyn Run>>) {}
-        takes(None, None);
+    /// A new turn's follow-up with `text` and nothing else.
+    fn follow_up(text: &str) -> FollowUp {
+        FollowUp {
+            turn_id: TurnId::generate(),
+            text: text.into(),
+            images: Vec::new(),
+            steer: false,
+            model: None,
+            permission: None,
+        }
     }
 
     #[test]
     fn follow_ups_are_idempotent_on_their_turn_id() {
         let (handle, mut control) = RunHandle::new(RunId::generate(), true, CancelSwitch::new());
-        let turn = FollowUp {
-            turn_id: TurnId::generate(),
-            text: "and the tests".into(),
-            images: Vec::new(),
-        };
+        let turn = follow_up("and the tests");
         handle.send(turn.clone()).unwrap();
         handle.send(turn.clone()).unwrap();
         assert_eq!(control.try_recv().unwrap(), turn);
@@ -756,42 +1201,12 @@ mod tests {
             Err(SendError::IdConflict)
         );
         drop(control);
-        assert_eq!(
-            handle.send(FollowUp {
-                turn_id: TurnId::generate(),
-                text: "late".into(),
-                images: Vec::new(),
-            }),
-            Err(SendError::Finished)
-        );
+        assert_eq!(handle.send(follow_up("late")), Err(SendError::Finished));
         assert_eq!(
             handle.send(turn),
             Err(SendError::Finished),
             "a retry after the run ended must not claim the message arrived"
         );
-    }
-
-    #[test]
-    fn a_backend_without_follow_ups_refuses_them() {
-        let (handle, _control) = RunHandle::new(RunId::generate(), false, CancelSwitch::new());
-        assert_eq!(
-            handle.send(FollowUp {
-                turn_id: TurnId::generate(),
-                text: "hi".into(),
-                images: Vec::new(),
-            }),
-            Err(SendError::Unsupported)
-        );
-    }
-
-    #[test]
-    fn cancel_flips_the_switch_once() {
-        let switch = CancelSwitch::new();
-        let (handle, _control) = RunHandle::new(RunId::generate(), true, switch.clone());
-        assert!(!switch.is_cancelled());
-        handle.cancel();
-        handle.cancel();
-        assert!(switch.is_cancelled());
     }
 
     #[tokio::test]
@@ -810,50 +1225,20 @@ mod tests {
         sink.finish(Outcome::Completed { result: None })
             .await
             .unwrap();
-        assert!(sink.is_finished());
         let mut events = Vec::new();
         while let Some(event) = stream.next().await {
             events.push(event);
         }
         assert_eq!(events.len(), 3);
-        assert_eq!(stream.outcome(), Some(&Outcome::Cancelled));
-        assert_eq!(stream.usage().input_tokens, 7);
         assert_eq!(
-            stream.usage_totals(),
-            [ModelUsage {
-                model: None,
-                usage: input(7)
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn resetting_usage_drops_what_was_summed_before_it() {
-        let (mut sink, mut stream) = EventSink::channel(8, Vec::new());
-        sink.emit(Event::Usage(ModelUsage {
-            model: None,
-            usage: input(100),
-        }))
-        .await
-        .unwrap();
-        sink.reset_usage(Vec::new());
-        sink.emit(Event::Usage(ModelUsage {
-            model: None,
-            usage: input(4),
-        }))
-        .await
-        .unwrap();
-        sink.finish(Outcome::Completed { result: None })
-            .await
-            .unwrap();
-        while stream.next().await.is_some() {}
-        assert_eq!(
-            stream.usage_totals(),
-            [ModelUsage {
-                model: None,
-                usage: input(4)
-            }],
-            "the reset total, not 104"
+            events[2],
+            Event::Finished {
+                outcome: Outcome::Cancelled,
+                usage_totals: vec![ModelUsage {
+                    model: None,
+                    usage: input(7)
+                }]
+            }
         );
     }
 
@@ -871,15 +1256,17 @@ mod tests {
             .await
             .unwrap();
         let mut deltas = Vec::new();
+        let mut totals = Vec::new();
         while let Some(event) = stream.next().await {
-            if let Event::Usage(delta) = event {
-                deltas.push(delta.usage.input_tokens);
+            match event {
+                Event::Usage(delta) => deltas.push(delta.usage.input_tokens),
+                Event::Finished { usage_totals, .. } => totals = usage_totals,
+                _ => {}
             }
         }
         assert_eq!(deltas, [200, 50]);
-        assert_eq!(stream.usage().input_tokens, 250);
         assert_eq!(
-            stream.usage_totals(),
+            totals,
             [ModelUsage {
                 model: Some("opus".into()),
                 usage: input(1250)

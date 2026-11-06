@@ -1,0 +1,67 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/update",
+    "params": { "version": "2610.10912.13045-nightly" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "version": "2610.10912.13045-nightly",
+      "restart": "afterRuns",
+      "runningAgents": 2,
+      "message": "Installed plxd 2610.10912.13045-nightly. plxd restarts into it once its 2 running agents finish."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "host/update",
+    "params": { "version": "2610.10912.13045-nightly" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "error": {
+      "code": -32000,
+      "message": "The downloaded parallax-plxd-2610.10912.13045-nightly-linux-x64 doesn't match the release's SHA-256, so plxd didn't install it.",
+      "data": {
+        "kind": "hostUpdateFailed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "host/update",
+    "params": { "version": "2610.10912.13045-nightly", "now": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "version": "2610.10912.13045-nightly",
+      "restart": "now",
+      "runningAgents": 2,
+      "message": "Installed plxd 2610.10912.13045-nightly. plxd restarts into it now, interrupting its 2 running agents."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "host/announceUpdate",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "host/updating",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  }
+]

@@ -1,0 +1,36 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/remoteControl",
+    "params": {
+      "runId": "01990b8a-7c00-7d3e-8f4a-5b6c7d8e9f01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "session": {
+        "sessionId": "session_018aqLm2Vb7Xy",
+        "url": "https://claude.ai/code/session_018aqLm2Vb7Xy",
+        "repository": "ryan-stoffel/learn-rust",
+        "branch": "main",
+        "state": "offline"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/remoteControl",
+    "params": {
+      "runId": "01989835-0e80-7d3e-8f4a-5b6c7d8e9f02"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {}
+  }
+]

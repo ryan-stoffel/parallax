@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Decides what release.yml's plan job builds (0051). Writes key=value lines to GITHUB_OUTPUT:
+# tag, version, channel (nightly or latest), sha, build (true or false), and dry_run (1, or
+# empty when this run publishes).
+#
+# A schedule publishes a nightly of the default branch when that branch has commits since the
+# last nightly and the last nightly is at least six hours old. A manual nightly publishes
+# immediately, and only from the default branch. A manual stable release publishes the latest
+# nightly's commit without -nightly. COMMIT_INPUT names a different commit, for a fix that
+# cannot wait for the next snapshot; VERSION_INPUT overrides its timestamp. Any other manual
+# run is a dry run: it versions the selected branch and sets dry_run=1.
+#
+# The version is the commit's committer time in UTC as YYMM.1DDHH.1MMSS (0030). A nightly
+# appends -nightly, so the stable tag of that same commit is newer.
+#
+# Environment: EVENT (schedule or workflow_dispatch), CHANNEL_INPUT (dry-run, nightly, or
+# stable), REF, SHA, DEFAULT_BRANCH, COMMIT_INPUT, VERSION_INPUT, GH_TOKEN, GH_REPO.
+# NOW_EPOCH overrides the clock, for tests.
+set -euo pipefail
+
+GAP=21600
+
+emit() {
+  printf '%s\n' "$1" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+}
+
+fail() {
+  echo "plan-release: $*" >&2
+  exit 1
+}
+
+# Prints YYMM.1DDHH.1MMSS for the commit, with -nightly when the second argument is 1.
+version_of() {
+  local sha=$1 nightly=$2 t version
+  t=$(gh api "repos/$GH_REPO/commits/$sha" --jq .commit.committer.date)
+  [[ $t =~ ^20([0-9]{2})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$ ]] \
+    || fail "$sha has no UTC committer time ($t)"
+  version="${BASH_REMATCH[1]}${BASH_REMATCH[2]}.1${BASH_REMATCH[3]}${BASH_REMATCH[4]}.1${BASH_REMATCH[5]}${BASH_REMATCH[6]}"
+  if [ "$nightly" = 1 ]; then version+=-nightly; fi
+  printf '%s\n' "$version"
+}
+
+epoch_of() {
+  python3 -c 'import datetime, sys; print(int(datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))' "$1"
+}
+
+# The newest published nightly, "published_at<TAB>tag", or nothing. One page: a hundred
+# releases newer than the latest nightly would hide it, and stable releases are rare.
+latest_nightly() {
+  gh api "repos/$GH_REPO/releases?per_page=100" --jq '
+    [.[]
+      | select(.draft == false and .published_at != null)
+      | select((.tag_name | endswith("-nightly")) or (.tag_name | startswith("nightly-")))]
+    | .[0]
+    | if . == null then empty else [.published_at, .tag_name] | @tsv end'
+}
+
+compare_status() {
+  gh api "repos/$GH_REPO/compare/$1...$2" --jq .status
+}
+
+finish() {
+  local build=$1 dry=$2 channel=$3 version=$4 sha=$5 tag=
+  [ -n "$version" ] && tag="v$version"
+  emit "build=$build"
+  emit "dry_run=$dry"
+  emit "channel=$channel"
+  emit "version=$version"
+  emit "sha=$sha"
+  emit "tag=$tag"
+}
+
+skip() {
+  echo "plan-release: $*" >&2
+  finish false "" nightly "" "$SHA"
+  exit 0
+}
+
+require_default() {
+  [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ] \
+    || fail "$1 publishes from $DEFAULT_BRANCH; this run is $REF. Use dry-run on any other branch."
+}
+
+: "${EVENT:?}" "${REF:?}" "${SHA:?}" "${DEFAULT_BRANCH:?}" "${GH_REPO:?}"
+channel_input=${CHANNEL_INPUT:-}
+commit_input=${COMMIT_INPUT:-}
+version_input=${VERSION_INPUT:-}
+
+if [ "$EVENT" = workflow_dispatch ] && [ "$channel_input" != nightly ] && [ "$channel_input" != stable ]; then
+  nightly=1
+  channel=nightly
+  if [ "$REF" = refs/heads/main ]; then nightly=0; channel=latest; fi
+  finish true 1 "$channel" "$(version_of "$SHA" "$nightly")" "$SHA"
+  exit 0
+fi
+
+if [ "$EVENT" = schedule ] || [ "$channel_input" = nightly ]; then
+  require_default "a nightly"
+  if [ "$EVENT" = schedule ]; then
+    latest=$(latest_nightly)
+    if [ -n "$latest" ]; then
+      published=${latest%%$'\t'*}
+      tag=${latest#*$'\t'}
+      now=${NOW_EPOCH:-$(date -u +%s)}
+      if [ $((now - $(epoch_of "$published"))) -lt "$GAP" ]; then
+        skip "$tag was published less than six hours ago."
+      fi
+      status=$(compare_status "$tag" "$SHA")
+      case "$status" in
+        ahead | diverged) ;;
+        identical | behind) skip "$DEFAULT_BRANCH is $status relative to $tag." ;;
+        *) fail "compare $tag...$SHA returned ${status:-nothing}" ;;
+      esac
+    else
+      echo "plan-release: no published nightly. Proceeding." >&2
+    fi
+  fi
+  finish true "" nightly "$(version_of "$SHA" 1)" "$SHA"
+  exit 0
+fi
+
+[ "$channel_input" = stable ] || fail "unknown event $EVENT channel ${channel_input:-<empty>}"
+require_default "a stable release"
+
+if [ -n "$commit_input" ]; then
+  sha=$commit_input
+else
+  latest=$(latest_nightly)
+  [ -n "$latest" ] || fail "no published nightly to promote."
+  tag=${latest#*$'\t'}
+  [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly$ ]] \
+    || fail "$tag is not a timestamp nightly. Pass commit and version to publish a chosen commit."
+  sha=$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)
+  status=$(compare_status "$sha" "$DEFAULT_BRANCH")
+  case "$status" in
+    ahead | identical) ;;
+    *) fail "$sha ($tag) is not contained in $DEFAULT_BRANCH (${status:-nothing})." ;;
+  esac
+fi
+
+if [ -n "$version_input" ]; then
+  [[ $version_input =~ ^[0-9]{4}\.[0-9]{5}\.[0-9]{5}$ ]] \
+    || fail "version must look like 2610.10402.10000, without -nightly."
+  version=$version_input
+else
+  version=$(version_of "$sha" 0)
+  if [ -z "$commit_input" ]; then
+    base=${tag#v}
+    base=${base%-nightly}
+    [ "$version" = "$base" ] || fail "$tag does not match $sha's committer time ($version)."
+  fi
+fi
+
+finish true "" latest "$version" "$sha"

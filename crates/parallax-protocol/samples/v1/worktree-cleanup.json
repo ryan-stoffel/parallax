@@ -1,0 +1,24 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/settings/get",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "autoResume": true, "cleanWorktrees": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "host/settings/set",
+    "params": { "cleanWorktrees": false }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": { "autoResume": true, "cleanWorktrees": false }
+  }
+]

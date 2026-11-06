@@ -1,0 +1,336 @@
+//! SQLite-backed storage for Parallax projects, key accounts, agent runs and the images sent to
+//! them, normal threads and their repo entries, orchestrators' inboxes, landing queues, and their
+//! children's questions, plxd's event log, its dispatcher's receipts, effects, and thread graph
+//! (0059), and its scheduled tasks and pull request watches (0063).
+//!
+//! [`Store`] owns one SQLite connection and applies its own versioned
+//! migrations on open. The caller chooses the database path; this crate
+//! never constructs Parallax's application data directory itself.
+//!
+//! A key account ([`Account`]) is metadata only: its API key lives in the macOS Keychain, never
+//! in this database (#117).
+
+mod accounts;
+mod attached;
+mod board;
+mod defaults;
+mod error;
+mod events;
+mod graph;
+mod images;
+mod inbox;
+mod landings;
+mod lineage;
+mod migrations;
+mod orchestration;
+mod orchestrator;
+mod orchestrator_sessions;
+mod placements;
+mod pr_guides;
+mod questions;
+mod queue;
+mod receipts;
+mod runs;
+mod settings;
+mod threads;
+mod timestamp;
+mod triggers;
+mod turns;
+mod usage;
+mod wakes;
+mod worktree;
+mod you_entries;
+
+use std::fs;
+use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use rusqlite::{Connection, Error as SqliteError, ErrorCode, Params, Statement};
+use uuid::Uuid;
+
+pub use accounts::{Account, AccountFields};
+pub use board::BoardItem;
+pub use defaults::RoleDefault;
+pub use error::StoreError;
+pub use events::{CompactableTurn, StoredEvent};
+pub use graph::{GraphNode, GraphRun, RuntimeRequest};
+pub use images::StoredImage;
+pub use inbox::InboxItem;
+pub use landings::Landing;
+pub use lineage::Lineage;
+pub use orchestration::{ClaimedEffect, EffectOutcome, NewEffect, OrchestrationReceipt};
+pub use orchestrator::{ChosenIcon, Orchestrator, OrchestratorEdit, OrchestratorFields};
+pub use orchestrator_sessions::NOT_RESUMABLE;
+pub use placements::Placement;
+pub use questions::Question;
+pub use queue::QueuedRow;
+pub use receipts::{CommandReceipt, RECEIPT_RETENTION_SECS};
+pub use runs::{Run, RunAccept, RunFields, RunState};
+pub use settings::UsageClaim;
+pub use threads::{ForkedFrom, Repo, RepoFields, Thread, ThreadFields, ThreadUpdate};
+pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageHour, UsageSummary};
+pub use wakes::WakeState;
+pub use worktree::{Worktree, WorktreeFields};
+pub use you_entries::YouEntry;
+
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const WAL_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+/// A connection to a Parallax project database.
+#[derive(Debug)]
+pub struct Store {
+    conn: Connection,
+}
+
+impl Store {
+    /// Opens the database at `path`, creating it and its parent directory
+    /// on first run, and applying any pending migrations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent directory can't be created, if
+    /// SQLite can't be opened or configured, or if the database was already
+    /// migrated by a newer build of this crate
+    /// ([`StoreError::UnsupportedSchemaVersion`]).
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut conn = Connection::open(path)?;
+        configure(&conn)?;
+        migrations::run(&mut conn)?;
+
+        Ok(Self { conn })
+    }
+
+    /// Opens a second connection to a database that [`Store::open`] already opened, for reads
+    /// only: `query_only` makes any write fail. It runs no migrations, and WAL, which the file
+    /// keeps, lets it read while the other connection writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SQLite can't open or configure the connection.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        Ok(Self { conn })
+    }
+
+    /// Turns SQLite's `secure_delete` on or off for this connection: on, deleted content is
+    /// overwritten with zeros rather than left in freed pages, as when wiping a secret (PLX-648).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_secure_delete(&self, on: bool) -> Result<(), StoreError> {
+        self.conn
+            .pragma_update(None, "secure_delete", if on { "ON" } else { "OFF" })?;
+        Ok(())
+    }
+
+    /// Sets how long this connection waits for another's lock before failing with `busy`.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_busy_timeout(&self, timeout: Duration) -> Result<(), StoreError> {
+        self.conn.busy_timeout(timeout)?;
+        Ok(())
+    }
+
+    /// Rebuilds the database with `VACUUM`, which leaves no freed page behind, then checkpoints
+    /// the WAL and truncates it. Returns whether the checkpoint finished: a reader still on an
+    /// older snapshot stops it.
+    ///
+    /// # Errors
+    ///
+    /// A database error, such as an open transaction.
+    pub fn vacuum(&self) -> Result<bool, StoreError> {
+        self.conn.execute_batch("VACUUM")?;
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        Ok(busy == 0)
+    }
+
+    /// Stops this connection's commits from checkpointing the WAL (`wal_autocheckpoint = 0`), for
+    /// a writer whose checkpoints [`Store::checkpoint`] runs on another connection instead.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn stop_auto_checkpoints(&self) -> Result<(), StoreError> {
+        self.conn.pragma_update(None, "wal_autocheckpoint", 0)?;
+        Ok(())
+    }
+
+    /// Copies the WAL's committed pages into the database file and syncs it, without waiting for
+    /// or blocking the writer or readers (`wal_checkpoint(PASSIVE)`). Pages a reader still needs
+    /// wait for the next one.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn checkpoint(&self) -> Result<(), StoreError> {
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    /// Starts a read transaction (`BEGIN`), so several reads see one snapshot. The event log's
+    /// own paged readers use it so a compact sweep cannot land between their pages (0052).
+    ///
+    /// # Errors
+    ///
+    /// A database error, such as one already open.
+    pub fn begin_read(&self) -> Result<(), StoreError> {
+        self.conn.execute_batch("BEGIN")?;
+        Ok(())
+    }
+
+    /// Starts a write transaction, taking the write lock now (`BEGIN IMMEDIATE`). Methods that
+    /// write several rows use savepoints, so they nest inside it. The statement is cached, since
+    /// the writer runs one per job.
+    ///
+    /// # Errors
+    ///
+    /// A database error, such as one already open.
+    pub fn begin(&self) -> Result<(), StoreError> {
+        self.conn.prepare_cached("BEGIN IMMEDIATE")?.execute([])?;
+        Ok(())
+    }
+
+    /// Commits the transaction [`Store::begin`] started, from a cached statement as `begin` does.
+    ///
+    /// # Errors
+    ///
+    /// A database error. The transaction may still be open then, so roll it back.
+    pub fn commit(&self) -> Result<(), StoreError> {
+        self.conn.prepare_cached("COMMIT")?.execute([])?;
+        Ok(())
+    }
+
+    /// Rolls back the transaction [`Store::begin`] started, if it is still open.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn rollback(&self) -> Result<(), StoreError> {
+        if !self.conn.is_autocommit() {
+            self.conn.execute_batch("ROLLBACK")?;
+        }
+        Ok(())
+    }
+}
+
+/// Runs `stmt`, whose first column is an id, and parses each row's.
+fn ids(stmt: &mut Statement<'_>, params: impl Params) -> Result<Vec<Uuid>, StoreError> {
+    stmt.query_map(params, |row| row.get::<_, String>(0))?
+        .map(|id| Ok(Uuid::parse_str(&id?)?))
+        .collect()
+}
+
+/// Sets the pragmas every connection needs: a busy timeout so lock
+/// contention waits instead of failing immediately, WAL journaling so
+/// readers never block on a writer, and foreign key enforcement.
+fn configure(conn: &Connection) -> Result<(), StoreError> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    set_wal_mode(conn)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+
+    Ok(())
+}
+
+/// Sets `journal_mode=WAL`, retrying on `SQLITE_BUSY` for up to
+/// `BUSY_TIMEOUT`.
+///
+/// This pragma needs its own retry loop: unlike ordinary reads and writes,
+/// changing the journal mode does not go through SQLite's busy-handler
+/// callback, so `Connection::busy_timeout` alone does not make it wait out
+/// lock contention. Confirmed empirically — two connections racing to open
+/// the same brand-new database made this pragma fail instantly with
+/// `SQLITE_BUSY` well under a millisecond in, never waiting anywhere near
+/// `BUSY_TIMEOUT` on its own.
+fn set_wal_mode(conn: &Connection) -> Result<(), StoreError> {
+    let deadline = Instant::now() + BUSY_TIMEOUT;
+    loop {
+        let attempt = conn
+            .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0));
+        match attempt {
+            Ok(mode) => {
+                return if mode.eq_ignore_ascii_case("wal") {
+                    Ok(())
+                } else {
+                    Err(StoreError::JournalMode(mode))
+                };
+            }
+            Err(SqliteError::SqliteFailure(e, _))
+                if e.code == ErrorCode::DatabaseBusy && Instant::now() < deadline =>
+            {
+                thread::sleep(WAL_RETRY_INTERVAL);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+
+    #[test]
+    fn moving_paths_changes_only_those_under_the_folder() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let mut store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");
+        for (id, path) in [
+            (uuid::Uuid::now_v7(), "/old/data/scratch"),
+            (uuid::Uuid::now_v7(), "/old/data-other/repo"),
+        ] {
+            let fields = crate::RepoFields {
+                name: id.to_string(),
+                path: path.to_owned(),
+                scratch: false,
+                project: false,
+            };
+            store.add_repo(id, &fields).expect("add repo");
+        }
+
+        store.move_paths("/old/data", "/new").expect("move");
+
+        let mut paths: Vec<String> = store
+            .conn
+            .prepare("SELECT path FROM repos")
+            .and_then(|mut rows| rows.query_map([], |row| row.get(0))?.collect())
+            .expect("read repos");
+        paths.sort();
+        assert_eq!(paths, ["/new/scratch", "/old/data-other/repo"]);
+    }
+
+    #[test]
+    fn open_enables_wal_busy_timeout_and_foreign_keys() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");
+
+        let journal_mode: String = store
+            .conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .expect("read journal_mode");
+        assert_eq!(journal_mode, "wal");
+
+        let foreign_keys: i64 = store
+            .conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .expect("read foreign_keys");
+        assert_eq!(foreign_keys, 1);
+
+        let busy_timeout: i64 = store
+            .conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .expect("read busy_timeout");
+        assert_eq!(busy_timeout, 5000, "busy_timeout should match BUSY_TIMEOUT");
+    }
+}

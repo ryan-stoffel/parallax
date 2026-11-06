@@ -1,29 +1,47 @@
+import { fileURLToPath } from "node:url";
+
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
+import { prepareVoice } from "./scripts/voice-assets.mjs";
 
-// The renderer's Content Security Policy, set as a <meta> tag because the
-// built app loads from file://, where response headers can't carry one.
+// The renderer's Content Security Policy, set as a <meta> tag so it applies
+// alike under the dev server and the built app's app:// scheme (appScheme.ts).
 // Inline styles are allowed: xterm.js (SignInTerminal) sizes and colors its
 // rows with <style> tags it writes, as Vite's dev server does. Scripts stay
-// 'self', except for React Refresh's inline preamble in dev. The dev server's
+// 'self', except for React Refresh's inline preamble in dev, and may compile
+// WebAssembly, which the Device view's 3D models decode their meshes with
+// (PLX-886). The dev server's
 // HMR websocket is same-origin, so 'self'. Images may be data: URLs, which is
-// how a message's images show (RYA-193); agent Markdown never loads images.
+// how a message's images show (PLX-193), or any https one, which a pull request's
+// description and comments show wherever it's hosted (PLX-517, PLX-1060). Agent Markdown never
+// requests a remote image (AgentChat.tsx's `resolveImageSource`), only images in its thread's
+// folder (PLX-834). blob: is those, and the images and videos an agent presented (PLX-785), made
+// from bytes plxd read.
+// Open VSX, and the host its downloads redirect to, is where Settings > Appearance searches for
+// and downloads color themes, with their icons. connect-src blob: is the textures in the Device
+// panel's 3D models, which three.js decodes by fetching blob: URLs it makes (PLX-886).
 const csp = (dev: boolean) =>
   [
     "default-src 'self'",
-    dev && "script-src 'self' 'unsafe-inline'",
+    `script-src 'self' 'wasm-unsafe-eval'${dev ? " 'unsafe-inline'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    // KaTeX's fonts, which Vite inlines as data: URLs when small.
+    "font-src 'self' data:",
+    // crx: is the side panel browser's extension icons (Extensions.tsx).
+    "img-src 'self' data: blob: crx: https:",
+    "connect-src 'self' blob: https://open-vsx.org https://openvsx.eclipsecontent.org",
+    // html_render pages (PLX-639), which main serves with a policy of their own, and browser
+    // recordings. plx-file: is presented videos, which main streams from their host (PLX-836).
+    "frame-src plx-render:",
+    "media-src plx-render: plx-file: blob:",
     "object-src 'none'",
     "base-uri 'none'",
-  ]
-    .filter(Boolean)
-    .join("; ");
+  ].join("; ");
 
 const cspMeta: Plugin = {
-  name: "wisp-csp",
+  name: "parallax-csp",
   transformIndexHtml: (_html, ctx) => [
     {
       tag: "meta",
@@ -35,15 +53,28 @@ const cspMeta: Plugin = {
 
 // Main and preload are separate CommonJS bundles: a sandboxed preload must be
 // one self-contained file. Every dependency is inlined except Electron itself,
-// node-pty, and node-llama-cpp, whose native binaries can't be, so the packaged
-// app needs only their folders from node_modules (RYA-66, RYA-152).
-const external = ["electron", "node-pty", "node-llama-cpp"];
+// so the packaged app needs nothing from node_modules (PLX-66).
+const external = ["electron"];
 const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
-  entry: { [name]: `src/${name}/${name}.ts` },
+  entry: {
+    [name]: `src/${name}/${name}.ts`,
+    // The browser's own preloads: extensions' `browser` namespace pointed at the filled-in
+    // `chrome` (extensionBrowser.ts), and the Chrome Web Store's install calls (webStore.ts).
+    ...(name === "preload" && {
+      extensionBrowser: "src/preload/extensionBrowser.ts",
+      webStore: "src/preload/webStore.ts",
+    }),
+  },
+  // electron-chrome-extensions finds its preload for extensions' pages beside the bundle that
+  // inlines it, since the packaged app has no node_modules (extensions.ts).
+  ...(name === "main" && {
+    copy: ["node_modules/electron-chrome-extensions/dist/chrome-extension-api.preload.js"],
+  }),
   outDir: `dist/${name}`,
   format: "cjs",
   platform: "node",
   sourcemap: true,
+  minify: true,
   deps: {
     neverBundle: external,
     alwaysBundle: (id) => !external.includes(id) && !id.startsWith("node:"),
@@ -54,8 +85,31 @@ export default defineConfig({
   // Renderer (`vp dev`, `vp build`).
   root: "src/renderer",
   base: "./",
-  plugins: [react(), tailwindcss(), cspMeta],
-  build: { outDir: "../../dist/renderer", emptyOutDir: true },
+  plugins: [
+    react(),
+    tailwindcss(),
+    cspMeta,
+    { name: "parallax-voice-assets", buildStart: prepareVoice },
+  ],
+  optimizeDeps: { exclude: ["cactus-needle"] },
+  build: {
+    outDir: "../../dist/renderer",
+    emptyOutDir: true,
+    // The composer uses prosemirror-markdown's serializer only. Its module also builds a parser
+    // on markdown-it at load, which marking these calls pure and markdown-it side-effect free
+    // leaves out (109 KB). Other modules keep their package.json `sideEffects`.
+    rolldownOptions: {
+      // The app, and the web client plxd serves (web.html, PLX-651), which loads the same chunks.
+      input: {
+        index: fileURLToPath(new URL("src/renderer/index.html", import.meta.url)),
+        web: fileURLToPath(new URL("src/renderer/web.html", import.meta.url)),
+      },
+      treeshake: {
+        manualPureFunctions: ["MarkdownIt", "MarkdownParser", "Schema"],
+        moduleSideEffects: (id) => (/[\\/]markdown-it[\\/]/.test(id) ? false : undefined),
+      },
+    },
+  },
 
   // Main process and preload (`vp pack`).
   pack: [electronBundle("main"), electronBundle("preload")],
@@ -64,9 +118,20 @@ export default defineConfig({
   // protocol types keep the generator's formatting, but are still linted and
   // type-checked.
   lint: { options: { typeAware: true, typeCheck: true } },
-  fmt: { ignorePatterns: ["src/protocol/generated/**"] },
+  fmt: { ignorePatterns: ["src/protocol/generated/**", "src/renderer/settings/*.generated.json"] },
   test: {
     root: ".",
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
+    // Its ES modules import each other without file extensions, which only a bundler resolves,
+    // so tests bundle it too (browserTheme.ts). Enriched Markdown's web build is what the app
+    // bundles, by its `browser` field, which Node's resolution in tests skips.
+    server: {
+      deps: { inline: ["@material/material-color-utilities", "react-native-enriched-markdown"] },
+    },
+    alias: {
+      "react-native-enriched-markdown": fileURLToPath(
+        import.meta.resolve("react-native-enriched-markdown/lib/module/index.web.js"),
+      ),
+    },
   },
 });

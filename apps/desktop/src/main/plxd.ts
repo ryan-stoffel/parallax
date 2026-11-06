@@ -1,0 +1,319 @@
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { promisify } from "node:util";
+
+import { olderVersion } from "../preload/bridge";
+
+export type PlxdLookup = {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  /** `app.isPackaged`. */
+  packaged: boolean;
+  /** `process.resourcesPath`, where a packaged app bundles plxd (PLX-66). */
+  resourcesPath: string;
+  /** `app.getAppPath()`: `apps/desktop` in development. */
+  appPath: string;
+  exists?: (file: string) => boolean;
+};
+
+/**
+ * Where the local `plxd` is, or undefined if it can't be found. In order:
+ * 1. `PLXD_PATH`, the path setting. When set, it is the only candidate.
+ * 2. The bundled binary in a packaged app, or the repo's Cargo debug build in development.
+ * 3. `PATH`.
+ */
+export function findPlxd(lookup: PlxdLookup): string | undefined {
+  const exists = lookup.exists ?? existsSync;
+  const name = lookup.platform === "win32" ? "plxd.exe" : "plxd";
+  const override = lookup.env["PLXD_PATH"];
+  if (override) return exists(override) ? override : undefined;
+
+  const builtIn = lookup.packaged
+    ? path.join(lookup.resourcesPath, name)
+    : path.join(lookup.appPath, "../../target/debug", name);
+  if (exists(builtIn)) return builtIn;
+
+  // ponytail: a Finder-launched macOS app gets launchd's short PATH, so this finds only system
+  // folders there. Add a login-shell PATH probe if users hit it before packaging bundles plxd.
+  const dirs = (lookup.env["PATH"] ?? "").split(path.delimiter).filter(Boolean);
+  return dirs.map((dir) => path.join(dir, name)).find(exists);
+}
+
+/** Where versions before `~/.parallax` kept plxd's data folder. */
+function legacyDataDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string {
+  if (platform === "darwin") return path.join(home, "Library/Application Support/parallax");
+  if (platform === "win32")
+    return path.join(env["LOCALAPPDATA"] ?? path.join(home, "AppData", "Local"), "parallax");
+  const xdg = env["XDG_DATA_HOME"];
+  return path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(home, ".local/share"), "parallax");
+}
+
+/**
+ * plxd's data folder, as `DataDir::default_location` finds it (daemon/src/paths.rs):
+ * `PLXD_DATA_DIR`, else `~/.parallax`, unless only the older OS folder has a store
+ * (`~/Library/Application Support/parallax`, `%LOCALAPPDATA%\parallax`, or
+ * `$XDG_DATA_HOME/parallax`), which keeps working because the store holds absolute worktree paths.
+ */
+export function dataDir(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  home: string,
+  exists: (dir: string) => boolean = existsSync,
+): string {
+  const override = env["PLXD_DATA_DIR"];
+  if (override) return override;
+  const current = path.join(home, ".parallax");
+  const legacy = legacyDataDir(env, platform, home);
+  const hasStore = (dir: string) => exists(path.join(dir, "plxd.sqlite3"));
+  return !hasStore(current) && hasStore(legacy) ? legacy : current;
+}
+
+/**
+ * The app's own data (Electron's userData): `~/.parallax/desktop`, unless that doesn't exist and
+ * `legacy`, where Electron kept it before, does.
+ */
+export function appDataDir(
+  home: string,
+  legacy: string,
+  exists: (dir: string) => boolean = existsSync,
+): string {
+  const current = path.join(home, ".parallax", "desktop");
+  return !exists(current) && exists(legacy) ? legacy : current;
+}
+
+/**
+ * What `keepServing` (hosts.ts) does next, from `plxd service status`'s output: `done` once the
+ * service is running the copy at the copy's version (`runsCopy`); else `failed` when this
+ * launch's install didn't get it there (`installed`); else `install` when no agents are running
+ * (`runningAgents`, undefined when unknown), since `--replace` restarts `serve` and ends their
+ * runs; else `wait`.
+ */
+export function serviceStep(
+  status: string,
+  runsCopy: boolean,
+  runningAgents: number | undefined,
+  installed: boolean,
+): "done" | "failed" | "install" | "wait" {
+  const yes = (field: string) => new RegExp(`^${field}: true$`, "m").test(status);
+  if (yes("installed") && yes("loaded") && yes("running") && runsCopy) return "done";
+  if (installed) return "failed";
+  return runningAgents === 0 ? "install" : "wait";
+}
+
+/**
+ * Whether the service in `plxd service status`'s output (`status`) runs `plxd`: its `program:`
+ * line, or for a plxd from before PLX-576, which prints none, the service file it names (read with
+ * `read`) holding that path.
+ */
+export async function serviceRuns(
+  status: string,
+  plxd: string,
+  read: (file: string) => Promise<string>,
+): Promise<boolean> {
+  const program = /^program: (.*)$/m.exec(status)?.[1];
+  if (program !== undefined) return program === plxd;
+  const file = /^file: (.*)$/m.exec(status)?.[1];
+  // ponytail: the service file naming the copy's path, unescaped, is enough for a home folder
+  // without `&`, `%`, `$`, or quotes. Only an older plxd gets here.
+  return file !== undefined && (await read(file).catch(() => "")).includes(plxd);
+}
+
+/** The web client a packaged plxd serves, beside itself (`remote_web_dir`, PLX-651). */
+const WEB_CLIENT = path.join("app.asar.unpacked", "dist", "renderer");
+
+/**
+ * Keeps this computer's copy of the bundled plxd at `~/.parallax-plxd` under `home`, which plxd's
+ * login service runs (0072): written when it's missing or older than `bundled`, never over a
+ * newer one, such as `host/update`'s. The web client plxd serves from beside itself (`WEB_CLIENT`)
+ * is kept the same way on its own, by the version in `renderer.version` beside it, since
+ * `host/update` and plx install plxd without it. Each is copied into a temp folder there,
+ * then renamed into place: the web client and its version, then plxd, then `plxd.version` (0066).
+ * Windows can't replace a running `plxd.exe` but can rename it, so it moves aside first. Answers
+ * the copy and its version.
+ */
+export async function refreshCopy(
+  bundled: string,
+  home: string,
+  platform = process.platform,
+  version = plxdVersion,
+): Promise<{ plxd: string; version: string | undefined }> {
+  const name = platform === "win32" ? "plxd.exe" : "plxd";
+  const dir = path.join(home, ".parallax-plxd");
+  const plxd = path.join(dir, name);
+  // Electron's asar patch leaves `app.asar.unpacked` alone, as command.ts's Linux copy relies on.
+  const source = path.join(path.dirname(bundled), WEB_CLIENT);
+  const web = path.join(dir, WEB_CLIENT);
+  const [ours, theirs, theirWeb] = await Promise.all([
+    version(bundled),
+    version(plxd),
+    readFile(`${web}.version`, "utf8").then(
+      (text) => text.trim(),
+      () => undefined,
+    ),
+  ]);
+  const stale = (copied: string | undefined) =>
+    ours !== undefined && (copied === undefined || olderVersion(copied, ours));
+  const newPlxd = stale(theirs);
+  const newWeb = stale(theirWeb) && existsSync(source);
+  if (!newPlxd && !newWeb) return { plxd, version: theirs };
+  await mkdir(dir, { recursive: true });
+  const temp = await mkdtemp(path.join(dir, ".app-"));
+  try {
+    if (newWeb) {
+      await cp(source, path.join(temp, "web"), { recursive: true });
+      await writeFile(path.join(temp, "web.version"), `${ours}\n`);
+      // A folder can't be renamed over one with files in it, so the old one moves into `temp`.
+      await mkdir(path.dirname(web), { recursive: true });
+      await rename(web, path.join(temp, "old-web")).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+      await rename(path.join(temp, "web"), web);
+      await rename(path.join(temp, "web.version"), `${web}.version`);
+    }
+    if (!newPlxd) return { plxd, version: theirs };
+    await copyFile(bundled, path.join(temp, name));
+    await copyFile(
+      path.join(path.dirname(bundled), "plxd.version"),
+      path.join(temp, "plxd.version"),
+    );
+    if (platform === "win32") {
+      const aside = path.join(dir, "plxd.old.exe");
+      await rm(aside, { force: true }).catch(() => {}); // Still running: the rename below fails.
+      await rename(plxd, aside).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
+    await rename(path.join(temp, name), plxd);
+    await rename(path.join(temp, "plxd.version"), path.join(dir, "plxd.version"));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+  return { plxd, version: ours };
+}
+
+/** What `<plxd> --version` reports ("plxd 1.2.3" → "1.2.3"), or undefined if it can't run. */
+export async function plxdVersion(plxd: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await promisify(execFile)(plxd, ["--version"], { timeout: 10_000 });
+    return stdout.trim().split(/\s+/).at(-1);
+  } catch {
+    return undefined;
+  }
+}
+
+/** What `replaceServe` needs from the system. Tests pass fakes. */
+export type ServeSystem = {
+  /** The pid in `dir`'s `plxd.lock`. Throws when there's none. */
+  lockPid: (dir: string) => number;
+  /** The process's command line, as `ps -o args=` prints it. Rejects when it isn't running. */
+  args: (pid: number) => Promise<string>;
+  /** `process.kill`: SIGTERM by default; signal 0 throws once the process is gone. */
+  kill: (pid: number, signal?: 0) => void;
+  sleep: (ms: number) => Promise<void>;
+};
+
+/** plxd's login service, when it's installed: replaced from the copy, never the bundle (0072). */
+export type ServeService = {
+  /** The service's pid while it runs, and whether the data folder's socket answers. */
+  status: () => Promise<{ pid?: number; ready: boolean }>;
+  /** `<copy> service install --replace`. */
+  replace: () => Promise<void>;
+};
+
+const processes: ServeSystem = {
+  lockPid: (dir) => Number.parseInt(readFileSync(path.join(dir, "plxd.lock"), "utf8")),
+  args: async (pid) =>
+    (await promisify(execFile)("ps", ["-o", "args=", "-p", String(pid)])).stdout.trim(),
+  kill: (pid, signal) => process.kill(pid, signal),
+  sleep: (ms) => sleep(ms),
+};
+
+/**
+ * Whether a serve's command line is a packaged Parallax app's bundled plxd, the path `findPlxd`
+ * returns there: `….app/Contents/Resources/plxd serve` on macOS, `…/resources/plxd serve` in
+ * an AppImage's mount, or the copy the `parallax` command runs on Linux,
+ * `…/parallax/app/plxd serve` (PLX-750). A Cargo build or a plxd on PATH is someone else's.
+ */
+const isBundledServe = (args: string) =>
+  /(\.app\/Contents\/Resources|\/resources|\/parallax\/app)\/plxd serve(\s|$)/.test(args);
+
+/** Whether a serve's command line is the copy at `~/.parallax-plxd/plxd` (`refreshCopy`). */
+const isCopyServe = (args: string) => /\/\.parallax-plxd\/plxd serve(\s|$)/.test(args);
+
+/**
+ * After an update, stops the `plxd serve` holding `dir`'s lock when its version (`running`)
+ * differs from `wanted` (undefined when unknown), the bundled plxd's, and a packaged Parallax
+ * app started it (`isBundledServe`), then waits up to 10 s for it to exit. SIGTERM lets serve shut
+ * down cleanly, but it ends agent runs in flight. Every other serve is left alone; a real protocol
+ * mismatch with one still shows as the connection's error. macOS and Linux only (`ps`). `why` is
+ * for the log. With plxd's login service installed, `wanted` is the copy's version, and the
+ * service is restarted on the copy instead, so its next login runs it too, unless
+ * `runningAgents` reports agents running; one that can't be asked, such as an incompatible plxd,
+ * is replaced. A failed service update never falls back to killing its process.
+ */
+export async function replaceServe(
+  dir: string,
+  running: string,
+  wanted: string | undefined,
+  system = processes,
+  service?: ServeService,
+  runningAgents?: () => Promise<number | undefined>,
+): Promise<{ stopped: boolean; why: string }> {
+  const keep = (why: string) => ({ stopped: false, why: `kept plxd serve ${running}: ${why}` });
+  if (wanted === undefined) return keep("the version to run is unknown");
+  if (wanted === running) return keep("it is the version to run");
+  let pid: number;
+  let args: string;
+  try {
+    pid = system.lockPid(dir);
+    // A crashed serve leaves its pid behind, which another process may have by now.
+    args = await system.args(pid);
+  } catch {
+    return keep("it isn't running");
+  }
+  if (!isBundledServe(args) && !(service && isCopyServe(args)))
+    return keep(`no packaged Parallax started it (${args})`);
+  if (service) {
+    // Never restart a service running a different data folder's daemon.
+    const { pid: servicePid } = await service.status();
+    if (servicePid !== undefined && servicePid !== pid)
+      return keep("the login service is running another daemon");
+    const agents = await runningAgents?.();
+    if (agents) return keep(`${agents} agents are running, so it's replaced once they finish`);
+    await service.replace();
+    // install returns before serve necessarily listens. Otherwise attach can start a competing
+    // process, especially for an isolated data folder without the default service's kickstart.
+    const deadline = Date.now() + 10_000;
+    for (let waited = 0; waited < 10_000 && Date.now() < deadline; waited += 100) {
+      const status = await service.status();
+      let holder: number | undefined;
+      try {
+        holder = system.lockPid(dir);
+      } catch {
+        // The old lock is gone and the new service hasn't acquired it yet.
+      }
+      if (status.ready && status.pid !== undefined && status.pid !== pid && status.pid === holder)
+        return { stopped: true, why: `restarted plxd's login service on its copy, ${wanted}` };
+      await system.sleep(100);
+    }
+    throw new Error("plxd's login service did not start the updated daemon within 10 seconds");
+  }
+  try {
+    system.kill(pid);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return keep("it already exited");
+    throw error;
+  }
+  for (let waited = 0; waited < 10_000; waited += 100) {
+    try {
+      system.kill(pid, 0);
+    } catch {
+      return { stopped: true, why: `stopped plxd serve ${running} for the bundled ${wanted}` };
+    }
+    await system.sleep(100);
+  }
+  throw new Error(`plxd serve ${running} did not exit within 10 seconds`);
+}

@@ -17,3 +17,9 @@ apps/desktop/release/
 # Editors
 .idea/
 *.swp
+
+# Python
+__pycache__/
+
+# Parallax Relay
+relay/.wrangler/

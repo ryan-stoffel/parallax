@@ -4,7 +4,7 @@ import { THEME_PREFERENCES, type ThemePreference } from "../preload/bridge";
 
 export type Theme = "dark" | "light";
 
-const STORAGE_KEY = "wisp.theme";
+const STORAGE_KEY = "parallax.theme";
 const darkQuery = "(prefers-color-scheme: dark)";
 
 /** The theme to paint: the user's choice, or the OS's when the choice is "system". */
@@ -34,9 +34,9 @@ export function useThemePreference() {
   // Layout effect, so the first paint already has the right theme.
   useLayoutEffect(() => {
     localStorage.setItem(STORAGE_KEY, preference);
-    // Scrollbars, native controls, the Linux title bar, and Windows' window
-    // buttons (main.ts).
-    window.wisp.setThemeSource(preference);
+    // Native controls, the Linux title bar, and Windows' window buttons
+    // (main.ts).
+    window.parallax.setThemeSource(preference);
 
     const media = matchMedia(darkQuery);
     const apply = () => applyTheme(preference);

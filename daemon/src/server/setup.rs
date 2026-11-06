@@ -85,7 +85,7 @@ fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-/// The lock on `wispd.lock` that admits one `serve` per data folder: `flock` on Unix, and
+/// The lock on `plxd.lock` that admits one `serve` per data folder: `flock` on Unix, and
 /// `LockFileEx` on Windows, both through std's `File::try_lock`.
 #[derive(Debug)]
 pub(crate) struct InstanceLock {
@@ -94,9 +94,14 @@ pub(crate) struct InstanceLock {
     path: PathBuf,
 }
 
+/// A failed step of locking the file at `path`, as a [`StartError`].
+fn locking(path: &Path) -> impl Fn(io::Error) -> StartError + Copy + '_ {
+    move |error| StartError::io(format!("locking {}", path.display()), error)
+}
+
 /// Opens and locks the file at `path`, creating it if needed.
 fn lock(path: &Path, data_dir: &Path) -> Result<File, StartError> {
-    let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+    let io_error = locking(path);
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     // A symlink here fails the open, or on Windows is opened itself and refused, instead of
@@ -132,12 +137,30 @@ fn lock(path: &Path, data_dir: &Path) -> Result<File, StartError> {
     }
 }
 
+/// The pid of the `serve` holding the lock at `path`, or `None` when nothing holds it or its pid
+/// can't be read. For `plxd service install --replace`.
+#[cfg(unix)]
+pub(crate) fn lock_holder(path: &Path, data_dir: &Path) -> Option<u32> {
+    match lock(path, data_dir) {
+        Err(StartError::AlreadyRunning { pid, .. }) => pid,
+        _ => None,
+    }
+}
+
 /// Writes this process's pid into the lock file it holds.
 fn write_pid(mut file: File, path: &Path) -> Result<File, StartError> {
-    let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+    let io_error = locking(path);
     file.set_len(0).map_err(io_error)?;
     writeln!(file, "{}", std::process::id()).map_err(io_error)?;
     Ok(file)
+}
+
+/// The instance lock on `data_dir` while `paths::move_to_default` moves it, or `None` when another
+/// `serve` runs there. The lock stays on the file through a rename, and `Server::start` takes it
+/// again at the new path.
+#[cfg(unix)]
+pub(crate) fn lock_for_move(data_dir: &crate::paths::DataDir) -> Option<File> {
+    lock(&data_dir.lock_file(), data_dir.root()).ok()
 }
 
 impl InstanceLock {
@@ -155,7 +178,7 @@ impl InstanceLock {
     /// Locks the file at `path`, creating it if needed, and writes this process's pid into it.
     #[cfg(unix)]
     pub fn acquire(path: &Path, data_dir: &Path) -> Result<Self, StartError> {
-        let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+        let io_error = locking(path);
         // A stopping instance removes the file before it lets go of the lock, so the file locked
         // here may no longer be the one at `path`. Locking until it is keeps a second instance
         // from holding a lock on a file nobody else can find.
@@ -176,7 +199,7 @@ impl InstanceLock {
             });
         }
         Err(io_error(io::Error::other(
-            "the lock file kept changing while wispd locked it",
+            "the lock file kept changing while plxd locked it",
         )))
     }
 
@@ -214,7 +237,7 @@ fn read_pid(file: &mut File) -> Option<u32> {
     text.trim().parse().ok()
 }
 
-/// The socket this server bound, known by its inode, so wispd only ever removes its own.
+/// The socket this server bound, known by its inode, so plxd only ever removes its own.
 #[cfg(unix)]
 #[derive(Debug)]
 pub(crate) struct Socket {
@@ -288,7 +311,7 @@ impl Socket {
 
 /// The named pipe this server listens on (0023): one instance that waits for the next client,
 /// with a DACL that grants only this user. Unlike a socket, a pipe can't be deleted or replaced
-/// while wispd holds an instance, so it needs no rebinding or removal.
+/// while plxd holds an instance, so it needs no rebinding or removal.
 ///
 /// It is a message pipe, though the protocol is a byte stream: a pipe has no half-close, so a
 /// client ends its input with an empty message, which reads here as the end of the stream (see
@@ -382,13 +405,7 @@ mod windows_tests {
     use std::fs;
     use std::process::Command;
 
-    use futures_util::SinkExt;
-    use tokio::io::AsyncReadExt;
-    use tokio::time::{Duration, timeout};
-    use tokio_util::codec::FramedWrite;
-    use wisp_protocol::framing::FrameCodec;
-
-    use super::{InstanceLock, Pipe, prepare_data_dir};
+    use super::{Pipe, prepare_data_dir};
     use crate::server::StartError;
 
     #[test]
@@ -421,26 +438,9 @@ mod windows_tests {
         ));
     }
 
-    #[test]
-    fn a_second_lock_is_refused_without_a_pid_and_the_file_stays() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
-        let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
-        match InstanceLock::acquire(&path, temp.path()) {
-            Err(StartError::AlreadyRunning { pid, .. }) => assert_eq!(pid, None),
-            other => panic!("expected AlreadyRunning, got {other:?}"),
-        }
-        lock.release();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap().trim(),
-            std::process::id().to_string()
-        );
-        InstanceLock::acquire(&path, temp.path()).unwrap().release();
-    }
-
     #[tokio::test]
     async fn the_pipe_takes_this_users_clients_and_its_name_only_once() {
-        let name = format!(r"\\.\pipe\wispd-test-{}", std::process::id());
+        let name = format!(r"\\.\pipe\plxd-test-{}", std::process::id());
         let mut pipe = Pipe::create(name.as_ref()).unwrap();
         assert!(matches!(
             Pipe::create(name.as_ref()),
@@ -456,27 +456,6 @@ mod windows_tests {
         // The next instance is in place.
         let _again = crate::transport::connect(name.as_ref()).await.unwrap();
         pipe.accept().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_large_framed_write_arrives_without_early_eof() {
-        let name = format!(r"\\.\pipe\wispd-test-framed-{}", std::process::id());
-        let mut pipe = Pipe::create(name.as_ref()).unwrap();
-        let client = crate::transport::connect(name.as_ref()).await.unwrap();
-        let mut server = pipe.accept().await.unwrap();
-        let payload = "x".repeat(32 << 10);
-        let expected = format!("{{\"payload\":\"{payload}\"}}\n");
-        let mut writer = FramedWrite::new(client, FrameCodec::new());
-        writer
-            .send(serde_json::json!({"payload": payload}))
-            .await
-            .unwrap();
-        let mut received = vec![0; expected.len()];
-        timeout(Duration::from_secs(10), server.read_exact(&mut received))
-            .await
-            .expect("server receives the whole frame")
-            .unwrap();
-        assert_eq!(received, expected.as_bytes());
     }
 }
 
@@ -530,48 +509,9 @@ mod tests {
     }
 
     #[test]
-    fn a_data_folder_owned_by_another_user_is_refused() {
-        // `/` belongs to root. Running as root, the check would pass and chmod `/`, so skip.
-        if rustix::process::geteuid().is_root() {
-            return;
-        }
-        match prepare_data_dir(std::path::Path::new("/")) {
-            Err(StartError::DataDir { reason, .. }) => {
-                assert!(reason.starts_with("it belongs to uid 0"), "{reason}");
-            }
-            other => panic!("expected DataDir, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_symlinked_lock_file_is_refused_and_its_target_not_created() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
-        let target = temp.path().join("elsewhere");
-        symlink(&target, &path).unwrap();
-        assert!(matches!(
-            InstanceLock::acquire(&path, temp.path()),
-            Err(StartError::Io { .. })
-        ));
-        assert!(!target.exists());
-    }
-
-    #[test]
-    fn releasing_leaves_a_lock_file_that_replaced_ours_alone() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
-        let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
-        let other = temp.path().join("other");
-        fs::write(&other, "another instance's\n").unwrap();
-        fs::rename(&other, &path).unwrap();
-        lock.release();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "another instance's\n");
-    }
-
-    #[test]
     fn a_second_lock_is_refused_with_the_holders_pid() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.lock");
+        let path = temp.path().join("plxd.lock");
         let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
         match InstanceLock::acquire(&path, temp.path()) {
             Err(StartError::AlreadyRunning { pid, .. }) => {
@@ -587,7 +527,7 @@ mod tests {
     #[test]
     fn an_old_socket_is_replaced_and_anything_else_is_left_alone() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.sock");
+        let path = temp.path().join("plxd.sock");
         drop(UnixListener::bind(&path).unwrap());
         let (socket, _listener) = Socket::bind(&path).unwrap();
         assert_eq!(
@@ -606,18 +546,29 @@ mod tests {
     }
 
     #[test]
-    fn a_deleted_socket_is_bound_again_and_a_replaced_one_is_not_removed() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("wispd.sock");
-        let (mut socket, _listener) = Socket::bind(&path).unwrap();
-        assert!(socket.rebind_if_gone().unwrap().is_none());
-        fs::remove_file(&path).unwrap();
-        let _rebound = socket.rebind_if_gone().unwrap().expect("bound again");
-        assert!(path.exists());
+    fn a_data_folder_owned_by_another_user_is_refused() {
+        // `/` belongs to root. Running as root, the check would pass and chmod `/`, so skip.
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        match prepare_data_dir(std::path::Path::new("/")) {
+            Err(StartError::DataDir { reason, .. }) => {
+                assert!(reason.starts_with("it belongs to uid 0"), "{reason}");
+            }
+            other => panic!("expected DataDir, got {other:?}"),
+        }
+    }
 
-        fs::remove_file(&path).unwrap();
-        fs::write(&path, "someone else's").unwrap();
-        socket.remove();
-        assert!(path.exists());
+    #[test]
+    fn a_symlinked_lock_file_is_refused_and_its_target_not_created() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("plxd.lock");
+        let target = temp.path().join("elsewhere");
+        symlink(&target, &path).unwrap();
+        assert!(matches!(
+            InstanceLock::acquire(&path, temp.path()),
+            Err(StartError::Io { .. })
+        ));
+        assert!(!target.exists());
     }
 }

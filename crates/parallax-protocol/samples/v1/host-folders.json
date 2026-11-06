@@ -1,0 +1,19 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/folders",
+    "params": { "path": "~/src" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "path": "/Users/me/src",
+      "folders": [
+        { "name": "api", "path": "/Users/me/src/api" },
+        { "name": "Website", "path": "/Users/me/src/Website" }
+      ]
+    }
+  }
+]

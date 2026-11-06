@@ -1,0 +1,4 @@
+[env]
+# Bundled SQLite without the extensions libsqlite3-sys turns on that plxd never uses (PLX-611).
+# FTS5 and JSON stay: thread search and the event log use them.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_COLUMN_METADATA"

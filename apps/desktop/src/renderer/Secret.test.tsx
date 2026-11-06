@@ -1,0 +1,235 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, expect, test, vi } from "vite-plus/test";
+
+import { notify } from "./notifications";
+import { isEnvFile, SecretCard } from "./Secret";
+
+vi.mock("./notifications", () => ({ notify: vi.fn() }));
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+const request = vi.fn(async () => ({ result: {}, logId: "log-1" }));
+Object.assign(window, { parallax: { request } });
+
+let root: ReturnType<typeof createRoot> | undefined;
+afterEach(() => {
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
+  request.mockClear();
+});
+
+function card(delivery?: "file", input?: "value" | "env" | "file", accept?: string[]) {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  act(() =>
+    root!.render(
+      <SecretCard
+        hostId="h1"
+        runId="r1"
+        secret={{
+          kind: "secret",
+          key: "k1",
+          request: {
+            requestId: "s1",
+            label: "Webhook secret",
+            reason: "To check signatures.",
+            delivery,
+            input,
+            accept,
+          },
+        }}
+      />,
+    ),
+  );
+  return el;
+}
+
+test("Save sends the value to secret/answer from a password field, and Decline sends none", async () => {
+  const el = card();
+  const input = el.querySelector("input")!;
+  expect(input.type).toBe("password");
+  expect(el.textContent).toContain("To check signatures.");
+  input.value = "example";
+  await act(async () => el.querySelector("form")!.requestSubmit());
+  expect(request).toHaveBeenCalledWith("h1", "secret/answer", {
+    runId: "r1",
+    requestId: "s1",
+    answer: { type: "save", secret: "example" },
+  });
+
+  act(() => root!.unmount());
+  const again = card();
+  const decline = [...again.querySelectorAll("button")].find((b) => b.textContent === "Decline")!;
+  await act(async () => decline.click());
+  expect(request).toHaveBeenLastCalledWith("h1", "secret/answer", {
+    runId: "r1",
+    requestId: "s1",
+    answer: { type: "decline" },
+  });
+});
+
+test("A file request says commands can read it, and Enter is a new line until Command-Enter saves", async () => {
+  const el = card("file");
+  expect(el.textContent).toContain("this agent's commands can read for 24 hours");
+  expect(el.textContent).not.toContain("never the value");
+  const field = el.querySelector("textarea")!;
+  field.value = "A=1\nB=2\n";
+  const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
+  await act(async () => field.dispatchEvent(enter));
+  expect(request).not.toHaveBeenCalled();
+  const save = new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true });
+  await act(async () => field.dispatchEvent(save));
+  expect(request).toHaveBeenCalledWith("h1", "secret/answer", {
+    runId: "r1",
+    requestId: "s1",
+    answer: { type: "save", secret: "A=1\nB=2\n" },
+  });
+});
+
+const env = '# old-value\nAPI_KEY=abc\n\nEMPTY=\nexport DB_URL="postgres://x"\n';
+
+function painted(el: HTMLElement) {
+  return el.querySelector("[data-testid=secret-paint]")!.textContent;
+}
+
+async function pick(el: HTMLElement, file: File) {
+  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(picker, "files", { value: [file], configurable: true });
+  await act(async () => {
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+    await file.text();
+  });
+}
+
+test("An env file shows its names masked, and its values only once asked", async () => {
+  const el = card("file");
+  const field = el.querySelector("textarea")!;
+  field.value = env;
+  await act(async () => field.dispatchEvent(new Event("input", { bubbles: true })));
+  expect(painted(el)).toBe("•••••••••••\nAPI_KEY=•••\n\n••••••\nexport DB_URL=••••••••••••••\n\n");
+  const show = el.querySelector<HTMLButtonElement>('button[aria-label="Show values"]')!;
+  await act(async () => show.click());
+  expect(painted(el)).toBe(`${env}\n`);
+  await act(async () => show.click());
+  expect(painted(el)).not.toContain("abc");
+});
+
+test("A picked file loads into the editor, fully masked if it isn't an env file", async () => {
+  const el = card("file");
+  const text = "-----BEGIN KEY-----\nabc\n-----END KEY-----\n";
+  await pick(el, new File([text], "deploy.pem"));
+  await vi.waitFor(() => expect(el.querySelector("textarea")!.value).toBe(text));
+  expect(painted(el)).not.toMatch(/[A-Za-z]/);
+});
+
+test.each([
+  ["too large", new File(["x".repeat(64 * 1024 + 1)], "big.env"), "up to 64 KB"],
+  ["binary", new File(["a\0b"], "key.p12"), "text file"],
+])("A %s file is refused", async (_, file, body) => {
+  const el = card("file");
+  await pick(el, file);
+  await vi.waitFor(() =>
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining(body) }),
+    ),
+  );
+  expect(el.textContent).not.toContain(file.name);
+});
+
+test("isEnvFile takes an env file with variables that have values", () => {
+  expect(isEnvFile(env)).toBe(true);
+  expect(isEnvFile("A=1\r\nB='two words'\r\n")).toBe(true);
+});
+
+test.each([
+  ["a password with an equals sign", "ABC=def"],
+  ["a single variable, which could be a password copied with its newline", "ABC=def\n"],
+  ["base32 tokens with padding", "ABCDEF==\nGHIJKL=="],
+  ["base32 tokens with single padding", "ABCDEFG=\nHIJKLMN="],
+  ["a quoted value spanning lines", 'CONFIG="user=a\npass=b"'],
+  ["a private key", "-----BEGIN KEY-----\nabc=\nDEF=x\n-----END KEY-----"],
+  ["assignments among other text", "A=1\nB=2\nnot an assignment"],
+])("isEnvFile refuses %s", (_, value) => {
+  expect(isEnvFile(value)).toBe(false);
+});
+
+test("input picks the view, whatever the delivery", () => {
+  const key = card("file", "value");
+  expect(key.querySelector<HTMLInputElement>('input[name="secret"]')!.type).toBe("password");
+  expect(key.querySelector("textarea")).toBeNull();
+  expect(key.textContent).toContain("this agent's commands can read for 24 hours");
+  act(() => root!.unmount());
+
+  expect(card("file", "env").querySelector("textarea")).not.toBeNull();
+});
+
+test("A file input offers its extensions, and saves a binary file byte for byte", async () => {
+  const el = card("file", "file", [".p12"]);
+  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+  expect(picker.accept).toBe(".p12");
+  expect(el.querySelector("textarea")).toBeNull();
+  expect(el.querySelector('input[name="secret"]')).toBeNull();
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(true);
+
+  await pick(el, new File([new Uint8Array([0x30, 0x82, 0xff, 0x00])], "signing.p12"));
+  await vi.waitFor(() => expect(el.textContent).toContain("signing.p12"));
+  await act(async () => save.click());
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("h1", "secret/answer", {
+      runId: "r1",
+      requestId: "s1",
+      answer: { type: "saveBytes", base64: "MIL/AA==" },
+    }),
+  );
+});
+
+test("A file input refuses a file of another type, and keeps Save off", async () => {
+  const el = card("file", "file", [".p8"]);
+  await pick(el, new File(["x"], "notes.txt"));
+  expect(el.textContent).not.toContain("notes.txt");
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(true);
+});
+
+test("Save stays off until the field has something", async () => {
+  const el = card(undefined, "value");
+  const input = el.querySelector<HTMLInputElement>('input[name="secret"]')!;
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(true);
+  input.value = "example";
+  await act(async () => input.dispatchEvent(new Event("input", { bubbles: true })));
+  expect(save.disabled).toBe(false);
+});
+
+test("Removing a picked file brings the drop zone back, focused, with Save off", async () => {
+  const el = card("file", "file", [".p8"]);
+  await pick(el, new File(["key"], "AuthKey.p8"));
+  await vi.waitFor(() => expect(el.textContent).toContain("AuthKey.p8"));
+  const save = [...el.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(false);
+  const remove = el.querySelector<HTMLButtonElement>('button[aria-label="Remove the file"]')!;
+  await act(async () => remove.click());
+  expect(el.textContent).not.toContain("AuthKey.p8");
+  expect(save.disabled).toBe(true);
+  expect(document.activeElement?.textContent).toContain("Drop a .p8 file here");
+});
+
+test("A file that finishes loading after Hide stays masked", async () => {
+  const el = card("file", "env");
+  const show = el.querySelector<HTMLButtonElement>('button[aria-label="Show values"]')!;
+  await act(async () => show.click());
+  let finish!: (text: string) => void;
+  const file = new File(["x"], "slow.env");
+  file.text = () => new Promise((resolve) => (finish = resolve));
+  const picker = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(picker, "files", { value: [file], configurable: true });
+  await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+  await act(async () => show.click());
+  await act(async () => finish("API_KEY=plain\nOTHER=two\n"));
+  expect(el.querySelector("textarea")!.value).toContain("plain");
+  expect(painted(el)).not.toContain("plain");
+});

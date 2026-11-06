@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 
-import type { RpcError } from "../preload/bridge";
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
+import { locale } from "./locale";
+import { hourCycle } from "./prefs";
+import { capitalize, dollars, duration } from "./usageStats";
 
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
 export type Period = "today" | "week";
@@ -15,36 +18,32 @@ export const periods: { value: Period; name: string }[] = [
 ];
 
 /**
- * How long after each answer the Providers and Usage pages ask for usage again. wispd sends no
+ * How long after each answer the Providers and Usage pages ask for usage again. plxd sends no
  * host-level usage or limit event, so this is what keeps them live while runs go.
  */
 const USAGE_POLL_MS = 5000;
 
 /**
- * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`, and
- * at once whenever `refresh` changes.
- * `usage` is undefined until it first answers, so a wispd without `usage/get` shows no usage at
- * all; a later failure keeps the last answer. `error` is the latest answer's, until one succeeds.
+ * A host's `usage/get`, by account id, asked again every `USAGE_POLL_MS` while `connected`.
+ * Undefined until it first answers, so a plxd without `usage/get` shows no usage at all; a later
+ * failure keeps the last answer.
  */
 export function useUsage(
   hostId: string,
   connected: boolean,
-  refresh?: number,
-): { usage?: ReadonlyMap<string, AccountUsage>; error?: RpcError } {
+): ReadonlyMap<string, AccountUsage> | undefined {
   const [usage, setUsage] = useState<ReadonlyMap<string, AccountUsage>>();
-  const [error, setError] = useState<RpcError>();
+  const connectedNow = useConnectedNow(hostId);
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || !connectedNow) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // After each answer rather than on an interval, so a slow host never has two in flight.
     const load = async () => {
-      const answer = await window.wisp.request(hostId, "usage/get", {});
+      const answer = await window.parallax.request(hostId, "usage/get", {});
       if (stopped) return;
-      if ("result" in answer) {
+      if ("result" in answer)
         setUsage(new Map(answer.result.accounts.map((a) => [a.accountId, a])));
-        setError(undefined);
-      } else setError(answer.error);
       timer = setTimeout(() => void load(), USAGE_POLL_MS);
     };
     void load();
@@ -52,33 +51,42 @@ export function useUsage(
       stopped = true;
       clearTimeout(timer);
     };
-  }, [hostId, connected, refresh]);
-  return { usage, error };
+  }, [hostId, connected, connectedNow]);
+  return usage;
 }
 
 /**
  * An account's usage over `period`, then a line per limit window, for under its row's details.
- * `usage` is undefined for an account wispd has recorded nothing for.
+ * `usage` is undefined for an account plxd has recorded nothing for.
  */
 export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Period }) {
   const spent = usage?.[period];
-  const now = Date.now();
   return (
     <>
       <span
-        className="block truncate text-[12.5px] text-muted-foreground"
+        className="block truncate text-body text-muted-foreground"
         title={spent && tokenBreakdown(spent)}
       >
         {describeUsage(spent, period)}
       </span>
-      {usage?.limits.map((limit) => {
+      <LimitLines limits={usage?.limits ?? []} />
+    </>
+  );
+}
+
+/** A line per limit window, each with a bar of how much is used, in red once it's reached. */
+export function LimitLines({ limits }: { limits: UsageLimitWindow[] }) {
+  const now = Date.now();
+  return (
+    <>
+      {limits.map((limit) => {
         const { text, used } = describeLimit(limit, now);
         const full = used !== undefined && used >= 100;
         return (
           <span
             key={limit.window}
             title={limitDetails(limit)}
-            className={`mt-1 flex items-center gap-2 text-[12px] ${full ? "text-danger" : "text-faint-foreground"}`}
+            className={`mt-1 flex items-center gap-2 text-meta ${full ? "text-danger" : "text-faint-foreground"}`}
           >
             {used !== undefined && (
               <span
@@ -99,8 +107,10 @@ export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Pe
   );
 }
 
-const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD" });
+export const compact = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
 
 const tokensIn = (p: UsagePeriod) =>
   p.inputTokens + p.outputTokens + p.cacheReadTokens + p.cacheWriteTokens;
@@ -111,11 +121,7 @@ export function describeUsage(spent: UsagePeriod | undefined, period: Period): s
   if (!spent || tokensIn(spent) === 0) return `No usage ${when}`;
   const micros = spent.costUsdMicros;
   const cost =
-    micros === undefined
-      ? ""
-      : micros < 5000
-        ? ", under $0.01"
-        : `, about ${usd.format(micros / 1_000_000)}`;
+    micros === undefined ? "" : micros < 5000 ? ", under $0.01" : `, about ${dollars(micros)}`;
   return `${compact.format(tokensIn(spent))} tokens ${when}${cost}`;
 }
 
@@ -156,63 +162,15 @@ export function limitName(window: string): string {
   return `${capitalize(window)} limit`;
 }
 
-const capitalize = (s: string) => {
-  const words = s.replaceAll("_", " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
-};
-
-/** "42 min", "2 h 14 min", "3 d 4 h", rounded up to the minute. */
-function duration(ms: number): string {
-  const minutes = Math.max(1, Math.ceil(ms / 60_000));
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
-  const days = Math.floor(hours / 24);
-  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
-}
-
 const at = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  new Date(iso).toLocaleString(locale(), {
+    dateStyle: "medium",
+    timeStyle: "short",
+    ...hourCycle(),
+  });
 
-/** When a limit resets and when wispd heard about it, for a tooltip. */
+/** When a limit resets and when plxd heard about it, for a tooltip. */
 export function limitDetails(limit: UsageLimitWindow): string {
   const resets = limit.resetsAt ? `Resets ${at(limit.resetsAt)}. ` : "";
   return `${resets}Reported ${at(limit.capturedAt)}.`;
-}
-
-/** How close a limit window is to its cap: amber from 75% used, red from 90%. */
-export type LimitTone = "normal" | "warning" | "danger";
-
-/**
- * A limit window for its meter on the Usage page: a short name ("Session", "Weekly · Opus"), how
- * much is used (0 to 100, rounded down) when the vendor says, its tone, and when it resets. Once
- * the reset time has passed, the last percent is stale and none of the window is used.
- */
-export function limitMeter(
-  limit: UsageLimitWindow,
-  now: number,
-): { name: string; used?: number; tone: LimitTone; resets: string } {
-  const weekly = /^seven_day(?:_(.+))?$/.exec(limit.window);
-  const name =
-    limit.window === "five_hour"
-      ? "Session"
-      : weekly
-        ? weekly[1]
-          ? `Weekly · ${capitalize(weekly[1])}`
-          : "Weekly"
-        : capitalize(limit.window);
-  const resets = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
-  if (resets !== undefined && resets <= now)
-    return { name, used: 0, tone: "normal", resets: "Has reset" };
-  const used =
-    limit.usedPercent === undefined
-      ? undefined
-      : Math.min(100, Math.max(0, Math.floor(limit.usedPercent)));
-  const tone = used === undefined || used < 75 ? "normal" : used < 90 ? "warning" : "danger";
-  return {
-    name,
-    used,
-    tone,
-    resets: resets === undefined ? "Reset time unknown" : `Resets in ${duration(resets - now)}`,
-  };
 }

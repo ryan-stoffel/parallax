@@ -1,4 +1,4 @@
-//! Running `wispd attach`, and the `wispd serve` it reaches, in temporary data folders.
+//! Running `plxd attach`, and the `plxd serve` it reaches, in temporary data folders.
 //!
 //! Every data folder comes from [`temp_dir`], which keeps socket paths under the OS's limit and
 //! keeps the tests away from the real data folder and any installed launch agent.
@@ -13,19 +13,19 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use parallax_protocol::framing::FrameCodec;
+use parallax_protocol::jsonrpc::{ErrorObject, Message, Request, RequestId, Response};
+use parallax_protocol::methods::{Initialize, RequestMethod};
+use parallax_protocol::{
+    ClientInfo, InitializeParams, InitializeResult, OrchestratorCreateParams, ProtocolRange,
+    ScopeId,
+};
+use plxd::paths::DataDir;
 use rustix::process::{Pid, Signal, WaitOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
 use tokio_util::codec::FramedRead;
-use wisp_protocol::framing::FrameCodec;
-use wisp_protocol::jsonrpc::{ErrorObject, Message, Request, RequestId, Response};
-use wisp_protocol::methods::{Initialize, RequestMethod};
-use wisp_protocol::{
-    Capabilities, ClientInfo, InitializeParams, InitializeResult, ProjectCreateParams, ProjectId,
-    ProtocolRange,
-};
-use wispd::paths::DataDir;
 
 #[path = "../common/temp.rs"]
 mod temp;
@@ -34,7 +34,7 @@ pub use temp::temp_dir;
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
 
-pub const WISPD: &str = env!("CARGO_BIN_EXE_wispd");
+pub const PLXD: &str = env!("CARGO_BIN_EXE_plxd");
 
 /// Held while a test spawns a process or makes a descriptor without close-on-exec.
 ///
@@ -55,16 +55,16 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
 }
 
 pub fn log(data_dir: &Path) -> String {
-    fs::read_to_string(data_dir.join("logs/wispd.log")).unwrap_or_default()
+    fs::read_to_string(data_dir.join("logs/plxd.log")).unwrap_or_default()
 }
 
 /// The pid in the lock file, which belongs to the `serve` running for `data_dir`.
 pub fn serve_pid(data_dir: &Path) -> Option<Pid> {
-    let text = fs::read_to_string(data_dir.join("wispd.lock")).ok()?;
+    let text = fs::read_to_string(data_dir.join("plxd.lock")).ok()?;
     Pid::from_raw(text.trim().parse().ok()?)
 }
 
-/// Whether `pid` still runs. A test that called [`wispd::attach::connect`] itself is the parent
+/// Whether `pid` still runs. A test that called [`plxd::attach::connect`] itself is the parent
 /// of the `serve` it started, so that one is reaped here once it exits.
 pub fn is_alive(pid: Pid) -> bool {
     let _ = rustix::process::waitpid(Some(pid), WaitOptions::NOHANG);
@@ -102,63 +102,7 @@ impl Drop for StopServe {
     }
 }
 
-/// A `wispd serve` that the test started itself.
-pub struct Serve {
-    child: std::process::Child,
-}
-
-impl Serve {
-    /// Starts `serve` and waits until it has logged that it listens.
-    pub async fn start(data_dir: &Path) -> Self {
-        let child = {
-            let _lock = spawn_lock();
-            std::process::Command::new(WISPD)
-                .arg("serve")
-                .env("WISPD_DATA_DIR", data_dir)
-                .env_remove("WISPD_LOG")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("spawn wispd serve")
-        };
-        let mut serve = Self { child };
-        let deadline = Instant::now() + PATIENCE;
-        while !log(data_dir).contains("listening") {
-            if let Some(status) = serve.child.try_wait().expect("check on wispd") {
-                panic!("wispd serve exited while starting: {status}");
-            }
-            assert!(Instant::now() < deadline, "wispd serve did not start");
-            sleep(Duration::from_millis(10)).await;
-        }
-        serve
-    }
-
-    pub fn pid(&self) -> Pid {
-        Pid::from_raw(self.child.id().try_into().unwrap()).unwrap()
-    }
-
-    pub fn is_running(&mut self) -> bool {
-        self.child.try_wait().expect("check on wispd").is_none()
-    }
-}
-
-impl Drop for Serve {
-    fn drop(&mut self) {
-        let _ = rustix::process::kill_process(self.pid(), Signal::TERM);
-        let deadline = std::time::Instant::now() + PATIENCE;
-        while std::time::Instant::now() < deadline {
-            if !matches!(self.child.try_wait(), Ok(None)) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-/// A running `wispd attach`, with its stdio piped to the test.
+/// A running `plxd attach`, with its stdio piped to the test.
 pub struct Attach {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -187,20 +131,20 @@ impl fmt::Debug for Exited {
 }
 
 impl Attach {
-    /// Starts `wispd attach` for `data_dir`.
+    /// Starts `plxd attach` for `data_dir`.
     pub fn spawn(data_dir: &Path) -> Self {
         Self::spawn_with(data_dir, &[], None)
     }
 
-    /// Starts `wispd attach` for `data_dir` with more arguments, and optionally with one more
+    /// Starts `plxd attach` for `data_dir` with more arguments, and optionally with one more
     /// descriptor that it inherits without close-on-exec, as a careless parent might pass it.
     pub fn spawn_with(data_dir: &Path, args: &[&str], inherit: Option<BorrowedFd<'_>>) -> Self {
-        let mut command = Command::new(WISPD);
+        let mut command = Command::new(PLXD);
         command
             .arg("attach")
             .args(args)
-            .env("WISPD_DATA_DIR", data_dir)
-            .env_remove("WISPD_LOG")
+            .env("PLXD_DATA_DIR", data_dir)
+            .env_remove("PLXD_LOG")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -212,7 +156,7 @@ impl Attach {
                 reason = "the copy must lack close-on-exec"
             )]
             let leaked = inherit.map(|fd| rustix::io::dup(fd).expect("copy the descriptor"));
-            let child = command.spawn().expect("spawn wispd attach");
+            let child = command.spawn().expect("spawn plxd attach");
             drop(leaked);
             child
         };
@@ -230,7 +174,7 @@ impl Attach {
     }
 
     pub fn signal(&self, signal: Signal) {
-        rustix::process::kill_process(self.pid(), signal).expect("signal wispd attach");
+        rustix::process::kill_process(self.pid(), signal).expect("signal plxd attach");
     }
 
     /// Writes one message as a line to `attach`'s stdin.
@@ -324,25 +268,28 @@ pub fn initialize_params() -> InitializeParams {
     InitializeParams {
         protocol: ProtocolRange::SUPPORTED,
         client: ClientInfo {
-            name: "wispd-attach-tests".to_owned(),
+            name: "plxd-attach-tests".to_owned(),
             version: "0.0.0".to_owned(),
             machine_id: None,
         },
-        capabilities: Capabilities::default(),
+        capabilities: parallax_protocol::legacy::client_capabilities(),
     }
 }
 
 /// Params for a new project named `name`, on a repository made for it under `dir`, which looks
-/// like one on `main` as far as wispd checks.
-pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
+/// like one on `main` as far as plxd checks.
+pub fn create_params(dir: &Path, name: &str) -> OrchestratorCreateParams {
     let path = dir.join("repos").join(name);
     std::fs::create_dir_all(path.join(".git")).expect("make the repository");
     std::fs::write(path.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
-    ProjectCreateParams {
-        id: ProjectId::generate(),
+    OrchestratorCreateParams {
+        id: ScopeId::generate(),
         name: name.to_owned(),
-        repo_path: path.to_str().expect("a UTF-8 path").to_owned(),
+        repo_path: Some(path.to_str().expect("a UTF-8 path").to_owned()),
         icon: None,
+        permission: None,
+        autonomy: None,
+        base_branch: None,
     }
 }
 
@@ -425,7 +372,7 @@ pub fn hold_instance_lock(data_dir: &Path) -> File {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(data_dir.join("wispd.lock"))
+        .open(data_dir.join("plxd.lock"))
         .expect("open the lock file");
     file.try_lock().expect("take the lock");
     file

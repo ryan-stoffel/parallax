@@ -1,7 +1,8 @@
-// Images sent with a message (RYA-193, decision 0026): read from a pasted, dropped, or picked
-// file into what wispd takes, and fetched back for the transcript.
+// Images sent with a message (PLX-193, decision 0026): read from a pasted, dropped, or picked
+// file into what plxd takes, and fetched back for the transcript. Also an orchestrator's or repo's
+// icon image (PLX-341, decision 0038).
 import type { ConnectionState } from "../preload/bridge";
-import type { ImageMediaType, PromptImage } from "../protocol/generated/protocol";
+import type { ImageMediaType, PromptImage, RepoLogo } from "../protocol/generated/protocol";
 
 /** The `promptImages` capability's caps: how many images a message takes, and how long each image's base64 and all of theirs together may be. */
 export interface ImageCaps {
@@ -10,7 +11,7 @@ export interface ImageCaps {
   maxTotalBytes: number;
 }
 
-/** A host's image caps. Undefined while it isn't connected, or when its wispd takes no images. */
+/** A host's image caps. Undefined while it isn't connected, or when its plxd takes no images. */
 export function imageCaps(connection?: ConnectionState): ImageCaps | undefined {
   const options =
     connection?.status === "connected" ? connection.capabilities["promptImages"] : undefined;
@@ -36,7 +37,7 @@ const maxEdge = 2000;
 /**
  * `file` as an image to send, at most 2000 px on its long edge and `maxBytes` of base64: as it is
  * when it fits (so a GIF keeps its frames), or else redrawn smaller as WebP, which keeps any
- * transparency. Resolves to why not, for people, when it isn't an image wispd takes or can't fit.
+ * transparency. Resolves to why not, for people, when it isn't an image plxd takes or can't fit.
  */
 export async function readImage(file: Blob, maxBytes: number): Promise<PromptImage | string> {
   if (!mediaTypes.includes(file.type)) return "Only PNG, JPEG, GIF, and WebP images can be sent.";
@@ -78,7 +79,96 @@ async function fit(
   return "That image is too large to send.";
 }
 
-function dataUrlOf(file: Blob): Promise<string> {
+/** The `iconImages` cap on an icon image's base64 (0038). Undefined while the host isn't connected, or when its plxd keeps no icon images. */
+export function iconImageBytes(connection?: ConnectionState): number | undefined {
+  const max =
+    connection?.status === "connected"
+      ? connection.capabilities["iconImages"]?.["maxBytes"]
+      : undefined;
+  return typeof max === "number" ? max : undefined;
+}
+
+// An icon image's edge: crisp at the largest icon drawn, Create orchestrator's 32 px, at 4x.
+const iconEdge = 128;
+
+/**
+ * `file` as an orchestrator's or repo's icon image (PLX-341, 0038): its center cropped square and
+ * redrawn as a 128 px WebP, which keeps any transparency (a GIF keeps its first frame). Resolves to
+ * why not, for people, when it isn't an image plxd takes, can't be read, or is over `maxBytes`.
+ */
+export async function readIcon(file: Blob, maxBytes: number): Promise<PromptImage | string> {
+  if (!mediaTypes.includes(file.type)) return "Only PNG, JPEG, GIF, and WebP images can be used.";
+  let bitmap: ImageBitmap | undefined;
+  try {
+    bitmap = await createImageBitmap(file);
+    const side = Math.min(bitmap.width, bitmap.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = iconEdge;
+    const context = canvas.getContext("2d")!;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      bitmap,
+      (bitmap.width - side) / 2,
+      (bitmap.height - side) / 2,
+      side,
+      side,
+      0,
+      0,
+      iconEdge,
+      iconEdge,
+    );
+    const image = fromDataUrl(canvas.toDataURL("image/webp", 0.9));
+    return image.data.length <= maxBytes ? image : "That image is too large for an icon.";
+  } catch {
+    return "That image couldn't be read.";
+  } finally {
+    bitmap?.close();
+  }
+}
+
+/**
+ * Where an image goes on an icon's square of `edge`, whole and centered, or undefined for one over
+ * twice as wide as tall or tall as wide, such as a wordmark, which would be unreadable as an icon.
+ * An SVG with no size of its own reports 0, and fills the square.
+ */
+export function logoPlacement(width: number, height: number, edge: number) {
+  if (!width || !height) return { x: 0, y: 0, width: edge, height: edge };
+  if (Math.max(width, height) > 2 * Math.min(width, height)) return undefined;
+  const scale = edge / Math.max(width, height);
+  const [w, h] = [width * scale, height * scale];
+  return { x: (edge - w) / 2, y: (edge - h) / 2, width: w, height: h };
+}
+
+/**
+ * A repository's own logo (`repo/logo`, PLX-1272) as an icon image: redrawn whole as a 128 px WebP,
+ * since an upload's center crop would cut a logo. An `<img>` decodes it, because
+ * `createImageBitmap` can't read an SVG, and it runs no script and loads nothing in one. Undefined
+ * when it can't be read, is shaped like a wordmark, or is over `maxBytes`.
+ */
+export async function readRepoLogo(
+  logo: RepoLogo,
+  maxBytes: number,
+): Promise<PromptImage | undefined> {
+  try {
+    const decoded = new Image();
+    decoded.src = `data:${logo.mediaType};base64,${logo.data}`;
+    await decoded.decode();
+    const place = logoPlacement(decoded.naturalWidth, decoded.naturalHeight, iconEdge);
+    if (!place) return undefined;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = iconEdge;
+    const context = canvas.getContext("2d")!;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(decoded, place.x, place.y, place.width, place.height);
+    const image = fromDataUrl(canvas.toDataURL("image/webp", 0.9));
+    return image.data.length <= maxBytes ? image : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `file` read as a `data:<type>;base64,<data>` URL. */
+export function dataUrlOf(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
@@ -93,6 +183,15 @@ const fromDataUrl = (url: string): PromptImage => ({
   data: url.slice(url.indexOf(",") + 1),
 });
 
+/**
+ * A data URL as an image, such as one a copied prompt carries, or undefined unless it's base64 of
+ * a type plxd takes.
+ */
+export function imageFromUrl(url: string): PromptImage | undefined {
+  const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+=*)$/.exec(url);
+  return match ? { mediaType: match[1] as ImageMediaType, data: match[2]! } : undefined;
+}
+
 // One data URL per image, so re-rendering a thumbnail doesn't rebuild megabytes of string.
 const urls = new WeakMap<PromptImage, string>();
 
@@ -103,12 +202,12 @@ export function imageUrl(image: PromptImage): string {
   return url;
 }
 
-// Images fetched from wispd, by id, which never changes what it names. ponytail: kept for the
+// Images fetched from plxd, by id, which never changes what it names. ponytail: kept for the
 // window's life at up to ~5 MiB each; evict the least recently shown if long sessions grow large.
 const fetched = new Map<string, Promise<string | undefined>>();
 
 /**
- * Image `imageId` of run `runId` as a data URL, from `agent/image`, or undefined when wispd can't
+ * Image `imageId` of run `runId` as a data URL, from `agent/image`, or undefined when plxd can't
  * serve it. Cached by id; a failure isn't, so the next showing tries again.
  */
 export function loadImage(hostId: string, runId: string, imageId: string) {
@@ -118,7 +217,7 @@ export function loadImage(hostId: string, runId: string, imageId: string) {
       fetched.delete(imageId);
       return undefined;
     };
-    image = window.wisp
+    image = window.parallax
       .request(hostId, "agent/image", { runId, imageId })
       .then((answer) => ("result" in answer ? imageUrl(answer.result) : failed()), failed);
     fetched.set(imageId, image);

@@ -1,0 +1,441 @@
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { Code, Eye } from "lucide-react";
+
+import { MarkdownText } from "./AgentChat";
+
+import { pagesOf, type Docx } from "./docx";
+import {
+  download,
+  drawPdfPage,
+  sizeOf,
+  titleOf,
+  typeOf,
+  useDocument,
+  useObjectUrl,
+  type DocRef,
+} from "./documents";
+import { downloadFailed, drawPage, pageSize } from "./FileCards";
+import { useSaveWhole, useStreamUrl } from "./mediaUrl";
+import { isVideo } from "./transcript";
+import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
+
+/**
+ * A presented file in the side panel (PLX-755), view-only, as Claude shows one: its title and
+ * type and Download over its pages, which sit on a gray backdrop with the page in view counted at
+ * the bottom right. The panel's own button takes it full screen. A spreadsheet shows as its
+ * sheets' grids instead, an image or video as itself, a Markdown file rendered or as its source
+ * (PLX-931), and any other file as its size, to download (PLX-834). A video its host streams (PLX-836) isn't read whole first.
+ */
+export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
+  const src = useStreamUrl(hostId, doc);
+  return src === null ? (
+    <ReadView hostId={hostId} doc={doc} />
+  ) : (
+    <StreamedView hostId={hostId} doc={doc} src={src} />
+  );
+}
+
+/** A file read whole, then opened by kind. */
+function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
+  const { loaded, error } = useDocument(hostId, doc);
+  const markdown = doc.kind === "file" && /\.(md|markdown)$/i.test(doc.name);
+  const [source, setSource] = useState(false);
+
+  let body: ReactNode;
+  if (error) body = <p className="p-6 text-body text-muted-foreground">{error}</p>;
+  else if (!loaded) body = <p className="p-6 text-body text-muted-foreground">Opening…</p>;
+  else {
+    const { opened } = loaded;
+    body =
+      opened.kind === "docx" ? (
+        <DocxPages docx={opened.docx} />
+      ) : opened.kind === "xlsx" ? (
+        <SheetView xlsx={opened.xlsx} />
+      ) : opened.kind === "pdf" ? (
+        <Paged count={opened.pdf.numPages} ratio={opened.ratio}>
+          {(page, width) => <Drawn draw={() => drawPdfPage(opened.pdf, page + 1, width)} />}
+        </Paged>
+      ) : opened.kind === "pptx" ? (
+        <Paged count={opened.pptx.slides.length} ratio={opened.pptx.height / opened.pptx.width}>
+          {(page, width) => (
+            <Drawn
+              draw={() =>
+                drawPage(opened, page).then((node) => scaled(node, pageSize(opened), width))
+              }
+            />
+          )}
+        </Paged>
+      ) : opened.kind === "media" ? (
+        <Media doc={doc} bytes={loaded.bytes} />
+      ) : markdown ? (
+        <MarkdownFile text={new TextDecoder().decode(loaded.bytes)} source={source} />
+      ) : (
+        <p className="p-6 text-body text-muted-foreground">
+          {sizeOf(loaded.bytes.length)}. Parallax can't show this kind of file, but you can download
+          it.
+        </p>
+      );
+  }
+
+  return (
+    <Framed
+      doc={doc}
+      disabled={!loaded}
+      onDownload={() => loaded && download(doc.name, loaded.bytes)}
+      toggle={markdown && <SourceToggle source={source} onChange={setSource} />}
+    >
+      {body}
+    </Framed>
+  );
+}
+
+/** A video its host streams (PLX-836), whose Download reads it whole only when clicked. */
+function StreamedView({ hostId, doc, src }: { hostId: string; doc: DocRef; src?: string }) {
+  const { busy, error, save } = useSaveWhole(hostId, doc);
+  useEffect(() => {
+    if (error) downloadFailed(doc.name, error);
+  }, [error, doc.name]);
+  return (
+    <Framed doc={doc} disabled={!src || busy} onDownload={save}>
+      <Media doc={doc} src={src} />
+    </Framed>
+  );
+}
+
+/** A file's title and type over `children`, with Download. */
+function Framed({
+  doc,
+  disabled,
+  onDownload,
+  toggle,
+  children,
+}: {
+  doc: DocRef;
+  disabled: boolean;
+  onDownload: () => void;
+  /** Switches how the file shows, before its title. */
+  toggle?: ReactNode;
+  children: ReactNode;
+}) {
+  const type = typeOf(doc);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1 border-b border-border px-3 py-1.5">
+        {toggle}
+        <p className="min-w-0 flex-1 truncate text-body text-foreground">
+          {titleOf(doc.name)}
+          <span className="text-muted-foreground"> · {type}</span>
+        </p>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onDownload}
+          className="rounded-lg bg-selected px-3 py-1 text-body text-foreground hover:bg-hover disabled:opacity-40"
+        >
+          Download as {type}
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** A Markdown file (PLX-931), rendered as the transcript renders an agent's, or as its `source`. */
+function MarkdownFile({ text, source }: { text: string; source: boolean }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      {source ? (
+        <pre className="font-mono text-body whitespace-pre-wrap text-foreground">{text}</pre>
+      ) : (
+        <div className="mx-auto max-w-[760px]">
+          <MarkdownText text={text} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Preview and Source buttons, as one control, for a Markdown file. */
+function SourceToggle({
+  source,
+  onChange,
+}: {
+  source: boolean;
+  onChange: (source: boolean) => void;
+}) {
+  const button =
+    "grid size-7 place-items-center rounded-md text-muted-foreground hover:text-foreground aria-pressed:bg-hover aria-pressed:text-foreground";
+  return (
+    <div className="mr-1 flex shrink-0 gap-0.5 rounded-lg bg-selected p-0.5">
+      <button
+        type="button"
+        aria-label="Preview"
+        title="Preview"
+        aria-pressed={!source}
+        onClick={() => onChange(false)}
+        className={button}
+      >
+        <Eye aria-hidden className="size-4" />
+      </button>
+      <button
+        type="button"
+        aria-label="Source"
+        title="Source"
+        aria-pressed={source}
+        onClick={() => onChange(true)}
+        className={button}
+      >
+        <Code aria-hidden className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+/** An image or video (PLX-834), fit to the panel on a dark backdrop: from its bytes, or `src`. */
+function Media({ doc, bytes, src }: { doc: DocRef; bytes?: Uint8Array; src?: string }) {
+  const url = useObjectUrl(bytes) ?? src;
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center overflow-auto bg-black p-4">
+      {url &&
+        (isVideo(doc.kind) ? (
+          <video controls src={url} aria-label={doc.name} className="max-h-full max-w-full" />
+        ) : (
+          <img src={url} alt={doc.name} className="max-h-full max-w-full object-contain" />
+        ))}
+    </div>
+  );
+}
+
+/** The width a scroll area's content has, as it resizes. */
+function useWidth(ref: RefObject<HTMLElement | null>) {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setWidth(el.clientWidth));
+    observer.observe(el);
+    setWidth(el.clientWidth);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
+
+/** `node`, drawn at `natural` size, scaled to `width` in a box that clips it. */
+function scaled(node: HTMLElement, natural: { width: number; height: number }, width: number) {
+  const scale = width / natural.width;
+  const box = document.createElement("div");
+  box.style.width = `${width}px`;
+  box.style.height = `${natural.height * scale}px`;
+  box.style.overflow = "hidden";
+  node.style.transform = `scale(${scale})`;
+  node.style.transformOrigin = "0 0";
+  box.append(node);
+  return box;
+}
+
+/**
+ * `count` pages, each as wide as the panel less its margins, one under another on a gray
+ * backdrop, with "Page n / count" for the page at the middle of the view. `ratio` is a page's
+ * height over its width, which holds each page's place before it draws.
+ */
+function Paged({
+  count,
+  ratio,
+  children,
+}: {
+  count: number;
+  ratio: number;
+  children: (page: number, width: number) => ReactNode;
+}) {
+  const scroll = useRef<HTMLDivElement>(null);
+  const width = Math.min(1100, Math.max(0, useWidth(scroll) - 48));
+  const [current, setCurrent] = useState(1);
+  const track = () => {
+    const el = scroll.current;
+    if (!el) return;
+    const middle = el.getBoundingClientRect().top + el.clientHeight / 2;
+    const pages = [...el.querySelectorAll<HTMLElement>("[data-page]")];
+    const at = pages.findLast((page) => page.getBoundingClientRect().top <= middle);
+    setCurrent(Number(at?.dataset["page"] ?? 1));
+  };
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={scroll} onScroll={track} className="min-h-0 flex-1 overflow-y-auto bg-selected">
+        <div className="flex flex-col items-center gap-5 px-6 py-6">
+          {!!width &&
+            Array.from({ length: count }, (_, page) => (
+              <div
+                key={`${page}:${width}`}
+                data-page={page + 1}
+                className="overflow-hidden bg-white shadow-sm"
+                style={{ width, minHeight: width * ratio }}
+              >
+                {children(page, width)}
+              </div>
+            ))}
+        </div>
+      </div>
+      {count > 0 && (
+        <span className="pointer-events-none absolute right-5 bottom-4 rounded-lg bg-black/55 px-2.5 py-1 text-body text-white tabular-nums">
+          Page {current} / {count}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** A DOM node `draw` makes, once. */
+function Drawn({ draw }: { draw: () => Promise<HTMLElement> }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const drawRef = useRef(draw);
+  useEffect(() => {
+    let live = true;
+    void drawRef.current().then((node) => live && ref.current?.replaceChildren(node));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return <div ref={ref} />;
+}
+
+/** A .docx on its pages, each zoomed to the panel's width, so a page that grows keeps its height. */
+function DocxPages({ docx }: { docx: Docx }) {
+  const [pages, setPages] = useState<HTMLElement[]>([]);
+  useLayoutEffect(() => setPages(pagesOf(docx)), [docx]);
+  return (
+    <Paged count={pages.length} ratio={docx.page.height / docx.page.width}>
+      {(index, width) => <Zoomed node={pages[index]!} zoom={width / docx.page.width} />}
+    </Paged>
+  );
+}
+
+/** An existing node, zoomed. */
+function Zoomed({ node, zoom }: { node: HTMLElement; zoom: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    node.style.zoom = String(zoom);
+    ref.current?.replaceChildren(node);
+  }, [node, zoom]);
+  return <div ref={ref} />;
+}
+
+/**
+ * A workbook's sheets as grids, with tabs for each sheet. ponytail: draws at most 1,000 rows and
+ * 60 columns without virtualizing; add a virtual grid for bigger sheets.
+ */
+function SheetView({ xlsx }: { xlsx: Xlsx }) {
+  const [index, setIndex] = useState(0);
+  const sheet = xlsx.sheets[index]!;
+  let rows = 30;
+  let cols = 10;
+  for (const ref of sheet.cells.keys()) {
+    const { row, col } = splitRef(ref);
+    rows = Math.max(rows, row + 5);
+    cols = Math.max(cols, col + 3);
+  }
+  rows = Math.min(rows, 1000);
+  cols = Math.min(cols, 60);
+  const head = "border border-[#d4d4d4] bg-[#f3f3f3] px-1.5 font-normal text-[#555]";
+
+  return (
+    <>
+      <div
+        role="grid"
+        aria-label={sheet.name}
+        className="min-h-0 flex-1 overflow-auto bg-white text-body text-black"
+      >
+        <table
+          className="border-collapse"
+          style={{ fontFamily: "Calibri, Carlito, Arial, sans-serif" }}
+        >
+          <thead>
+            <tr>
+              <th className={`sticky top-0 left-0 z-20 ${head}`} />
+              {Array.from({ length: cols }, (_, c) => (
+                <th
+                  key={c}
+                  className={`sticky top-0 z-10 ${head}`}
+                  style={{ minWidth: sheet.widths.get(c) ?? 64 }}
+                >
+                  {colName(c)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: rows }, (_, i) => {
+              const row = i + 1;
+              return (
+                <tr key={row} style={{ height: sheet.heights.get(row) ?? 20 }}>
+                  <th className={`sticky left-0 z-10 ${head}`}>{row}</th>
+                  {Array.from({ length: cols }, (_, col) => {
+                    const ref = `${colName(col)}${row}`;
+                    if (sheet.covered.has(ref)) return null;
+                    const merge = sheet.merges.get(ref);
+                    const cell = cellAt(xlsx, sheet, ref);
+                    return (
+                      <td
+                        key={ref}
+                        role="gridcell"
+                        rowSpan={merge?.rows}
+                        colSpan={merge?.cols}
+                        className="overflow-hidden border border-[#e1e1e1] px-1 whitespace-nowrap"
+                        style={{
+                          maxWidth: (sheet.widths.get(col) ?? 64) * (merge?.cols ?? 1),
+                          textAlign: cell.number ? "right" : undefined,
+                          ...cssObject(cell.css),
+                        }}
+                      >
+                        {cell.text}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {xlsx.sheets.length > 1 && (
+        <div
+          role="tablist"
+          aria-label="Sheets"
+          className="flex gap-0.5 overflow-x-auto border-t border-border px-2 py-1"
+        >
+          {xlsx.sheets.map((s, i) => (
+            <button
+              key={s.name}
+              type="button"
+              role="tab"
+              aria-selected={i === index}
+              onClick={() => setIndex(i)}
+              className="rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover aria-selected:bg-selected aria-selected:text-foreground"
+            >
+              {s.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** `a:b;c:d` as a React style object. */
+function cssObject(css: string): Record<string, string> {
+  return Object.fromEntries(
+    css
+      .split(";")
+      .filter(Boolean)
+      .map((rule) => {
+        const [key = "", value = ""] = rule.split(":");
+        return [key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()), value];
+      }),
+  );
+}

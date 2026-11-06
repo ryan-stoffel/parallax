@@ -1,0 +1,175 @@
+//! Permission requests a run's CLI waits on (PLX-222, decision 0031), and how each one ended, so
+//! a resolution is logged once and `agent/approve` stays idempotent. A request waits until it's
+//! answered, the run stops, or the CLI withdraws it, with no timer (PLX-726).
+
+use std::collections::{BTreeMap, HashMap};
+
+use parallax_protocol::{AgentApprovalBy, AgentApprovalDecision, AgentApproveResult, ApprovalId};
+use serde_json::{Map, Value};
+
+/// What the agent is told when the user denies a request without a message.
+pub(super) const DENIED: &str = "The user denied permission for this tool call.";
+
+/// What the agent is told when its run is cancelled or plxd stops while a request waits.
+pub(super) const STOPPED: &str = "The run was stopped while this permission request waited.";
+
+/// The input fields that name what a file tool works on: `file_path` (`Read`, `Write`, `Edit`),
+/// `notebook_path` (`NotebookEdit`), and `path` (`Glob`, `Grep`). A worker's edited input must
+/// keep them as the request had them (0031).
+pub(super) const PATH_FIELDS: &[&str] = &["file_path", "notebook_path", "path"];
+
+/// `ExitPlanMode`'s input field naming the plan file Claude Code writes an approved plan to
+/// (PLX-243). A worker's edited input may leave it out, as a client that sends back only the
+/// edited `plan` does, but may not change or add it. Claude Code 2.1.283 ignores it and writes
+/// the file it chose, but that write is the CLI's own, which `--restricted` doesn't confine, so
+/// plxd doesn't rely on that (0031).
+pub(super) const PLAN_PATH_FIELD: &str = "planFilePath";
+
+/// One run's permission requests, as long as its actor lives.
+#[derive(Default)]
+pub(super) struct Approvals {
+    /// The requests the CLI waits on, oldest first, since ids are version 7 UUIDs.
+    pending: BTreeMap<ApprovalId, Pending>,
+    resolved: HashMap<ApprovalId, AgentApproveResult>,
+}
+
+struct Pending {
+    /// The request offers rules to always allow, so an answer may give `always`.
+    offers_always: bool,
+    /// The request input's [`PATH_FIELDS`] and [`PLAN_PATH_FIELD`].
+    paths: Map<String, Value>,
+}
+
+/// Where a request stands.
+pub(super) enum Lookup {
+    /// It waits for an answer.
+    Pending {
+        /// An answer may give `always`.
+        offers_always: bool,
+        /// The request input's [`PATH_FIELDS`] and [`PLAN_PATH_FIELD`].
+        paths: Map<String, Value>,
+    },
+    /// It ended.
+    Resolved(AgentApproveResult),
+    /// This actor never saw it.
+    Unknown,
+}
+
+impl Approvals {
+    /// Adds a request for `input`.
+    pub fn add(&mut self, id: ApprovalId, offers_always: bool, input: &Value) {
+        let paths = PATH_FIELDS
+            .iter()
+            .chain([&PLAN_PATH_FIELD])
+            .filter_map(|&field| Some((field.to_owned(), input.get(field)?.clone())))
+            .collect();
+        self.pending.insert(
+            id,
+            Pending {
+                offers_always,
+                paths,
+            },
+        );
+    }
+
+    pub fn lookup(&self, id: ApprovalId) -> Lookup {
+        if let Some(pending) = self.pending.get(&id) {
+            return Lookup::Pending {
+                offers_always: pending.offers_always,
+                paths: pending.paths.clone(),
+            };
+        }
+        self.resolved
+            .get(&id)
+            .map_or(Lookup::Unknown, |resolution| {
+                Lookup::Resolved(resolution.clone())
+            })
+    }
+
+    /// Whether no request waits.
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// Every request that waits, oldest first.
+    pub fn pending(&self) -> Vec<ApprovalId> {
+        self.pending.keys().copied().collect()
+    }
+
+    /// Records how request `id` ended. Returns false, and changes nothing, when it isn't
+    /// waiting.
+    pub fn resolve(&mut self, id: ApprovalId, resolution: AgentApproveResult) -> bool {
+        if self.pending.remove(&id).is_none() {
+            return false;
+        }
+        self.resolved.insert(id, resolution);
+        true
+    }
+}
+
+/// Whether `edited` names another file than the request's `paths` did: by any of
+/// [`PATH_FIELDS`], adding or dropping one included, or by a [`PLAN_PATH_FIELD`] that isn't the
+/// request's. Leaving that one out doesn't move anything.
+pub(super) fn moves_paths(paths: &Map<String, Value>, edited: &Value) -> bool {
+    PATH_FIELDS
+        .iter()
+        .any(|&field| paths.get(field) != edited.get(field))
+        || edited
+            .get(PLAN_PATH_FIELD)
+            .is_some_and(|plan_file| paths.get(PLAN_PATH_FIELD) != Some(plan_file))
+}
+
+/// A resolution that isn't the user's.
+pub(super) fn ended(decision: AgentApprovalDecision, by: AgentApprovalBy) -> AgentApproveResult {
+    AgentApproveResult {
+        decision,
+        by,
+        always: false,
+        message: None,
+        answers: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use parallax_protocol::ApprovalId;
+    use serde_json::json;
+
+    use super::{Approvals, Lookup, moves_paths};
+
+    /// PLX-243: an edited plan may leave out `ExitPlanMode`'s `planFilePath`, as a client that
+    /// sends back only the plan does, but may not name another file, whatever Claude Code does
+    /// with it. Nor may an edit add one to a request that had none.
+    #[test]
+    fn an_edited_plan_may_drop_its_plan_file_but_not_move_it() {
+        let mut approvals = Approvals::default();
+        let id = ApprovalId::generate();
+        let plan_file = "/Users/u/.claude/plans/plan-it-cozy-pinwheel.md";
+        let asked = json!({"plan": "1. Add a README.", "planFilePath": plan_file});
+        approvals.add(id, false, &asked);
+        let Lookup::Pending { paths, .. } = approvals.lookup(id) else {
+            panic!("the request waits");
+        };
+        for kept in [
+            json!({"plan": "1. Add a README and a license."}),
+            json!({"plan": "1. Add a README and a license.", "planFilePath": plan_file}),
+        ] {
+            assert!(!moves_paths(&paths, &kept), "{kept}");
+        }
+        for moved in [
+            json!({"plan": "1. Add a README.", "planFilePath": "/Users/u/.zshenv"}),
+            json!({"plan": "1. Add a README.", "planFilePath": null}),
+        ] {
+            assert!(moves_paths(&paths, &moved), "{moved}");
+        }
+
+        let bash = ApprovalId::generate();
+        approvals.add(bash, false, &json!({"command": "ls"}));
+        let Lookup::Pending { paths, .. } = approvals.lookup(bash) else {
+            panic!("the request waits");
+        };
+        let added = json!({"command": "ls", "planFilePath": "/Users/u/.zshenv"});
+        assert!(moves_paths(&paths, &added));
+        assert!(!moves_paths(&paths, &json!({"command": "ls -a"})));
+    }
+}

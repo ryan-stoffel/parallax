@@ -1,0 +1,51 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "pr/guide",
+    "params": {
+      "url": "https://github.com/me/app/pull/42",
+      "headSha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "model": {
+        "backend": "claude",
+        "model": "claude-sonnet-5-5",
+        "effort": "medium"
+      },
+      "regenerate": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "guide": {
+        "headSha": "3f9a2c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39",
+        "overview": "Adds a README that explains how to build the app.",
+        "diagram": "flowchart LR\n  A[Clone] --> B[Build]",
+        "steps": [
+          {
+            "title": "Write the build steps",
+            "explanation": "The README lists the commands that build the app.",
+            "hunks": [
+              {
+                "path": "README.md",
+                "start": 1,
+                "end": 2
+              }
+            ],
+            "diagram": "sequenceDiagram\n  Dev->>App: build"
+          },
+          {
+            "title": "Link it from the docs",
+            "explanation": "The docs index points to it.",
+            "hunks": []
+          }
+        ],
+        "omitted": ["Cargo.lock"],
+        "createdAt": "2026-10-02T12:20:00Z"
+      },
+      "generating": true,
+      "error": "the model's guide had no steps"
+    }
+  }
+]

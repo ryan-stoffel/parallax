@@ -1,0 +1,58 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "coordinator/fresh",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "run": {
+        "id": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "prompt": "Add a dark mode to the settings page.",
+        "policy": "noWrite",
+        "status": "completed",
+        "backend": "claude",
+        "accountId": "claude",
+        "coordinatorThread": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "createdAt": "2026-09-29T12:00:00Z",
+        "updatedAt": "2026-10-23T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 40,
+      "time": "2026-10-23T12:00:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "items": [{ "kind": "epoch", "epoch": 2, "reason": "userFresh" }]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 52,
+      "time": "2026-11-30T09:00:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "items": [{ "kind": "epoch", "epoch": 3, "reason": "notResumable" }]
+      }
+    }
+  }
+]

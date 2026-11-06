@@ -1,0 +1,152 @@
+[
+  {
+    "init": {
+      "sessionId": "e2e-question-keys",
+      "model": "fake-model"
+    }
+  },
+  {
+    "requestApproval": {
+      "toolName": "AskUserQuestion",
+      "interactive": true,
+      "input": {
+        "questions": [
+          {
+            "question": "Which database should the app use?",
+            "header": "Database",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "SQLite",
+                "description": "One writer and no server to run."
+              },
+              {
+                "label": "Postgres",
+                "description": "Runs as a server."
+              }
+            ]
+          },
+          {
+            "question": "Which platforms should ship first?",
+            "header": "Platforms",
+            "multiSelect": true,
+            "options": [
+              {
+                "label": "macOS",
+                "description": "Signed and notarized."
+              },
+              {
+                "label": "Linux",
+                "description": "AppImage."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "awaitApproval",
+  "awaitFollowUp",
+  {
+    "requestApproval": {
+      "toolName": "AskUserQuestion",
+      "interactive": true,
+      "input": {
+        "questions": [
+          {
+            "question": "Asked while a menu is open?",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Yes"
+              },
+              {
+                "label": "No"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "awaitApproval",
+  "awaitFollowUp",
+  {
+    "requestApproval": {
+      "toolName": "AskUserQuestion",
+      "interactive": true,
+      "input": {
+        "questions": [
+          {
+            "question": "Asked while Settings is open?",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Yes"
+              },
+              {
+                "label": "No"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "awaitApproval",
+  "awaitFollowUp",
+  {
+    "requestApproval": {
+      "toolName": "AskUserQuestion",
+      "interactive": true,
+      "input": {
+        "questions": [
+          {
+            "question": "Asked with focus in an empty composer?",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Yes"
+              },
+              {
+                "label": "No"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "awaitApproval",
+  "awaitFollowUp",
+  {
+    "requestApproval": {
+      "toolName": "AskUserQuestion",
+      "interactive": true,
+      "input": {
+        "questions": [
+          {
+            "question": "Asked while the user types?",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Yes"
+              },
+              {
+                "label": "No"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "awaitApproval",
+  {
+    "emit": {
+      "kind": "text",
+      "text": "The fake agent is done asking."
+    }
+  },
+  "hang"
+]

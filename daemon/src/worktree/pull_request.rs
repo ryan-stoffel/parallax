@@ -1,26 +1,52 @@
-//! Opening a pull request from a run's branch (RYA-168).
+//! Opening a pull request from a run's branch (PLX-168).
 //!
 //! [`WorktreeManager::open_pr`] works in the user's own checkout, as the user. It pushes the run's
-//! branch to `origin` through [`WorktreeManager::run_git`], so git uses the user's own
-//! configuration and credential helpers, runs no hooks, and never prompts. Then `gh`, with its own
+//! branch to `origin` with [`WorktreeManager::push`], setting its upstream. Then `gh`, with its own
 //! sign-in, returns the branch's open pull request, or opens one against the GitHub repository's
-//! default branch. `gh` is found on the same `PATH` as every other tool wispd runs.
+//! default branch. `gh` is found on the same `PATH` as every other tool plxd runs.
+//!
+//! [`WorktreeManager::view_pr`] reads a pull request by its URL for the merged-worktree sweep
+//! (`pr/view` serves `crate::pr_watch`'s shared read instead, PLX-1151), and
+//! [`WorktreeManager::diff_pr`] reads its diff (PLX-328), in plxd's temp folder rather than any
+//! checkout, and [`github_pr_urls`] finds the pull requests an agent's `gh pr create` printed.
+//! [`WorktreeManager::shared_diff`] reads a diff once per head for every run's `pull_request_diff`
+//! (PLX-1021), and [`agent_diff`] cuts it to the paths the agent asked for.
 
 use std::ffi::OsString;
 use std::path::Path;
+use std::sync::PoisonError;
 use std::time::Duration;
 
+use jiff::Timestamp;
+use parallax_protocol::{
+    PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrFile, PrMergeMethod, PrMergeState,
+    PrReview, PrReviewState, PrState, PullRequest,
+};
+use serde::Deserialize;
 use tokio::time::timeout;
 
-use super::{WorktreeManager, collect, describe_failure};
+use super::folder::NETWORK_TIMEOUT;
+use super::{WorktreeManager, collect};
 use crate::backend::process::{ProcessSpec, SpawnError, StdinMode};
-
-/// How long the push, and each `gh` call, may take: both go over the network, and a push can
-/// carry a large branch.
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// `gh`'s exit code when it isn't signed in.
 const GH_AUTH_REQUIRED: i32 = 4;
+
+/// What `pr/view` asks `gh pr view` for: everything [`PullRequest`] has.
+const VIEW_FIELDS: &str = "--json=number,title,url,state,isDraft,author,updatedAt,baseRefName,\
+                           headRefName,changedFiles,additions,deletions,files,body,comments,reviews,\
+                           reviewRequests,labels,statusCheckRollup,mergeStateStatus,\
+                           autoMergeRequest,createdAt,closedAt,mergedAt,mergedBy,commits";
+
+/// The most of a pull request's diff `pr/diff` returns, so its answer fits one frame.
+const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
+
+/// The most diffs [`WorktreeManager::shared_diff`] keeps, so at most 32 MiB.
+const SHARED_DIFFS: usize = 16;
+
+/// The longest [`WorktreeManager::shared_diff`] waits on GitHub, well under the 90 s plxd lets a
+/// connection sit idle.
+const SHARED_DIFF_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Why [`WorktreeManager::open_pr`] failed. Each message says what to do, with the command's
 /// stderr.
@@ -51,38 +77,16 @@ impl WorktreeManager {
         title: &str,
         body: &str,
     ) -> Result<String, PrError> {
-        let push_error = |error: super::WorktreeError| PrError::Push(error.to_string());
-        let repo_root = self.repo_root(repo_path).await.map_err(push_error)?;
         let origin = self
-            .run_git(&repo_root, &["remote", "get-url", "origin"])
+            .push(repo_path, branch)
             .await
-            .map_err(push_error)?;
-        if !origin.success() {
-            return Err(PrError::Push(format!(
-                "{} has no origin to push to: {}",
-                repo_root.display(),
-                describe_failure(&origin)
-            )));
-        }
-        let origin = origin.stdout.trim().to_owned();
-        let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
-        let push = self
-            .run_git_for(&repo_root, &["push", "origin", &refspec], NETWORK_TIMEOUT)
-            .await
-            .map_err(push_error)?;
-        if !push.success() {
-            return Err(PrError::Push(format!(
-                "could not push {branch} to origin: {}",
-                describe_failure(&push)
-            )));
-        }
-
+            .map_err(|error| PrError::Push(error.0))?;
         // `--flag=value`, so a value is never read as a flag.
         let repo = format!("--repo={}", without_userinfo(&origin));
         let head = format!("--head={branch}");
         let open = self
             .gh(
-                &repo_root,
+                repo_path,
                 &[
                     "pr",
                     "list",
@@ -102,7 +106,7 @@ impl WorktreeManager {
         let title = format!("--title={title}");
         let body = format!("--body={body}");
         let created = self
-            .gh(&repo_root, &["pr", "create", &repo, &head, &title, &body])
+            .gh(repo_path, &["pr", "create", &repo, &head, &title, &body])
             .await?;
         // gh prints the new pull request's URL last, on stdout.
         created
@@ -113,9 +117,92 @@ impl WorktreeManager {
             .ok_or_else(|| PrError::Gh("gh pr create printed no pull request URL".to_owned()))
     }
 
+    /// Pull request `url` as GitHub has it now.
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed, or its answer can't be read.
+    pub async fn view_pr(&self, url: &str) -> Result<PullRequest, PrError> {
+        let viewed = self
+            .gh(&std::env::temp_dir(), &["pr", "view", url, VIEW_FIELDS])
+            .await?;
+        parse_view(&viewed)
+    }
+
+    /// Pull request `url`'s state alone, a lighter read than [`Self::view_pr`] for the merge
+    /// sweep (PLX-839).
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed.
+    pub async fn pr_state(&self, url: &str) -> Result<PrState, PrError> {
+        let viewed = self
+            .gh(
+                &std::env::temp_dir(),
+                &["pr", "view", url, "--json=state", "--jq=.state"],
+            )
+            .await?;
+        Ok(pr_state(viewed.trim()))
+    }
+
+    /// Pull request `url`'s unified diff, cut at a line's end at [`MAX_DIFF_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed.
+    pub async fn diff_pr(&self, url: &str) -> Result<PrDiffResult, PrError> {
+        let diff = self
+            .gh(&std::env::temp_dir(), &["pr", "diff", url, "--color=never"])
+            .await?;
+        Ok(cap_diff(diff, MAX_DIFF_BYTES))
+    }
+
+    /// Pull request `url`'s diff as [`Self::diff_pr`] reads it, shared by every caller while its
+    /// head stays the same: a call for a head already read costs one `gh pr view` of the head,
+    /// not a second `gh pr diff`.
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed, or GitHub took longer than
+    /// [`SHARED_DIFF_TIMEOUT`].
+    // ponytail: reads the head with its own call; take it from pr_watch's shared read (PLX-1018)
+    // once that lands, so a hit costs nothing.
+    pub async fn shared_diff(&self, url: &str) -> Result<PrDiffResult, PrError> {
+        timeout(SHARED_DIFF_TIMEOUT, async {
+            let head = self
+                .gh(
+                    &std::env::temp_dir(),
+                    &["pr", "view", url, "--json=headRefOid", "--jq=.headRefOid"],
+                )
+                .await?;
+            let key = format!("{url}@{}", head.trim());
+            let diffs = || self.pr_diffs.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((_, diff)) = diffs().iter().find(|(read, _)| *read == key) {
+                return Ok(diff.clone());
+            }
+            // A push between the head's read and this one keeps the newer head's diff under the
+            // older head. Only a caller that still sees the older head is served it, and the
+            // next read of the newer head misses and reads its own.
+            let diff = self.diff_pr(url).await?;
+            let mut kept = diffs();
+            if kept.len() >= SHARED_DIFFS {
+                kept.pop_front();
+            }
+            kept.push_back((key, diff.clone()));
+            Ok(diff)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(PrError::Gh(format!(
+                "GitHub didn't send the pull request's diff within {}s; try again",
+                SHARED_DIFF_TIMEOUT.as_secs()
+            )))
+        })
+    }
+
     /// Runs `gh args` in `repo_root` and returns its stdout, turning a missing `gh`, a sign-in
     /// it needs, and any other failure into a [`PrError`].
-    async fn gh(&self, repo_root: &Path, args: &[&str]) -> Result<String, PrError> {
+    pub(crate) async fn gh(&self, repo_root: &Path, args: &[&str]) -> Result<String, PrError> {
         let mut spec = ProcessSpec::new("gh", repo_root);
         spec.args = args.iter().map(OsString::from).collect();
         spec.inject.set("GH_PROMPT_DISABLED", "1");
@@ -158,11 +245,473 @@ impl WorktreeManager {
 }
 
 /// One pull request in `gh pr list --json=url,isCrossRepository`.
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Listed {
     url: String,
     is_cross_repository: bool,
+}
+
+/// Every `https://github.com/<owner>/<repo>/pull/<n>` in `text`, in order, such as the one
+/// `gh pr create` prints.
+#[must_use]
+pub fn github_pr_urls(text: &str) -> Vec<String> {
+    const PREFIX: &str = "https://github.com/";
+    let name = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    text.match_indices(PREFIX)
+        .filter_map(|(at, _)| {
+            let mut parts = text[at + PREFIX.len()..].splitn(4, '/');
+            let (owner, repo) = (parts.next()?, parts.next()?);
+            if parts.next()? != "pull" {
+                return None;
+            }
+            let tail = parts.next()?;
+            let digits = tail
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(tail.len());
+            let ends = !tail[digits..].starts_with(|c: char| c.is_ascii_alphanumeric());
+            (name(owner) && name(repo) && digits > 0 && ends)
+                .then(|| format!("{PREFIX}{owner}/{repo}/pull/{}", &tail[..digits]))
+        })
+        .collect()
+}
+
+/// `gh pr view --json`'s answer, with only what [`PullRequest`] needs.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Viewed {
+    number: u64,
+    title: String,
+    url: String,
+    state: String,
+    is_draft: bool,
+    author: Option<Login>,
+    updated_at: Timestamp,
+    base_ref_name: String,
+    head_ref_name: String,
+    changed_files: u64,
+    additions: u64,
+    deletions: u64,
+    #[serde(default)]
+    files: Vec<PrFile>,
+    body: String,
+    #[serde(default)]
+    comments: Vec<Comment>,
+    #[serde(default)]
+    reviews: Vec<Review>,
+    #[serde(default)]
+    review_requests: Vec<Requested>,
+    #[serde(default)]
+    labels: Vec<Label>,
+    #[serde(default)]
+    status_check_rollup: Option<Vec<Check>>,
+    merge_state_status: String,
+    auto_merge_request: Option<AutoMerge>,
+    created_at: Option<Timestamp>,
+    closed_at: Option<Timestamp>,
+    merged_at: Option<Timestamp>,
+    merged_by: Option<Login>,
+    #[serde(default)]
+    commits: Vec<Commit>,
+}
+
+#[derive(Deserialize)]
+struct Login {
+    login: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Comment {
+    author: Option<Login>,
+    body: String,
+    created_at: Option<Timestamp>,
+}
+
+/// A review: its text, verdict, and `submittedAt`, absent while it is pending.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Review {
+    author: Option<Login>,
+    body: String,
+    state: String,
+    submitted_at: Option<Timestamp>,
+}
+
+/// A commit's hash, first line, authors, and time.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Commit {
+    oid: String,
+    message_headline: String,
+    #[serde(default)]
+    authors: Vec<CommitAuthor>,
+    committed_date: Timestamp,
+}
+
+/// A commit's author: a GitHub `login` when git's email matches an account, else just a `name`.
+#[derive(Deserialize)]
+struct CommitAuthor {
+    #[serde(default)]
+    login: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// A user, by `login`, or a team, by `name`.
+#[derive(Deserialize)]
+struct Requested {
+    login: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Label {
+    name: String,
+}
+
+/// A GitHub Actions job (`name`, `status`, `conclusion`, `detailsUrl`) or another CI's status
+/// (`context`, `state`, `targetUrl`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Check {
+    name: Option<String>,
+    context: Option<String>,
+    status: Option<String>,
+    conclusion: Option<String>,
+    state: Option<String>,
+    details_url: Option<String>,
+    target_url: Option<String>,
+    workflow_name: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoMerge {
+    merge_method: String,
+}
+
+/// A deleted account is GitHub's `ghost`.
+fn login(author: Option<Login>) -> String {
+    author.map_or_else(|| "ghost".to_owned(), |a| a.login)
+}
+
+/// The comments and review texts that say something, and the reviews' verdicts, each oldest
+/// first. A pending review has no `submittedAt`, so it is left out of both.
+fn discussion(comments: Vec<Comment>, reviews: Vec<Review>) -> (Vec<PrComment>, Vec<PrReview>) {
+    let mut said: Vec<PrComment> = comments
+        .into_iter()
+        .filter_map(|comment| {
+            Some(PrComment {
+                created_at: comment.created_at?,
+                author: login(comment.author),
+                body: comment.body,
+                id: None,
+                url: None,
+                kind: None,
+                avatar_url: None,
+            })
+        })
+        .collect();
+    let mut verdicts = Vec::new();
+    for review in reviews {
+        let Some(submitted_at) = review.submitted_at else {
+            continue;
+        };
+        let author = login(review.author);
+        said.push(PrComment {
+            author: author.clone(),
+            body: review.body,
+            created_at: submitted_at,
+            id: None,
+            url: None,
+            kind: None,
+            avatar_url: None,
+        });
+        verdicts.push(PrReview {
+            author,
+            state: match review.state.as_str() {
+                "APPROVED" => PrReviewState::Approved,
+                "CHANGES_REQUESTED" => PrReviewState::ChangesRequested,
+                "COMMENTED" => PrReviewState::Commented,
+                "DISMISSED" => PrReviewState::Dismissed,
+                _ => PrReviewState::Unknown,
+            },
+            submitted_at,
+        });
+    }
+    said.retain(|comment| !comment.body.trim().is_empty());
+    said.sort_by_key(|comment| comment.created_at);
+    verdicts.sort_by_key(|review| review.submitted_at);
+    (said, verdicts)
+}
+
+/// `gh`'s name for a pull request's state as a [`PrState`].
+fn pr_state(state: &str) -> PrState {
+    match state {
+        "OPEN" => PrState::Open,
+        "CLOSED" => PrState::Closed,
+        "MERGED" => PrState::Merged,
+        _ => PrState::Unknown,
+    }
+}
+
+/// `gh pr view --json`'s answer as a [`PullRequest`].
+fn parse_view(json: &str) -> Result<PullRequest, PrError> {
+    let viewed: Viewed = serde_json::from_str(json)
+        .map_err(|error| PrError::Gh(format!("could not read gh pr view's answer: {error}")))?;
+    let (comments, reviews) = discussion(viewed.comments, viewed.reviews);
+    let checks: Vec<PrCheck> = viewed
+        .status_check_rollup
+        .unwrap_or_default()
+        .into_iter()
+        .map(check)
+        .collect();
+    let any = |state| checks.iter().any(|check| check.state == state);
+    let checks_state = (!checks.is_empty()).then(|| {
+        if any(PrCheckState::Failed) {
+            PrCheckState::Failed
+        } else if any(PrCheckState::Pending) {
+            PrCheckState::Pending
+        } else {
+            PrCheckState::Passed
+        }
+    });
+    Ok(PullRequest {
+        number: viewed.number,
+        title: viewed.title,
+        // `https://github.com/<owner>/<name>/pull/<n>`.
+        repo: viewed
+            .url
+            .split('/')
+            .skip(3)
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("/"),
+        url: viewed.url,
+        state: pr_state(&viewed.state),
+        draft: viewed.is_draft,
+        author: login(viewed.author),
+        updated_at: viewed.updated_at,
+        base_branch: viewed.base_ref_name,
+        head_branch: viewed.head_ref_name,
+        changed_files: viewed.changed_files,
+        additions: viewed.additions,
+        deletions: viewed.deletions,
+        files: viewed.files,
+        body: viewed.body,
+        comments,
+        review_requests: viewed
+            .review_requests
+            .into_iter()
+            .filter_map(|requested| requested.login.or(requested.name))
+            .collect(),
+        labels: viewed.labels.into_iter().map(|label| label.name).collect(),
+        checks,
+        checks_state,
+        created_at: viewed.created_at,
+        closed_at: viewed.closed_at,
+        merged_at: viewed.merged_at,
+        merged_by: viewed.merged_by.map(|by| by.login),
+        commits: viewed.commits.into_iter().map(commit).collect(),
+        reviews,
+        merge_state: match viewed.merge_state_status.as_str() {
+            "CLEAN" => Some(PrMergeState::Clean),
+            "UNSTABLE" => Some(PrMergeState::Unstable),
+            "HAS_HOOKS" => Some(PrMergeState::HasHooks),
+            "BEHIND" => Some(PrMergeState::Behind),
+            "BLOCKED" => Some(PrMergeState::Blocked),
+            "DIRTY" => Some(PrMergeState::Dirty),
+            "DRAFT" => Some(PrMergeState::Draft),
+            _ => None,
+        },
+        auto_merge: viewed
+            .auto_merge_request
+            .map(|auto| match auto.merge_method.as_str() {
+                "MERGE" => PrMergeMethod::Merge,
+                "SQUASH" => PrMergeMethod::Squash,
+                "REBASE" => PrMergeMethod::Rebase,
+                _ => PrMergeMethod::Unknown,
+            }),
+        review_decision: None,
+        mergeable: None,
+        behind_by: None,
+        ready: None,
+        reasons: Vec::new(),
+        head_sha: None,
+        merge_methods: Vec::new(),
+        label_colors: Vec::new(),
+        review_threads: Vec::new(),
+        review_threads_truncated: false,
+    })
+}
+
+/// One of `commits`, by its first author.
+fn commit(commit: Commit) -> PrCommit {
+    PrCommit {
+        author: commit
+            .authors
+            .into_iter()
+            .next()
+            .map(|a| if a.login.is_empty() { a.name } else { a.login })
+            .unwrap_or_default(),
+        oid: commit.oid,
+        headline: commit.message_headline,
+        committed_at: commit.committed_date,
+    }
+}
+
+/// One of `statusCheckRollup`'s checks. A job is done once its `status` is `COMPLETED`, and a
+/// status once its `state` isn't `PENDING` or `EXPECTED`; until then it has no conclusion.
+fn check(check: Check) -> PrCheck {
+    let done = match (&check.status, &check.state) {
+        (Some(status), _) => status == "COMPLETED",
+        (None, Some(state)) => !matches!(state.as_str(), "PENDING" | "EXPECTED"),
+        (None, None) => false,
+    };
+    let conclusion = done
+        .then(|| check.conclusion.filter(|c| !c.is_empty()).or(check.state))
+        .flatten()
+        .map(|conclusion| conclusion.to_lowercase());
+    PrCheck {
+        name: check.name.or(check.context).unwrap_or_default(),
+        state: match conclusion.as_deref() {
+            None => PrCheckState::Pending,
+            Some("success" | "neutral") => PrCheckState::Passed,
+            Some("skipped") => PrCheckState::Skipped,
+            Some(_) => PrCheckState::Failed,
+        },
+        conclusion,
+        url: check
+            .details_url
+            .or(check.target_url)
+            .filter(|url| !url.is_empty()),
+        workflow: check.workflow_name.filter(|name| !name.is_empty()),
+        started_at: time(check.started_at),
+        completed_at: time(check.completed_at),
+        required: false,
+        run_id: None,
+        job_id: None,
+    }
+}
+
+/// A check's time. GitHub sends `0001-01-01T00:00:00Z` for one it doesn't have yet.
+fn time(time: Option<String>) -> Option<Timestamp> {
+    time.and_then(|time| time.parse::<Timestamp>().ok())
+        .filter(|time| time.as_second() > 0)
+}
+
+/// `diff` cut to at most `max` bytes, at the end of a line.
+fn cap_diff(mut diff: String, max: usize) -> PrDiffResult {
+    if diff.len() <= max {
+        return PrDiffResult {
+            diff,
+            truncated: false,
+        };
+    }
+    let cut = diff.as_bytes()[..max]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |at| at + 1);
+    diff.truncate(cut);
+    PrDiffResult {
+        diff,
+        truncated: true,
+    }
+}
+
+/// What `pull_request_diff` shows of `read`: only the files at or under `paths` when there are
+/// any, cut at a line's end at `max` bytes, with a note for whatever is missing.
+pub(crate) fn agent_diff(read: PrDiffResult, paths: &[String], max: usize) -> String {
+    let diff = if paths.is_empty() {
+        read.diff
+    } else {
+        of_paths(&read.diff, paths)
+    };
+    let total = diff.len();
+    // Room for the notes.
+    let shown = cap_diff(diff, max.saturating_sub(256));
+    let mut notes = Vec::new();
+    if total == 0 && !paths.is_empty() {
+        notes.push("[No file in the diff matches those paths.]\n".to_owned());
+    }
+    if shown.truncated {
+        notes.push(format!(
+            "[Cut: {} of {total} bytes shown. Pass paths to read the rest.]\n",
+            shown.diff.len()
+        ));
+    }
+    if read.truncated {
+        notes.push(format!(
+            "[GitHub's diff was cut at {} MiB; files after the cut are missing.]\n",
+            MAX_DIFF_BYTES / 1024 / 1024
+        ));
+    }
+    shown.diff + &notes.concat()
+}
+
+/// The `diff --git` sections of `diff` whose old or new path is one of `paths` or under it, by
+/// whole path components.
+fn of_paths(diff: &str, paths: &[String]) -> String {
+    let paths: Vec<&str> = paths
+        .iter()
+        .map(|path| path.trim_start_matches("./").trim_matches('/'))
+        .filter(|path| !path.is_empty())
+        .collect();
+    let wanted = |file: &str| {
+        paths.iter().any(|path| {
+            file.strip_prefix(path)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
+    };
+    sections(diff)
+        .into_iter()
+        .filter(|section| files(section).any(wanted))
+        .collect()
+}
+
+/// `diff`'s `diff --git` sections, in order.
+pub(crate) fn sections(diff: &str) -> Vec<String> {
+    let mut sections: Vec<String> = Vec::new();
+    for line in diff.split_inclusive('\n') {
+        match sections.last_mut() {
+            Some(section) if !line.starts_with("diff --git ") => section.push_str(line),
+            _ => sections.push(line.to_owned()),
+        }
+    }
+    sections
+}
+
+/// The paths a `diff --git` section names: both sides of its header when they are the same path,
+/// and its `---`, `+++`, rename, and copy lines before its first hunk.
+pub(crate) fn files(section: &str) -> impl Iterator<Item = &str> {
+    let mut lines = section.lines();
+    // `a/X b/Y` is ambiguous when a path holds " b/", but not when X is Y.
+    let header = lines
+        .next()
+        .and_then(|header| header.strip_prefix("diff --git a/"))
+        .and_then(|sides| {
+            let half = sides.len().checked_sub(3)? / 2;
+            let (old, new) = (sides.get(..half)?, sides.get(half..)?);
+            (new.strip_prefix(" b/")? == old).then_some(old)
+        });
+    let named = lines
+        .take_while(|line| !line.starts_with("@@"))
+        .filter_map(|line| {
+            ["--- a/", "+++ b/", "rename from ", "rename to ", "copy from ", "copy to "]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+                // git ends a path holding a space with a tab on `---` and `+++` lines.
+                .map(|file| file.trim_end_matches('\t'))
+        });
+    header.into_iter().chain(named)
 }
 
 /// `url` without its userinfo (`https://user:token@host/path` becomes `https://host/path`), so a
@@ -181,7 +730,275 @@ fn without_userinfo(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::without_userinfo;
+    use parallax_protocol::{
+        PrCheckState, PrDiffResult, PrMergeMethod, PrMergeState, PrReviewState, PrState,
+    };
+    use serde_json::json;
+
+    use super::{agent_diff, parse_view, without_userinfo};
+
+    /// An open draft's `gh pr view --json` answer, with every kind of comment and check.
+    fn answer() -> serde_json::Value {
+        json!({
+            "number": 42,
+            "title": "Add a README",
+            "url": "https://github.com/me/app/pull/42",
+            "state": "OPEN",
+            "isDraft": true,
+            "author": {"id": "U_1", "is_bot": false, "login": "me", "name": "Me"},
+            "updatedAt": "2026-10-02T12:10:00Z",
+            "baseRefName": "main",
+            "headRefName": "parallax/add-readme",
+            "changedFiles": 1,
+            "additions": 12,
+            "deletions": 2,
+            "files": [{"path": "README.md", "additions": 12, "deletions": 2, "changeType": "MODIFIED"}],
+            "body": "Explains the build.",
+            "comments": [
+                {"author": {"login": "bot"}, "body": "Deployed.", "createdAt": "2026-10-02T12:09:00Z"},
+                {"author": null, "body": "First!", "createdAt": "2026-10-02T12:01:00Z"}
+            ],
+            "reviews": [
+                {"author": {"login": "rev"}, "body": "Mention Node.", "state": "COMMENTED",
+                 "submittedAt": "2026-10-02T12:05:00Z"},
+                {"author": {"login": "rev"}, "body": "", "state": "APPROVED",
+                 "submittedAt": "2026-10-02T12:06:00Z"},
+                {"author": {"login": "rev"}, "body": "Draft note", "state": "PENDING",
+                 "submittedAt": null}
+            ],
+            "reviewRequests": [
+                {"__typename": "User", "login": "rev"},
+                {"__typename": "Team", "name": "docs", "slug": "me/docs"}
+            ],
+            "labels": [{"id": "L_1", "name": "docs", "color": "0075ca", "description": ""}],
+            "statusCheckRollup": [
+                {"__typename": "CheckRun", "name": "build", "status": "COMPLETED",
+                 "conclusion": "SUCCESS", "detailsUrl": "https://github.com/me/app/runs/1",
+                 "workflowName": "CI", "startedAt": "2026-10-02T12:01:00Z",
+                 "completedAt": "2026-10-02T12:04:00Z"},
+                {"__typename": "CheckRun", "name": "test", "status": "IN_PROGRESS",
+                 "conclusion": "", "detailsUrl": "", "workflowName": "CI",
+                 "startedAt": "2026-10-02T12:02:00Z", "completedAt": "0001-01-01T00:00:00Z"},
+                {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED",
+                 "conclusion": "SKIPPED", "detailsUrl": ""},
+                {"__typename": "StatusContext", "context": "deploy", "state": "FAILURE",
+                 "targetUrl": "https://deploy.example/1"}
+            ],
+            "mergeStateStatus": "BLOCKED",
+            "autoMergeRequest": {"mergeMethod": "SQUASH", "enabledBy": {"login": "me"}},
+            "createdAt": "2026-10-02T12:00:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "mergedBy": null,
+            "commits": [
+                {"oid": "abc123", "messageHeadline": "docs: add a README",
+                 "messageBody": "", "committedDate": "2026-10-02T11:58:00Z",
+                 "authoredDate": "2026-10-02T11:58:00Z",
+                 "authors": [{"email": "me@example.com", "id": "U_1", "login": "me", "name": "Me"}]},
+                {"oid": "def456", "messageHeadline": "docs: mention Node",
+                 "messageBody": "", "committedDate": "2026-10-02T12:07:00Z",
+                 "authoredDate": "2026-10-02T12:07:00Z",
+                 "authors": [{"email": "a@example.com", "id": "", "login": "", "name": "Ann"}]}
+            ]
+        })
+    }
+
+    #[test]
+    fn gh_pr_view_s_answer_becomes_a_pull_request() {
+        let pr = parse_view(&answer().to_string()).unwrap();
+        assert_eq!(pr.repo, "me/app");
+        assert_eq!(pr.state, PrState::Open);
+        assert!(pr.draft);
+        assert_eq!(pr.author, "me");
+        assert_eq!(
+            (pr.base_branch.as_str(), pr.head_branch.as_str()),
+            ("main", "parallax/add-readme")
+        );
+        assert_eq!((pr.changed_files, pr.additions, pr.deletions), (1, 12, 2));
+        let comments: Vec<_> = pr
+            .comments
+            .iter()
+            .map(|c| (c.author.as_str(), c.body.as_str()))
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                ("ghost", "First!"),
+                ("rev", "Mention Node."),
+                ("bot", "Deployed.")
+            ],
+            "oldest first, with reviews that say something and aren't pending"
+        );
+        assert_eq!(pr.review_requests, ["rev", "docs"]);
+        assert_eq!(pr.labels, ["docs"]);
+        let checks: Vec<_> = pr
+            .checks
+            .iter()
+            .map(|c| {
+                (
+                    c.name.as_str(),
+                    c.state,
+                    c.conclusion.as_deref(),
+                    c.url.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            checks,
+            [
+                (
+                    "build",
+                    PrCheckState::Passed,
+                    Some("success"),
+                    Some("https://github.com/me/app/runs/1")
+                ),
+                ("test", PrCheckState::Pending, None, None),
+                ("lint", PrCheckState::Skipped, Some("skipped"), None),
+                (
+                    "deploy",
+                    PrCheckState::Failed,
+                    Some("failure"),
+                    Some("https://deploy.example/1")
+                ),
+            ]
+        );
+        assert_eq!(pr.checks_state, Some(PrCheckState::Failed));
+        let test = &pr.checks[1];
+        assert_eq!(test.workflow.as_deref(), Some("CI"));
+        assert_eq!(
+            test.started_at,
+            Some("2026-10-02T12:02:00Z".parse().unwrap())
+        );
+        assert_eq!(test.completed_at, None, "GitHub's zero time is no time");
+        assert_eq!(
+            pr.checks[0].completed_at,
+            Some("2026-10-02T12:04:00Z".parse().unwrap())
+        );
+        assert_eq!(pr.checks[3].workflow, None);
+        assert_eq!(pr.merge_state, Some(PrMergeState::Blocked));
+        assert_eq!(pr.auto_merge, Some(PrMergeMethod::Squash));
+        assert_eq!(pr.created_at, Some("2026-10-02T12:00:00Z".parse().unwrap()));
+        let reviews: Vec<_> = pr
+            .reviews
+            .iter()
+            .map(|r| (r.author.as_str(), r.state))
+            .collect();
+        assert_eq!(
+            reviews,
+            [
+                ("rev", PrReviewState::Commented),
+                ("rev", PrReviewState::Approved)
+            ],
+            "every submitted verdict, even with no text, and no pending one"
+        );
+        let commits: Vec<_> = pr
+            .commits
+            .iter()
+            .map(|c| (c.oid.as_str(), c.headline.as_str(), c.author.as_str()))
+            .collect();
+        assert_eq!(
+            commits,
+            [
+                ("abc123", "docs: add a README", "me"),
+                ("def456", "docs: mention Node", "Ann")
+            ],
+            "by login, or by name without a GitHub account"
+        );
+    }
+
+    #[test]
+    fn an_agent_reads_only_the_paths_it_asks_for() {
+        let section = |old: &str, new: &str| {
+            format!("diff --git a/{old} b/{new}\n--- a/{old}\n+++ b/{new}\n@@ -1 +1 @@\n-x\n+y\n")
+        };
+        let (main, docs, renamed) = (
+            section("src/main.rs", "src/main.rs"),
+            section("docs/a b.md", "docs/a b.md"),
+            section("old.rs", "src/new.rs"),
+        );
+        let read = PrDiffResult {
+            diff: format!("{main}{docs}{renamed}"),
+            truncated: false,
+        };
+        let paths = |paths: &[&str]| {
+            paths
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let shown = |asked: &[&str]| agent_diff(read.clone(), &paths(asked), 1024 * 1024);
+        assert_eq!(shown(&[]), read.diff, "no paths is the whole diff");
+        assert_eq!(shown(&["src/main.rs"]), main, "a file");
+        assert_eq!(shown(&["docs/"]), docs, "a folder, a path with a space");
+        assert_eq!(shown(&["old.rs"]), renamed, "a rename by its old path");
+        assert_eq!(
+            shown(&["src"]),
+            format!("{main}{renamed}"),
+            "by its new path"
+        );
+        assert_eq!(
+            shown(&["src/main"]),
+            "[No file in the diff matches those paths.]\n"
+        );
+        assert_eq!(
+            shown(&["docs/a"]),
+            "[No file in the diff matches those paths.]\n",
+            "whole path components only"
+        );
+
+        let cut = agent_diff(read.clone(), &[], 256 + main.len() + 1);
+        assert!(cut.starts_with(&main) && !cut.contains("docs/"), "{cut}");
+        assert!(cut.ends_with("Pass paths to read the rest.]\n"), "{cut}");
+    }
+
+    /// A second read of a head already read runs only `gh pr view`, never a second `gh pr diff`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_head_already_read_shares_its_diff() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::backend::process::{Environment, Launcher};
+        use crate::paths::DataDir;
+        use crate::worktree::WorktreeManager;
+
+        let bin = tempfile::tempdir().unwrap();
+        let log = bin.path().join("calls");
+        let gh = bin.path().join("gh");
+        std::fs::write(
+            &gh,
+            format!(
+                "#!/bin/sh\necho \"$1 $2\" >> '{}'\nif [ \"$2\" = view ]; then cat '{}'; else echo 'diff --git a/x b/x'; fi\n",
+                log.display(),
+                bin.path().join("head").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let head = |sha: &str| std::fs::write(bin.path().join("head"), format!("{sha}\n")).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let path = format!(
+            "{}:{}",
+            bin.path().display(),
+            std::env::var("PATH").unwrap()
+        );
+        let env: Environment = [("PATH", path.as_str())].into_iter().collect();
+        let manager = WorktreeManager::new(
+            Launcher::new(DataDir::new(data.path()).unwrap(), env),
+            data.path(),
+        );
+        let url = "https://github.com/me/app/pull/42";
+
+        head("abc");
+        let first = manager.shared_diff(url).await.unwrap();
+        assert_eq!(manager.shared_diff(url).await.unwrap(), first);
+        head("def");
+        manager.shared_diff(url).await.unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls, "pr view\npr diff\npr view\npr view\npr diff\n",
+            "a new head reads its diff again"
+        );
+    }
 
     #[test]
     fn a_remote_url_loses_its_userinfo() {

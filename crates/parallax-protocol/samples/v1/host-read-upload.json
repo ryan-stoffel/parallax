@@ -1,0 +1,11 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/readUpload",
+    "params": {
+      "path": "/Users/me/.parallax/uploads/0199e1c2-7a3b-7c4d-8e5f-6a7b8c9d0e1f/notes.txt"
+    }
+  },
+  { "jsonrpc": "2.0", "id": 1, "result": { "data": "aGVsbG8K" } }
+]

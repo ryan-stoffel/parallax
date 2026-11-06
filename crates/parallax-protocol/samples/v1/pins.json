@@ -1,0 +1,48 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/update",
+    "params": {
+      "runId": "01a0f8a0-0000-7000-8000-000000000011",
+      "pinned": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "thread": {
+        "id": "01a0f8a0-0000-7000-8000-000000000011",
+        "repo": "01a0f8a0-0000-7000-8000-000000000041",
+        "createdAt": "2026-10-15T11:00:00Z",
+        "lastPromptAt": "2026-10-15T11:30:00Z",
+        "pinned": true
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/search",
+    "params": { "query": "dark mode" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "threads": [
+        {
+          "id": "01a0f8a0-0000-7000-8000-000000000011",
+          "repo": "01a0f8a0-0000-7000-8000-000000000041",
+          "createdAt": "2026-10-15T11:00:00Z",
+          "lastPromptAt": "2026-10-15T11:30:00Z",
+          "pinned": true
+        }
+      ],
+      "snippets": {
+        "01a0f8a0-0000-7000-8000-000000000011": "…the settings page gets a dark mode toggle next to the font size…"
+      }
+    }
+  }
+]

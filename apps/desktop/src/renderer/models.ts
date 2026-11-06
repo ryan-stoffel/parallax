@@ -1,44 +1,223 @@
-import type { AgentPermission, ThreadStartParams } from "../protocol/generated/protocol";
+import { useMemo } from "react";
 
-// The models each worker backend's CLI took on 2026-09-29, and what to send for each. A
-// placeholder until wispd reports them per host. Sources:
-// - Claude Code 2.1.283: the full names its aliases (opus, fable, sonnet, haiku) resolve to in
-//   its baked-in model catalog. `--model` takes these as they are.
-// - codex-cli 0.157.1: the slugs ~/.codex/models_cache.json lists (visibility "list"), which
-//   `-m` takes.
-// Cursor has no wispd backend, so it has no models here.
-
-export type Provider = "Claude" | "Codex";
-
-export interface Model {
-  /** What the backend's CLI takes, sent as `thread/start`'s `model`. */
-  id: string;
-  name: string;
-  provider: Provider;
-  isNew?: boolean;
-}
-
-export const models: Model[] = [
-  { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "Claude", isNew: true },
-  { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "Claude" },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "Claude" },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "Claude" },
-  { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "Codex", isNew: true },
-  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "Codex" },
-  { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "Codex" },
-  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "Codex" },
-  { id: "gpt-5.5", name: "GPT-5.5", provider: "Codex" },
-];
+import type {
+  AgentPermission,
+  ProviderInfo,
+  ThreadStartParams,
+} from "../protocol/generated/protocol";
+import { instanceModels, models, type Model, type Provider } from "./catalog";
+import { accountLabel, discoveredAt, useLegacyProviders, useProviders } from "./providers";
+import { merged, stored } from "./stored";
 
 /**
- * The wispd backends a thread can run on, by name (`AccountChoice`'s `backend`): whose models
- * they take, and the permissions they map. Every backend maps every effort (RYA-97, RYA-38).
- * ponytail: mirrors wispd's `Backend::permissions`, which it doesn't report yet (RYA-154).
+ * What a new thread's run asks of its CLI, sent only to a plxd that advertises `runOptions`, and
+ * its context window and fast mode only to one that advertises `contextAndFast`. An open run's
+ * message adds the account it moves to, for another provider's model (`sendAccount`).
  */
-export const backends: Record<string, { provider: Provider; permissions: AgentPermission[] }> = {
-  claude: { provider: "Claude", permissions: ["auto", "manual", "edit", "plan", "bypass"] },
-  codex: { provider: "Codex", permissions: ["edit"] },
-};
+export type RunOptions = Pick<
+  ThreadStartParams,
+  "model" | "effort" | "permission" | "contextWindow" | "fast" | "account"
+>;
 
-/** What a new thread's run asks of its CLI, sent only to a wispd that advertises `runOptions`. */
-export type RunOptions = Pick<ThreadStartParams, "model" | "effort" | "permission">;
+const disabled = stored<string[]>("parallax.disabledProviders", [], (raw, fallback) =>
+  Array.isArray(raw) ? raw.filter((c): c is string => typeof c === "string") : fallback,
+);
+
+/**
+ * The CLIs turned off in Settings > Providers, by `CliKind`, kept current: on an older plxd only.
+ * A plxd with `providers` keeps each instance's `enabled` itself.
+ */
+export const useDisabledClis = disabled.use;
+
+/** Turns a CLI's provider on or off for new threads and model menus on this computer. */
+export const setCliEnabled = (cli: string, on: boolean) =>
+  disabled.set(
+    on ? disabled.get().filter((c) => c !== cli) : [...new Set([...disabled.get(), cli])],
+  );
+
+/**
+ * A provider instance a thread can run on (`AccountChoice`'s `backend` is its id): what kind it
+ * is, the permissions it maps, whether it takes an effort, and whether it can run an orchestrator's
+ * orchestrator. `enabled` is off while it's turned off in Settings > Providers.
+ */
+export interface Instance {
+  id: string;
+  name: string;
+  /** Sign-in identity or plan reported by the provider. */
+  account?: string;
+  /** Subscription plan reported by the provider, such as `pro`. */
+  plan?: string;
+  kind: string;
+  /** Hub identity, shared by its Claude/Codex runtimes. */
+  hub?: string;
+  hubName?: string;
+  enabled: boolean;
+  permissions: AgentPermission[];
+  efforts: boolean;
+  orchestrator: boolean;
+}
+
+/** A host's instances, and the models it offers on them, in the order the model picker lists them. */
+export interface Catalog {
+  hostId: string;
+  instances: Instance[];
+  /** The models it offers. */
+  models: Model[];
+  /** Every model its instances have, offered or not, to name the one an open thread runs on. */
+  known: Model[];
+}
+
+/**
+ * The built-in backends of a plxd without `providers`, whose names the model menu has always shown.
+ * Every one maps efforts but Cursor, whose model ids carry the effort (PLX-97, PLX-38, 0036).
+ * ponytail: mirrors plxd's `Backend::permissions`, `Backend::efforts`, and
+ * `Capabilities::orchestrator`; a plxd with `providers` reports them (`ProviderInfo`).
+ */
+const builtIns: Omit<Instance, "enabled">[] = [
+  {
+    id: "claude",
+    name: "Claude",
+    kind: "claude",
+    permissions: ["manual", "edit", "auto", "plan", "bypass"],
+    efforts: true,
+    orchestrator: true,
+  },
+  // A Codex thread's modes (0035); Codex's plan mode is experimental, so it has no Plan.
+  {
+    id: "codex",
+    name: "Codex",
+    kind: "codex",
+    permissions: ["manual", "edit", "auto", "bypass"],
+    efforts: true,
+    orchestrator: false,
+  },
+  {
+    id: "cursor",
+    name: "Cursor",
+    kind: "cursor",
+    permissions: ["edit", "plan", "auto", "bypass"],
+    efforts: false,
+    orchestrator: false,
+  },
+];
+
+/** What this device keeps about an instance's models, by model id. */
+interface ModelPrefs {
+  /** The order they're listed in. One not in it follows, in its own order. */
+  order?: string[];
+  /** Those left out of the model picker. */
+  hidden?: string[];
+  favorites?: string[];
+}
+
+const prefs = stored<Record<string, ModelPrefs>>("parallax.modelPrefs", {}, merged);
+
+/** Every instance's `ModelPrefs`, by `prefsKey`, kept current. */
+export const useModelPrefs = prefs.use;
+
+/** Where an instance's `ModelPrefs` are kept: per host, since each host has its own instances. */
+export const prefsKey = (hostId: string, instance: string) => `${hostId}/${instance}`;
+
+export function updateModelPrefs(key: string, change: (p: ModelPrefs) => ModelPrefs) {
+  const all = prefs.get();
+  prefs.set({ ...all, [key]: change(all[key] ?? {}) });
+}
+
+/** `list` with `id` added, or taken out if it's there. */
+export const toggled = (list: string[] = [], id: string) =>
+  list.includes(id) ? list.filter((each) => each !== id) : [...list, id];
+
+/** Stars or unstars a model on a host's instance, for this device. */
+export const toggleFavorite = (hostId: string, instance: string, id: string) =>
+  updateModelPrefs(prefsKey(hostId, instance), (p) => ({
+    ...p,
+    favorites: toggled(p.favorites, id),
+  }));
+
+/** `list` in `p`'s order. */
+export function arranged(list: Model[], p: ModelPrefs | undefined): Model[] {
+  const order = p?.order ?? [];
+  const rank = (m: Model) => {
+    const i = order.indexOf(m.id);
+    return i < 0 ? order.length + list.indexOf(m) : i;
+  };
+  return [...list].sort((a, b) => rank(a) - rank(b));
+}
+
+/**
+ * Whether threads can run on an instance: installed, not signed out, and not refused for its plan,
+ * as Cursor refuses a free account. A sign-in plxd can't tell (`null`) counts, so a probe that
+ * timed out doesn't hide a provider.
+ */
+export const canRun = (info: ProviderInfo) =>
+  info.installed && info.signedIn !== false && !info.note?.startsWith("[plan_required]");
+
+/**
+ * The model picker's catalog: each instance's models in this device's order, without those it
+ * hides. Only instances turned on in Settings > Providers that can run offer models, unless none
+ * can, when the composer still needs a model and its thread's error says what's wrong. `listed` is
+ * plxd's `providers/list`; without it (an older plxd), the built-in backends, turned off by `off`.
+ */
+export function catalogOf(
+  hostId: string,
+  listed: ProviderInfo[] | undefined,
+  all: Record<string, ModelPrefs>,
+  off: string[],
+): Catalog {
+  const entries = listed
+    ? listed.map((info) => ({
+        instance: {
+          id: info.instance.id,
+          name: accountLabel(info),
+          ...(info.account && { account: info.account }),
+          ...(info.plan && { plan: info.plan }),
+          kind: info.instance.kind,
+          ...(info.hub && {
+            hub: info.hub,
+            hubName: info.instance.name,
+          }),
+          enabled: info.instance.enabled,
+          permissions: info.permissions,
+          efforts: info.efforts,
+          orchestrator: info.orchestrator,
+        },
+        runs: canRun(info),
+        models: instanceModels(info).map((m) => ({
+          ...m,
+          released: m.released ?? discoveredAt(hostId, info.instance.id, m.id),
+        })),
+      }))
+    : builtIns.map((b) => ({
+        instance: { ...b, enabled: !off.includes(b.id) },
+        runs: true,
+        models: models.filter((m) => m.provider === b.id),
+      }));
+  const offered = ({ instance, models }: (typeof entries)[number]) => {
+    const p = all[prefsKey(hostId, instance.id)];
+    return arranged(models, p).filter((m) => !p?.hidden?.includes(m.id));
+  };
+  const anyRuns = entries.some((e) => e.instance.enabled && e.runs && offered(e).length > 0);
+  return {
+    hostId,
+    instances: entries.map((e) => e.instance),
+    known: entries.flatMap((e) => e.models),
+    models: entries.flatMap((e) => (!e.instance.enabled || (anyRuns && !e.runs) ? [] : offered(e))),
+  };
+}
+
+const emptyProviders: ProviderInfo[] = [];
+
+/** `hostId`'s catalog, kept current. Without a host, the built-in one, as on an older plxd. */
+export function useCatalog(hostId: string | undefined): Catalog {
+  const listed = useProviders(hostId)?.providers;
+  const legacy = useLegacyProviders(hostId);
+  const available = listed ?? (legacy ? undefined : emptyProviders);
+  const all = prefs.use();
+  const off = disabled.use();
+  return useMemo(
+    () => catalogOf(hostId ?? "local", available, all, off),
+    [hostId, available, all, off],
+  );
+}
+
+export { instanceModels, models, type Model, type Provider };

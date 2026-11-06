@@ -1,0 +1,27 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "usage/report/claim",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "claimId": "019a0000-0000-7000-8000-000000000001",
+      "hours": [
+        {
+          "hour": "2026-09-29T18:00:00Z",
+          "accountId": "claude-max",
+          "model": "claude-opus-4-1",
+          "inputTokens": 1200,
+          "outputTokens": 340,
+          "cacheReadTokens": 500,
+          "cacheWriteTokens": 0,
+          "costUsdMicros": 45000
+        }
+      ]
+    }
+  }
+]

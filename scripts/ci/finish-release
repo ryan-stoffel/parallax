@@ -10,6 +10,9 @@
 # the argument (workflow_dispatch has no release), and skips SHA256SUMS.
 set -euo pipefail
 
+retry=$(dirname "$0")/gh-retry
+gh() { "$retry" "$@"; }
+
 write() {
   if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
 }
@@ -22,7 +25,7 @@ if [ "${DRY_RUN:-}" = 1 ]; then
 else
   assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
   for f in "$x64" "$arm64"; do
-    if grep -qxF -- "$f" <<< "$assets"; then gh release download "$TAG" --pattern "$f" --dir "$out"; fi
+    if grep -qxF -- "$f" <<< "$assets"; then gh release download "$TAG" --pattern "$f" --dir "$out" --clobber; fi
   done
 fi
 

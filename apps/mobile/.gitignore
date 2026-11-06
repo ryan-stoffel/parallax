@@ -1,0 +1,5 @@
+node_modules/
+.expo/
+# Expo prebuild output, made fresh by `expo run:ios`.
+/ios/
+/android/

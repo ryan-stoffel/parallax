@@ -1,0 +1,806 @@
+//! Normal threads, behind the `threads` capability (0011, #110, decision 0017).
+//!
+//! A normal thread is one agent with no orchestrator: an agent run (0014) that belongs to a repo
+//! entry instead of a project. A repo entry is a lightweight record of a repository on the host,
+//! registered by path with `repo/add`. A thread with no repo, a quick chat, runs in a scratch
+//! repository plxd makes for it, and belongs to plxd's scratch entry.
+//!
+//! A thread's run is an ordinary [`AgentRun`] whose `project` is its repo entry's id, so
+//! `agent/list`, `agent/send`, `agent/cancel`, `agent/events`, `events/subscribe`, and every
+//! `agent.*` event take a repo entry's id as they take a project's. What threads add is the repo
+//! entries, the archived flag, and host-level `repo.*` and `thread.*` events.
+//!
+//! Since 0041, behind `threadLineage`, a thread also has a parent (the run that launched it), a
+//! fork origin, a title, and a settled flag.
+//!
+//! Since 0042, behind `orchestratorTasks`, `thread/start` with `project` starts an orchestrator's
+//! child: a thread whose run, and `repo`, is the orchestrator's id, whose parent is its
+//! orchestrator. Behind `orchestratorFromThreads`, `orchestrator/fromThreads` makes existing
+//! threads a new orchestrator's children: their runs move to the orchestrator, so their later
+//! `agent.*` events take its id, while `repo` keeps their repo entry.
+
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::id::uuid_v7_id;
+use crate::{
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ChosenIcon, PromptImage, RunId, ScopeId,
+    TurnId,
+};
+
+/// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
+pub const MAX_THREAD_TITLE_BYTES: usize = 256;
+
+uuid_v7_id! {
+    /// A repo entry's id: a version 7 UUID that the client generates once and sends again on
+    /// every retry of `repo/add`. plxd generates the scratch entry's.
+    RepoId
+}
+
+/// A repository on the host that normal threads run in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Repo {
+    /// The entry's id.
+    pub id: RepoId,
+    /// The name shown in the app: the repository folder's name.
+    pub name: String,
+    /// The absolute, canonical path of the repository on the host.
+    pub path: String,
+    /// True for plxd's scratch entry, which holds the threads with no repo. Its `path` is the
+    /// folder that holds each such thread's own scratch repository.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scratch: bool,
+    /// True for a Project (0069): a group of chats the user made, with no repository of theirs.
+    /// `path` is the repository plxd made for it. Behind the `projects` capability.
+    #[serde(default, alias = "space", skip_serializing_if = "std::ops::Not::not")]
+    pub project: bool,
+    /// The icon the user chose or the app took from the repository (PLX-1272), in a project's
+    /// shape (0032), behind the `threadAttention` capability (0033). Absent means the app's
+    /// default: the name's initials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon: Option<ChosenIcon>,
+    /// When the entry was created, in RFC 3339 UTC.
+    pub created_at: Timestamp,
+    /// A Project's instructions, which plxd pins to the system prompt of every thread in it (0090),
+    /// behind the `projectContext` capability. Absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instructions: Option<String>,
+    /// The files a Project gives every thread in it (0090), as absolute paths on the host, such as
+    /// `host/upload` answers, behind `projectContext`. Each thread's system prompt lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub files: Vec<String>,
+}
+
+/// A normal thread: what threads add to its run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Thread {
+    /// The thread's run id.
+    pub id: RunId,
+    /// Its repo entry: the scratch entry for a thread with no repo. An orchestrator's child started
+    /// with `thread/start`'s `project` has the orchestrator's id here instead (0042), while a
+    /// thread `orchestrator/fromThreads` made an orchestrator's child keeps its repo entry.
+    pub repo: RepoId,
+    /// Whether the user archived it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
+    /// When it was created, in RFC 3339 UTC.
+    pub created_at: Timestamp,
+    /// When a client last marked it seen with `thread/update` (0033). The app counts a run that
+    /// stopped after this as one the user hasn't seen. Absent if never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub seen_at: Option<Timestamp>,
+    /// Until when the user snoozed it (0033). A time in the past means it isn't snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_until: Option<Timestamp>,
+    /// When its newest message was sent: its newest turn, or its creation (0033). Absent from a
+    /// plxd without `threadAttention`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_prompt_at: Option<Timestamp>,
+    /// When the user last sent it a message: its newest turn the user wrote, or its creation
+    /// (PLX-1012). Wake-ups and other threads' messages don't move it, so the app's Working clock
+    /// spans them. Absent from an older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_user_prompt_at: Option<Timestamp>,
+    /// The run that launched it (0041), from `thread/start`'s `parent`. Absent for a thread the
+    /// user started, and once the parent is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<RunId>,
+    /// The run and turn it was forked from (0041). Absent once that run is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub forked_from: Option<ForkedFrom>,
+    /// Its title (0041). Absent leaves it to the client, which shows its prompt's first line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// Whether the user or an agent marked it settled: nothing left to do (0041).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub settled: bool,
+    /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
+    /// The Project the user added it to with `thread/setProject` (0090), where it works elsewhere.
+    /// Absent for a thread in no Project, and for one started in a Project, whose `repo` is the
+    /// Project.
+    #[serde(default, alias = "space", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<RepoId>,
+    /// The orchestrator whose orchestration it runs, when it is an orchestrator thread (0093),
+    /// behind `orchestratorThreads`. Its `repo` is the orchestrator too, as its children's is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub orchestrator: Option<ScopeId>,
+    /// Why an orchestrator thread last un-archived itself (0093), behind `orchestratorThreads`.
+    /// Absent once the user archives or un-archives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wake_reason: Option<WakeReason>,
+}
+
+/// Why an orchestrator thread un-archived itself (0093). A newer plxd may send a kind this version
+/// does not know; treat it as unknown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WakeReason {
+    /// A child finished or failed.
+    ChildFinished {
+        /// The child's run.
+        child: RunId,
+    },
+    /// A scheduled task fired.
+    Schedule {
+        /// The task's id.
+        task: String,
+        /// The task's title.
+        title: String,
+    },
+    /// A watched pull request changed.
+    PullRequest {
+        /// The pull request's web URL.
+        url: String,
+    },
+    /// Something waits on the user: a child's question or permission, a landing, or paused
+    /// wake-ups.
+    NeedsYou {
+        /// The run it is about: a child, or the orchestrator's own.
+        run: RunId,
+    },
+    /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkedFrom {
+    /// The run it was forked from.
+    pub run: RunId,
+    /// The turn of that run it was forked at.
+    pub turn: TurnId,
+}
+
+/// Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
+/// `threadAttention` capability, sets its title or settled flag (0041), behind `threadLineage`,
+/// or pins it (PLX-789), behind `pins`.
+///
+/// `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
+/// past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
+/// Fails with `threadNotFound` for an unknown thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUpdateParams {
+    /// The thread's run id.
+    pub run_id: RunId,
+    /// True to mark it seen now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seen: bool,
+    /// Snoozes it until this time, in RFC 3339 UTC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_until: Option<Timestamp>,
+    /// Its new title, trimmed. Empty clears it. At most [`MAX_THREAD_TITLE_BYTES`] bytes, or it
+    /// fails with `invalidParams`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// True to mark it settled, false to clear that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub settled: Option<bool>,
+    /// True to pin it, false to unpin it (PLX-789), behind `pins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pinned: Option<bool>,
+}
+
+/// Result of `thread/update`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUpdateResult {
+    /// The thread as it stands.
+    pub thread: Thread,
+}
+
+/// Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
+/// behind the `threadAttention` capability, renames a Project (0069), behind `projects`, or sets a
+/// Project's instructions and files (0090), behind `projectContext`. A change appends
+/// `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
+/// `name`, `instructions`, or `files` on an entry that isn't a Project.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoUpdateParams {
+    /// The entry's id.
+    pub repo: RepoId,
+    /// Its new icon, checked as `orchestrator/update` checks a project's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon: Option<ChosenIcon>,
+    /// True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
+    /// replace one the user picked meanwhile. Behind the `repoLogo` capability.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub icon_if_unset: bool,
+    /// A Project's new name, trimmed, 1 to 128 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// A Project's new instructions, up to [`MAX_PROJECT_INSTRUCTIONS_BYTES`] once trimmed. Empty
+    /// clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instructions: Option<String>,
+    /// A Project's files in full, replacing the list: at most [`MAX_PROJECT_FILES`] absolute paths
+    /// inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub files: Option<Vec<String>>,
+}
+
+/// The longest Project name `project/create` and `repo/update` take, in bytes once trimmed.
+pub const MAX_PROJECT_NAME_BYTES: usize = 128;
+
+/// The longest instructions a Project keeps (0090), in bytes once trimmed.
+pub const MAX_PROJECT_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+
+/// The most files a Project keeps (0090).
+pub const MAX_PROJECT_FILES: usize = 50;
+
+/// Params of `project/create` (0069), behind the `projects` capability: makes a Project, a named group
+/// for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry
+/// with the same name returns the entry, another name fails with `idConflict`. Appends
+/// `repo.added`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCreateParams {
+    /// The Project's id, a version 7 UUID generated by the client.
+    pub id: RepoId,
+    /// Its name, trimmed, 1 to [`MAX_PROJECT_NAME_BYTES`] bytes.
+    pub name: String,
+    /// Its icon, checked as `orchestrator/create` checks a project's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon: Option<ChosenIcon>,
+}
+
+/// Result of `project/create`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCreateResult {
+    /// The Project, new or existing, as a repo entry with `project` true.
+    pub repo: Repo,
+}
+
+/// Params of `project/delete` (0069), behind the `projects` capability: deletes a Project and every
+/// chat in it, as `thread/delete` deletes each, then its repository. Appends `repo.removed`.
+/// Fails with `repoNotFound` for an unknown id or an entry that isn't a Project.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDeleteParams {
+    /// The Project's id.
+    #[serde(alias = "space")]
+    pub project: RepoId,
+}
+
+/// Params of `thread/setProject` (0090), behind the `projectThreads` capability: adds threads to a
+/// Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+/// and transcript, and its next CLI process gets the Project's instructions and files. Appends
+/// `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
+/// thread started in a Project or an orchestrator's child, and with `repoNotFound` for a `project`
+/// that isn't one. An orchestrator thread joins one (0093).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetProjectParams {
+    /// The threads, by run id.
+    pub threads: Vec<RunId>,
+    /// The Project to add them to. Absent takes them out of their Project.
+    #[serde(default, alias = "space", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<RepoId>,
+}
+
+/// Result of `thread/setProject`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetProjectResult {
+    /// The threads as they stand, in the order asked.
+    pub threads: Vec<Thread>,
+}
+
+/// Result of `project/delete`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDeleteResult {}
+
+/// Result of `repo/update`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoUpdateResult {
+    /// The entry as it stands.
+    pub repo: Repo,
+}
+
+/// Params of `thread/list`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadListParams {}
+
+/// Result of `thread/list`: every repo entry and every thread. The threads' runs come from
+/// `agent/list` with each entry's id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadListResult {
+    /// Every repo entry, oldest first.
+    pub repos: Vec<Repo>,
+    /// Every thread, oldest first.
+    pub threads: Vec<Thread>,
+    /// The event log's `seq` from before the list was read. Subscribe to host-level events with
+    /// `after` set to it. The list may already reflect some events after it, and replaying them is
+    /// harmless.
+    pub seq: u64,
+}
+
+/// Params of `repo/add`: registers a repository for normal threads.
+///
+/// Idempotent on `id`, and failing with `idConflict` if the same id comes with another path. A
+/// path that is already registered returns its existing entry, whatever `id` says. The path must
+/// be the top folder of a git working tree on the host, or it fails with `notARepository`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoAddParams {
+    /// The new entry's id, a version 7 UUID generated by the client.
+    pub id: RepoId,
+    /// The absolute path of the repository on the host.
+    pub path: String,
+}
+
+/// Result of `repo/add`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoAddResult {
+    /// The entry, new or existing.
+    pub repo: Repo,
+}
+
+/// Params of `repo/clone`, behind the `repoClone` capability (PLX-905): clones a repository onto
+/// the host and registers it as `repo/add` does, answering `repo/add`'s result once git is done.
+///
+/// git never waits on a prompt for a username, password, or SSH passphrase: one it would ask
+/// fails the clone instead. An SSH URL that fails is tried again over HTTPS, which Parallax's
+/// GitHub setup signs in to. A clone git stops reporting progress on for 5 minutes fails. A path
+/// that already holds a clone of the same repository registers it without cloning again; any
+/// other existing path fails with `invalidParams`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCloneParams {
+    /// The new entry's id, a version 7 UUID generated by the client, which `repo/cloneProgress`
+    /// takes while it clones.
+    pub id: RepoId,
+    /// What `git clone` takes: an HTTPS or SSH URL.
+    pub url: String,
+    /// Where it goes: an absolute path, or `~` or a path under it, for the home folder of the user
+    /// plxd runs as. Missing folders above it are made.
+    pub path: String,
+}
+
+/// Params of `repo/cloneProgress`, behind the `repoClone` capability.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCloneProgressParams {
+    /// The id a `repo/clone` under way was given.
+    pub id: RepoId,
+}
+
+/// Result of `repo/cloneProgress`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoCloneProgressResult {
+    /// git's latest progress line, such as `Receiving objects:  42% (420/1000)`. Absent before
+    /// git reports any, or once the clone is over or unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub progress: Option<String>,
+}
+
+/// Params of `repo/remote`, behind the `repoClone` capability. Fails with `repoNotFound` for an
+/// unknown entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoRemoteParams {
+    /// The entry's id.
+    pub repo: RepoId,
+}
+
+/// Result of `repo/remote`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoRemoteResult {
+    /// The URL of its `origin` remote, which `repo/clone` clones on another host. Absent when it
+    /// has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+}
+
+/// Params of `repo/logo` (PLX-1272), behind the `repoLogo` capability: finds the repository's own
+/// favicon or logo among the files git doesn't ignore in its checkout, by name and folder, and
+/// reads it. It changes nothing: the app encodes the image and sets it with `repo/update`. Fails
+/// with `repoNotFound` for an unknown entry and `worktreeFailed` when git fails there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLogoParams {
+    /// The entry's id.
+    pub repo: RepoId,
+}
+
+/// Result of `repo/logo`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLogoResult {
+    /// The best match. Absent when the repository has none, and always for a Project or the
+    /// scratch entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub logo: Option<RepoLogo>,
+}
+
+/// An image file from a repository, as it is on disk.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLogo {
+    /// Relative to the checkout, with `/` separators.
+    pub path: String,
+    /// From its extension: unlike an icon's image, it can be `image/svg+xml` or `image/x-icon`.
+    pub media_type: String,
+    /// Its bytes, in base64.
+    pub data: String,
+}
+
+/// Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
+/// `origin`, for an orchestrator on another plxd whose children run here. Each entry's `origin` and
+/// this one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing
+/// slash, and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoMatchParams {
+    /// The other plxd's `origin` URL, in any form git takes.
+    pub origin: String,
+}
+
+/// Result of `repo/match`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoMatchResult {
+    /// The matching entry, the oldest when several match. Absent when none does, so the
+    /// repository has to be cloned or added here first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<Repo>,
+}
+
+/// Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
+/// starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
+/// worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
+///
+/// Idempotent on `runId`: the same id with the same params returns the run; with different
+/// params it fails with `idConflict`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStartParams {
+    /// The new run's id, a version 7 UUID generated by the client.
+    pub run_id: RunId,
+    /// The repo entry to work in. Absent starts a thread with no repo, in a scratch repository
+    /// of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<RepoId>,
+    /// Starts a child of this orchestrator instead (0042), behind `orchestratorTasks`: it runs in
+    /// the orchestrator's mode with `approvals`, in a new worktree cut from the orchestrator's
+    /// integration branch, and its first message is the child's header, then `prompt`. Its parent
+    /// is the orchestrator's current run, which a batched wake-up tells of the start; with
+    /// no orchestrator yet it has none. Not with `repo`, `parent`, `checkout`, `base`, or
+    /// `checkoutRef`, which the orchestrator decides.
+    #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub orchestrator: Option<ScopeId>,
+    /// The run that launches it, recorded as its parent (0041). It must exist, or the start fails
+    /// with `runNotFound`. Behind `threadLineage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<RunId>,
+    /// Whether the thread wakes its `parent` when a CLI process of its ends, as an orchestrator's
+    /// orchestrator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notify: Option<bool>,
+    /// Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
+    /// conflict, since the title can change. Behind `threadLineage`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// The first message.
+    pub prompt: String,
+    /// The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<AccountChoice>,
+    /// The model, as `agent/start` takes it. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// How hard the model thinks, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// Claude Code's permission mode for the agent, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
+    /// The context window in tokens, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context_window: Option<u32>,
+    /// Fast mode on or off, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fast: Option<bool>,
+    /// Names the worktree's branch the host's `branchPrefix`, `parallax/` by default, then this: lowercase letters, digits, and hyphens,
+    /// no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
+    /// the run's short id after it. Absent names it the prefix then the short run id. Not part of what makes
+    /// a retry with the same run id conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_slug: Option<String>,
+    /// Images for the first message, as `agent/start`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<PromptImage>,
+    /// Forward the agent's permission requests to the client, as `agent/start` takes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approvals: bool,
+    /// Work in the repo entry's own checkout, on whatever branch it has out, instead of in a new
+    /// worktree: the agent's changes land there, uncommitted, and `branchSlug` is ignored. Needs a
+    /// `repo`. Behind the `checkout` capability, since an older plxd would silently ignore it and
+    /// make a worktree.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checkout: bool,
+    /// The ref the new worktree starts from, such as `develop` or `origin/develop`. Absent means
+    /// the repo's `HEAD`. Not with `checkout`. Behind the `repoRefs` capability, like
+    /// `checkoutRef`. Not part of what makes a retry with the same run id conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base: Option<String>,
+    /// With `checkout`, the branch to switch the checkout to before the agent starts, as
+    /// `git switch` does: a remote-tracking ref such as `origin/foo` switches to the local `foo`,
+    /// made to track it if missing. Never forced: when git refuses, such as over local changes
+    /// it would overwrite, the start fails with git's reason. Absent switches nothing. Not part of
+    /// what makes a retry with the same run id conflict, and a retry switches nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checkout_ref: Option<String>,
+    /// Threads attached to the first message as context, as `agent/start` takes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RunId>,
+    /// The model that names the thread once it has started (0058), behind `threadNaming`. plxd
+    /// asks it for a title and a branch name from `prompt`, then sets the title unless the thread
+    /// has one by then, and renames the worktree's branch while it has no upstream, reporting it
+    /// in `agent.updated`. Not part of what makes a retry with the same run id conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub naming: Option<ThreadNaming>,
+}
+
+/// The model that names a new thread, as `thread/start`'s `naming` (0058). When its instance
+/// can't name threads on the host, plxd uses the default model of the thread's own instance:
+/// `claude-haiku-5-5` for Claude Code, `gpt-6-luna` for Codex.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadNaming {
+    /// The provider instance that runs it, as a subscription `AccountChoice`'s `backend`: a
+    /// Claude Code or Codex one.
+    pub backend: String,
+    /// The model, as the CLI's `--model` takes it.
+    pub model: String,
+    /// How hard it thinks. Absent means the CLI's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+}
+
+/// Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
+/// behind the `threadContext` capability.
+///
+/// Matches a thread whose title contains `query`, or whose messages hold every word of it: the
+/// user's, Parallax's wake-ups, and the agent's replies, but not its tool calls. A word matches
+/// any word it starts, ignoring case, accents, and punctuation (PLX-487). The user's message is
+/// searchable once it's sent, and the agent's replies once their turn ends. An empty query
+/// fails with `invalidParams`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchParams {
+    /// The text to find.
+    pub query: String,
+    /// The most threads to return: 20 by default, and at most 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub limit: Option<u32>,
+}
+
+/// Result of `thread/search`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchResult {
+    /// The matching threads: title matches first, then the one with the newest message.
+    pub threads: Vec<Thread>,
+    /// For each returned thread that matched in its messages, one line of its best-matching
+    /// message, around the matching words, at most 120 characters, with `…` where it was cut
+    /// (PLX-789). Absent for a thread that matched only by title, and from an older plxd.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub snippets: std::collections::BTreeMap<RunId, String>,
+}
+
+/// Params of `thread/fork`: a new thread that continues thread `runId`'s conversation from one of
+/// its turns, behind the `threadFork` capability (0050). The fork has no CLI until its first
+/// `agent/send`. Its transcript starts with the parent's up to the end of that turn.
+///
+/// It works where the parent does: a new worktree cut from the parent's latest commit, the same
+/// checkout for a Current checkout thread, or a scratch repository of its own, holding the
+/// parent's latest commit, for a thread with no repo.
+///
+/// Idempotent on `newRunId`: a retry returns the fork, and a run id that is taken by anything
+/// else, a fork with another `parent` field included, fails with `idConflict`. Fails with
+/// `threadNotFound` for an unknown parent, and with `invalidParams` for a turn the parent didn't
+/// record or one it is still running. A fork's copied turns aren't its own: they are part of its
+/// prompt's turn, and forking at one of their ids fails.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadForkParams {
+    /// The thread to fork.
+    pub run_id: RunId,
+    /// The fork's run id, a version 7 UUID generated by the client.
+    pub new_run_id: RunId,
+    /// The turn to fork at: a follow-up's turn id, or the parent's run id for its prompt's turn.
+    /// Absent means its latest turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<TurnId>,
+    /// The account to run on. Absent means the one the parent's session is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<AccountChoice>,
+    /// The model. Absent means the parent's, when the fork runs on the parent's backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// The run that asked for the fork, such as a thread's `thread_fork` tool, recorded as the
+    /// fork's `parent` (0041). It must exist, or the fork fails with `runNotFound`. Absent means
+    /// none, as for a fork the user makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<RunId>,
+}
+
+/// Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an
+/// unknown entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoRefsParams {
+    /// The entry's id.
+    pub repo: RepoId,
+}
+
+/// Result of `repo/refs`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoRefsResult {
+    /// Its local and remote-tracking branches, `origin/HEAD` left out: the default branch first,
+    /// then the most recently committed first.
+    pub refs: Vec<RepoRef>,
+}
+
+/// A branch in a repository, as `repo/refs` lists it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a branch, not states of one thing"
+)]
+pub struct RepoRef {
+    /// Its short name: `develop`, or `origin/develop` for a remote-tracking branch.
+    pub name: String,
+    /// True for a remote-tracking branch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote: bool,
+    /// True for the default branch `origin/HEAD` names: its local branch, or the remote-tracking
+    /// one when there is no local one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
+    /// True for the branch the repository's checkout has out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+    /// True for a branch checked out in another worktree, a thread's included, which the checkout
+    /// can't switch to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worktree: bool,
+}
+
+/// Result of `thread/start`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadStartResult {
+    /// The thread.
+    pub thread: Thread,
+    /// Its run, as it stands.
+    pub run: AgentRun,
+}
+
+/// Params of `thread/archive`: archives a thread or brings it back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadArchiveParams {
+    /// The thread's run id.
+    pub run_id: RunId,
+    /// True to archive it, false to bring it back.
+    pub archived: bool,
+}
+
+/// Result of `thread/archive`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadArchiveResult {
+    /// The thread as it stands.
+    pub thread: Thread,
+}
+
+/// Params of `thread/delete`: deletes a thread, its run, its worktree and branch, a thread with
+/// no repo's scratch repository, and its stored events.
+///
+/// A running CLI is cancelled first, and the delete answers once it has exited and its changes
+/// were committed. Deleting a thread that doesn't exist fails with `threadNotFound`, and one
+/// whose push or Open PR is running with `gitRefused` (PLX-458).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadDeleteParams {
+    /// The thread's run id.
+    pub run_id: RunId,
+}
+
+/// Result of `thread/delete`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadDeleteResult {}

@@ -1,6 +1,6 @@
-// Generated from crates/wisp-protocol by `cargo run -p wisp-protocol --bin generate-typescript`. Do not edit.
+// Generated from crates/parallax-protocol by `cargo run -p parallax-protocol --bin generate-typescript`. Do not edit.
 //
-// The messages of the protocol between clients and wispd (decision record 0007), without
+// The messages of the protocol between clients and plxd (decision record 0007), without
 // the JSON-RPC 2.0 envelope around them.
 
 /** The newest protocol version these types describe. */
@@ -9,21 +9,21 @@ export const PROTOCOL_VERSION = 1;
 /** The largest frame either side sends or accepts: 8 MiB, not counting the line ending. */
 export const MAX_FRAME_BYTES = 8388608;
 
-/** JSON-RPC error codes. A `WispError`'s `data` is an `ErrorData`. */
+/** JSON-RPC error codes. A `ParallaxError`'s `data` is an `ErrorData`. */
 export const ErrorCodes = {
 	ParseError: -32700,
 	InvalidRequest: -32600,
 	MethodNotFound: -32601,
 	InvalidParams: -32602,
 	InternalError: -32603,
-	WispError: -32000,
+	ParallaxError: -32000,
 	RequestCancelled: -32800,
 } as const;
 
-/** Requests, which the client sends and wispd answers, by method. */
-export type WispRequests = {
+/** Requests, which the client sends and plxd answers, by method. */
+export type ParallaxRequests = {
 	/**
-	 * `initialize`: the handshake. It must be the first request on a connection; wispd
+	 * `initialize`: the handshake. It must be the first request on a connection; plxd
 	 * answers anything before it with `notInitialized`.
 	 */
 	"initialize": { params: InitializeParams, result: InitializeResult },
@@ -33,18 +33,46 @@ export type WispRequests = {
 	 */
 	"host/health": { params: HostHealthParams, result: HostHealthResult },
 	/**
-	 * `host/version`: wispd's release and protocol versions, operating system, and CPU
+	 * `host/version`: plxd's release and protocol versions, operating system, and CPU
 	 * architecture.
 	 */
 	"host/version": { params: HostVersionParams, result: HostVersionResult },
 	/**
-	 * `project/list`: every project, and the `seq` the list reflects.
+	 * `host/update`: installs plxd `version` from its GitHub release, checked against the
+	 * release's SHA-256, and restarts into it once no agent's turn is running, or at once
+	 * with `now`. It never downgrades. Gated on the `hostUpdate` capability (PLX-700, decision 0066).
 	 */
-	"project/list": { params: ProjectListParams, result: ProjectListResult },
+	"host/update": { params: HostUpdateParams, result: HostUpdateResult },
 	/**
-	 * `project/create`: creates a project, idempotent on its client-generated id.
+	 * `host/announceUpdate`: sends `host/updating` on every connection, for a restart that
+	 * doesn't start here. A newer plxd's `service install --replace` sends it to the plxd
+	 * it's about to stop (PLX-1418).
 	 */
-	"project/create": { params: ProjectCreateParams, result: ProjectCreateResult },
+	"host/announceUpdate": { params: HostAnnounceUpdateParams, result: HostAnnounceUpdateResult },
+	/**
+	 * `host/folders`: the folders in a folder on the host, for adding a repository there
+	 * (PLX-769). Gated on the `hostFolders` capability.
+	 */
+	"host/folders": { params: HostFoldersParams, result: HostFoldersResult },
+	/**
+	 * `host/upload`: saves a file attached to a message on the host and answers its path
+	 * (PLX-779, decision 0071). Gated on the `fileUploads` capability, and a file sent in
+	 * pieces on `fileChunks` (decision 0074).
+	 */
+	"host/upload": { params: HostUploadParams, result: HostUploadResult },
+	/**
+	 * `host/readUpload`: a file `host/upload` saved, for the transcript (PLX-779). Gated on
+	 * the `fileUploads` capability, and a slice of it on `fileChunks` (decision 0074).
+	 */
+	"host/readUpload": { params: HostReadUploadParams, result: HostReadUploadResult },
+	/**
+	 * `orchestrator/list`: every orchestrator, and the event log's `seq` from before the read.
+	 */
+	"orchestrator/list": { params: OrchestratorListParams, result: OrchestratorListResult },
+	/**
+	 * `orchestrator/create`: creates an orchestrator, idempotent on its client-generated id.
+	 */
+	"orchestrator/create": { params: OrchestratorCreateParams, result: OrchestratorCreateResult },
 	/**
 	 * `events/subscribe`: replays the events after a `seq`, then streams new ones as
 	 * `events/event` notifications.
@@ -69,7 +97,7 @@ export type WispRequests = {
 	 */
 	"accounts/keys/remove": { params: AccountsKeysRemoveParams, result: AccountsKeysRemoveResult },
 	/**
-	 * `accounts/list`: the vendor CLIs wispd detects (#114), installed, signed in, and their
+	 * `accounts/list`: the vendor CLIs plxd detects (#114), installed, signed in, and their
 	 * plan where exposed. May answer from a short-lived cache. Gated on the `agentClis`
 	 * capability.
 	 */
@@ -79,6 +107,78 @@ export type WispRequests = {
 	 * cache. Gated on the `agentClis` capability.
 	 */
 	"accounts/refresh": { params: AccountsRefreshParams, result: AccountsRefreshResult },
+	/**
+	 * `providers/list`: this host's provider instances (0040), each with its detected state
+	 * and models. May answer from a short-lived cache unless `refresh` is set. Gated on the
+	 * `providers` capability.
+	 */
+	"providers/list": { params: ProvidersListParams, result: ProvidersListResult },
+	/**
+	 * `providers/save`: adds an instance, or replaces the one with its id, and returns every
+	 * instance. A secret variable sent without a value keeps its stored one.
+	 */
+	"providers/save": { params: ProvidersSaveParams, result: ProvidersListResult },
+	/**
+	 * `providers/remove`: removes an instance the user added, and its secrets, and returns
+	 * every instance. Fails with `invalidParams` for a built-in one.
+	 */
+	"providers/remove": { params: ProvidersRemoveParams, result: ProvidersListResult },
+	/**
+	 * `hubs/list`: this host's `CLIProxyAPI` hubs (0089), each with whether it answers, its
+	 * models, and with a management key its accounts and their limits. May answer from a
+	 * short-lived cache unless `refresh` is set. Gated on the `hubs` capability.
+	 */
+	"hubs/list": { params: HubsListParams, result: HubsListResult },
+	/**
+	 * `hubs/save`: adds a hub, or replaces the one with its id, and its two provider
+	 * instances, and returns every hub. A key left out keeps the stored one.
+	 */
+	"hubs/save": { params: HubsSaveParams, result: HubsListResult },
+	/**
+	 * `hubs/remove`: removes a hub, its keys, and its instances, and returns every hub.
+	 */
+	"hubs/remove": { params: HubsRemoveParams, result: HubsListResult },
+	/**
+	 * `hubs/accounts/signIn`: asks a hub with a management key for a Claude or Codex sign-in
+	 * page to open in a browser, and has it start its callback forwarder, which catches the
+	 * browser's redirect on the hub's own computer (PLX-1070). Gated on the `hubAccounts`
+	 * capability, like every `hubs/accounts/*` method.
+	 */
+	"hubs/accounts/signIn": { params: HubSignInParams, result: HubSignIn },
+	/**
+	 * `hubs/accounts/callback`: hands the hub the address the browser was sent to after
+	 * signing in, for a browser on another computer. Refused with `invalidParams` when the
+	 * address isn't the sign-in's.
+	 */
+	"hubs/accounts/callback": { params: HubSignInCallbackParams, result: HubSignInStatus },
+	/**
+	 * `hubs/accounts/status`: where a sign-in is, asked of the hub once.
+	 */
+	"hubs/accounts/status": { params: HubSignInStateParams, result: HubSignInStatus },
+	/**
+	 * `hubs/accounts/cancel`: ends a sign-in, so the hub keeps no account from it.
+	 */
+	"hubs/accounts/cancel": { params: HubSignInStateParams, result: HubSignInStatus },
+	/**
+	 * `hubs/accounts/setEnabled`: turns a hub's account on or off, and returns every hub.
+	 */
+	"hubs/accounts/setEnabled": { params: HubAccountSetEnabledParams, result: HubsListResult },
+	/**
+	 * `hubs/accounts/remove`: deletes a hub's account, and returns every hub.
+	 */
+	"hubs/accounts/remove": { params: HubAccountRemoveParams, result: HubsListResult },
+	/**
+	 * `providers/updates`: each installed Claude Code and Codex with a newer release where it
+	 * came from: its Homebrew cask or formula, else its npm package. Gated on the
+	 * `providerUpdates` capability (PLX-746, PLX-783).
+	 */
+	"providers/updates": { params: ProvidersUpdatesParams, result: ProvidersUpdatesResult },
+	/**
+	 * `providers/upgrade`: runs the CLI's own `update` command, which knows how it was
+	 * installed, or `brew upgrade`, one upgrade at a time, and answers with the version
+	 * installed after it. Gated on the `providerUpdates` capability (PLX-746).
+	 */
+	"providers/upgrade": { params: ProvidersUpgradeParams, result: ProvidersUpgradeResult },
 	/**
 	 * `usage/get`: per-account tokens and cost for today and this week (local time on this
 	 * host), and the latest limit windows.
@@ -90,7 +190,28 @@ export type WispRequests = {
 	 */
 	"usage/history": { params: UsageHistoryParams, result: UsageHistoryResult },
 	/**
-	 * `accounts/defaults/get`: this host's default account for the coordinator role and for
+	 * `usage/report/claim`: the whole hours of usage no app has reported to usage data yet,
+	 * marked reported, so two apps connected to this host report each hour once (PLX-1301).
+	 */
+	"usage/report/claim": { params: UsageReportClaimParams, result: UsageReportClaimResult },
+	/**
+	 * `usage/report/release`: gives back a claim whose hours couldn't be reported, so they
+	 * go in the next one.
+	 */
+	"usage/report/release": { params: UsageReportReleaseParams, result: UsageReportReleaseResult },
+	/**
+	 * `usage/daily`: every Claude Code, Codex, and Cursor session's tokens and cost on this
+	 * host since a local day, per local day, agent, and model (0039), and each source that
+	 * failed.
+	 */
+	"usage/daily": { params: UsageDailyParams, result: UsageDailyResult },
+	/**
+	 * `usage/limits`: every subscription account's limit windows, read live from its CLI,
+	 * and why a CLI didn't answer.
+	 */
+	"usage/limits": { params: UsageLimitsParams, result: UsageLimitsResult },
+	/**
+	 * `accounts/defaults/get`: this host's default account for the orchestrator role and for
 	 * a worker role, absent where none is set (#119).
 	 */
 	"accounts/defaults/get": { params: AccountsDefaultsGetParams, result: AccountsDefaultsGetResult },
@@ -115,6 +236,16 @@ export type WispRequests = {
 	 */
 	"context/write": { params: ContextWriteParams, result: ContextWriteResult },
 	/**
+	 * `context/readBytes`: one slice of a shared context file of any type, such as an
+	 * artifact, base64-encoded. Behind `orchestratorArtifacts`.
+	 */
+	"context/readBytes": { params: ContextReadBytesParams, result: ContextReadBytesResult },
+	/**
+	 * `context/saveArtifact`: copies a file from an orchestrator child's working folder into
+	 * the orchestrator's `artifacts/<run id>/`. Behind `orchestratorArtifacts`.
+	 */
+	"context/saveArtifact": { params: ContextSaveArtifactParams, result: ContextWriteResult },
+	/**
 	 * `agent/start`: starts a worker in its own worktree of the project's repository, with
 	 * the worker sandbox (0013) and the shared context folder, idempotent on its
 	 * client-generated run id. Gated on the `agents` capability, like every `agent/*`
@@ -131,11 +262,12 @@ export type WispRequests = {
 	 */
 	"agent/cancel": { params: AgentCancelParams, result: AgentRunResult },
 	/**
-	 * `agent/list`: every run, or one project's, and the `seq` the list reflects.
+	 * `agent/list`: every run, or one project's, and the event log's `seq` from before the
+	 * read.
 	 */
 	"agent/list": { params: AgentListParams, result: AgentListResult },
 	/**
-	 * `agent/events`: one run's events from wispd's log, a page at a time.
+	 * `agent/events`: one run's events from plxd's log, a page at a time.
 	 */
 	"agent/events": { params: AgentEventsParams, result: AgentEventsResult },
 	/**
@@ -144,6 +276,83 @@ export type WispRequests = {
 	 */
 	"agent/image": { params: AgentImageParams, result: PromptImage },
 	/**
+	 * `agent/attach`: keeps a page or recording a run's browser tools made with its images,
+	 * for `agent/image` (PLX-639). `plxd mcp` calls it for `html_render`.
+	 */
+	"agent/attach": { params: AgentAttachParams, result: AgentAttachResult },
+	/**
+	 * `preview/call`: one of a thread's `preview_*` browser tools (PLX-639), which its
+	 * `plxd mcp` sends here.
+	 */
+	"preview/call": { params: PreviewCallParams, result: PreviewCallResult },
+	/**
+	 * `preview/list`: a thread's browser tabs.
+	 */
+	"preview/list": { params: PreviewListParams, result: PreviewListResult },
+	/**
+	 * `preview/frame`: a tab's newest frame, waiting up to 10 s for a new one.
+	 */
+	"preview/frame": { params: PreviewFrameParams, result: PreviewFrameResult },
+	/**
+	 * `preview/input`: the user's control, mouse, wheel, keys, viewport, or address bar on a
+	 * tab.
+	 */
+	"preview/input": { params: PreviewInputParams, result: PreviewInputResult },
+	/**
+	 * `device/state`: what the host can run, its simulators and emulators, the device hub,
+	 * and the devices a thread's agent opened (PLX-886). Gated on the `devices` capability,
+	 * like every `device/*` method.
+	 */
+	"device/state": { params: DeviceStateParams, result: DeviceStateResult },
+	/**
+	 * `device/setup`: starts installing the device hub plxd pins, and answers at once.
+	 * `device/state` reports it installing, then installed or why it failed.
+	 */
+	"device/setup": { params: DeviceSetupParams, result: DeviceOkResult },
+	/**
+	 * `device/boot`: starts a simulator or emulator and answers once it has booted.
+	 */
+	"device/boot": { params: DeviceTarget, result: DeviceResult },
+	/**
+	 * `device/shutdown`: powers a simulator or emulator off.
+	 */
+	"device/shutdown": { params: DeviceTarget, result: DeviceOkResult },
+	/**
+	 * `device/create`: makes an iPhone Simulator on the newest iOS runtime.
+	 */
+	"device/create": { params: DeviceCreateParams, result: DeviceResult },
+	/**
+	 * `device/screenshot`: a PNG of a booted device's screen.
+	 */
+	"device/screenshot": { params: DeviceTarget, result: DeviceScreenshotResult },
+	/**
+	 * `device/chrome`: a simulator's bezel and buttons as Xcode's Simulator draws them, from
+	 * the host's Xcode, or none for a device it has no artwork for.
+	 */
+	"device/chrome": { params: DeviceTarget, result: DeviceChromeResult },
+	/**
+	 * `device/stream`: opens a stream to a booted device through the device hub, starting it,
+	 * and sends its messages to this connection as `device/data`, then `device/end`. Fails
+	 * with `invalidParams` while the hub isn't installed.
+	 */
+	"device/stream": { params: DeviceStreamParams, result: DeviceStreamResult },
+	/**
+	 * `computer/ask`: whether a thread may use a desktop app with its `computer_*` tools
+	 * (PLX-897, decision 0077), asking the user in its transcript when they haven't always
+	 * allowed it. `plxd mcp` sends it. Gated on the `computerUse` capability, like every
+	 * `computer/*` method.
+	 */
+	"computer/ask": { params: ComputerAskParams, result: ComputerAskResult },
+	/**
+	 * `computer/status`: plxd's macOS permissions for computer use and the apps always
+	 * allowed, after asking macOS for the missing permissions with `request`.
+	 */
+	"computer/status": { params: ComputerStatusParams, result: ComputerStatus },
+	/**
+	 * `computer/forget`: stops always allowing an app.
+	 */
+	"computer/forget": { params: ComputerForgetParams, result: ComputerStatus },
+	/**
 	 * `agent/diff`: the files that differ between a run's base and its latest commit, each
 	 * with its stats and a size-capped unified diff (#157). Gated on the `agentReview`
 	 * capability, like every review method.
@@ -151,9 +360,29 @@ export type WispRequests = {
 	"agent/diff": { params: AgentDiffParams, result: AgentDiffResult },
 	/**
 	 * `agent/file`: one file of a run's diff, on its base or head side, base64-encoded and
-	 * size-capped, for a diff editor.
+	 * size-capped, for a diff editor. Its `working` side, behind the `files` capability,
+	 * reads the file on disk now, and behind `fileChunks` (decision 0074), one slice of it.
 	 */
 	"agent/file": { params: AgentFileParams, result: AgentFileResult },
+	/**
+	 * `agent/files`: one folder of a run's worktree, or a Current checkout thread's
+	 * checkout, without `.git` or what git ignores, for browsing (PLX-296). Gated on the
+	 * `files` capability.
+	 */
+	"agent/files": { params: AgentFilesParams, result: AgentFilesResult },
+	/**
+	 * `agent/fileCreate`: a new empty file or folder in a run's folder (PLX-590). Gated on
+	 * the `fileEdit` capability, like `agent/fileRename` and `agent/fileDelete`.
+	 */
+	"agent/fileCreate": { params: AgentFileCreateParams, result: AgentFileEditResult },
+	/**
+	 * `agent/fileRename`: moves an entry of a run's folder, never over another.
+	 */
+	"agent/fileRename": { params: AgentFileRenameParams, result: AgentFileEditResult },
+	/**
+	 * `agent/fileDelete`: removes an entry of a run's folder, a folder with its contents.
+	 */
+	"agent/fileDelete": { params: AgentFileDeleteParams, result: AgentFileEditResult },
 	/**
 	 * `agent/accept`: merges a run's commit into the project repository's current branch on
 	 * the host, fast-forward when possible, then removes its worktree and branch. Never
@@ -167,13 +396,36 @@ export type WispRequests = {
 	"agent/requestChanges": { params: AgentRequestChangesParams, result: AgentRunResult },
 	/**
 	 * `agent/openPr`: pushes a finished run's branch to the repository's `origin` and opens
-	 * a pull request for it with `gh`, or finds the one already open (RYA-168). Gated on the
+	 * a pull request for it with `gh`, or finds the one already open (PLX-168). Gated on the
 	 * `openPr` capability.
 	 */
 	"agent/openPr": { params: AgentOpenPrParams, result: AgentOpenPrResult },
 	/**
-	 * `thread/list`: every repo entry and normal thread, and the `seq` the list reflects
-	 * (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
+	 * `agent/gitStatus`: the git state of a run's folder (PLX-298). Gated on the `git`
+	 * capability, like `agent/commit` and `agent/push`.
+	 */
+	"agent/gitStatus": { params: AgentGitStatusParams, result: GitStatus },
+	/**
+	 * `repo/gitStatus`: read-only checkout status, gated on `repoGitStatus`.
+	 */
+	"repo/gitStatus": { params: RepoGitStatusParams, result: GitStatus },
+	/**
+	 * `agent/commit`: stages everything in a finished run's folder and commits it.
+	 */
+	"agent/commit": { params: AgentCommitParams, result: GitStatus },
+	/**
+	 * `agent/push`: pushes a finished run's branch to `origin`, setting its upstream.
+	 */
+	"agent/push": { params: AgentPushParams, result: GitStatus },
+	/**
+	 * `agent/approve`: answers a run's permission request, from its `approvalRequested`
+	 * item, by allowing or denying the tool call (PLX-222, decision 0031). Idempotent on the
+	 * request. Gated on the `approvals` capability.
+	 */
+	"agent/approve": { params: AgentApproveParams, result: AgentApproveResult },
+	/**
+	 * `thread/list`: every repo entry and normal thread, and the event log's `seq` from before
+	 * the read (#110). Gated on the `threads` capability, like every `thread/*` and `repo/*` method.
 	 */
 	"thread/list": { params: ThreadListParams, result: ThreadListResult },
 	/**
@@ -182,46 +434,969 @@ export type WispRequests = {
 	 */
 	"repo/add": { params: RepoAddParams, result: RepoAddResult },
 	/**
+	 * `repo/clone`: clones a repository onto the host and registers it (PLX-905). Gated on
+	 * the `repoClone` capability, like `repo/cloneProgress` and `repo/remote`.
+	 */
+	"repo/clone": { params: RepoCloneParams, result: RepoAddResult },
+	/**
+	 * `repo/cloneProgress`: git's latest progress line for a `repo/clone` under way.
+	 */
+	"repo/cloneProgress": { params: RepoCloneProgressParams, result: RepoCloneProgressResult },
+	/**
+	 * `repo/remote`: the URL of a repo entry's `origin` remote, for cloning it elsewhere.
+	 */
+	"repo/remote": { params: RepoRemoteParams, result: RepoRemoteResult },
+	/**
+	 * `repo/logo`: the repository's own favicon or logo, for its icon when it has none
+	 * (PLX-1272). Gated on the `repoLogo` capability.
+	 */
+	"repo/logo": { params: RepoLogoParams, result: RepoLogoResult },
+	/**
+	 * `repo/match`: the repo entry whose `origin` names the same repository as another
+	 * plxd's (0057). Not behind a capability of its own: a plxd without it answers
+	 * `methodNotFound`.
+	 */
+	"repo/match": { params: RepoMatchParams, result: RepoMatchResult },
+	/**
 	 * `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
 	 * scratch repository of its own when no repo is given. Idempotent on its
 	 * client-generated run id.
 	 */
 	"thread/start": { params: ThreadStartParams, result: ThreadStartResult },
 	/**
+	 * `thread/fork`: a new thread that continues a thread's conversation from one of its
+	 * turns, in a workspace of the same kind (0050). Idempotent on its client-generated
+	 * run id. Gated on the `threadFork` capability.
+	 */
+	"thread/fork": { params: ThreadForkParams, result: ThreadStartResult },
+	/**
+	 * `thread/importable`: the past sessions the Claude, Codex, and Cursor desktop apps
+	 * keep on the host, and Claude Code's and Codex's Remote Control sessions that ran on
+	 * it (PLX-881). Gated on the `threadImport` capability.
+	 */
+	"thread/importable": { params: ThreadImportableParams, result: ThreadImportableResult },
+	/**
+	 * `thread/import`: makes one of those sessions a thread, at rest with its
+	 * conversation. Idempotent on the session. Gated on the `threadImport` capability.
+	 */
+	"thread/import": { params: ThreadImportParams, result: ThreadStartResult },
+	/**
+	 * `thread/importChat`: makes a chat from a `ChatGPT` or `claude.ai` data export an archived
+	 * thread (PLX-883). Idempotent on the chat. Gated on the `chatImport` capability.
+	 */
+	"thread/importChat": { params: ThreadImportChatParams, result: ThreadStartResult },
+	/**
+	 * `thread/importedChats`: which exported chats are imported. Gated on `chatImport`.
+	 */
+	"thread/importedChats": { params: ThreadImportedChatsParams, result: ThreadImportedChatsResult },
+	/**
+	 * `thread/remoteControl`: a Claude Remote Control thread's session, where it works, and
+	 * what it's doing (PLX-1140). Gated on the `claudeRemoteControl` capability.
+	 */
+	"thread/remoteControl": { params: ThreadRemoteControlParams, result: ThreadRemoteControlResult },
+	/**
+	 * `thread/remoteControlOrigin`: where a Claude Remote Control thread's session runs, read
+	 * from `claude.ai`, to move it there (PLX-1143). Gated on `claudeRemoteControlMove`.
+	 */
+	"thread/remoteControlOrigin": { params: ThreadRemoteControlOriginParams, result: ThreadRemoteControlOriginResult },
+	/**
 	 * `thread/archive`: archives a normal thread or brings it back.
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
+	/**
+	 * `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the
+	 * `threadAttention` capability, or sets its title or settled flag (0041), gated on
+	 * `threadLineage`.
+	 */
+	"thread/update": { params: ThreadUpdateParams, result: ThreadUpdateResult },
+	/**
+	 * `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
+	 * capability.
+	 */
+	"repo/update": { params: RepoUpdateParams, result: RepoUpdateResult },
+	/**
+	 * `project/create`: makes a Project, a named group for chats with no repository, backed by a
+	 * repository plxd makes (0069). Idempotent on its client-generated id. Gated on the
+	 * `projects` capability.
+	 */
+	"project/create": { params: ProjectCreateParams, result: ProjectCreateResult },
+	/**
+	 * `project/delete`: deletes a Project and the chats in it (0069). Gated on the `projects`
+	 * capability.
+	 */
+	"project/delete": { params: ProjectDeleteParams, result: ProjectDeleteResult },
+	/**
+	 * `thread/setProject`: adds threads to a Project, or takes them out of one, leaving where
+	 * each works as it is (0090). Gated on the `projectThreads` capability.
+	 */
+	"thread/setProject": { params: ThreadSetProjectParams, result: ThreadSetProjectResult },
 	/**
 	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
 	 * stopping its CLI first if it runs.
 	 */
 	"thread/delete": { params: ThreadDeleteParams, result: ThreadDeleteResult },
 	/**
-	 * `project/start`: starts a project's coordinator chat, a no-write run in its repository
-	 * with wispd's coordinator tools (0024), idempotent on its client-generated run id. It
-	 * replaces the project's last coordinator unless that one is running. Gated on the
-	 * `coordinator` capability.
+	 * `orchestrator/start`: starts an orchestrator's chat, a no-write run in its repository
+	 * with plxd's orchestrator tools (0024), idempotent on its client-generated run id. It
+	 * replaces the orchestrator's last run unless that one is running. Gated on the
+	 * `orchestrator` capability.
 	 */
-	"project/start": { params: ProjectStartParams, result: AgentRunResult },
+	"orchestrator/start": { params: OrchestratorStartParams, result: AgentRunResult },
 	/**
-	 * `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
-	 * it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
-	 * `projectEdit` capability, like `Project.icon`.
+	 * `orchestrator/fresh`: ends an orchestrator's session, so its next message starts a new
+	 * one from the orchestrator's state (PLX-937, 0079). Gated on the `orchestratorEpochs`
+	 * capability.
 	 */
-	"project/update": { params: ProjectUpdateParams, result: ProjectUpdateResult },
+	"orchestrator/fresh": { params: OrchestratorFreshParams, result: AgentRunResult },
+	/**
+	 * `orchestrator/update`: renames an orchestrator or sets its icon, and leaves its
+	 * `updatedAt` as it is (0032). Fails with `orchestratorNotFound` for an unknown
+	 * orchestrator. Gated on the `orchestratorEdit` capability, like `Orchestrator.icon`.
+	 */
+	"orchestrator/update": { params: OrchestratorUpdateParams, result: OrchestratorUpdateResult },
+	/**
+	 * `repo/refs`: a repo entry's local and remote-tracking branches, for picking the ref a
+	 * thread starts from. Gated on the `repoRefs` capability.
+	 */
+	"repo/refs": { params: RepoRefsParams, result: RepoRefsResult },
+	/**
+	 * `pr/view`: one of a run's linked pull requests from the host's shared GraphQL read,
+	 * refreshed at most every 30 s (PLX-318, PLX-1151). Gated on the `pullRequests`
+	 * capability, like `pr/act`. A plxd without `prActions` leaves the newer fields out.
+	 */
+	"pr/view": { params: PrViewParams, result: PullRequest },
+	/**
+	 * `pr/act`: merges, squashes, rebases, sets auto-merge on or off, drafts, readies,
+	 * closes, updates the branch, reruns or cancels CI, or deletes the merged branch of one
+	 * of a run's linked pull requests through the host's paced write queue, and returns it
+	 * as a fresh read after. A plxd without `prActions` refuses `rebase` and the actions after
+	 * `close`.
+	 */
+	"pr/act": { params: PrActParams, result: PullRequest },
+	/**
+	 * `pr/diff`: one of a run's linked pull requests' unified diff, read with `gh pr diff`
+	 * and cut at a size cap (PLX-328). Gated on the `prDiff` capability.
+	 */
+	"pr/diff": { params: PrViewParams, result: PrDiffResult },
+	/**
+	 * `pr/link`: links a GitHub pull request URL to a run, unless it already is, and reports
+	 * the run as `agent.updated` (0041). Fails with `invalidParams` for another URL. Gated
+	 * on the `threadTools` capability, like `pr/unlink`.
+	 */
+	"pr/link": { params: PrViewParams, result: AgentRunResult },
+	/**
+	 * `pr/unlink`: removes a pull request URL from a run's links. Unlinking one that isn't
+	 * linked changes nothing.
+	 */
+	"pr/unlink": { params: PrViewParams, result: AgentRunResult },
+	/**
+	 * `orchestrator/delete`: deletes an orchestrator with every run in it, stopping their CLIs
+	 * first (PLX-338). Fails with `orchestratorNotFound` for an unknown orchestrator or a repo
+	 * entry's id. Gated on the `orchestratorDelete` capability.
+	 */
+	"orchestrator/delete": { params: OrchestratorDeleteParams, result: OrchestratorDeleteResult },
+	/**
+	 * `agent/commands`: a CLI's own slash commands and skills, for the composer's `/` menu
+	 * (PLX-359). Gated on the `composerMenus` capability, like `repo/files`.
+	 */
+	"agent/commands": { params: AgentCommandsParams, result: AgentCommandsResult },
+	/**
+	 * `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
+	 * composer's `@` menu.
+	 */
+	"repo/files": { params: RepoFilesParams, result: RepoFilesResult },
+	/**
+	 * `repo/grep`: the lines of a thread's files that contain a query, for the command
+	 * menu's Search project contents (PLX-993). Gated on the `repoGrep` capability.
+	 */
+	"repo/grep": { params: RepoGrepParams, result: RepoGrepResult },
+	/**
+	 * `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
+	 * github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
+	 * `githubStatus` capability.
+	 */
+	"github/status": { params: GithubStatusParams, result: GithubStatus },
+	/**
+	 * `thread/search`: the host's threads whose title or messages match a query, title
+	 * matches first, then the one with the newest message (PLX-372, PLX-487). Gated on the
+	 * `threadContext` capability.
+	 */
+	"thread/search": { params: ThreadSearchParams, result: ThreadSearchResult },
+	/**
+	 * `agent/resumeNow`: resumes a run waiting for its usage limit to reset now (PLX-371,
+	 * decision 0049). Gated on the `autoResume` capability, like `agent/autoResume` and
+	 * `host/settings/*`.
+	 */
+	"agent/resumeNow": { params: AgentResumeNowParams, result: AgentRunResult },
+	/**
+	 * `agent/stopTask` (PLX-777): stops one of a live run's background tasks, such as a
+	 * Monitor, through the CLI. Fails with `invalidParams` when the run has no live CLI or
+	 * its backend can't stop one.
+	 */
+	"agent/stopTask": { params: AgentStopTaskParams, result: AgentStopTaskResult },
+	/**
+	 * `agent/setPermission`: moves a run's live CLI to another permission mode now, and stores
+	 * it as the run's. Fails with `invalidParams` when the run has no live CLI, is in an
+	 * orchestrator, or its backend can't switch mid-turn; send the mode with the next message
+	 * instead.
+	 */
+	"agent/setPermission": { params: AgentSetPermissionParams, result: AgentRunResult },
+	/**
+	 * `agent/autoResume`: sets or clears a run's auto-resume override.
+	 */
+	"agent/autoResume": { params: AgentAutoResumeParams, result: AgentRunResult },
+	/**
+	 * `host/settings/get`: this host's settings.
+	 */
+	"host/settings/get": { params: HostSettingsGetParams, result: HostSettings },
+	/**
+	 * `host/settings/set`: changes this host's settings and returns them.
+	 */
+	"host/settings/set": { params: HostSettingsSetParams, result: HostSettings },
+	/**
+	 * `connect/devices`: this node and the tailnet's other nodes of its Tailscale user, and
+	 * whether plxd answers on each (decision 0056). Gated on the `connect` capability.
+	 */
+	"connect/devices": { params: ConnectDevicesParams, result: ConnectDevicesResult },
+	/**
+	 * `remote/pair`: a new one-time pairing code, which replaces any earlier one (PLX-641,
+	 * 0065). Gated on the `remote` capability, like `remote/sessions` and `remote/revoke`.
+	 */
+	"remote/pair": { params: RemotePairParams, result: RemotePairResult },
+	/**
+	 * `remote/sessions`: the paired clients' sessions.
+	 */
+	"remote/sessions": { params: RemoteSessionsParams, result: RemoteSessionsResult },
+	/**
+	 * `remote/revoke`: ends a session and closes its connections. An unknown id changes
+	 * nothing.
+	 */
+	"remote/revoke": { params: RemoteRevokeParams, result: RemoteSessionsResult },
+	/**
+	 * `relay/register`: registers this host with Parallax Relay under the user of a Clerk
+	 * session token, signed with the host key (PLX-652, 0068). Gated on the `relay`
+	 * capability.
+	 */
+	"relay/register": { params: RelayRegisterParams, result: RemoteSessionsResult },
+	/**
+	 * `relay/sign`: signs this host's relay registration over a token's hash, for the
+	 * computer that holds the token to post with `relay/register` (PLX-1146). Turns `relay`
+	 * on unless it was ever set.
+	 */
+	"relay/sign": { params: RelaySignParams, result: RelaySignResult },
+	/**
+	 * `relay/hosts`: the hosts the signed-in user has on Parallax Relay (PLX-652, 0068).
+	 */
+	"relay/hosts": { params: RelayHostsParams, result: RelayHostsResult },
+	/**
+	 * `relay/check`: opens a real stream through the relay back to this host's listener, and
+	 * says which part failed and what to do about it (PLX-1356). An older plxd answers it as
+	 * an unknown method.
+	 */
+	"relay/check": { params: RelayCheckParams, result: RelayCheckResult },
+	/**
+	 * `relay/remove`: removes one of the user's hosts from the relay, freeing its place, and
+	 * answers with the rest.
+	 */
+	"relay/remove": { params: RelayRemoveParams, result: RelayHostsResult },
+	/**
+	 * `relay/id`: this host's relay id, so a client on another route, such as a `tailnet:`
+	 * connection, can match it to the account's host list (0091), and its current routes,
+	 * so a client can refresh a changed LAN or Tailscale address. Gated on the
+	 * `accountAccess` capability, like every `access/*` method.
+	 */
+	"relay/id": { params: RelayIdParams, result: RelayIdResult },
+	/**
+	 * `relay/pushKey`: the key this host seals a push's title and text with, for a phone's
+	 * notification service extension to open (0100). Gated on the `relayPushKey` capability.
+	 */
+	"relay/pushKey": { params: RelayPushKeyParams, result: RelayPushKeyResult },
+	/**
+	 * `access/get`: who may sign in with this host's account, and a new device's request
+	 * while it waits (0091). With `after`, it answers once that changes.
+	 */
+	"access/get": { params: AccessGetParams, result: AccessState },
+	/**
+	 * `access/merge`: merges another host's approved, removed, and read-only lists into this
+	 * one's.
+	 */
+	"access/merge": { params: AccessMergeParams, result: AccessState },
+	/**
+	 * `access/setReadOnly`: makes a session's device read-only, for every session of its key,
+	 * and closes those sessions' connections so they reconnect read-only. No method undoes
+	 * it (0091). Answers as `remote/sessions` does. Gated on `readOnlyDevices`.
+	 */
+	"access/setReadOnly": { params: AccessSetReadOnlyParams, result: RemoteSessionsResult },
+	/**
+	 * `access/approve`: approves the waiting request's key, once it shows a code.
+	 */
+	"access/approve": { params: AccessRequestParams, result: AccessState },
+	/**
+	 * `access/deny`: drops the waiting request, so a new one can start.
+	 */
+	"access/deny": { params: AccessRequestParams, result: AccessState },
+	/**
+	 * `access/remove`: removes a client's key for good and ends its sessions.
+	 */
+	"access/remove": { params: AccessRemoveParams, result: AccessState },
+	/**
+	 * `access/forgetHost`: forgets a computer the user removed from their account: drops it
+	 * from the approved hosts and deletes this computer's saved session for it.
+	 */
+	"access/forgetHost": { params: AccessForgetHostParams, result: AccessState },
+	/**
+	 * `access/setupCode`: a new code for a signed-in client to type, which replaces any
+	 * pairing code waiting.
+	 */
+	"access/setupCode": { params: AccessSetupCodeParams, result: AccessSetupCodeResult },
+	/**
+	 * `inbox/list`: an orchestrator's inbox, oldest first, and the event log's `seq` from
+	 * before the read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
+	 */
+	"inbox/list": { params: InboxListParams, result: InboxListResult },
+	/**
+	 * `inbox/seen`: marks items of an orchestrator's inbox seen, and returns them as they
+	 * stand.
+	 */
+	"inbox/seen": { params: InboxSeenParams, result: InboxSeenResult },
+	/**
+	 * `github/install`: starts installing `gh` into plxd's data folder, from the latest
+	 * GitHub release, and answers at once with `installing` set (PLX-423, 0050). Refused
+	 * with `githubSetupFailed` while a `gh` is found. Gated on the `githubSetup` capability,
+	 * like `github/signIn` and `github/signInCancel`.
+	 */
+	"github/install": { params: GithubInstallParams, result: GithubStatus },
+	/**
+	 * `github/signIn`: starts `gh auth login --web` and answers with its one-time code, or
+	 * the pending sign-in's. `github/status` reports it until it ends.
+	 */
+	"github/signIn": { params: GithubSignInParams, result: GithubSignIn },
+	/**
+	 * `github/signInCancel`: stops a pending sign-in, if there is one.
+	 */
+	"github/signInCancel": { params: GithubSignInCancelParams, result: GithubSignInCancelResult },
+	/**
+	 * `queue/list`: a run's waiting messages, first to be sent first (PLX-370). Gated on
+	 * the `queue` capability, like every `queue/*` method.
+	 */
+	"queue/list": { params: QueueListParams, result: QueueResult },
+	/**
+	 * `queue/edit`: replaces a waiting message's text.
+	 */
+	"queue/edit": { params: QueueEditParams, result: QueueResult },
+	/**
+	 * `queue/reorder`: puts a run's waiting messages in a new order.
+	 */
+	"queue/reorder": { params: QueueReorderParams, result: QueueResult },
+	/**
+	 * `queue/cancel`: drops a waiting message, which is never sent.
+	 */
+	"queue/cancel": { params: QueueCancelParams, result: QueueResult },
+	/**
+	 * `queue/steer`: sends a waiting message into the turn running now.
+	 */
+	"queue/steer": { params: QueueSteerParams, result: QueueResult },
+	/**
+	 * `question/ask`: records an orchestrator child's question and wakes its orchestrator; the
+	 * child goes on with its assumption (PLX-402, 0043). Gated on the `questions`
+	 * capability, like every `question/*` method.
+	 */
+	"question/ask": { params: QuestionAskParams, result: QuestionResult },
+	/**
+	 * `question/answer`: the orchestrator's or the user's answer to a question.
+	 */
+	"question/answer": { params: QuestionAnswerParams, result: QuestionResult },
+	/**
+	 * `question/escalate`: the orchestrator passes a question to the user.
+	 */
+	"question/escalate": { params: QuestionEscalateParams, result: QuestionResult },
+	/**
+	 * `question/list`: an orchestrator's questions, oldest first.
+	 */
+	"question/list": { params: QuestionListParams, result: QuestionListResult },
+	/**
+	 * `board/list`: an orchestrator's status board items, oldest first (PLX-940). Gated on the
+	 * `board` capability.
+	 */
+	"board/list": { params: BoardListParams, result: BoardListResult },
+	/**
+	 * `board/add`: adds an item to an orchestrator's status board and renders `notes.md`
+	 * (PLX-940). Gated on the `board` capability.
+	 */
+	"board/add": { params: BoardAddParams, result: BoardItemResult },
+	/**
+	 * `board/update`: changes one board item (PLX-940). Gated on the `board` capability.
+	 */
+	"board/update": { params: BoardUpdateParams, result: BoardItemResult },
+	/**
+	 * `board/remove`: removes one board item (PLX-940). Gated on the `board` capability.
+	 */
+	"board/remove": { params: BoardRemoveParams, result: BoardRemoveResult },
+	/**
+	 * `memory/list`: a scope's brief, memory entries, knowledge, and proposals, with each
+	 * entry's header (PLX-405, 0044). Gated on the `memory` capability, like every
+	 * `memory/*` method.
+	 */
+	"memory/list": { params: MemoryListParams, result: MemoryListResult },
+	/**
+	 * `memory/read`: one memory file's header and body.
+	 */
+	"memory/read": { params: MemoryReadParams, result: MemoryReadResult },
+	/**
+	 * `memory/write`: writes the brief, knowledge, or an entry, as the user or an
+	 * orchestrator.
+	 */
+	"memory/write": { params: MemoryWriteParams, result: MemoryWriteResult },
+	/**
+	 * `memory/delete`: deletes a memory file.
+	 */
+	"memory/delete": { params: MemoryDeleteParams, result: MemoryDeleteResult },
+	/**
+	 * `memory/propose`: a thread proposes an entry, for its orchestrator or the user.
+	 */
+	"memory/propose": { params: MemoryProposeParams, result: MemoryProposeResult },
+	/**
+	 * `memory/syncList`: every version plxd has recorded in You, for another of the user's
+	 * plxds to pull (0082). Gated on the `youSync` capability, like `memory/syncRead`.
+	 */
+	"memory/syncList": { params: MemorySyncListParams, result: MemorySyncListResult },
+	/**
+	 * `memory/syncRead`: the text that syncs of one You entry or knowledge file.
+	 */
+	"memory/syncRead": { params: MemorySyncReadParams, result: MemorySyncReadResult },
+	/**
+	 * `land/queue`: queues an orchestrator's finished child to land on its integration branch,
+	 * as the orchestrator's `land` tool does (PLX-410, 0045). Gated on the `landing`
+	 * capability, like every `land/*` method.
+	 */
+	"land/queue": { params: LandQueueParams, result: LandResult },
+	/**
+	 * `land/approve`: lands a child waiting for the user's approval, in its turn.
+	 */
+	"land/approve": { params: LandApproveParams, result: LandResult },
+	/**
+	 * `land/sendBack`: sends a child waiting for approval the user's message instead.
+	 */
+	"land/sendBack": { params: LandSendBackParams, result: LandResult },
+	/**
+	 * `agent/wait`: waits until any or all of up to 50 runs are idle, or for at most 60 s,
+	 * without polling (PLX-451). Gated on the `agentWait` capability.
+	 */
+	"agent/wait": { params: AgentWaitParams, result: AgentWaitResult },
+	/**
+	 * `orchestrator/fromThreads`: makes an orchestrator from threads on one repo entry, each
+	 * with its own worktree, starts its orchestrator, and makes each thread its child (0042).
+	 * Idempotent on its client-generated ids. Gated on the `orchestratorFromThreads`
+	 * capability.
+	 */
+	"orchestrator/fromThreads": { params: OrchestratorFromThreadsParams, result: OrchestratorFromThreadsResult },
+	/**
+	 * `cursor/signIn`: starts a Cursor account login in the browser and answers with its
+	 * URL (0053). The app opens it. `providers/list` reports the instance signed in once
+	 * the browser login finishes. Gated on the `providers` capability, like
+	 * `cursor/signInCancel` and `cursor/signOut`.
+	 */
+	"cursor/signIn": { params: CursorSignInParams, result: CursorSignInResult },
+	/**
+	 * `cursor/signInCancel`: stops a Cursor login that is still waiting on the browser.
+	 */
+	"cursor/signInCancel": { params: CursorSignInParams, result: CursorSignInCancelResult },
+	/**
+	 * `cursor/signOut`: forgets the Cursor SDK login stored for the instance.
+	 */
+	"cursor/signOut": { params: CursorSignInParams, result: CursorSignOutResult },
+	/**
+	 * `cursor/install`: starts installing the Cursor SDK the sidecar pins into plxd's data
+	 * folder with npm, and answers at once (0053). `providers/list` reports Cursor
+	 * `installing` until it's done, then installed, or why it failed in its `note`.
+	 */
+	"cursor/install": { params: CursorInstallParams, result: CursorInstallResult },
+	/**
+	 * `terminal/open`: starts a terminal, or attaches to the running one with its thread and
+	 * id, resized, and streams what it prints to this connection as `terminal/output`,
+	 * starting with its kept output, then `terminal/exit`, until `terminal/detach` (PLX-637). Gated on the
+	 * `terminals` capability, like every `terminal/*` method.
+	 */
+	"terminal/open": { params: TerminalOpenParams, result: TerminalResult },
+	/**
+	 * `terminal/close`: ends a terminal, killing what runs in it. Closing one that isn't
+	 * running changes nothing.
+	 */
+	"terminal/close": { params: TerminalKey, result: TerminalResult },
+	/**
+	 * `terminal/list`: the running terminals, or one thread's.
+	 */
+	"terminal/list": { params: TerminalListParams, result: TerminalListResult },
+	/**
+	 * `schedule/list`: every scheduled task on the host (0063). Gated on the `schedules`
+	 * capability, like every `schedule/*` method.
+	 */
+	"schedule/list": { params: ScheduleListParams, result: ScheduleListResult },
+	/**
+	 * `schedule/save`: creates a scheduled task, or with `id` replaces one, and returns it.
+	 * Fails with `invalidParams` for a bad trigger or an unknown id.
+	 */
+	"schedule/save": { params: ScheduleSaveParams, result: ScheduledTask },
+	/**
+	 * `schedule/delete`: deletes a scheduled task. An unknown id changes nothing.
+	 */
+	"schedule/delete": { params: ScheduleIdParams, result: ScheduleDeleteResult },
+	/**
+	 * `schedule/run`: fires a scheduled task now, paused or not, and returns it.
+	 */
+	"schedule/run": { params: ScheduleIdParams, result: ScheduledTask },
+	/**
+	 * `pr/watch`: links a GitHub pull request URL to a run if it isn't, and watches it for
+	 * the run (0063). Fails with `invalidParams` for a pull request that isn't open. Gated
+	 * on the `prWatch` capability, like `pr/unwatch`, `pr/watches`, and `pr/status`.
+	 */
+	"pr/watch": { params: PrViewParams, result: PrWatchResult },
+	/**
+	 * `pr/unwatch`: stops watching a pull request for a run. It stays linked.
+	 */
+	"pr/unwatch": { params: PrViewParams, result: PrWatchResult },
+	/**
+	 * `pr/watches`: the run's watched pull requests.
+	 */
+	"pr/watches": { params: PrWatchesParams, result: PrWatchesResult },
+	/**
+	 * `pr/status` (PLX-837): reads a GitHub pull request once and says whether it is ready
+	 * to merge, and whether the run watches it. It needn't be linked.
+	 */
+	"pr/status": { params: PrViewParams, result: PrStatusResult },
+	/**
+	 * `pr/failureLog` (PLX-1019): the error lines of each failed check's log on a GitHub
+	 * pull request's head, each log read from GitHub once per head and job. Gated on
+	 * `prWatch`.
+	 */
+	"pr/failureLog": { params: PrFailureLogParams, result: PrFailureLogResult },
+	/**
+	 * `pr/uploadMedia` (PLX-1020): commits images and videos to the pull request's
+	 * repository's `pr-media` branch, one upload at a time per host, and returns links pinned
+	 * to the commit. Bytes uploaded to the repository before reuse their link.
+	 */
+	"pr/uploadMedia": { params: PrUploadMediaParams, result: PrUploadMediaResult },
+	/**
+	 * `pr/sharedDiff` (PLX-1021): a GitHub pull request's unified diff, as `pr/diff` reads
+	 * it, read once per head and shared by every run that asks. It needn't be linked. Gated
+	 * on `prWatch`.
+	 */
+	"pr/sharedDiff": { params: PrViewParams, result: PrDiffResult },
+	/**
+	 * `pr/write` (PLX-1022): comments on, reviews, edits, or replies to a review thread of a
+	 * GitHub pull request through plxd's one paced write queue per host. Fails with
+	 * `prFailed` when GitHub refuses or rate limits it or the queue stays busy, and with
+	 * `ghUnavailable` without a signed-in `gh`. Gated on `prWatch`.
+	 */
+	"pr/write": { params: PrWriteParams, result: PrWriteResult },
+	/**
+	 * `pr/guide` (PLX-1188, 0095): a GitHub pull request's guide, as plxd last wrote it, and
+	 * whether one for the given head is being written. With none for that head, none being
+	 * written, and no failed try, it starts writing one in the background; `regenerate`
+	 * starts one regardless. Never reads GitHub itself, so the app polls it while one is
+	 * written. Gated on `prGuide`.
+	 */
+	"pr/guide": { params: PrGuideParams, result: PrGuideResult },
+	/**
+	 * `voice/clean` (PLX-1232): dictated text tidied by the user's small model. An older plxd
+	 * answers it as an unknown method, and the app inserts the raw transcript on any error.
+	 */
+	"voice/clean": { params: VoiceCleanParams, result: VoiceCleanResult },
+	/**
+	 * `pr/mergeWhenReady` (PLX-1022): watches a pull request for a run, as `pr/watch` does,
+	 * and has plxd merge it, pinned to the head it judged, once it is ready, then wake the
+	 * run with the result. Unwatching cancels the merge. Gated on `prWatch`.
+	 */
+	"pr/mergeWhenReady": { params: PrMergeWhenReadyParams, result: PrWatchResult },
+	/**
+	 * `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
+	 * declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
+	 * `setupScripts` capability, like `repo/saveScripts`.
+	 */
+	"repo/scripts": { params: RepoScriptsParams, result: RepoScriptsResult },
+	/**
+	 * `repo/saveScripts`: replaces a repo entry's scripts.
+	 */
+	"repo/saveScripts": { params: RepoSaveScriptsParams, result: RepoScriptsResult },
+	/**
+	 * `task/delegate`: starts a thread in another thread's worktree, as a task it delegated
+	 * or a top-level thread beside it (0063, PLX-648). Idempotent on `runId`. Gated on the
+	 * `delegation` capability, like `task/status` and `thread/mergeBack`.
+	 */
+	"task/delegate": { params: TaskDelegateParams, result: ThreadStartResult },
+	/**
+	 * `task/status`: a delegated task, after acknowledging its result or changing its wake.
+	 */
+	"task/status": { params: TaskStatusParams, result: DelegatedTask },
+	/**
+	 * `thread/mergeBack`: a fork's or child's new context goes with the next message of the
+	 * thread it came from.
+	 */
+	"thread/mergeBack": { params: ThreadMergeBackParams, result: ThreadMergeBackResult },
+	/**
+	 * `secret/request`: asks the user for a secret through the app, or keeps waiting on a
+	 * request already made, and answers how it stands (`request_secret`, 0063). Refused
+	 * with `keychainUnavailable` on a host with no keystore. Gated on the `secrets`
+	 * capability, like `secret/answer`.
+	 */
+	"secret/request": { params: SecretRequestParams, result: SecretRequestResult },
+	/**
+	 * `secret/answer`: the user's answer to a secret request, or the agent giving up on it.
+	 */
+	"secret/answer": { params: SecretAnswerParams, result: SecretAnswerResult },
+	/**
+	 * `orchestration/dispatch`: runs one command on a thread (0059, PLX-644), idempotent on
+	 * its `commandId`. Gated on the `orchestration` capability, like every
+	 * `orchestration/*` method.
+	 */
+	"orchestration/dispatch": { params: OrchestrationCommand, result: DispatchResult },
+	/**
+	 * `orchestration/subscribeShell`: the host's shell at a `seq`, then its shell events as
+	 * `events/event` notifications, or with `afterSeq` the events after it when few enough
+	 * are left to replay.
+	 */
+	"orchestration/subscribeShell": { params: SubscribeShellParams, result: SubscribeShellResult },
+	/**
+	 * `orchestration/subscribeThread`: one thread at a `seq`, then its events, or with
+	 * `afterSeq` the events after it when few enough are left to replay.
+	 */
+	"orchestration/subscribeThread": { params: SubscribeThreadParams, result: SubscribeThreadResult },
+	/**
+	 * `orchestration/threadHistory`: a page of a thread's events before a `seq`.
+	 */
+	"orchestration/threadHistory": { params: ThreadHistoryParams, result: ThreadHistoryResult },
+	/**
+	 * `orchestration/threadRuns`: a thread's runs, each with its checkpoint (0062). Gated on
+	 * the `checkpoints` capability, like `orchestration/getTurnDiff`,
+	 * `orchestration/getFullThreadDiff`, and `checkpoint.rollback`.
+	 */
+	"orchestration/threadRuns": { params: ThreadRunsParams, result: ThreadRunsResult },
+	/**
+	 * `orchestration/getTurnDiff`: the diff between two of a thread's checkpoints. Fails
+	 * with `invalidParams` for a range whose `to` checkpoint isn't `ready`, or `from` after
+	 * `to`.
+	 */
+	"orchestration/getTurnDiff": { params: TurnDiffParams, result: TurnDiffResult },
+	/**
+	 * `orchestration/getFullThreadDiff`: the diff from a thread's start to a checkpoint.
+	 */
+	"orchestration/getFullThreadDiff": { params: FullThreadDiffParams, result: TurnDiffResult },
+	/**
+	 * `bundle/prepare`: bundles a run's branch, pinned to its tip, for the home plxd to read
+	 * (0057). Gated on the `peerGit` capability, like every `bundle/*` method and
+	 * `git/startMerge`. Fails with `bundleTooLarge` over 64 MiB.
+	 */
+	"bundle/prepare": { params: BundlePrepareParams, result: BundlePrepareResult },
+	/**
+	 * `bundle/read`: a chunk of a bundle `bundle/prepare` made.
+	 */
+	"bundle/read": { params: BundleReadParams, result: BundleReadResult },
+	/**
+	 * `bundle/drop`: removes a bundle file.
+	 */
+	"bundle/drop": { params: BundleDropParams, result: BundleOkResult },
+	/**
+	 * `bundle/begin`: opens a bundle file for the home plxd to write into a run's repository.
+	 * Fails with `bundleTooLarge` over 64 MiB.
+	 */
+	"bundle/begin": { params: BundleBeginParams, result: BundleBeginResult },
+	/**
+	 * `bundle/write`: appends a chunk to a bundle `bundle/begin` opened.
+	 */
+	"bundle/write": { params: BundleWriteParams, result: BundleOkResult },
+	/**
+	 * `bundle/apply`: checks a written bundle and fetches it into `refs/parallax-sync/<run
+	 * id>`. Fails with `bundleMissingCommits` when the repository lacks a commit it needs,
+	 * and `bundleFailed` when its hash, its tip, or `git bundle verify` fails.
+	 */
+	"bundle/apply": { params: BundleApplyParams, result: BundleOkResult },
+	/**
+	 * `git/startMerge`: starts a conflict merge in a run's worktree. Fails with `runBusy`
+	 * while the run is starting or running.
+	 */
+	"git/startMerge": { params: GitStartMergeParams, result: BundleOkResult },
 };
 
+/** Every request method, in `ParallaxRequests`' order. */
+export const REQUEST_METHODS = [
+	"initialize",
+	"host/health",
+	"host/version",
+	"host/update",
+	"host/announceUpdate",
+	"host/folders",
+	"host/upload",
+	"host/readUpload",
+	"orchestrator/list",
+	"orchestrator/create",
+	"events/subscribe",
+	"events/unsubscribe",
+	"accounts/keys/add",
+	"accounts/keys/list",
+	"accounts/keys/remove",
+	"accounts/list",
+	"accounts/refresh",
+	"providers/list",
+	"providers/save",
+	"providers/remove",
+	"hubs/list",
+	"hubs/save",
+	"hubs/remove",
+	"hubs/accounts/signIn",
+	"hubs/accounts/callback",
+	"hubs/accounts/status",
+	"hubs/accounts/cancel",
+	"hubs/accounts/setEnabled",
+	"hubs/accounts/remove",
+	"providers/updates",
+	"providers/upgrade",
+	"usage/get",
+	"usage/history",
+	"usage/report/claim",
+	"usage/report/release",
+	"usage/daily",
+	"usage/limits",
+	"accounts/defaults/get",
+	"accounts/defaults/set",
+	"context/list",
+	"context/read",
+	"context/write",
+	"context/readBytes",
+	"context/saveArtifact",
+	"agent/start",
+	"agent/send",
+	"agent/cancel",
+	"agent/list",
+	"agent/events",
+	"agent/image",
+	"agent/attach",
+	"preview/call",
+	"preview/list",
+	"preview/frame",
+	"preview/input",
+	"device/state",
+	"device/setup",
+	"device/boot",
+	"device/shutdown",
+	"device/create",
+	"device/screenshot",
+	"device/chrome",
+	"device/stream",
+	"computer/ask",
+	"computer/status",
+	"computer/forget",
+	"agent/diff",
+	"agent/file",
+	"agent/files",
+	"agent/fileCreate",
+	"agent/fileRename",
+	"agent/fileDelete",
+	"agent/accept",
+	"agent/requestChanges",
+	"agent/openPr",
+	"agent/gitStatus",
+	"repo/gitStatus",
+	"agent/commit",
+	"agent/push",
+	"agent/approve",
+	"thread/list",
+	"repo/add",
+	"repo/clone",
+	"repo/cloneProgress",
+	"repo/remote",
+	"repo/logo",
+	"repo/match",
+	"thread/start",
+	"thread/fork",
+	"thread/importable",
+	"thread/import",
+	"thread/importChat",
+	"thread/importedChats",
+	"thread/remoteControl",
+	"thread/remoteControlOrigin",
+	"thread/archive",
+	"thread/update",
+	"repo/update",
+	"project/create",
+	"project/delete",
+	"thread/setProject",
+	"thread/delete",
+	"orchestrator/start",
+	"orchestrator/fresh",
+	"orchestrator/update",
+	"repo/refs",
+	"pr/view",
+	"pr/act",
+	"pr/diff",
+	"pr/link",
+	"pr/unlink",
+	"orchestrator/delete",
+	"agent/commands",
+	"repo/files",
+	"repo/grep",
+	"github/status",
+	"thread/search",
+	"agent/resumeNow",
+	"agent/stopTask",
+	"agent/setPermission",
+	"agent/autoResume",
+	"host/settings/get",
+	"host/settings/set",
+	"connect/devices",
+	"remote/pair",
+	"remote/sessions",
+	"remote/revoke",
+	"relay/register",
+	"relay/sign",
+	"relay/hosts",
+	"relay/check",
+	"relay/remove",
+	"relay/id",
+	"relay/pushKey",
+	"access/get",
+	"access/merge",
+	"access/setReadOnly",
+	"access/approve",
+	"access/deny",
+	"access/remove",
+	"access/forgetHost",
+	"access/setupCode",
+	"inbox/list",
+	"inbox/seen",
+	"github/install",
+	"github/signIn",
+	"github/signInCancel",
+	"queue/list",
+	"queue/edit",
+	"queue/reorder",
+	"queue/cancel",
+	"queue/steer",
+	"question/ask",
+	"question/answer",
+	"question/escalate",
+	"question/list",
+	"board/list",
+	"board/add",
+	"board/update",
+	"board/remove",
+	"memory/list",
+	"memory/read",
+	"memory/write",
+	"memory/delete",
+	"memory/propose",
+	"memory/syncList",
+	"memory/syncRead",
+	"land/queue",
+	"land/approve",
+	"land/sendBack",
+	"agent/wait",
+	"orchestrator/fromThreads",
+	"cursor/signIn",
+	"cursor/signInCancel",
+	"cursor/signOut",
+	"cursor/install",
+	"terminal/open",
+	"terminal/close",
+	"terminal/list",
+	"schedule/list",
+	"schedule/save",
+	"schedule/delete",
+	"schedule/run",
+	"pr/watch",
+	"pr/unwatch",
+	"pr/watches",
+	"pr/status",
+	"pr/failureLog",
+	"pr/uploadMedia",
+	"pr/sharedDiff",
+	"pr/write",
+	"pr/guide",
+	"voice/clean",
+	"pr/mergeWhenReady",
+	"repo/scripts",
+	"repo/saveScripts",
+	"task/delegate",
+	"task/status",
+	"thread/mergeBack",
+	"secret/request",
+	"secret/answer",
+	"orchestration/dispatch",
+	"orchestration/subscribeShell",
+	"orchestration/subscribeThread",
+	"orchestration/threadHistory",
+	"orchestration/threadRuns",
+	"orchestration/getTurnDiff",
+	"orchestration/getFullThreadDiff",
+	"bundle/prepare",
+	"bundle/read",
+	"bundle/drop",
+	"bundle/begin",
+	"bundle/write",
+	"bundle/apply",
+	"git/startMerge",
+] as const;
+
 /** Notifications, which get no response, by method. */
-export type WispNotifications = {
+export type ParallaxNotifications = {
 	/**
 	 * `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
 	 * side may send it.
 	 */
 	"$/cancelRequest": CancelRequestParams,
 	/**
-	 * `events/event`: one event for a subscription. wispd sends it.
+	 * `events/event`: one event for a subscription. plxd sends it.
 	 */
 	"events/event": EventsEventParams,
+	/**
+	 * `events/resync`: plxd ended a subscription that fell behind, and the connection
+	 * stays open. plxd sends it only to a client that declared `resyncNotice` (PLX-455).
+	 */
+	"events/resync": EventsResyncParams,
+	/**
+	 * `host/updating`: plxd is about to restart for an update, so a client can say so rather
+	 * than report an outage. plxd sends it once on every connection, after `initialize` is
+	 * answered. A client that doesn't know it ignores it (PLX-1418).
+	 */
+	"host/updating": HostUpdatingParams,
+	/**
+	 * `terminal/write`: input for a terminal, in the order sent. The client sends it.
+	 */
+	"terminal/write": TerminalWriteParams,
+	/**
+	 * `terminal/resize`: a terminal's new size. The client sends it.
+	 */
+	"terminal/resize": TerminalResizeParams,
+	/**
+	 * `terminal/detach`: stops a terminal's stream to this connection, and leaves it running
+	 * with its kept output (PLX-664). The client sends it once nothing shows the terminal. A
+	 * terminal running a `command` ignores it, and still ends with its connection.
+	 */
+	"terminal/detach": TerminalKey,
+	/**
+	 * `terminal/output`: what a terminal printed. plxd sends it to each connection that
+	 * opened the terminal and hasn't detached it.
+	 */
+	"terminal/output": TerminalOutputParams,
+	/**
+	 * `terminal/exit`: a terminal's program exited, and the terminal closed.
+	 */
+	"terminal/exit": TerminalExitParams,
+	/**
+	 * `device/send`: a message on a device stream, in the order sent. The client sends it.
+	 */
+	"device/send": DeviceDataParams,
+	/**
+	 * `device/close`: closes a device stream. The client sends it.
+	 */
+	"device/close": DeviceCloseParams,
+	/**
+	 * `device/data`: a message on a device stream. plxd sends it.
+	 */
+	"device/data": DeviceDataParams,
+	/**
+	 * `device/end`: a device stream ended other than by `device/close`. plxd sends it.
+	 */
+	"device/end": DeviceEndParams,
 };
 
 /**
@@ -240,7 +1415,8 @@ export type InitializeParams = {
 	 */
 	client: ClientInfo,
 	/**
-	 * What the client supports.
+	 * What the client supports. `resyncNotice` (PLX-455): end a subscription that falls behind
+	 * with `events/resync` instead of closing the connection.
 	 */
 	capabilities: Capabilities,
 };
@@ -249,7 +1425,7 @@ export type InitializeParams = {
  * Capabilities by name, such as `{"agents": {}}`. Each value holds that capability's options,
  * and is empty when it has none. The map never changes shape.
  *
- * Later features are gated on a capability, so a newer client still works with an older wispd.
+ * Later features are gated on a capability, so a newer client still works with an older plxd.
  */
 export type Capabilities = { [key in string]: { [key in string]: JsonValue } };
 
@@ -260,7 +1436,7 @@ export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in
  */
 export type ClientInfo = {
 	/**
-	 * The client's name, such as `wisp` for the desktop app.
+	 * The client's name, such as `parallax` for the desktop app.
 	 */
 	name: string,
 	/**
@@ -296,26 +1472,31 @@ export type InitializeResult = {
 	 */
 	protocol: number,
 	/**
-	 * wispd's release version.
+	 * plxd's release version.
 	 */
-	wispd: string,
+	plxd: string,
 	/**
-	 * Identifies wispd's event log. It changes only when the log starts over, and then every
+	 * Changes each time plxd starts, so a client that reconnects can tell whether it restarted.
+	 * A plxd from before this field sends none.
+	 */
+	startId?: string,
+	/**
+	 * Identifies plxd's event log. It changes only when the log starts over, and then every
 	 * `seq` the client holds is meaningless.
 	 */
 	logId: LogId,
 	/**
-	 * What wispd supports.
+	 * What plxd supports.
 	 */
 	capabilities: Capabilities,
 	/**
-	 * The largest frame wispd accepts, in bytes, not counting the line ending.
+	 * The largest frame plxd accepts, in bytes, not counting the line ending.
 	 */
 	maxFrameBytes: number,
 };
 
 /**
- * Identifies wispd's event log. It changes only when the log starts over.
+ * Identifies plxd's event log. It changes only when the log starts over.
  */
 export type LogId = string;
 
@@ -329,23 +1510,67 @@ export type HostHealthParams = Record<symbol, never>;
  */
 export type HostHealthResult = {
 	/**
-	 * Seconds since wispd started.
+	 * Seconds since plxd started.
 	 */
 	uptimeSeconds: number,
 	/**
-	 * Whether wispd can read and write its project store.
+	 * Whether plxd can read and write its project store.
 	 */
 	store: StoreState,
 	/**
-	 * Agents running on this host. Always 0 before M3.
+	 * Agents with a turn running on this host. An idle session (0060) doesn't count.
 	 */
 	runningAgents: number,
+	/**
+	 * How busy the store's job queue is (PLX-445). An older plxd leaves it out.
+	 */
+	queues?: HostQueues,
 };
 
 /**
- * The state of wispd's project store.
+ * The job queue of plxd's database thread, which runs its jobs one at a time.
+ */
+export type HostQueues = {
+	/**
+	 * The project store's thread, which writes rows and their events (0052).
+	 */
+	store: QueueStats,
+};
+
+/**
+ * Counts and times for one job queue since plxd started. Divide a total by `jobs` for the average.
+ */
+export type QueueStats = {
+	/**
+	 * Jobs sent and not yet started.
+	 */
+	queued: number,
+	/**
+	 * Jobs started.
+	 */
+	jobs: number,
+	/**
+	 * The longest a job sat in the queue before its thread took it, in microseconds.
+	 */
+	maxWaitMicros: number,
+	/**
+	 * Every started job's wait, added up, in microseconds.
+	 */
+	totalWaitMicros: number,
+	/**
+	 * The longest a job took to run, in microseconds.
+	 */
+	maxRunMicros: number,
+	/**
+	 * Every finished job's run time, added up, in microseconds. It leaves out the one running.
+	 */
+	totalRunMicros: number,
+};
+
+/**
+ * The state of plxd's project store.
  *
- * A newer wispd may send states that are not listed here. Treat those as unknown, so a `switch`
+ * A newer plxd may send states that are not listed here. Treat those as unknown, so a `switch`
  * over this type must not end in an exhaustiveness assertion.
  */
 export type StoreState = "ok" | "unavailable";
@@ -360,11 +1585,11 @@ export type HostVersionParams = Record<symbol, never>;
  */
 export type HostVersionResult = {
 	/**
-	 * wispd's release version.
+	 * plxd's release version.
 	 */
-	wispd: string,
+	plxd: string,
 	/**
-	 * The protocol versions wispd speaks.
+	 * The protocol versions plxd speaks.
 	 */
 	protocol: ProtocolRange,
 	/**
@@ -378,71 +1603,322 @@ export type HostVersionResult = {
 };
 
 /**
- * Params of `project/list`.
+ * Params of `host/update`, behind the `hostUpdate` capability (PLX-700, decision 0066): install
+ * plxd `version` from its GitHub release and restart into it.
  */
-export type ProjectListParams = Record<symbol, never>;
+export type HostUpdateParams = {
+	/**
+	 * The release to install, such as `2610.10912.13045-nightly`: the app's own version.
+	 */
+	version: string,
+	/**
+	 * Restart into it at once, cutting off running agents' turns, instead of once they end
+	 * (PLX-746). The host's `continueAfterRestart` then decides whether they go on.
+	 */
+	now?: boolean,
+};
 
 /**
- * Result of `project/list`: a snapshot of every project.
+ * Result of `host/update`: plxd installed the release and says when it restarts into it. Every
+ * failure, such as a download that fails, a checksum that doesn't match, a version older than
+ * plxd's, or a host plxd can't update itself on, is a `hostUpdateFailed` error whose message is
+ * for people.
  */
-export type ProjectListResult = {
+export type HostUpdateResult = {
 	/**
-	 * Every project, oldest first.
+	 * The version plxd installed, or already runs.
 	 */
-	projects: Array<Project>,
+	version: string,
 	/**
-	 * The `seq` of the last event the snapshot reflects. Subscribe with `after` set to it.
+	 * When plxd hands over to it.
+	 */
+	restart: HostUpdateRestart,
+	/**
+	 * Agents with a turn running, which plxd waits for under `afterRuns`.
+	 */
+	runningAgents: number,
+	/**
+	 * What happened, for people.
+	 */
+	message: string,
+};
+
+/**
+ * When plxd restarts into the version `host/update` installed.
+ *
+ * A newer plxd may send values that are not listed here. Treat those as unknown.
+ */
+export type HostUpdateRestart = "now" | "afterRuns" | "upToDate";
+
+/**
+ * Params of `host/announceUpdate`.
+ */
+export type HostAnnounceUpdateParams = Record<symbol, never>;
+
+/**
+ * Result of `host/announceUpdate`: plxd told its connections, and had time to send it.
+ */
+export type HostAnnounceUpdateResult = Record<symbol, never>;
+
+/**
+ * Params of `host/folders`, behind the `hostFolders` capability (PLX-769): the folders in a
+ * folder on the host, for adding a repository on another computer.
+ */
+export type HostFoldersParams = {
+	/**
+	 * The folder: an absolute path, or `~` or a path under it, for the home folder of the user
+	 * plxd runs as.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `host/folders`. A folder that can't be read fails with `invalidParams`, whose
+ * message says why.
+ */
+export type HostFoldersResult = {
+	/**
+	 * The folder's absolute path.
+	 */
+	path: string,
+	/**
+	 * Its folders, and its symbolic links to folders, by name, ignoring case.
+	 */
+	folders: Array<HostFolder>,
+};
+
+/**
+ * A folder `host/folders` lists.
+ */
+export type HostFolder = {
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Its absolute path.
+	 */
+	path: string,
+};
+
+/**
+ * Params of `host/upload`, behind the `fileUploads` capability (PLX-779, decision 0071): a file
+ * the user attached to a message, which plxd saves on the host so the agent can read it.
+ */
+export type HostUploadParams = {
+	/**
+	 * Its file name, kept as is. A name with `/`, `\`, or `:`, or that is `.` or `..`, fails
+	 * with `invalidParams`.
+	 */
+	name: string,
+	/**
+	 * Its bytes, in standard base64 with padding, at most the capability's `maxBytes` long. A
+	 * piece's are at most `fileChunks`' `chunkBytes` once decoded.
+	 */
+	data: string,
+	/**
+	 * The upload this piece belongs to (`fileChunks`, decision 0074), as the first piece's
+	 * answer named it. Absent on the first piece, which starts a new upload.
+	 */
+	uploadId?: UploadId,
+	/**
+	 * Where this piece starts in the file, which must be the length received so far: 0 for the
+	 * first piece. A gap, a different piece where one already landed, or a file that would grow
+	 * past `fileChunks`' `maxBytes` fails with `invalidParams`. The piece that landed last, sent
+	 * again with the same bytes, as a retry sends it, answers as it did without being written
+	 * twice, even once its `last` finished the file. Any of `uploadId`, `offset`, and `last`
+	 * makes the call a piece; absent means 0.
+	 */
+	offset?: number,
+	/**
+	 * Whether this is the file's last piece, after which the file is at `path`. Absent means
+	 * false. An upload that gets no piece for an hour is removed.
+	 */
+	last?: boolean,
+};
+
+/**
+ * A chunked upload's id (`fileChunks`, decision 0074): a version 7 UUID plxd generates for
+ * a file's first piece, which every later piece names.
+ */
+export type UploadId = string;
+
+/**
+ * Result of `host/upload`.
+ */
+export type HostUploadResult = {
+	/**
+	 * The saved file's absolute path on the host: `<data folder>/uploads/<id>/<name>`. For a
+	 * piece, where the file will be once its last piece arrives.
+	 */
+	path: string,
+	/**
+	 * The upload a piece belongs to, for the next piece to name. Absent for a whole file.
+	 */
+	uploadId?: UploadId,
+};
+
+/**
+ * Params of `host/readUpload`, behind `fileUploads` (PLX-779): a file `host/upload` saved, for
+ * the transcript to show again.
+ */
+export type HostReadUploadParams = {
+	/**
+	 * The path `host/upload` answered. Any path outside the uploads folder fails with
+	 * `invalidParams`, as does one that's gone.
+	 */
+	path: string,
+	/**
+	 * Where to start reading, in bytes, for one slice of the file (`fileChunks`, decision
+	 * 0074). A slice is read from a file of any size, and never through a symlink. Either of
+	 * `offset` and `length` makes the call a slice; absent `offset` means 0.
+	 */
+	offset?: number,
+	/**
+	 * How many bytes a slice reads, at most `fileChunks`' `chunkBytes`, which is also the
+	 * default.
+	 */
+	length?: number,
+};
+
+/**
+ * Result of `host/readUpload`.
+ */
+export type HostReadUploadResult = {
+	/**
+	 * The file's bytes, or a slice's, in standard base64 with padding. A slice past the end is
+	 * empty.
+	 */
+	data: string,
+	/**
+	 * The whole file's size in bytes, for a slice.
+	 */
+	size?: number,
+};
+
+/**
+ * Params of `orchestrator/list`.
+ */
+export type OrchestratorListParams = Record<symbol, never>;
+
+/**
+ * Result of `orchestrator/list`: a snapshot of every orchestrator.
+ */
+export type OrchestratorListResult = {
+	/**
+	 * Every orchestrator, oldest first.
+	 */
+	orchestrators: Array<Orchestrator>,
+	/**
+	 * The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+	 * list may already reflect some events after it, and replaying them is harmless.
 	 */
 	seq: number,
 };
 
 /**
- * A project: a body of work on one repository, run by this wispd.
+ * An orchestrator thread (0093, once a Project): a long-running chat on one repository that plans
+ * work and hands it to child threads, run by this plxd.
  */
-export type Project = {
+export type Orchestrator = {
 	/**
-	 * The id the client chose when it created the project.
+	 * The id the client chose when it created the orchestrator.
 	 */
-	id: ProjectId,
+	id: ScopeId,
 	/**
 	 * The name shown in the app.
 	 */
 	name: string,
 	/**
-	 * The icon the user chose, behind the `projectEdit` capability (RYA-227, 0032). Absent means
-	 * the app's default icon.
+	 * The icon the user chose, behind the `orchestratorEdit` capability (PLX-227, 0032). Absent
+	 * means the app's default icon.
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
 	/**
-	 * The absolute path of the repository on this host.
+	 * The absolute path of the repository on this host, or empty for an orchestrator with no
+	 * repo (0093), which only a client of a plxd that advertises `orchestratorThreads` makes.
 	 */
 	repoPath: string,
 	/**
 	 * The branch checked out in the repository, or the first 7 digits of the commit when `HEAD`
-	 * is detached, read when wispd sends the project. Absent when wispd can't read it.
+	 * is detached, read when plxd sends the orchestrator. Absent when plxd can't read it.
 	 */
 	branch?: string,
 	/**
-	 * The run of the project's coordinator chat, the newest one `project/start` started (0024).
-	 * Its transcript, messages, and Stop go through `agent/*` like any run's.
+	 * The run of its chat, the newest one `orchestrator/start` started (0024). Its transcript,
+	 * messages, and Stop go through `agent/*` like any run's. Was `coordinator` (0093).
 	 */
-	coordinator?: RunId,
+	run?: RunId,
 	/**
-	 * When the project was created, in RFC 3339 UTC.
+	 * The permission mode its run and every child start in (0042), behind the
+	 * `orchestratorPermission` capability. Absent only from an older plxd.
+	 */
+	permission?: OrchestratorPermission,
+	/**
+	 * Who answers its children's questions (0043), behind the `orchestratorAutonomy` capability.
+	 * Absent only from an older plxd.
+	 */
+	autonomy?: OrchestratorAutonomy,
+	/**
+	 * The branch its integration branch is cut from and its PR targets (0045), behind the
+	 * `integrationBranch` capability. Absent until set, or until plxd cuts the integration branch
+	 * from the repository's default branch.
+	 */
+	baseBranch?: string,
+	/**
+	 * Its integration branch, `parallax/<orchestrator slug>` (0045), behind `integrationBranch`.
+	 * Absent until plxd cuts it, when the orchestrator is created or a run in it starts.
+	 */
+	integrationBranch?: string,
+	/**
+	 * Its children land without waiting for the user's approval (0045), behind the `landing`
+	 * capability. Absent means false.
+	 */
+	autoLand?: boolean,
+	/**
+	 * How many of its children run at once (0046), behind `orchestratorPlacement`. Over it, a new
+	 * child waits in the orchestrator's queue. Absent only from an older plxd.
+	 */
+	maxChildren?: number,
+	/**
+	 * Whether its children may run on an API key account (0046), behind `orchestratorPlacement`.
+	 * Off, a child never starts on one, nor falls back to one on a usage limit. Absent only from
+	 * an older plxd.
+	 */
+	allowApiKeys?: boolean,
+	/**
+	 * The command plxd runs in the integration worktree after each landing (0045), behind the
+	 * `checks` capability: through `sh -c` (`cmd /C` on Windows), with a 30-minute limit. Absent
+	 * means none, so a clean merge is enough.
+	 */
+	checks?: string,
+	/**
+	 * The checks command the orchestrator proposed, behind `checks`. It never runs: the user
+	 * confirms it, or another, by setting `checks`. Absent means none.
+	 */
+	proposedChecks?: string,
+	/**
+	 * The Tailscale node ID of the Connect device its children run on (0057), one of the
+	 * tailnet devices `connect/devices` lists. Absent means this plxd.
+	 */
+	computer?: string,
+	/**
+	 * When the orchestrator was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
 	/**
-	 * When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
-	 * a rename or a new icon is not activity (0032).
+	 * When the orchestrator last changed, in RFC 3339 UTC. `orchestrator/update` leaves it as it
+	 * is, since a rename or a new icon is not activity (0032).
 	 */
 	updatedAt: string,
 };
 
 /**
- * A project's icon (RYA-227, 0032): a Lucide icon and a color from the app's palette, both by
- * name. wispd stores them as the client sent them and never reads them.
+ * An orchestrator's icon (PLX-227, 0032): a Lucide icon and a color from the app's palette, both
+ * by name, and optionally an uploaded image (PLX-339, 0038). plxd stores them as the client sent
+ * them and never reads them.
  */
-export type ProjectIcon = {
+export type ChosenIcon = {
 	/**
 	 * The Lucide icon's name in kebab-case, such as `rocket`: 1 to 64 characters of `a-z`, `0-9`,
 	 * and `-`.
@@ -453,13 +1929,55 @@ export type ProjectIcon = {
 	 * `-`. Absent means the app's accent.
 	 */
 	color?: string,
+	/**
+	 * An uploaded image the app draws instead of the glyph, behind the `iconImages` capability
+	 * (0038). Its `data` is at most the capability's `maxBytes` of base64, or the request fails
+	 * with `imageTooLarge`. Absent means no image, so an icon sent without one clears it.
+	 */
+	image?: PromptImage,
 };
 
 /**
- * A project's id: a version 7 UUID that the client generates once and sends again on every
- * retry of `project/create`.
+ * An image sent with a prompt or message, behind the `promptImages` capability (PLX-191,
+ * decision 0026). The CLI gets it beside the text, never as a file name or path in it. A
+ * project's or repo's icon image has the same shape (0038).
  */
-export type ProjectId = string;
+export type PromptImage = {
+	/**
+	 * Its file type, which its bytes must match.
+	 */
+	mediaType: ImageMediaType,
+	/**
+	 * The image file's bytes, in standard base64 with padding.
+	 */
+	data: string,
+};
+
+/**
+ * An image's file type (PLX-191): the four that Claude and Codex both take, plus the types of
+ * what a run's browser tools attach (PLX-639): an `html_render` page and a recording. A message's
+ * images take only the four.
+ *
+ * A newer peer may send a type this version does not know; treat it as unknown.
+ */
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "text/html" | "video/webm";
+
+/**
+ * An orchestrator's autonomy level (0043): who answers its children's questions. Separate from its
+ * permission mode, which decides what they may run.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type OrchestratorAutonomy = "ask" | "routine" | "full";
+
+/**
+ * An orchestrator's permission mode (0042): the mode its run and every child start
+ * in. Each maps to the [`AgentPermission`] of the same name. A run on a backend that doesn't map
+ * it is refused with `unsupportedOption`, never moved to another mode.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type OrchestratorPermission = "auto" | "bypass";
 
 /**
  * An agent run's id: a version 7 UUID that the client generates once and sends again on every
@@ -468,61 +1986,100 @@ export type ProjectId = string;
 export type RunId = string;
 
 /**
- * Params of `project/create`.
- *
- * It is idempotent on `id`: if a project with that id exists, wispd returns it instead of
- * creating another, and fails with `idConflict` if `name`, `repoPath`, or `icon` differ. A new
- * project's `repoPath` must be the top folder of a git working tree on this host, or it fails
- * with `notARepository`.
+ * A run's scope: an orchestrator's id, or a repo entry's for a thread's run. An orchestrator's
+ * is a version 7 UUID that the client generates once and sends again on every retry of
+ * `orchestrator/create`. Its wire name is still `project` where a field holds a scope (0093).
  */
-export type ProjectCreateParams = {
+export type ScopeId = string;
+
+/**
+ * Params of `orchestrator/create`.
+ *
+ * It is idempotent on `id`: if an orchestrator with that id exists, plxd returns it instead of
+ * creating another, and fails with `idConflict` if `name`, `repoPath`, `icon`, `permission`,
+ * `autonomy`, or a given `baseBranch` differ. A new orchestrator's `repoPath` must be the top
+ * folder of a git working tree on this host, or it fails with `notARepository`.
+ */
+export type OrchestratorCreateParams = {
 	/**
-	 * The new project's id, a version 7 UUID generated by the client.
+	 * The new orchestrator's id, a version 7 UUID generated by the client.
 	 */
-	id: ProjectId,
+	id: ScopeId,
 	/**
 	 * The name shown in the app.
 	 */
 	name: string,
 	/**
-	 * The absolute path of the repository on this host.
+	 * The absolute path of the repository on this host. Absent or empty makes an orchestrator
+	 * with no repo (0093), sent only to a plxd that advertises `orchestratorThreads`.
 	 */
-	repoPath: string,
+	repoPath?: string,
 	/**
-	 * The project's icon, sent only to a wispd that advertises `projectEdit`. Absent means the
-	 * app's default icon.
+	 * The orchestrator's icon, sent only to a plxd that advertises `orchestratorEdit`. Absent
+	 * means the app's default icon.
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
+	/**
+	 * The orchestrator's permission mode, sent only to a plxd that advertises
+	 * `orchestratorPermission`. Absent means `auto`, the mode orchestrators from before it have.
+	 */
+	permission?: OrchestratorPermission,
+	/**
+	 * The orchestrator's autonomy level, sent only to a plxd that advertises
+	 * `orchestratorAutonomy`. Absent means `routine`, the level orchestrators from before it have.
+	 */
+	autonomy?: OrchestratorAutonomy,
+	/**
+	 * The orchestrator's base branch (0045), sent only to a plxd that advertises
+	 * `integrationBranch`: a local or remote-tracking branch, such as `main` or `origin/main`.
+	 * Absent means the repository's default branch. A retry that leaves it out matches any.
+	 */
+	baseBranch?: string,
 };
 
 /**
- * Result of `project/create`.
+ * Result of `orchestrator/create`.
  */
-export type ProjectCreateResult = {
+export type OrchestratorCreateResult = {
 	/**
-	 * The project, new or existing.
+	 * The orchestrator, new or existing.
 	 */
-	project: Project,
+	orchestrator: Orchestrator,
 };
 
 /**
  * Params of `events/subscribe`.
  *
- * wispd replays the events after `after`, then sends new ones as they happen, each as an
+ * plxd replays the events after `after`, then sends new ones as they happen, each as an
  * `events/event` notification. If those events are gone or too many to replay, it fails with
  * `resyncRequired`.
+ *
+ * `run` and `shell` narrow the `project` subscription, only for a plxd that advertises
+ * `eventFilters` (PLX-453); an older one ignores them and sends everything. Either one without
+ * `project` fails with `invalidParams` (PLX-455). Like a scope, a filter skips the `seq`s of the
+ * events it leaves out: `seq` only ever increases, and resuming from the last one delivered is
+ * still exact.
  */
 export type EventsSubscribeParams = {
 	/**
 	 * Replay the events whose `seq` is greater than this: usually the `seq` of a snapshot, such
-	 * as `project/list`'s, or of the last event received. `seq` starts at 1.
+	 * as `orchestrator/list`'s, or of the last event received. `seq` starts at 1.
 	 */
 	after: number,
 	/**
 	 * Subscribe to one project's events. Without it, the subscription gets host-level events,
-	 * such as `project.created`.
+	 * such as `orchestrator.created`.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
+	/**
+	 * Only this run's events, for an open transcript.
+	 */
+	run?: RunId,
+	/**
+	 * Every event, but each `agent.output` cut down to its `approvalRequested` and
+	 * `approvalResolved` items, for a sidebar. A batch with neither is left out.
+	 */
+	shell?: boolean,
 };
 
 /**
@@ -536,7 +2093,7 @@ export type EventsSubscribeResult = {
 };
 
 /**
- * Identifies one `events/subscribe` on one connection. wispd generates it.
+ * Identifies one `events/subscribe` on one connection. plxd generates it.
  */
 export type SubscriptionId = string;
 
@@ -560,7 +2117,7 @@ export type EventsUnsubscribeResult = Record<symbol, never>;
  *
  * It is idempotent on `id`: adding the same id again with the same `provider`, `label`, and
  * `key` returns the existing account instead of storing the key twice, and fails with
- * `idConflict` if they differ. The key is sent once; wispd stores it in the Keychain and never
+ * `idConflict` if they differ. The key is sent once; plxd stores it in the Keychain and never
  * echoes it back unmasked.
  */
 export type AccountsKeysAddParams = {
@@ -591,7 +2148,7 @@ export type AccountId = string;
 /**
  * Who a stored API key is for (0004's fallback for a subscription).
  *
- * A newer wispd may send providers that are not listed here. Treat those as unknown, so a
+ * A newer plxd may send providers that are not listed here. Treat those as unknown, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
 export type Provider = "anthropic" | "openai" | "cursor";
@@ -602,7 +2159,7 @@ export type Provider = "anthropic" | "openai" | "cursor";
  * It serializes and deserializes as a plain string (serde's newtype-struct representation is
  * already transparent in JSON, so `#[serde(transparent)]` would be redundant here, and ts-rs 12
  * cannot parse it), but its `Debug` never shows the value, so a stray `{:?}` in a log line can't
- * leak it (#117). Compare wispd's `backend::ApiKey`, which does the same for the key once it
+ * leak it (#117). Compare plxd's `backend::ApiKey`, which does the same for the key once it
  * reaches a backend.
  */
 export type RawKey = string;
@@ -618,8 +2175,8 @@ export type AccountsKeysAddResult = {
 };
 
 /**
- * A key account: its record in wisp's store. The key itself lives only in the macOS Keychain
- * (0004); wispd never returns it unmasked.
+ * A key account: its record in Parallax's store. The key itself lives only in the macOS Keychain
+ * (0004); plxd never returns it unmasked.
  */
 export type KeyAccount = {
 	/**
@@ -686,7 +2243,7 @@ export type AccountsListParams = Record<symbol, never>;
  */
 export type AccountsListResult = {
 	/**
-	 * Every CLI wispd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
+	 * Every CLI plxd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
 	 */
 	clis: Array<DetectedCli>,
 	/**
@@ -700,7 +2257,7 @@ export type AccountsListResult = {
  * One CLI's detected state.
  *
  * Every field but `cli` and `installed` is best-effort: the status commands 0004 lists are
- * undocumented in places, so a field wispd could not read is `null` rather than a guess.
+ * undocumented in places, so a field plxd could not read is `null` rather than a guess.
  */
 export type DetectedCli = {
 	/**
@@ -708,7 +2265,7 @@ export type DetectedCli = {
 	 */
 	cli: CliKind,
 	/**
-	 * Whether the binary resolves on the `PATH` wispd itself uses (#96).
+	 * Whether the binary resolves on the `PATH` plxd itself uses (#96).
 	 */
 	installed: boolean,
 	/**
@@ -720,7 +2277,7 @@ export type DetectedCli = {
 	 */
 	version?: string,
 	/**
-	 * Whether the user is signed in. `null` when installed but wispd could not tell (a timeout,
+	 * Whether the user is signed in. `null` when installed but plxd could not tell (a timeout,
 	 * unparseable output, or an exit code 0004 doesn't document).
 	 */
 	signedIn?: boolean,
@@ -743,15 +2300,15 @@ export type DetectedCli = {
 /**
  * How a signed-in CLI authenticates.
  *
- * A newer wispd may send kinds that are not listed here. Treat those as unknown, so a `switch`
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown, so a `switch`
  * over this type must not end in an exhaustiveness assertion.
  */
 export type AuthKind = "subscription" | "apiKey";
 
 /**
- * A vendor CLI wispd knows how to detect (0004).
+ * A vendor CLI plxd knows how to detect (0004).
  *
- * A newer wispd may send kinds that are not listed here. Treat those as unknown, so a `switch`
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown, so a `switch`
  * over this type must not end in an exhaustiveness assertion.
  */
 export type CliKind = "claude" | "codex" | "cursor";
@@ -766,7 +2323,7 @@ export type AccountsRefreshParams = Record<symbol, never>;
  */
 export type AccountsRefreshResult = {
 	/**
-	 * Every CLI wispd knows how to detect, freshly probed.
+	 * Every CLI plxd knows how to detect, freshly probed.
 	 */
 	clis: Array<DetectedCli>,
 	/**
@@ -776,9 +2333,587 @@ export type AccountsRefreshResult = {
 };
 
 /**
+ * Params of `providers/list`.
+ */
+export type ProvidersListParams = {
+	/**
+	 * Probe every instance again instead of answering from plxd's cache.
+	 */
+	refresh: boolean,
+};
+
+/**
+ * Result of `providers/list`, and of `providers/save` and `providers/remove`.
+ */
+export type ProvidersListResult = {
+	/**
+	 * Every instance, the built-in ones first, then in the order they were added.
+	 */
+	providers: Array<ProviderInfo>,
+	/**
+	 * When the slowest of these was probed.
+	 */
+	checkedAt: string,
+};
+
+/**
+ * An instance's detected state, and what it offers.
+ */
+export type ProviderInfo = {
+	/**
+	 * Its settings.
+	 */
+	instance: ProviderInstance,
+	/**
+	 * Whether its program resolves on the host.
+	 */
+	installed: boolean,
+	/**
+	 * Whether plxd is installing it in the background: Cursor's SDK after `cursor/install`, or
+	 * on its own for someone who used Cursor before (0053), or the Claude Agent SDK for a host
+	 * with Claude Code (0061). `note` says so meanwhile, and says why if the install fails.
+	 */
+	installing?: boolean,
+	/**
+	 * The program's resolved path, when installed.
+	 */
+	path?: string,
+	/**
+	 * The agent's version, when plxd could read it.
+	 */
+	version?: string,
+	/**
+	 * Whether it is signed in, or `null` when plxd can't tell.
+	 */
+	signedIn?: boolean,
+	/**
+	 * Who it is signed in as, or the plan, where the agent says.
+	 */
+	account?: string,
+	/**
+	 * Its subscription plan, such as `pro`, where the agent says.
+	 */
+	plan?: string,
+	/**
+	 * Why something above is missing or uncertain.
+	 */
+	note?: string,
+	/**
+	 * The models plxd found for it, without the user's own.
+	 */
+	models: Array<ProviderModel>,
+	/**
+	 * The permissions a thread on it may ask for.
+	 */
+	permissions: Array<AgentPermission>,
+	/**
+	 * Whether it takes `thread/start`'s `effort`.
+	 */
+	efforts: boolean,
+	/**
+	 * Whether it can run an orchestrator.
+	 */
+	orchestrator: boolean,
+	/**
+	 * The command that signs it in, run in a terminal on the host, if it has one.
+	 */
+	login?: Array<string>,
+	/**
+	 * Variables the sign-in command runs with, none of them secret: the agent's own and the
+	 * instance's, and for an ACP agent its home folder's.
+	 */
+	loginEnv?: Array<ProviderEnvVar>,
+	/**
+	 * The hub this instance runs through (0089), whose settings it takes: `hubs/save` edits it,
+	 * and `providers/save` and `providers/remove` refuse it.
+	 */
+	hub?: string,
+	/**
+	 * Why the last Cursor browser sign-in failed (0053), until the next one starts.
+	 */
+	signInError?: string,
+};
+
+/**
+ * A run's permission mode, behind the `runOptions` capability (PLX-97): Claude Code's modes,
+ * which each backend reports the subset of that it maps (PLX-188, 0027). A worker keeps the
+ * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
+
+/**
+ * One environment variable an instance's runs get.
+ */
+export type ProviderEnvVar = {
+	/**
+	 * The variable's name.
+	 */
+	name: string,
+	/**
+	 * Its value. plxd never sends a secret's value back: a listed secret has none, and an
+	 * update that leaves it out keeps the stored one.
+	 */
+	value?: string,
+	/**
+	 * Kept in the host's keychain instead of plxd's settings, such as an API key.
+	 */
+	secret: boolean,
+};
+
+/**
+ * An instance's settings, as the user sees and edits them.
+ */
+export type ProviderInstance = {
+	/**
+	 * A stable id: lowercase letters, digits, and `-`. The built-in instances are `claude`,
+	 * `codex`, and `cursor`.
+	 */
+	id: string,
+	/**
+	 * What runs it.
+	 */
+	kind: ProviderKind,
+	/**
+	 * What people see, such as `Codex` or `Work Codex`.
+	 */
+	name: string,
+	/**
+	 * Whether threads may start on it. A disabled instance keeps its settings.
+	 */
+	enabled: boolean,
+	/**
+	 * The program, a name on the host's `PATH` or an absolute path. Absent: the kind's own.
+	 */
+	program?: string,
+	/**
+	 * The agent's home or configuration folder, such as `CODEX_HOME`, for a kind that has one.
+	 */
+	home?: string,
+	/**
+	 * Arguments added after the kind's own. For an `acp` instance, every argument.
+	 */
+	args: Array<string>,
+	/**
+	 * Variables its runs get, set last.
+	 */
+	env: Array<ProviderEnvVar>,
+	/**
+	 * Models the user added, offered beside the ones plxd finds.
+	 */
+	models: Array<ProviderModel>,
+	/**
+	 * The percent of each limit window that an orchestrator's children leave for the user, from 0
+	 * to 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
+	 */
+	reserve?: number,
+};
+
+/**
+ * What runs an instance, and the defaults it starts from.
+ *
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown, so a `switch`
+ * over this type must not end in an exhaustiveness assertion.
+ */
+export type ProviderKind = "claude" | "codex" | "cursor" | "antigravity" | "opencode" | "pi" | "grokBuild" | "hermes" | "ollamaCloud" | "openRouter" | "localModel" | "acp";
+
+/**
+ * A model an instance offers.
+ */
+export type ProviderModel = {
+	/**
+	 * What the agent takes, sent as `thread/start`'s `model`.
+	 */
+	id: string,
+	/**
+	 * What people see.
+	 */
+	name: string,
+};
+
+/**
+ * Params of `providers/save`: adds an instance, or replaces the one with its id.
+ */
+export type ProvidersSaveParams = {
+	/**
+	 * The instance as it should be.
+	 */
+	instance: ProviderInstance,
+};
+
+/**
+ * Params of `providers/remove`. A built-in instance can't be removed, only disabled.
+ */
+export type ProvidersRemoveParams = {
+	/**
+	 * The instance's id.
+	 */
+	id: string,
+};
+
+/**
+ * Params of `hubs/list`.
+ */
+export type HubsListParams = {
+	/**
+	 * Ask every hub again instead of answering from plxd's cache.
+	 */
+	refresh: boolean,
+};
+
+/**
+ * Result of `hubs/list`, and of `hubs/save` and `hubs/remove`.
+ */
+export type HubsListResult = {
+	/**
+	 * Every hub, in the order they were added.
+	 */
+	hubs: Array<Hub>,
+};
+
+/**
+ * A hub as `hubs/list` reports it: its settings, without its keys, and what it last answered.
+ */
+export type Hub = {
+	/**
+	 * A stable id: 1 to 48 lowercase letters, digits, and `-`.
+	 */
+	id: string,
+	/**
+	 * What people see. Its two instances are named after it.
+	 */
+	name: string,
+	/**
+	 * The hub's address, such as `https://hub.tailnet.ts.net:8317`, without a trailing `/`.
+	 */
+	url: string,
+	/**
+	 * Whether its instances run threads. A disabled hub keeps its settings and keys.
+	 */
+	enabled: boolean,
+	/**
+	 * Whether a management key is kept, which lists its accounts.
+	 */
+	hasManagementKey: boolean,
+	/**
+	 * The id of the instance that runs Claude Code through it.
+	 */
+	claude: string,
+	/**
+	 * The id of the instance that runs Codex through it.
+	 */
+	codex: string,
+	/**
+	 * Whether `/v1/models` answered with the access key.
+	 */
+	reachable: boolean,
+	/**
+	 * Why it didn't, for people: the kind of failure and an HTTP status, never a response body.
+	 */
+	problem?: string,
+	/**
+	 * The Claude models it serves, which run through Claude Code.
+	 */
+	claudeModels: Array<ProviderModel>,
+	/**
+	 * Every other model it serves, which runs through Codex.
+	 */
+	codexModels: Array<ProviderModel>,
+	/**
+	 * Its accounts, from its management API. Empty without a management key.
+	 */
+	accounts: Array<HubAccount>,
+	/**
+	 * Why its accounts couldn't be listed, for people.
+	 */
+	accountsProblem?: string,
+	/**
+	 * When plxd last asked it.
+	 */
+	checkedAt: string,
+};
+
+/**
+ * One account a hub keeps signed in: one of its auth files.
+ */
+export type HubAccount = {
+	/**
+	 * The hub's id for it, its auth file's name, which `hubs/accounts/setEnabled` and
+	 * `hubs/accounts/remove` take.
+	 */
+	id: string,
+	/**
+	 * Which service it signs in to, as the hub names it: `claude`, `codex`, or another.
+	 */
+	provider: string,
+	/**
+	 * The account's email, when the hub knows it.
+	 */
+	email?: string,
+	/**
+	 * Its plan, such as `pro`, when the service says.
+	 */
+	plan?: string,
+	/**
+	 * Whether the hub keeps it out of rotation.
+	 */
+	disabled: boolean,
+	/**
+	 * Its limit windows, read through the hub: `five_hour`, `seven_day`, and
+	 * `seven_day_<model>`, as `usage/limits` names them. Empty for a disabled account and for a
+	 * service plxd doesn't read limits for.
+	 */
+	limits: Array<UsageLimitWindow>,
+	/**
+	 * Why its limits couldn't be read, for people.
+	 */
+	problem?: string,
+};
+
+/**
+ * One of an account's limit windows, as a vendor reported it (0004's `rate_limit_event` and
+ * Codex's `account/rateLimits/updated` in `usage/get`, Claude Code's `get_usage` and Codex's
+ * `account/rateLimits/read` in `usage/limits`).
+ */
+export type UsageLimitWindow = {
+	/**
+	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `seven_day_opus`,
+	 * `primary`, or `secondary`. `usage/limits` names Codex's five-hour and weekly windows
+	 * `five_hour` and `seven_day`, as Claude's are.
+	 */
+	window: string,
+	/**
+	 * How much of the window is used, from 0 to 100, when the vendor says.
+	 */
+	usedPercent?: number,
+	/**
+	 * When the window resets, when the vendor says.
+	 */
+	resetsAt?: string,
+	/**
+	 * When plxd captured this snapshot.
+	 */
+	capturedAt: string,
+};
+
+/**
+ * Params of `hubs/save`: adds a hub, or replaces the one with its id.
+ */
+export type HubsSaveParams = {
+	/**
+	 * The hub's id.
+	 */
+	id: string,
+	/**
+	 * What people see.
+	 */
+	name: string,
+	/**
+	 * The hub's `http` or `https` address.
+	 */
+	url: string,
+	/**
+	 * Whether its instances run threads.
+	 */
+	enabled: boolean,
+	/**
+	 * One of the hub's `api-keys`, which its instances run with. Required for a new hub;
+	 * absent keeps the stored one.
+	 */
+	accessKey?: string,
+	/**
+	 * Its management key, which lists its accounts. Absent keeps the stored one; empty removes
+	 * it.
+	 */
+	managementKey?: string,
+};
+
+/**
+ * Params of `hubs/remove`: removes a hub, its keys, and its two instances.
+ */
+export type HubsRemoveParams = {
+	/**
+	 * The hub's id.
+	 */
+	id: string,
+};
+
+/**
+ * Params of `hubs/accounts/signIn`: starts signing an account in to a hub.
+ */
+export type HubSignInParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * Which service to sign in to.
+	 */
+	service: HubService,
+};
+
+/**
+ * A service a hub signs accounts in to (PLX-1070).
+ */
+export type HubService = "claude" | "codex";
+
+/**
+ * Result of `hubs/accounts/signIn`: the page to open in a browser, and the sign-in's state,
+ * which names it in the other `hubs/accounts/*` sign-in calls.
+ */
+export type HubSignIn = {
+	/**
+	 * The service's `https` sign-in page.
+	 */
+	url: string,
+	/**
+	 * The sign-in's OAuth state.
+	 */
+	state: string,
+};
+
+/**
+ * Params of `hubs/accounts/callback`: the address the browser was sent to after signing in, for
+ * a browser on another computer than the hub.
+ */
+export type HubSignInCallbackParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The sign-in's state, which the address's `state` must match.
+	 */
+	state: string,
+	/**
+	 * The `http://localhost` address, with its `code` and `state`.
+	 */
+	redirectUrl: string,
+};
+
+/**
+ * Result of `hubs/accounts/status`, `hubs/accounts/callback`, and `hubs/accounts/cancel`.
+ */
+export type HubSignInStatus = {
+	/**
+	 * Where the sign-in is.
+	 */
+	status: HubSignInState,
+	/**
+	 * Why it failed, for people, in plxd's words and never the hub's.
+	 */
+	problem?: string,
+};
+
+/**
+ * Where a sign-in on a hub is.
+ */
+export type HubSignInState = "waiting" | "done" | "failed" | "cancelled";
+
+/**
+ * Params of `hubs/accounts/status` and `hubs/accounts/cancel`: one sign-in on a hub.
+ */
+export type HubSignInStateParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The sign-in's state.
+	 */
+	state: string,
+};
+
+/**
+ * Params of `hubs/accounts/setEnabled`: turns a hub's account on or off.
+ */
+export type HubAccountSetEnabledParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The account's id, a [`HubAccount`]'s.
+	 */
+	account: string,
+	/**
+	 * Whether the hub uses it.
+	 */
+	enabled: boolean,
+};
+
+/**
+ * Params of `hubs/accounts/remove`: deletes a hub's account and its sign-in.
+ */
+export type HubAccountRemoveParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The account's id, a [`HubAccount`]'s.
+	 */
+	account: string,
+};
+
+/**
+ * Params of `providers/updates`.
+ */
+export type ProvidersUpdatesParams = Record<symbol, never>;
+
+/**
+ * Result of `providers/updates` (PLX-746).
+ */
+export type ProvidersUpdatesResult = {
+	/**
+	 * Each installed agent CLI with a newer release, none when every one is current.
+	 */
+	updates: Array<ProviderUpdate>,
+};
+
+/**
+ * An agent CLI with a newer release than the one installed.
+ */
+export type ProviderUpdate = {
+	/**
+	 * The CLI.
+	 */
+	cli: CliKind,
+	/**
+	 * The version installed.
+	 */
+	version: string,
+	/**
+	 * The newest release.
+	 */
+	latest: string,
+};
+
+/**
+ * Params of `providers/upgrade`.
+ */
+export type ProvidersUpgradeParams = {
+	/**
+	 * The CLI to update.
+	 */
+	cli: CliKind,
+};
+
+/**
+ * Result of `providers/upgrade`.
+ */
+export type ProvidersUpgradeResult = {
+	/**
+	 * The version installed now, when plxd could read it.
+	 */
+	version?: string,
+};
+
+/**
  * Params of `usage/get`.
  *
- * Empty: wispd has no account registry yet (#114, #117, #118 are still open, and #113's
+ * Empty: plxd has no account registry yet (#114, #117, #118 are still open, and #113's
  * `AccountRef` is already just a caller-supplied string), so it reports every account id it has
  * recorded usage or limits for.
  */
@@ -789,7 +2924,7 @@ export type UsageGetParams = Record<symbol, never>;
  */
 export type UsageGetResult = {
 	/**
-	 * Every account wispd has recorded usage or limits for, in no particular order.
+	 * Every account plxd has recorded usage or limits for, in no particular order.
 	 */
 	accounts: Array<AccountUsage>,
 };
@@ -799,7 +2934,7 @@ export type UsageGetResult = {
  */
 export type AccountUsage = {
 	/**
-	 * wispd's id for the account (#114, #117).
+	 * plxd's id for the account (#114, #117).
 	 */
 	accountId: string,
 	/**
@@ -815,30 +2950,6 @@ export type AccountUsage = {
 	 * Cursor's headless output has no usage API).
 	 */
 	limits: Array<UsageLimitWindow>,
-};
-
-/**
- * One of an account's limit windows, as a vendor last reported it (0004's `rate_limit_event` and
- * Codex's `account/rateLimits/read`).
- */
-export type UsageLimitWindow = {
-	/**
-	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `primary`, or
-	 * `secondary`.
-	 */
-	window: string,
-	/**
-	 * How much of the window is used, from 0 to 100, when the vendor says.
-	 */
-	usedPercent?: number,
-	/**
-	 * When the window resets, when the vendor says.
-	 */
-	resetsAt?: string,
-	/**
-	 * When wispd captured this snapshot.
-	 */
-	capturedAt: string,
 };
 
 /**
@@ -898,7 +3009,7 @@ export type UsageHistoryResult = {
  */
 export type AccountRuns = {
 	/**
-	 * wispd's id for the account (#114, #117).
+	 * plxd's id for the account (#114, #117).
 	 */
 	accountId: string,
 	/**
@@ -916,7 +3027,7 @@ export type UsageHour = {
 	 */
 	hour: string,
 	/**
-	 * wispd's id for the account (#114, #117).
+	 * plxd's id for the account (#114, #117).
 	 */
 	accountId: string,
 	/**
@@ -947,6 +3058,192 @@ export type UsageHour = {
 };
 
 /**
+ * Params of `usage/report/claim`. Empty: plxd names the whole hours by its own clock.
+ */
+export type UsageReportClaimParams = Record<symbol, never>;
+
+/**
+ * Result of `usage/report/claim`.
+ */
+export type UsageReportClaimResult = {
+	/**
+	 * This claim's id, for `usage/report/release`.
+	 */
+	claimId: string,
+	/**
+	 * The usage from the end of the last claim to the start of the current UTC hour, as in
+	 * `usage/history`. Empty on a host's first claim, which reports none of its past usage. No
+	 * later claim returns these hours, unless they are released.
+	 */
+	hours: Array<UsageHour>,
+};
+
+/**
+ * Params of `usage/report/release`: a claim whose hours couldn't be reported.
+ */
+export type UsageReportReleaseParams = {
+	/**
+	 * The claim's `claimId`.
+	 */
+	claimId: string,
+};
+
+/**
+ * Result of `usage/report/release`. Empty, and the same when the claim was released already or a
+ * later claim came first, which keeps its place.
+ */
+export type UsageReportReleaseResult = Record<symbol, never>;
+
+/**
+ * Params of `usage/daily`.
+ */
+export type UsageDailyParams = {
+	/**
+	 * The first local day of the range, such as `2026-09-30`. The range ends today.
+	 */
+	since: string,
+	/**
+	 * The IANA time zone whose local days the usage is grouped by, such as
+	 * `America/Los_Angeles`.
+	 */
+	timeZone: string,
+};
+
+/**
+ * Result of `usage/daily`.
+ */
+export type UsageDailyResult = {
+	/**
+	 * Usage per local day, agent, and model. Days with no usage are left out.
+	 */
+	days: Array<UsageDay>,
+	/**
+	 * Each source that failed, so the others still show.
+	 */
+	problems: Array<UsageProblem>,
+	/**
+	 * Sessions per local day and agent, counted on the day of their last activity: Claude
+	 * Code's and Codex's, from ccusage. Absent when they couldn't be counted, and from a plxd
+	 * older than the field.
+	 */
+	sessions?: Array<UsageSessions>,
+};
+
+/**
+ * One agent's usage of one model on one local day, from every session on the host, not only
+ * runs plxd started (0039).
+ */
+export type UsageDay = {
+	/**
+	 * The local day.
+	 */
+	date: string,
+	/**
+	 * The agent: Claude Code, Codex, or Cursor.
+	 */
+	agent: CliKind,
+	/**
+	 * The model, as the agent names it.
+	 */
+	model: string,
+	/**
+	 * Input tokens, not counting cache reads and writes.
+	 */
+	inputTokens: number,
+	/**
+	 * Output tokens, including reasoning.
+	 */
+	outputTokens: number,
+	/**
+	 * Input tokens read from the prompt cache.
+	 */
+	cacheReadTokens: number,
+	/**
+	 * Input tokens written to the prompt cache.
+	 */
+	cacheWriteTokens: number,
+	/**
+	 * The cost, when the source priced it.
+	 */
+	costUsdMicros?: number,
+};
+
+/**
+ * A source of `usage/daily` that failed, and why, for people.
+ */
+export type UsageProblem = {
+	/**
+	 * Which source.
+	 */
+	source: UsageSource,
+	/**
+	 * What went wrong, written for people, such as "Install Node.js or ccusage on this host to
+	 * see Claude Code and Codex usage."
+	 */
+	message: string,
+};
+
+/**
+ * Where `usage/daily` gets usage from.
+ *
+ * A newer plxd may send sources that are not listed here. Treat those as unknown.
+ */
+export type UsageSource = "ccusage" | "cursor";
+
+/**
+ * How many of one agent's sessions last did something on one local day.
+ */
+export type UsageSessions = {
+	/**
+	 * The local day.
+	 */
+	date: string,
+	/**
+	 * The agent: Claude Code or Codex.
+	 */
+	agent: CliKind,
+	/**
+	 * Sessions whose last activity was that day.
+	 */
+	sessions: number,
+};
+
+/**
+ * Params of `usage/limits`.
+ */
+export type UsageLimitsParams = Record<symbol, never>;
+
+/**
+ * Result of `usage/limits`.
+ */
+export type UsageLimitsResult = {
+	/**
+	 * Every subscription account whose CLI reports limits and could be started, in no
+	 * particular order.
+	 */
+	accounts: Array<AccountLimits>,
+};
+
+/**
+ * One subscription account's limit windows, as its CLI reports them now.
+ */
+export type AccountLimits = {
+	/**
+	 * plxd's id for the account: its backend's name, such as `claude`.
+	 */
+	accountId: string,
+	/**
+	 * The windows. Empty when the account has none, such as an API key login, or when
+	 * `problem` says why the CLI didn't answer.
+	 */
+	limits: Array<UsageLimitWindow>,
+	/**
+	 * Why the CLI didn't report its windows, for people.
+	 */
+	problem?: string,
+};
+
+/**
  * Params of `accounts/defaults/get`.
  */
 export type AccountsDefaultsGetParams = Record<symbol, never>;
@@ -957,9 +3254,9 @@ export type AccountsDefaultsGetParams = Record<symbol, never>;
  */
 export type AccountsDefaultsGetResult = {
 	/**
-	 * The coordinator's default account.
+	 * The orchestrator's default account.
 	 */
-	coordinator?: AccountChoice,
+	orchestrator?: AccountChoice,
 	/**
 	 * A worker's default account.
 	 */
@@ -969,12 +3266,12 @@ export type AccountsDefaultsGetResult = {
 /**
  * An account a task can be routed to: the user's own login in a vendor CLI, or a stored key.
  *
- * A newer wispd may send a kind this version does not know. Treat that as absent rather than end
+ * A newer plxd may send a kind this version does not know. Treat that as absent rather than end
  * a `switch` over this type in an exhaustiveness assertion.
  */
 export type AccountChoice = { "kind": "subscription",
 	/**
-	 * The backend's name, as `host/health`'s running agents and wispd's logs use it.
+	 * The backend's name, as `host/health`'s running agents and plxd's logs use it.
 	 */
 	backend: string, } | { "kind": "key",
 	/**
@@ -1000,7 +3297,7 @@ export type AccountsDefaultsSetParams = {
 /**
  * Which kind of run an account is chosen for (0004).
  */
-export type Role = "coordinator" | "worker";
+export type Role = "orchestrator" | "worker";
 
 /**
  * Params of `context/list`.
@@ -1009,7 +3306,7 @@ export type ContextListParams = {
 	/**
 	 * The project whose shared context to list.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 };
 
 /**
@@ -1039,8 +3336,8 @@ export type ContextFile = {
 	 */
 	modifiedAt: string,
 	/**
-	 * Who wrote it last, such as `"app"` or an agent's run id, when wispd knows. Absent for a
-	 * file wispd has not seen written since it started, such as one already on disk at startup.
+	 * Who wrote it last, such as `"app"` or an agent's run id, when plxd knows. Absent for a
+	 * file plxd has not seen written since it started, such as one already on disk at startup.
 	 */
 	lastWriter?: string,
 };
@@ -1052,7 +3349,7 @@ export type ContextReadParams = {
 	/**
 	 * The file's project.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The file's path. Fails with `contextNotFound` if it does not exist.
 	 */
@@ -1089,7 +3386,7 @@ export type ContextWriteParams = {
 	/**
 	 * The file's project.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The file's path.
 	 */
@@ -1124,6 +3421,63 @@ export type ContextWriteResult = {
 };
 
 /**
+ * Params of `context/readBytes`, behind `orchestratorArtifacts` (PLX-941): one slice of a shared
+ * context file of any type, such as an artifact, as `agent/file`'s working side reads one
+ * (`fileChunks`, 0074). Fails with `contextNotFound` if it does not exist.
+ */
+export type ContextReadBytesParams = {
+	/**
+	 * The file's project.
+	 */
+	project: ScopeId,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+	/**
+	 * Where to start reading, in bytes. Absent means 0.
+	 */
+	offset?: number,
+	/**
+	 * How many bytes to read, at most `fileChunks`' `chunkBytes`, which is also the default.
+	 */
+	length?: number,
+};
+
+/**
+ * Result of `context/readBytes`.
+ */
+export type ContextReadBytesResult = {
+	/**
+	 * The file's metadata, with the whole file's size.
+	 */
+	file: ContextFile,
+	/**
+	 * The slice, base64-encoded: empty past the end.
+	 */
+	content: string,
+};
+
+/**
+ * Params of `context/saveArtifact`, behind `orchestratorArtifacts` (PLX-941): copies a file from a
+ * orchestrator child's working folder into its orchestrator's `artifacts/<run id>/`, at the same
+ * path, replacing an earlier copy. When the orchestrator's `history/`, `artifacts/`, and
+ * `.versions/` would pass 2 GiB, plxd deletes its oldest artifacts first and adds a `needsYou`
+ * inbox item. Fails with `invalidParams` for a run outside an orchestrator or a path that isn't a
+ * file, and `contextTooLarge` when deleting artifacts can't make room.
+ */
+export type ContextSaveArtifactParams = {
+	/**
+	 * The child whose file it is.
+	 */
+	runId: RunId,
+	/**
+	 * The file's path in the child's working folder, as `agent/file` takes it.
+	 */
+	path: string,
+};
+
+/**
  * Params of `agent/start`.
  *
  * Idempotent on `runId`: starting the same id again with the same params returns the run
@@ -1137,14 +3491,14 @@ export type AgentStartParams = {
 	/**
 	 * The project whose repository the run works in.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The task.
 	 */
 	prompt: string,
 	/**
-	 * What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
-	 * `noWrite` run, is started with `project/start`.
+	 * What the run's tools may do: only `workspaceWrite`. An orchestrator, the one
+	 * `noWrite` run, is started with `orchestrator/start`.
 	 */
 	policy: AgentPolicy,
 	/**
@@ -1152,13 +3506,18 @@ export type AgentStartParams = {
 	 */
 	account?: AccountChoice,
 	/**
-	 * The coordinator thread starting the run, which `wispd mcp` sets for runs the coordinator
+	 * The orchestrator thread starting the run, which `plxd mcp` sets for runs the orchestrator
 	 * spawns (0019). The run keeps it, and a retry must repeat it.
 	 */
-	coordinatorThread?: CoordinatorThreadId,
+	orchestratorThread?: OrchestratorThreadId,
+	/**
+	 * Whether the run wakes its orchestrator when a CLI process of its ends (PLX-380, 0025), for
+	 * a run with a `orchestratorThread`. Absent means true. A retry must repeat it.
+	 */
+	notify?: boolean,
 	/**
 	 * The model, in the backend's naming, such as `opus`. Absent means the CLI's default. Send
-	 * it, `effort`, and `permission` only to a wispd that advertises `runOptions`. The run keeps
+	 * it, `effort`, and `permission` only to a plxd that advertises `runOptions`. The run keeps
 	 * all three when it resumes, and a retry must repeat them.
 	 */
 	model?: string,
@@ -1167,21 +3526,58 @@ export type AgentStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * The permission mode (RYA-97, 0027). Absent means `edit`, or for a run with a
-	 * `coordinatorThread`, the coordinator's mode when it spawns the run.
+	 * The context window in tokens, one the backend offers: Claude Code's `200000` or
+	 * `1000000`, Codex's `272000` or `872000`. Absent means the CLI's default. Send it and
+	 * `fast` only to a plxd that advertises `contextAndFast`. The run keeps both when it
+	 * resumes, and a retry must repeat them.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off: Claude Code's fast mode, or Codex's priority service tier. Absent
+	 * means the CLI's default.
+	 */
+	fast?: boolean,
+	/**
+	 * The permission mode (PLX-97, 0027). Absent means `edit`. Ignored in a project, whose
+	 * runs run in the project's mode (0042).
 	 */
 	permission?: AgentPermission,
 	/**
-	 * Images for the prompt, sent only to a wispd that advertises `promptImages`. Its options
+	 * Images for the prompt, sent only to a plxd that advertises `promptImages`. Its options
 	 * give the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of `data`, past which
-	 * the request fails with `imageTooLarge`. With images, the prompt may be empty (RYA-193). A
-	 * retry must repeat them; wispd doesn't compare them.
+	 * the request fails with `imageTooLarge`. With images, the prompt may be empty (PLX-193). A
+	 * retry must repeat them; plxd doesn't compare them.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the run's permission requests to the client as `approvalRequested` items, which
+	 * `agent/approve` answers (PLX-222, decision 0031). Set it only when the client shows and
+	 * answers them, and only to a plxd that advertises `approvals`. A thread with it is full
+	 * Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
+	 * denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a
+	 * `orchestratorThread` also gets it when its orchestrator has it. The run keeps it when it
+	 * resumes, and a retry must repeat it.
+	 */
+	approvals?: boolean,
+	/**
+	 * Threads attached to the prompt as context, by their run ids, sent only to a plxd that
+	 * advertises `threadContext` (PLX-372, decision 0047). The agent gets a summary of each ahead
+	 * of the prompt: its id and what was said in it, without tool calls, cut from the front to
+	 * the capability's `maxSummaryBytes`. At most the capability's `maxThreads`. An id that is
+	 * no thread's fails with `threadNotFound`. A retry must repeat them; plxd doesn't compare
+	 * them.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * Start an orchestrator's child as an exploration, such as a spike or a comparison, which
+	 * never lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must
+	 * repeat it.
+	 */
+	explore?: boolean,
 };
 
 /**
- * How hard a run's model thinks, behind the `runOptions` capability (RYA-97). Claude Code takes
+ * How hard a run's model thinks, behind the `runOptions` capability (PLX-97). Claude Code takes
  * every level as `--effort`, and downgrades `xhigh` on models that lack it. A backend that can't
  * honor a level refuses the run with `unsupportedOption`.
  *
@@ -1190,52 +3586,22 @@ export type AgentStartParams = {
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
- * A run's permission mode, behind the `runOptions` capability (RYA-97): Claude Code's modes,
- * which each backend reports the subset of that it maps (RYA-188, 0027). A worker keeps the
- * worker sandbox (0013) in every mode but [`AgentPermission::Bypass`].
+ * What a run's tools may do. `agent/start` takes only `workspaceWrite`; an orchestrator,
+ * which `orchestrator/start` starts, is `noWrite`.
  *
- * A newer peer may send a value this version does not know; treat it as unknown.
- */
-export type AgentPermission = "auto" | "manual" | "edit" | "plan" | "bypass";
-
-/**
- * What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
- * which `project/start` starts, is `noWrite`.
- *
- * A newer wispd may send a policy this version does not know; treat it as unknown.
+ * A newer plxd may send a policy this version does not know; treat it as unknown.
  */
 export type AgentPolicy = "workspaceWrite" | "noWrite";
 
 /**
- * A project's coordinator thread (M4, #195, decision 0019). Runs the coordinator starts
- * through its wisp tools carry it, so a client can tell them from runs it started itself.
+ * An orchestrator thread (M4, #195, decision 0019). Runs the orchestrator starts
+ * through its Parallax tools carry it, so a client can tell them from runs it started itself.
  */
-export type CoordinatorThreadId = string;
+export type OrchestratorThreadId = string;
 
 /**
- * An image sent with a prompt or message, behind the `promptImages` capability (RYA-191,
- * decision 0026). The CLI gets it beside the text, never as a file name or path in it.
- */
-export type PromptImage = {
-	/**
-	 * Its file type, which its bytes must match.
-	 */
-	mediaType: ImageMediaType,
-	/**
-	 * The image file's bytes, in standard base64 with padding.
-	 */
-	data: string,
-};
-
-/**
- * An image's file type (RYA-191): the four that Claude and Codex both take.
- *
- * A newer peer may send a type this version does not know; treat it as unknown.
- */
-export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-
-/**
- * Result of `agent/start`, `agent/send`, and `agent/cancel`: the run as it stands.
+ * Result of `agent/start`, `agent/send`, `agent/cancel`, `agent/resumeNow`, and
+ * `agent/autoResume`: the run as it stands.
  */
 export type AgentRunResult = {
 	/**
@@ -1255,7 +3621,7 @@ export type AgentRun = {
 	/**
 	 * Its project.
 	 */
-	project: ProjectId,
+	project: ScopeId,
 	/**
 	 * The task it was started with.
 	 */
@@ -1273,12 +3639,16 @@ export type AgentRun = {
 	 */
 	backend: string,
 	/**
+	 * Distinct backends used by this run, in first-use order (PLX-1214). Older daemons omit it.
+	 */
+	backends?: Array<string>,
+	/**
 	 * The account it is charged to now: the backend's name for a subscription, or a key
 	 * account's id. It changes on `agent.accountFallback`.
 	 */
 	accountId: string,
 	/**
-	 * Its worktree's branch, such as `wisp/1a2b3c4d`, once the worktree exists.
+	 * Its worktree's branch, such as `parallax/1a2b3c4d`, once the worktree exists.
 	 */
 	branch?: string,
 	/**
@@ -1300,14 +3670,14 @@ export type AgentRun = {
 	 */
 	error?: string,
 	/**
-	 * Its latest commit, once wispd made one.
+	 * Its latest commit, once plxd made one.
 	 */
 	diff?: DiffSummary,
 	/**
-	 * The coordinator thread that started it through its wisp tools. Absent for a run a client
-	 * started itself.
+	 * The orchestrator thread that started it through its Parallax tools. Absent for a run a
+	 * client started itself.
 	 */
-	coordinatorThread?: CoordinatorThreadId,
+	orchestratorThread?: OrchestratorThreadId,
 	/**
 	 * Its model: what it was started with, or what `agent/send` last changed it to. Absent
 	 * means the CLI's default.
@@ -1318,9 +3688,50 @@ export type AgentRun = {
 	 */
 	effort?: AgentEffort,
 	/**
+	 * Its context window in tokens, as `model`. Absent means the CLI's default.
+	 */
+	contextWindow?: number,
+	/**
+	 * Whether it runs in fast mode, as `model`. Absent means the CLI's default.
+	 */
+	fast?: boolean,
+	/**
 	 * Its permission, as `model`. Absent means `edit`.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * True when it forwards its permission requests to the client, as the start method that made
+	 * it asked with `approvals` (PLX-222, decision 0031). It changes only when
+	 * `orchestrator/fromThreads` makes the run an orchestrator's child, which sets it. Absent
+	 * means false: its CLI denies what would prompt.
+	 */
+	approvals?: boolean,
+	/**
+	 * True for a thread started with `checkout`: it works in its repository's own checkout, so it
+	 * has no `branch`, `worktreePath`, or `diff`, and its changes are left uncommitted there.
+	 * Absent means false.
+	 */
+	checkout?: boolean,
+	/**
+	 * True for an orchestrator's exploration child, started with `explore` (0045): it never lands.
+	 * Absent means false.
+	 */
+	explore?: boolean,
+	/**
+	 * The web URLs of the pull requests linked to it, oldest first, with no duplicates: the one
+	 * `agent/openPr` returned, and any its agent opened with `gh pr create` (PLX-318). Behind the
+	 * `pullRequests` capability. Absent means none.
+	 */
+	pullRequests?: Array<string>,
+	/**
+	 * When plxd resumes it, while it is `waiting` (decision 0049). Absent otherwise.
+	 */
+	resumeAt?: string,
+	/**
+	 * Whether a usage limit makes it wait and resume, overriding the host's
+	 * `host/settings` `autoResume` (decision 0049). Absent means the host's setting.
+	 */
+	autoResume?: boolean,
 	/**
 	 * When it was created, in RFC 3339 UTC.
 	 */
@@ -1334,13 +3745,13 @@ export type AgentRun = {
 /**
  * Where a run is.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown, and don't
+ * A newer plxd may send a status this version does not know; treat it as unknown, and don't
  * end a `switch` over this type in an exhaustiveness assertion.
  */
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "accepted";
+export type AgentStatus = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "waiting" | "accepted";
 
 /**
- * The commit wispd made for a run, compared with the commit its worktree was created from.
+ * The commit plxd made for a run, compared with the commit its worktree was created from.
  */
 export type DiffSummary = {
 	/**
@@ -1366,7 +3777,7 @@ export type DiffSummary = {
  *
  * A running agent gets it as its next turn. An agent that ended with a `sessionId` resumes
  * that session in its worktree, with the message as the prompt. Idempotent on `turnId` while
- * wispd runs.
+ * plxd runs.
  */
 export type AgentSendParams = {
 	/**
@@ -1382,26 +3793,73 @@ export type AgentSendParams = {
 	 */
 	text: string,
 	/**
-	 * A new model for the run and every later resume (RYA-163), sent only to a wispd that
-	 * advertises `sendModel`. It should be one the run's backend runs, since a session can't move
-	 * to another CLI; wispd can't check that, so another's fails the run with the CLI's own error.
-	 * Absent, or the run's own, changes nothing. A different one fails with
-	 * `unsupportedOption` while the run's CLI is running, since it can't change mid-process.
+	 * A new model for the run and every later resume (PLX-163), sent only to a plxd that
+	 * advertises `sendModel`. It should be one the run's backend runs, or with `account`, that
+	 * account's; plxd can't check that, so another's fails the run with the CLI's own error.
+	 * Absent, or the run's own, changes nothing. While the run's CLI is running, a different one
+	 * waits with the message until the CLI exits, since it can't change mid-process, as does
+	 * every message sent after it; a plxd without `sendAccount` fails it with
+	 * `unsupportedOption` instead.
 	 */
 	model?: string,
 	/**
-	 * A new effort (RYA-161), as `model`. `sendOptions` is enough for it and `permission`.
+	 * A new effort (PLX-161), as `model`. `sendOptions` is enough for it and `permission`.
 	 */
 	effort?: AgentEffort,
 	/**
-	 * A new permission (RYA-161), as `effort`.
+	 * A new permission (PLX-161), as `effort`. Ignored for a run in a project, which runs in the
+	 * project's mode (0042).
 	 */
 	permission?: AgentPermission,
+	/**
+	 * A new context window, as `effort`, but sent only to a plxd that advertises
+	 * `contextAndFast`.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `contextWindow`.
+	 */
+	fast?: boolean,
+	/**
+	 * A new account for the run and every later resume, sent only to a plxd that advertises
+	 * `sendAccount`, and waiting for a running CLI as `model` does. On the run's backend, the
+	 * session resumes on it. On another backend, the session can't move, so plxd starts a new
+	 * one there in the run's worktree, whose first message carries the conversation so far
+	 * before this one: the run keeps its id, transcript, and worktree, and takes the new
+	 * backend, with `model`, and the run's effort, permission, context window, and fast mode where
+	 * the backend maps them.
+	 * Absent, or the run's own, changes nothing.
+	 */
+	account?: AccountChoice,
 	/**
 	 * Images for the message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Threads attached to the message as context, as `agent/start`'s. A message that waits for
+	 * the run's CLI gets their summaries when it's sent.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * The thread sending it through its Parallax tools (0041), which the turn's `turnStarted`
+	 * names. It must be a run on the host, or the send fails with `runNotFound`. Absent for the
+	 * user's own message. Behind `threadTools`.
+	 */
+	from?: RunId,
+	/**
+	 * How the message reaches a run whose CLI is working on a turn, sent only to a plxd that
+	 * advertises `queue` (PLX-370, 0048). Absent is `queue`.
+	 */
+	delivery?: AgentDelivery,
 };
+
+/**
+ * How `agent/send` delivers a message to a run whose CLI is working on a turn, behind the
+ * `queue` capability. A run with no turn running takes either at once.
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentDelivery = "queue" | "steer";
 
 /**
  * A follow-up turn's id: a version 7 UUID that the client generates once and sends again on
@@ -1418,6 +3876,12 @@ export type AgentCancelParams = {
 	 * The run.
 	 */
 	runId: RunId,
+	/**
+	 * The thread stopping it through its Parallax tools (0041): a running run logs an
+	 * `interrupted` item naming it. It must be a run on the host, or the cancel fails with
+	 * `runNotFound`. Behind `threadTools`.
+	 */
+	from?: RunId,
 };
 
 /**
@@ -1427,7 +3891,7 @@ export type AgentListParams = {
 	/**
 	 * Only this project's runs. Absent lists every run on the host.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
 };
 
 /**
@@ -1439,14 +3903,16 @@ export type AgentListResult = {
 	 */
 	runs: Array<AgentRun>,
 	/**
-	 * The `seq` of the last event the list reflects, to subscribe after.
+	 * The event log's `seq` from before the list was read. Subscribe with `after` set to it. The
+	 * list may already reflect some events after it, and replaying them is harmless.
 	 */
 	seq: number,
 };
 
 /**
- * Params of `agent/events`: one run's events from wispd's log, for rebuilding its transcript
- * after `resyncRequired` or a restart.
+ * Params of `agent/events`: one run's events from plxd's log, for rebuilding its transcript
+ * after `resyncRequired` or a restart. Pages go oldest first from `after`, or, with `before`
+ * (the `eventsBefore` capability, PLX-490), newest first.
  */
 export type AgentEventsParams = {
 	/**
@@ -1454,9 +3920,16 @@ export type AgentEventsParams = {
 	 */
 	runId: RunId,
 	/**
-	 * Return the events whose `seq` is greater than this; 0 for the first page.
+	 * Return the events whose `seq` is greater than this; 0 for the first page. Ignored with
+	 * `before`.
 	 */
 	after: number,
+	/**
+	 * Return the newest events whose `seq` is less than this instead, for a transcript that opens
+	 * at its end: `Number.MAX_SAFE_INTEGER` for the newest page, then the first `seq` of the last
+	 * page returned. An older plxd ignores it.
+	 */
+	before?: number,
 	/**
 	 * The most events to return: 500 by default, and at most 1000.
 	 */
@@ -1472,13 +3945,24 @@ export type AgentEventsResult = {
 	 */
 	events: Array<LoggedEvent>,
 	/**
-	 * Whether more events follow the last one returned. Ask again after its `seq`.
+	 * Whether more events follow the last one returned, or with `before`, precede the first.
+	 * Ask again after the last one's `seq`, or before the first one's.
 	 */
 	more: boolean,
+	/**
+	 * With `before`: the run as it stands, read after the page, since a page that doesn't reach
+	 * back to the run's start has no `agent.started`. Events in the page never change it.
+	 */
+	run?: AgentRun,
+	/**
+	 * With `before`: the event log's `seq` from before the page was read. Subscribe with `after`
+	 * set to it or to the page's last `seq`, whichever is greater, as after `agent/list`.
+	 */
+	seq?: number,
 };
 
 /**
- * An event from wispd's log, as `agent/events` returns it.
+ * An event from plxd's log, as `agent/events` returns it.
  */
 export type LoggedEvent = {
 	/**
@@ -1492,28 +3976,32 @@ export type LoggedEvent = {
 	/**
 	 * Its project. Absent for host-level events.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
 	/**
 	 * What happened.
 	 */
-	event: WispEvent,
+	event: ParallaxEvent,
 };
 
 /**
  * What happened, by `kind`.
  *
- * A newer wispd may send kinds that are not listed here. Skip those events but still count their
+ * A newer plxd may send kinds that are not listed here. Skip those events but still count their
  * `seq` as received, and don't end a `switch` over this type in an exhaustiveness assertion.
  */
-export type WispEvent = { "kind": "project.created",
+export type ParallaxEvent = { "kind": "orchestrator.created",
 	/**
-	 * The new project.
+	 * The new orchestrator.
 	 */
-	project: Project, } | { "kind": "project.updated",
+	orchestrator: Orchestrator, } | { "kind": "orchestrator.updated",
 	/**
-	 * The project as it stands.
+	 * The orchestrator as it stands.
 	 */
-	project: Project, } | { "kind": "context.changed",
+	orchestrator: Orchestrator, } | { "kind": "orchestrator.deleted",
+	/**
+	 * The deleted orchestrator's id.
+	 */
+	orchestrator: ScopeId, } | { "kind": "context.changed",
 	/**
 	 * The changed file.
 	 */
@@ -1523,7 +4011,7 @@ export type WispEvent = { "kind": "project.created",
 	 */
 	runId: RunId,
 	/**
-	 * The run as it was created. wispd always sends it.
+	 * The run as it was created. plxd always sends it.
 	 */
 	run?: AgentRun, } | { "kind": "agent.updated",
 	/**
@@ -1541,7 +4029,11 @@ export type WispEvent = { "kind": "project.created",
 	/**
 	 * What happened, in order.
 	 */
-	items: Array<AgentOutputItem>, } | { "kind": "agent.accountFallback",
+	items: Array<AgentOutputItem>,
+	/**
+	 * Set when this row is a finished turn's batches rewritten as one (0052).
+	 */
+	compacted?: Compacted, } | { "kind": "agent.accountFallback",
 	/**
 	 * The run's id.
 	 */
@@ -1565,15 +4057,7 @@ export type WispEvent = { "kind": "project.created",
 	/**
 	 * How it ended.
 	 */
-	outcome: AgentOutcome, } | { "kind": "agent.diffReady",
-	/**
-	 * The run's id.
-	 */
-	runId: RunId,
-	/**
-	 * The commit and its stats against the worktree's base.
-	 */
-	diff: DiffSummary, } | { "kind": "agent.accepted",
+	outcome: AgentOutcome, } | { "kind": "agent.accepted",
 	/**
 	 * The run's id.
 	 */
@@ -1583,13 +4067,53 @@ export type WispEvent = { "kind": "project.created",
 	 */
 	merge: AgentMerge, } | { "kind": "agent.wakeupsPaused",
 	/**
-	 * The coordinator's run id.
+	 * The orchestrator's run id.
 	 */
-	runId: RunId, } | { "kind": "repo.added",
+	runId: RunId, } | { "kind": "inbox.added",
+	/**
+	 * The new item.
+	 */
+	item: InboxItem, } | { "kind": "agent.background",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * Every one still running, oldest first.
+	 */
+	tasks: Array<AgentBackgroundTask>, } | { "kind": "pr.watches",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * The URLs it watches now, as `pr/watches` has them.
+	 */
+	urls: Array<string>, } | { "kind": "queue.updated",
+	/**
+	 * The run's id.
+	 */
+	runId: RunId,
+	/**
+	 * The queue as it is now, first to be sent first.
+	 */
+	messages: Array<QueuedMessage>,
+	/**
+	 * True while a Stop holds it until `queue.resume` (PLX-644). Absent means false.
+	 */
+	held?: boolean, } | { "kind": "repo.added",
 	/**
 	 * The entry.
 	 */
-	repo: Repo, } | { "kind": "thread.started",
+	repo: Repo, } | { "kind": "repo.updated",
+	/**
+	 * The entry as it stands.
+	 */
+	repo: Repo, } | { "kind": "repo.removed",
+	/**
+	 * The removed entry's id.
+	 */
+	repo: RepoId, } | { "kind": "thread.started",
 	/**
 	 * The thread.
 	 */
@@ -1605,22 +4129,118 @@ export type WispEvent = { "kind": "project.created",
 	/**
 	 * Its repo entry.
 	 */
-	repo: RepoId,
+	repo: RepoId, } | { "kind": "thread.script",
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * When it ran.
+	 */
+	trigger: ScriptTrigger,
+	/**
+	 * The script's name.
+	 */
+	name: string,
+	/**
+	 * The plxd terminal it runs in, under the thread.
+	 */
+	terminalId: string,
+	/**
+	 * True for a setup script that holds the agent's first turn until it exits.
+	 */
+	blocking?: boolean,
+	/**
+	 * Where it is.
+	 */
+	status: ScriptStatus,
+	/**
+	 * Its exit code, once it exited.
+	 */
+	exitCode?: number,
+	/**
+	 * Why it couldn't start.
+	 */
+	error?: string, } | { "kind": "thread.checkpoint",
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * The turn: its run in `orchestration/threadRuns`.
+	 */
+	turnId: TurnId,
+	/**
+	 * That run's ordinal, which names the checkpoint.
+	 */
+	ordinal: number,
+	/**
+	 * The checkpoint.
+	 */
+	checkpoint: TurnCheckpoint, } | { "kind": "thread.reverted",
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * The run it went back to, or 0 for the thread's start.
+	 */
+	ordinal: number,
+	/**
+	 * The runs it undid, oldest first, now `rolledBack`.
+	 */
+	turns: Array<TurnId>,
+	/**
+	 * Whether the files went back too.
+	 */
+	restoreFiles?: boolean,
 };
+
+/**
+ * One of an agent's background tasks still running (PLX-777): a command it started in the
+ * background, a Monitor, or one of its own subagents. `agent/stopTask` stops it.
+ */
+export type AgentBackgroundTask = {
+	/**
+	 * The CLI's id for it, which `agent/stopTask` takes.
+	 */
+	taskId: string,
+	/**
+	 * What it is.
+	 */
+	kind: AgentBackgroundKind,
+	/**
+	 * What it does, as the agent described it, such as `Watching pull request #746`.
+	 */
+	description: string,
+	/**
+	 * For one of the agent's own subagents, the call that started it, as its `subagent` items
+	 * name it, so a subagent still running after its parent's turn ended shows as working
+	 * (PLX-929). Absent for other kinds and from an older plxd.
+	 */
+	callId?: string,
+};
+
+/**
+ * What an [`AgentBackgroundTask`] is.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
+ */
+export type AgentBackgroundKind = "command" | "monitor" | "agent";
 
 /**
  * Why a run failed, for code to match on.
  *
- * A newer wispd may send a kind this version does not know; treat it as unknown.
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
  */
-export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "commitFailed" | "internal";
+export type AgentFailureKind = "notSignedIn" | "rateLimited" | "policyViolation" | "unexpectedApiKey" | "vendorError" | "crashed" | "spawnFailed" | "setupFailed" | "commitFailed" | "internal";
 
 /**
  * What `agent/accept` did to the project's repository.
  */
 export type AgentMerge = {
 	/**
-	 * The commit the branch points at now: the run's commit, or wispd's merge commit.
+	 * The commit the branch points at now: the run's commit, or plxd's merge commit.
 	 */
 	commit: string,
 	/**
@@ -1637,14 +4257,14 @@ export type AgentMerge = {
 /**
  * How `agent/accept` brought a run's commit into the project's branch.
  *
- * A newer wispd may send a value this version does not know; treat it as unknown.
+ * A newer plxd may send a value this version does not know; treat it as unknown.
  */
 export type AgentMergeKind = "fastForward" | "merge" | "upToDate";
 
 /**
  * How one CLI process of a run ended.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown.
+ * A newer plxd may send a status this version does not know; treat it as unknown.
  */
 export type AgentOutcome = { "status": "completed",
 	/**
@@ -1664,7 +4284,7 @@ export type AgentOutcome = { "status": "completed",
 /**
  * One thing in a run's transcript: a normalized event from its CLI (0004), by `kind`.
  *
- * A newer wispd may send kinds that are not listed here; skip them.
+ * A newer plxd may send kinds that are not listed here; skip them.
  */
 export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
@@ -1681,20 +4301,40 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	turnId?: TurnId,
 	/**
 	 * A follow-up's message, as `agent/send` took it, cut short when it is long. Absent for
-	 * the prompt's turn, whose text is the run's `prompt`, and in logs from before wispd
+	 * the prompt's turn, whose text is the run's `prompt`, and in logs from before plxd
 	 * recorded it.
 	 */
 	text?: string,
 	/**
-	 * True for a wake-up (RYA-42, decision 0025): a turn wispd sent a project's coordinator
-	 * on its own, not the user, because runs it started finished. `text` lists them.
+	 * True for a wake-up (PLX-42, decision 0025): a turn plxd sent an orchestrator
+	 * on its own, not the user, because runs it started finished. `text` lists them. Also
+	 * true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
+	 * 0049).
 	 */
 	wake?: boolean,
 	/**
-	 * The images sent with the turn's message, the prompt's or a follow-up's, in order, for
-	 * `agent/image` (RYA-191). Absent when it had none.
+	 * True for a turn plxd sent that clients draw nothing for, such as a pull request watch's
+	 * update (PLX-1247). `wake` is true too. Its row stays in the transcript, so what refers
+	 * to its turn still finds it.
 	 */
-	images?: Array<ImageId>, } | { "kind": "textDelta",
+	hidden?: boolean,
+	/**
+	 * The thread that sent a follow-up through its Parallax tools (0041), as `agent/send`'s
+	 * `from` named it. Absent for the user's own message and for the prompt's turn, whose
+	 * sender is the thread's `parent`.
+	 */
+	from?: RunId,
+	/**
+	 * The images sent with the turn's message, the prompt's or a follow-up's, in order, for
+	 * `agent/image` (PLX-191). Absent when it had none.
+	 */
+	images?: Array<ImageId>,
+	/**
+	 * The threads attached to the turn's message as context, in order (PLX-372). The agent
+	 * got a summary of each ahead of the message, which `text` and the run's `prompt` leave
+	 * out. Absent when it had none.
+	 */
+	threads?: Array<RunId>, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -1735,7 +4375,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * What the tool returned, when the vendor includes it, cut short when it is long.
 	 */
-	output?: string, } | { "kind": "reasoning",
+	output?: string,
+	/**
+	 * The images the tool returned, such as a device screenshot (PLX-640), in order, for
+	 * `agent/image`. Absent when it returned none.
+	 */
+	images?: Array<ImageId>, } | { "kind": "reasoning",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -1751,7 +4396,19 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The message.
 	 */
-	detail: string, } | { "kind": "turnFinished",
+	detail: string, } | { "kind": "contextCompaction",
+	/**
+	 * Whether it's finished.
+	 */
+	done: boolean, } | { "kind": "epoch",
+	/**
+	 * The new session's number, from 1 for the orchestrator's first.
+	 */
+	epoch: number,
+	/**
+	 * Why the last one ended.
+	 */
+	reason: OrchestratorSessionEnd, } | { "kind": "turnFinished",
 	/**
 	 * The turn's id, as its `turnStarted` had it.
 	 */
@@ -1759,11 +4416,36 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The turn's final text, when the vendor reports one.
 	 */
-	result?: string, } | { "kind": "followUpDropped",
+	result?: string,
+	/**
+	 * Where the vendor's session stood when the turn ended, which a revert to this turn
+	 * resumes at (0062): Claude's last transcript entry. Absent for other vendors.
+	 */
+	cursor?: string,
+	/**
+	 * The vendor session `cursor` is in.
+	 */
+	sessionId?: string, } | { "kind": "followUpDropped",
 	/**
 	 * The follow-up's turn id.
 	 */
-	turnId: TurnId, } | { "kind": "usage",
+	turnId: TurnId, } | { "kind": "interrupted",
+	/**
+	 * The thread that stopped it.
+	 */
+	from: RunId, } | { "kind": "requestUsage",
+	/**
+	 * The provider instance that made the request.
+	 */
+	backend: string,
+	/**
+	 * The account charged for the request, including fallback key accounts.
+	 */
+	accountId: string,
+	/**
+	 * The provider's request measurements. Missing values are unknown.
+	 */
+	usage: AgentRequestUsage, } | { "kind": "usage",
 	/**
 	 * The model, when the vendor breaks usage down by model.
 	 */
@@ -1791,8 +4473,202 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * A short description.
 	 */
-	detail: string,
+	detail: string, } | { "kind": "approvalRequested",
+	/**
+	 * The request's id.
+	 */
+	approvalId: ApprovalId,
+	/**
+	 * The tool, in the vendor's naming, such as `Bash` or `ExitPlanMode`.
+	 */
+	toolName: string,
+	/**
+	 * The tool's input as the vendor sent it, such as `ExitPlanMode`'s `plan`, or
+	 * `{"truncated": true, "bytes": n}` when it was too large to forward.
+	 */
+	input: JsonValue,
+	/**
+	 * The tool call's id, which its `toolCall` and `toolResult` carry, when the vendor
+	 * says.
+	 */
+	callId?: string,
+	/**
+	 * Why the CLI asks, such as a safety check's warning, with terminal escapes removed.
+	 */
+	reason?: string,
+	/**
+	 * The path that made the CLI ask, when one did.
+	 */
+	blockedPath?: string,
+	/**
+	 * The vendor's id for the subagent asking, when one of the agent's own subagents asks.
+	 */
+	subagent?: string,
+	/**
+	 * The rules that `always` adds for the rest of the CLI process, such as
+	 * `Bash(pnpm test:*)`. Absent when the request offers none.
+	 */
+	alwaysAllow?: Array<string>,
+	/**
+	 * True when the request is a question for the user rather than one action to allow,
+	 * such as `ExitPlanMode`'s plan: show its input in full.
+	 */
+	interactive?: boolean,
+	/**
+	 * When plxd denies it if nobody has answered, in RFC 3339 UTC. Since PLX-726 a request
+	 * waits until it's answered, so plxd sends the latest time there is.
+	 */
+	expiresAt: string, } | { "kind": "approvalResolved",
+	/**
+	 * The request's id.
+	 */
+	approvalId: ApprovalId,
+	/**
+	 * What it came to.
+	 */
+	decision: AgentApprovalDecision,
+	/**
+	 * Who or what decided it.
+	 */
+	by: AgentApprovalBy,
+	/**
+	 * True when it was allowed for the rest of the CLI process as well.
+	 */
+	always?: boolean,
+	/**
+	 * The user's message to the agent with a denial, cut short when it is long.
+	 */
+	message?: string,
+	/**
+	 * What the user answered a question with, one entry per question, each cut short when
+	 * it is long (PLX-245).
+	 */
+	answers?: Array<string>, } | { "kind": "subagent",
+	/**
+	 * The tool call that started the subagent, whose `toolCall` names its task.
+	 */
+	callId: string,
+	/**
+	 * The subagent's type, such as `general-purpose`, when the vendor says.
+	 */
+	agentType?: string,
+	/**
+	 * The model that wrote the item, when the vendor says.
+	 */
+	model?: string,
+	/**
+	 * The item.
+	 */
+	item: AgentOutputItem, } | { "kind": "subagentFinished",
+	/**
+	 * The tool call that started it.
+	 */
+	callId: string,
+	/**
+	 * How it ended.
+	 */
+	status: AgentSubagentStatus,
+	/**
+	 * Its final report, when the vendor includes it, cut short when it is long.
+	 */
+	summary?: string, } | { "kind": "secretRequested",
+	/**
+	 * The request's id, which `secret/answer` names.
+	 */
+	requestId: string,
+	/**
+	 * What the agent needs, such as `GitHub webhook secret`.
+	 */
+	label: string,
+	/**
+	 * What it is for, and where the user gets it.
+	 */
+	reason: string,
+	/**
+	 * A hint for the input.
+	 */
+	placeholder?: string,
+	/**
+	 * How the agent gets the answer. Absent means `secretRef`. With `file`, its commands can
+	 * read the value, so the card must say so.
+	 */
+	delivery?: SecretDelivery,
+	/**
+	 * What the user gives (0099). Absent, as on an older item, means what `delivery` used
+	 * to imply: `env` with `file`, else `value`.
+	 */
+	input?: SecretInput,
+	/**
+	 * With `input: file`: the extensions to offer, such as `.p8`. Absent means any.
+	 */
+	accept?: Array<string>, } | { "kind": "secretResolved",
+	/**
+	 * The request's id.
+	 */
+	requestId: string,
+	/**
+	 * What came of it.
+	 */
+	status: SecretStatus,
 };
+
+/**
+ * Who or what decided a permission request.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type AgentApprovalBy = "user" | "timeout" | "cancel" | "stop" | "agent";
+
+/**
+ * What a permission request came to.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type AgentApprovalDecision = "allowed" | "denied" | "expired" | "withdrawn";
+
+/**
+ * Measurements from the latest main-session model request, never cumulative billing totals.
+ */
+export type AgentRequestUsage = {
+	/**
+	 * The actual model when the provider reports it.
+	 */
+	model?: string,
+	/**
+	 * Claude's request input, Codex's last request total, or ACP's current context tokens.
+	 */
+	contextTokens?: number,
+	/**
+	 * The context window reported by the provider, never inferred from the model catalog.
+	 */
+	contextWindow?: number,
+	/**
+	 * Request input including cached input. The denominator for cache utilization.
+	 */
+	inputTokens?: number,
+	/**
+	 * Request input served from cache. Missing differs from zero.
+	 */
+	cachedInputTokens?: number,
+	/**
+	 * Output tokens behind the latest approximate speed sample. Paired with `output_ms`.
+	 */
+	outputTokens?: number,
+	/**
+	 * Milliseconds those output tokens took by the provider's own timing: the time Claude's
+	 * main-session responses streamed in the last turn (its API time for the turn when it streamed
+	 * no partial messages), or `OpenCode`'s text and reasoning streaming time. Never wall-clock
+	 * turn time.
+	 */
+	outputMs?: number,
+};
+
+/**
+ * How one of an agent's own subagents ended (PLX-382).
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type AgentSubagentStatus = "completed" | "failed" | "stopped";
 
 /**
  * One item of an agent's checklist.
@@ -1811,22 +4687,56 @@ export type AgentTodoItem = {
 /**
  * How far along a checklist item is.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown.
+ * A newer plxd may send a status this version does not know; treat it as unknown.
  */
 export type AgentTodoStatus = "pending" | "inProgress" | "completed";
 
 /**
  * How a tool call ended.
  *
- * A newer wispd may send a status this version does not know; treat it as unknown.
+ * A newer plxd may send a status this version does not know; treat it as unknown.
  */
 export type AgentToolStatus = "ok" | "error" | "denied";
 
 /**
- * A stored image's id (RYA-191, decision 0026): a version 7 UUID that wispd generates once a
+ * A permission request's id: a version 7 UUID that plxd generates when a run's CLI asks.
+ * `approvalRequested` carries it, and `agent/approve` and `approvalResolved` name it.
+ */
+export type ApprovalId = string;
+
+/**
+ * A stored image's id (PLX-191, decision 0026): a version 7 UUID that plxd generates once a
  * message's image reaches the CLI. `turnStarted` lists them, and `agent/image` serves them.
  */
 export type ImageId = string;
+
+/**
+ * Why an orchestrator session ended (PLX-937, decision 0079).
+ *
+ * A newer plxd may send a reason this version does not know; treat it as unknown.
+ */
+export type OrchestratorSessionEnd = "compactedOut" | "notResumable" | "userFresh" | "backendChange";
+
+/**
+ * How an agent gets the answer to a secret request (0098).
+ *
+ * A newer client may send a delivery this version does not know; plxd refuses it.
+ */
+export type SecretDelivery = "secretRef" | "file";
+
+/**
+ * What the user gives to a secret request, which picks the card's input (0099).
+ *
+ * A newer client may send an input this version does not know; plxd refuses it.
+ */
+export type SecretInput = "value" | "env" | "file";
+
+/**
+ * How a secret request stands (0063).
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type SecretStatus = "pending" | "saved" | "declined" | "cancelled";
 
 /**
  * The part of a run that changes while it runs, as `agent.updated` reports it. The rest of
@@ -1842,6 +4752,15 @@ export type AgentRunState = {
 	 */
 	accountId: string,
 	/**
+	 * The backend it runs on, which `agent/send`'s `account` can move it to. Absent from a plxd
+	 * without `sendAccount`, whose runs never move.
+	 */
+	backend?: string,
+	/**
+	 * The run's provider history, as `AgentRun.backends` (PLX-1214).
+	 */
+	backends?: Array<string>,
+	/**
 	 * The vendor's session id, once the CLI reported it.
 	 */
 	sessionId?: string,
@@ -1850,25 +4769,128 @@ export type AgentRunState = {
 	 */
 	error?: string,
 	/**
-	 * Its latest commit, once wispd made one.
+	 * Its latest commit, once plxd made one.
 	 */
 	diff?: DiffSummary,
 	/**
-	 * Its model, which `agent/send` can change (RYA-163). Absent means the CLI's default.
+	 * Its model, which `agent/send` can change (PLX-163). Absent means the CLI's default.
 	 */
 	model?: string,
 	/**
-	 * Its effort, which `agent/send` can change (RYA-161). Absent means the CLI's default.
+	 * Its effort, which `agent/send` can change (PLX-161). Absent means the CLI's default.
 	 */
 	effort?: AgentEffort,
 	/**
-	 * Its permission, which `agent/send` can change (RYA-161). Absent means `edit`.
+	 * Its context window in tokens, which `agent/send` can change. Absent means the CLI's
+	 * default.
+	 */
+	contextWindow?: number,
+	/**
+	 * Whether it runs in fast mode, which `agent/send` can change. Absent means the CLI's
+	 * default.
+	 */
+	fast?: boolean,
+	/**
+	 * Its permission, which `agent/send` can change (PLX-161). Absent means `edit`.
 	 */
 	permission?: AgentPermission,
+	/**
+	 * Its linked pull requests, as `AgentRun.pullRequests` (PLX-318). Absent means none.
+	 */
+	pullRequests?: Array<string>,
+	/**
+	 * When plxd resumes it, as `AgentRun.resumeAt`. Absent once it doesn't wait.
+	 */
+	resumeAt?: string,
+	/**
+	 * Its auto-resume override, as `AgentRun.autoResume`. Absent means the host's setting.
+	 */
+	autoResume?: boolean,
+	/**
+	 * Its worktree's branch, sent only when plxd renamed it after naming the thread (0058).
+	 * Absent leaves `AgentRun.branch` as it was.
+	 */
+	branch?: string,
 	/**
 	 * When it changed, in RFC 3339 UTC.
 	 */
 	updatedAt: string,
+};
+
+/**
+ * A finished turn rewritten in place as one `agent.output` row (0052).
+ */
+export type Compacted = {
+	/**
+	 * The turn's first `seq`. A reader that meets this row first drops any `agent.output` of
+	 * the same run with `seq` in [`from`, this row's `seq`), then takes the row.
+	 */
+	from: number,
+};
+
+/**
+ * One item of an orchestrator's inbox.
+ */
+export type InboxItem = {
+	/**
+	 * The item's id.
+	 */
+	id: InboxItemId,
+	/**
+	 * What it says.
+	 */
+	kind: InboxKind,
+	/**
+	 * The run it is about: a child, or the orchestrator when its wake-ups paused.
+	 */
+	run: RunId,
+	/**
+	 * One line for people, such as the child's task and its diff stats.
+	 */
+	text: string,
+	/**
+	 * When plxd added it, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+	/**
+	 * When a client first marked it seen with `inbox/seen` (0033's read model). Absent if never.
+	 */
+	seenAt?: string,
+};
+
+/**
+ * Identifies one inbox item. plxd generates it.
+ */
+export type InboxItemId = string;
+
+/**
+ * What an inbox item says, by 0043's kinds.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown, and don't end
+ * a `switch` over this type in an exhaustiveness assertion.
+ */
+export type InboxKind = "needsYou" | "done" | "failed" | "decided" | "learned";
+
+/**
+ * A message waiting in a run's queue.
+ */
+export type QueuedMessage = {
+	/**
+	 * The message's `turnId` from `agent/send`, which its turn keeps once it is sent.
+	 */
+	id: TurnId,
+	/**
+	 * The message.
+	 */
+	text: string,
+	/**
+	 * How many images go with it.
+	 */
+	images: number,
+	/**
+	 * The threads attached to it (PLX-372), whose summaries the CLI gets with it.
+	 */
+	threads: Array<RunId>,
 };
 
 /**
@@ -1888,21 +4910,54 @@ export type Repo = {
 	 */
 	path: string,
 	/**
-	 * True for wispd's scratch entry, which holds the threads with no repo. Its `path` is the
+	 * True for plxd's scratch entry, which holds the threads with no repo. Its `path` is the
 	 * folder that holds each such thread's own scratch repository.
 	 */
 	scratch?: boolean,
 	/**
+	 * True for a Project (0069): a group of chats the user made, with no repository of theirs.
+	 * `path` is the repository plxd made for it. Behind the `projects` capability.
+	 */
+	project?: boolean,
+	/**
+	 * The icon the user chose or the app took from the repository (PLX-1272), in a project's
+	 * shape (0032), behind the `threadAttention` capability (0033). Absent means the app's
+	 * default: the name's initials.
+	 */
+	icon?: ChosenIcon,
+	/**
 	 * When the entry was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
+	/**
+	 * A Project's instructions, which plxd pins to the system prompt of every thread in it (0090),
+	 * behind the `projectContext` capability. Absent when it has none.
+	 */
+	instructions?: string,
+	/**
+	 * The files a Project gives every thread in it (0090), as absolute paths on the host, such as
+	 * `host/upload` answers, behind `projectContext`. Each thread's system prompt lists them.
+	 */
+	files?: Array<string>,
 };
 
 /**
  * A repo entry's id: a version 7 UUID that the client generates once and sends again on
- * every retry of `repo/add`. wispd generates the scratch entry's.
+ * every retry of `repo/add`. plxd generates the scratch entry's.
  */
 export type RepoId = string;
+
+/**
+ * Where a script is.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type ScriptStatus = "running" | "done" | "failed" | "cancelled" | "interrupted";
+
+/**
+ * When a script ran.
+ */
+export type ScriptTrigger = "setup" | "settle";
 
 /**
  * A normal thread: what threads add to its run.
@@ -1913,7 +4968,9 @@ export type Thread = {
 	 */
 	id: RunId,
 	/**
-	 * Its repo entry: the scratch entry for a thread with no repo.
+	 * Its repo entry: the scratch entry for a thread with no repo. An orchestrator's child started
+	 * with `thread/start`'s `project` has the orchestrator's id here instead (0042), while a
+	 * thread `orchestrator/fromThreads` made an orchestrator's child keeps its repo entry.
 	 */
 	repo: RepoId,
 	/**
@@ -1924,11 +4981,150 @@ export type Thread = {
 	 * When it was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
+	/**
+	 * When a client last marked it seen with `thread/update` (0033). The app counts a run that
+	 * stopped after this as one the user hasn't seen. Absent if never.
+	 */
+	seenAt?: string,
+	/**
+	 * Until when the user snoozed it (0033). A time in the past means it isn't snoozed.
+	 */
+	snoozedUntil?: string,
+	/**
+	 * When its newest message was sent: its newest turn, or its creation (0033). Absent from a
+	 * plxd without `threadAttention`.
+	 */
+	lastPromptAt?: string,
+	/**
+	 * When the user last sent it a message: its newest turn the user wrote, or its creation
+	 * (PLX-1012). Wake-ups and other threads' messages don't move it, so the app's Working clock
+	 * spans them. Absent from an older plxd.
+	 */
+	lastUserPromptAt?: string,
+	/**
+	 * The run that launched it (0041), from `thread/start`'s `parent`. Absent for a thread the
+	 * user started, and once the parent is deleted.
+	 */
+	parent?: RunId,
+	/**
+	 * The run and turn it was forked from (0041). Absent once that run is deleted.
+	 */
+	forkedFrom?: ForkedFrom,
+	/**
+	 * Its title (0041). Absent leaves it to the client, which shows its prompt's first line.
+	 */
+	title?: string,
+	/**
+	 * Whether the user or an agent marked it settled: nothing left to do (0041).
+	 */
+	settled?: boolean,
+	/**
+	 * Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
+	 */
+	pinned?: boolean,
+	/**
+	 * The Project the user added it to with `thread/setProject` (0090), where it works elsewhere.
+	 * Absent for a thread in no Project, and for one started in a Project, whose `repo` is the
+	 * Project.
+	 */
+	project?: RepoId,
+	/**
+	 * The orchestrator whose orchestration it runs, when it is an orchestrator thread (0093),
+	 * behind `orchestratorThreads`. Its `repo` is the orchestrator too, as its children's is.
+	 */
+	orchestrator?: ScopeId,
+	/**
+	 * Why an orchestrator thread last un-archived itself (0093), behind `orchestratorThreads`.
+	 * Absent once the user archives or un-archives it.
+	 */
+	wakeReason?: WakeReason,
 };
 
 /**
+ * Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
+ */
+export type ForkedFrom = {
+	/**
+	 * The run it was forked from.
+	 */
+	run: RunId,
+	/**
+	 * The turn of that run it was forked at.
+	 */
+	turn: TurnId,
+};
+
+/**
+ * Why an orchestrator thread un-archived itself (0093). A newer plxd may send a kind this version
+ * does not know; treat it as unknown.
+ */
+export type WakeReason = { "kind": "childFinished",
+	/**
+	 * The child's run.
+	 */
+	child: RunId, } | { "kind": "schedule",
+	/**
+	 * The task's id.
+	 */
+	task: string,
+	/**
+	 * The task's title.
+	 */
+	title: string, } | { "kind": "pullRequest",
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string, } | { "kind": "needsYou",
+	/**
+	 * The run it is about: a child, or the orchestrator's own.
+	 */
+	run: RunId,
+};
+
+/**
+ * A turn's checkpoint (0062): a git ref, `refs/parallax/checkpoints/<thread>/<ordinal>`, holding
+ * the thread's folder as the turn left it.
+ */
+export type TurnCheckpoint = {
+	/**
+	 * Whether its ref holds the folder.
+	 */
+	status: CheckpointStatus,
+	/**
+	 * The files the turn changed, with their line counts, by path. Empty unless `ready`.
+	 */
+	files?: Array<CheckpointFile>,
+};
+
+/**
+ * One file a turn changed, as `git diff --numstat` counts it. A binary file has no lines.
+ */
+export type CheckpointFile = {
+	/**
+	 * Its path, from the folder's root.
+	 */
+	path: string,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+};
+
+/**
+ * Where a checkpoint is (T3 Code's).
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type CheckpointStatus = "ready" | "missing" | "error" | "stale";
+
+/**
  * Params of `agent/image`: one image sent with a run's messages, by an id from its
- * `turnStarted` (RYA-191). Its result is the [`PromptImage`] as it was sent.
+ * `turnStarted` (PLX-191), or one a tool returned, by an id from its `toolResult` (PLX-640). Its
+ * result is the [`PromptImage`] as it was sent or returned.
  */
 export type AgentImageParams = {
 	/**
@@ -1939,6 +5135,652 @@ export type AgentImageParams = {
 	 * The image.
 	 */
 	imageId: ImageId,
+};
+
+/**
+ * Params of `agent/attach`: a page or recording one of a run's tools made, kept with the run's
+ * images (PLX-639). Its result names it for `agent/image`.
+ */
+export type AgentAttachParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The attachment, of type `text/html` or `video/webm`.
+	 */
+	attachment: PromptImage,
+};
+
+/**
+ * Result of `agent/attach`.
+ */
+export type AgentAttachResult = {
+	/**
+	 * The attachment's id, for `agent/image`.
+	 */
+	imageId: ImageId,
+};
+
+/**
+ * Params of `preview/call`: one of thread `runId`'s `preview_*` tools, as its MCP call named it.
+ */
+export type PreviewCallParams = {
+	/**
+	 * The calling thread.
+	 */
+	runId: RunId,
+	/**
+	 * The tool, such as `preview_click`.
+	 */
+	tool: string,
+	/**
+	 * The tool's arguments.
+	 */
+	arguments: JsonValue,
+};
+
+/**
+ * Result of `preview/call`: what the tool answers the model.
+ */
+export type PreviewCallResult = {
+	/**
+	 * The text, JSON in T3's shape when the tool worked.
+	 */
+	text: string,
+	/**
+	 * A PNG of the page, in base64, when the tool returns one.
+	 */
+	image?: string,
+	/**
+	 * Whether `text` says why the tool failed.
+	 */
+	error?: boolean,
+};
+
+/**
+ * Params of `preview/list`: one thread's tabs.
+ */
+export type PreviewListParams = {
+	/**
+	 * The thread.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `preview/list`.
+ */
+export type PreviewListResult = {
+	/**
+	 * The thread's tabs, oldest first.
+	 */
+	tabs: Array<PreviewTab>,
+};
+
+/**
+ * An agent's browser tab.
+ */
+export type PreviewTab = {
+	/**
+	 * Its id within its thread, such as `tab-1`.
+	 */
+	tabId: string,
+	/**
+	 * The page it shows.
+	 */
+	url: string,
+	/**
+	 * The page's title, when known.
+	 */
+	title: string,
+	/**
+	 * Whether the page is loading.
+	 */
+	loading: boolean,
+	/**
+	 * Whether the user controls it, so the agent's actions wait.
+	 */
+	human: boolean,
+	/**
+	 * Whether the agent is recording it.
+	 */
+	recording: boolean,
+	/**
+	 * Whether its viewport has a fixed size, rather than filling the app's panel.
+	 */
+	fixed?: boolean,
+};
+
+/**
+ * Params of `preview/frame`: the tab's newest frame after `after`. plxd waits up to 10 s for
+ * one, then answers with the last.
+ */
+export type PreviewFrameParams = {
+	/**
+	 * The thread.
+	 */
+	runId: RunId,
+	/**
+	 * The tab.
+	 */
+	tabId: string,
+	/**
+	 * The last frame's `seq` the caller has, 0 for none.
+	 */
+	after: number,
+};
+
+/**
+ * Result of `preview/frame`.
+ */
+export type PreviewFrameResult = {
+	/**
+	 * The frame's number, 0 before the first.
+	 */
+	seq: number,
+	/**
+	 * The frame, a JPEG in base64, empty before the first.
+	 */
+	data: string,
+	/**
+	 * The page's width in CSS pixels, which input coordinates use.
+	 */
+	width: number,
+	/**
+	 * The page's height in CSS pixels.
+	 */
+	height: number,
+	/**
+	 * The tab as it stands.
+	 */
+	tab: PreviewTab,
+};
+
+/**
+ * Params of `preview/input`: the user's input to a tab. Anything but handing control back or
+ * sizing the viewport takes control first.
+ */
+export type PreviewInputParams = {
+	/**
+	 * The thread.
+	 */
+	runId: RunId,
+	/**
+	 * The tab.
+	 */
+	tabId: string,
+	/**
+	 * The input.
+	 */
+	input: PreviewInput,
+};
+
+/**
+ * One piece of the user's input. Coordinates are the page's CSS pixels.
+ */
+export type PreviewInput = { "kind": "control",
+	/**
+	 * True to take it.
+	 */
+	take: boolean, } | { "kind": "mouse",
+	/**
+	 * Down, up, or a move.
+	 */
+	event: PreviewMouse,
+	/**
+	 * Where, from the page's left.
+	 */
+	x: number,
+	/**
+	 * Where, from the page's top.
+	 */
+	y: number,
+	/**
+	 * `left`, `middle`, or `right`, for a press or release.
+	 */
+	button?: string,
+	/**
+	 * 1 for a click, 2 for a double-click.
+	 */
+	clickCount?: number,
+	/**
+	 * Alt 1, Control 2, Meta 4, Shift 8, as `DevTools` adds them.
+	 */
+	modifiers: number, } | { "kind": "wheel",
+	/**
+	 * Where, from the page's left.
+	 */
+	x: number,
+	/**
+	 * Where, from the page's top.
+	 */
+	y: number,
+	/**
+	 * How far right, in CSS pixels.
+	 */
+	deltaX: number,
+	/**
+	 * How far down, in CSS pixels.
+	 */
+	deltaY: number, } | { "kind": "key",
+	/**
+	 * True going down, false coming up.
+	 */
+	down: boolean,
+	/**
+	 * The key as the DOM names it, such as `a` or `Enter`.
+	 */
+	key: string,
+	/**
+	 * The physical key, such as `KeyA`.
+	 */
+	code?: string,
+	/**
+	 * What it types, for a key that types.
+	 */
+	text?: string,
+	/**
+	 * Alt 1, Control 2, Meta 4, Shift 8.
+	 */
+	modifiers: number, } | { "kind": "viewport",
+	/**
+	 * The width.
+	 */
+	width: number,
+	/**
+	 * The height.
+	 */
+	height: number, } | { "kind": "fixed",
+	/**
+	 * The width.
+	 */
+	width: number,
+	/**
+	 * The height.
+	 */
+	height: number, } | { "kind": "fill" } | { "kind": "navigate",
+	/**
+	 * The page, as the address bar's text.
+	 */
+	url: string,
+};
+
+/**
+ * A mouse event's kind.
+ */
+export type PreviewMouse = "down" | "up" | "move";
+
+/**
+ * Result of `preview/input`.
+ */
+export type PreviewInputResult = Record<symbol, never>;
+
+/**
+ * Params of `device/state`.
+ */
+export type DeviceStateParams = {
+	/**
+	 * A thread whose agent's open devices to include in `open`.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `device/state`: what the host can run, its devices, and the hub.
+ */
+export type DeviceStateResult = {
+	/**
+	 * iOS, then Android.
+	 */
+	platforms: Array<DevicePlatformState>,
+	/**
+	 * Every simulator and emulator, booted first.
+	 */
+	devices: Array<DeviceInfo>,
+	/**
+	 * The device hub.
+	 */
+	hub: DeviceHubState,
+	/**
+	 * The devices `runId`'s agent opened with `device_open`, most recent last.
+	 */
+	open: Array<string>,
+};
+
+/**
+ * How the device hub stands. It installs only when the user asks (`device/setup`).
+ */
+export type DeviceHubState = {
+	/**
+	 * Whether the pinned hub is installed.
+	 */
+	installed: boolean,
+	/**
+	 * Whether it is being installed.
+	 */
+	installing: boolean,
+	/**
+	 * Why the last install or start failed.
+	 */
+	failure?: string,
+};
+
+/**
+ * A simulator, emulator, or phone.
+ */
+export type DeviceInfo = {
+	/**
+	 * The simulator's udid, the adb serial, or an AVD's name while it isn't running.
+	 */
+	id: string,
+	/**
+	 * Its platform.
+	 */
+	platform: DevicePlatform,
+	/**
+	 * Such as "iPhone 17 Pro".
+	 */
+	name: string,
+	/**
+	 * Such as "iOS 26.5" or "Android 15".
+	 */
+	version: string,
+	/**
+	 * Whether it is running.
+	 */
+	booted: boolean,
+	/**
+	 * A phone over USB or Wi-Fi rather than an emulator.
+	 */
+	physical?: boolean,
+};
+
+/**
+ * A device's platform.
+ */
+export type DevicePlatform = "ios" | "android";
+
+/**
+ * Whether the host can run a platform's devices.
+ */
+export type DevicePlatformState = {
+	/**
+	 * The platform.
+	 */
+	platform: DevicePlatform,
+	/**
+	 * Why it can't, such as a missing Android SDK. Absent when it can.
+	 */
+	unavailable?: string,
+	/**
+	 * What it can run but not show yet, such as Android video without ffmpeg.
+	 */
+	warning?: string,
+	/**
+	 * Whether `device/create` can make one of its devices here.
+	 */
+	canCreate?: boolean,
+};
+
+/**
+ * Params of `device/setup`: installs the device hub in the background.
+ */
+export type DeviceSetupParams = Record<symbol, never>;
+
+/**
+ * Result of `device/setup` and `device/shutdown`.
+ */
+export type DeviceOkResult = Record<symbol, never>;
+
+/**
+ * Params of `device/boot`, `device/shutdown`, and `device/screenshot`.
+ */
+export type DeviceTarget = {
+	/**
+	 * The device, from `device/state`.
+	 */
+	deviceId: string,
+	/**
+	 * Its platform.
+	 */
+	platform: DevicePlatform,
+};
+
+/**
+ * Result of `device/boot` and `device/create`.
+ */
+export type DeviceResult = {
+	/**
+	 * The device as it stands now.
+	 */
+	device: DeviceInfo,
+};
+
+/**
+ * Params of `device/create`: a new iPhone Simulator on the newest iOS runtime, or a new Pixel
+ * emulator on the newest system image the Android SDK has.
+ */
+export type DeviceCreateParams = {
+	/**
+	 * Which platform's device to make. Absent makes an iPhone.
+	 */
+	platform?: DevicePlatform,
+};
+
+/**
+ * Result of `device/screenshot`.
+ */
+export type DeviceScreenshotResult = {
+	/**
+	 * A PNG of the screen, in base64.
+	 */
+	png: string,
+};
+
+/**
+ * Result of `device/chrome`: the device as Xcode's Simulator or Android Studio's emulator draws
+ * it, from the host's own Xcode or Android Studio.
+ */
+export type DeviceChromeResult = {
+	/**
+	 * The artwork, or absent when there's none.
+	 */
+	chrome?: DeviceChrome,
+};
+
+/**
+ * A device's artwork: its bezel and buttons around its screen, in the artwork's own units (points
+ * for a simulator, pixels for an emulator), in its natural orientation.
+ */
+export type DeviceChrome = {
+	/**
+	 * The whole device's width, side buttons included.
+	 */
+	width: number,
+	/**
+	 * The whole device's height.
+	 */
+	height: number,
+	/**
+	 * Where the screen is.
+	 */
+	screen: DeviceRect,
+	/**
+	 * The screen's shape, an image data URL whose alpha masks it.
+	 */
+	mask?: string,
+	/**
+	 * The radius of the screen's corners, when no mask or layer shapes them.
+	 */
+	cornerRadius?: number,
+	/**
+	 * The bezel, buttons, and overlays, in drawing order.
+	 */
+	layers: Array<DeviceChromeLayer>,
+};
+
+/**
+ * One piece of a device's artwork.
+ */
+export type DeviceChromeLayer = {
+	/**
+	 * Such as `bezel`, `power`, or `volume-up`.
+	 */
+	name: string,
+	/**
+	 * The image, as a data URL.
+	 */
+	image: string,
+	/**
+	 * Where it's drawn.
+	 */
+	rect: DeviceRect,
+	/**
+	 * Whether it's drawn over the screen, as an emulator's camera cutout is.
+	 */
+	above?: boolean,
+	/**
+	 * How far a button moves out while the pointer is over it, as Simulator shows it.
+	 */
+	hoverX?: number,
+};
+
+/**
+ * A rectangle, in points.
+ */
+export type DeviceRect = {
+	/**
+	 * Its left.
+	 */
+	x: number,
+	/**
+	 * Its top.
+	 */
+	y: number,
+	/**
+	 * Its width.
+	 */
+	width: number,
+	/**
+	 * Its height.
+	 */
+	height: number,
+};
+
+/**
+ * Params of `device/stream`: opens a stream to a booted device through the hub, starting the hub
+ * first. Its messages arrive as `device/data` until `device/end`.
+ */
+export type DeviceStreamParams = {
+	/**
+	 * The client's name for it, unique on this connection. Reusing one closes the old stream.
+	 */
+	streamId: string,
+	/**
+	 * The device.
+	 */
+	deviceId: string,
+	/**
+	 * Its platform.
+	 */
+	platform: DevicePlatform,
+	/**
+	 * What it carries.
+	 */
+	kind: DeviceStreamKind,
+};
+
+/**
+ * What a `device/stream` carries.
+ */
+export type DeviceStreamKind = "video" | "control";
+
+/**
+ * Result of `device/stream`: the stream is open.
+ */
+export type DeviceStreamResult = Record<symbol, never>;
+
+/**
+ * Params of `computer/ask`: may thread `runId` use `app`? An app the user always allows answers
+ * at once. Otherwise the run's transcript gets an `approvalRequested` item whose tool is
+ * `computer_use`, whose input is `{"app": app}`, and whose `alwaysAllow` is `[app]`, and the call
+ * waits up to `waitMs` for its `agent/approve`. Asking again for the same app while that request
+ * waits keeps waiting on it, so a caller asks again after each `pending`.
+ */
+export type ComputerAskParams = {
+	/**
+	 * The thread asking.
+	 */
+	runId: RunId,
+	/**
+	 * The app's name, as `computer_list_apps` shows it, such as `Notes`.
+	 */
+	app: string,
+	/**
+	 * How long to wait for the user before answering `pending`, at most 50000, under plxd's
+	 * idle timeout.
+	 */
+	waitMs: number,
+};
+
+/**
+ * Result of `computer/ask`.
+ */
+export type ComputerAskResult = {
+	/**
+	 * Where the request stands.
+	 */
+	status: ComputerAnswer,
+};
+
+/**
+ * Where a `computer/ask` stands.
+ *
+ * A newer plxd may send a value this version does not know; treat it as not allowed.
+ */
+export type ComputerAnswer = "pending" | "allowed" | "always" | "denied" | "stopped";
+
+/**
+ * Params of `computer/status`.
+ */
+export type ComputerStatusParams = {
+	/**
+	 * Ask macOS for the permissions plxd lacks first, which shows its prompts.
+	 */
+	request?: boolean,
+};
+
+/**
+ * Result of `computer/status` and `computer/forget`.
+ */
+export type ComputerStatus = {
+	/**
+	 * plxd may read other apps' windows and act in them: macOS's Accessibility permission.
+	 */
+	accessibility: boolean,
+	/**
+	 * plxd may capture other apps' windows: macOS's Screen Recording permission.
+	 */
+	screenRecording: boolean,
+	/**
+	 * The program macOS lists under both permissions, such as `plxd`.
+	 */
+	program: string,
+	/**
+	 * The apps every thread may use without asking, by name, sorted.
+	 */
+	apps: Array<string>,
+};
+
+/**
+ * Params of `computer/forget`: ask again before a thread uses `app`.
+ */
+export type ComputerForgetParams = {
+	/**
+	 * The app, as `computer/status` lists it.
+	 */
+	app: string,
 };
 
 /**
@@ -1961,7 +5803,7 @@ export type AgentDiffResult = {
 	base: string,
 	/**
 	 * The run's latest commit: the `head` side, and what `agent/accept` merges. Equal to `base`
-	 * until wispd has committed something for the run.
+	 * until plxd has committed something for the run.
 	 */
 	head: string,
 	/**
@@ -2022,7 +5864,7 @@ export type AgentDiffFile = {
 /**
  * How a file differs from the base.
  *
- * A newer wispd may send a status this version does not know; treat it as modified.
+ * A newer plxd may send a status this version does not know; treat it as modified.
  */
 export type AgentFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "typeChanged";
 
@@ -2066,14 +5908,27 @@ export type AgentFileParams = {
 	 * `stat` needs. Absent means false.
 	 */
 	sizeOnly?: boolean,
+	/**
+	 * Where to start reading, in bytes, for one slice of a file of any size (`fileChunks`,
+	 * decision 0074): `content` is the slice, empty past the end, `size` is the whole file's,
+	 * and `tooLarge` is false. Only the `working` side reads slices; another side fails with
+	 * `invalidParams`. Either of `offset` and `length` makes the call a slice; absent `offset`
+	 * means 0.
+	 */
+	offset?: number,
+	/**
+	 * How many bytes a slice reads, at most `fileChunks`' `chunkBytes`, which is also the
+	 * default.
+	 */
+	length?: number,
 };
 
 /**
  * Which side of a run's diff to read.
  *
- * A newer client may send a side this version does not know; wispd refuses it.
+ * A newer client may send a side this version does not know; plxd refuses it.
  */
-export type AgentFileSide = "base" | "head";
+export type AgentFileSide = "base" | "head" | "working";
 
 /**
  * Result of `agent/file`.
@@ -2088,9 +5943,9 @@ export type AgentFileResult = {
 	 */
 	side: AgentFileSide,
 	/**
-	 * The commit it was read from.
+	 * The commit it was read from. Absent for the `working` side.
 	 */
-	commit: string,
+	commit?: string,
 	/**
 	 * Whether the file exists on that side. An added file has no base side, and a deleted file
 	 * no head side.
@@ -2110,6 +5965,124 @@ export type AgentFileResult = {
 	 * Whether it is over `agent/file`'s size cap, so `content` is absent.
 	 */
 	tooLarge: boolean,
+};
+
+/**
+ * Params of `agent/files` (PLX-296): one folder of a run's worktree, or for a Current checkout
+ * thread, its repository's checkout.
+ */
+export type AgentFilesParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The folder, relative to the run's folder, by `agent/file`'s path rules. Absent means the
+	 * run's folder itself.
+	 */
+	path?: string,
+};
+
+/**
+ * Result of `agent/files`.
+ */
+export type AgentFilesResult = {
+	/**
+	 * The folder's entries by name, without `.git` or anything git ignores.
+	 */
+	entries: Array<AgentEntry>,
+	/**
+	 * Whether `entries` was cut short because the folder holds more than one answer lists.
+	 */
+	truncated: boolean,
+	/**
+	 * The run's folder's absolute path on the host (PLX-755), which `present_files` resolves an
+	 * agent's absolute paths against. An older plxd leaves it out.
+	 */
+	folder?: string,
+};
+
+/**
+ * One entry of a folder, from `agent/files`.
+ */
+export type AgentEntry = {
+	/**
+	 * Its name in the folder.
+	 */
+	name: string,
+	/**
+	 * What it is.
+	 */
+	kind: AgentEntryKind,
+	/**
+	 * Its size in bytes, for a file.
+	 */
+	size?: number,
+};
+
+/**
+ * What a folder entry is. Symlinks are never followed.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as a file.
+ */
+export type AgentEntryKind = "file" | "dir" | "symlink";
+
+/**
+ * Params of `agent/fileCreate` (PLX-590): a new empty file or folder in a run's folder, by
+ * `agent/file`'s path rules. Fails if anything is already at `path` or its folder is missing.
+ */
+export type AgentFileCreateParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The new entry, relative to the run's folder.
+	 */
+	path: string,
+	/**
+	 * A folder rather than a file.
+	 */
+	folder: boolean,
+};
+
+/**
+ * Result of `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete`.
+ */
+export type AgentFileEditResult = Record<symbol, never>;
+
+/**
+ * Params of `agent/fileRename` (PLX-590): moves a file, folder, or symlink in a run's folder.
+ * Fails if anything is already at `to`, or `to` is inside `from`.
+ */
+export type AgentFileRenameParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The entry, relative to the run's folder.
+	 */
+	from: string,
+	/**
+	 * Its new path, relative to the run's folder.
+	 */
+	to: string,
+};
+
+/**
+ * Params of `agent/fileDelete` (PLX-590): removes a file, a symlink (never its target), or a
+ * folder with everything in it, from a run's folder.
+ */
+export type AgentFileDeleteParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The entry, relative to the run's folder.
+	 */
+	path: string,
 };
 
 /**
@@ -2175,7 +6148,7 @@ export type AgentRequestChangesParams = {
 };
 
 /**
- * Params of `agent/openPr` (RYA-168): wispd pushes the run's branch to the repository's `origin`
+ * Params of `agent/openPr` (PLX-168): plxd pushes the run's branch to the repository's `origin`
  * on the host, as the user, and opens a pull request for it against the GitHub repository's
  * default branch with `gh`.
  *
@@ -2185,11 +6158,12 @@ export type AgentRequestChangesParams = {
 export type AgentOpenPrParams = {
 	/**
 	 * The run. It must have finished, have a commit, and work in a repository: a thread with no
-	 * repo has no `origin`.
+	 * repo has no `origin`. A Current checkout thread instead pushes the branch its checkout has
+	 * out (PLX-298), and needs one: not a detached HEAD.
 	 */
 	runId: RunId,
 	/**
-	 * The pull request's title, such as the thread's. wispd takes its first line, cut to 256
+	 * The pull request's title, such as the thread's. plxd takes its first line, cut to 256
 	 * characters.
 	 */
 	title: string,
@@ -2207,6 +6181,161 @@ export type AgentOpenPrResult = {
 	 * The pull request's web URL.
 	 */
 	url: string,
+};
+
+/**
+ * Params of `agent/gitStatus`.
+ */
+export type AgentGitStatusParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * The git state of a run's folder: the result of `agent/gitStatus`, and of `agent/commit` and
+ * `agent/push` after they ran.
+ */
+export type GitStatus = {
+	/**
+	 * The branch checked out, or null on a detached HEAD.
+	 */
+	branch: string | null,
+	/**
+	 * How many paths have uncommitted changes, untracked ones included.
+	 */
+	changes: number,
+	/**
+	 * Uncommitted lines added relative to HEAD, including untracked text files.
+	 */
+	insertions?: number,
+	/**
+	 * Uncommitted lines removed relative to HEAD. Binary files contribute zero lines.
+	 */
+	deletions?: number,
+	/**
+	 * The branch's upstream, such as `origin/main`, or null when it has none.
+	 */
+	upstream: string | null,
+	/**
+	 * Commits not on the upstream, or with no upstream, not on any of `origin`'s branches.
+	 */
+	ahead: number,
+	/**
+	 * Whether the repository has an `origin` remote to push to.
+	 */
+	origin: boolean,
+};
+
+/**
+ * Read-only Git status of a repository checkout, behind `repoGitStatus`.
+ */
+export type RepoGitStatusParams = {
+	/**
+	 * The repository entry.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Params of `agent/commit`.
+ */
+export type AgentCommitParams = {
+	/**
+	 * The run. It must not be running.
+	 */
+	runId: RunId,
+	/**
+	 * The commit message, at most 64 KiB, not blank.
+	 */
+	message: string,
+};
+
+/**
+ * Params of `agent/push`.
+ */
+export type AgentPushParams = {
+	/**
+	 * The run. It must not be running, and its folder must have a branch checked out.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `agent/approve`: the user's answer to a run's permission request, from its
+ * `approvalRequested`.
+ *
+ * Idempotent: answering a request that is already resolved changes nothing, and returns how it
+ * was resolved, which may be another answer, a timeout, or a cancel. A run started without
+ * `approvals` has no requests, so any answer for it fails with `approvalNotFound`.
+ */
+export type AgentApproveParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The request.
+	 */
+	approvalId: ApprovalId,
+	/**
+	 * Allow or deny.
+	 */
+	decision: AgentApprovalAnswer,
+	/**
+	 * With `allow`: the tool's input to run with instead of the one it asked with, a JSON
+	 * object of the same shape, at most 1 MiB. Absent runs it as asked.
+	 */
+	input?: JsonValue,
+	/**
+	 * With `allow`: also allow what the request's `alwaysAllow` lists, for the rest of the CLI
+	 * process. Only for a request whose `alwaysAllow` isn't empty.
+	 */
+	always?: boolean,
+	/**
+	 * With `deny`: what to tell the agent, at most 64 KiB. Absent says that the user denied it.
+	 */
+	message?: string,
+	/**
+	 * With `allow`, for a question (PLX-245): what the user answered, one entry per question and
+	 * at most 64 KiB in all, which the transcript shows. The agent reads the answer from `input`.
+	 * A client leaves out what must not be logged, such as a secret.
+	 */
+	answers?: Array<string>,
+};
+
+/**
+ * The user's answer to a permission request.
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentApprovalAnswer = "allow" | "deny";
+
+/**
+ * Result of `agent/approve`: how the request was resolved, as its `approvalResolved` says.
+ */
+export type AgentApproveResult = {
+	/**
+	 * What it came to.
+	 */
+	decision: AgentApprovalDecision,
+	/**
+	 * Who or what decided it: `user` when this answer, or an earlier one, did.
+	 */
+	by: AgentApprovalBy,
+	/**
+	 * True when it was allowed for the rest of the CLI process as well.
+	 */
+	always?: boolean,
+	/**
+	 * The user's message to the agent with a denial.
+	 */
+	message?: string,
+	/**
+	 * What the user answered a question with, one entry per question.
+	 */
+	answers?: Array<string>,
 };
 
 /**
@@ -2228,8 +6357,9 @@ export type ThreadListResult = {
 	 */
 	threads: Array<Thread>,
 	/**
-	 * The `seq` of the last event the snapshot reflects. Subscribe to host-level events with
-	 * `after` set to it.
+	 * The event log's `seq` from before the list was read. Subscribe to host-level events with
+	 * `after` set to it. The list may already reflect some events after it, and replaying them is
+	 * harmless.
 	 */
 	seq: number,
 };
@@ -2263,8 +6393,145 @@ export type RepoAddResult = {
 };
 
 /**
+ * Params of `repo/clone`, behind the `repoClone` capability (PLX-905): clones a repository onto
+ * the host and registers it as `repo/add` does, answering `repo/add`'s result once git is done.
+ *
+ * git never waits on a prompt for a username, password, or SSH passphrase: one it would ask
+ * fails the clone instead. An SSH URL that fails is tried again over HTTPS, which Parallax's
+ * GitHub setup signs in to. A clone git stops reporting progress on for 5 minutes fails. A path
+ * that already holds a clone of the same repository registers it without cloning again; any
+ * other existing path fails with `invalidParams`.
+ */
+export type RepoCloneParams = {
+	/**
+	 * The new entry's id, a version 7 UUID generated by the client, which `repo/cloneProgress`
+	 * takes while it clones.
+	 */
+	id: RepoId,
+	/**
+	 * What `git clone` takes: an HTTPS or SSH URL.
+	 */
+	url: string,
+	/**
+	 * Where it goes: an absolute path, or `~` or a path under it, for the home folder of the user
+	 * plxd runs as. Missing folders above it are made.
+	 */
+	path: string,
+};
+
+/**
+ * Params of `repo/cloneProgress`, behind the `repoClone` capability.
+ */
+export type RepoCloneProgressParams = {
+	/**
+	 * The id a `repo/clone` under way was given.
+	 */
+	id: RepoId,
+};
+
+/**
+ * Result of `repo/cloneProgress`.
+ */
+export type RepoCloneProgressResult = {
+	/**
+	 * git's latest progress line, such as `Receiving objects:  42% (420/1000)`. Absent before
+	 * git reports any, or once the clone is over or unknown.
+	 */
+	progress?: string,
+};
+
+/**
+ * Params of `repo/remote`, behind the `repoClone` capability. Fails with `repoNotFound` for an
+ * unknown entry.
+ */
+export type RepoRemoteParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/remote`.
+ */
+export type RepoRemoteResult = {
+	/**
+	 * The URL of its `origin` remote, which `repo/clone` clones on another host. Absent when it
+	 * has none.
+	 */
+	url?: string,
+};
+
+/**
+ * Params of `repo/logo` (PLX-1272), behind the `repoLogo` capability: finds the repository's own
+ * favicon or logo among the files git doesn't ignore in its checkout, by name and folder, and
+ * reads it. It changes nothing: the app encodes the image and sets it with `repo/update`. Fails
+ * with `repoNotFound` for an unknown entry and `worktreeFailed` when git fails there.
+ */
+export type RepoLogoParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/logo`.
+ */
+export type RepoLogoResult = {
+	/**
+	 * The best match. Absent when the repository has none, and always for a Project or the
+	 * scratch entry.
+	 */
+	logo?: RepoLogo,
+};
+
+/**
+ * An image file from a repository, as it is on disk.
+ */
+export type RepoLogo = {
+	/**
+	 * Relative to the checkout, with `/` separators.
+	 */
+	path: string,
+	/**
+	 * From its extension: unlike an icon's image, it can be `image/svg+xml` or `image/x-icon`.
+	 */
+	mediaType: string,
+	/**
+	 * Its bytes, in base64.
+	 */
+	data: string,
+};
+
+/**
+ * Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
+ * `origin`, for an orchestrator on another plxd whose children run here. Each entry's `origin` and
+ * this one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing
+ * slash, and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
+ */
+export type RepoMatchParams = {
+	/**
+	 * The other plxd's `origin` URL, in any form git takes.
+	 */
+	origin: string,
+};
+
+/**
+ * Result of `repo/match`.
+ */
+export type RepoMatchResult = {
+	/**
+	 * The matching entry, the oldest when several match. Absent when none does, so the
+	 * repository has to be cloned or added here first.
+	 */
+	repo?: Repo,
+};
+
+/**
  * Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
- * starts a worker, with the same sandbox (0013).
+ * starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
+ * worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
  *
  * Idempotent on `runId`: the same id with the same params returns the run; with different
  * params it fails with `idConflict`.
@@ -2279,6 +6546,31 @@ export type ThreadStartParams = {
 	 * of its own.
 	 */
 	repo?: RepoId,
+	/**
+	 * Starts a child of this orchestrator instead (0042), behind `orchestratorTasks`: it runs in
+	 * the orchestrator's mode with `approvals`, in a new worktree cut from the orchestrator's
+	 * integration branch, and its first message is the child's header, then `prompt`. Its parent
+	 * is the orchestrator's current run, which a batched wake-up tells of the start; with
+	 * no orchestrator yet it has none. Not with `repo`, `parent`, `checkout`, `base`, or
+	 * `checkoutRef`, which the orchestrator decides.
+	 */
+	orchestrator?: ScopeId,
+	/**
+	 * The run that launches it, recorded as its parent (0041). It must exist, or the start fails
+	 * with `runNotFound`. Behind `threadLineage`.
+	 */
+	parent?: RunId,
+	/**
+	 * Whether the thread wakes its `parent` when a CLI process of its ends, as an orchestrator's
+	 * orchestrator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+	 * it.
+	 */
+	notify?: boolean,
+	/**
+	 * Its title, as `thread/update` takes it. Not part of what makes a retry with the same run id
+	 * conflict, since the title can change. Behind `threadLineage`.
+	 */
+	title?: string,
 	/**
 	 * The first message.
 	 */
@@ -2296,13 +6588,21 @@ export type ThreadStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * How the agent may act inside its sandbox, as `agent/start` takes it.
+	 * Claude Code's permission mode for the agent, as `agent/start` takes it.
 	 */
 	permission?: AgentPermission,
 	/**
-	 * Names the worktree's branch `wisp/<branchSlug>`: lowercase letters, digits, and hyphens,
+	 * The context window in tokens, as `agent/start` takes it.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `agent/start` takes it.
+	 */
+	fast?: boolean,
+	/**
+	 * Names the worktree's branch the host's `branchPrefix`, `parallax/` by default, then this: lowercase letters, digits, and hyphens,
 	 * no leading or trailing hyphen, at most 40 bytes. A branch that already has the name gets
-	 * the run's short id after it. Absent names it `wisp/<short run id>`. Not part of what makes
+	 * the run's short id after it. Absent names it the prefix then the short run id. Not part of what makes
 	 * a retry with the same run id conflict.
 	 */
 	branchSlug?: string,
@@ -2310,6 +6610,63 @@ export type ThreadStartParams = {
 	 * Images for the first message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Forward the agent's permission requests to the client, as `agent/start` takes it.
+	 */
+	approvals?: boolean,
+	/**
+	 * Work in the repo entry's own checkout, on whatever branch it has out, instead of in a new
+	 * worktree: the agent's changes land there, uncommitted, and `branchSlug` is ignored. Needs a
+	 * `repo`. Behind the `checkout` capability, since an older plxd would silently ignore it and
+	 * make a worktree.
+	 */
+	checkout?: boolean,
+	/**
+	 * The ref the new worktree starts from, such as `develop` or `origin/develop`. Absent means
+	 * the repo's `HEAD`. Not with `checkout`. Behind the `repoRefs` capability, like
+	 * `checkoutRef`. Not part of what makes a retry with the same run id conflict.
+	 */
+	base?: string,
+	/**
+	 * With `checkout`, the branch to switch the checkout to before the agent starts, as
+	 * `git switch` does: a remote-tracking ref such as `origin/foo` switches to the local `foo`,
+	 * made to track it if missing. Never forced: when git refuses, such as over local changes
+	 * it would overwrite, the start fails with git's reason. Absent switches nothing. Not part of
+	 * what makes a retry with the same run id conflict, and a retry switches nothing.
+	 */
+	checkoutRef?: string,
+	/**
+	 * Threads attached to the first message as context, as `agent/start` takes them.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * The model that names the thread once it has started (0058), behind `threadNaming`. plxd
+	 * asks it for a title and a branch name from `prompt`, then sets the title unless the thread
+	 * has one by then, and renames the worktree's branch while it has no upstream, reporting it
+	 * in `agent.updated`. Not part of what makes a retry with the same run id conflict.
+	 */
+	naming?: ThreadNaming,
+};
+
+/**
+ * The model that names a new thread, as `thread/start`'s `naming` (0058). When its instance
+ * can't name threads on the host, plxd uses the default model of the thread's own instance:
+ * `claude-haiku-5-5` for Claude Code, `gpt-6-luna` for Codex.
+ */
+export type ThreadNaming = {
+	/**
+	 * The provider instance that runs it, as a subscription `AccountChoice`'s `backend`: a
+	 * Claude Code or Codex one.
+	 */
+	backend: string,
+	/**
+	 * The model, as the CLI's `--model` takes it.
+	 */
+	model: string,
+	/**
+	 * How hard it thinks. Absent means the CLI's default.
+	 */
+	effort?: AgentEffort,
 };
 
 /**
@@ -2324,6 +6681,340 @@ export type ThreadStartResult = {
 	 * Its run, as it stands.
 	 */
 	run: AgentRun,
+};
+
+/**
+ * Params of `thread/fork`: a new thread that continues thread `runId`'s conversation from one of
+ * its turns, behind the `threadFork` capability (0050). The fork has no CLI until its first
+ * `agent/send`. Its transcript starts with the parent's up to the end of that turn.
+ *
+ * It works where the parent does: a new worktree cut from the parent's latest commit, the same
+ * checkout for a Current checkout thread, or a scratch repository of its own, holding the
+ * parent's latest commit, for a thread with no repo.
+ *
+ * Idempotent on `newRunId`: a retry returns the fork, and a run id that is taken by anything
+ * else, a fork with another `parent` field included, fails with `idConflict`. Fails with
+ * `threadNotFound` for an unknown parent, and with `invalidParams` for a turn the parent didn't
+ * record or one it is still running. A fork's copied turns aren't its own: they are part of its
+ * prompt's turn, and forking at one of their ids fails.
+ */
+export type ThreadForkParams = {
+	/**
+	 * The thread to fork.
+	 */
+	runId: RunId,
+	/**
+	 * The fork's run id, a version 7 UUID generated by the client.
+	 */
+	newRunId: RunId,
+	/**
+	 * The turn to fork at: a follow-up's turn id, or the parent's run id for its prompt's turn.
+	 * Absent means its latest turn.
+	 */
+	turnId?: TurnId,
+	/**
+	 * The account to run on. Absent means the one the parent's session is on.
+	 */
+	account?: AccountChoice,
+	/**
+	 * The model. Absent means the parent's, when the fork runs on the parent's backend.
+	 */
+	model?: string,
+	/**
+	 * The run that asked for the fork, such as a thread's `thread_fork` tool, recorded as the
+	 * fork's `parent` (0041). It must exist, or the fork fails with `runNotFound`. Absent means
+	 * none, as for a fork the user makes.
+	 */
+	parent?: RunId,
+};
+
+/**
+ * Params of `thread/importable`.
+ */
+export type ThreadImportableParams = {
+	/**
+	 * Lists the `claude.ai` sessions to import ([`ImportableSession::remote`]) instead of the
+	 * apps' sessions on the host. Slower, as each is read to check it has a transcript. Behind
+	 * the `threadImportRemote` capability.
+	 */
+	remote?: boolean,
+};
+
+/**
+ * Result of `thread/importable`.
+ */
+export type ThreadImportableResult = {
+	/**
+	 * Every app's sessions on the host, the most recently active first. An app that isn't
+	 * installed, or whose files can't be read, adds none.
+	 */
+	sessions: Array<ImportableSession>,
+	/**
+	 * For `remote`, why `claude.ai`'s sessions couldn't be listed, such as Claude Code not being
+	 * signed in with a `claude.ai` account.
+	 */
+	problem?: string,
+};
+
+/**
+ * A session `thread/import` can import.
+ */
+export type ImportableSession = {
+	/**
+	 * The app it comes from.
+	 */
+	source: ImportSource,
+	/**
+	 * The app's id for it.
+	 */
+	id: string,
+	/**
+	 * Its title in the app, or else its first message, cut short.
+	 */
+	title: string,
+	/**
+	 * The folder it worked in, when the app records one.
+	 */
+	cwd?: string,
+	/**
+	 * When it was last active.
+	 */
+	updatedAt: string,
+	/**
+	 * The thread it was imported as. Absent until it is.
+	 */
+	thread?: RunId,
+	/**
+	 * A Claude Code session `claude remote-control` served on another computer, which
+	 * `claude.ai` keeps (PLX-1136): its id is `claude.ai`'s, and its transcript is read from there
+	 * through Claude Code's own sign-in. With `claudeRemoteControl`, its thread's follow-ups go to
+	 * that session (PLX-1140).
+	 */
+	remote?: boolean,
+	/**
+	 * For a Claude session, Claude Code's own id for it when that isn't `id`, as for one the
+	 * Claude desktop app records. Moving a Claude Remote Control thread finds its session by it
+	 * (PLX-1143).
+	 */
+	claudeSession?: string,
+};
+
+/**
+ * The desktop app a session comes from.
+ */
+export type ImportSource = "claude" | "codex" | "cursor" | "chatgpt" | "claudeChat";
+
+/**
+ * Params of `thread/import`: makes a session an archived thread, in its folder's own checkout
+ * when that folder is a repository, else with no repo. Idempotent: a session already imported returns its
+ * thread. Fails with `invalidParams` for a session the app no longer has, or one with no
+ * messages. Answers with `thread/start`'s result.
+ */
+export type ThreadImportParams = {
+	/**
+	 * The app it comes from.
+	 */
+	source: ImportSource,
+	/**
+	 * The app's id for it, as `thread/importable` listed it.
+	 */
+	id: string,
+	/**
+	 * It's a `claude.ai` session ([`ImportableSession::remote`]).
+	 */
+	remote?: boolean,
+	/**
+	 * The account the thread's follow-ups run on. Absent means the built-in agent of the
+	 * session's app: `claude`, `codex`, or `cursor`.
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * Params of `thread/importChat`, behind the `chatImport` capability (PLX-883): makes a chat the
+ * client read from a `ChatGPT` or `claude.ai` data export an archived thread with no repo, whose
+ * first follow-up tells a new session the chat. Idempotent on `source`, `id`, and `createdAt`: a
+ * chat already imported returns its thread. Fails with `invalidParams` for another `source`, a
+ * chat with no message from the user, or more than [`MAX_CHAT_MESSAGES`] messages. Answers with
+ * `thread/start`'s result.
+ */
+export type ThreadImportChatParams = {
+	/**
+	 * `chatgpt` or `claudeChat`.
+	 */
+	source: ImportSource,
+	/**
+	 * The export's id for the chat.
+	 */
+	id: string,
+	/**
+	 * Its title in the export.
+	 */
+	title: string,
+	/**
+	 * When it started.
+	 */
+	createdAt: string,
+	/**
+	 * Its messages, oldest first. Each is cut to 32 KiB.
+	 */
+	messages: Array<ChatMessage>,
+	/**
+	 * The account the thread's follow-ups run on. Absent means `codex` for `ChatGPT` and `claude`
+	 * for Claude.
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * One message of an exported chat.
+ */
+export type ChatMessage = {
+	/**
+	 * Who wrote it.
+	 */
+	role: ChatRole,
+	/**
+	 * Its text.
+	 */
+	text: string,
+};
+
+/**
+ * Who wrote a message of an exported chat.
+ */
+export type ChatRole = "user" | "assistant";
+
+/**
+ * Params of `thread/importedChats`, behind `chatImport`: which of `chats` are imported.
+ */
+export type ThreadImportedChatsParams = {
+	/**
+	 * The chats.
+	 */
+	chats: Array<ChatRef>,
+};
+
+/**
+ * An exported chat, as `thread/importedChats` asks after it.
+ */
+export type ChatRef = {
+	/**
+	 * `chatgpt` or `claudeChat`.
+	 */
+	source: ImportSource,
+	/**
+	 * The export's id for it.
+	 */
+	id: string,
+	/**
+	 * When it started.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Result of `thread/importedChats`.
+ */
+export type ThreadImportedChatsResult = {
+	/**
+	 * Each chat's thread, in `chats`' order, or `null` where it isn't imported.
+	 */
+	threads: Array<RunId | null>,
+};
+
+/**
+ * Params of `thread/remoteControl`.
+ */
+export type ThreadRemoteControlParams = {
+	/**
+	 * The thread's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `thread/remoteControl`: answered at once from what plxd last read, which it reads
+ * again in the background once it's half a minute old.
+ */
+export type ThreadRemoteControlResult = {
+	/**
+	 * The thread's session. Absent for a thread that isn't a Claude Remote Control thread.
+	 */
+	session?: RemoteControlSession,
+};
+
+/**
+ * A Claude Remote Control session, as plxd last saw it.
+ */
+export type RemoteControlSession = {
+	/**
+	 * `claude.ai`'s id for it, starting with `session_`.
+	 */
+	sessionId: string,
+	/**
+	 * Where it opens in Claude: `https://claude.ai/code/<sessionId>`.
+	 */
+	url: string,
+	/**
+	 * The GitHub repository it works in, `owner/name`, when it has one.
+	 */
+	repository?: string,
+	/**
+	 * The branch it works on, when `claude.ai` names one.
+	 */
+	branch?: string,
+	/**
+	 * What it's doing. Absent until plxd has read it.
+	 */
+	state?: RemoteControlState,
+};
+
+/**
+ * What a Claude Remote Control session is doing.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type RemoteControlState = "running" | "idle" | "waiting" | "offline" | "archived";
+
+/**
+ * Params of `thread/remoteControlOrigin`.
+ */
+export type ThreadRemoteControlOriginParams = {
+	/**
+	 * The thread's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `thread/remoteControlOrigin`, read from `claude.ai` through Claude Code.
+ */
+export type ThreadRemoteControlOriginResult = {
+	/**
+	 * Absent for a thread that isn't a Claude Remote Control thread.
+	 */
+	origin?: RemoteControlOrigin,
+};
+
+/**
+ * Where a Claude Remote Control session runs, from its transcript on `claude.ai` (PLX-1143).
+ * `claude.ai` doesn't name the computer, so the app finds it by this session's transcript there.
+ */
+export type RemoteControlOrigin = {
+	/**
+	 * Claude Code's own id for the session on its computer, which that computer's plxd lists
+	 * among its Claude sessions to import.
+	 */
+	sessionId?: string,
+	/**
+	 * The folder it works in there.
+	 */
+	cwd?: string,
+	/**
+	 * The computer's platform, as Node names it: `darwin`, `win32`, or `linux`.
+	 */
+	platform?: string,
 };
 
 /**
@@ -2351,11 +7042,183 @@ export type ThreadArchiveResult = {
 };
 
 /**
+ * Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
+ * `threadAttention` capability, sets its title or settled flag (0041), behind `threadLineage`,
+ * or pins it (PLX-789), behind `pins`.
+ *
+ * `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
+ * past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
+ * Fails with `threadNotFound` for an unknown thread.
+ */
+export type ThreadUpdateParams = {
+	/**
+	 * The thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * True to mark it seen now.
+	 */
+	seen?: boolean,
+	/**
+	 * Snoozes it until this time, in RFC 3339 UTC.
+	 */
+	snoozedUntil?: string,
+	/**
+	 * Its new title, trimmed. Empty clears it. At most [`MAX_THREAD_TITLE_BYTES`] bytes, or it
+	 * fails with `invalidParams`.
+	 */
+	title?: string,
+	/**
+	 * True to mark it settled, false to clear that.
+	 */
+	settled?: boolean,
+	/**
+	 * True to pin it, false to unpin it (PLX-789), behind `pins`.
+	 */
+	pinned?: boolean,
+};
+
+/**
+ * Result of `thread/update`.
+ */
+export type ThreadUpdateResult = {
+	/**
+	 * The thread as it stands.
+	 */
+	thread: Thread,
+};
+
+/**
+ * Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
+ * behind the `threadAttention` capability, renames a Project (0069), behind `projects`, or sets a
+ * Project's instructions and files (0090), behind `projectContext`. A change appends
+ * `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
+ * `name`, `instructions`, or `files` on an entry that isn't a Project.
+ */
+export type RepoUpdateParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+	/**
+	 * Its new icon, checked as `orchestrator/update` checks a project's.
+	 */
+	icon?: ChosenIcon,
+	/**
+	 * True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
+	 * replace one the user picked meanwhile. Behind the `repoLogo` capability.
+	 */
+	iconIfUnset?: boolean,
+	/**
+	 * A Project's new name, trimmed, 1 to 128 bytes.
+	 */
+	name?: string,
+	/**
+	 * A Project's new instructions, up to [`MAX_PROJECT_INSTRUCTIONS_BYTES`] once trimmed. Empty
+	 * clears them.
+	 */
+	instructions?: string,
+	/**
+	 * A Project's files in full, replacing the list: at most [`MAX_PROJECT_FILES`] absolute paths
+	 * inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
+	 */
+	files?: Array<string>,
+};
+
+/**
+ * Result of `repo/update`.
+ */
+export type RepoUpdateResult = {
+	/**
+	 * The entry as it stands.
+	 */
+	repo: Repo,
+};
+
+/**
+ * Params of `project/create` (0069), behind the `projects` capability: makes a Project, a named group
+ * for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry
+ * with the same name returns the entry, another name fails with `idConflict`. Appends
+ * `repo.added`.
+ */
+export type ProjectCreateParams = {
+	/**
+	 * The Project's id, a version 7 UUID generated by the client.
+	 */
+	id: RepoId,
+	/**
+	 * Its name, trimmed, 1 to [`MAX_PROJECT_NAME_BYTES`] bytes.
+	 */
+	name: string,
+	/**
+	 * Its icon, checked as `orchestrator/create` checks a project's.
+	 */
+	icon?: ChosenIcon,
+};
+
+/**
+ * Result of `project/create`.
+ */
+export type ProjectCreateResult = {
+	/**
+	 * The Project, new or existing, as a repo entry with `project` true.
+	 */
+	repo: Repo,
+};
+
+/**
+ * Params of `project/delete` (0069), behind the `projects` capability: deletes a Project and every
+ * chat in it, as `thread/delete` deletes each, then its repository. Appends `repo.removed`.
+ * Fails with `repoNotFound` for an unknown id or an entry that isn't a Project.
+ */
+export type ProjectDeleteParams = {
+	/**
+	 * The Project's id.
+	 */
+	project: RepoId,
+};
+
+/**
+ * Result of `project/delete`.
+ */
+export type ProjectDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `thread/setProject` (0090), behind the `projectThreads` capability: adds threads to a
+ * Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+ * and transcript, and its next CLI process gets the Project's instructions and files. Appends
+ * `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
+ * thread started in a Project or an orchestrator's child, and with `repoNotFound` for a `project`
+ * that isn't one. An orchestrator thread joins one (0093).
+ */
+export type ThreadSetProjectParams = {
+	/**
+	 * The threads, by run id.
+	 */
+	threads: Array<RunId>,
+	/**
+	 * The Project to add them to. Absent takes them out of their Project.
+	 */
+	project?: RepoId,
+};
+
+/**
+ * Result of `thread/setProject`.
+ */
+export type ThreadSetProjectResult = {
+	/**
+	 * The threads as they stand, in the order asked.
+	 */
+	threads: Array<Thread>,
+};
+
+/**
  * Params of `thread/delete`: deletes a thread, its run, its worktree and branch, a thread with
  * no repo's scratch repository, and its stored events.
  *
  * A running CLI is cancelled first, and the delete answers once it has exited and its changes
- * were committed. Deleting a thread that doesn't exist fails with `threadNotFound`.
+ * were committed. Deleting a thread that doesn't exist fails with `threadNotFound`, and one
+ * whose push or Open PR is running with `gitRefused` (PLX-458).
  */
 export type ThreadDeleteParams = {
 	/**
@@ -2370,25 +7233,25 @@ export type ThreadDeleteParams = {
 export type ThreadDeleteResult = Record<symbol, never>;
 
 /**
- * Params of `project/start`: starts the project's coordinator chat (0024), behind the
- * `coordinator` capability.
+ * Params of `orchestrator/start`: starts the orchestrator chat (0024), behind the
+ * `orchestrator` capability.
  *
- * The coordinator is a run with policy `noWrite` in the project's repository, whose
- * `coordinatorThread` is its own id. Later messages, Stop, and its transcript go through
- * `agent/send`, `agent/cancel`, and `agent/events`, and its events are the project's `agent.*`
- * events. Idempotent on `runId` like `agent/start`: the same params return the run, and
- * different ones fail with `idConflict`. A project's coordinator is its newest one, which
- * `Project.coordinator` names. A new `runId` starts over: it replaces the coordinator unless that
- * one is starting or running, when it fails with `idConflict`. So a coordinator whose session
- * can't be resumed never locks its project.
+ * The orchestrator is a run with policy `noWrite` in the orchestrator's repository, whose
+ * `orchestratorThread` is its own id. Later messages, Stop, and its transcript go through
+ * `agent/send`, `agent/cancel`, and `agent/events`, and its events are the orchestrator's
+ * `agent.*` events. Idempotent on `runId` like `agent/start`: the same params return the run, and
+ * different ones fail with `idConflict`. An orchestrator is its newest one, which
+ * `Orchestrator.orchestrator` names. A new `runId` starts over: it replaces the orchestrator
+ * unless that one is starting or running, when it fails with `idConflict`. So an orchestrator
+ * whose session can't be resumed never locks its orchestrator.
  */
-export type ProjectStartParams = {
+export type OrchestratorStartParams = {
 	/**
-	 * The project.
+	 * The orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
-	 * The coordinator run's id, a version 7 UUID generated by the client.
+	 * The orchestrator run's id, a version 7 UUID generated by the client.
 	 */
 	runId: RunId,
 	/**
@@ -2396,7 +7259,7 @@ export type ProjectStartParams = {
 	 */
 	prompt: string,
 	/**
-	 * The account to run on. Absent means the coordinator role's default
+	 * The account to run on. Absent means the orchestrator role's default
 	 * (`accounts/defaults/*`). Only a backend that can coordinate takes it: Claude Code.
 	 */
 	account?: AccountChoice,
@@ -2409,29 +7272,57 @@ export type ProjectStartParams = {
 	 */
 	effort?: AgentEffort,
 	/**
-	 * The permission mode, as `agent/start`'s (RYA-188). Absent means the backend's default.
+	 * Ignored: the orchestrator runs in the orchestrator's permission mode (0042).
 	 */
 	permission?: AgentPermission,
 	/**
 	 * Images for the first message, as `agent/start`'s.
 	 */
 	images?: Array<PromptImage>,
+	/**
+	 * Ignored: plxd starts the orchestrator as if it were set, as it does every orchestrator
+	 * child, since the inbox answers its permission requests (0042).
+	 */
+	approvals?: boolean,
 };
 
 /**
- * Params of `project/update`: renames a project or sets its icon, behind the `projectEdit`
- * capability (RYA-227, 0032).
+ * Params of `orchestrator/fresh`: ends an orchestrator session, so its next message
+ * starts a new one from the orchestrator's state (PLX-937, decision 0079), behind the
+ * `orchestratorEpochs` capability.
+ *
+ * The orchestrator stays the same run and thread. plxd ends its idle CLI, ends its epoch as
+ * `userFresh`, and adds an `epoch` item to its transcript. Its next message starts the next epoch
+ * from a rehydration packet. Fails with `orchestratorNotFound` for an unknown orchestrator,
+ * `runNotFound` for one with no orchestrator, and `idConflict` while the orchestrator is starting
+ * or running.
+ */
+export type OrchestratorFreshParams = {
+	/**
+	 * The orchestrator.
+	 */
+	orchestrator: ScopeId,
+};
+
+/**
+ * Params of `orchestrator/update`: renames an orchestrator or sets its icon, behind the
+ * `orchestratorEdit` capability (PLX-227, 0032), its permission mode, behind
+ * `orchestratorPermission` (0042), its autonomy level, behind `orchestratorAutonomy` (0043), its
+ * base branch, behind `integrationBranch` (0045), automatic landing, behind `landing` (0045), how
+ * its children are placed, behind `orchestratorPlacement` (0046), its checks, behind `checks`
+ * (0045), or the computer its children run on, behind `orchestratorComputer` (0057).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
- * `project/create`'s rules, and the repository can't change. A rename or a new icon is not
- * activity, so `updatedAt` stays as it is. Fails with `projectNotFound` for an unknown project.
- * A change appends `project.updated`; an update that changes nothing appends no event.
+ * `orchestrator/create`'s rules, and the repository can't change. A rename, a new icon, a new
+ * mode, or a new level is not activity, so `updatedAt` stays as it is. Fails with
+ * `orchestratorNotFound` for an unknown orchestrator. A change appends `orchestrator.updated`; an
+ * update that changes nothing appends no event.
  */
-export type ProjectUpdateParams = {
+export type OrchestratorUpdateParams = {
 	/**
-	 * The project.
+	 * The orchestrator.
 	 */
-	project: ProjectId,
+	orchestrator: ScopeId,
 	/**
 	 * The new name. Absent keeps the name.
 	 */
@@ -2439,17 +7330,4607 @@ export type ProjectUpdateParams = {
 	/**
 	 * The new icon. Absent keeps the icon, and so does `null`: an icon can't be removed (0032).
 	 */
-	icon?: ProjectIcon,
+	icon?: ChosenIcon,
+	/**
+	 * The new permission mode. Absent keeps the mode. Each run in the orchestrator starts its next
+	 * CLI process in it, and a running CLI keeps its mode until it exits.
+	 */
+	permission?: OrchestratorPermission,
+	/**
+	 * The new autonomy level. Absent keeps it. It applies to the next question: one already
+	 * waiting for the orchestrator stays with it, though in `ask` plxd refuses its answer.
+	 */
+	autonomy?: OrchestratorAutonomy,
+	/**
+	 * The new base branch, behind `integrationBranch`. Absent keeps it. An integration branch
+	 * already cut stays where it is.
+	 */
+	baseBranch?: string,
+	/**
+	 * Turns automatic landing on or off, behind `landing` (0045). Absent keeps it. Children
+	 * already waiting for approval keep waiting.
+	 */
+	autoLand?: boolean,
+	/**
+	 * How many children may run at once, from 1 to 100, behind `orchestratorPlacement`. Absent
+	 * keeps it. Children already running keep running, and a higher number starts waiting ones.
+	 */
+	maxChildren?: number,
+	/**
+	 * Whether children may run on an API key account, behind `orchestratorPlacement`. Absent keeps
+	 * it.
+	 */
+	allowApiKeys?: boolean,
+	/**
+	 * The checks command the user confirms or edits, behind `checks` (0045): at most 4,096
+	 * bytes. Empty clears it, and setting it clears `proposedChecks`. Absent keeps it.
+	 */
+	checks?: string,
+	/**
+	 * The orchestrator's proposal for `checks`, behind `checks`, which adds a `needsYou` item
+	 * naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps
+	 * it.
+	 */
+	proposedChecks?: string,
+	/**
+	 * The Tailscale node ID of the device its children run on, behind `orchestratorComputer`
+	 * (0057). Empty clears it, so they run on this plxd. Absent keeps it. The node has to be one
+	 * of `connect/devices`' tailnet devices, online or not, and the repository needs an `origin`
+	 * for the device to find its copy. A plxd without `orchestratorComputer` refuses it with
+	 * `unsupportedOption`. Children already started keep their computer.
+	 */
+	computer?: string,
 };
 
 /**
- * Result of `project/update`.
+ * Result of `orchestrator/update`.
  */
-export type ProjectUpdateResult = {
+export type OrchestratorUpdateResult = {
 	/**
-	 * The project as it stands after the update.
+	 * The orchestrator as it stands after the update.
 	 */
-	project: Project,
+	orchestrator: Orchestrator,
+};
+
+/**
+ * Params of `repo/refs`, behind the `repoRefs` capability. Fails with `repoNotFound` for an
+ * unknown entry.
+ */
+export type RepoRefsParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/refs`.
+ */
+export type RepoRefsResult = {
+	/**
+	 * Its local and remote-tracking branches, `origin/HEAD` left out: the default branch first,
+	 * then the most recently committed first.
+	 */
+	refs: Array<RepoRef>,
+};
+
+/**
+ * A branch in a repository, as `repo/refs` lists it.
+ */
+export type RepoRef = {
+	/**
+	 * Its short name: `develop`, or `origin/develop` for a remote-tracking branch.
+	 */
+	name: string,
+	/**
+	 * True for a remote-tracking branch.
+	 */
+	remote?: boolean,
+	/**
+	 * True for the default branch `origin/HEAD` names: its local branch, or the remote-tracking
+	 * one when there is no local one.
+	 */
+	default?: boolean,
+	/**
+	 * True for the branch the repository's checkout has out.
+	 */
+	current?: boolean,
+	/**
+	 * True for a branch checked out in another worktree, a thread's included, which the checkout
+	 * can't switch to.
+	 */
+	worktree?: boolean,
+};
+
+/**
+ * Params of `pr/view`, of `pr/diff`, and of `pr/link` and `pr/unlink`.
+ */
+export type PrViewParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL, as the run's `pullRequests` lists it.
+	 */
+	url: string,
+};
+
+/**
+ * A pull request as GitHub has it now: the result of `pr/view` and `pr/act`.
+ */
+export type PullRequest = {
+	/**
+	 * Its number in its repository.
+	 */
+	number: number,
+	/**
+	 * Its title.
+	 */
+	title: string,
+	/**
+	 * Its web URL.
+	 */
+	url: string,
+	/**
+	 * Its repository, as `owner/name`.
+	 */
+	repo: string,
+	/**
+	 * Where it is.
+	 */
+	state: PrState,
+	/**
+	 * Whether it is a draft.
+	 */
+	draft: boolean,
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * When it last changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+	/**
+	 * The branch it merges into.
+	 */
+	baseBranch: string,
+	/**
+	 * The branch it merges from.
+	 */
+	headBranch: string,
+	/**
+	 * Files changed.
+	 */
+	changedFiles: number,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+	/**
+	 * The files it changes, as GitHub lists them: at most its first 100. Absent means none, or a
+	 * plxd without them.
+	 */
+	files?: Array<PrFile>,
+	/**
+	 * Its description, in Markdown.
+	 */
+	body: string,
+	/**
+	 * Its comments and the text of its reviews, oldest first.
+	 */
+	comments: Array<PrComment>,
+	/**
+	 * Who is asked to review it: users' logins and teams' names.
+	 */
+	reviewRequests: Array<string>,
+	/**
+	 * Its labels' names.
+	 */
+	labels: Array<string>,
+	/**
+	 * The checks on its head commit.
+	 */
+	checks: Array<PrCheck>,
+	/**
+	 * All its checks together: failed if any failed, else pending if any is, else passed.
+	 * Absent when it has none.
+	 */
+	checksState?: PrCheckState,
+	/**
+	 * When it was opened, in RFC 3339 UTC. Absent from a plxd without `prDiff`.
+	 */
+	createdAt?: string,
+	/**
+	 * When it was closed or merged, in RFC 3339 UTC. Absent while it is open.
+	 */
+	closedAt?: string,
+	/**
+	 * When it was merged, in RFC 3339 UTC. Absent unless it is merged.
+	 */
+	mergedAt?: string,
+	/**
+	 * Who merged it. Absent unless it is merged.
+	 */
+	mergedBy?: string,
+	/**
+	 * Its commits, oldest first. Absent means none, or a plxd without `prDiff`.
+	 */
+	commits?: Array<PrCommit>,
+	/**
+	 * Its submitted reviews, oldest first. Absent means none, or a plxd without `prDiff`.
+	 */
+	reviews?: Array<PrReview>,
+	/**
+	 * Whether it can merge. Absent while GitHub is still working it out.
+	 */
+	mergeState?: PrMergeState,
+	/**
+	 * How it merges once its requirements pass, when auto-merge is on. Absent means off.
+	 */
+	autoMerge?: PrMergeMethod,
+	/**
+	 * Its review decision, when the repository asks for reviews (PLX-1151). This field and the
+	 * rest below are absent from a plxd without `prActions`.
+	 */
+	reviewDecision?: PrReviewDecision,
+	/**
+	 * Whether it merges without conflicts. Absent while GitHub works it out.
+	 */
+	mergeable?: boolean,
+	/**
+	 * Commits on the base branch its head doesn't have. Absent once it isn't open.
+	 */
+	behindBy?: number,
+	/**
+	 * Open, not a draft, no conflict, not behind, every check passed, no unresolved thread, and
+	 * no change request, as `pr/status` judges it.
+	 */
+	ready?: boolean,
+	/**
+	 * Why it isn't ready, one line each. Absent when it is.
+	 */
+	reasons?: Array<string>,
+	/**
+	 * Its head commit.
+	 */
+	headSha?: string,
+	/**
+	 * The merge methods its repository allows.
+	 */
+	mergeMethods?: Array<PrMergeMethod>,
+	/**
+	 * Its labels with their colors, in `labels`' order.
+	 */
+	labelColors?: Array<PrLabel>,
+	/**
+	 * Its review threads, resolved ones included, oldest first.
+	 */
+	reviewThreads?: Array<PrReviewThread>,
+	/**
+	 * It has older review threads than `review_threads` holds (the newest 100).
+	 */
+	reviewThreadsTruncated?: boolean,
+};
+
+/**
+ * One check on a pull request's head commit: a GitHub Actions job or another CI's status.
+ */
+export type PrCheck = {
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Where it is.
+	 */
+	state: PrCheckState,
+	/**
+	 * How it ended, as GitHub says it in lowercase, such as `success`, `failure`, or
+	 * `timed_out`. Absent while it is pending.
+	 */
+	conclusion?: string,
+	/**
+	 * Its page, when it has one.
+	 */
+	url?: string,
+	/**
+	 * The GitHub Actions workflow it is a job of. Absent for another CI's status.
+	 */
+	workflow?: string,
+	/**
+	 * When it started. Absent when GitHub doesn't say.
+	 */
+	startedAt?: string,
+	/**
+	 * When it finished. Absent while it runs.
+	 */
+	completedAt?: string,
+	/**
+	 * Whether branch protection requires it (PLX-1151).
+	 */
+	required?: boolean,
+	/**
+	 * Its GitHub Actions workflow run, for `rerunFailed` and `cancelRun`.
+	 */
+	runId?: number,
+	/**
+	 * Its GitHub Actions job, for `rerunJob`.
+	 */
+	jobId?: number,
+};
+
+/**
+ * Where a check is, or all of a pull request's checks together.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrCheckState = "pending" | "passed" | "failed" | "skipped";
+
+/**
+ * A comment on a pull request, or a review's text.
+ */
+export type PrComment = {
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * Its Markdown.
+	 */
+	body: string,
+	/**
+	 * When it was written, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+	/**
+	 * Its GitHub node id (PLX-1151).
+	 */
+	id?: string,
+	/**
+	 * Its web URL.
+	 */
+	url?: string,
+	/**
+	 * Whether it is a comment or a review's text.
+	 */
+	kind?: PrCommentKind,
+	/**
+	 * Its author's avatar image.
+	 */
+	avatarUrl?: string,
+};
+
+/**
+ * What a [`PrComment`] is.
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
+ */
+export type PrCommentKind = "comment" | "review";
+
+/**
+ * A commit on a pull request.
+ */
+export type PrCommit = {
+	/**
+	 * Its full hash.
+	 */
+	oid: string,
+	/**
+	 * Its message's first line.
+	 */
+	headline: string,
+	/**
+	 * Its first author's login, or name when they have no GitHub account.
+	 */
+	author: string,
+	/**
+	 * When it was committed, in RFC 3339 UTC.
+	 */
+	committedAt: string,
+};
+
+/**
+ * One file a pull request changes, with its lines added and removed.
+ */
+export type PrFile = {
+	/**
+	 * Its path in the repository.
+	 */
+	path: string,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines removed.
+	 */
+	deletions: number,
+};
+
+/**
+ * A label and its color.
+ */
+export type PrLabel = {
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Its color, as six hex digits without `#`.
+	 */
+	color: string,
+};
+
+/**
+ * How a pull request merges.
+ *
+ * A newer plxd may send a method this version does not know; treat it as unknown.
+ */
+export type PrMergeMethod = "merge" | "squash" | "rebase";
+
+/**
+ * Whether a pull request can merge, as GitHub's `mergeStateStatus` says.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrMergeState = "clean" | "unstable" | "hasHooks" | "behind" | "blocked" | "dirty" | "draft";
+
+/**
+ * A submitted review: who, what verdict, and when. Its text, if any, is also in `comments`.
+ */
+export type PrReview = {
+	/**
+	 * Its author's login.
+	 */
+	author: string,
+	/**
+	 * Its verdict.
+	 */
+	state: PrReviewState,
+	/**
+	 * When it was submitted, in RFC 3339 UTC.
+	 */
+	submittedAt: string,
+};
+
+/**
+ * A review's verdict.
+ *
+ * A newer plxd may send a verdict this version does not know; treat it as unknown.
+ */
+export type PrReviewState = "approved" | "changesRequested" | "commented" | "dismissed";
+
+/**
+ * A pull request's review decision, as GitHub's `reviewDecision` says.
+ *
+ * A newer plxd may send a decision this version does not know; treat it as unknown.
+ */
+export type PrReviewDecision = "approved" | "changesRequested" | "reviewRequired";
+
+/**
+ * A review thread on a pull request's diff, resolved or not.
+ */
+export type PrReviewThread = {
+	/**
+	 * Its GitHub node id, for `pr/write`'s `replyToThread`.
+	 */
+	id: string,
+	/**
+	 * The file it is on.
+	 */
+	path?: string,
+	/**
+	 * The line it is on, or was on when written once it is outdated. Absent for a thread on the
+	 * whole file.
+	 */
+	line?: number,
+	/**
+	 * The diff down to its line, from its first comment.
+	 */
+	diffHunk?: string,
+	/**
+	 * Whether the code it is on changed since.
+	 */
+	isOutdated: boolean,
+	/**
+	 * Whether someone resolved it.
+	 */
+	isResolved: boolean,
+	/**
+	 * Its comments, oldest first.
+	 */
+	comments: Array<PrThreadComment>,
+	/**
+	 * GitHub has more comments on it than `comments` holds (the first 50).
+	 */
+	truncated?: boolean,
+};
+
+/**
+ * A comment in a [`PrReviewThread`].
+ */
+export type PrThreadComment = {
+	/**
+	 * Its GitHub node id.
+	 */
+	id: string,
+	/**
+	 * Its web URL.
+	 */
+	url?: string,
+	/**
+	 * Its author's login, `ghost` for a deleted account.
+	 */
+	author: string,
+	/**
+	 * Its author's avatar image.
+	 */
+	avatarUrl?: string,
+	/**
+	 * Its Markdown.
+	 */
+	body: string,
+	/**
+	 * When it was written, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Where a pull request is.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type PrState = "open" | "closed" | "merged";
+
+/**
+ * Params of `pr/act`.
+ */
+export type PrActParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL, as the run's `pullRequests` lists it.
+	 */
+	url: string,
+	/**
+	 * What to do.
+	 */
+	action: PrAction,
+	/**
+	 * How `autoMerge` merges, and whether `updateBranch` rebases. Absent means a merge commit
+	 * (PLX-1151).
+	 */
+	method?: PrMergeMethod,
+	/**
+	 * Whether `merge`, `squash`, or `rebase` also deletes the head branch.
+	 */
+	deleteBranch?: boolean,
+	/**
+	 * The head commit the user saw: `merge`, `squash`, `rebase`, and `autoMerge` merge only while
+	 * the head is still this commit.
+	 */
+	headSha?: string,
+	/**
+	 * The GitHub Actions run for `rerunFailed` and `cancelRun`, as a check's `runId`.
+	 */
+	workflowRunId?: number,
+	/**
+	 * The GitHub Actions job for `rerunJob`, as a check's `jobId`.
+	 */
+	jobId?: number,
+};
+
+/**
+ * What `pr/act` does to a pull request.
+ *
+ * A newer client may send an action this version does not know; plxd refuses it.
+ */
+export type PrAction = "merge" | "squash" | "rebase" | "autoMerge" | "disableAutoMerge" | "draft" | "ready" | "close" | "updateBranch" | "rerunFailed" | "rerunJob" | "cancelRun" | "deleteBranch";
+
+/**
+ * Result of `pr/diff`: a pull request's changes as one unified diff, as `gh pr diff` prints it.
+ */
+export type PrDiffResult = {
+	/**
+	 * Its unified diff, a `diff --git` section per file.
+	 */
+	diff: string,
+	/**
+	 * Whether `diff` was cut short, at a line's end, at plxd's size cap.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * Params of `orchestrator/delete`: deletes an orchestrator with every run in it, their
+ * stored events, sent turns, images, worktrees, and branches, and its shared context folder,
+ * behind the `orchestratorDelete` capability (PLX-338).
+ *
+ * Running CLIs are cancelled first, and the delete answers once they have exited, the runs' pushes
+ * and Open PRs in flight have finished (PLX-458), and the orchestrator is gone, after appending
+ * `orchestrator.deleted`. Deleting an orchestrator that doesn't exist, or a repo entry's id, fails
+ * with `orchestratorNotFound`.
+ */
+export type OrchestratorDeleteParams = {
+	/**
+	 * The orchestrator.
+	 */
+	orchestrator: ScopeId,
+};
+
+/**
+ * Result of `orchestrator/delete`.
+ */
+export type OrchestratorDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `agent/commands`: lists what a thread on `backend` takes as a command, by asking the
+ * CLI itself, started as a thread on the user's own login would be. Fails with an internal error
+ * when the CLI can't start or doesn't answer in time.
+ */
+export type AgentCommandsParams = {
+	/**
+	 * The backend, such as `claude`, `codex`, or `cursor`.
+	 */
+	backend: string,
+	/**
+	 * The repo entry whose checkout the CLI runs in, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run whose folder the CLI runs in.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `agent/commands`.
+ */
+export type AgentCommandsResult = {
+	/**
+	 * In the CLI's own order. Empty for a backend that lists none.
+	 */
+	commands: Array<AgentCommand>,
+};
+
+/**
+ * One command or skill a CLI takes in a message.
+ */
+export type AgentCommand = {
+	/**
+	 * What goes in the message to run it: `/name` for Claude Code and Cursor, `$name` for Codex.
+	 */
+	text: string,
+	/**
+	 * Its name, without the `/` or `$`.
+	 */
+	name: string,
+	/**
+	 * What it does, possibly empty.
+	 */
+	description: string,
+	/**
+	 * What its arguments look like, such as `[lite|full|ultra]`.
+	 */
+	argumentHint?: string,
+};
+
+/**
+ * Params of `repo/files`: a thread's tracked and untracked files that git doesn't ignore, from
+ * the run's folder, else the repo entry's checkout. Fails with `worktreeFailed` when git fails
+ * there, such as outside a repository.
+ */
+export type RepoFilesParams = {
+	/**
+	 * The repo entry, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `repo/files`.
+ */
+export type RepoFilesResult = {
+	/**
+	 * Paths relative to the folder, with `/` separators, in git's order, up to a cap.
+	 */
+	files: Array<string>,
+	/**
+	 * Whether there were more than the cap.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * Params of `repo/grep` (PLX-993): the lines of a thread's files that contain `query`, ignoring
+ * case, read with `git grep` in the run's folder, else the repo entry's checkout, over tracked
+ * and untracked files that git doesn't ignore, skipping binary ones. Fails with `invalidParams`
+ * for an empty query and `worktreeFailed` when git fails there.
+ */
+export type RepoGrepParams = {
+	/**
+	 * Plain text, not a pattern.
+	 */
+	query: string,
+	/**
+	 * The repo entry, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `repo/grep`.
+ */
+export type RepoGrepResult = {
+	/**
+	 * In git's order, up to a cap.
+	 */
+	matches: Array<GrepMatch>,
+	/**
+	 * Whether there were more than the cap.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * One line `repo/grep` found.
+ */
+export type GrepMatch = {
+	/**
+	 * Relative to the folder, with `/` separators.
+	 */
+	path: string,
+	/**
+	 * 1-based.
+	 */
+	line: number,
+	/**
+	 * The line, cut to a few hundred characters.
+	 */
+	text: string,
+};
+
+/**
+ * Params of `github/status`.
+ */
+export type GithubStatusParams = Record<symbol, never>;
+
+/**
+ * The GitHub CLI (`gh`) on the host: the result of `github/status`.
+ *
+ * Every field but `installed` and `checkedAt` is best-effort: a field plxd could not read is
+ * absent rather than a guess.
+ */
+export type GithubStatus = {
+	/**
+	 * Whether `gh` resolves on the `PATH` plxd itself uses (#96).
+	 */
+	installed: boolean,
+	/**
+	 * Its version, such as `2.100.0`, from `gh --version`.
+	 */
+	version?: string,
+	/**
+	 * Whether `gh` is signed in to github.com. Absent when installed but plxd could not tell (a
+	 * timeout, or an exit code `gh auth status` doesn't use).
+	 */
+	signedIn?: boolean,
+	/**
+	 * The signed-in github.com login, when `gh auth status` names it.
+	 */
+	account?: string,
+	/**
+	 * Why a field above is missing, such as `"timed out after 5s"`. Never set on a clean read.
+	 */
+	note?: string,
+	/**
+	 * Whether the `gh` in use is the copy `github/install` put in plxd's data folder, rather than
+	 * one the user installed (PLX-423).
+	 */
+	managed?: boolean,
+	/**
+	 * Whether `github/install` is downloading and unpacking `gh` now.
+	 */
+	installing?: boolean,
+	/**
+	 * The sign-in `github/signIn` started, until `gh auth login` exits and `gh auth setup-git`
+	 * has run after it.
+	 */
+	signingIn?: GithubSignIn,
+	/**
+	 * What went wrong with the last install or sign-in plxd ran: why it failed, or why `gh auth
+	 * setup-git` failed after a sign-in that worked. Cleared when the next one starts.
+	 */
+	setupNote?: string,
+	/**
+	 * When plxd read this.
+	 */
+	checkedAt: string,
+};
+
+/**
+ * A pending `gh auth login`: the one-time code to enter on GitHub's device page. The result of
+ * `github/signIn`.
+ */
+export type GithubSignIn = {
+	/**
+	 * The one-time code, such as `AA17-58F5`.
+	 */
+	code: string,
+	/**
+	 * The page to enter it on, `https://github.com/login/device`.
+	 */
+	url: string,
+	/**
+	 * When plxd stops waiting: GitHub's device codes last 15 minutes.
+	 */
+	expiresAt: string,
+};
+
+/**
+ * Params of `thread/search`: finds threads by what was said in them (PLX-372, decision 0047),
+ * behind the `threadContext` capability.
+ *
+ * Matches a thread whose title contains `query`, or whose messages hold every word of it: the
+ * user's, Parallax's wake-ups, and the agent's replies, but not its tool calls. A word matches
+ * any word it starts, ignoring case, accents, and punctuation (PLX-487). The user's message is
+ * searchable once it's sent, and the agent's replies once their turn ends. An empty query
+ * fails with `invalidParams`.
+ */
+export type ThreadSearchParams = {
+	/**
+	 * The text to find.
+	 */
+	query: string,
+	/**
+	 * The most threads to return: 20 by default, and at most 100.
+	 */
+	limit?: number,
+};
+
+/**
+ * Result of `thread/search`.
+ */
+export type ThreadSearchResult = {
+	/**
+	 * The matching threads: title matches first, then the one with the newest message.
+	 */
+	threads: Array<Thread>,
+	/**
+	 * For each returned thread that matched in its messages, one line of its best-matching
+	 * message, around the matching words, at most 120 characters, with `…` where it was cut
+	 * (PLX-789). Absent for a thread that matched only by title, and from an older plxd.
+	 */
+	snippets?: { [key in RunId]: string },
+};
+
+/**
+ * Params of `agent/resumeNow`: resumes a `waiting` run now instead of at its `resumeAt`, with
+ * the same message the timer sends (decision 0049). Fails with `runNotResumable` for a run that
+ * isn't waiting.
+ */
+export type AgentResumeNowParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `agent/stopTask` (PLX-777): stops one of a live run's background tasks.
+ */
+export type AgentStopTaskParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The task, as its [`AgentBackgroundTask`] names it.
+	 */
+	taskId: string,
+};
+
+/**
+ * Result of `agent/stopTask`. The task's end arrives as an `agent.background` event.
+ */
+export type AgentStopTaskResult = Record<symbol, never>;
+
+/**
+ * Params of `agent/setPermission`: moves a running run to another permission mode now, mid-turn
+ * included, rather than with its next message.
+ */
+export type AgentSetPermissionParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The mode, one its backend offers.
+	 */
+	permission: AgentPermission,
+};
+
+/**
+ * Params of `agent/autoResume`: sets or clears a run's auto-resume override (decision 0049).
+ * Turning it off for a `waiting` run clears its timer, and the run becomes `failed` with its
+ * usage limit's error.
+ */
+export type AgentAutoResumeParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * On or off for this run. Absent clears the override, so the host's setting applies.
+	 */
+	autoResume?: boolean,
+};
+
+/**
+ * Params of `host/settings/get`.
+ */
+export type HostSettingsGetParams = Record<symbol, never>;
+
+/**
+ * This host's settings, the result of `host/settings/get` and `host/settings/set`.
+ */
+export type HostSettings = {
+	/**
+	 * Whether a run a usage limit stopped waits for the limit to reset and then resumes
+	 * (PLX-371, decision 0049). Off by default (0060). A run's own `autoResume` overrides it.
+	 * Turning it off stops a waiting run from resuming when its timer fires.
+	 */
+	autoResume: boolean,
+	/**
+	 * Whether a plain thread's turn that a plxd restart cut off gets "Continue where you left
+	 * off." once plxd is up (0060). Off by default. An orchestrator's runs always continue. An
+	 * older plxd leaves it out.
+	 */
+	continueAfterRestart?: boolean,
+	/**
+	 * Whether plxd removes a settled or archived thread's worktree and local branch once its
+	 * linked pull requests have merged (PLX-555). On by default. The thread and its transcript
+	 * stay. An older plxd, without the `worktreeCleanup` capability, leaves it out.
+	 */
+	cleanWorktrees?: boolean,
+	/**
+	 * What a new thread's branch starts with, `parallax/` until set (PLX-1249). A branch already
+	 * made keeps its name. An older plxd, without the `branchPrefix` capability, leaves it out.
+	 */
+	branchPrefix?: string,
+	/**
+	 * Whether plxd listens for this user's other devices on its Tailscale address (decision
+	 * 0056). Off by default. An older plxd, without the `connect` capability, leaves it out.
+	 */
+	connect?: boolean,
+	/**
+	 * Whether plxd listens for paired clients over HTTPS on port 7341 (PLX-641, 0065). Off by
+	 * default. An older plxd, without the `remote` capability, leaves it out.
+	 */
+	remote?: boolean,
+	/**
+	 * Whether the HTTPS listener also serves the app as a web client at `/`, and pairs browsers
+	 * with the short code (PLX-651). Off by default, and only in effect while `remote` is on. An
+	 * older plxd, without the `remoteWeb` capability, leaves it out.
+	 */
+	remoteWeb?: boolean,
+	/**
+	 * Whether plxd keeps a connection to Parallax Relay, for phone notifications and its
+	 * webhooks' public URL, and while `remote` is on too, so this user's other devices reach it
+	 * from anywhere (PLX-652, 0068, PLX-1146). Off until set, or until the host first registers.
+	 * An older plxd, without the `relay` capability, leaves it out.
+	 */
+	relay?: boolean,
+	/**
+	 * This device's nickname for Parallax Connect, when one is set.
+	 */
+	deviceName?: string,
+	/**
+	 * This device's icon for Parallax Connect, when one is set: `laptop`, `desktop`, `mini`, or
+	 * `server`.
+	 */
+	deviceIcon?: string,
+};
+
+/**
+ * Params of `host/settings/set`: changes the settings it names and leaves the rest.
+ */
+export type HostSettingsSetParams = {
+	/**
+	 * The new `autoResume`. Absent leaves it.
+	 */
+	autoResume?: boolean,
+	/**
+	 * The new `continueAfterRestart`. Absent leaves it.
+	 */
+	continueAfterRestart?: boolean,
+	/**
+	 * The new `cleanWorktrees`, behind the `worktreeCleanup` capability. Absent leaves it.
+	 */
+	cleanWorktrees?: boolean,
+	/**
+	 * The new `branchPrefix`, behind the `branchPrefix` capability. Empty names branches for the
+	 * thread alone. Absent leaves it. Fails with `invalidParams` for one git can't start a branch
+	 * name with: letters, digits, `.`, `_`, `-`, and `/`, ending in `/` or `-`, at most 64 bytes.
+	 */
+	branchPrefix?: string,
+	/**
+	 * The new `connect`, behind the `connect` capability. Absent leaves it.
+	 */
+	connect?: boolean,
+	/**
+	 * The new `remote`, behind the `remote` capability. Absent leaves it.
+	 */
+	remote?: boolean,
+	/**
+	 * The new `remoteWeb`, behind the `remoteWeb` capability. Absent leaves it.
+	 */
+	remoteWeb?: boolean,
+	/**
+	 * The new `relay`, behind the `relay` capability. Absent leaves it.
+	 */
+	relay?: boolean,
+	/**
+	 * The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
+	 * are dropped and the rest trimmed to at most 64 characters.
+	 */
+	deviceName?: string,
+	/**
+	 * The new `deviceIcon`, behind the `connect` capability: `laptop`, `desktop`, `mini`, or
+	 * `server`, and `""` clears it. Anything else is invalid params.
+	 */
+	deviceIcon?: string,
+};
+
+/**
+ * Params of `connect/devices`.
+ */
+export type ConnectDevicesParams = Record<symbol, never>;
+
+/**
+ * Result of `connect/devices`: this node and the tailnet's other nodes of this node's
+ * Tailscale user (0056).
+ */
+export type ConnectDevicesResult = {
+	/**
+	 * Whether Tailscale runs on this host.
+	 */
+	tailscale: TailscaleState,
+	/**
+	 * The port plxd listens on while `connect` is on.
+	 */
+	port: number,
+	/**
+	 * Whether this plxd's tailnet listener is bound now.
+	 */
+	listening: boolean,
+	/**
+	 * This node. Absent unless Tailscale is running.
+	 */
+	self?: TailnetDevice,
+	/**
+	 * The other untagged nodes of this node's user, by host name. Tagged and shared nodes are
+	 * left out, and a tagged node lists none.
+	 */
+	devices: Array<TailnetDevice>,
+};
+
+/**
+ * A node on the tailnet.
+ */
+export type TailnetDevice = {
+	/**
+	 * The node's stable ID, such as `nZi1Lj6Rrb11CNTRL`.
+	 */
+	id: string,
+	/**
+	 * The node's host name.
+	 */
+	hostName: string,
+	/**
+	 * The node's `MagicDNS` name, without the trailing dot.
+	 */
+	dnsName: string,
+	/**
+	 * The OS as Tailscale reports it, such as `macOS`, `windows`, `linux`, or `iOS`.
+	 */
+	os: string,
+	/**
+	 * The node's first Tailscale IPv4 address.
+	 */
+	ip: string,
+	/**
+	 * Whether Tailscale sees the node online.
+	 */
+	online: boolean,
+	/**
+	 * Whether plxd answered on the node's port. Only checked when it is online.
+	 */
+	parallax: boolean,
+};
+
+/**
+ * Whether Tailscale runs on a host.
+ *
+ * A newer plxd may send states that are not listed here. Treat those as unknown.
+ */
+export type TailscaleState = "running" | "stopped" | "missing";
+
+/**
+ * Params of `remote/pair`.
+ */
+export type RemotePairParams = Record<symbol, never>;
+
+/**
+ * Result of `remote/pair`: a one-time pairing code another computer on this network enters
+ * (PLX-641, 0065).
+ */
+export type RemotePairResult = {
+	/**
+	 * Such as `7KQ-4M2`. It works once, until `expiresAt`, and locks after 5 wrong tries. A
+	 * newer code replaces it.
+	 */
+	code: string,
+	/**
+	 * When the code stops working, in RFC 3339.
+	 */
+	expiresAt: string,
+	/**
+	 * The name this host advertises over mDNS while the code waits.
+	 */
+	name: string,
+	/**
+	 * Where another computer can reach this one, best first, for when mDNS can't find it: its
+	 * LAN address, then its Tailscale address. Each is an IP, with `:port` when plxd listens on
+	 * another port than 7341.
+	 */
+	addresses: Array<string>,
+};
+
+/**
+ * Params of `remote/sessions`.
+ */
+export type RemoteSessionsParams = Record<symbol, never>;
+
+/**
+ * Result of `remote/sessions` and `remote/revoke`: the paired clients' sessions, oldest first.
+ */
+export type RemoteSessionsResult = {
+	/**
+	 * The sessions.
+	 */
+	sessions: Array<RemoteSession>,
+	/**
+	 * Whether plxd is listening for paired clients now.
+	 */
+	listening: boolean,
+	/**
+	 * Whether a pairing code is waiting, so plxd advertises itself over mDNS. False once the
+	 * code is used, locked, or expired.
+	 */
+	pairing: boolean,
+	/**
+	 * The SHA-256 fingerprint of the listener's certificate, in hex, while it listens: what a
+	 * browser shows for it, to check before trusting it (PLX-651).
+	 */
+	fingerprint?: string,
+	/**
+	 * Why it isn't while `remote` is on, such as the port being in use by another program.
+	 */
+	problem?: string,
+	/**
+	 * The relay connection while `relay` is on (PLX-652, 0068). An older plxd leaves it out.
+	 */
+	relay?: RelayStatus,
+};
+
+/**
+ * plxd's connection to Parallax Relay (PLX-652, 0068).
+ */
+export type RelayStatus = {
+	/**
+	 * Whether plxd is connected and the relay accepted its host key.
+	 */
+	connected: boolean,
+	/**
+	 * Where webhooks reach this host through the relay, to be followed by `/<hookId>/<token>`.
+	 */
+	hookUrl?: string,
+	/**
+	 * Why it isn't connected, such as this host not being registered yet.
+	 */
+	problem?: string,
+};
+
+/**
+ * A paired client's session.
+ */
+export type RemoteSession = {
+	/**
+	 * Its id, which `remote/revoke` takes.
+	 */
+	id: string,
+	/**
+	 * The name the client gave while pairing.
+	 */
+	name: string,
+	/**
+	 * When it paired, in RFC 3339.
+	 */
+	createdAt: string,
+	/**
+	 * Whether its device is read-only, which refuses it everything but reads. Absent means full
+	 * access.
+	 */
+	readOnly?: boolean,
+};
+
+/**
+ * Params of `remote/revoke`: ends a session and closes its connections.
+ */
+export type RemoteRevokeParams = {
+	/**
+	 * The session's id, from `remote/sessions`.
+	 */
+	id: string,
+};
+
+/**
+ * Params of `relay/register`: registers a host with Parallax Relay under the signed-in user.
+ */
+export type RelayRegisterParams = {
+	/**
+	 * The user's Clerk session token. plxd sends it to the relay once and keeps nothing of it.
+	 */
+	token: string,
+	/**
+	 * Another computer's registration, from its `relay/sign` over this token's hash, to post in
+	 * its place (PLX-1146). Absent registers this host.
+	 */
+	signed?: RelaySignResult,
+};
+
+/**
+ * Result of `relay/sign`: what `relay/register`'s `signed` takes.
+ */
+export type RelaySignResult = {
+	/**
+	 * Its relay id: its host key's JWK thumbprint.
+	 */
+	hostId: string,
+	/**
+	 * Its host key's P-256 public x coordinate, in base64url.
+	 */
+	x: string,
+	/**
+	 * Its y coordinate.
+	 */
+	y: string,
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Its ES256 signature over the registration message, in base64url.
+	 */
+	signature: string,
+};
+
+/**
+ * Params of `relay/sign` (PLX-1146): signs this host's relay registration for a token that stays
+ * on another computer.
+ */
+export type RelaySignParams = {
+	/**
+	 * The token's SHA-256, in base64url without padding.
+	 */
+	tokenHash: string,
+	/**
+	 * The token's Clerk user id (`sub`), which this host records as its account (0091). Only a
+	 * trusted connection's caller sets it, never the relay.
+	 */
+	userId?: string,
+};
+
+/**
+ * Params of `relay/hosts`: the hosts the signed-in user has on Parallax Relay.
+ */
+export type RelayHostsParams = {
+	/**
+	 * The user's Clerk session token. plxd sends it to the relay and keeps nothing of it.
+	 */
+	token: string,
+};
+
+/**
+ * Result of `relay/hosts` and `relay/remove`.
+ */
+export type RelayHostsResult = {
+	/**
+	 * The user's hosts on the relay.
+	 */
+	hosts: Array<RelayHost>,
+	/**
+	 * The relay ids of hosts that left the account, by Remove or by moving to another user, until
+	 * they register under this user again (PLX-1351). The only proof a host left: not being in
+	 * `hosts` proves nothing, since a relay that lost its data lists nothing. An older relay
+	 * leaves it out, which says nothing either way.
+	 */
+	removed?: Array<string>,
+};
+
+/**
+ * A host the signed-in user has on Parallax Relay.
+ */
+export type RelayHost = {
+	/**
+	 * Its relay id.
+	 */
+	hostId: string,
+	/**
+	 * Its name, as it registered.
+	 */
+	name: string,
+	/**
+	 * Whether it is connected to the relay now.
+	 */
+	online: boolean,
+	/**
+	 * Whether it is the plxd that answered: this computer.
+	 */
+	thisComputer: boolean,
+	/**
+	 * Its traffic against the relay's daily cap. An older relay leaves it out.
+	 */
+	usage?: RelayUsage,
+};
+
+/**
+ * A host's traffic through Parallax Relay today, as the relay counts it (PLX-1357).
+ */
+export type RelayUsage = {
+	/**
+	 * The bytes its streams carried this UTC day, both ways together.
+	 */
+	bytes: number,
+	/**
+	 * The bytes a day past which the relay refuses its streams.
+	 */
+	limit: number,
+	/**
+	 * When the count starts again, in milliseconds since the epoch: the next 00:00 UTC.
+	 */
+	resetsAt: number,
+};
+
+/**
+ * Params of `relay/check` (PLX-1356).
+ */
+export type RelayCheckParams = {
+	/**
+	 * The user's Clerk session token, which also checks the sign-in. plxd sends it to the relay
+	 * and keeps nothing of it. Without one, as plxd keeps none, the sign-in check is whether the
+	 * relay accepts this host's key.
+	 */
+	token?: string,
+};
+
+/**
+ * Result of `relay/check` (PLX-1356): whether a real stream through the relay reached this host's
+ * listener, with TLS pinned to its own host id, and if not, the first part that failed.
+ */
+export type RelayCheckResult = {
+	/**
+	 * The first part that failed. The parts after it weren't checked. None when all passed.
+	 */
+	failed?: RelayCheckPart,
+	/**
+	 * What went wrong, for people.
+	 */
+	problem?: string,
+	/**
+	 * What to do about it, for people.
+	 */
+	fix?: string,
+	/**
+	 * How long the stream took, from asking the relay to reading the listener's answer.
+	 */
+	roundTripMs?: number,
+	/**
+	 * This result as text to paste into a bug report. It holds no token, ticket, session, or user
+	 * id, and only the start of the host id.
+	 */
+	diagnostics: string,
+};
+
+/**
+ * A part of the path a client's connection takes through Parallax Relay.
+ */
+export type RelayCheckPart = "signIn" | "relay" | "listener" | "stream";
+
+/**
+ * Params of `relay/remove`: removes one of the signed-in user's hosts from Parallax Relay,
+ * which frees its place: an account holds 10.
+ */
+export type RelayRemoveParams = {
+	/**
+	 * The user's Clerk session token.
+	 */
+	token: string,
+	/**
+	 * The host's relay id.
+	 */
+	hostId: string,
+};
+
+/**
+ * Params of `relay/id`.
+ */
+export type RelayIdParams = Record<symbol, never>;
+
+/**
+ * Result of `relay/id` (0091): this host's relay id, the JWK thumbprint of its host key, which an
+ * `account:` connection pins, and its current routes, so a client can refresh them.
+ */
+export type RelayIdResult = {
+	/**
+	 * Its relay id.
+	 */
+	hostId: string,
+	/**
+	 * Where the host can be reached now, best first, as its `/.well-known/parallax` descriptor
+	 * lists them: its LAN address, its Tailscale address, then `relay:<hostId>` while plxd is
+	 * connected to the relay. Each address is an IP, with `:port` when plxd listens on another
+	 * port than 7341. An older plxd leaves it out.
+	 */
+	routes?: Array<string>,
+};
+
+/**
+ * Params of `relay/pushKey`.
+ */
+export type RelayPushKeyParams = Record<symbol, never>;
+
+/**
+ * Result of `relay/pushKey` (0100): the key this host seals a push's title and text with, for a
+ * phone's notification service extension to open.
+ */
+export type RelayPushKeyResult = {
+	/**
+	 * The relay id its pushes carry, which the phone keeps the key under.
+	 */
+	hostId: string,
+	/**
+	 * 32 random bytes, for AES-256-GCM, in base64url.
+	 */
+	key: string,
+};
+
+/**
+ * Params of `access/get`.
+ */
+export type AccessGetParams = {
+	/**
+	 * A `version` the caller already has: the answer waits until the state changes from it, or
+	 * the connection closes. Absent answers at once.
+	 */
+	after?: number,
+};
+
+/**
+ * Who may sign in to this host with its account (0091), and what waits for the user.
+ */
+export type AccessState = {
+	/**
+	 * Changes whenever anything below does, for `access/get`'s `after`.
+	 */
+	version: number,
+	/**
+	 * The Clerk user id this host registered with the relay under, if it has.
+	 */
+	account?: string,
+	/**
+	 * The `DPoP` key thumbprints of the approved clients.
+	 */
+	approvedClients: Array<string>,
+	/**
+	 * The thumbprints of removed clients, which are never approved again.
+	 */
+	removedClients: Array<string>,
+	/**
+	 * The relay ids of the account's approved hosts.
+	 */
+	approvedHosts: Array<string>,
+	/**
+	 * Hosts added with Allow alone (0091), apart from `approved_hosts`, which is all an older
+	 * client reads: clients use them and copy lists to them, but take no keys or host ids from
+	 * them.
+	 */
+	allowedHosts?: Array<string>,
+	/**
+	 * The thumbprints of read-only clients. A merge can't take one off (0091).
+	 */
+	readOnlyClients?: Array<string>,
+	/**
+	 * A new device's request, while it waits.
+	 */
+	pending?: AccessRequest,
+	/**
+	 * The name of the device the latest `access/setupCode` code approved, once one has.
+	 */
+	setupApproved?: string,
+};
+
+/**
+ * A new device's request to sign in, which one of the user's approved devices approves once
+ * both show the same code.
+ */
+export type AccessRequest = {
+	/**
+	 * Its id, which `access/approve` and `access/deny` take.
+	 */
+	id: string,
+	/**
+	 * The name the device gave.
+	 */
+	name: string,
+	/**
+	 * The device's `DPoP` key thumbprint.
+	 */
+	thumbprint: string,
+	/**
+	 * Its 6 digits, once the device sent its random value. Until then it can't be approved.
+	 */
+	code?: string,
+	/**
+	 * When it lapses, in RFC 3339.
+	 */
+	expiresAt: string,
+};
+
+/**
+ * Params of `access/merge`: lists another host keeps, merged into this one's. A removed key
+ * stays removed and leaves the approved list.
+ */
+export type AccessMergeParams = {
+	/**
+	 * Approved client thumbprints.
+	 */
+	approvedClients: Array<string>,
+	/**
+	 * Removed client thumbprints.
+	 */
+	removedClients: Array<string>,
+	/**
+	 * Approved host ids.
+	 */
+	approvedHosts: Array<string>,
+	/**
+	 * Host ids added with Allow alone.
+	 */
+	allowedHosts?: Array<string>,
+	/**
+	 * Read-only client thumbprints. A merge only adds to them, so it can't raise a device.
+	 */
+	readOnlyClients?: Array<string>,
+};
+
+/**
+ * Params of `access/setReadOnly`.
+ */
+export type AccessSetReadOnlyParams = {
+	/**
+	 * A session of the device, by the id `remote/sessions` lists.
+	 */
+	id: string,
+};
+
+/**
+ * Params of `access/approve` and `access/deny`.
+ */
+export type AccessRequestParams = {
+	/**
+	 * The request's id.
+	 */
+	request: string,
+};
+
+/**
+ * Params of `access/remove`.
+ */
+export type AccessRemoveParams = {
+	/**
+	 * The client's `DPoP` key thumbprint.
+	 */
+	thumbprint: string,
+};
+
+/**
+ * Params of `access/forgetHost`.
+ */
+export type AccessForgetHostParams = {
+	/**
+	 * The relay id of the computer the user removed from their account.
+	 */
+	hostId: string,
+};
+
+/**
+ * Params of `access/setupCode`.
+ */
+export type AccessSetupCodeParams = {
+	/**
+	 * The `DPoP` key thumbprint of the device whose Add computer gave the setup command. While
+	 * the code lasts, that key's Allow is enough, and no other key's request is taken (0091).
+	 */
+	device?: string,
+};
+
+/**
+ * Result of `access/setupCode`: the code a new computer shows for a signed-in client to type
+ * (0091).
+ */
+export type AccessSetupCodeResult = {
+	/**
+	 * 6 digits. A client that types it runs SPAKE2 pairing with it once.
+	 */
+	code: string,
+	/**
+	 * When it stops working, in RFC 3339.
+	 */
+	expiresAt: string,
+};
+
+/**
+ * Params of `inbox/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
+ */
+export type InboxListParams = {
+	/**
+	 * The Orchestrator.
+	 */
+	orchestrator: ScopeId,
+};
+
+/**
+ * Result of `inbox/list`.
+ */
+export type InboxListResult = {
+	/**
+	 * Every item, oldest first.
+	 */
+	items: Array<InboxItem>,
+	/**
+	 * The event log's `seq` from before the list was read. Subscribe to the orchestrator's events
+	 * with `after` set to it for the items added since. The list may already reflect some events
+	 * after it, and replaying them is harmless.
+	 */
+	seq: number,
+};
+
+/**
+ * Params of `inbox/seen`: marks items seen at plxd's clock now. An item already seen keeps its
+ * first `seenAt`, and ids not in the orchestrator's inbox are skipped. Fails with
+ * `orchestratorNotFound` for an unknown orchestrator.
+ */
+export type InboxSeenParams = {
+	/**
+	 * The Orchestrator.
+	 */
+	orchestrator: ScopeId,
+	/**
+	 * The items to mark.
+	 */
+	items: Array<InboxItemId>,
+};
+
+/**
+ * Result of `inbox/seen`.
+ */
+export type InboxSeenResult = {
+	/**
+	 * The marked items as they stand, oldest first.
+	 */
+	items: Array<InboxItem>,
+};
+
+/**
+ * Params of `github/install`.
+ */
+export type GithubInstallParams = Record<symbol, never>;
+
+/**
+ * Params of `github/signIn`.
+ */
+export type GithubSignInParams = Record<symbol, never>;
+
+/**
+ * Params of `github/signInCancel`.
+ */
+export type GithubSignInCancelParams = Record<symbol, never>;
+
+/**
+ * Result of `github/signInCancel`.
+ */
+export type GithubSignInCancelResult = Record<symbol, never>;
+
+/**
+ * Params of `queue/list`.
+ */
+export type QueueListParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of every `queue/*` method: the run's queue after it, first to be sent first.
+ */
+export type QueueResult = {
+	/**
+	 * The waiting messages, without the hidden ones plxd sends itself (PLX-1247).
+	 */
+	messages: Array<QueuedMessage>,
+	/**
+	 * True while a Stop holds them until `queue.resume` (PLX-644). Absent means false.
+	 */
+	held?: boolean,
+};
+
+/**
+ * Params of `queue/edit`: replaces a waiting message's text, keeping its images.
+ */
+export type QueueEditParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The message.
+	 */
+	id: TurnId,
+	/**
+	 * Its new text, which may be empty only when it has images.
+	 */
+	text: string,
+};
+
+/**
+ * Params of `queue/reorder`.
+ */
+export type QueueReorderParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * Every waiting message's id, in the new order, first to be sent first.
+	 */
+	ids: Array<TurnId>,
+};
+
+/**
+ * Params of `queue/cancel`: drops a waiting message, which is never sent.
+ */
+export type QueueCancelParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The message.
+	 */
+	id: TurnId,
+};
+
+/**
+ * Params of `queue/steer`: takes a waiting message out of the queue and sends it into the turn
+ * running now, as `agent/send` with `delivery: steer` does.
+ */
+export type QueueSteerParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The message.
+	 */
+	id: TurnId,
+};
+
+/**
+ * Params of `question/ask`. Fails with `invalidParams` unless `run` is in an orchestrator and
+ * isn't its orchestrator, and with `runNotFound` for an unknown run.
+ */
+export type QuestionAskParams = {
+	/**
+	 * The child asking.
+	 */
+	run: RunId,
+	/**
+	 * The question, at most 4 KiB.
+	 */
+	question: string,
+	/**
+	 * What the child goes on assuming until it hears otherwise, at most 4 KiB.
+	 */
+	assumption: string,
+};
+
+/**
+ * Result of `question/ask`, `question/answer`, and `question/escalate`.
+ */
+export type QuestionResult = {
+	/**
+	 * The question as it stands.
+	 */
+	question: Question,
+};
+
+/**
+ * A question a child asked.
+ */
+export type Question = {
+	/**
+	 * The question's id.
+	 */
+	id: QuestionId,
+	/**
+	 * The child that asked it.
+	 */
+	run: RunId,
+	/**
+	 * The question.
+	 */
+	question: string,
+	/**
+	 * What the child went on assuming.
+	 */
+	assumption: string,
+	/**
+	 * Where it stands.
+	 */
+	status: QuestionStatus,
+	/**
+	 * The orchestrator's or the user's answer. Absent while `open` or `escalated`.
+	 */
+	answer?: string,
+	/**
+	 * When the child asked it, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * Identifies one question. plxd generates it.
+ */
+export type QuestionId = string;
+
+/**
+ * Where a question stands.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type QuestionStatus = "open" | "escalated" | "decided" | "answered";
+
+/**
+ * Params of `question/answer`. With `from`, the orchestrator's current run answers an
+ * `open` question, which becomes `decided`; otherwise it fails with `invalidParams`. Without
+ * `from`, the user answers any question, which becomes `answered`. The child gets the answer as a
+ * queued message when it differs from what it was last told: its assumption, or the decided answer
+ * the user changes. Fails with `invalidParams` for an unknown question, or one whose child is
+ * gone.
+ */
+export type QuestionAnswerParams = {
+	/**
+	 * The question.
+	 */
+	question: QuestionId,
+	/**
+	 * The answer, at most 4 KiB.
+	 */
+	text: string,
+	/**
+	 * The orchestrator's run, when it answers. Absent for the user.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Params of `question/escalate`: the orchestrator's current run passes an `open` question
+ * to the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or
+ * for a question that isn't open or is unknown.
+ */
+export type QuestionEscalateParams = {
+	/**
+	 * The question.
+	 */
+	question: QuestionId,
+	/**
+	 * The orchestrator's run.
+	 */
+	from: RunId,
+};
+
+/**
+ * Params of `question/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
+ */
+export type QuestionListParams = {
+	/**
+	 * The Orchestrator.
+	 */
+	orchestrator: ScopeId,
+};
+
+/**
+ * Result of `question/list`.
+ */
+export type QuestionListResult = {
+	/**
+	 * Every question, oldest first.
+	 */
+	questions: Array<Question>,
+};
+
+/**
+ * Params of `board/list`. Fails with `orchestratorNotFound` for an unknown Orchestrator.
+ */
+export type BoardListParams = {
+	/**
+	 * The Orchestrator.
+	 */
+	orchestrator: ScopeId,
+};
+
+/**
+ * Result of `board/list`.
+ */
+export type BoardListResult = {
+	/**
+	 * Every item, archived ones included, oldest first.
+	 */
+	items: Array<BoardItem>,
+};
+
+/**
+ * One item on an orchestrator's status board.
+ */
+export type BoardItem = {
+	/**
+	 * The item's id, unique on the host. plxd assigns it.
+	 */
+	id: number,
+	/**
+	 * One line of Markdown, such as `**Search command**: one subagent adds it`.
+	 */
+	text: string,
+	/**
+	 * Whether it is still to do.
+	 */
+	status: BoardStatus,
+	/**
+	 * Its section.
+	 */
+	section: BoardSection,
+	/**
+	 * What it links to.
+	 */
+	links: BoardLinks,
+	/**
+	 * When it was added, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+	/**
+	 * When it last changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+	/**
+	 * When it was marked done, while it is. Seven days later it moves to `archived.md`.
+	 */
+	doneAt?: string,
+};
+
+/**
+ * What a board item links to.
+ */
+export type BoardLinks = {
+	/**
+	 * Threads doing or tracking the work, by run id.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * The item's pull request, an `https://` URL.
+	 */
+	pullRequest?: string,
+	/**
+	 * Files it concerns: repository paths or shared context files.
+	 */
+	files?: Array<string>,
+};
+
+/**
+ * The board section an item is in, in the order the board shows them.
+ *
+ * A newer plxd may send a section this version does not know; treat it as `risks`.
+ */
+export type BoardSection = "now" | "next" | "risks";
+
+/**
+ * Whether a board item is still to do.
+ *
+ * A newer plxd may send a status this version does not know; treat it as open.
+ */
+export type BoardStatus = "open" | "done";
+
+/**
+ * Params of `board/add`: adds an item. Not idempotent: a retry adds a second item. Fails with
+ * `orchestratorNotFound` for an unknown Orchestrator, and `invalidParams` for empty or multi-line
+ * text over 2 KiB, or links that aren't valid.
+ */
+export type BoardAddParams = {
+	/**
+	 * The Orchestrator.
+	 */
+	orchestrator: ScopeId,
+	/**
+	 * One line of Markdown.
+	 */
+	text: string,
+	/**
+	 * Its section.
+	 */
+	section: BoardSection,
+	/**
+	 * Its status. Absent means `open`.
+	 */
+	status?: BoardStatus,
+	/**
+	 * What it links to.
+	 */
+	links?: BoardLinks,
+};
+
+/**
+ * Result of `board/add` and `board/update`.
+ */
+export type BoardItemResult = {
+	/**
+	 * The item as it stands.
+	 */
+	item: BoardItem,
+};
+
+/**
+ * Params of `board/update`: changes what it names of one item, replacing `links` whole. Fails
+ * with `invalidParams` for an item the orchestrator doesn't have, or a value `board/add` refuses.
+ */
+export type BoardUpdateParams = {
+	/**
+	 * The Orchestrator.
+	 */
+	orchestrator: ScopeId,
+	/**
+	 * The item.
+	 */
+	id: number,
+	/**
+	 * Its new text.
+	 */
+	text?: string,
+	/**
+	 * Its new section.
+	 */
+	section?: BoardSection,
+	/**
+	 * Its new status.
+	 */
+	status?: BoardStatus,
+	/**
+	 * Its new links, replacing the old ones.
+	 */
+	links?: BoardLinks,
+};
+
+/**
+ * Params of `board/remove`: removes one item. Removing one the orchestrator doesn't have succeeds
+ * with `removed` false.
+ */
+export type BoardRemoveParams = {
+	/**
+	 * The Orchestrator.
+	 */
+	orchestrator: ScopeId,
+	/**
+	 * The item.
+	 */
+	id: number,
+};
+
+/**
+ * Result of `board/remove`.
+ */
+export type BoardRemoveResult = {
+	/**
+	 * Whether the item existed.
+	 */
+	removed: boolean,
+};
+
+/**
+ * Params of `memory/list`.
+ */
+export type MemoryListParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+};
+
+/**
+ * Whose memory: the user's own, a repository's, or an orchestrator's (0044).
+ */
+export type MemoryScope = { "kind": "you" } | { "kind": "repo",
+	/**
+	 * The repo entry.
+	 */
+	id: RepoId, } | { "kind": "orchestrator",
+	/**
+	 * The Orchestrator.
+	 */
+	id: ScopeId,
+};
+
+/**
+ * Result of `memory/list`.
+ */
+export type MemoryListResult = {
+	/**
+	 * The brief, entries, knowledge, and proposals, ordered by path.
+	 */
+	files: Array<MemoryFile>,
+};
+
+/**
+ * One memory file, without its body. The header fields are read from an entry's file, and are
+ * absent for one that lacks them, such as the brief or knowledge.
+ */
+export type MemoryFile = {
+	/**
+	 * The file's path in the scope's folder.
+	 */
+	path: string,
+	/**
+	 * Its size in bytes.
+	 */
+	size: number,
+	/**
+	 * When it was last modified, in RFC 3339 UTC.
+	 */
+	modifiedAt: string,
+	/**
+	 * An entry's or proposal's kind.
+	 */
+	kind?: MemoryKind,
+	/**
+	 * Its title.
+	 */
+	title?: string,
+	/**
+	 * The run or message it came from.
+	 */
+	source?: string,
+	/**
+	 * The day it was written, as its file says, such as `2026-10-04`.
+	 */
+	date?: string,
+	/**
+	 * Who wrote it: `user`, or `orchestrator <run id>`, or for a proposal `thread <run id>` or
+	 * `orchestrator <run id>`.
+	 */
+	writer?: string,
+	/**
+	 * For a proposal in an orchestrator's folder, the scope it is for: a child's, which its
+	 * orchestrator curates, or an orchestrator's, which the user saves there.
+	 */
+	forScope?: MemoryScopeKind,
+	/**
+	 * For an orchestrator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
+	 * `for_scope`, which saving it replaces.
+	 */
+	replaces?: string,
+	/**
+	 * An entry plxd marked for review because a path it names in backticks is missing from its
+	 * branch: the integration branch for an orchestrator entry, the base branch for a repo entry
+	 * (0044, PLX-407). Rewriting the entry clears it.
+	 */
+	stale?: boolean,
+	/**
+	 * The day an agent's `memory_read` last returned the entry, as its file says, such as
+	 * `2026-10-20` (PLX-943). Absent until one does; rewriting the entry clears it.
+	 */
+	lastUsed?: string,
+	/**
+	 * An entry no agent has read for 60 days or more: its `last_used`, or its `date` when it has
+	 * none, is that old (PLX-943). The Memory tab lists it, and a `stale` one, for review.
+	 */
+	unused?: boolean,
+	/**
+	 * For a You entry or knowledge file, the computer that last wrote it (0082). Absent until
+	 * plxd has recorded its current text, which it does within a minute while `connect` is on.
+	 */
+	machine?: MemoryMachine,
+};
+
+/**
+ * What an entry records (0044).
+ *
+ * A newer plxd may send a kind this version does not know; treat it as unknown.
+ */
+export type MemoryKind = "preference" | "convention" | "decision" | "gotcha";
+
+/**
+ * A computer that wrote a You entry (0082).
+ */
+export type MemoryMachine = {
+	/**
+	 * Its Tailscale node ID.
+	 */
+	id: string,
+	/**
+	 * Its device name, or its Tailscale host name when it has none, as of the write.
+	 */
+	name: string,
+};
+
+/**
+ * A scope's name, as a proposal's file names the scope it is for.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type MemoryScopeKind = "you" | "repo" | "orchestrator";
+
+/**
+ * Params of `memory/read`. Fails with `contextNotFound` if there is no such file.
+ */
+export type MemoryReadParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+	/**
+	 * The run reading, for a thread's Parallax tools. Its read of an entry records today as the
+	 * entry's `last_used`. Absent: the user reads, which records nothing.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Result of `memory/read`.
+ */
+export type MemoryReadResult = {
+	/**
+	 * The file, with its header's fields.
+	 */
+	file: MemoryFile,
+	/**
+	 * Its body: an entry's or proposal's text after its header, or the whole of any other file.
+	 */
+	content: string,
+};
+
+/**
+ * Params of `memory/write`: replaces `brief.md`, `knowledge/<slug>.md`, or an entry,
+ * `memory/<kind>/<slug>.md`, in full. For an entry, plxd writes the header from `title`, which it
+ * then needs, `source`, today's UTC date, and the writer. Fails with `contextTooLarge` over the
+ * shared context caps. Only the user writes the brief: an orchestrator proposes it.
+ */
+export type MemoryWriteParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+	/**
+	 * The new content: an entry's body, or the whole file.
+	 */
+	content: string,
+	/**
+	 * An entry's title, one line.
+	 */
+	title?: string,
+	/**
+	 * The run or message an entry came from. Absent: `user`, or the writing run.
+	 */
+	source?: string,
+	/**
+	 * The run writing, for a thread's Parallax tools. It must be its orchestrator's current
+	 * orchestrator, or the write fails with `invalidParams`, and the write adds a `learned` item
+	 * to that orchestrator's inbox. Absent: the user writes.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Result of `memory/write`.
+ */
+export type MemoryWriteResult = {
+	/**
+	 * The file as written.
+	 */
+	file: MemoryFile,
+};
+
+/**
+ * Params of `memory/delete`: deletes the brief, an entry, knowledge, or a proposal. Fails with
+ * `contextNotFound` if there is no such file.
+ */
+export type MemoryDeleteParams = {
+	/**
+	 * The scope.
+	 */
+	scope: MemoryScope,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `memory/delete`.
+ */
+export type MemoryDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `memory/propose`, for a thread's Parallax tools: run `from` proposes an entry, saved
+ * as `proposals/<slug>.md`. An orchestrator's child's is saved in the orchestrator's folder, with
+ * a `Scope:` line naming `scope`, and its orchestrator's next wake-up carries it, then removes it;
+ * it doesn't wake the orchestrator. An orchestrator's is saved the same way, for the user, and no
+ * wake-up carries it. A plain thread's, only at its own repository's scope, is saved there for the
+ * user. Any other run's fails with `invalidParams`.
+ */
+export type MemoryProposeParams = {
+	/**
+	 * The run proposing.
+	 */
+	from: RunId,
+	/**
+	 * The scope the entry belongs in.
+	 */
+	scope: MemoryScope,
+	/**
+	 * Its kind. Absent: a rewrite of the orchestrator's brief, which only its orchestrator
+	 * proposes, at the orchestrator's scope. Its proposal has no kind.
+	 */
+	kind?: MemoryKind,
+	/**
+	 * Its title, one line.
+	 */
+	title: string,
+	/**
+	 * Its body.
+	 */
+	content: string,
+	/**
+	 * The entry it rewrites, `memory/<kind>/<name>.md` of the same kind at `scope`, which must
+	 * exist. Only an orchestrator names one; its proposal records it as `replaces`.
+	 */
+	replaces?: string,
+};
+
+/**
+ * Result of `memory/propose`.
+ */
+export type MemoryProposeResult = {
+	/**
+	 * Who it went to.
+	 */
+	to: MemoryProposalTo,
+	/**
+	 * The proposal's file. Absent only from an older plxd.
+	 */
+	file?: MemoryFile,
+};
+
+/**
+ * Who a proposal went to.
+ *
+ * A newer plxd may send a value this version does not know; treat it as unknown.
+ */
+export type MemoryProposalTo = "orchestrator" | "user";
+
+/**
+ * Params of `memory/syncList`.
+ */
+export type MemorySyncListParams = Record<symbol, never>;
+
+/**
+ * Result of `memory/syncList`.
+ */
+export type MemorySyncListResult = {
+	/**
+	 * Every path plxd has recorded in You, deletions included.
+	 */
+	entries: Array<MemorySyncEntry>,
+};
+
+/**
+ * One version of a You entry or knowledge file, as a plxd records it (0082).
+ */
+export type MemorySyncEntry = {
+	/**
+	 * The path in the You folder.
+	 */
+	path: string,
+	/**
+	 * The SHA-256, in hex, of the text that syncs: the file without its `Last used:` and
+	 * `Stale:` lines. Empty for a deletion.
+	 */
+	hash: string,
+	/**
+	 * The version vector: each machine's node ID, and how many local changes it made.
+	 */
+	clock: Record<string, number>,
+	/**
+	 * The computer that wrote this version.
+	 */
+	machine: MemoryMachine,
+	/**
+	 * When it did, in RFC 3339 UTC.
+	 */
+	writtenAt: string,
+	/**
+	 * This version deletes the file.
+	 */
+	deleted?: boolean,
+};
+
+/**
+ * Params of `memory/syncRead`. Fails with `contextNotFound` if there is no such file.
+ */
+export type MemorySyncReadParams = {
+	/**
+	 * The path in the You folder: an entry or a knowledge file.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `memory/syncRead`.
+ */
+export type MemorySyncReadResult = {
+	/**
+	 * The text that syncs, whose SHA-256 is its entry's `hash`.
+	 */
+	content: string,
+};
+
+/**
+ * Params of `land/queue`: queues a finished child of an orchestrator to land on its integration
+ * branch, as the orchestrator's `land` tool does. It waits for the user's approval unless the
+ * orchestrator's `autoLand` is on. A child already waiting, queued, or sent back stays as it is.
+ *
+ * Fails with `runNotFound`, or `landRefused` for a run that isn't an orchestrator's completed
+ * child with a branch, such as one started with `explore`.
+ */
+export type LandQueueParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `land/queue`, `land/approve`, and `land/sendBack`.
+ */
+export type LandResult = {
+	/**
+	 * The child's landing as it stands.
+	 */
+	landing: Landing,
+};
+
+/**
+ * A child in its orchestrator's landing queue.
+ */
+export type Landing = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+	/**
+	 * Its Orchestrator.
+	 */
+	orchestrator: ScopeId,
+	/**
+	 * Where it is.
+	 */
+	status: LandingStatus,
+	/**
+	 * When it was last queued, in RFC 3339 UTC. The queue lands the oldest first.
+	 */
+	queuedAt: string,
+};
+
+/**
+ * Where a child is in its orchestrator's landing queue.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type LandingStatus = "waiting" | "queued" | "sentBack" | "landed" | "needsYou";
+
+/**
+ * Params of `land/approve`: lands a child waiting for approval, in its turn. Fails with
+ * `landRefused` unless it is `waiting`.
+ */
+export type LandApproveParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Params of `land/sendBack`: sends a child waiting for approval a message from the user instead
+ * of landing it. plxd queues it again, waiting for approval, when that turn ends. Fails with
+ * `landRefused` unless it is `waiting`.
+ */
+export type LandSendBackParams = {
+	/**
+	 * The child's run.
+	 */
+	runId: RunId,
+	/**
+	 * What the child should change, sent as the user's message.
+	 */
+	text: string,
+};
+
+/**
+ * Params of `agent/wait` (PLX-451): waits until runs are idle, that is neither `starting` nor
+ * `running`, or until the timeout.
+ */
+export type AgentWaitParams = {
+	/**
+	 * The runs, from 1 to 50 of them.
+	 */
+	runIds: Array<RunId>,
+	/**
+	 * Whether any one of them or all of them have to be idle.
+	 */
+	until: AgentWaitUntil,
+	/**
+	 * How long to wait, in milliseconds: at most 60000, which keeps the request under the
+	 * connection's idle timeout.
+	 */
+	timeoutMs: number,
+};
+
+/**
+ * Which of `agent/wait`'s runs have to be idle.
+ *
+ * A newer peer may send a value this version does not know; treat it as unknown.
+ */
+export type AgentWaitUntil = "any" | "all";
+
+/**
+ * Result of `agent/wait`.
+ */
+export type AgentWaitResult = {
+	/**
+	 * The runs as they stand, in the order asked for.
+	 */
+	runs: Array<AgentRun>,
+	/**
+	 * Whether the timeout passed first.
+	 */
+	timedOut: boolean,
+};
+
+/**
+ * Params of `orchestrator/fromThreads`: makes an orchestrator from threads (0042), behind the
+ * `orchestratorFromThreads` capability.
+ *
+ * Each thread must be on the same repo entry and have its own worktree, so a thread on the scratch
+ * entry, one in the user's checkout, one whose worktree `agent/accept` removed, or one already in
+ * an orchestrator fails with `invalidParams`, as do threads on two repo entries. A thread whose
+ * kind has no `permission` in an orchestrator fails with `unsupportedOption`. An unknown thread
+ * fails with `threadNotFound`.
+ *
+ * plxd creates the orchestrator on the threads' repository as `orchestrator/create` does, starts
+ * its orchestrator as `orchestrator/start` does, with a first message asking it to read the
+ * threads and propose the brief with `memory_propose` for the user to save, and makes each thread
+ * the orchestrator's child. When the orchestrator can't start, plxd removes the orchestrator it
+ * just created and leaves the threads as they were.
+ *
+ * A thread keeps its history, worktree, branch, and `Thread.repo`. Its run moves to the
+ * orchestrator, so its later `agent.*` events are on the orchestrator's scope, and it forwards its
+ * permission requests (`approvals`) to the inbox. It takes the orchestrator as its `parent`
+ * (reported as `thread.updated`), replacing any parent it had: a thread another thread started
+ * stops waking that thread. It runs in the orchestrator's mode from its next CLI process.
+ * Idempotent on `id` and `runId`: a retry returns the same orchestrator and run.
+ */
+export type OrchestratorFromThreadsParams = {
+	/**
+	 * The new orchestrator's id, a version 7 UUID generated by the client.
+	 */
+	id: ScopeId,
+	/**
+	 * The orchestrator run's id, a version 7 UUID generated by the client.
+	 */
+	runId: RunId,
+	/**
+	 * The name shown in the app.
+	 */
+	name: string,
+	/**
+	 * The orchestrator's permission mode, which the user picked in the disclaimer.
+	 */
+	permission: OrchestratorPermission,
+	/**
+	 * The threads, by run id: at least one.
+	 */
+	threads: Array<RunId>,
+	/**
+	 * The orchestrator's account, as `orchestrator/start`'s. Absent means the orchestrator role's
+	 * default.
+	 */
+	account?: AccountChoice,
+};
+
+/**
+ * Result of `orchestrator/fromThreads`.
+ */
+export type OrchestratorFromThreadsResult = {
+	/**
+	 * The orchestrator, with its run.
+	 */
+	orchestrator: Orchestrator,
+	/**
+	 * The orchestrator's run.
+	 */
+	run: AgentRun,
+};
+
+/**
+ * Params of `cursor/signIn`, `cursor/signInCancel`, and `cursor/signOut` (0053).
+ */
+export type CursorSignInParams = {
+	/**
+	 * The instance, or the built-in `cursor` when omitted.
+	 */
+	instance?: string,
+};
+
+/**
+ * Result of `cursor/signIn`: the browser URL the app opens.
+ */
+export type CursorSignInResult = {
+	/**
+	 * The Cursor account login page.
+	 */
+	url: string,
+};
+
+/**
+ * Result of `cursor/signInCancel`.
+ */
+export type CursorSignInCancelResult = Record<symbol, never>;
+
+/**
+ * Result of `cursor/signOut`.
+ */
+export type CursorSignOutResult = Record<symbol, never>;
+
+/**
+ * Params of `cursor/install`.
+ */
+export type CursorInstallParams = Record<symbol, never>;
+
+/**
+ * Result of `cursor/install`.
+ */
+export type CursorInstallResult = Record<symbol, never>;
+
+/**
+ * Params of `terminal/open`. A terminal is named by its thread and its own id; `threadId` is
+ * empty for one that belongs to no thread, such as a repository checkout's.
+ */
+export type TerminalOpenParams = {
+	/**
+	 * The thread it belongs to, whose archive or delete closes it.
+	 */
+	threadId: string,
+	/**
+	 * The client's name for it, unique within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The absolute folder a new terminal starts in. Absent, or `~`, is the home folder.
+	 */
+	cwd?: string,
+	/**
+	 * What a new terminal runs instead of the login shell. It ends when the connection that
+	 * opened it closes, where a shell outlives it.
+	 */
+	command?: TerminalCommand,
+	/**
+	 * Its size in character cells.
+	 */
+	cols: number,
+	/**
+	 * Its height in character cells.
+	 */
+	rows: number,
+};
+
+/**
+ * A program a terminal runs, found on `PATH` unless it's a path.
+ */
+export type TerminalCommand = {
+	/**
+	 * The program.
+	 */
+	program: string,
+	/**
+	 * Its arguments.
+	 */
+	args?: Array<string>,
+	/**
+	 * Variables it gets besides plxd's own.
+	 */
+	env?: { [key in string]: string },
+};
+
+/**
+ * Result of `terminal/open` and `terminal/close`.
+ */
+export type TerminalResult = Record<symbol, never>;
+
+/**
+ * A terminal's name: its thread and its own id.
+ */
+export type TerminalKey = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+};
+
+/**
+ * Params of `terminal/list`.
+ */
+export type TerminalListParams = {
+	/**
+	 * Only this thread's terminals. Absent lists every one.
+	 */
+	threadId?: string,
+};
+
+/**
+ * Result of `terminal/list`: the terminals that are running.
+ */
+export type TerminalListResult = {
+	/**
+	 * Each running terminal.
+	 */
+	terminals: Array<TerminalKey>,
+};
+
+/**
+ * Params of `schedule/list`.
+ */
+export type ScheduleListParams = Record<symbol, never>;
+
+/**
+ * Result of `schedule/list`: every task on the host, oldest first.
+ */
+export type ScheduleListResult = {
+	/**
+	 * The tasks.
+	 */
+	tasks: Array<ScheduledTask>,
+};
+
+/**
+ * A scheduled task, as `schedule/save`, `schedule/list`, and `schedule/run` return it.
+ */
+export type ScheduledTask = {
+	/**
+	 * Its id, a UUID.
+	 */
+	id: string,
+	/**
+	 * Its name, and the title of each thread it launches.
+	 */
+	title: string,
+	/**
+	 * What each fire sends. A webhook's placeholders are filled from the request.
+	 */
+	prompt: string,
+	/**
+	 * A paused task doesn't fire, except by `schedule/run`.
+	 */
+	enabled: boolean,
+	/**
+	 * Its trigger.
+	 */
+	schedule: Schedule,
+	/**
+	 * The thread each fire queues its prompt into.
+	 */
+	thread?: RunId,
+	/**
+	 * The orchestrator each fire messages.
+	 */
+	orchestrator?: ScopeId,
+	/**
+	 * Without `thread` or `project`: the repo entry each fire launches a thread in. Absent
+	 * launches it with no repository.
+	 */
+	repo?: RepoId,
+	/**
+	 * A launched thread's account. Absent uses the worker default.
+	 */
+	account?: AccountChoice,
+	/**
+	 * A launched thread's model.
+	 */
+	model?: string,
+	/**
+	 * A launched thread's effort.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * A launched thread's access.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * When it fires next. Absent for a webhook or a paused task.
+	 */
+	nextRunAt?: string,
+	/**
+	 * When it last fired.
+	 */
+	lastRunAt?: string,
+	/**
+	 * How its last fire went.
+	 */
+	lastRunStatus: ScheduleRunStatus,
+	/**
+	 * Why its last fire failed.
+	 */
+	lastRunError?: string,
+	/**
+	 * How many times it has fired.
+	 */
+	runCount: number,
+	/**
+	 * Where a webhook task receives requests.
+	 */
+	webhook?: ScheduleWebhook,
+	/**
+	 * When it was created.
+	 */
+	createdAt: string,
+};
+
+/**
+ * What fires a scheduled task.
+ *
+ * A newer plxd may send a trigger this version does not know; show it as unknown.
+ */
+export type Schedule = { "type": "interval",
+	/**
+	 * The interval.
+	 */
+	everyMs: number, } | { "type": "fixed_time",
+	/**
+	 * `HH:MM`, 24-hour, in the host's time zone.
+	 */
+	timeOfDay: string,
+	/**
+	 * 0 is Sunday and 6 Saturday. Empty means every day.
+	 */
+	weekdays?: Array<number>, } | { "type": "webhook",
+	/**
+	 * The signature each request must carry, if any.
+	 */
+	signature?: WebhookSignature,
+};
+
+/**
+ * An HMAC-SHA256 signature over a webhook request's raw body, as GitHub and most senders sign.
+ */
+export type WebhookSignature = {
+	/**
+	 * The header that carries it, such as `x-hub-signature-256`.
+	 */
+	header: string,
+	/**
+	 * How the digest is written in the header.
+	 */
+	encoding: SignatureEncoding,
+	/**
+	 * Text before the digest, such as `sha256=`. Empty for none.
+	 */
+	prefix: string,
+	/**
+	 * The shared secret. Only `schedule/save` takes it, and omitting it there keeps the stored
+	 * one. plxd keeps it in the host's keystore and never returns it.
+	 */
+	secret?: string,
+	/**
+	 * In place of `secret`: a `secret-ref:<id>` from `secret/request`, which this save uses up.
+	 * Only the thread that asked for it, named in `schedule/save`'s `from`, can use it.
+	 */
+	secretRef?: string,
+};
+
+/**
+ * How a webhook signature's digest is written.
+ *
+ * A newer client may send an encoding this version does not know; plxd refuses it.
+ */
+export type SignatureEncoding = "hex" | "base64";
+
+/**
+ * How a scheduled task's last fire went.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type ScheduleRunStatus = "never" | "running" | "succeeded" | "failed";
+
+/**
+ * Where a webhook task receives requests.
+ */
+export type ScheduleWebhook = {
+	/**
+	 * `/api/hooks/<id>/<token>`. The token is the secret part, so share it only with the sender.
+	 */
+	path: string,
+	/**
+	 * The full URL: through Parallax Relay while plxd is connected to it (PLX-652), else on
+	 * this host's LAN address while remote access is on.
+	 */
+	url?: string,
+	/**
+	 * Whether requests must carry a valid signature.
+	 */
+	hasSecret: boolean,
+};
+
+/**
+ * Params of `schedule/save`: a task to create, or with `id`, to replace.
+ */
+export type ScheduleSaveParams = {
+	/**
+	 * The task to replace. Absent creates one.
+	 */
+	id?: string,
+	/**
+	 * Its name.
+	 */
+	title: string,
+	/**
+	 * What each fire sends, at most 64 KiB.
+	 */
+	prompt: string,
+	/**
+	 * Whether it fires on its own.
+	 */
+	enabled: boolean,
+	/**
+	 * Its trigger. An interval is at least 60000 ms.
+	 */
+	schedule: Schedule,
+	/**
+	 * The thread each fire queues into.
+	 */
+	thread?: RunId,
+	/**
+	 * The orchestrator each fire messages.
+	 */
+	orchestrator?: ScopeId,
+	/**
+	 * The repo entry each fire launches a thread in.
+	 */
+	repo?: RepoId,
+	/**
+	 * A launched thread's account.
+	 */
+	account?: AccountChoice,
+	/**
+	 * A launched thread's model.
+	 */
+	model?: string,
+	/**
+	 * A launched thread's effort.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * A launched thread's access.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * The thread saving it, for a `secretRef` only that thread can use.
+	 */
+	from?: RunId,
+};
+
+/**
+ * Params of `schedule/run` and `schedule/delete`.
+ */
+export type ScheduleIdParams = {
+	/**
+	 * The task's id.
+	 */
+	id: string,
+};
+
+/**
+ * Result of `schedule/delete`.
+ */
+export type ScheduleDeleteResult = {
+	/**
+	 * False when no task had the id.
+	 */
+	deleted: boolean,
+};
+
+/**
+ * Result of `pr/watch` and `pr/unwatch`.
+ */
+export type PrWatchResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+	/**
+	 * Whether plxd watches it for the run now.
+	 */
+	watching: boolean,
+	/**
+	 * Whether it did before the call.
+	 */
+	wasWatching: boolean,
+};
+
+/**
+ * Params of `pr/watches`.
+ */
+export type PrWatchesParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `pr/watches`: the URLs of the run's linked pull requests that plxd watches.
+ */
+export type PrWatchesResult = {
+	/**
+	 * The URLs.
+	 */
+	urls: Array<string>,
+};
+
+/**
+ * Result of `pr/status` (PLX-837, PLX-1018): one read of a pull request, and whether it is ready
+ * to merge. A read under 30 s old, by any run or the watch sweep, is shared.
+ */
+export type PrStatusResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+	/**
+	 * Its title (PLX-1018).
+	 */
+	title?: string,
+	/**
+	 * Its description, in full. Absent when it has none.
+	 */
+	body?: string,
+	/**
+	 * `OPEN`, `CLOSED`, or `MERGED`.
+	 */
+	state: string,
+	/**
+	 * Whether it is a draft.
+	 */
+	draft: boolean,
+	/**
+	 * The head commit.
+	 */
+	headSha?: string,
+	/**
+	 * The branch it merges from.
+	 */
+	headBranch?: string,
+	/**
+	 * The branch it merges into.
+	 */
+	baseBranch: string,
+	/**
+	 * The files it changes, at most 100. Absent means none.
+	 */
+	files?: Array<PrStatusFile>,
+	/**
+	 * Commits on the base branch the head doesn't have. 0 once it isn't open.
+	 */
+	behindBy: number,
+	/**
+	 * `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
+	 */
+	mergeable: string,
+	/**
+	 * GitHub's `mergeStateStatus`, such as `CLEAN`, `BLOCKED`, or `BEHIND`.
+	 */
+	mergeState: string,
+	/**
+	 * `APPROVED`, `CHANGES_REQUESTED`, or `REVIEW_REQUIRED`, when the repository asks for
+	 * reviews.
+	 */
+	reviewDecision?: string,
+	/**
+	 * The head commit's failed checks.
+	 */
+	failing: Array<PrStatusCheck>,
+	/**
+	 * The names of its checks still running or queued.
+	 */
+	pending: Array<string>,
+	/**
+	 * The names of its checks that passed.
+	 */
+	passed: Array<string>,
+	/**
+	 * Every check on the head, by name, with its link and Actions run (PLX-1018). Absent means
+	 * none.
+	 */
+	checks?: Array<PrStatusCheck>,
+	/**
+	 * Review threads nobody has resolved.
+	 */
+	unresolvedThreads: Array<PrStatusThread>,
+	/**
+	 * Whether plxd watches it for the run.
+	 */
+	watching: boolean,
+	/**
+	 * Open, not a draft, no conflict, not behind, every check passed, no unresolved thread, and
+	 * no change request.
+	 */
+	ready: boolean,
+	/**
+	 * Why it isn't ready, one line each. Empty when it is.
+	 */
+	reasons: Array<string>,
+};
+
+/**
+ * A check in a [`PrStatusResult`].
+ */
+export type PrStatusCheck = {
+	/**
+	 * The check's name.
+	 */
+	name: string,
+	/**
+	 * `pending`, `passed`, or how it failed, in lowercase: `failure`, `cancelled`, `timed out`,
+	 * and so on.
+	 */
+	how: string,
+	/**
+	 * Whether branch protection requires it.
+	 */
+	required: boolean,
+	/**
+	 * Its log or details page.
+	 */
+	url?: string,
+	/**
+	 * Its GitHub Actions workflow run, for `gh run`, when it is an Actions check.
+	 */
+	runId?: number,
+};
+
+/**
+ * A file a [`PrStatusResult`]'s pull request changes.
+ */
+export type PrStatusFile = {
+	/**
+	 * Its path in the repository.
+	 */
+	path: string,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines deleted.
+	 */
+	deletions: number,
+};
+
+/**
+ * An unresolved review thread in a [`PrStatusResult`], by its first comment.
+ */
+export type PrStatusThread = {
+	/**
+	 * Its GraphQL node id, to reply to or resolve it (PLX-1018).
+	 */
+	id?: string,
+	/**
+	 * The file it is on.
+	 */
+	path?: string,
+	/**
+	 * Who wrote the comment.
+	 */
+	author?: string,
+	/**
+	 * The comment, on one line, at most 200 characters.
+	 */
+	body: string,
+	/**
+	 * The comment on GitHub.
+	 */
+	url?: string,
+};
+
+/**
+ * Params of `pr/failureLog` (PLX-1019).
+ */
+export type PrFailureLogParams = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * Only the failed checks whose name contains this, ignoring case.
+	 */
+	check?: string,
+};
+
+/**
+ * Result of `pr/failureLog`: the failed checks on a pull request's head, each with its log's
+ * error lines.
+ */
+export type PrFailureLogResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+	/**
+	 * The head commit.
+	 */
+	headSha?: string,
+	/**
+	 * Its failed checks, by name. Empty when none failed.
+	 */
+	failures: Array<PrFailureLog>,
+};
+
+/**
+ * A failed check in a [`PrFailureLogResult`].
+ */
+export type PrFailureLog = {
+	/**
+	 * The check's name.
+	 */
+	name: string,
+	/**
+	 * How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+	 */
+	how: string,
+	/**
+	 * Its GitHub Actions workflow run, when it is an Actions job.
+	 */
+	workflowRunId?: number,
+	/**
+	 * Its GitHub Actions job, when it is one.
+	 */
+	jobId?: number,
+	/**
+	 * Its log or details page.
+	 */
+	url?: string,
+	/**
+	 * The log's lines around errors, failures, and panics, at most 8 KiB. Says why instead when
+	 * there is no log, such as for a check that isn't an Actions job.
+	 */
+	log: string,
+};
+
+/**
+ * Params of `pr/uploadMedia`.
+ */
+export type PrUploadMediaParams = {
+	/**
+	 * A GitHub pull request URL. The files go to its repository.
+	 */
+	url: string,
+	/**
+	 * The files, in order.
+	 */
+	files: Array<PrMediaFile>,
+};
+
+/**
+ * A file to upload in [`PrUploadMediaParams`].
+ */
+export type PrMediaFile = {
+	/**
+	 * Its absolute path on the host: an image or a video, at most 25 MB.
+	 */
+	path: string,
+	/**
+	 * The embed's text. The file's name when absent.
+	 */
+	caption?: string,
+};
+
+/**
+ * Result of `pr/uploadMedia`: each file, in the order asked.
+ */
+export type PrUploadMediaResult = {
+	/**
+	 * The files.
+	 */
+	files: Array<PrMediaUploaded>,
+};
+
+/**
+ * An uploaded file in [`PrUploadMediaResult`].
+ */
+export type PrMediaUploaded = {
+	/**
+	 * The path asked for.
+	 */
+	path: string,
+	/**
+	 * `https://raw.githubusercontent.com/<owner>/<repo>/<commit>/<path>`.
+	 */
+	url: string,
+	/**
+	 * `![caption](url)` for an image, `[caption](url)` for a video.
+	 */
+	markdown: string,
+	/**
+	 * Whether the same bytes were uploaded to the repository before, so no upload was made.
+	 */
+	reused: boolean,
+};
+
+/**
+ * Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's
+ * paced write queue. It needn't be linked.
+ */
+export type PrWriteParams = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * What to write.
+	 */
+	write: PrWrite,
+};
+
+/**
+ * A write to a pull request.
+ *
+ * A newer client may send a write this version does not know; plxd refuses it.
+ */
+export type PrWrite = { "kind": "comment",
+	/**
+	 * The comment, in Markdown.
+	 */
+	body: string, } | { "kind": "review",
+	/**
+	 * Its verdict.
+	 */
+	event: PrReviewEvent,
+	/**
+	 * The review's text, in Markdown.
+	 */
+	body: string, } | { "kind": "edit",
+	/**
+	 * The new title.
+	 */
+	title?: string,
+	/**
+	 * The new body, in Markdown.
+	 */
+	body?: string, } | { "kind": "replyToThread",
+	/**
+	 * The review thread's id, as `pr/status` lists it.
+	 */
+	reviewThreadId: string,
+	/**
+	 * The reply, in Markdown. Absent resolves without replying.
+	 */
+	body?: string,
+	/**
+	 * Whether to resolve the thread, after the reply.
+	 */
+	resolve?: boolean,
+};
+
+/**
+ * A review's verdict.
+ *
+ * A newer client may send one this version does not know; plxd refuses it.
+ */
+export type PrReviewEvent = "comment" | "approve" | "requestChanges";
+
+/**
+ * Result of `pr/write`.
+ */
+export type PrWriteResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+};
+
+/**
+ * Params of `pr/guide` (PLX-1188, 0095): a GitHub pull request's guide, at the head commit the
+ * app shows. It needn't be linked.
+ */
+export type PrGuideParams = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * The head commit the app shows. plxd writes a guide for it when it has none.
+	 */
+	headSha: string,
+	/**
+	 * The model that writes it: the user's default.
+	 */
+	model: ThreadNaming,
+	/**
+	 * Writes a new guide for `head_sha` even when one exists or the last try failed.
+	 */
+	regenerate?: boolean,
+};
+
+/**
+ * Result of `pr/guide`: what plxd has now. A guide for an older head than `headSha` is out of
+ * date, and shows until the new one is written.
+ */
+export type PrGuideResult = {
+	/**
+	 * The newest guide written for the pull request. Absent before the first.
+	 */
+	guide?: PrGuide,
+	/**
+	 * Whether a guide for `headSha` is being written.
+	 */
+	generating: boolean,
+	/**
+	 * Why the last try at `headSha`'s guide failed.
+	 */
+	error?: string,
+};
+
+/**
+ * An agent-written walkthrough of a pull request: an overview, then its changes in reading
+ * order.
+ */
+export type PrGuide = {
+	/**
+	 * The head commit it was written for.
+	 */
+	headSha: string,
+	/**
+	 * What the pull request does and the main parts it touches.
+	 */
+	overview: string,
+	/**
+	 * Mermaid source of a diagram for the overview.
+	 */
+	diagram?: string,
+	/**
+	 * Its steps, in reading order.
+	 */
+	steps: Array<PrGuideStep>,
+	/**
+	 * Files the model didn't read, to fit the diff into its prompt.
+	 */
+	omitted?: Array<string>,
+	/**
+	 * When it was written, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+};
+
+/**
+ * One step of a [`PrGuide`].
+ */
+export type PrGuideStep = {
+	/**
+	 * A short title.
+	 */
+	title: string,
+	/**
+	 * What changed and why, in plain language.
+	 */
+	explanation: string,
+	/**
+	 * The changes it explains.
+	 */
+	hunks: Array<PrGuideHunk>,
+	/**
+	 * Mermaid source of a diagram.
+	 */
+	diagram?: string,
+};
+
+/**
+ * Lines of one file in the pull request's diff, by their numbers in the new file.
+ */
+export type PrGuideHunk = {
+	/**
+	 * The file's path, as the diff names it.
+	 */
+	path: string,
+	/**
+	 * The first line.
+	 */
+	start: number,
+	/**
+	 * The last line, at or after `start`.
+	 */
+	end: number,
+};
+
+/**
+ * Params of `voice/clean`: a dictated transcript to tidy.
+ */
+export type VoiceCleanParams = {
+	/**
+	 * What the speech transcribed to.
+	 */
+	text: string,
+	/**
+	 * The instance whose small model answers, the one the message is going to. Without a small
+	 * model there, the first instance by name that has one answers.
+	 */
+	backend?: string,
+	/**
+	 * The repo being dictated about, without `runId`. Its file names that match what was said
+	 * help the model spell them.
+	 */
+	repo?: RepoId,
+	/**
+	 * The thread being dictated into, for the same.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `voice/clean`.
+ */
+export type VoiceCleanResult = {
+	/**
+	 * The tidied text.
+	 */
+	text: string,
+};
+
+/**
+ * Params of `pr/mergeWhenReady` (PLX-1022).
+ */
+export type PrMergeWhenReadyParams = {
+	/**
+	 * The run to wake with the result.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * How to merge it.
+	 */
+	method: PrMergeMethod,
+};
+
+/**
+ * Params of `repo/scripts`.
+ */
+export type RepoScriptsParams = {
+	/**
+	 * The repo entry.
+	 */
+	repo: RepoId,
+};
+
+/**
+ * Result of `repo/scripts` and `repo/saveScripts`.
+ */
+export type RepoScriptsResult = {
+	/**
+	 * The scripts plxd runs for the repository.
+	 */
+	scripts: Array<RepoScript>,
+	/**
+	 * The scripts the repository's `parallax.json` declares, which plxd runs only once the user
+	 * imports them, as T3 Code does with `t3.json`'s.
+	 */
+	fileScripts?: Array<RepoScript>,
+	/**
+	 * Why `parallax.json` was ignored, when it exists but isn't valid.
+	 */
+	fileError?: string,
+};
+
+/**
+ * One script, in T3 Code's `ProjectScript` shape. A repository's first `runOnWorktreeCreate`
+ * script is its setup script and its first `runOnSettle` one its settle script, as in T3.
+ */
+export type RepoScript = {
+	/**
+	 * plxd's id for it, from its name, which its terminal is named after. Ignored in
+	 * `repo/saveScripts`.
+	 */
+	id: string,
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * The shell command, run in the user's shell in the worktree.
+	 */
+	command: string,
+	/**
+	 * Runs in each new thread's worktree once it's created.
+	 */
+	runOnWorktreeCreate?: boolean,
+	/**
+	 * Runs in the thread's worktree each time the thread settles.
+	 */
+	runOnSettle?: boolean,
+	/**
+	 * For a setup script: `false` holds the agent's first turn until it exits, and fails the
+	 * run if it exits with an error. Absent or `true` starts the agent alongside it.
+	 */
+	async?: boolean,
+};
+
+/**
+ * Params of `repo/saveScripts`: replaces the repository's scripts. Fails with `invalidParams`
+ * for an empty name or command, or more than 50 scripts.
+ */
+export type RepoSaveScriptsParams = {
+	/**
+	 * The repo entry.
+	 */
+	repo: RepoId,
+	/**
+	 * Its scripts, in order.
+	 */
+	scripts: Array<RepoScript>,
+};
+
+/**
+ * Params of `task/delegate`. Idempotent on `runId`.
+ */
+export type TaskDelegateParams = {
+	/**
+	 * The new thread's run id, which the client makes. Reuse it to retry.
+	 */
+	runId: RunId,
+	/**
+	 * The thread whose workspace it works in: a thread in a repo entry, running a turn. With
+	 * `completionWake`, also its parent.
+	 */
+	owner: RunId,
+	/**
+	 * Its first message.
+	 */
+	prompt: string,
+	/**
+	 * Its title in the sidebar.
+	 */
+	title?: string,
+	/**
+	 * Where it runs. Absent: the owner's account.
+	 */
+	account?: AccountChoice,
+	/**
+	 * Its model. Absent: the owner's on the same backend, else the backend's default.
+	 */
+	model?: string,
+	/**
+	 * Its effort. Absent: the owner's on the same backend.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * Its mode, which can't need less approval than the owner's. Absent: the owner's.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * Set for a delegated task, the owner's child. Absent: a top-level thread.
+	 */
+	completionWake?: CompletionWake,
+};
+
+/**
+ * When a delegated task's end wakes its parent, as T3 Code's `completionWake`.
+ *
+ * A newer peer may send a policy this version does not know; plxd refuses it.
+ */
+export type CompletionWake = "always" | "settled_only";
+
+/**
+ * Params of `task/status`: reads a task `parent` delegated, after the changes asked for.
+ */
+export type TaskStatusParams = {
+	/**
+	 * The thread that delegated it.
+	 */
+	parent: RunId,
+	/**
+	 * The task: its thread's run id.
+	 */
+	taskId: RunId,
+	/**
+	 * Marks its result read, if it has ended, so its end no longer wakes the parent.
+	 */
+	acknowledge?: boolean,
+	/**
+	 * Its new wake policy.
+	 */
+	completionWake?: CompletionWake,
+	/**
+	 * Its end no longer wakes the parent, as when the parent cancels it.
+	 */
+	dispose?: boolean,
+};
+
+/**
+ * A delegated task, as `task/status` returns it.
+ */
+export type DelegatedTask = {
+	/**
+	 * Its thread's run id.
+	 */
+	taskId: RunId,
+	/**
+	 * The thread that delegated it.
+	 */
+	parent: RunId,
+	/**
+	 * When its end wakes the parent.
+	 */
+	completionWake: CompletionWake,
+	/**
+	 * Whether its end still wakes the parent.
+	 */
+	delivery: TaskDelivery,
+	/**
+	 * Its run, as it stands.
+	 */
+	run: AgentRun,
+};
+
+/**
+ * Whether a delegated task's end still wakes its parent.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type TaskDelivery = "pending" | "acknowledged" | "disposed";
+
+/**
+ * Params of `thread/mergeBack`: `source`'s context since it forked from `target`, or for
+ * `target`'s child, all of it, goes with `target`'s next message.
+ */
+export type ThreadMergeBackParams = {
+	/**
+	 * The fork or child.
+	 */
+	source: RunId,
+	/**
+	 * The thread it forked from, or its parent.
+	 */
+	target: RunId,
+};
+
+/**
+ * Result of `thread/mergeBack`.
+ */
+export type ThreadMergeBackResult = {
+	/**
+	 * The transfer's id, a UUID.
+	 */
+	transferId: string,
+};
+
+/**
+ * Params of `secret/request`: asks the user for a secret in run `runId`'s thread, or keeps
+ * waiting on request `requestId` if it was asked already, for at most `waitMs`.
+ */
+export type SecretRequestParams = {
+	/**
+	 * The run that asks, which must be running a turn.
+	 */
+	runId: RunId,
+	/**
+	 * The request's id, a UUID the caller makes. Reuse it to keep waiting.
+	 */
+	requestId: string,
+	/**
+	 * What it needs, shown as the card's title.
+	 */
+	label: string,
+	/**
+	 * What it is for, and where the user gets it.
+	 */
+	reason: string,
+	/**
+	 * A hint for the input.
+	 */
+	placeholder?: string,
+	/**
+	 * How the agent gets the answer. Absent means `secretRef`.
+	 */
+	delivery?: SecretDelivery,
+	/**
+	 * What the user gives. `env` and `file` always deliver a file.
+	 */
+	input?: SecretInput,
+	/**
+	 * With `input: file`: the extensions to offer, each with its leading dot.
+	 */
+	accept?: Array<string>,
+	/**
+	 * How long to wait for an answer before answering `pending`, at most 50000.
+	 */
+	waitMs: number,
+};
+
+/**
+ * Result of `secret/request`.
+ */
+export type SecretRequestResult = {
+	/**
+	 * How the request stands.
+	 */
+	status: SecretStatus,
+	/**
+	 * With `saved`: `secret-ref:<id>`, which a tool such as `schedule/save` uses once, within
+	 * 24 hours, for the thread that asked.
+	 */
+	secretRef?: string,
+	/**
+	 * With `saved` and `delivery: file`: the path of an owner-only file holding the value, which
+	 * the thread's commands can read for 24 hours.
+	 */
+	file?: string,
+};
+
+/**
+ * Params of `secret/answer`.
+ */
+export type SecretAnswerParams = {
+	/**
+	 * The run that asked.
+	 */
+	runId: RunId,
+	/**
+	 * The request.
+	 */
+	requestId: string,
+	/**
+	 * The answer.
+	 */
+	answer: SecretChoice,
+};
+
+/**
+ * An answer to a secret request.
+ *
+ * A newer client may send an answer this version does not know; plxd refuses it.
+ */
+export type SecretChoice = { "type": "save",
+	/**
+	 * The secret.
+	 */
+	secret: string, } | { "type": "saveBytes",
+	/**
+	 * The file's contents, as standard base64.
+	 */
+	base64: string, } | { "type": "decline" } | { "type": "cancel"
+};
+
+/**
+ * Result of `secret/answer`.
+ */
+export type SecretAnswerResult = Record<symbol, never>;
+
+/**
+ * A command for `orchestration/dispatch` (0059), by `type`.
+ *
+ * A newer peer may send a type this version does not know; plxd refuses it.
+ */
+export type OrchestrationCommand = { "type": "message.dispatch",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The new run's id, which is the message's turn id. Reuse it to retry.
+	 */
+	messageId: TurnId,
+	/**
+	 * The message.
+	 */
+	text: string,
+	/**
+	 * Images sent with it, as `agent/send`'s.
+	 */
+	images?: Array<PromptImage>,
+	/**
+	 * Threads attached to it as context, as `agent/send`'s.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * A new model, as `agent/send`'s.
+	 */
+	model?: string,
+	/**
+	 * A new effort, as `agent/send`'s.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * A new access, as `agent/send`'s.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * A new context window, as `agent/send`'s.
+	 */
+	contextWindow?: number,
+	/**
+	 * Fast mode on or off, as `agent/send`'s.
+	 */
+	fast?: boolean,
+	/**
+	 * A new account, as `agent/send`'s.
+	 */
+	account?: AccountChoice,
+	/**
+	 * How it starts.
+	 */
+	dispatchMode: DispatchMode, } | { "type": "queued-run.reorder",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * Its queued runs, first to be sent first.
+	 */
+	runIds: Array<TurnId>, } | { "type": "queued-run.edit",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The queued run.
+	 */
+	runId: TurnId,
+	/**
+	 * Its new text.
+	 */
+	text: string, } | { "type": "queued-run.cancel",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The queued run.
+	 */
+	runId: TurnId, } | { "type": "queued-message.promote-to-steer",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The queued run.
+	 */
+	runId: TurnId, } | { "type": "queue.resume",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId, } | { "type": "run.interrupt",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * Whether its queue waits for `queue.resume`.
+	 */
+	holdQueue?: boolean, } | { "type": "checkpoint.rollback",
+	/**
+	 * The thread.
+	 */
+	threadId: RunId,
+	/**
+	 * The run whose checkpoint it reverts to, or 0 for the thread's start.
+	 */
+	ordinal: number,
+	/**
+	 * Whether the files go back too, or only the conversation.
+	 */
+	restoreFiles?: boolean,
+};
+
+/**
+ * A run's dispatch mode (T3 Code's).
+ *
+ * A newer peer may send a mode this version does not know; plxd refuses it.
+ */
+export type DispatchMode = { "type": "defer_start" } | { "type": "steer_active",
+	/**
+	 * The run under way. Absent means the thread's newest.
+	 */
+	targetRunId?: TurnId, } | { "type": "restart_active",
+	/**
+	 * The run under way. Absent means the thread's newest.
+	 */
+	targetRunId?: TurnId, } | { "type": "queue_after_active" } | { "type": "start_immediately"
+};
+
+/**
+ * Result of `orchestration/dispatch`.
+ */
+export type DispatchResult = {
+	/**
+	 * The event log's `seq` once the command was applied: its events are at or before it.
+	 */
+	seq: number,
+};
+
+/**
+ * Params of `orchestration/subscribeShell`.
+ */
+export type SubscribeShellParams = {
+	/**
+	 * Resume after this `seq`: the last one received.
+	 */
+	afterSeq?: number,
+};
+
+/**
+ * Result of `orchestration/subscribeShell`.
+ */
+export type SubscribeShellResult = {
+	/**
+	 * The new subscription, which its `events/event` notifications name.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The shell to start from, with the events after its `seq` to follow. Absent when the
+	 * events after `afterSeq` follow instead.
+	 */
+	snapshot?: ShellSnapshot,
+};
+
+/**
+ * What a sidebar shows of a host.
+ */
+export type ShellSnapshot = {
+	/**
+	 * The event log's `seq` it stands at. Events after it follow.
+	 */
+	seq: number,
+	/**
+	 * Every project.
+	 */
+	orchestrators: Array<Orchestrator>,
+	/**
+	 * Every repo entry.
+	 */
+	repos: Array<Repo>,
+	/**
+	 * Every normal thread.
+	 */
+	threads: Array<Thread>,
+	/**
+	 * Every agent run: each thread's, and each orchestrators' and children's.
+	 */
+	runs: Array<AgentRun>,
+	/**
+	 * The permission requests runs wait on, oldest first, each as an `agent.output` with its one
+	 * `approvalRequested` item, at the `seq` it was logged at.
+	 */
+	requests: Array<LoggedEvent>,
+	/**
+	 * The runs whose agents wait on something now (PLX-777). Later `agent.background` and
+	 * `pr.watches` events replace each part. Absent means none.
+	 */
+	waiting?: Array<RunWaiting>,
+};
+
+/**
+ * What one run's agent waits on (PLX-777): background tasks, pull request watches, or both.
+ */
+export type RunWaiting = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * Its agent's background tasks running now, as `ThreadSnapshot.background`.
+	 */
+	background?: Array<AgentBackgroundTask>,
+	/**
+	 * The URLs of its pull requests plxd watches, as `ThreadSnapshot.watching`.
+	 */
+	watching?: Array<string>,
+};
+
+/**
+ * Params of `orchestration/subscribeThread`.
+ */
+export type SubscribeThreadParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * Resume after this `seq`: the last one received.
+	 */
+	afterSeq?: number,
+};
+
+/**
+ * Result of `orchestration/subscribeThread`.
+ */
+export type SubscribeThreadResult = {
+	/**
+	 * The new subscription, which its `events/event` notifications name.
+	 */
+	subscription: SubscriptionId,
+	/**
+	 * The thread to start from, with the events after its `seq` to follow. Absent when the
+	 * events after `afterSeq` follow instead.
+	 */
+	snapshot?: ThreadSnapshot,
+};
+
+/**
+ * One thread as it stands.
+ */
+export type ThreadSnapshot = {
+	/**
+	 * The event log's `seq` it stands at. Events after it follow.
+	 */
+	seq: number,
+	/**
+	 * The thread's run, as `agent/list` has it.
+	 */
+	thread: AgentRun,
+	/**
+	 * Its runs: those that started, oldest first, then the queued ones, first to be sent first.
+	 */
+	runs: Array<ThreadRun>,
+	/**
+	 * Its newest events, oldest first, up to `seq`. A finished turn that left plxd's window is
+	 * one compacted `agent.output` (0052).
+	 */
+	events: Array<LoggedEvent>,
+	/**
+	 * Whether older events remain, for `orchestration/threadHistory` before the first one.
+	 */
+	more: boolean,
+	/**
+	 * The permission requests it waits on, as [`ShellSnapshot::requests`], for those older
+	 * than `events`.
+	 */
+	requests: Array<LoggedEvent>,
+	/**
+	 * Its agent's background tasks running now (PLX-777), as the last `agent.background` event
+	 * says, which may be older than `events`. Later ones replace it. Absent means none.
+	 */
+	background?: Array<AgentBackgroundTask>,
+	/**
+	 * The URLs of its pull requests plxd watches (PLX-777), as `pr/watches` has them. Later
+	 * `pr.watches` events replace it. Absent means none.
+	 */
+	watching?: Array<string>,
+};
+
+/**
+ * One run of a thread (T3 Code's Run): a message the user, plxd, or another thread sent, and the
+ * turn it became. A thread's first run is its prompt's.
+ */
+export type ThreadRun = {
+	/**
+	 * The message's turn id, or one plxd made for a turn that had none.
+	 */
+	id: TurnId,
+	/**
+	 * Where it is.
+	 */
+	status: ThreadRunStatus,
+	/**
+	 * Its place among the thread's runs that started, from 1. Absent while queued.
+	 */
+	ordinal?: number,
+	/**
+	 * Its place in the queue, from 0, while queued.
+	 */
+	position?: number,
+	/**
+	 * Its current attempt, from 1. A turn retried on another account after a usage limit or a
+	 * sign-out has another. Absent while queued.
+	 */
+	attempt?: number,
+	/**
+	 * The message. Absent for a first run, whose text is the thread's prompt, and a turn
+	 * plxd's log didn't record the text of.
+	 */
+	text?: string,
+	/**
+	 * How many images went with it.
+	 */
+	images?: number,
+	/**
+	 * The threads attached to it as context.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * The thread that sent it with its Parallax tools, not the user.
+	 */
+	from?: RunId,
+	/**
+	 * True for a turn plxd sent itself: a wake-up or a resume after a usage limit.
+	 */
+	wake?: boolean,
+	/**
+	 * True for a queued run held after a Stop: it waits for `queue.resume`.
+	 */
+	queueHeld?: boolean,
+	/**
+	 * When its turn started.
+	 */
+	startedAt?: string,
+	/**
+	 * When it ended.
+	 */
+	completedAt?: string,
+	/**
+	 * The worktree as its turn left it (0062), once plxd has captured it.
+	 */
+	checkpoint?: TurnCheckpoint,
+	/**
+	 * Where the vendor's session stood when its turn ended: its `turnFinished` item's `cursor`.
+	 */
+	cursor?: string,
+	/**
+	 * The vendor session `cursor` is in, as its `turnFinished` item has it.
+	 */
+	sessionId?: string,
+};
+
+/**
+ * Where a run is.
+ *
+ * A newer plxd may send a status this version does not know; treat it as unknown.
+ */
+export type ThreadRunStatus = "queued" | "starting" | "running" | "waiting" | "completed" | "interrupted" | "failed" | "cancelled" | "rolledBack";
+
+/**
+ * Params of `orchestration/threadHistory`.
+ */
+export type ThreadHistoryParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * The page is the events before this `seq`: the first one the client has.
+	 */
+	before: number,
+};
+
+/**
+ * Result of `orchestration/threadHistory`.
+ */
+export type ThreadHistoryResult = {
+	/**
+	 * The events, oldest first.
+	 */
+	events: Array<LoggedEvent>,
+	/**
+	 * Whether older ones remain.
+	 */
+	more: boolean,
+};
+
+/**
+ * Params of `orchestration/threadRuns`.
+ */
+export type ThreadRunsParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+};
+
+/**
+ * Result of `orchestration/threadRuns`.
+ */
+export type ThreadRunsResult = {
+	/**
+	 * Its runs, as [`ThreadSnapshot::runs`].
+	 */
+	runs: Array<ThreadRun>,
+};
+
+/**
+ * Params of `orchestration/getTurnDiff` (T3 Code's `getTurnDiff`, 0062).
+ */
+export type TurnDiffParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * The run whose checkpoint the diff starts from, or 0 for the thread's start.
+	 */
+	from: number,
+	/**
+	 * The run whose checkpoint it ends at. Its checkpoint must be `ready`.
+	 */
+	to: number,
+	/**
+	 * Whether whitespace changes count. Ignored unless false, as T3 Code does.
+	 */
+	ignoreWhitespace?: boolean,
+};
+
+/**
+ * Result of `orchestration/getTurnDiff` and `orchestration/getFullThreadDiff`.
+ */
+export type TurnDiffResult = {
+	/**
+	 * The unified diff, `git diff --patch`'s.
+	 */
+	diff: string,
+	/**
+	 * True when the diff was cut at 10 MB.
+	 */
+	truncated?: boolean,
+};
+
+/**
+ * Params of `orchestration/getFullThreadDiff`: the diff from the thread's start.
+ */
+export type FullThreadDiffParams = {
+	/**
+	 * The thread: its run id.
+	 */
+	threadId: RunId,
+	/**
+	 * The run whose checkpoint it ends at.
+	 */
+	to: number,
+	/**
+	 * As [`TurnDiffParams::ignore_whitespace`].
+	 */
+	ignoreWhitespace?: boolean,
+};
+
+/**
+ * Params of `bundle/prepare`.
+ */
+export type BundlePrepareParams = {
+	/**
+	 * The run whose branch to bundle. It must have a worktree.
+	 */
+	run: RunId,
+	/**
+	 * Commits the receiver already has, as full hex object ids, left out of the bundle. At most
+	 * 256. Each must be in the run's repository.
+	 */
+	exclude: Array<string>,
+};
+
+/**
+ * Result of `bundle/prepare`.
+ */
+export type BundlePrepareResult = {
+	/**
+	 * The branch's tip when the bundle was made. A branch that moves later doesn't change it.
+	 */
+	tip: string,
+	/**
+	 * The bundle, or absent when `exclude` already has `tip`, so there is nothing to send.
+	 */
+	bundle?: BundleFile,
+};
+
+/**
+ * A bundle file `bundle/prepare` made. It is removed by `bundle/drop`, or 10 minutes after it
+ * was last read.
+ */
+export type BundleFile = {
+	/**
+	 * Its id, for `bundle/read` and `bundle/drop`.
+	 */
+	id: BundleId,
+	/**
+	 * Its size in bytes.
+	 */
+	size: number,
+	/**
+	 * The SHA-256 of its bytes, in lowercase hex.
+	 */
+	sha256: string,
+};
+
+/**
+ * A bundle file's id on the plxd that holds it: a version 7 UUID that `bundle/prepare` or
+ * `bundle/begin` generates.
+ */
+export type BundleId = string;
+
+/**
+ * Params of `bundle/read`.
+ */
+export type BundleReadParams = {
+	/**
+	 * The bundle.
+	 */
+	id: BundleId,
+	/**
+	 * Where to start reading, in bytes.
+	 */
+	offset: number,
+	/**
+	 * How many bytes to read, at most 1 MiB.
+	 */
+	length: number,
+};
+
+/**
+ * Result of `bundle/read`.
+ */
+export type BundleReadResult = {
+	/**
+	 * The bytes, in standard base64 with padding. Past the end is empty.
+	 */
+	data: string,
+};
+
+/**
+ * Params of `bundle/drop`: removes a bundle file of either direction. An unknown id changes
+ * nothing.
+ */
+export type BundleDropParams = {
+	/**
+	 * The bundle.
+	 */
+	id: BundleId,
+};
+
+/**
+ * The empty result of `bundle/drop`, `bundle/write`, `bundle/apply`, and `git/startMerge`.
+ */
+export type BundleOkResult = Record<symbol, never>;
+
+/**
+ * Params of `bundle/begin`: opens an empty bundle file for `bundle/write` to fill.
+ */
+export type BundleBeginParams = {
+	/**
+	 * The run whose repository the bundle goes into. It must have a worktree.
+	 */
+	run: RunId,
+	/**
+	 * The bundle's size in bytes, at most 64 MiB.
+	 */
+	size: number,
+	/**
+	 * The SHA-256 of its bytes, in lowercase hex, which `bundle/apply` checks.
+	 */
+	sha256: string,
+};
+
+/**
+ * Result of `bundle/begin`.
+ */
+export type BundleBeginResult = {
+	/**
+	 * The new file's id, for `bundle/write` and `bundle/apply`. A file that isn't written to for
+	 * 10 minutes is removed.
+	 */
+	id: BundleId,
+};
+
+/**
+ * Params of `bundle/write`: appends a chunk to a file `bundle/begin` opened.
+ */
+export type BundleWriteParams = {
+	/**
+	 * The bundle.
+	 */
+	id: BundleId,
+	/**
+	 * Where the chunk starts, which must be the length written so far.
+	 */
+	offset: number,
+	/**
+	 * The chunk, at most 1 MiB, in standard base64 with padding.
+	 */
+	data: string,
+};
+
+/**
+ * Params of `bundle/apply`: checks a written bundle and fetches its one ref into the run's
+ * repository as `refs/parallax-sync/<run id>`, the only ref it writes. The file is removed
+ * either way.
+ */
+export type BundleApplyParams = {
+	/**
+	 * The bundle, fully written.
+	 */
+	id: BundleId,
+	/**
+	 * The commit its ref must point at, as a full hex object id.
+	 */
+	tip: string,
+};
+
+/**
+ * Params of `git/startMerge`: starts merging `tip` into the run's worktree, leaving conflict
+ * markers for the run to resolve, as a landing conflict does for a local child (0045). Refused
+ * with `runBusy` while the run is starting or running.
+ */
+export type GitStartMergeParams = {
+	/**
+	 * The run.
+	 */
+	run: RunId,
+	/**
+	 * The commit to merge, as a full hex object id, already in the run's repository.
+	 */
+	tip: string,
 };
 
 /**
@@ -2468,7 +11949,7 @@ export type CancelRequestParams = {
 export type RequestId = number | string;
 
 /**
- * Params of `events/event`: one event from wispd's event log.
+ * Params of `events/event`: one event from plxd's event log.
  */
 export type EventsEventParams = {
 	/**
@@ -2476,7 +11957,7 @@ export type EventsEventParams = {
 	 */
 	subscription: SubscriptionId,
 	/**
-	 * The event's position in wispd's log. It increases by one for every change on the host,
+	 * The event's position in plxd's log. It increases by one for every change on the host,
 	 * across all projects.
 	 */
 	seq: number,
@@ -2487,15 +11968,157 @@ export type EventsEventParams = {
 	/**
 	 * The project it belongs to. Absent for host-level events.
 	 */
-	project?: ProjectId,
+	project?: ScopeId,
 	/**
 	 * What happened.
 	 */
-	event: WispEvent,
+	event: ParallaxEvent,
 };
 
 /**
- * The `data` of a wisp error (code -32000).
+ * Params of `events/resync`: plxd ended a subscription that fell behind its event log's
+ * retention (PLX-455). Reload the snapshot it started from and subscribe again. plxd sends it
+ * only to a client that declared the `resyncNotice` capability; it closes any other client's
+ * connection instead.
+ */
+export type EventsResyncParams = {
+	/**
+	 * The subscription plxd ended.
+	 */
+	subscription: SubscriptionId,
+};
+
+/**
+ * Params of `host/updating`. It says nothing but that plxd is about to restart for an update.
+ */
+export type HostUpdatingParams = Record<symbol, never>;
+
+/**
+ * Params of `terminal/write`: what's typed into a terminal.
+ */
+export type TerminalWriteParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The input.
+	 */
+	data: string,
+};
+
+/**
+ * Params of `terminal/resize`.
+ */
+export type TerminalResizeParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * Its width in character cells.
+	 */
+	cols: number,
+	/**
+	 * Its height in character cells.
+	 */
+	rows: number,
+};
+
+/**
+ * Params of `terminal/output`: what a terminal printed.
+ */
+export type TerminalOutputParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The output.
+	 */
+	data: string,
+	/**
+	 * The start of its kept output, which replaces whatever the client shows.
+	 */
+	replay?: boolean,
+};
+
+/**
+ * Params of `terminal/exit`: what a terminal ran exited, and the terminal closed.
+ */
+export type TerminalExitParams = {
+	/**
+	 * Its thread, or empty.
+	 */
+	threadId: string,
+	/**
+	 * Its id within the thread.
+	 */
+	terminalId: string,
+	/**
+	 * The program's exit code, or -1 if it has none.
+	 */
+	exitCode: number,
+};
+
+/**
+ * Params of `device/data` (plxd to the app) and `device/send` (the app to plxd): one message on
+ * a stream. A video stream's messages are pieces of its body, a control stream's are its
+ * socket's messages.
+ */
+export type DeviceDataParams = {
+	/**
+	 * The stream.
+	 */
+	streamId: string,
+	/**
+	 * Binary data in base64, or the text of a text message.
+	 */
+	data: string,
+	/**
+	 * Whether `data` is a text message rather than base64.
+	 */
+	text?: boolean,
+};
+
+/**
+ * Params of `device/close`: the app is done with a stream.
+ */
+export type DeviceCloseParams = {
+	/**
+	 * The stream.
+	 */
+	streamId: string,
+};
+
+/**
+ * Params of `device/end`: a stream ended, other than by `device/close`.
+ */
+export type DeviceEndParams = {
+	/**
+	 * The stream.
+	 */
+	streamId: string,
+	/**
+	 * Why, when it failed.
+	 */
+	error?: string,
+};
+
+/**
+ * The `data` of a Parallax error (code -32000).
  */
 export type ErrorData = {
 	/**
@@ -2509,16 +12132,16 @@ export type ErrorData = {
 };
 
 /**
- * What went wrong, in a wisp error's `data.kind`. Receivers match on it, never on the message.
+ * What went wrong, in a Parallax error's `data.kind`. Receivers match on it, never on the message.
  *
- * A newer wispd may send kinds that are not listed here. Treat those as unknown errors, so a
+ * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "orchestratorNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits" | "relayUnreachable" | "clerkUnreachable" | "readOnly";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it
- * from every wispd.
+ * from every plxd.
  */
 export type IncompatibleProtocolDetail = {
 	/**
@@ -2526,11 +12149,11 @@ export type IncompatibleProtocolDetail = {
 	 */
 	requested: ProtocolRange,
 	/**
-	 * The versions wispd speaks.
+	 * The versions plxd speaks.
 	 */
 	supported: ProtocolRange,
 	/**
-	 * wispd's release version, so the client can say which side to update.
+	 * plxd's release version, so the client can say which side to update.
 	 */
-	wispd: string,
+	plxd: string,
 };

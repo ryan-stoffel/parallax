@@ -1,7 +1,7 @@
 name: CI
 
 # Pull requests only: develop and main take changes only through PRs that passed these checks, so a
-# push there runs just release.yml's build.
+# push to develop runs just rust-cache.yml, which saves the Rust caches these jobs restore.
 on:
   pull_request:
 
@@ -18,9 +18,42 @@ defaults:
     shell: bash
 
 jobs:
-  # wispd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (RYA-17),
-  # and Windows x86_64 and arm64 (RYA-21).
+  # Whether the PR changes Rust or anything the rust job builds or runs (PLX-961), and whether it
+  # changes the mobile app, which the android job builds (PLX-1370). The checkout is the PR merged
+  # into its base, so its first parent is the base.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+      mobile: ${{ steps.diff.outputs.mobile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: List the changed files
+        id: diff
+        run: |
+          git diff --name-only --no-renames HEAD^1 HEAD | tee "$RUNNER_TEMP/changed"
+          rust_inputs='^(daemon/|crates/|sidecar/|relay/|packages/clerk-verify/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|rustfmt\.toml$|clippy\.toml$|apps/desktop/src/protocol/generated/|apps/desktop/\.node-version$|\.gitattributes$|scripts/ci/(check-rust|check-ssh-attach|ssh-localhost)|\.github/workflows/ci\.yml$)'
+          if grep -qE "$rust_inputs" "$RUNNER_TEMP/changed"; then
+            echo rust=true >> "$GITHUB_OUTPUT"
+          else
+            echo rust=false >> "$GITHUB_OUTPUT"
+          fi
+          if grep -qE '^(apps/mobile/|scripts/ci/android-)' "$RUNNER_TEMP/changed"; then
+            echo mobile=true >> "$GITHUB_OUTPUT"
+          else
+            echo mobile=false >> "$GITHUB_OUTPUT"
+          fi
+
+  # plxd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (PLX-17),
+  # and Windows x86_64 and arm64 (PLX-21). Only when the PR changes Rust.
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -57,14 +90,17 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # rust-cache.yml saves this on develop. A PR can't read another PR's caches, so saving here
+      # would only fill the cache quota.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: ${{ runner.os }}-${{ runner.arch }}
+          shared-key: test-${{ runner.os }}-${{ runner.arch }}
+          save-if: false
 
       # What Claude Code's worker sandbox needs on Linux (0013): bubblewrap, socat, and the AppArmor
       # profile from Claude Code's docs that lets bwrap make user namespaces. Plus a pinned Claude
-      # Code, which the sandbox tests run against a fake API (RYA-20), and zsh, whose startup the
-      # PATH test makes reset PATH (RYA-126).
+      # Code, which the sandbox tests run against a fake API (PLX-20), and zsh, whose startup the
+      # PATH test makes reset PATH (PLX-126).
       - name: Install the Linux worker sandbox
         if: runner.os == 'Linux'
         env:
@@ -93,10 +129,46 @@ jobs:
             "https://downloads.claude.ai/claude-code-releases/$CLAUDE_VERSION/$platform/claude"
           echo "$sha256  $RUNNER_TEMP/claude" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/claude"
-          echo "WISP_SANDBOX_CLAUDE=$RUNNER_TEMP/claude" >> "$GITHUB_ENV"
+          echo "PLX_SANDBOX_CLAUDE=$RUNNER_TEMP/claude" >> "$GITHUB_ENV"
+
+      # The tests that run that Claude Code through plxd's backend go through the Agent SDK
+      # sidecar (0061), so they need Node and the SDK the sidecar pins.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: runner.os == 'Linux'
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install the Claude Agent SDK sidecar
+        if: runner.os == 'Linux'
+        working-directory: sidecar/claude
+        run: |
+          npm ci --omit=dev --omit=optional --omit=peer --no-audit --no-fund
 
       - name: Lint, type-check, build, and test
         run: scripts/ci/check-rust
+
+      - name: Test the Claude Agent SDK sidecar against the process supervisor
+        if: runner.os == 'Linux'
+        working-directory: sidecar/claude
+        run: node --test src/*.test.mjs
+
+      # plxd behind the relay under `wrangler dev`, end to end (PLX-652): pairing and a session
+      # through it, and webhooks forwarded and held. Reuses check-rust's test build.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.os == 'ubuntu-24.04'
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Test plxd through the relay
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+          WRANGLER_SEND_METRICS: "false"
+        working-directory: relay
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          node scripts/e2e.mjs cargo test -p plxd --test server --locked relay::
 
       # The Ubuntu images may ship only the ssh client.
       - name: Install sshd
@@ -108,15 +180,15 @@ jobs:
           fi
 
       # scripts/ci/ssh-localhost sets up key-based ssh to localhost; check-ssh-attach runs
-      # `wispd attach` through it (#95). On a runner, "ssh not ready" fails instead of skipping.
-      - name: Check wispd attach over ssh
+      # `plxd attach` through it (#95). On a runner, "ssh not ready" fails instead of skipping.
+      - name: Check plxd attach over ssh
         if: runner.os != 'Windows'
         env:
-          WISP_E2E_REQUIRE_SSH: "1"
+          PLX_E2E_REQUIRE_SSH: "1"
         run: |
           status=$(mktemp)
           scripts/ci/ssh-localhost "$status"
-          scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/wispd"
+          scripts/ci/check-ssh-attach "$status" "$PWD/target/debug/plxd"
 
       # The same check through Windows' own OpenSSH server, which puts each session in a job
       # object that `serve` must break away from (0023).
@@ -126,27 +198,84 @@ jobs:
         shell: pwsh
         run: scripts/ci/ssh-localhost.ps1 -StatusFile "$env:RUNNER_TEMP\ssh-status"
 
-      - name: Check wispd attach over Windows OpenSSH
+      - name: Check plxd attach over Windows OpenSSH
         if: runner.os == 'Windows'
         env:
-          WISP_E2E_REQUIRE_SSH: "1"
+          PLX_E2E_REQUIRE_SSH: "1"
         run: |
-          scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/wispd.exe")"
+          scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/plxd.exe")"
 
-      # The e2e job's wispd, so it doesn't build its own (RYA-25). The feature only changes the
-      # wispd crate, so this rebuilds just that.
-      - name: Build wispd with the fake backend
-        run: cargo build -p wispd --locked --features fake-backend
-
-      - name: Upload wispd
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+  # The e2e and load jobs' plxd, with the fake backend (PLX-25). Its own job so those start without
+  # waiting for the rust job's tests, and run on PRs that skip it (PLX-961).
+  plxd:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: wispd-${{ matrix.os }}
-          path: target/debug/wispd${{ runner.os == 'Windows' && '.exe' || '' }}
+          persist-credentials: false
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/*
+            !~/.rustup/toolchains/stable-*
+          key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      # As in the rust job, rust-cache.yml saves this on develop.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: plxd-${{ runner.os }}-${{ runner.arch }}
+          save-if: false
+
+      - name: Build plxd with the fake backend
+        run: cargo build -p plxd --locked --features fake-backend
+
+      - name: Upload plxd
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plxd-${{ matrix.os }}
+          path: target/debug/plxd${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 7
 
-  # The desktop app on every OS it ships to (0022): checked, built, then launched (RYA-84).
+  # Parallax Relay's Worker (PLX-652, 0068): type-checked, and its tests run in Miniflare. Nothing
+  # here deploys it.
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install, type-check, and test
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm test
+
+  # The desktop app on every OS it ships to (0022): checked, built, then launched (PLX-84).
   app:
     strategy:
       fail-fast: false
@@ -161,7 +290,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: apps/desktop/.node-version
 
@@ -201,10 +330,158 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/launch-app
 
-  # The app against a wispd running its fake backend, with Playwright (RYA-16), on the OSes the app
-  # job covers, with the wispd the rust job built for that OS (RYA-25).
+  # The mobile app (PLX-653): type check and unit tests only. Its native build needs Xcode and runs
+  # by hand in the iOS Simulator.
+  mobile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install pnpm
+        id: pnpm
+        working-directory: apps/mobile
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-mobile-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/mobile/pnpm-lock.yaml') }}
+          restore-keys: pnpm-mobile-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install, type check, and test
+        run: scripts/ci/check-mobile
+
+  # The mobile app on Android (PLX-1370): its debug APK, pinned-tls's tests on the JVM, and on an
+  # emulator those tests and the real app. Slow, so only when the PR changes the mobile app. A failed
+  # test fails it. The app's drive only reports, as the emulator is too slow to be sure of.
+  android:
+    needs: [changes, plxd]
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g"
+    steps:
+      # The emulator refuses to start with the disk the build leaves on a stock runner.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/powershell
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: apps/desktop/.node-version
+
+      - name: Install pnpm
+        id: pnpm
+        working-directory: apps/mobile
+        run: |
+          corepack enable
+          echo "store=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-mobile-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/mobile/pnpm-lock.yaml') }}
+          restore-keys: pnpm-mobile-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache Gradle
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-android-${{ hashFiles('apps/mobile/pnpm-lock.yaml', 'apps/mobile/modules/pinned-tls/android/build.gradle') }}
+          restore-keys: gradle-android-
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plxd-ubuntu-24.04
+          path: ${{ runner.temp }}/plxd
+
+      # Artifacts drop the executable bit.
+      - name: Point the tests at plxd
+        run: |
+          chmod +x "$RUNNER_TEMP/plxd/plxd"
+          echo "PLXD_PATH=$RUNNER_TEMP/plxd/plxd" >> "$GITHUB_ENV"
+
+      - name: Use JDK 17
+        run: echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+
+      - name: Build the debug APK and test pinned-tls on the JVM
+        run: scripts/ci/android-build
+
+      - name: Let the emulator use KVM
+        run: |
+          df -h /
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test on an emulator
+        timeout-minutes: 30
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          ANDROID_E2E_OUT: ${{ runner.temp }}/android-e2e
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          cores: 4
+          ram-size: 4096M
+          disk-size: 6G
+          disable-animations: true
+          emulator-options: -no-window -skin 412x892 -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: scripts/ci/android-e2e
+
+      - name: Upload screenshots and test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-e2e
+          path: |
+            ${{ runner.temp }}/android-e2e
+            apps/mobile/android/pinned-tls/build/reports
+            apps/mobile/modules/pinned-tls/android/build/reports
+          if-no-files-found: warn
+          retention-days: 7
+
+      # The app's drive on a shared runner's emulator is too slow to be sure of, so its failure shows
+      # here without blocking a merge. A failed pin test above still fails the job.
+      - name: Report the app's drive on the emulator
+        continue-on-error: true
+        env:
+          FAILED: ${{ runner.temp }}/android-e2e/ui-drive-failed.txt
+        run: |
+          if [ -f "$FAILED" ]; then
+            echo "::error title=The Android app's drive failed::$(head -n 1 "$FAILED")"
+            cat "$FAILED"
+            exit 1
+          fi
+          echo "The app signed in and reached lan-box over the LAN and relay-box through the relay."
+
+  # The app against a plxd running its fake backend, with Playwright (PLX-16), on the OSes the app
+  # job covers, with the plxd the plxd job built for that OS (PLX-25).
   e2e:
-    needs: rust
+    needs: plxd
     strategy:
       fail-fast: false
       matrix:
@@ -218,22 +495,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: wispd-${{ matrix.os }}
-          path: ${{ runner.temp }}/wispd
+          name: plxd-${{ matrix.os }}
+          path: ${{ runner.temp }}/plxd
 
-      # e2e-app runs the tests against WISPD_PATH. Artifacts drop the executable bit.
-      - name: Point the tests at wispd
+      # e2e-app runs the tests against PLXD_PATH. Artifacts drop the executable bit.
+      - name: Point the tests at plxd
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
-            echo "WISPD_PATH=$RUNNER_TEMP\\wispd\\wispd.exe" >> "$GITHUB_ENV"
+            echo "PLXD_PATH=$RUNNER_TEMP\\plxd\\plxd.exe" >> "$GITHUB_ENV"
           else
-            chmod +x "$RUNNER_TEMP/wispd/wispd"
-            echo "WISPD_PATH=$RUNNER_TEMP/wispd/wispd" >> "$GITHUB_ENV"
+            chmod +x "$RUNNER_TEMP/plxd/plxd"
+            echo "PLXD_PATH=$RUNNER_TEMP/plxd/plxd" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: apps/desktop/.node-version
 
@@ -268,6 +545,62 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/e2e-app
 
+  # 30 fake-backend threads streaming through the plxd job's Linux plxd, subscribed as the app did
+  # before PLX-454 and, with --filtered, as it does since. Each run fails when a daemon number falls
+  # outside its set in scripts/bench/budgets.json (PLX-452). App frame times under xvfb are too
+  # noisy to gate.
+  load:
+    needs: plxd
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plxd-ubuntu-24.04
+          path: ${{ runner.temp }}/plxd
+
+      # Artifacts drop the executable bit.
+      - name: Run the load harness
+        run: |
+          chmod +x "$RUNNER_TEMP/plxd/plxd"
+          python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --out load.json
+
+      - name: Run the load harness with filtered subscriptions
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --filtered \
+            --out load-filtered.json
+
+      - name: Run the load harness with the orchestration subscriptions
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/bench/load.py "$RUNNER_TEMP/plxd/plxd" --threads 30 --orchestration \
+            --out load-orchestration.json
+
+      - name: Check the budgets
+        if: ${{ !cancelled() && hashFiles('load.json') != '' }}
+        run: scripts/ci/check-load load.json unfiltered
+
+      - name: Check the filtered budgets
+        if: ${{ !cancelled() && hashFiles('load-filtered.json') != '' }}
+        run: scripts/ci/check-load load-filtered.json filtered
+
+      - name: Check the orchestration budgets
+        if: ${{ !cancelled() && hashFiles('load-orchestration.json') != '' }}
+        run: scripts/ci/check-load load-orchestration.json orchestration
+
+      - name: Upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: load
+          path: load*.json
+          retention-days: 7
+
   actionlint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -291,6 +624,12 @@ jobs:
       - name: Lint workflows
         run: actionlint -color
 
+      - name: Test the release plan
+        run: scripts/ci/plan-release.test
+
+      - name: Test publishing a build
+        run: scripts/ci/publish-build.test
+
       - name: Require ci to need every other job
         run: |
           workflow_jobs=$(yq -o=json '.jobs' .github/workflows/ci.yml)
@@ -302,16 +641,18 @@ jobs:
   # Branch protection requires this job's name, ci, as the only check (#6). Renaming it blocks every merge.
   ci:
     if: always()
-    needs: [actionlint, app, e2e, rust]
+    needs: [actionlint, android, app, changes, e2e, load, mobile, plxd, relay, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every job to succeed
+      # rust is skipped when the PR changes no Rust. A job is also skipped when a job it needs
+      # fails, but that job fails this check.
+      - name: Require every job to succeed or be skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          if ! jq -e 'to_entries | all(.value.result == "success")' <<< "$NEEDS" > /dev/null; then
-            echo "::error::Every job in ci.yml must succeed."
+          if ! jq -e 'to_entries | all(.value.result == "success" or .value.result == "skipped")' <<< "$NEEDS" > /dev/null; then
+            echo "::error::Every job in ci.yml must succeed or be skipped."
             exit 1
           fi

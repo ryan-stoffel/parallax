@@ -1,18 +1,20 @@
 //! Mapping between the runner's inputs and outputs: backend events to the protocol's transcript
 //! items, and store rows to the protocol's runs.
 
+use jiff::Timestamp;
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AgentApproveResult, AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome,
+    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, ApprovalId, DiffSummary,
+    OrchestratorThreadId, RunId, ScopeId,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::error;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
-    AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
-    AgentRun, AgentRunState, AgentStatus, AgentTodoItem, AgentTodoStatus, AgentToolStatus,
-    CoordinatorThreadId, DiffSummary, ProjectId, RunId,
-};
 
-use crate::backend::{Event, FailureKind, Outcome, TodoItem, TodoStatus, ToolStatus};
+use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
+use crate::backend::{ApprovalRequest, Event, FailureKind, Outcome, TodoItem};
 use crate::json::escaped_len;
 use crate::worktree::MergeHow;
 
@@ -24,11 +26,15 @@ pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 /// a `Write` of a big file, becomes `{"truncated": true, "bytes": n}`.
 pub(super) const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
 
+/// The largest tool input an `approvalRequested` item carries as JSON, in bytes (PLX-222): more
+/// than a tool call's, since the user has to see what they allow, such as a long plan.
+pub(super) const MAX_APPROVAL_INPUT_BYTES: usize = 256 * 1024;
+
 /// The longest free text field of any other `agent.output` item — `Text`, `TextDelta`,
 /// `Reasoning`, `Notice.detail`, `Warning.detail`, `TurnFinished.result`, `TurnStarted.text` — in
 /// bytes, at the same cap as a tool's output (#190 N8). Without this, one item near 0007's 8 MiB
 /// frame would close every subscriber and then be replayed again on every reconnect.
-pub(super) const MAX_TEXT_ITEM_BYTES: usize = 32 * 1024;
+pub(crate) const MAX_TEXT_ITEM_BYTES: usize = 32 * 1024;
 
 /// The longest a short identifier gets to be, in bytes: `ToolCall`'s `call_id` and `name`,
 /// `ToolResult`'s `call_id`, `SessionStarted`'s `session_id` and `model`, and every `message_id`.
@@ -45,21 +51,23 @@ pub(super) const MAX_TODO_TEXT_BYTES: usize = 4 * 1024;
 /// dropped, not only their text, since even a short text per item adds up at an unbounded count.
 pub(super) const MAX_TODO_LIST_BYTES: usize = 64 * 1024;
 
-pub(super) const STARTING: &str = "starting";
-pub(super) const RUNNING: &str = "running";
+pub(crate) const STARTING: &str = "starting";
+pub(crate) const RUNNING: &str = "running";
 pub(super) const COMPLETED: &str = "completed";
 pub(super) const FAILED: &str = "failed";
 pub(super) const CANCELLED: &str = "cancelled";
 pub(super) const INTERRUPTED: &str = "interrupted";
+pub(crate) const WAITING: &str = "waiting";
 pub(super) const ACCEPTED: &str = "accepted";
 
 /// The store's text for the only policy `agent/start` takes.
 pub(super) const WORKSPACE_WRITE: &str = "workspaceWrite";
 
-/// The store's text for a project coordinator's policy (0024).
+/// The store's text for a project orchestrator's policy (0024).
 pub(crate) const NO_WRITE: &str = "noWrite";
 
-fn status(text: &str) -> AgentStatus {
+/// The protocol's status for a run row's stored `status`.
+pub(crate) fn status(text: &str) -> AgentStatus {
     match text {
         STARTING => AgentStatus::Starting,
         RUNNING => AgentStatus::Running,
@@ -67,6 +75,7 @@ fn status(text: &str) -> AgentStatus {
         FAILED => AgentStatus::Failed,
         CANCELLED => AgentStatus::Cancelled,
         INTERRUPTED => AgentStatus::Interrupted,
+        WAITING => AgentStatus::Waiting,
         ACCEPTED => AgentStatus::Accepted,
         _ => AgentStatus::Unknown,
     }
@@ -74,18 +83,18 @@ fn status(text: &str) -> AgentStatus {
 
 /// A store row and its worktree as the protocol's run.
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
 pub(crate) fn agent_run(
-    row: &wisp_store::Run,
-    worktree: Option<&wisp_store::Worktree>,
+    row: &parallax_store::Run,
+    worktree: Option<&parallax_store::Worktree>,
 ) -> Result<AgentRun, ErrorObject> {
     let corrupt = |what: &str| {
         error!(run = %row.id, what, "a stored run has an invalid id");
         ErrorObject::internal_error(format!("the stored run {} has an invalid {what}", row.id))
     };
     let id = RunId::try_from(row.id).map_err(|_| corrupt("id"))?;
-    let project = ProjectId::try_from(row.fields.project_id).map_err(|_| corrupt("project id"))?;
+    let project = ScopeId::try_from(row.fields.project_id).map_err(|_| corrupt("project id"))?;
     let state = &row.state;
     Ok(AgentRun {
         id,
@@ -98,6 +107,7 @@ pub(crate) fn agent_run(
         },
         status: status(&state.status),
         backend: row.fields.backend.clone(),
+        backends: row.backends.clone(),
         account_id: state.account_id.clone(),
         branch: worktree.map(|worktree| worktree.branch.clone()),
         worktree_path: worktree.map(|worktree| worktree.path.clone()),
@@ -105,22 +115,30 @@ pub(crate) fn agent_run(
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
-        coordinator_thread: row
+        orchestrator_thread: row
             .fields
-            .coordinator_thread
-            .map(CoordinatorThreadId::try_from)
+            .orchestrator_thread
+            .map(OrchestratorThreadId::try_from)
             .transpose()
-            .map_err(|_| corrupt("coordinator thread id"))?,
+            .map_err(|_| corrupt("orchestrator thread id"))?,
         model: row.fields.model.clone(),
         effort: row.fields.effort.as_deref().and_then(option_value),
         permission: row.fields.permission.as_deref().and_then(option_value),
+        context_window: row.fields.context_window,
+        fast: row.fields.fast,
+        approvals: row.fields.approvals,
+        checkout: row.fields.checkout,
+        explore: row.fields.explore,
+        pull_requests: state.pull_requests.clone(),
+        resume_at: state.resume_at,
+        auto_resume: state.auto_resume,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
 }
 
 /// An effort's or a permission's protocol name, such as `high`, as the runs table stores it.
-pub(super) fn option_name(value: impl Serialize) -> Option<String> {
+pub(crate) fn option_name(value: impl Serialize) -> Option<String> {
     serde_json::to_value(value)
         .ok()?
         .as_str()
@@ -129,22 +147,30 @@ pub(super) fn option_name(value: impl Serialize) -> Option<String> {
 
 /// A stored effort or permission, back from its protocol name: `Unknown` for a name this version
 /// doesn't know.
-pub(super) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
+pub(crate) fn option_value<T: DeserializeOwned>(name: &str) -> Option<T> {
     serde_json::from_value(Value::String(name.to_owned())).ok()
 }
 
 /// The part of a stored run that `agent.updated` reports.
-pub(super) fn run_state(row: &wisp_store::Run) -> AgentRunState {
+pub(super) fn run_state(row: &parallax_store::Run) -> AgentRunState {
     let state = &row.state;
     AgentRunState {
         status: status(&state.status),
         account_id: state.account_id.clone(),
+        backend: Some(row.fields.backend.clone()),
+        backends: row.backends.clone(),
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
         model: row.fields.model.clone(),
         effort: row.fields.effort.as_deref().and_then(option_value),
         permission: row.fields.permission.as_deref().and_then(option_value),
+        context_window: row.fields.context_window,
+        fast: row.fields.fast,
+        pull_requests: state.pull_requests.clone(),
+        resume_at: state.resume_at,
+        auto_resume: state.auto_resume,
+        branch: None,
         updated_at: row.updated_at,
     }
 }
@@ -159,7 +185,7 @@ pub(super) fn merge_how_text(how: MergeHow) -> &'static str {
 }
 
 /// A stored accept as the protocol's merge.
-pub(super) fn merge(accept: &wisp_store::RunAccept) -> AgentMerge {
+pub(super) fn merge(accept: &parallax_store::RunAccept) -> AgentMerge {
     AgentMerge {
         commit: accept.commit.clone(),
         into: accept.into.clone(),
@@ -172,7 +198,7 @@ pub(super) fn merge(accept: &wisp_store::RunAccept) -> AgentMerge {
     }
 }
 
-fn diff(state: &wisp_store::RunState) -> Option<DiffSummary> {
+fn diff(state: &parallax_store::RunState) -> Option<DiffSummary> {
     match (
         &state.commit_sha,
         state.files_changed,
@@ -195,7 +221,7 @@ pub(super) fn failure_kind(kind: FailureKind) -> AgentFailureKind {
         FailureKind::RateLimited => AgentFailureKind::RateLimited,
         FailureKind::PolicyViolation => AgentFailureKind::PolicyViolation,
         FailureKind::UnexpectedApiKey => AgentFailureKind::UnexpectedApiKey,
-        FailureKind::VendorError => AgentFailureKind::VendorError,
+        FailureKind::VendorError | FailureKind::SessionNotFound => AgentFailureKind::VendorError,
         FailureKind::Crashed => AgentFailureKind::Crashed,
         FailureKind::SpawnFailed => AgentFailureKind::SpawnFailed,
         FailureKind::Internal | FailureKind::Other => AgentFailureKind::Internal,
@@ -222,7 +248,7 @@ pub(super) fn outcome(outcome: &Outcome) -> (AgentOutcome, &'static str, Option<
             Some(failure.message.clone()),
         ),
         Outcome::Unknown => {
-            let message = "the run ended in a way this wispd does not know".to_owned();
+            let message = "the run ended in a way this plxd does not know".to_owned();
             (
                 AgentOutcome::Failed {
                     failure: AgentFailureKind::Internal,
@@ -235,26 +261,8 @@ pub(super) fn outcome(outcome: &Outcome) -> (AgentOutcome, &'static str, Option<
     }
 }
 
-fn tool_status(status: ToolStatus) -> AgentToolStatus {
-    match status {
-        ToolStatus::Ok => AgentToolStatus::Ok,
-        ToolStatus::Error => AgentToolStatus::Error,
-        ToolStatus::Denied => AgentToolStatus::Denied,
-        ToolStatus::Other => AgentToolStatus::Unknown,
-    }
-}
-
-fn todo_status(status: TodoStatus) -> AgentTodoStatus {
-    match status {
-        TodoStatus::Pending => AgentTodoStatus::Pending,
-        TodoStatus::InProgress => AgentTodoStatus::InProgress,
-        TodoStatus::Completed => AgentTodoStatus::Completed,
-        TodoStatus::Other => AgentTodoStatus::Unknown,
-    }
-}
-
 /// `text` cut to at most `max` bytes on a character boundary, with a note when it was cut.
-pub(super) fn truncate(text: &str, max: usize) -> String {
+pub(crate) fn truncate(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_owned();
     }
@@ -271,8 +279,13 @@ fn id(message_id: Option<&str>) -> Option<String> {
 }
 
 fn tool_input(input: &Value) -> Value {
+    capped_input(input, MAX_TOOL_INPUT_BYTES)
+}
+
+/// `input`, or `{"truncated": true, "bytes": n}` when its JSON is over `max` bytes.
+fn capped_input(input: &Value, max: usize) -> Value {
     let bytes = serde_json::to_string(input).map_or(0, |json| json.len());
-    if bytes > MAX_TOOL_INPUT_BYTES {
+    if bytes > max {
         json!({"truncated": true, "bytes": bytes})
     } else {
         input.clone()
@@ -284,7 +297,7 @@ fn tool_input(input: &Value) -> Value {
 /// (`escaped_len`, as `serde_json` writes a string), not raw ones, so text that needs a lot of
 /// escaping can't make the list's real JSON size exceed the cap. Always keeps at least one item,
 /// matching how the log's own paging never returns an empty, non-progressing page.
-fn capped_todo_items(items: &[TodoItem]) -> Vec<AgentTodoItem> {
+fn capped_todo_items(items: &[TodoItem]) -> Vec<TodoItem> {
     let mut capped = Vec::new();
     let mut bytes = 0;
     for item in items {
@@ -296,9 +309,9 @@ fn capped_todo_items(items: &[TodoItem]) -> Vec<AgentTodoItem> {
             break;
         }
         bytes += size;
-        capped.push(AgentTodoItem {
+        capped.push(TodoItem {
             text,
-            status: todo_status(item.status),
+            status: item.status,
         });
     }
     capped
@@ -314,13 +327,17 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             session_id: truncate(session_id, MAX_ID_BYTES),
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
-        // The backend knows only the id; the run's actor adds a follow-up's text (RYA-92), marks
-        // a coordinator's wake-up (RYA-42), and lists the message's images (RYA-191).
+        // The backend knows only the id; the run's actor adds a follow-up's text (PLX-92), marks
+        // an orchestrator's wake-up (PLX-42), and lists the message's images (PLX-191) and
+        // attached threads (PLX-372).
         Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
             turn_id: *turn_id,
             text: None,
             wake: false,
+            hidden: false,
+            from: None,
             images: Vec::new(),
+            threads: Vec::new(),
         },
         Event::TextDelta { message_id, text } => AgentOutputItem::TextDelta {
             message_id: id(message_id.as_deref()),
@@ -343,12 +360,15 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             call_id,
             status,
             output,
+            ..
         } => AgentOutputItem::ToolResult {
             call_id: truncate(call_id, MAX_ID_BYTES),
-            status: tool_status(*status),
+            status: *status,
             output: output
                 .as_deref()
                 .map(|output| truncate(output, MAX_TOOL_OUTPUT_BYTES)),
+            // The actor stores the images and fills in their ids.
+            images: Vec::new(),
         },
         Event::Reasoning { message_id, text } => AgentOutputItem::Reasoning {
             message_id: id(message_id.as_deref()),
@@ -360,6 +380,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         Event::Notice { detail } => AgentOutputItem::Notice {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
+        Event::ContextCompaction { done } => AgentOutputItem::ContextCompaction { done: *done },
         Event::Usage(delta) => AgentOutputItem::Usage {
             model: delta.model.clone(),
             input_tokens: delta.usage.input_tokens,
@@ -368,11 +389,16 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             cache_write_tokens: delta.usage.cache_write_tokens,
             cost_usd_micros: delta.usage.cost_usd_micros,
         },
-        Event::TurnFinished { turn_id, result } => AgentOutputItem::TurnFinished {
+        Event::TurnFinished {
+            turn_id, result, ..
+        } => AgentOutputItem::TurnFinished {
             turn_id: *turn_id,
             result: result
                 .as_deref()
                 .map(|result| truncate(result, MAX_TEXT_ITEM_BYTES)),
+            // The run's actor fills them from the turn's `TurnCursor`, which comes just before.
+            cursor: None,
+            session_id: None,
         },
         Event::FollowUpDropped { turn_id } => {
             AgentOutputItem::FollowUpDropped { turn_id: *turn_id }
@@ -380,11 +406,97 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         Event::Warning { detail, .. } => AgentOutputItem::Warning {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
-        Event::RateLimit(_)
+        Event::Subagent { .. } | Event::SubagentFinished { .. } => return subagent_item(event),
+        // The run's actor reports permission requests and how they end.
+        Event::ApprovalRequested(_)
+        | Event::ApprovalWithdrawn { .. }
+        | Event::RequestUsage(_)
+        | Event::TurnCursor { .. }
+        | Event::RateLimit(_)
         | Event::AccountFallback { .. }
+        | Event::BackgroundTasks { .. }
+        | Event::RemoteControl { .. }
         | Event::Finished { .. }
         | Event::Unknown => return None,
     })
+}
+
+/// The transcript item for one of the agent's own subagents' events (PLX-382). Its own item is
+/// capped as the agent's would be, and left out where the agent's would be.
+fn subagent_item(event: &Event) -> Option<AgentOutputItem> {
+    Some(match event {
+        Event::Subagent {
+            call_id,
+            agent_type,
+            model,
+            event,
+        } => AgentOutputItem::Subagent {
+            call_id: truncate(call_id, MAX_ID_BYTES),
+            agent_type: agent_type
+                .as_deref()
+                .map(|kind| truncate(kind, MAX_ID_BYTES)),
+            model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
+            item: Box::new(output_item(event)?),
+        },
+        Event::SubagentFinished {
+            call_id,
+            status,
+            summary,
+        } => AgentOutputItem::SubagentFinished {
+            call_id: truncate(call_id, MAX_ID_BYTES),
+            status: *status,
+            summary: summary
+                .as_deref()
+                .map(|summary| truncate(summary, MAX_TEXT_ITEM_BYTES)),
+        },
+        _ => return None,
+    })
+}
+
+/// The transcript item for a permission request (PLX-222). It waits for an answer with no timer
+/// (PLX-726), so `expiresAt` is the latest time there is.
+pub(super) fn approval_requested(request: &ApprovalRequest) -> AgentOutputItem {
+    let capped = |text: Option<&str>| text.map(|text| truncate(text, MAX_TEXT_ITEM_BYTES));
+    AgentOutputItem::ApprovalRequested {
+        approval_id: request.approval_id,
+        tool_name: truncate(&request.tool_name, MAX_ID_BYTES),
+        input: capped_input(&request.input, MAX_APPROVAL_INPUT_BYTES),
+        call_id: id(request.call_id.as_deref()),
+        reason: capped(request.reason.as_deref()),
+        blocked_path: capped(request.blocked_path.as_deref()),
+        subagent: id(request.subagent.as_deref()),
+        always_allow: request
+            .always_allow
+            .iter()
+            .take(MAX_ALWAYS_ALLOW_RULES)
+            .map(|rule| truncate(rule, MAX_ALWAYS_ALLOW_RULE_BYTES))
+            .collect(),
+        interactive: request.interactive,
+        expires_at: Timestamp::MAX,
+    }
+}
+
+/// The transcript item for how a permission request ended (PLX-222).
+pub(super) fn approval_resolved(
+    approval_id: ApprovalId,
+    resolution: &AgentApproveResult,
+) -> AgentOutputItem {
+    AgentOutputItem::ApprovalResolved {
+        approval_id,
+        decision: resolution.decision,
+        by: resolution.by,
+        always: resolution.always,
+        message: resolution
+            .message
+            .as_deref()
+            .map(|message| truncate(message, MAX_TEXT_ITEM_BYTES)),
+        answers: resolution.answers.as_ref().map(|answers| {
+            answers
+                .iter()
+                .map(|answer| truncate(answer, MAX_TEXT_ITEM_BYTES))
+                .collect()
+        }),
+    }
 }
 
 /// About how many bytes `item` adds to an `agent.output` event.
@@ -394,48 +506,11 @@ pub(super) fn item_bytes(item: &AgentOutputItem) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use parallax_protocol::{AgentOutputItem, AgentToolStatus};
     use serde_json::json;
-    use wisp_protocol::{AgentOutputItem, AgentToolStatus};
 
-    use super::{
-        MAX_ID_BYTES, MAX_TEXT_ITEM_BYTES, MAX_TODO_LIST_BYTES, MAX_TODO_TEXT_BYTES,
-        MAX_TOOL_INPUT_BYTES, MAX_TOOL_OUTPUT_BYTES, output_item, truncate,
-    };
-    use crate::backend::{
-        Event, LimitStatus, LimitWindow, ModelUsage, TodoItem, TodoStatus, ToolStatus, Usage,
-    };
-
-    #[test]
-    fn transcript_events_map_and_bookkeeping_events_do_not() {
-        let usage = Event::Usage(ModelUsage {
-            model: Some("opus".into()),
-            usage: Usage {
-                input_tokens: 3,
-                output_tokens: 1,
-                ..Usage::default()
-            },
-        });
-        assert_eq!(
-            output_item(&usage),
-            Some(AgentOutputItem::Usage {
-                model: Some("opus".into()),
-                input_tokens: 3,
-                output_tokens: 1,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                cost_usd_micros: None,
-            })
-        );
-        let limit = Event::RateLimit(LimitWindow {
-            window: "five_hour".into(),
-            duration_minutes: None,
-            status: LimitStatus::Allowed,
-            used_percent: None,
-            resets_at: None,
-        });
-        assert_eq!(output_item(&limit), None);
-        assert_eq!(output_item(&Event::Unknown), None);
-    }
+    use super::{MAX_TOOL_INPUT_BYTES, MAX_TOOL_OUTPUT_BYTES, output_item, truncate};
+    use crate::backend::{Event, ToolStatus};
 
     #[test]
     fn large_tool_inputs_and_outputs_are_cut() {
@@ -454,6 +529,7 @@ mod tests {
             call_id: "c".into(),
             status: ToolStatus::Ok,
             output: Some("é".repeat(MAX_TOOL_OUTPUT_BYTES)),
+            images: Vec::new(),
         };
         let Some(AgentOutputItem::ToolResult { output, status, .. }) = output_item(&result) else {
             panic!("a tool result");
@@ -467,179 +543,5 @@ mod tests {
         );
         assert!(output.ends_with("bytes cut)"));
         assert_eq!(truncate("short", 10), "short");
-    }
-
-    /// #190 N8: every free text field of an `agent.output` item is capped, not only a tool's.
-    #[test]
-    fn oversized_text_fields_are_cut_to_the_same_cap_as_tool_output() {
-        let big = "x".repeat(MAX_TEXT_ITEM_BYTES + 1);
-        let cut = |field: &str| assert!(field.len() < MAX_TEXT_ITEM_BYTES + 64, "{}", field.len());
-
-        let Some(AgentOutputItem::TextDelta { text, .. }) = output_item(&Event::TextDelta {
-            message_id: None,
-            text: big.clone(),
-        }) else {
-            panic!("a text delta");
-        };
-        cut(&text);
-
-        let Some(AgentOutputItem::Text { text, .. }) = output_item(&Event::Text {
-            message_id: None,
-            text: big.clone(),
-        }) else {
-            panic!("text");
-        };
-        cut(&text);
-
-        let Some(AgentOutputItem::Reasoning { text, .. }) = output_item(&Event::Reasoning {
-            message_id: None,
-            text: big.clone(),
-        }) else {
-            panic!("reasoning");
-        };
-        cut(&text);
-
-        let Some(AgentOutputItem::Notice { detail }) = output_item(&Event::Notice {
-            detail: big.clone(),
-        }) else {
-            panic!("a notice");
-        };
-        cut(&detail);
-
-        let Some(AgentOutputItem::Warning { detail }) = output_item(&Event::Warning {
-            warning: crate::backend::WarningKind::Other,
-            detail: big.clone(),
-        }) else {
-            panic!("a warning");
-        };
-        cut(&detail);
-
-        let Some(AgentOutputItem::TurnFinished { result, .. }) =
-            output_item(&Event::TurnFinished {
-                turn_id: None,
-                result: Some(big),
-            })
-        else {
-            panic!("a turn finished");
-        };
-        cut(&result.unwrap());
-    }
-
-    /// #190 review: identifiers are capped too, not only free text — a vendor bug or a hostile
-    /// CLI reporting a huge `call_id`, `name`, `session_id`, `model`, or `message_id` shouldn't be
-    /// able to blow up an `agent.output` event any more than a huge tool output can.
-    #[test]
-    fn oversized_identifiers_are_cut() {
-        let big = "i".repeat(MAX_ID_BYTES + 1);
-        let cut = |field: &str| assert!(field.len() < MAX_ID_BYTES + 64, "{}", field.len());
-
-        let Some(AgentOutputItem::SessionStarted { session_id, model }) =
-            output_item(&Event::SessionStarted {
-                session_id: big.clone(),
-                model: Some(big.clone()),
-                api_key_source: None,
-            })
-        else {
-            panic!("a session started");
-        };
-        cut(&session_id);
-        cut(&model.unwrap());
-
-        let Some(AgentOutputItem::ToolCall { call_id, name, .. }) = output_item(&Event::ToolCall {
-            call_id: big.clone(),
-            name: big.clone(),
-            input: json!({}),
-        }) else {
-            panic!("a tool call");
-        };
-        cut(&call_id);
-        cut(&name);
-
-        let Some(AgentOutputItem::ToolResult { call_id, .. }) = output_item(&Event::ToolResult {
-            call_id: big.clone(),
-            status: ToolStatus::Ok,
-            output: None,
-        }) else {
-            panic!("a tool result");
-        };
-        cut(&call_id);
-
-        let Some(AgentOutputItem::Text { message_id, .. }) = output_item(&Event::Text {
-            message_id: Some(big),
-            text: "hi".to_owned(),
-        }) else {
-            panic!("text");
-        };
-        cut(&message_id.unwrap());
-    }
-
-    /// #190 review: a `TodoList` is capped on both axes — each item's text, and how many items
-    /// one event carries — so neither a single huge item nor an unbounded count of short ones can
-    /// make the event approach 0007's frame. The list's total is a JSON-escaped byte budget, not
-    /// a raw one or a plain item count, so text that needs a lot of escaping is charged for what
-    /// it actually costs once serialized.
-    #[test]
-    fn a_todo_list_is_capped_on_item_text_and_on_total_escaped_bytes() {
-        let big_text = "t".repeat(MAX_TODO_TEXT_BYTES + 1);
-        let plain: Vec<TodoItem> = (0..MAX_TODO_LIST_BYTES)
-            .map(|i| TodoItem {
-                text: if i == 0 {
-                    big_text.clone()
-                } else {
-                    "task".to_owned()
-                },
-                status: TodoStatus::Pending,
-            })
-            .collect();
-        let Some(AgentOutputItem::TodoList { items: plain }) =
-            output_item(&Event::TodoList { items: plain })
-        else {
-            panic!("a todo list");
-        };
-        assert!(
-            !plain.is_empty() && plain.len() < MAX_TODO_LIST_BYTES,
-            "extra items are dropped once the total budget is spent: {}",
-            plain.len()
-        );
-        assert!(
-            plain[0].text.len() < MAX_TODO_TEXT_BYTES + 64,
-            "{}",
-            plain[0].text.len()
-        );
-        assert!(plain[0].text.ends_with("bytes cut)"));
-
-        // Escape-heavy text costs more once serialized (each `"` becomes `\"`), so fewer such
-        // items fit under the same budget than plain ones would: a raw byte count would let this
-        // list's real JSON size run past MAX_TODO_LIST_BYTES.
-        let escaped: Vec<TodoItem> = (0..MAX_TODO_LIST_BYTES)
-            .map(|_| TodoItem {
-                text: "\"\"\"\"".to_owned(),
-                status: TodoStatus::Pending,
-            })
-            .collect();
-        let Some(AgentOutputItem::TodoList { items: escaped }) =
-            output_item(&Event::TodoList { items: escaped })
-        else {
-            panic!("a todo list");
-        };
-        assert!(
-            escaped.len() < plain.len(),
-            "escaped: {}, plain: {}",
-            escaped.len(),
-            plain.len()
-        );
-    }
-
-    /// #190 review: `truncate` must land on a character boundary even when the cut falls inside a
-    /// multibyte character, not only for the all-ASCII strings the other tests use.
-    #[test]
-    fn truncate_keeps_multibyte_text_valid_utf8_at_the_boundary() {
-        // Each "é" is 2 bytes, so a byte cap that isn't a multiple of 2 lands mid-character;
-        // `truncate` must still produce valid UTF-8 (guaranteed by `String`'s own invariant, so a
-        // wrong cut point would panic rather than silently corrupt anything) and actually cut.
-        let text: String = "é".repeat(20_000);
-        let cut = truncate(&text, MAX_TEXT_ITEM_BYTES + 1);
-        assert!(cut.len() < text.len());
-        assert!(cut.ends_with("bytes cut)"));
     }
 }

@@ -1,0 +1,15 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/upload",
+    "params": { "name": "notes.txt", "data": "aGVsbG8K" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "path": "/Users/me/.parallax/uploads/0199e1c2-7a3b-7c4d-8e5f-6a7b8c9d0e1f/notes.txt"
+    }
+  }
+]

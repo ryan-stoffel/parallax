@@ -4,25 +4,57 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import samples from "../../../../crates/wisp-protocol/samples/v1/agents.json";
-import type { ConnectionState, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
+import type {
+  ConnectionState,
+  SubscriptionMessage,
+  ParallaxBridge,
+  RpcError,
+  WatchMessage,
+  WatchParams,
+} from "../preload/bridge";
 import type {
   AgentRun,
-  AgentRunResult,
-  AgentTodoItem,
   AgentToolStatus,
   LoggedEvent,
+  ThreadRun,
 } from "../protocol/generated/protocol";
-import { activity, AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
+import { AgentChat, RowView, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
+import { threadDrafts } from "./drafts";
+import { ForkContext } from "./Fork";
+import "./markdownTest";
+import { Notifications } from "./notifications";
 import type { Item } from "./transcript";
+import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// A web link asks main for its site's icon, which these tests have none of.
+window.parallax = { siteIcon: async () => undefined } as Partial<ParallaxBridge> as ParallaxBridge;
+// The real split, watched, to see which messages take it.
+vi.mock("./markdownBlocks", async (actual) => {
+  const real = await actual<typeof import("./markdownBlocks")>();
+  return { ...real, markdownBlocks: vi.fn(real.markdownBlocks) };
+});
+// happy-dom has no popovers. Menus are in the DOM either way.
+HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
+// The notifications, outside the body, which a test's unmount clears.
+const notices = document.documentElement.appendChild(document.createElement("div"));
+createRoot(notices).render(<Notifications />);
 // happy-dom lays nothing out. Give the transcript a tall viewport and each row a
 // small height, so the virtualized list renders every row.
-Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-  get(this: HTMLElement) {
-    return this.getAttribute("role") === "log" ? 10_000 : 20;
+// The list reads the transcript's height from clientHeight and each row's from offsetHeight.
+Object.defineProperties(HTMLElement.prototype, {
+  clientHeight: {
+    get(this: HTMLElement) {
+      return this.getAttribute("role") === "log" ? 10_000 : 0;
+    },
+  },
+  offsetHeight: {
+    get(this: HTMLElement) {
+      return this.getAttribute("role") === "log" ? 10_000 : 20;
+    },
   },
 });
 
@@ -33,7 +65,12 @@ const logged = (samples as { method?: string; params?: unknown }[])
 
 let unmount = () => {};
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of notices.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]'))
+    act(() => close.click());
   act(() => unmount());
+  // Each test's sends count from 0, so none reaches the support ask's bridge call.
+  localStorage.removeItem("parallax.promptsBeforeSupportAsk");
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -44,8 +81,11 @@ function render(node: ReactNode) {
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
+    // What's left in the box would come back as a draft in the next render of the run.
+    for (const key of Object.keys(threadDrafts.get())) threadDrafts.remove(key);
     unmount = () => {};
   };
+  return root;
 }
 
 // The composer's editor, which Tiptap keeps on its element for tests.
@@ -53,88 +93,12 @@ const composer = () =>
   document.querySelector<TiptapEditorHTMLElement>('[role="textbox"][aria-label="Message"]')!;
 const type = (text: string) => act(() => void composer().editor!.commands.setContent(text));
 
-const row = (item: Item) =>
-  render(<RowView row={item} live={false} open={false} onToggle={() => {}} />);
-// A row's summary as it shows, without what only screen readers hear.
-const shown = () => {
-  const summary = document.querySelector("summary")!.cloneNode(true) as Element;
-  summary.querySelectorAll(".sr-only").forEach((e) => e.remove());
-  return summary.textContent;
-};
-const said = () => document.querySelector("summary .sr-only")?.textContent;
+const row = (item: Item, open = false) =>
+  render(<RowView row={item} live={false} open={open} onToggle={() => {}} />);
+const said = () =>
+  document.querySelector("summary :is(.sr-only, [data-slot=trace-description])")?.textContent;
 
-test("a message on its way to the agent shows at full strength", () => {
-  render(
-    <RowView
-      row={{ kind: "pending", key: "p", text: "And this?" }}
-      live={false}
-      open={false}
-      onToggle={() => {}}
-    />,
-  );
-  expect(document.body.textContent).toBe("And this?");
-  expect(document.querySelector('[class*="opacity"]')).toBeNull();
-});
-
-test("a user message shows its text, or a neutral label when the log has none", () => {
-  row({ kind: "user", key: "a", text: "Fix the build" });
-  expect(document.body.textContent).toBe("Fix the build");
-  act(() => unmount());
-  row({ kind: "user", key: "b", text: null, turnId: "t" });
-  expect(document.body.textContent).toBe("Follow-up message");
-});
-
-test("a user message shows its images over its text: fetched by id, or at hand when sent from here", async () => {
-  const url = (data: string) => `data:image/png;base64,${data}`;
-  const loadImage = vi.fn(async (id: string) => (id === "i-1" ? url("AAAA") : undefined));
-  render(
-    <RowView
-      row={{ kind: "user", key: "a", text: "", images: ["i-1", "i-2"] }}
-      live={false}
-      open={false}
-      onToggle={() => {}}
-      loadImage={loadImage}
-    />,
-  );
-  await act(async () => {});
-  expect([...document.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual([
-    url("AAAA"),
-  ]);
-  expect(document.querySelector('[aria-label="Image unavailable"]')).not.toBeNull();
-  // Images alone get no bubble.
-  expect(document.body.textContent).toBe("");
-  act(() => unmount());
-
-  render(
-    <RowView
-      row={{
-        kind: "pending",
-        key: "p",
-        text: "And this?",
-        images: [{ mediaType: "image/png", data: "BBBB" }],
-      }}
-      live={false}
-      open={false}
-      onToggle={() => {}}
-    />,
-  );
-  expect(document.querySelector("img")?.getAttribute("src")).toBe(url("BBBB"));
-  expect(document.body.textContent).toBe("And this?");
-});
-
-test("a wake-up reads as from wisp, with its message folded away", () => {
-  row({
-    kind: "user",
-    key: "w",
-    text: "wisp, not the user: runs you started finished.",
-    wake: true,
-  });
-  expect(document.querySelector("summary")!.textContent).toBe("From wisp: subagents finished");
-  expect(document.querySelector("details")!.open).toBe(false);
-  expect(document.querySelector(".bg-selected")).toBeNull();
-});
-
-test("an assistant message renders Markdown, but never raw HTML or images", () => {
+test("an assistant message renders Markdown, but never raw HTML or images", async () => {
   row({
     kind: "assistant",
     key: "a",
@@ -146,366 +110,109 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   const link = document.querySelector("a")!;
   expect(link.getAttribute("href")).toBe("https://example.com");
   expect(link.target).toBe("_blank");
-  // A Markdown image is a link with its alt text, which main opens only if it's https.
+  // Raw HTML is its text, and a Markdown image is a link with its alt text, which a click opens
+  // only as a file in the thread's folder (here, outside a thread, nothing).
   expect(document.querySelector("img")).toBeNull();
+  expect(document.body.textContent).toContain("<img src=x onerror=alert(1)>");
   const links = [...document.querySelectorAll("a")];
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
-  // Its file: source is unsafe, so it has no href at all rather than an empty one.
-  expect(links[1]!.hasAttribute("href")).toBe(false);
 });
 
-test("a tool call collapses its input and output under its name", () => {
-  const toggled = vi.fn();
-  const tool: Item = {
-    kind: "tool",
-    key: "t",
-    callId: "toolu_1",
-    name: "Bash",
-    input: { command: "cargo test\n--quiet" },
-    status: "error",
-    output: "1 failed",
-  };
-  render(<RowView row={tool} live={false} open={false} onToggle={toggled} />);
-  const details = document.querySelector("details")!;
-  expect(details.open).toBe(false);
-  expect(shown()).toBe("Bashcargo test");
-  expect(said()).toBe("Failed");
-
-  act(() => {
-    details.open = true;
-    details.dispatchEvent(new Event("toggle"));
-  });
-  expect(toggled).toHaveBeenCalledWith("t", true);
-  expect(details.textContent).toContain("1 failed");
-});
-
-test("a tool call with an oversized input says so", () => {
-  row({
-    kind: "tool",
-    key: "t",
-    callId: "toolu_2",
-    name: "Bash",
-    input: { truncated: true, bytes: 90210 },
-    status: "denied",
-  });
-  expect(document.querySelector("details")!.textContent).toContain("Too large to show (89 KB)");
-});
-
-test("a coordinator's wispd tool calls read as what they did, and to what", () => {
-  const summary = (name: string, input: Record<string, string>, subagent?: string) => {
-    row({ kind: "tool", key: "t", callId: "1", name, input, ...(subagent && { subagent }) });
-    const text = shown();
-    act(() => unmount());
-    return text;
-  };
-  expect(summary("mcp__wispd__spawn_agent", { prompt: "Fix the login bug\nwith a test" })).toBe(
-    "Started a subagentFix the login bug",
-  );
-  expect(summary("mcp__wispd__agent_status", { runId: "r-1" }, "Fix the login bug")).toBe(
-    "Checked on a subagentFix the login bug",
-  );
-  expect(summary("mcp__wispd__write_context", { path: "plan.md", content: "# Plan" })).toBe(
-    "Wrote shared contextplan.md",
-  );
-  // A wispd tool this app doesn't know reads as any MCP server's tool does.
-  expect(summary("mcp__wispd__plan_approve", {})).toBe("wispdplan approve");
-});
-
-test("another MCP server's tool reads as the server and the tool, and a skill by its name", () => {
-  const summary = (name: string, input: Record<string, string>) => {
-    row({ kind: "tool", key: "t", callId: "1", name, input });
-    const text = shown();
-    act(() => unmount());
-    return text;
-  };
-  expect(summary("mcp__linear__save_issue", { title: "Fix it" })).toBe("Linearsave issue");
-  expect(summary("mcp__claude-code-remote__list_repos", {})).toBe("Claude code remotelist repos");
-  expect(summary("Skill", { skill: "code-review" })).toBe("Skillcode-review");
-  // Older Claude Code versions name it `command`.
-  expect(summary("Skill", { command: "simplify" })).toBe("Skillsimplify");
-});
-
-test("each kind of work has its own loader, and MCP tools and skills read by name", () => {
-  const tool = (name: string | null, input: Record<string, string> = {}): Item => ({
-    kind: "tool",
-    key: "t",
-    callId: "1",
-    name,
-    input,
-  });
-  const loader = (kind: string, variant: string) => ({ kind, variant });
-  expect(activity({ kind: "reasoning", key: "r", text: "Hm" })).toEqual({
-    label: "Thinking",
-    loader: loader("matrix", "ripple"),
-  });
-  expect(activity(tool("Bash", { command: "cargo test\n--quiet" }))).toEqual({
-    label: "Running",
-    detail: "cargo test",
-    loader: loader("register", "shift"),
-  });
-  expect(activity(tool("Read", { file_path: "src/main.rs" }))).toEqual({
-    label: "Reading",
-    detail: "src/main.rs",
-    loader: loader("bands", "descend"),
-  });
-  expect(activity(tool("Grep", { pattern: "TODO" })).loader).toEqual(loader("matrix", "scan"));
-  expect(activity(tool("WebSearch")).loader).toEqual(loader("matrix", "scan"));
-  expect(activity(tool("Edit")).loader).toEqual(loader("cells", "merge"));
-  expect(activity(tool("Write")).loader).toEqual(loader("cells", "merge"));
-  expect(activity(tool("WebFetch")).loader).toEqual(loader("beacon", "rise"));
-  expect(activity(tool("Task", { description: "Find the bug" }))).toEqual({
-    label: "Running agent",
-    detail: "Find the bug",
-    loader: loader("orbit", "oppose"),
-  });
-  expect(activity(tool("Skill", { skill: "code-review" }))).toEqual({
-    label: "Using skill",
-    detail: "code-review",
-    loader: loader("lift", "rise"),
-  });
-  expect(activity(tool("mcp__linear__save_issue", { title: "Fix it" }))).toEqual({
-    label: "Using Linear",
-    detail: "save issue",
-    loader: loader("beacon", "balance"),
-  });
-  expect(activity(tool("mcp__wispd__spawn_agent", { prompt: "Fix the login bug" }))).toEqual({
-    label: "Started a subagent",
-    detail: "Fix the login bug",
-    loader: loader("cells", "spread"),
-  });
-  // A wispd tool this app doesn't know reads as any MCP server's tool does, with wispd's loader.
-  expect(activity(tool("mcp__wispd__plan_approve"))).toEqual({
-    label: "Using wispd",
-    detail: "plan approve",
-    loader: loader("cells", "spread"),
-  });
-  expect(activity({ kind: "todo", key: "c", items: [] })).toEqual({
-    label: "Planning",
-    loader: loader("lift", "breathe"),
-  });
-  // Anything else.
-  expect(activity(tool("Frobnicate", { path: "a.txt" }))).toEqual({
-    label: "Frobnicate",
-    detail: "a.txt",
-    loader: loader("orbit", "chase"),
-  });
-  expect(activity(tool(null))).toMatchObject({
-    label: "Working",
-    loader: loader("orbit", "chase"),
-  });
-  expect(activity()).toEqual({ label: "Working", loader: loader("orbit", "chase") });
-});
-
-test("a running tool call draws its work's loader, and a finished one its kind's icon", () => {
-  const tool: Item = { kind: "tool", key: "t", callId: "1", name: "Read", input: {} };
-  render(<RowView row={tool} live open={false} onToggle={() => {}} />);
-  const summary = () => document.querySelector("summary")!;
-  expect(summary().querySelector('[data-loader="bands"][data-variant="descend"]')).not.toBeNull();
-  // Screen readers hear the word, not the loader.
-  expect(summary().querySelector(".loader")!.closest('[aria-hidden="true"]')).not.toBeNull();
-  expect(said()).toBe("Running");
-  act(() => unmount());
-
-  render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
-  expect(document.querySelector(".loader")).toBeNull();
-  expect(summary().querySelector("svg.lucide-file-text")).not.toBeNull();
-  expect(said()).toBe("Succeeded");
-});
-
-test("each kind of tool has its icon once it's done, as its loader matches it while it runs", () => {
-  // The icon each finished tool shows, by its lucide name.
-  const icon = (name: string | null, input: Record<string, string> = {}) => {
-    row({ kind: "tool", key: "t", callId: "1", name, input, status: "ok" });
-    const svg = document.querySelector("summary svg:not(.lucide-chevron-right)")!;
-    act(() => unmount());
-    return svg.getAttribute("class")!.split(" ")[1];
-  };
-  expect(
-    Object.fromEntries(
-      [
-        "Task",
-        "Agent",
-        "Bash",
-        "Read",
-        "NotebookRead",
-        "LS",
-        "Grep",
-        "Glob",
-        "WebSearch",
-        "ToolSearch",
-        "Edit",
-        "MultiEdit",
-        "NotebookEdit",
-        "Write",
-        "WebFetch",
-        "mcp__linear__save_issue",
-        "Skill",
-        "mcp__wispd__spawn_agent",
-        "mcp__wispd__plan_approve",
-        "TodoWrite",
-        "Frobnicate",
-      ].map((name) => [name, icon(name)]),
-    ),
-  ).toEqual({
-    Task: "lucide-bot",
-    Agent: "lucide-bot",
-    Bash: "lucide-square-terminal",
-    Read: "lucide-file-text",
-    NotebookRead: "lucide-file-text",
-    LS: "lucide-file-text",
-    Grep: "lucide-search",
-    Glob: "lucide-search",
-    WebSearch: "lucide-search",
-    ToolSearch: "lucide-search",
-    Edit: "lucide-pencil",
-    MultiEdit: "lucide-pencil",
-    NotebookEdit: "lucide-pencil",
-    Write: "lucide-file-plus",
-    WebFetch: "lucide-globe",
-    mcp__linear__save_issue: "lucide-plug",
-    Skill: "lucide-sparkles",
-    mcp__wispd__spawn_agent: "lucide-workflow",
-    // A wispd tool this app doesn't know is still wispd's.
-    mcp__wispd__plan_approve: "lucide-workflow",
-    TodoWrite: "lucide-list-checks",
-    Frobnicate: "lucide-hammer",
-  });
-  expect(icon(null)).toBe("lucide-hammer");
-
-  // Thinking has the brain.
-  row({ kind: "reasoning", key: "r", text: "Hm" });
-  expect(document.querySelector("summary svg.lucide-brain")).not.toBeNull();
-});
-
-test("a failed, denied, or unfinished tool call marks its icon, and says how it went in words", () => {
-  const tool = (status?: AgentToolStatus): Item => ({
-    kind: "tool",
-    key: "t",
-    callId: "1",
-    name: "Bash",
-    input: { command: "git push" },
-    ...(status && { status }),
-  });
-  // The kind's icon, whether it fades, and the mark at its corner.
-  const slot = () => {
-    const icon = document.querySelector("summary .lucide-square-terminal")!;
-    return {
-      color: icon.parentElement!.className.match(/text-[\w-]+/)?.[0],
-      faded: icon.classList.contains("opacity-50"),
-      mark: icon.nextElementSibling?.getAttribute("class")?.split(" ")[1],
-      said: said(),
+test("a streaming message renders as the whole text does, at every line", async () => {
+  // Past SPLIT_FROM, so each reply renders block by block.
+  const lead = "A long reply opens with a paragraph. ".repeat(30) + "\n\n";
+  const replies = [
+    [
+      "Setext\n===\n\nIntro with `code` and **bold**.",
+      "- loose\n\n- list\n  continued\n\n  - nested\n\n    ```sh\n    cargo test\n\n    ```",
+      "1. one\n\n2) two\n\n10. ten",
+      "    indented code\n\n    more\n\n> quote\n> lines",
+      "| a | b |\n| - | - |\n| 1 | 2 |\n\n---\n\n- [x] done\n- [ ] not",
+      "```ts\nconst a = 1;\n\n~~~\n```\n\n~~~~\n```\n\n~~~~\n\nEnd.",
+      "- tight\n- list\n\nText\n\n  ```\n  indented fence\n  ```\n\nEnd.",
+    ].join("\n\n"),
+    // A list item's fence that a column-0 fence ends, which opens a new one.
+    "1. Run:\n   ```sh\n   cargo test\n```\n\nThen check.\n\nDone.",
+    // A fence on a list marker's line.
+    "- ```\n  a\n  ```\n\nText\n\n```\ncode\n\nmore\n```",
+    // A fence inside an HTML block.
+    "<details>\n```ts\nconst a = 1;\n\nconst b = 2;\n```\n\n</details>\n\nAfter",
+    "```\r\ncode\r\n\r\nmore\r\n```\r\n\r\n- a\r\n\r\n- b\r\n-\r\n\r\nEnd",
+    // Definitions inside containers.
+    "See [x].\n\n> [x]: https://example.com",
+    "See [x].\n\nok\n\n- [x]: https://example.com",
+    "A[^1]\n\nB\n\n> [^1]: Note",
+    "a\n\u00a0\nb",
+    // A loose list whose next item, while it arrives, reads as a paragraph.
+    "1. a\n\n2. b\n\n3. c\n\nText\n\n- d\n\n- e",
+    // Math in each delimiter, beside prices.
+    "From $5 to $10, so \\(a^2\\) and $b$.\n\n\\[\nx = 1\n\\]\n\n$$\ny = 2\n$$\n\nEnd.",
+  ];
+  // A row in a root of its own, which keeps it across renders, as the transcript does.
+  const view = () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    return async (text: string, partial: boolean) => {
+      const row: Item = { kind: "assistant", key: "a", text, partial };
+      act(() => root.render(<RowView row={row} live={false} open={false} onToggle={() => {}} />));
+      // A streaming message differs by its class, which hides LaTeX still arriving, and by each
+      // block's own Enriched Markdown root, whose last margin it zeroes: the elements are the same.
+      const shape = container.cloneNode(true) as HTMLElement;
+      for (const root of shape.querySelectorAll(".enrm-text")) root.replaceWith(...root.childNodes);
+      for (const styled of shape.querySelectorAll("[style]")) styled.removeAttribute("style");
+      // An element React updated keeps its attributes' first order, one it made has its own.
+      for (const el of shape.querySelectorAll("*")) {
+        const attributes = [...el.attributes]
+          .map((a) => [a.name, a.value] as const)
+          .sort(([a], [b]) => a.localeCompare(b));
+        for (const [name] of attributes) el.removeAttribute(name);
+        for (const [name, value] of attributes) el.setAttribute(name, value);
+      }
+      return shape.innerHTML.replaceAll(">\n<", "><").replace('"enriched streaming"', '"enriched"');
     };
   };
-  const unfinished = {
-    color: "text-faint-foreground",
-    faded: true,
-    mark: "lucide-ellipsis",
-    said: "No result",
-  };
-  row(tool("error"));
-  expect(slot()).toEqual({ color: "text-danger", faded: false, mark: "lucide-x", said: "Failed" });
-  act(() => unmount());
-  row(tool("denied"));
-  expect(slot()).toEqual({
-    color: "text-danger",
-    faded: false,
-    mark: "lucide-ban",
-    said: "Denied",
-  });
-  act(() => unmount());
-  // No result, and the run has stopped: unfinished.
-  row(tool());
-  expect(slot()).toEqual(unfinished);
-  act(() => unmount());
-  // A status from a newer wispd reads as no result, rather than breaking the row.
-  row(tool("cancelled" as AgentToolStatus));
-  expect(slot()).toEqual(unfinished);
-  act(() => unmount());
-  row(tool("ok"));
-  expect(slot()).toEqual({
-    color: "text-muted-foreground",
-    faded: false,
-    mark: undefined,
-    said: "Succeeded",
-  });
-});
-
-test("a tool named like an object's own property is any other tool, running or done", () => {
-  const tool: Item = { kind: "tool", key: "t", callId: "1", name: "constructor", input: {} };
-  expect(activity(tool).loader).toEqual({ kind: "orbit", variant: "chase" });
-  render(<RowView row={tool} live open={false} onToggle={() => {}} />);
-  expect(
-    document.querySelector('summary [data-loader="orbit"][data-variant="chase"]'),
-  ).not.toBeNull();
-  expect(said()).toBe("Running");
-  act(() => unmount());
-  render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
-  expect(document.querySelector("summary svg.lucide-hammer")).not.toBeNull();
-  expect(said()).toBe("Succeeded");
-});
-
-test("a coordinator's no-write stop lists the files it changed", () => {
-  row({
-    kind: "end",
-    key: "e",
-    outcome: {
-      status: "failed",
-      failure: "policyViolation",
-      message:
-        "the coordinator's no-write turn changed the working tree:\n M src/settings.tsx\n?? notes.md",
-    },
-  });
-  const alert = document.querySelector('[role="alert"]')!;
-  expect(alert.querySelector("p")!.textContent).toBe("Failed: stopped by wisp's safety check");
-  expect(alert.textContent).toContain("the coordinator's no-write turn changed the working tree:");
-  expect(alert.querySelector("pre")!.textContent).toBe(" M src/settings.tsx\n?? notes.md");
-});
-
-test("reasoning, plan updates, and notices render quietly", () => {
-  row({ kind: "reasoning", key: "r", text: "The build uses cargo." });
-  expect(shown()).toBe("Thinking");
-  act(() => unmount());
-
-  // A checklist in the work is an update to the turn's plan: one line, not the list again.
-  row({
-    kind: "todo",
-    key: "c",
-    items: [
-      { text: "Write README.md", status: "inProgress" },
-      { text: "Read the scripts", status: "completed" },
-    ],
-  });
-  expect(document.body.textContent).toBe("Updated the plan");
-  expect(document.querySelector("li")).toBeNull();
-  act(() => unmount());
-
-  row({ kind: "notice", key: "n", tone: "warning", text: "skipped a malformed line" });
-  expect(document.body.textContent).toBe("skipped a malformed line");
-});
-
-test("a failed run shows why; other endings are a divider", () => {
-  row({
-    kind: "end",
-    key: "e",
-    outcome: { status: "failed", failure: "commitFailed", message: "no git identity" },
-  });
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe(
-    "Failed: wisp couldn't commit its changesno git identity",
-  );
-  act(() => unmount());
-  row({ kind: "end", key: "e", outcome: { status: "cancelled" } });
-  expect(document.body.textContent).toBe("Stopped");
-});
+  for (const reply of replies.map((r) => lead + r)) {
+    const streaming = view();
+    // Each length that ends a line or stops in its first characters, which decide its kind.
+    for (let n = 1; n <= reply.length; n++) {
+      const column = n - 1 - reply.lastIndexOf("\n", n - 1);
+      if (column > 4 && n < reply.length && reply[n] !== "\n") continue;
+      const text = reply.slice(0, n);
+      expect(await streaming(text, true), JSON.stringify(text)).toBe(await view()(text, false));
+    }
+  }
+  // Hundreds of renders, a few seconds when other files run alongside.
+}, 30_000);
 
 // The sample's run, as it started.
 const sampleRun = (logged[0]!.event as { run: AgentRun }).run;
 
 /**
+ * The messages the chat sent, as `message.dispatch` commands (0059), each as a call with its
+ * thread and message ids under the names `agent/send` gave them, and its dispatch mode as a
+ * `delivery`.
+ */
+function sendCalls(request: { mock: { calls: unknown[][] } }) {
+  return request.mock.calls
+    .filter(
+      ([, method, params]) =>
+        method === "orchestration/dispatch" &&
+        (params as { type: string }).type === "message.dispatch",
+    )
+    .map(([host, , params]) => {
+      const p = params as { threadId: string; messageId: string; dispatchMode: { type: string } };
+      const delivery = p.dispatchMode.type === "steer_active" ? "steer" : "queue";
+      return [host, "agent/send", { ...p, runId: p.threadId, turnId: p.messageId, delivery }];
+    });
+}
+
+/**
  * A bridge serving the sample's events up to `seq`, two per page, that records calls.
- * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as wispd does
+ * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as plxd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
- * wispd advertises `capabilities`, `agent/send` answers the run as `sent` leaves it (running by
- * default), and `agent/openPr` answers `prUrl`. `connect` changes the connection's state.
+ * plxd advertises `capabilities`, `message.dispatch` fails when `sent` leaves the run failed,
+ * and `agent/image` answers a tiny PNG.
+ * `connect` changes the connection's state, and `traffic` moves the scope's log to `listSeq`.
  */
 function fakeBridge(
   seq: number,
@@ -515,19 +222,32 @@ function fakeBridge(
     cancelError = "",
     capabilities = {},
     sent = {} as Partial<AgentRun>,
-    prUrl = "",
   } = {},
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
-  let connection: (hostId: string, state: ConnectionState) => void = () => {};
-  const request = vi.fn(async (_host: string, method: string, params: { after?: number }) => {
+  const connections = new Set<(hostId: string, state: ConnectionState) => void>();
+  type Params = { after?: number; before?: number; type?: string };
+  const request = vi.fn(async (_host: string, method: string, params: Params) => {
+    if (method === "queue/list") return { result: { messages: [] }, logId: "log-1" };
     if (method === "agent/list") return { result: { runs: [], seq: listSeq }, logId: "log-1" };
-    if (method === "agent/cancel" && cancelError)
+    if (method === "orchestration/threadRuns") return { result: { runs: [] }, logId: "log-1" };
+    const command = (params as { type?: string }).type;
+    if ((method === "agent/cancel" || command === "run.interrupt") && cancelError)
       return { error: { code: -32000, message: cancelError } };
-    if (method === "agent/send")
-      return { result: { run: { ...sampleRun, status: "running", ...sent } }, logId: "log-1" };
-    if (method === "agent/openPr") return { result: { url: prUrl }, logId: "log-1" };
+    // A run whose CLI didn't start again fails the message, and no turn follows.
+    if (command === "message.dispatch" && sent.status === "failed")
+      return { error: { code: -32603, message: sent.error ?? "The agent couldn't start." } };
+    if (method === "orchestration/dispatch") return { result: { seq: 1 }, logId: "log-1" };
+    if (method === "agent/image")
+      return { result: { mediaType: "image/png", data: "AAAA" }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
+    if (params.before !== undefined) {
+      const older = logged.filter((e) => e.seq < params.before! && e.seq <= seq);
+      return {
+        result: { events: older.slice(-2), more: older.length > 2, run: sampleRun, seq: listSeq },
+        logId: "log-1",
+      };
+    }
     const rest = logged.filter((e) => e.seq > params.after! && e.seq <= seq);
     return { result: { events: rest.slice(0, 2), more: rest.length > 2 }, logId: "log-1" };
   });
@@ -537,27 +257,32 @@ function fakeBridge(
     if (params.after < listSeq || resyncs-- > 0) queueMicrotask(() => l({ type: "resync" }));
     return unsubscribe;
   });
-  window.wisp = {
+  window.parallax = {
     platform: "darwin",
     connectionState: async () => ({
       status: "connected",
-      wispd: "0.1.0",
+      plxd: "0.1.0",
       protocol: 1,
       capabilities,
     }),
-    onConnectionState: (l: typeof connection) => {
-      connection = l;
-      return () => {};
+    onConnectionState: (l: (hostId: string, state: ConnectionState) => void) => {
+      connections.add(l);
+      return () => connections.delete(l);
     },
     request,
+    watch: fakeWatch(() => window.parallax),
     subscribe,
-  } as Partial<WispBridge> as WispBridge;
+  } as Partial<ParallaxBridge> as ParallaxBridge;
   return {
     request,
     subscribe,
     unsubscribe,
     emit: (m: SubscriptionMessage) => act(() => listener(m)),
-    connect: (state: ConnectionState) => act(() => connection("local", state)),
+    connect: (state: ConnectionState) =>
+      act(() => connections.forEach((connection) => connection("local", state))),
+    traffic: (seq: number) => {
+      listSeq = seq;
+    },
   };
 }
 
@@ -565,53 +290,171 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await act(async () => {});
 };
 
-async function renderChat(noRepo?: boolean) {
-  render(<AgentChat hostId="local" runId={runId} noRepo={noRepo} />);
+async function renderChat() {
+  render(<AgentChat hostId="local" runId={runId} />);
   await settle(); // the connection state and the pages
 }
 
 const transcriptText = () => document.querySelector('[role="log"]')?.textContent ?? "";
 
-test("loads every page, subscribes after the last seq, and appends live events", async () => {
-  const { request, subscribe, unsubscribe, emit } = fakeBridge(2);
-  await renderChat();
-  expect(request).toHaveBeenCalledWith("local", "agent/events", { runId, after: 0 });
-  expect(subscribe).toHaveBeenCalledWith(
-    "local",
-    { after: 2, project: "01a0d349-6e00-7c9e-80e2-0426486a8cae", logId: "log-1" },
-    expect.any(Function),
-  );
-  expect(transcriptText()).toContain("Add a README");
-  expect(document.body.textContent).toContain("Worktree"); // the footer's tab
+/**
+ * A bridge whose `watch` the test drives: `snapshot` and `emit` play plxd's side of the thread's
+ * subscription (0059), and `orchestration/threadHistory` serves the sample's events before a
+ * `seq`, two per page.
+ */
+function watchedBridge() {
+  let listener: (m: WatchMessage) => void = () => {};
+  const stop = vi.fn();
+  const watch = vi.fn((_host: string, _params: WatchParams, l: (m: never) => void) => {
+    listener = l as (m: WatchMessage) => void;
+    return stop;
+  });
+  const request = vi.fn(async (_host: string, method: string, params: { before?: number }) => {
+    if (method === "orchestration/threadRuns") return { result: { runs: [] }, logId: "log-1" };
+    if (method !== "orchestration/threadHistory") return { result: {}, logId: "log-1" };
+    const older = logged.filter((e) => e.seq < params.before!);
+    return { result: { events: older.slice(-2), more: older.length > 2 }, logId: "log-1" };
+  });
+  const connections = new Set<(hostId: string, state: ConnectionState) => void>();
+  window.parallax = {
+    platform: "darwin",
+    connectionState: async () => ({
+      status: "connected",
+      plxd: "0.1.0",
+      protocol: 1,
+      capabilities: {},
+    }),
+    onConnectionState: (l: (hostId: string, state: ConnectionState) => void) => {
+      connections.add(l);
+      return () => connections.delete(l);
+    },
+    request,
+    watch,
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const connect = (state: ConnectionState) =>
+    act(() => connections.forEach((connection) => connection("local", state)));
+  const snapshot = (
+    events: LoggedEvent[],
+    more = false,
+    seq = events.at(-1)?.seq ?? 0,
+    runs: ThreadRun[] = [],
+  ) =>
+    act(async () =>
+      listener({
+        type: "snapshot",
+        snapshot: { seq, thread: sampleRun, runs, events, more, requests: [] },
+      }),
+    );
+  const emit = (event: LoggedEvent) =>
+    act(async () => listener({ type: "event", event: { subscription: "s", ...event } }));
+  const emitError = (error: RpcError) => act(async () => listener({ type: "error", error }));
+  return { watch, stop, request, snapshot, emit, emitError, connect };
+}
 
-  emit({ type: "event", event: { subscription: "s", ...logged[2]! } });
+test("opens from the thread's snapshot, appends its events, and a fresh snapshot rebuilds it", async () => {
+  const { watch, stop, snapshot, emit } = watchedBridge();
+  await renderChat();
+  expect(watch).toHaveBeenCalledWith("local", { threadId: runId }, expect.any(Function));
+  await snapshot(logged.slice(0, 2));
+  expect(transcriptText()).toContain("Add a README");
+
+  await emit(logged[2]!);
   // The agent's messages are never folded into a work dropdown.
   expect(transcriptText()).toContain("I'll add a README and note the build steps");
 
-  // A resync reloads from the start.
-  request.mockClear();
-  emit({ type: "resync" });
-  await settle();
-  expect(request).toHaveBeenCalledWith("local", "agent/events", { runId, after: 0 });
+  // A reconnect whose gap was too long to replay starts over from plxd's new snapshot.
+  await snapshot(logged.slice(0, 2), false, 50_000);
+  expect(transcriptText()).not.toContain("I'll add a README and note the build steps");
+  await emit({ ...logged[2]!, seq: 50_001 });
+  expect(transcriptText()).toContain("I'll add a README and note the build steps");
 
+  // Closed, it stays watched, so it opens again as it is now, without waiting on plxd.
   act(() => unmount());
-  expect(unsubscribe).toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+  await renderChat();
+  expect(transcriptText()).toContain("I'll add a README and note the build steps");
+  expect(watch).toHaveBeenCalledTimes(1);
 });
 
-test("subscribes after the scope's snapshot seq, so repeated resyncs end", async () => {
-  // The run's last event is seq 8, but its project's log is at 1000.
-  const { subscribe } = fakeBridge(8, { listSeq: 1000, resyncs: 2 });
+test("the box keeps its focus as the transcript arrives under it (PLX-1051)", async () => {
+  const { snapshot } = watchedBridge();
   await renderChat();
+  expect(document.body.textContent).toContain("Loading…");
+  const box = composer();
+  act(() => box.focus());
+
+  await snapshot(logged.slice(0, 2));
+  expect(transcriptText()).toContain("Add a README");
+  expect(composer()).toBe(box);
+  expect(document.activeElement).toBe(box);
+});
+
+test("a thread's subscription that ended in an error opens again on the host's next connection", async () => {
+  const { watch, emitError, snapshot, connect } = watchedBridge();
+  await renderChat();
+  await emitError({ code: -32000, message: "plxd's store failed" });
+  expect(watch).toHaveBeenCalledOnce();
+  const failed = { reason: "exited", message: "plxd exited" } as const;
+  connect({ status: "failed", retrying: true, error: failed });
+  connect({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
   await settle();
-  expect(subscribe.mock.calls.map(([, params]) => params.after)).toEqual([1000, 1000, 1000]);
+  expect(watch).toHaveBeenCalledTimes(2);
+  await snapshot(logged.slice(0, 2));
   expect(transcriptText()).toContain("Add a README");
 });
 
-test("the composer tab shows the worktree and its branch", () => {
-  const started = samples.find((m) => "result" in m && m.id === 2)!;
-  render(<RunTab run={(started as unknown as { result: AgentRunResult }).result.run} />);
-  expect(document.body.textContent).toBe("Worktreewisp/1a2b3c4d");
-});
+test.each(["live", "snapshot"] as const)(
+  "a %s revert pages past the undone tail to the kept turn",
+  async (mode) => {
+    const turn = (seq: number, turnId: string, text: string): LoggedEvent => ({
+      seq,
+      time: "",
+      event: {
+        kind: "agent.output",
+        runId,
+        items: [{ kind: "turnStarted", turnId, text, wake: false, images: [], threads: [] }],
+      },
+    });
+    const history: LoggedEvent[] = [
+      turn(1, "kept", "Keep this message"),
+      turn(2, "undone", "Undo this message"),
+      ...Array.from({ length: 1100 }, (_, i): LoggedEvent => ({
+        seq: i + 3,
+        time: "",
+        event: {
+          kind: "agent.output",
+          runId,
+          items: [{ kind: "text", text: "Undone output" }],
+        },
+      })),
+    ];
+    const reverted: LoggedEvent = {
+      seq: 1103,
+      time: "",
+      event: { kind: "thread.reverted", runId, ordinal: 1, turns: ["undone"], restoreFiles: false },
+    };
+    const { request, snapshot, emit } = watchedBridge();
+    request.mockImplementation(async (_host, method, params) => {
+      if (method === "orchestration/threadRuns") return { result: { runs: [] }, logId: "log-1" };
+      if (method !== "orchestration/threadHistory") return { result: {}, logId: "log-1" };
+      const older = history.filter((e) => e.seq < params.before!);
+      return { result: { events: older.slice(-500), more: older.length > 500 }, logId: "log-1" };
+    });
+    await renderChat();
+    if (mode === "snapshot") await snapshot([...history.slice(-499), reverted], true);
+    else {
+      await snapshot(history.slice(-500), true);
+      await emit(reverted);
+    }
+    await settle();
+    expect(transcriptText()).toContain("Keep this message");
+    expect(transcriptText()).not.toContain("Undone output");
+    expect(transcriptText()).not.toContain("Undo this message");
+    expect(
+      request.mock.calls.filter(([, method]) => method === "orchestration/threadHistory").length,
+    ).toBeGreaterThanOrEqual(2);
+  },
+);
 
 test("Enter sends with a fresh v7 turn id, but not while an IME is composing", async () => {
   const { request } = fakeBridge(4);
@@ -627,15 +470,41 @@ test("Enter sends with a fresh v7 turn id, but not while an IME is composing", a
   await dispatch(new CompositionEvent("compositionstart", { bubbles: true }));
   await enter(true);
   await dispatch(new CompositionEvent("compositionend", { bubbles: true }));
-  expect(request.mock.calls.some(([, method]) => method === "agent/send")).toBe(false);
+  expect(sendCalls(request).length > 0).toBe(false);
 
   await enter(false);
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
+  const send = sendCalls(request)[0]!;
   expect(send[2]).toMatchObject({ runId, text: "Also mention the tests." });
   expect((send[2] as { turnId: string }).turnId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7/);
   expect(box.textContent).toBe("");
   // Shown as pending until its turn starts.
   expect(transcriptText()).toContain("Also mention the tests.");
+});
+
+test("a sent prompt draws its thread's pull request as a chip, neutral in a pane that doesn't read its state", async () => {
+  const url = "https://github.com/o/r/pull/7";
+  const { request } = fakeBridge(4);
+  render(
+    <AgentChat
+      hostId="local"
+      runId={runId}
+      listed={{ id: runId, pullRequests: [url] } as AgentRun}
+    />,
+  );
+  await settle();
+  type(`See ${url} and https://github.com/o/r/pull/8 `);
+  const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
+  await act(async () => void composer().dispatchEvent(enter));
+  expect(sendCalls(request)[0]![2]).toMatchObject({
+    text: `See ${url} and https://github.com/o/r/pull/8`,
+  });
+  await settle();
+  const log = document.querySelector('[role="log"]')!;
+  expect(
+    log.querySelector('[class*="text-muted-foreground"][class*="tabular-nums"]')?.textContent,
+  ).toBe("#7");
+  // One the thread didn't link stays text.
+  expect(log.textContent).toContain("https://github.com/o/r/pull/8");
 });
 
 test("a dropped follow-up sent from here can be sent again, once", async () => {
@@ -646,7 +515,7 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   await act(async () => {
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
-  const sends = () => request.mock.calls.filter(([, method]) => method === "agent/send");
+  const sends = () => sendCalls(request);
   const { turnId } = sends()[0]![2] as { turnId: string };
   emit({
     type: "event",
@@ -666,113 +535,46 @@ test("a dropped follow-up sent from here can be sent again, once", async () => {
   expect(sendAgain()).toBeUndefined();
 });
 
-test("a message a finished run couldn't take goes back in the box, with no loader", async () => {
-  const send = async (text: string) => {
-    type(text);
-    await act(async () => {
-      composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    });
-    await settle();
-  };
-  // wispd answers with the run its CLI failed to start again, and no turn follows.
-  fakeBridge(8, { sent: { status: "failed", error: "the CLI didn't start" } });
+test("Stop or Esc before the agent answers puts the prompt back in the box, but not after", async () => {
+  const prompt = "Add a README that explains how to build the app.";
+  const stopButton = () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!;
+  fakeBridge(2); // started, with nothing from the agent yet
   await renderChat();
-  await send("Also mention the tests.");
-  expect(composer().textContent).toBe("Also mention the tests.");
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("the CLI didn't start");
-  expect(transcriptText()).not.toContain("Also mention the tests.");
-  expect(document.querySelector(".loader")).toBeNull();
+  await act(async () => stopButton().click());
+  expect(composer().textContent).toBe(prompt);
   act(() => unmount());
 
-  fakeBridge(8, { sent: { status: "failed" } });
+  fakeBridge(2);
   await renderChat();
-  await send("Also mention the tests.");
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("The agent couldn't start.");
-});
-
-test("a pasted image goes with agent/send beside the text, and shows while it's pending", async () => {
-  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1, close() {} }));
-  const promptImages = { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 };
-  const { request } = fakeBridge(4, { capabilities: { promptImages } });
-  await renderChat();
-  const data = new DataTransfer();
-  data.items.add(new File([Uint8Array.of(0x89, 0x50, 0x4e, 0x47)], "a.png", { type: "image/png" }));
-  act(() => {
-    composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
-  });
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
-  await act(async () => {
-    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  });
-
-  const send = request.mock.calls.find(([, method]) => method === "agent/send")!;
-  expect(send[2]).toMatchObject({
-    runId,
-    text: "",
-    images: [{ mediaType: "image/png", data: "iVBORw==" }],
-  });
-  const img = document.querySelector('[role="log"] img');
-  expect(img?.getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
-  vi.unstubAllGlobals();
-});
-
-test("Stop cancels, and a failed cancel says why and allows another try", async () => {
-  const { request } = fakeBridge(4, { cancelError: "wispd is gone" });
-  await renderChat();
-  await act(async () =>
-    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  await act(
+    async () =>
+      void composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
   );
-  expect(request).toHaveBeenCalledWith("local", "agent/cancel", { runId });
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("wispd is gone");
-  expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
-    false,
+  expect(composer().textContent).toBe(prompt);
+  act(() => unmount());
+
+  const { request } = fakeBridge(4); // the agent has replied
+  await renderChat();
+  await act(async () => stopButton().click());
+  expect(request).toHaveBeenCalledWith("local", "orchestration/dispatch", {
+    type: "run.interrupt",
+    threadId: runId,
+    holdQueue: true,
+  });
+  expect(composer().textContent).toBe("");
+});
+
+test("the box keeps what it holds across a visit to a subagent (PLX-887)", async () => {
+  fakeBridge(4);
+  const chat = (subagent?: string) => (
+    <AgentChat hostId="local" runId={runId} subagent={subagent} />
   );
-});
-
-test("a finished run opens a pull request titled like its thread, then links to it", async () => {
-  const openPr = () =>
-    [...document.querySelectorAll("button")].find((b) => b.textContent === "Open PR");
-  // Not while the run goes, nor in a thread with no repo, nor from a wispd that can't.
-  fakeBridge(4, { capabilities: { openPr: {} } });
-  await renderChat();
-  expect(openPr()).toBeUndefined();
-  act(() => unmount());
-  fakeBridge(8, { capabilities: { openPr: {} } });
-  await renderChat(true);
-  expect(openPr()).toBeUndefined();
-  act(() => unmount());
-  fakeBridge(8);
-  await renderChat();
-  expect(openPr()).toBeUndefined();
-  act(() => unmount());
-
-  const url = "https://github.com/me/app/pull/42";
-  const { request } = fakeBridge(8, { capabilities: { openPr: {} }, prUrl: url });
-  await renderChat();
-  await act(async () => openPr()!.click());
-  expect(request).toHaveBeenCalledWith("local", "agent/openPr", {
-    runId,
-    title: "Add a README that explains how to build the app.",
-  });
-  // An https link in a new window, which main opens in the browser.
-  const link = document.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!;
-  expect(link.textContent).toBe("PR #42");
-  expect(link.target).toBe("_blank");
-  expect(openPr()).toBeUndefined();
-});
-
-test("while disconnected, nothing loads and the composer says why", async () => {
-  const { request } = fakeBridge(8);
-  window.wisp.connectionState = async () => ({
-    status: "failed",
-    retrying: true,
-    error: { reason: "exited", message: "wispd exited" },
-  });
-  await renderChat();
-  expect(request).not.toHaveBeenCalled();
-  expect(composer().getAttribute("aria-placeholder")).toBe("Disconnected from wispd");
-  const send = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
-  expect(send.disabled).toBe(true);
+  const root = render(chat());
+  await settle();
+  act(() => void composer().editor!.commands.setContent("Half a thought"));
+  await act(async () => root.render(chat("sub-1")));
+  await act(async () => root.render(chat()));
+  expect(composer().textContent).toBe("Half a thought");
 });
 
 test("an open thread's composer picks within its provider and sends only what changed", async () => {
@@ -782,6 +584,9 @@ test("an open thread's composer picks within its provider and sends only what ch
       <Composer
         backend="claude"
         started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+        unavailable={{
+          codex: "Codex is unavailable in this thread. Start a new thread to switch providers.",
+        }}
         onSend={onSend}
         optionsDisabled={optionsDisabled}
       />,
@@ -791,37 +596,34 @@ test("an open thread's composer picks within its provider and sends only what ch
   const off = (label: string) => control(label).closest("fieldset")!.disabled;
 
   open("The model, effort, and access can change once it finishes");
-  expect(off("Model: Claude Opus 5.5")).toBe(true);
-  expect(off("Reasoning effort: Extra high")).toBe(true);
+  expect(off("Model: Claude Opus 5.5, reasoning Extra high")).toBe(true);
   expect(off("Access: Plan")).toBe(true);
   act(() => unmount());
 
   open();
-  expect(off("Model: Claude Opus 5.5")).toBe(false);
-  expect(off("Reasoning effort: Extra high")).toBe(false);
+  expect(off("Model: Claude Opus 5.5, reasoning Extra high")).toBe(false);
   expect(off("Access: Plan")).toBe(false);
   // The model menu lists only Claude's models; Codex is in the rail, disabled, saying why.
   const menu = document.getElementById(
-    control("Model: Claude Opus 5.5").getAttribute("popovertarget")!,
+    control("Model: Claude Opus 5.5, reasoning Extra high").getAttribute("popovertarget")!,
   )!;
-  const listed = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
+  const listed = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].filter(
+    (m) => !m.closest('[aria-label="Reasoning"], [role="menu"]'),
+  );
   expect(listed.every((m) => m.textContent?.includes("Claude"))).toBe(true);
   expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Claude"]')!.disabled).toBe(
     false,
   );
-  const codex = menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!;
-  expect(codex.disabled).toBe(true);
-  expect(codex.parentElement!.querySelector('[role="tooltip"]')!.textContent).toBe(
-    "Codex is unavailable in this thread. Start a new thread to switch providers.",
-  );
+  expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!.disabled).toBe(true);
 
-  await act(async () => listed.find((m) => m.textContent?.startsWith("Claude Sonnet 5"))!.click());
-  const set = (el: HTMLInputElement, value: string) =>
-    act(() => {
-      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")!.set!.call(el, value);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  set(document.querySelector<HTMLInputElement>('input[type="range"]')!, "0");
+  await act(async () =>
+    listed.find((m) => m.textContent?.startsWith("Claude Sonnet 5.5"))!.click(),
+  );
+  act(() =>
+    [...menu.querySelectorAll<HTMLElement>('[aria-label="Reasoning"] button')]
+      .find((b) => b.textContent === "Low")!
+      .click(),
+  );
   type("Just the summary");
   await act(async () =>
     document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
@@ -829,276 +631,268 @@ test("an open thread's composer picks within its provider and sends only what ch
   // Access is still the run's, so it isn't sent.
   expect(onSend).toHaveBeenCalledWith(
     "Just the summary",
-    { model: "claude-sonnet-5", effort: "low" },
+    { model: "claude-sonnet-5-5", effort: "low" },
+    [],
     [],
   );
 });
 
-test("while a run goes, only the last work row shows what the agent is doing", () => {
-  const transcript = (rows: Item[]) => render(<TranscriptView rows={rows} sent={new Map()} live />);
-  const user: Item = { kind: "user", key: "u", text: "go" };
-  const tool: Item = {
-    kind: "tool",
-    key: "t",
-    callId: "1",
-    name: "Bash",
-    input: { command: "ls" },
+test("an open thread's new Access goes to the running run at once", async () => {
+  const onPermission = vi.fn();
+  render(
+    <Composer
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "manual" }}
+      onSend={async () => undefined}
+      onPermission={onPermission}
+    />,
+  );
+  const pick = async (label: string, option: string) => {
+    const control = document.querySelector(`[aria-label="${label}"]`)!;
+    const menu = document.getElementById(control.getAttribute("popovertarget")!)!;
+    const item = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((m) =>
+      m.textContent?.startsWith(option),
+    )!;
+    await act(async () => item.click());
   };
-  const reply: Item = { kind: "assistant", key: "a", text: "Hi", partial: true };
-  const header = () => document.querySelector("button[aria-expanded]");
-
-  // A reply with no tools needs no placeholder above it.
-  transcript([user, reply]);
-  expect(header()).toBeNull();
-  act(() => unmount());
-
-  // The loader for what it's doing, its label, and what it's doing it to.
-  transcript([user, tool]);
-  expect(header()!.textContent).toBe("Runningls");
-  expect(header()!.querySelector('[data-loader="register"][data-variant="shift"]')).not.toBeNull();
-  act(() => unmount());
-
-  // Once its text streams, the work before it is done.
-  transcript([user, { ...tool, at: "2026-01-01T00:00:00Z" }, reply]);
-  expect(header()!.textContent).toBe("Worked briefly");
-  expect(document.querySelector(".loader")).toBeNull();
+  await pick("Access: Supervised", "Supervised");
+  expect(onPermission).not.toHaveBeenCalled();
+  await pick("Access: Supervised", "Full access");
+  expect(onPermission).toHaveBeenCalledExactlyOnceWith("bypass");
+  // Back again before the run reports the switch: the run must hear it too.
+  await pick("Access: Full access", "Supervised");
+  expect(onPermission).toHaveBeenLastCalledWith("manual");
 });
 
-test("until the agent does anything, a loader muses under the message on its way to it", () => {
-  const user: Item = { kind: "user", key: "u", text: "go" };
-  const reply: Item = { kind: "assistant", key: "a", text: "Done." };
-  const end: Item = { kind: "end", key: "e", outcome: { status: "completed" } };
-  const pending = { kind: "pending" as const, key: "pending:t", text: "And the tests?" };
-  const fallback: Item = { kind: "notice", key: "n", tone: "info", text: "Switched accounts." };
-  const transcript = (rows: Parameters<typeof TranscriptView>[0]["rows"], live: boolean) =>
-    render(<TranscriptView rows={rows} sent={new Map()} live={live} />);
-  // The empty work row's header: the loader and a word, which screen readers hear as Working.
-  const musing = () => {
-    const header = document.querySelector<HTMLButtonElement>("button[aria-expanded]");
-    if (!header) return undefined;
-    expect(header.disabled).toBe(true);
-    expect(header.querySelector('[data-loader="orbit"][data-variant="chase"]')).not.toBeNull();
-    expect(header.querySelector('[aria-hidden="true"]:not(.loader)')!.textContent).toMatch(
-      /^[A-Z][a-z]+$/,
-    );
-    return header.querySelector(".sr-only")?.textContent;
-  };
-  // What follows the message, by row: a musing is a work row with nothing in it.
-  const after = (text: string) => {
-    const rows = [...document.querySelectorAll("[data-index]")];
-    const i = rows.findIndex((r) => r.textContent === text);
-    return rows.slice(i + 1).map((r) => r.textContent);
-  };
-
-  // A message the run has, but hasn't answered yet.
-  transcript([user], true);
-  expect(musing()).toBe("Working");
-  act(() => unmount());
-
-  // A message on its way to the agent, even before the run goes again, as a finished one resumes.
-  transcript([user, reply, end, pending], false);
-  expect(musing()).toBe("Working");
-  expect(after("And the tests?")).toHaveLength(1);
-  act(() => unmount());
-
-  // The musing goes where the work will be, before a notice after the message.
-  transcript([user, fallback], true);
-  expect(musing()).toBe("Working");
-  expect(after("go").at(-1)).toBe("Switched accounts.");
-  act(() => unmount());
-
-  // Not once the agent answered, nor for a message of a run that has stopped.
-  transcript([user, reply], true);
-  expect(musing()).toBeUndefined();
-  act(() => unmount());
-  transcript([user], false);
-  expect(musing()).toBeUndefined();
-  act(() => unmount());
-
-  // Nor in a transcript that's out of date: no loader at all.
-  render(<TranscriptView rows={[user, pending]} sent={new Map()} live stalled />);
-  expect(musing()).toBeUndefined();
-  expect(document.querySelector(".loader")).toBeNull();
+test("another provider's model moves an open thread there, with every option and the account", async () => {
+  const onSend = vi.fn(async () => undefined);
+  render(
+    <Composer
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "plan" }}
+      onSend={onSend}
+    />,
+  );
+  const control = (label: string) => document.querySelector(`[aria-label="${label}"]`);
+  const menu = document.getElementById(
+    control("Model: Claude Opus 5.5, reasoning Extra high")!.getAttribute("popovertarget")!,
+  )!;
+  expect(menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!.disabled).toBe(false);
+  act(() => menu.querySelector<HTMLButtonElement>('button[aria-label="Codex"]')!.click());
+  const astra = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((m) =>
+    m.textContent?.startsWith("GPT-6 Astra"),
+  )!;
+  await act(async () => astra.click());
+  // Codex has no Plan, so Plan becomes Auto-accept edits.
+  expect(control("Access: Plan")).toBeNull();
+  type("Carry on");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
+  );
+  expect(onSend).toHaveBeenCalledWith(
+    "Carry on",
+    {
+      model: "gpt-6-astra",
+      effort: "xhigh",
+      permission: "edit",
+      account: { kind: "subscription", backend: "codex" },
+    },
+    [],
+    [],
+  );
 });
 
-test("the musing changes its word on the wall clock, while screen readers keep hearing Working", () => {
-  // On a word's boundary: the first word is Picturing.
-  vi.useFakeTimers({ now: 2400 * 8000 });
-  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
-  const header = () => document.querySelector("button[aria-expanded]")!;
-  // Each word shown, and whether it fades in or out.
-  const words = () =>
-    [...header().querySelectorAll('[aria-hidden="true"]:not(.loader) > span')].map((w) => [
-      w.textContent,
-      w.className.match(/working-(in|out)/)?.[0],
-    ]);
-  // The first word doesn't fade in, so a remount doesn't blink.
-  expect(words()).toEqual([["Picturing", undefined]]);
-  act(() => void vi.advanceTimersByTime(2400));
-  expect(words()).toEqual([
-    ["Picturing", "working-out"],
-    ["Pondering", "working-in"],
-  ]);
-  act(() => void vi.advanceTimersByTime(2400));
-  expect(words()).toEqual([
-    ["Pondering", "working-out"],
-    ["Sketching", "working-in"],
-  ]);
-  expect(header().querySelector(".sr-only")!.textContent).toBe("Working");
-  act(() => unmount());
-  expect(vi.getTimerCount()).toBe(0);
-});
+// The musing row: what stands for the agent's next step while nothing is in flight, a running
+// "Working" line of its own rather than a fold's header.
+const musingRow = () =>
+  [...document.querySelectorAll('[role="log"] [data-index]')].find((r) =>
+    [...r.querySelectorAll("[data-slot=trace-line][data-status=running]")].some(
+      (line) => !line.closest("summary") && line.textContent === "Working",
+    ),
+  );
 
-test("under reduced motion, the musing keeps its word", () => {
-  vi.useFakeTimers({ now: 2400 * 8000 });
-  vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduced-motion") }));
-  render(<TranscriptView rows={[{ kind: "user", key: "u", text: "go" }]} sent={new Map()} live />);
-  expect(vi.getTimerCount()).toBe(0);
-  act(() => void vi.advanceTimersByTime(4800));
-  expect(document.querySelector("button[aria-expanded]")!.textContent).toBe("WorkingPicturing");
-});
-
-test("a running chat that loses wispd shows no loader", async () => {
-  // The run is going, and the agent hasn't done anything yet.
-  const { connect } = fakeBridge(2);
-  await renderChat();
-  expect(document.querySelector('[role="log"] .loader')).not.toBeNull();
-  connect({ status: "connecting" });
-  expect(document.querySelector(".loader")).toBeNull();
-  connect({
-    status: "failed",
-    retrying: true,
-    error: { reason: "exited", message: "wispd exited" },
-  });
-  expect(document.querySelector(".loader")).toBeNull();
-  expect(transcriptText()).toContain("Add a README");
-});
-
-test("until its transcript loads, a chat shows its first message, with the loader only if it goes", async () => {
+test("until its transcript loads, only a chat that just started shows its first message, with the loader", async () => {
   fakeBridge(8);
   // The transcript is still on its way.
-  window.wisp.request = vi.fn(() => new Promise<never>(() => {}));
+  window.parallax.request = vi.fn(() => new Promise<never>(() => {}));
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
   await settle();
-  expect(transcriptText()).toBe("Add a README");
-  expect(document.querySelector(".loader")).toBeNull();
+  // Its first message alone would show as all the thread holds.
+  expect(transcriptText()).toBe("");
+  expect(document.body.textContent).toContain("Loading…");
   act(() => unmount());
 
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
   await settle();
   expect(document.querySelector('[role="log"] .bg-selected')!.textContent).toBe("Add a README");
-  expect(document.querySelector('[role="log"] button[aria-expanded] .sr-only')!.textContent).toBe(
-    "Working",
-  );
+  expect(musingRow()!.textContent).toBe("Working");
 });
 
-test("a chat that couldn't load shows its first message, with no loader", async () => {
-  fakeBridge(8);
-  window.wisp.request = vi.fn(async () => ({ error: { code: -32000, message: "wispd is gone" } }));
-  render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);
-  await settle();
-  expect(transcriptText()).toBe("Add a README");
-  expect(document.querySelector(".loader")).toBeNull();
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("wispd is gone");
-});
-
-// A two-step checklist with `done` steps finished and the next one under way.
-const checklist = (done: number): AgentTodoItem[] =>
-  ["Read", "Build"].map((text, i) => ({
-    text,
-    status: i < done ? "completed" : i === done ? "inProgress" : "pending",
-  }));
-// TodoWrite as wispd sends it: the call, then the checklist it stands for.
-const todoWrite = (n: number, done: number): Item[] => [
-  { kind: "tool", key: `w${n}`, callId: `w${n}`, name: "TodoWrite", input: {}, status: "ok" },
-  { kind: "todo", key: `t${n}`, items: checklist(done) },
-];
-
-test("a turn's plan is one card where it began, its updates lines in the work, its proposal a card", () => {
+test("in a fork, only a turn that ended past the copied history offers Fork, at that turn", async () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const copiedAt = "2026-10-04T10:00:00.000Z";
   const rows: Item[] = [
-    { kind: "user", key: "u", text: "go" },
-    { kind: "reasoning", key: "r", text: "A plan first." },
-    {
-      kind: "tool",
-      key: "x",
-      callId: "x",
-      name: "ExitPlanMode",
-      input: { plan: "## Ship it\n\n- Read\n- Build" },
-      status: "ok",
+    { kind: "user", key: "p", text: "Plan it", at: copiedAt },
+    { kind: "tool", key: "t1", callId: "1", name: "Bash", status: "ok", at: copiedAt },
+    { kind: "assistant", key: "a1", text: "Planned", at: copiedAt },
+    { kind: "end", key: "e1", outcome: { status: "completed" }, at: copiedAt },
+    { kind: "user", key: "f", text: "Build it", turnId: "turn-2", at: "2026-10-04T10:05:00Z" },
+    { kind: "assistant", key: "a2", text: "Built", at: "2026-10-04T10:06:00Z" },
+    { kind: "user", key: "g", text: "Ship it", turnId: "turn-3", at: "2026-10-04T10:07:00Z" },
+  ];
+  const onFork = vi.fn(async () => undefined);
+  const run = { id: "fork", status: "running", backend: "claude" } as AgentRun;
+  render(
+    <ForkContext value={{ hostId: "local", run, onFork }}>
+      <TranscriptView rows={rows} sent={new Map()} live copiedAt={copiedAt} />
+    </ForkContext>,
+  );
+
+  const forks = () => [...document.querySelectorAll('button[aria-label="Fork from here"]')];
+  // The prompt and the last reply of the turn that ended offer it, at that turn.
+  expect(forks().map((b) => b.closest(".group\\/prompt")!.textContent)).toEqual([
+    expect.stringContaining("Build it"),
+    expect.stringContaining("Built"),
+  ]);
+  // Prompts and replies show when they were sent, but the copied ones' time is the fork's.
+  expect(
+    [...document.querySelectorAll("time")].map((t) => t.closest(".group\\/prompt")!.textContent),
+  ).toEqual([
+    expect.stringContaining("Build it"),
+    expect.stringContaining("Built"),
+    expect.stringContaining("Ship it"),
+  ]);
+  // happy-dom has no popovers: the Fork menus get the event a browser sends as one opens.
+  act(() => {
+    for (const menu of document.querySelectorAll('[role="menu"][aria-label="Fork"]'))
+      menu.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
+  });
+  const keep = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
+    b.textContent?.startsWith("Keep"),
+  )!;
+  await act(async () => keep.click());
+  expect(onFork).toHaveBeenCalledWith("turn-2", {});
+});
+test("a hidden update draws nothing, while the agent's reply to it shows and keeps its turn (PLX-1247)", () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const rows: Item[] = [
+    { kind: "user", key: "p", text: "Open the PR", turnId: "turn-1" },
+    { kind: "assistant", key: "a1", text: "Opened" },
+    { kind: "end", key: "e1", outcome: { status: "completed" } },
+    { kind: "user", key: "u", text: "A check failed", turnId: "turn-2", wake: true, hidden: true },
+    { kind: "assistant", key: "a2", text: "Fixed the check" },
+    { kind: "end", key: "e2", outcome: { status: "completed" } },
+  ];
+  const onFork = vi.fn(async () => undefined);
+  const run = { id: "run", status: "completed", backend: "claude" } as AgentRun;
+  render(
+    <ForkContext value={{ hostId: "local", run, onFork }}>
+      <TranscriptView rows={rows} sent={new Map()} live={false} />
+    </ForkContext>,
+  );
+  expect(document.body.textContent).not.toContain("A check failed");
+  expect(document.body.textContent).not.toContain("From Parallax");
+  expect(document.body.textContent).toContain("Fixed the check");
+  // The update's turn is still there for its reply's Fork.
+  const forks = [...document.querySelectorAll('button[aria-label="Fork from here"]')];
+  expect(forks.map((b) => b.closest(".group\\/prompt")!.textContent)).toEqual([
+    expect.stringContaining("Open the PR"),
+    expect.stringContaining("Opened"),
+    expect.stringContaining("Fixed the check"),
+  ]);
+});
+
+test("scrolling up from the end, however little, stops following until it scrolls back down (PLX-1031)", () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const rows: Item[] = [
+    { kind: "user", key: "p", text: "Explain it" },
+    { kind: "assistant", key: "a1", text: "It works like this." },
+  ];
+  const root = render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
+  // happy-dom lays nothing out: the list's heights and position, as a browser would have them.
+  const log = document.querySelector<HTMLElement>('[role="log"]')!;
+  let height = 1000;
+  let top = 0;
+  Object.defineProperties(log, {
+    scrollHeight: { get: () => height },
+    clientHeight: { get: () => 300 },
+    scrollTop: {
+      get: () => top,
+      set: (v: number) => {
+        top = v;
+      },
     },
-    ...todoWrite(1, 0),
-    { kind: "tool", key: "b", callId: "b", name: "Bash", input: { command: "ls" }, status: "ok" },
-    ...todoWrite(2, 1),
-    ...todoWrite(3, 2),
-    { kind: "assistant", key: "a", text: "Done." },
-  ];
-  render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
-  const rowAt = (i: number) => document.querySelectorAll("[data-index]")[i]!;
-  const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
-  expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
-    "go",
-    "Workedbriefly",
-    "ProposedplanShipitReadBuild",
-    "Plan2of2doneDone:ReadDone:Build",
-    "Workedbriefly",
-    "Done.",
-  ]);
-  // The work after the plan holds its updates, one line each, and no TodoWrite calls.
-  act(() => rowAt(4).querySelector("button")!.click());
-  const lines = [...rowAt(4).querySelectorAll("p")].map((p) => p.textContent);
-  expect(lines.filter((t) => t?.includes("the plan"))).toEqual([
-    "Updated the planFinished: Read · Started: Build",
-    "Updated the planFinished: Build",
-  ]);
-  expect(rowAt(4).querySelectorAll("summary")).toHaveLength(1); // Bash's
-  expect(transcriptText()).not.toContain("TodoWrite");
+  });
+  const scroll = (deltaY: number, to: number) =>
+    act(() => {
+      log.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+      top = to;
+      log.dispatchEvent(new Event("scroll"));
+    });
+  // An update the list re-renders for, which grows it.
+  const update = () => {
+    height += 100;
+    rows.push({ kind: "assistant", key: `a${rows.length}`, text: "More." });
+    act(() => root.render(<TranscriptView rows={[...rows]} sent={new Map()} live={false} />));
+  };
+
+  scroll(5, 700);
+  // A scroll up that a box in it takes, such as a tool's output, leaves it following.
+  const box = log.appendChild(document.createElement("div"));
+  box.style.overflowY = "auto";
+  Object.defineProperties(box, {
+    scrollHeight: { get: () => 400 },
+    clientHeight: { get: () => 200 },
+    scrollTop: { get: () => 100 },
+  });
+  act(() => {
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -5, bubbles: true }));
+  });
+  update();
+  expect(top).toBe(height);
+  scroll(5, height - 300);
+  // 5px up from the end, an update leaves it where the user put it.
+  scroll(-5, 695);
+  update();
+  expect(top).toBe(695);
+  // Back down near the end, it follows again.
+  scroll(5, height - 300 - 10);
+  update();
+  expect(top).toBe(height);
 });
-
-test("while a run goes, only its latest plan moves, and the work after a plan muses until it starts", () => {
-  const rows: Item[] = [
-    { kind: "user", key: "u1", text: "go" },
-    { kind: "todo", key: "t1", items: checklist(0) },
-    { kind: "assistant", key: "a", text: "Stopped there." },
-    { kind: "user", key: "u2", text: "Go on", turnId: "t" },
-    ...todoWrite(2, 1),
-  ];
-  render(<TranscriptView rows={rows} sent={new Map()} live />);
-  const cards = [...document.querySelectorAll('[role="group"]')];
-  expect(cards.map((c) => c.querySelectorAll(".loader").length)).toEqual([0, 1]);
-  // After the plan, a work row for what comes next.
-  const last = [...document.querySelectorAll("[data-index]")].at(-1)!;
-  expect(last.querySelector("button[aria-expanded] .sr-only")!.textContent).toBe("Working");
+test("a tool named like an object's own property, or a status from a newer plxd, is read as any other", () => {
+  const tool: Item = { kind: "tool", key: "t", callId: "1", name: "constructor", input: {} };
+  render(<RowView row={tool} live open={false} onToggle={() => {}} />);
+  expect(said()).toBe("Running");
+  act(() => unmount());
+  render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
+  expect(said()).toBe("Succeeded");
+  act(() => unmount());
+  // A status from a newer plxd reads as no result, rather than breaking the row.
+  row({ ...tool, status: "cancelled" as AgentToolStatus });
+  expect(said()).toBe("No result");
 });
-
-test("while the run works on a plan, a strip over the composer shows it, until a turn without one or the end", async () => {
-  const strip = () => document.querySelector('section[aria-label="Plan"]');
-  // The sample's first turn: running, with a checklist one of three done.
-  const first = fakeBridge(4);
+test("a message a finished run couldn't take goes back in the box", async () => {
+  const send = async (text: string) => {
+    type(text);
+    await act(async () => {
+      composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+  };
+  // plxd answers with the run its CLI failed to start again, and no turn follows.
+  fakeBridge(8, { sent: { status: "failed", error: "the CLI didn't start" } });
   await renderChat();
-  expect(strip()!.querySelector("button")!.textContent).toBe(
-    "In progress: Write README.md1 of 3 done",
-  );
-  // A follow-up starts a turn with no plan of its own (seq 5). Focus in the strip goes to the box.
-  act(() => strip()!.querySelector("button")!.focus());
-  first.emit({ type: "event", event: { subscription: "s", ...logged[4]! } });
-  expect(strip()).toBeNull();
-  expect(document.activeElement).toBe(composer());
-  act(() => unmount());
-
-  const second = fakeBridge(4);
-  await renderChat();
-  expect(strip()).not.toBeNull();
-  // The run finishes (seq 8).
-  second.emit({ type: "event", event: { subscription: "s", ...logged[7]! } });
-  expect(strip()).toBeNull();
-  act(() => unmount());
-
-  // Losing wispd stalls it: no strip, and nothing moves in the card.
-  const card = () => document.querySelector('[role="log"] [role="group"]')!;
-  const third = fakeBridge(4);
-  await renderChat();
-  expect(card().querySelector(".loader")).not.toBeNull();
-  third.connect({ status: "connecting" });
-  expect(strip()).toBeNull();
-  expect(card().querySelector(".loader")).toBeNull();
+  await send("Also mention the tests.");
+  expect(composer().textContent).toBe("Also mention the tests.");
+  expect(transcriptText()).not.toContain("Also mention the tests.");
 });

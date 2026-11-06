@@ -1,0 +1,87 @@
+{
+  "expo": {
+    "name": "Parallax (Nightly)",
+    "slug": "parallax",
+    "scheme": "parallax",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
+    "ios": {
+      "bundleIdentifier": "dev.parallax.mobile",
+      "appleTeamId": "9D3GQSX699",
+      "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocalNetworkUsageDescription": "Parallax connects to your computers on this network.",
+        "NSBonjourServices": [
+          "_parallax._tcp"
+        ],
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSSupportsLiveActivities": true
+      },
+      "buildNumber": "12"
+    },
+    "android": {
+      "package": "dev.parallax.mobile",
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/Sora_500Medium.ttf",
+            "./assets/fonts/JetBrainsMonoNerdFont-Regular.ttf",
+            "./assets/fonts/JetBrainsMonoNerdFont-Bold.ttf"
+          ]
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "expo-notifications",
+      "./plugins/withNotificationService",
+      "./plugins/withThreadWidget",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Parallax attaches the photos you pick to your messages.",
+          "cameraPermission": "Parallax attaches the photos you take to your messages.",
+          "microphonePermission": "Parallax listens while you dictate a message."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Parallax shows your recent photos so you can attach them to your messages.",
+          "savePhotosPermission": false,
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Parallax listens while you dictate a message.",
+          "speechRecognitionPermission": "Parallax turns what you say into text for your message."
+        }
+      ],
+      "./plugins/withSceneLifecycle",
+      "./plugins/withAndroidMinSdk"
+    ],
+    "experiments": {
+      "tsconfigPaths": false
+    }
+  }
+}

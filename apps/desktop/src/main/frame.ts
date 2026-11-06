@@ -1,10 +1,10 @@
 import type { BrowserWindowConstructorOptions, TitleBarOverlay } from "electron";
 
 // The app's colors that native UI has to match: --background and --foreground
-// in the renderer's index.css.
+// in the renderer's index.css, Parallax's pair (other color themes keep these).
 const colors = {
-  dark: { background: "#0d0d0f", foreground: "#ececef" },
-  light: { background: "#ffffff", foreground: "#18181b" },
+  dark: { background: "#000000", foreground: "#e8e8e8" },
+  light: { background: "#ffffff", foreground: "#1e1b4b" },
 };
 
 /** The window's color before the renderer paints. */
@@ -15,12 +15,17 @@ export const windowBackground = (dark: boolean) => colors[dark ? "dark" : "light
  * app's 52px top row (`h-13` in ui.tsx) with the theme's foreground. Their
  * background is the theme's, fully transparent: whichever row is under them
  * (the main pane's, or the side panel's darker one) shows through, and Electron
- * still shades hovered buttons from its RGB. Undefined off Windows.
+ * still shades hovered buttons from its RGB. As tall as the row at the page's
+ * `zoom`. Undefined off Windows.
  */
-export function titleBarOverlay(platform: string, dark: boolean): TitleBarOverlay | undefined {
+export function titleBarOverlay(
+  platform: string,
+  dark: boolean,
+  zoom = 1,
+): TitleBarOverlay | undefined {
   if (platform !== "win32") return undefined;
   const { background, foreground } = colors[dark ? "dark" : "light"];
-  return { color: `${background}00`, symbolColor: foreground, height: 52 };
+  return { color: `${background}00`, symbolColor: foreground, height: Math.round(52 * zoom) };
 }
 
 /**

@@ -1,0 +1,38 @@
+{"kind":"sessionStarted","model":"grok-4.7[context=256k,reasoning_effort=high,fast=true]","sessionId":"7928c61b-038c-4ce8-86f8-c9061a3522d9"}
+{"kind":"turnStarted","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}
+{"kind":"reasoning","text":"Reading README.md. Writing \"hi\" to notes.txt. Preparing a brief reply."}
+{"kind":"textDelta","text":"I'll"}
+{"kind":"textDelta","text":" read"}
+{"kind":"textDelta","text":" the"}
+{"kind":"textDelta","text":" README"}
+{"kind":"textDelta","text":" first"}
+{"kind":"textDelta","text":","}
+{"kind":"textDelta","text":" then"}
+{"kind":"textDelta","text":" write"}
+{"kind":"textDelta","text":" the"}
+{"kind":"textDelta","text":" notes"}
+{"kind":"textDelta","text":" file"}
+{"kind":"textDelta","text":"."}
+{"callId":"call-a378b966-0d1f-4587-97b7-bee4d84df7f7-0\nfc_64a4c0f6-9961-963e-a149-3fd7f384aaaa_0","input":{"path":"/repo/README.md"},"kind":"toolCall","name":"Read"}
+{"callId":"call-a378b966-0d1f-4587-97b7-bee4d84df7f7-0\nfc_64a4c0f6-9961-963e-a149-3fd7f384aaaa_0","kind":"toolResult","output":"# demo\n\nA tiny repo for a recorded session.\n","status":"ok"}
+{"kind":"reasoning","text":"Running `printf hi > notes.txt` in the shell."}
+{"callId":"call-67526b61-e7cc-46ea-a1f2-e65a28f159cc-1\nfc_e2a69b05-1314-97de-85c5-e996c25b6739_0","input":{"command":"printf hi > notes.txt"},"kind":"toolCall","name":"Bash"}
+{"approvalId":"approval","callId":"call-67526b61-e7cc-46ea-a1f2-e65a28f159cc-1\nfc_e2a69b05-1314-97de-85c5-e996c25b6739_0","input":{"command":"printf hi > notes.txt"},"kind":"approvalRequested","reason":"Not in allowlist: printf","toolName":"Bash"}
+{"callId":"call-67526b61-e7cc-46ea-a1f2-e65a28f159cc-1\nfc_e2a69b05-1314-97de-85c5-e996c25b6739_0","kind":"toolResult","status":"ok"}
+{"kind":"reasoning","text":"Created notes.txt containing \"hi\"."}
+{"kind":"textDelta","text":"I"}
+{"kind":"textDelta","text":" read"}
+{"kind":"textDelta","text":" the"}
+{"kind":"textDelta","text":" README"}
+{"kind":"textDelta","text":" and"}
+{"kind":"textDelta","text":" wrote"}
+{"kind":"textDelta","text":" `"}
+{"kind":"textDelta","text":"hi"}
+{"kind":"textDelta","text":"`"}
+{"kind":"textDelta","text":" to"}
+{"kind":"textDelta","text":" `"}
+{"kind":"textDelta","text":"notes"}
+{"kind":"textDelta","text":".txt"}
+{"kind":"textDelta","text":"`."}
+{"kind":"turnFinished","result":"I read the README and wrote `hi` to `notes.txt`.","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}
+{"kind":"finished","outcome":{"result":"I read the README and wrote `hi` to `notes.txt`.","status":"completed"}}

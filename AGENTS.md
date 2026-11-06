@@ -1,6 +1,6 @@
-# wisp
+# Parallax
 
-`wispd`, an open-source Rust host daemon, and an Electron desktop app in `apps/desktop/` ([0022](docs/decisions/0022-desktop-app.md)), for macOS, Windows, and Linux ([0023](docs/decisions/0023-cross-platform.md)). The plan and open questions live in [docs/PLAN.md](docs/PLAN.md). Read it before planning any work. Records in [docs/decisions/](docs/decisions/) supersede the plan where they differ.
+`plxd`, an open-source Rust host daemon, and an Electron desktop app in `apps/desktop/` ([0022](docs/decisions/0022-desktop-app.md)), for macOS, Windows, and Linux ([0023](docs/decisions/0023-cross-platform.md)). The plan and open questions live in [docs/PLAN.md](docs/PLAN.md). Read it before planning any work. Records in [docs/decisions/](docs/decisions/) supersede the plan where they differ.
 
 ## Roles
 
@@ -18,23 +18,23 @@ The naming convention has no exceptions, including for small fixes.
 
 | Branch | Purpose | Branches from | Merges into |
 | --- | --- | --- | --- |
-| `main` | Released code only | | |
-| `develop` | Integration branch | `main` | `main`, as a release |
+| `develop` | Default integration branch. A nightly is a snapshot of it; a stable release is one nightly, promoted ([0051](docs/decisions/0051-promote-a-nightly.md)) | | |
 | `feature/<ID>-<slug>` | New functionality | `develop` | `develop` |
 | `bug/<ID>-<slug>` | Bug fixes | `develop` | `develop` |
 | `chore/<ID>-<slug>` | Tooling, deps, CI | `develop` | `develop` |
 | `docs/<ID>-<slug>` | Documentation | `develop` | `develop` |
-| `hotfix/<ID>-<slug>` | Urgent fix to a release | `main` | `main` and `develop` |
+| `hotfix/<ID>-<slug>` | A stable fix that cannot wait for the next nightly to be promoted | `develop` | `develop` |
 
-- Every branch starts from an existing Linear issue and uses its ID. The prefix follows the issue's type label (Feature, Bug, Chore, Docs; Improvement uses `feature/`), whatever its title says. Examples: `feature/RYA-12-connect-app-to-wispd`, `docs/RYA-5-linear-work-record`. Never use Linear's suggested branch name.
+- Every branch starts from an existing Linear issue and uses its ID. The prefix follows the issue's type label (Feature, Bug, Chore, Docs; Improvement uses `feature/`), whatever its title says. Examples: `feature/PLX-12-connect-app-to-plxd`, `docs/PLX-5-linear-work-record`. Never use Linear's suggested branch name.
 - Slugs are lowercase, hyphenated, five words or fewer.
-- Commits use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`) and end with the Linear ID, e.g. `feat: show follow-up messages in a rebuilt transcript (RYA-92)`.
-- Commits and PRs are authored as Ryan only: no co-author or attribution trailers.
-- `main` and `develop` are protected. Changes land only through pull requests.
+- Commits use Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`) and end with the Linear ID, e.g. `feat: show follow-up messages in a rebuilt transcript (PLX-92)`.
+- Commits and PRs are authored as Ryan, with the git identity `Ryan Stoffel <stoffel.thomas.ryan@gmail.com>` and no other email.
+- The agent that writes a commit credits itself with one `Co-authored-by` trailer at the end of the commit message, and the squash message keeps it. Claude: `Co-authored-by: Claude <noreply@anthropic.com>`. Cursor: `Co-authored-by: Cursor <cursoragent@cursor.com>`. Any other agent uses the co-author trailer its own tool writes. No other trailers or session links.
+- `develop` is protected. Changes land only through pull requests.
 
 ## Issues are the record
 
-The Linear project [Wisp](https://linear.app/ryanstoffel/project/wisp-459c0ee45806) is the single place work is tracked ([0021](docs/decisions/0021-linear-work-record.md)); GitHub is for code, PRs, and CI only. Plans, reasoning, decisions, progress, blockers, and questions go in issue comments; nothing important lives only in a local file or chat.
+The Linear project [Parallax](https://linear.app/ryanstoffel/project/parallax-459c0ee45806) is the single place work is tracked ([0021](docs/decisions/0021-linear-work-record.md)); GitHub is for code, PRs, and CI only. Plans, reasoning, decisions, progress, blockers, and questions go in issue comments; nothing important lives only in a local file or chat.
 
 When something comes up mid-work (a bug, a follow-up, a question, out-of-scope work, a flaky test), open a Linear issue for it right away, under its milestone's epic, with labels and a link back to where it came up. Keep the current PR on its own issue.
 
@@ -50,15 +50,16 @@ When something comes up mid-work (a bug, a follow-up, a question, out-of-scope w
 
 ## Pull requests
 
-- Target `develop`. Exceptions: release PRs (`develop` into `main`) and hotfixes.
+- Target `develop`.
 - The body follows `.github/pull_request_template.md`: the problem, the fix, a `Linear: <issue URL>` line, and the acceptance criteria as a checklist. Linear's GitHub integration links the PR and marks the issue Done when it merges.
 - A separate senior engineer subagent reviews every PR against the acceptance criteria and posts it as a comment review (`gh pr review --comment`; the shared account cannot approve its own PRs). The review opens with `Verdict: ready to merge` or `Verdict: changes needed`.
 - The project manager merges a PR into `develop` once the review says ready and CI is green. Feature, bug, chore, and docs PRs are squash-merged.
-- Ryan approves and merges every PR into `main`: releases (`develop` into `main`, merge commit) and hotfixes. The project manager opens them and leaves the merge to Ryan.
+- Agents never merge a PR from a fork. Outside contributions follow [CONTRIBUTING.md](CONTRIBUTING.md), and only Ryan merges them.
+- Ryan promotes a nightly to stable by running the Release workflow with `channel=stable` ([0051](docs/decisions/0051-promote-a-nightly.md)). A hotfix merges to `develop` like any other pull request; to publish it before the next snapshot is promoted, Ryan runs that workflow with `commit` set to the hotfix commit.
 
 ## CI/CD
 
-The GitHub Actions workflow `ci.yml` runs on every PR, and only on PRs, since `develop` and `main` take changes only through PRs that passed it: lint, type-check, build, and test `wispd` on macOS, Linux, and Windows and check `wispd attach` over ssh; lint, type-check, test, build, and launch the app on the same three OSes; run the app's end-to-end tests on macOS, Linux, and Windows against the `wispd` the Rust job built for each; lint the workflow. The `ci` job needs every other job, and a red `ci` check blocks merge. A second workflow, `release.yml`, on every push to `develop` and `main` builds the installer and its update metadata for macOS arm64, Windows x64 and arm64, and Linux x64 and arm64 on their own runners (no tests or lint; the PR already passed them), signing and verifying the macOS app (Windows and Linux stay unsigned) and reusing a cached release `wispd` when no Rust changed. `plan` creates a draft nightly prerelease (`develop`, tag `v<YYMM.1DDHH.1MMSS>-nightly`) or standard release (`main`, `v<YYMM.1DDHH.1MMSS>`, marked Latest), and each build attaches its installer and the updater's `.yml`, zip, and blockmap files to it as soon as it's done and publishes it, so the first one done makes it visible; then a `finish` job joins the Windows metadata and adds `SHA256SUMS`, and a `notarize` job notarizes the published dmg ([0028](docs/decisions/0028-release-channels.md), [0029](docs/decisions/0029-app-packaging.md), [0030](docs/decisions/0030-release-versions.md)). A failed build leaves only its own OS out. Run it on a branch with `workflow_dispatch`, which builds, signs, and notarizes but never creates or publishes a release. It is the only workflow with `contents: write`.
+The GitHub Actions workflow `ci.yml` runs on every PR, and only on PRs, since `develop` takes changes only through PRs that passed it: when the PR changes Rust or its inputs, lint, type-check, and test `plxd` on macOS, Linux, and Windows and check `plxd attach` over ssh, and on Linux run it through Parallax Relay under `wrangler dev`; type-check the relay's Worker and run its tests in Miniflare; lint, type-check, test, build, and launch the app, and type-check and test the `plx` package ([0091](docs/decisions/0091-connect-over-relay.md)), on the same three OSes; type-check and unit-test the mobile app (`apps/mobile`) on Linux; run the app's end-to-end tests on macOS, Linux, and Windows against a fake-backend `plxd` built for each; run 30 fake-backend threads through the Linux `plxd`, with unfiltered, filtered, and orchestration subscriptions, and fail when a daemon number falls outside `scripts/bench/budgets.json`; lint the workflow. The `ci` job needs every other job and passes when each succeeded or was skipped, and a red `ci` check blocks merge. PR runs restore Rust caches but don't save them, since a PR can't read another PR's caches. `rust-cache.yml` saves them on each push to the default branch. A second workflow, `release.yml`, builds the installer and its update metadata for macOS arm64, Windows x64 and arm64, and Linux x64 and arm64 on their own runners (no tests or lint; the PR already passed them), signing and verifying the macOS app (Windows and Linux stay unsigned) and reusing a cached release `plxd` when no Rust changed. It does not run on push. A schedule checks the default branch every half hour and publishes a nightly prerelease, `v<YYMM.1DDHH.1MMSS>-nightly`, only when that branch has commits since the last nightly and the last nightly is at least six hours old. A manual run promotes the latest nightly's commit to a standard release of the same timestamp, marked Latest, or publishes a nightly immediately. `plan` creates the draft, each build attaches its installer and the updater's `.yml`, zip, and blockmap files as soon as it's done and publishes it, so the first one done makes it visible; then a `finish` job joins the Windows metadata and adds `SHA256SUMS`, and a `notarize` job notarizes the published dmg, and for a nightly an `aur` job points the AUR's `parallax-nightly-bin` at its AppImages ([0051](docs/decisions/0051-promote-a-nightly.md), [0028](docs/decisions/0028-release-channels.md), [0029](docs/decisions/0029-app-packaging.md), [0030](docs/decisions/0030-release-versions.md)). A failed build leaves only its own OS out. `workflow_dispatch` with `dry-run` builds, signs, and notarizes on any branch and never publishes. It is the only workflow with `contents: write`. A third workflow, `relay-probe.yml`, runs `scripts/bench/relay-probe.mjs` against the deployed relay every three hours and, called by `release.yml`, on each new nightly with that nightly's `plxd`, and `release.yml`'s `report` job adds that result to the nightly's notes. Its numbers stay in the job summary, a 90-day artifact, and those notes. Until the test account's secrets exist (PLX-1385), it says the signed-in part was skipped and runs the rest.
 
 ## Order of work
 

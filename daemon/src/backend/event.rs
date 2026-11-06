@@ -1,14 +1,21 @@
 //! The normalized events every backend turns its CLI's output into (0004's per-provider table).
 //!
-//! They serialize with a `kind` tag and camelCase fields, like 0007's `WispEvent`, so M3 can
+//! They serialize with a `kind` tag and camelCase fields, like 0007's `ParallaxEvent`, so M3 can
 //! store them and map them to `agent.*` notifications without another translation.
 
 use std::collections::BTreeMap;
 use std::ops::{Add, AddAssign};
 
 use jiff::Timestamp;
+pub use parallax_protocol::{
+    AgentBackgroundKind as BackgroundKind, AgentBackgroundTask as BackgroundTask,
+    AgentSubagentStatus as SubagentStatus, AgentTodoItem as TodoItem,
+    AgentTodoStatus as TodoStatus, AgentToolStatus as ToolStatus,
+};
+use parallax_protocol::{ApprovalId, PromptImage, TurnId};
 use serde::{Deserialize, Serialize};
-use wisp_protocol::TurnId;
+
+use super::process::Exit;
 
 /// One thing that happened in a run.
 ///
@@ -20,12 +27,12 @@ use wisp_protocol::TurnId;
     rename_all_fields = "camelCase"
 )]
 pub enum Event {
-    /// The CLI started or resumed its session: Claude's and Cursor's `system/init`, Codex's
-    /// `thread.started`.
+    /// The CLI started or resumed its session: Claude's `system/init`, Codex's `thread.started`,
+    /// Cursor's `session/new` or `session/load` response.
     SessionStarted {
         /// The vendor's id for the session, which a later run passes as
         /// [`RunRequest::resume`](super::RunRequest::resume): Claude's `session_id`, Codex's
-        /// `thread_id`, or Cursor's `chatId`.
+        /// `thread_id`, or Cursor's `sessionId`.
         session_id: String,
         /// The model the CLI chose, when it says.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,11 +43,12 @@ pub enum Event {
         api_key_source: Option<String>,
     },
     /// The CLI took a turn's message: the run's prompt, or a follow-up. Turns finish in the order
-    /// they started, so a follow-up sent during a turn starts before that turn finishes.
+    /// they started, so a follow-up sent during a turn starts before that turn finishes. Claude
+    /// also starts turns itself while idle, for a background task's end (PLX-724).
     TurnStarted {
         /// The caller's id for the turn: [`RunRequest::turn_id`](super::RunRequest::turn_id) for
         /// the prompt's turn, or [`FollowUp::turn_id`](super::FollowUp::turn_id). Absent when the
-        /// caller gave the prompt's turn no id.
+        /// caller gave the prompt's turn no id, or the CLI started the turn itself.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<TurnId>,
     },
@@ -65,9 +73,11 @@ pub enum Event {
         /// The vendor's id for the call, which its [`Event::ToolResult`] repeats.
         call_id: String,
         /// The tool, in the vendor's naming, such as `Read`, `command_execution`, or
-        /// `mcp__wispd__plan`.
+        /// `mcp__plxd__plan`.
         name: String,
-        /// The tool's input, as the vendor sent it.
+        /// The tool's input, as the vendor sent it. Null when the call is announced before its
+        /// input: Claude's starts with its block, and the whole message repeats it with the
+        /// input (PLX-714).
         #[serde(default)]
         input: serde_json::Value,
     },
@@ -80,6 +90,9 @@ pub enum Event {
         /// What the tool returned, when the vendor includes it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
+        /// The images it returned, such as a device screenshot (PLX-640).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<PromptImage>,
     },
     /// Part or all of the model's reasoning, when the vendor shows it: Claude's thinking blocks,
     /// Codex's `reasoning` items.
@@ -102,11 +115,19 @@ pub enum Event {
         /// The message.
         detail: String,
     },
+    /// The CLI compacts its context: Claude's `status` `compacting` as it starts, then its
+    /// `compact_boundary`, `done`; Codex's `contextCompaction` item started, then completed.
+    ContextCompaction {
+        /// Whether it's finished.
+        done: bool,
+    },
     /// Tokens and cost the run used since its previous `Usage` event.
     Usage(ModelUsage),
+    /// Latest request measurements, independent of cumulative account billing.
+    RequestUsage(parallax_protocol::AgentRequestUsage),
     /// The latest state of one of the account's limit windows.
     RateLimit(LimitWindow),
-    /// A turn ended: Claude's and Cursor's `result`, Codex's `turn.completed`.
+    /// A turn ended: Claude's `result`, Codex's `turn.completed`, Cursor's `session/prompt` response.
     TurnFinished {
         /// The turn's id, as its [`Event::TurnStarted`] had it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,6 +135,20 @@ pub enum Event {
         /// The turn's final text, when the vendor reports one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result: Option<String>,
+        /// The turn failed. Its session then ends, and [`Event::Finished`] carries why (0060).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        failed: bool,
+    },
+    /// Where the session stood when a turn ended, which a later run resumes at with
+    /// [`Resume::at`](super::Resume::at) to rewind to that turn's end, dropping what came after
+    /// (0062): the `uuid` of Claude's last transcript entry. Comes before the turn's
+    /// [`Event::TurnFinished`], from Claude only.
+    TurnCursor {
+        /// The turn's id, as its [`Event::TurnStarted`] had it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<TurnId>,
+        /// The vendor's id for the position.
+        cursor: String,
     },
     /// A follow-up that [`Run::send`](super::Run::send) accepted never reached the CLI, because
     /// the run ended first. The caller can send it again in a run that resumes this session.
@@ -134,6 +169,56 @@ pub enum Event {
         /// Why that attempt failed.
         reason: FailureKind,
     },
+    /// The CLI asks whether a tool call may run, and waits for
+    /// [`Run::answer`](super::Run::answer) (PLX-222): Claude Code's `can_use_tool` control
+    /// request.
+    ApprovalRequested(ApprovalRequest),
+    /// The CLI no longer waits for an answer to a request, because its turn was interrupted:
+    /// Claude Code's `control_cancel_request`.
+    ApprovalWithdrawn {
+        /// The request's id from its [`Event::ApprovalRequested`].
+        approval_id: ApprovalId,
+    },
+    /// What one of the agent's own subagents did (PLX-382, 0041): Claude Code's lines with a
+    /// `parent_tool_use_id`. Not part of the agent's own flow, so nothing that reads the agent's
+    /// replies, tool calls, or checklist sees it.
+    Subagent {
+        /// The tool call that started the subagent: Claude Code's `parent_tool_use_id`.
+        call_id: String,
+        /// The subagent's type, such as `general-purpose`, when the CLI says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_type: Option<String>,
+        /// The model that wrote it, when the CLI says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// What it did.
+        event: Box<Event>,
+    },
+    /// One of the agent's own subagents ended (PLX-382): Claude Code's `task_notification`. A
+    /// subagent run in the background ends long after its tool call's result.
+    SubagentFinished {
+        /// The tool call that started it.
+        call_id: String,
+        /// How it ended.
+        status: SubagentStatus,
+        /// Its final report, when the CLI includes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
+    /// The agent's background commands and subagents still running changed (PLX-725), from Claude
+    /// Code's `background_tasks_changed`, `task_started`, and `task_notification`. While any run,
+    /// they keep its idle session up, as T3 Code's pending background tasks do, and the app shows
+    /// them over the composer (PLX-777).
+    BackgroundTasks {
+        /// Every one still running, by Claude Code's `task_id`.
+        tasks: Vec<BackgroundTask>,
+    },
+    /// What the Claude Remote Control session a run follows is doing now (PLX-1140), which
+    /// plxd keeps for `thread/remoteControl`. Not logged.
+    RemoteControl {
+        /// Its state.
+        state: parallax_protocol::RemoteControlState,
+    },
     /// Something in the CLI's output that the backend skipped. It never ends a run.
     Warning {
         /// What was wrong.
@@ -152,34 +237,51 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         usage_totals: Vec<ModelUsage>,
     },
-    /// A kind this version does not know, read back from a newer wispd's records.
+    /// A kind this version does not know, read back from a newer plxd's records.
     #[serde(other)]
     Unknown,
 }
 
-/// One item of an [`Event::TodoList`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TodoItem {
-    /// What to do.
-    pub text: String,
-    /// How far along it is.
-    pub status: TodoStatus,
-}
+/// The most rules an [`ApprovalRequest`] offers to always allow: as many as its
+/// `approvalRequested` item shows, so an answer with `always` adds only rules the user saw.
+pub const MAX_ALWAYS_ALLOW_RULES: usize = 16;
 
-/// How far along an [`TodoItem`] is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The longest rule, in bytes, that an [`ApprovalRequest`] offers to always allow, which its
+/// `approvalRequested` item shows whole. A longer one isn't offered.
+pub const MAX_ALWAYS_ALLOW_RULE_BYTES: usize = 1024;
+
+/// What an [`Event::ApprovalRequested`] asks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum TodoStatus {
-    /// Not started.
-    Pending,
-    /// Being worked on.
-    InProgress,
-    /// Done.
-    Completed,
-    /// A status this version does not know.
-    #[serde(other)]
-    Other,
+pub struct ApprovalRequest {
+    /// The backend's id for the request, which [`Run::answer`](super::Run::answer) names.
+    pub approval_id: ApprovalId,
+    /// The tool, in the vendor's naming, such as `Bash` or `ExitPlanMode`.
+    pub tool_name: String,
+    /// The tool's input, as the vendor sent it.
+    #[serde(default)]
+    pub input: serde_json::Value,
+    /// The tool call's id, which its [`Event::ToolCall`] carries, when the vendor says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    /// Why the CLI asks, for people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The path that made the CLI ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_path: Option<String>,
+    /// The vendor's id for the agent's own subagent that asks, when one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
+    /// The rules an answer with `always` adds for the rest of the CLI process, such as
+    /// `Bash(pnpm test:*)`: at most [`MAX_ALWAYS_ALLOW_RULES`], none longer than
+    /// [`MAX_ALWAYS_ALLOW_RULE_BYTES`]. Empty when the request offers none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub always_allow: Vec<String>,
+    /// The request is a question for the user, such as `ExitPlanMode`'s plan, rather than one
+    /// action to allow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interactive: bool,
 }
 
 impl Event {
@@ -188,22 +290,6 @@ impl Event {
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Finished { .. })
     }
-}
-
-/// How a tool call ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ToolStatus {
-    /// It ran and succeeded.
-    Ok,
-    /// It ran and failed.
-    Error,
-    /// The tool policy or the CLI's approval rules refused it: Claude's `permission_denied`, or a
-    /// Codex approval request that exec's `never` policy denied.
-    Denied,
-    /// A status this version does not know.
-    #[serde(other)]
-    Other,
 }
 
 /// What a [`Event::Warning`] is about.
@@ -239,7 +325,7 @@ pub enum Outcome {
     Cancelled,
     /// It failed.
     Failed(Failure),
-    /// A status this version does not know, read back from a newer wispd's records.
+    /// A status this version does not know, read back from a newer plxd's records.
     #[serde(other)]
     Unknown,
 }
@@ -258,6 +344,74 @@ pub struct Failure {
     /// The end of the CLI's stderr, when it wrote any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
+}
+
+impl Failure {
+    /// A failure with no process exit attached.
+    #[must_use]
+    pub fn new(failure: FailureKind, message: String) -> Self {
+        Self {
+            failure,
+            message,
+            exit: None,
+            stderr_tail: None,
+        }
+    }
+
+    /// The failed outcome, with how the process ended when it did.
+    #[must_use]
+    pub fn ended(mut self, exit: Option<&Exit>) -> Outcome {
+        if let Some(exit) = exit {
+            self.exit = Some(exit.info);
+            self.stderr_tail = (!exit.stderr_tail.is_empty()).then(|| exit.stderr_tail.clone());
+        }
+        Outcome::Failed(self)
+    }
+}
+
+/// How a run ends when `label`'s CLI exited with no outcome of its own: not signed in, as
+/// `signed_out` tells from its stderr, done mid-turn, or crashed.
+#[must_use]
+pub fn exit_outcome(label: &str, signed_out: bool, exit: &Exit) -> Outcome {
+    let failure = if signed_out {
+        Failure::new(
+            FailureKind::NotSignedIn,
+            format!("{label} is not signed in"),
+        )
+    } else if exit.info.success() {
+        Failure::new(
+            FailureKind::VendorError,
+            format!("{label} exited without finishing its turn"),
+        )
+    } else {
+        let message = match (exit.info.code, exit.info.signal) {
+            (_, Some(signal)) => format!("{label} was killed by signal {signal}"),
+            (Some(code), None) => format!("{label} exited with code {code}"),
+            (None, None) => format!("{label} ended in an unknown way"),
+        };
+        Failure::new(FailureKind::Crashed, message)
+    };
+    failure.ended(Some(exit))
+}
+
+/// A todo from `entry`'s `text` field and `status`, or `None` without text.
+pub fn todo(entry: &serde_json::Value, text: &str) -> Option<TodoItem> {
+    Some(TodoItem {
+        text: entry.get(text)?.as_str()?.to_owned(),
+        status: todo_status(entry.get("status").and_then(serde_json::Value::as_str)),
+    })
+}
+
+/// A todo status in any backend's spelling: `in_progress` (Claude, ACP, `OpenCode`), `inProgress`
+/// (Codex, the Cursor SDK), or Cursor ACP's `TODO_STATUS_*`.
+#[must_use]
+pub fn todo_status(status: Option<&str>) -> TodoStatus {
+    match status {
+        Some("pending" | "TODO_STATUS_PENDING") => TodoStatus::Pending,
+        Some("in_progress" | "inProgress" | "TODO_STATUS_IN_PROGRESS") => TodoStatus::InProgress,
+        Some("completed" | "TODO_STATUS_COMPLETED") => TodoStatus::Completed,
+        _ => TodoStatus::Unknown,
+    }
 }
 
 /// What kind of failure ended a run. Routing (#119) falls back to another account on
@@ -279,19 +433,23 @@ pub enum FailureKind {
     UnexpectedApiKey,
     /// The CLI reported an error of its own, such as Claude's `error_max_turns`.
     VendorError,
+    /// The session the run resumes is gone, such as one Claude Code pruned (PLX-937). Routing
+    /// starts a new session with [`Resume::fallback`](super::Resume::fallback) when the run has
+    /// one.
+    SessionNotFound,
     /// The process died from a signal, or exited unsuccessfully without saying why.
     Crashed,
     /// A process the run needed could not be started.
     SpawnFailed,
-    /// A fault in wispd.
+    /// A fault in plxd.
     Internal,
     /// A kind this version does not know.
     #[serde(other)]
     Other,
 }
 
-/// How a process ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// How a process ended. The default says nothing: no code and no signal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExitInfo {
     /// Its exit code, if it exited.
@@ -344,7 +502,7 @@ impl Usage {
     #[must_use]
     pub fn since(&self, earlier: &Self) -> Self {
         fn delta(now: u64, before: u64) -> u64 {
-            if now >= before { now - before } else { now }
+            now.checked_sub(before).unwrap_or(now)
         }
         Self {
             input_tokens: delta(self.input_tokens, earlier.input_tokens),
@@ -498,12 +656,7 @@ pub enum LimitStatus {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
-    use super::{
-        CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus, LimitWindow,
-        ModelUsage, Outcome, TodoItem, TodoStatus, Usage,
-    };
+    use super::{CumulativeUsage, Usage};
 
     fn tokens(input: u64, output: u64) -> Usage {
         Usage {
@@ -513,211 +666,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn events_serialize_with_a_kind_tag_and_camel_case_fields() {
-        let event = Event::SessionStarted {
-            session_id: "s-1".into(),
-            model: Some("m".into()),
-            api_key_source: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&event).unwrap(),
-            json!({"kind": "sessionStarted", "sessionId": "s-1", "model": "m"})
-        );
-        let usage = Event::Usage(ModelUsage {
-            model: None,
-            usage: Usage {
-                cost_usd_micros: Some(1_500),
-                ..tokens(3, 4)
-            },
-        });
-        assert_eq!(
-            serde_json::to_value(&usage).unwrap(),
-            json!({
-                "kind": "usage", "inputTokens": 3, "outputTokens": 4, "cacheReadTokens": 0,
-                "cacheWriteTokens": 0, "costUsdMicros": 1500
-            })
-        );
-        let failed = Event::Finished {
-            outcome: Outcome::Failed(Failure {
-                failure: FailureKind::RateLimited,
-                message: "limit".into(),
-                exit: Some(ExitInfo {
-                    code: Some(1),
-                    signal: None,
-                }),
-                stderr_tail: None,
-            }),
-            usage_totals: vec![ModelUsage {
-                model: Some("opus".into()),
-                usage: tokens(9, 1),
-            }],
-        };
-        let value = serde_json::to_value(&failed).unwrap();
-        assert_eq!(
-            value,
-            json!({
-                "kind": "finished",
-                "outcome": {
-                    "status": "failed", "failure": "rateLimited", "message": "limit",
-                    "exit": {"code": 1}
-                },
-                "usageTotals": [{
-                    "model": "opus", "inputTokens": 9, "outputTokens": 1, "cacheReadTokens": 0,
-                    "cacheWriteTokens": 0
-                }]
-            })
-        );
-        assert_eq!(serde_json::from_value::<Event>(value).unwrap(), failed);
-        let todo = Event::TodoList {
-            items: vec![TodoItem {
-                text: "Write tests".into(),
-                status: TodoStatus::InProgress,
-            }],
-        };
-        assert_eq!(
-            serde_json::to_value(&todo).unwrap(),
-            json!({"kind": "todoList", "items": [{"text": "Write tests", "status": "inProgress"}]})
-        );
-    }
-
-    #[test]
-    fn account_fallback_serializes_with_both_accounts_and_its_reason() {
-        let event = Event::AccountFallback {
-            from_account: "claude".into(),
-            to_account: "01a0d34e-01e0-7dc0-b326-598cbff22aa1".into(),
-            reason: FailureKind::RateLimited,
-        };
-        assert_eq!(
-            serde_json::to_value(&event).unwrap(),
-            json!({
-                "kind": "accountFallback",
-                "fromAccount": "claude",
-                "toAccount": "01a0d34e-01e0-7dc0-b326-598cbff22aa1",
-                "reason": "rateLimited"
-            })
-        );
-    }
-
-    #[test]
-    fn limit_windows_round_trip_with_rfc_3339_resets() {
-        let window = Event::RateLimit(LimitWindow {
-            window: "five_hour".into(),
-            duration_minutes: Some(300),
-            used_percent: Some(42.5),
-            status: LimitStatus::Warning,
-            resets_at: Some("2026-09-24T17:00:00Z".parse().unwrap()),
-        });
-        let value = serde_json::to_value(&window).unwrap();
-        assert_eq!(value["resetsAt"], "2026-09-24T17:00:00Z");
-        assert_eq!(serde_json::from_value::<Event>(value).unwrap(), window);
-        let unknown: LimitWindow =
-            serde_json::from_value(json!({"window": "w", "status": "throttled"})).unwrap();
-        assert_eq!(unknown.status, LimitStatus::Unknown);
-    }
-
-    #[test]
-    fn unknown_kinds_decode_to_their_fallbacks() {
-        let failure: FailureKind = serde_json::from_value(json!("quotaExploded")).unwrap();
-        assert_eq!(failure, FailureKind::Other);
-        let event: Event =
-            serde_json::from_value(json!({"kind": "agentTeleported", "to": "mars"})).unwrap();
-        assert_eq!(event, Event::Unknown);
-        let finished: Event = serde_json::from_value(
-            json!({"kind": "finished", "outcome": {"status": "paused", "until": "later"}}),
-        )
-        .unwrap();
-        assert_eq!(
-            finished,
-            Event::Finished {
-                outcome: Outcome::Unknown,
-                usage_totals: Vec::new()
-            }
-        );
-    }
-
-    #[test]
-    fn usage_adds_field_by_field_and_keeps_a_cost_either_side_reported() {
-        let a = Usage {
-            cost_usd_micros: Some(10),
-            ..tokens(1, 2)
-        };
-        let b = tokens(10, 20);
-        assert_eq!(
-            a + b,
-            Usage {
-                cost_usd_micros: Some(10),
-                ..tokens(11, 22)
-            }
-        );
-        assert_eq!(b + b, tokens(20, 40));
-    }
-
+    /// Running totals become per-model deltas, a repeat adds nothing, and a total that went
+    /// down starts over.
     #[test]
     fn running_totals_become_deltas_per_model() {
-        let mut meter = CumulativeUsage::new();
-        assert_eq!(
-            meter.observe(Some("opus"), tokens(100, 10)).unwrap().usage,
-            tokens(100, 10)
-        );
-        assert_eq!(
-            meter.observe(Some("opus"), tokens(150, 30)).unwrap().usage,
-            tokens(50, 20)
-        );
-        let haiku = meter.observe(Some("haiku"), tokens(5, 1)).unwrap();
-        assert_eq!(haiku.model.as_deref(), Some("haiku"));
-        assert_eq!(haiku.usage, tokens(5, 1));
-        assert_eq!(meter.observe(Some("opus"), tokens(150, 30)), None);
-    }
-
-    #[test]
-    fn a_total_that_went_down_counts_as_new() {
-        let mut meter = CumulativeUsage::new();
-        meter.observe(None, tokens(100, 10));
-        assert_eq!(
-            meter.observe(None, tokens(7, 3)).unwrap().usage,
-            tokens(7, 3)
-        );
-    }
-
-    #[test]
-    fn a_resumed_session_starts_from_its_baseline() {
-        let mut meter = CumulativeUsage::with_baseline([ModelUsage {
-            model: Some("opus".into()),
-            usage: tokens(100, 10),
-        }]);
-        assert_eq!(
-            meter.observe(Some("opus"), tokens(120, 15)).unwrap().usage,
-            tokens(20, 5)
-        );
-    }
-
-    #[test]
-    fn recorded_deltas_add_to_the_totals() {
-        let mut meter = CumulativeUsage::with_baseline([ModelUsage {
-            model: None,
-            usage: tokens(10, 1),
-        }]);
-        meter.record(&ModelUsage {
-            model: None,
-            usage: tokens(5, 5),
-        });
-        meter.record(&ModelUsage {
-            model: Some("haiku".into()),
-            usage: tokens(1, 1),
-        });
-        assert_eq!(
-            meter.totals(),
-            [
-                ModelUsage {
-                    model: None,
-                    usage: tokens(15, 6)
-                },
-                ModelUsage {
-                    model: Some("haiku".into()),
-                    usage: tokens(1, 1)
-                },
-            ]
-        );
+        {
+            let mut meter = CumulativeUsage::new();
+            assert_eq!(
+                meter.observe(Some("opus"), tokens(100, 10)).unwrap().usage,
+                tokens(100, 10)
+            );
+            assert_eq!(
+                meter.observe(Some("opus"), tokens(150, 30)).unwrap().usage,
+                tokens(50, 20)
+            );
+            let haiku = meter.observe(Some("haiku"), tokens(5, 1)).unwrap();
+            assert_eq!(haiku.model.as_deref(), Some("haiku"));
+            assert_eq!(haiku.usage, tokens(5, 1));
+            assert_eq!(meter.observe(Some("opus"), tokens(150, 30)), None);
+        }
+        {
+            let mut meter = CumulativeUsage::new();
+            meter.observe(None, tokens(100, 10));
+            assert_eq!(
+                meter.observe(None, tokens(7, 3)).unwrap().usage,
+                tokens(7, 3)
+            );
+        }
     }
 }

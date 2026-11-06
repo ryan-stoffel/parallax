@@ -1,137 +1,317 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
-import type { AgentSendParams, PromptImage } from "../protocol/generated/protocol";
-import { applyEvents, emptyTranscript, isRunning, type Transcript } from "./transcript";
+import type {
+  AgentBackgroundTask,
+  AgentDelivery,
+  AgentSendParams,
+  LoggedEvent,
+  PromptImage,
+  QueuedMessage,
+  ThreadRun,
+} from "../protocol/generated/protocol";
+import { watchThread } from "./threadWatches";
+import { applyEvents, emptyTranscript, rebuild, type Transcript } from "./transcript";
+import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
 
-export interface AgentRunView {
+interface AgentRunView {
   transcript: Transcript;
   /** Why the transcript couldn't load, for people. */
   error?: string;
-  /** Messages this window sent, by turn id, since older logs hold only the id (RYA-92). */
+  /** Messages this window sent, by turn id, since older logs hold only the id (PLX-92). */
   sent: ReadonlyMap<string, SentMessage>;
+  queue: QueuedMessage[];
+  /** Whether a Stop or a restart holds the queue until it is resumed (0060). */
+  held: boolean;
+  /** The agent's background tasks running now, such as a Monitor (PLX-777). */
+  background: AgentBackgroundTask[];
+  /** The URLs of the thread's pull requests plxd watches (PLX-777). */
+  watching: string[];
+  /** The thread's runs, as `orchestration/threadRuns` has them, for each turn's checkpoint (0062). */
+  runs: ThreadRun[];
   /**
-   * Sends a message and its images as the run's next turn, with a new model, effort, or access for
-   * the run if given. Resolves to wispd's error, or why the run couldn't take it, or undefined.
+   * Sends a message, its images, and the threads attached to it as the run's next turn, with a new
+   * model, effort, or access for the run if given. Resolves to plxd's error, or why the run
+   * couldn't take it, or undefined.
    */
   send: (
     text: string,
     options?: SendOptions,
     images?: PromptImage[],
+    threads?: string[],
+    delivery?: AgentDelivery,
   ) => Promise<RpcError | undefined>;
-  /** Stops the run. Resolves to an error message, or undefined. */
-  cancel: () => Promise<string | undefined>;
+  /**
+   * Stops the run's turn, keeping what waits, held until Resume (`run.interrupt`), or with
+   * `drop`, dropping it (`agent/cancel`). Resolves to an error message, or undefined.
+   */
+  cancel: (drop?: boolean) => Promise<string | undefined>;
+  /** Whether older events are left to load, for a transcript that opened at its end (PLX-490). */
+  older: boolean;
+  /** Loads the page of events before the oldest loaded, one page at a time. */
+  loadOlder: () => void;
 }
 
-/** A message this window sent: its text and images, at hand until the run's log has them. */
+/**
+ * A transcript's events loaded so far, oldest first, and the `seq` to load older ones before,
+ * absent once the first is in.
+ */
+interface Pages {
+  events: LoggedEvent[];
+  before?: number;
+  loading?: boolean;
+}
+
+/**
+ * A message this window sent: its text, images, and attached threads' run ids, at hand until the
+ * run's log has them.
+ */
 export interface SentMessage {
   text: string;
   images: PromptImage[];
+  threads?: string[];
 }
 
-/** A new model, effort, or access for a run, sent only to a wispd that advertises `sendModel`. */
-export type SendOptions = Pick<AgentSendParams, "model" | "effort" | "permission">;
+/**
+ * A new model, effort, or access for a run, sent only to a plxd that advertises `sendModel`, and
+ * a new account, perhaps another provider's, only to one that advertises `sendAccount`.
+ */
+type SendOptions = Pick<
+  AgentSendParams,
+  "model" | "effort" | "permission" | "contextWindow" | "fast" | "account"
+>;
+
+/** The queued runs of `runs`, as the queue lists them, first to be sent first. */
+const queuedOf = (runs: ThreadRun[]): QueuedMessage[] =>
+  runs
+    .filter((r) => r.status === "queued")
+    .map((r) => ({
+      id: r.id,
+      text: r.text ?? "",
+      images: r.images ?? 0,
+      threads: r.threads ?? [],
+    }));
 
 /**
- * One run's transcript, kept live: pages through `agent/events`, then subscribes
- * to its scope's events from a fresh snapshot `seq`, and starts over on `resync`.
- * Loads only while `connected`; a reconnect loads again. Key the caller by host
- * and run, so another run starts from an empty transcript.
+ * One run's transcript, kept live through `orchestration/subscribeThread` (0059): a snapshot of
+ * the run, its queue, and its newest events, then its events as they come. Older events load a
+ * page at a time with `loadOlder`, and while the newest show nothing, on their own. It opens once
+ * the host connects and stays open across disconnects: a reconnect resumes after the last event,
+ * and a fresh snapshot rebuilds the transcript only when the gap is too long to replay
+ * (`useWatchKey`). A run shown lately is still watched (`watchThread`), so it shows as it is now
+ * before the first paint. Key the caller by host and run, so another run starts from an empty
+ * transcript.
  */
 export function useAgentRun(hostId: string, runId: string, connected: boolean): AgentRunView {
   const [transcript, setTranscript] = useState(emptyTranscript);
   const [error, setError] = useState<string>();
   const [sent, setSent] = useState<ReadonlyMap<string, SentMessage>>(new Map());
+  const pages = useRef<Pages>(undefined);
+  const [older, setOlder] = useState(false);
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const [held, setHeld] = useState(false);
+  const [background, setBackground] = useState<AgentBackgroundTask[]>([]);
+  const [watching, setWatching] = useState<string[]>([]);
+  const [runs, setRuns] = useState<ThreadRun[]>([]);
+  const [watchKey, failed] = useWatchKey(`${hostId}\n${runId}`, connected, hostId);
 
-  useEffect(() => {
-    if (!connected) return;
-    let stopped = false;
-    let unsubscribe = () => {};
-
-    async function load() {
-      let t = emptyTranscript;
-      // The scope's seq from `agent/list`, taken before the last page is read. The run's
-      // own last seq can be too old for wispd to replay the scope from, which would
-      // answer every subscribe with another resync. Subscribing after the snapshot is
-      // gap-free, since at least one page was read after it.
-      let snapshot: number | undefined;
-      // The log the first page was read under. If it changes before the subscribe, main
-      // answers it with a resync, so a mix of two logs' seqs is never used.
-      let logId: string | undefined;
-      for (let more = true; more || snapshot === undefined;) {
-        // agent.started, the first event, carries the run's scope: its project, or its
-        // thread's repo entry (0017).
-        if (snapshot === undefined && t.run) {
-          const list = await window.wisp.request(hostId, "agent/list", {
-            project: t.run.project,
-          });
-          if (stopped) return;
-          if ("error" in list) return setError(list.error.message);
-          snapshot = list.result.seq;
-        }
-        const page = await window.wisp.request(hostId, "agent/events", { runId, after: t.seq });
-        if (stopped) return;
-        if ("error" in page) return setError(page.error.message);
-        logId ??= page.logId;
-        t = applyEvents(t, page.result.events, runId);
-        more = page.result.more;
-        if (!more && !t.run) return setError("This agent run hasn't started.");
+  // Loads the page before `p`'s oldest event into it, one at a time: `false` while another is
+  // on its way, or once a fresh snapshot replaced `p` or the page failed.
+  const loadPage = useCallback(
+    async (p: Pages) => {
+      if (p.before === undefined || p.loading) return false;
+      p.loading = true;
+      const page = await window.parallax.request(hostId, "orchestration/threadHistory", {
+        threadId: runId,
+        before: p.before,
+      });
+      p.loading = false;
+      if (pages.current !== p) return false;
+      if ("error" in page) {
+        setError(page.error.message);
+        return false;
       }
-      // The loop only ends with both, but the types can't tell.
-      if (!t.run || snapshot === undefined || logId === undefined) return;
-      setTranscript(t);
-      setError(undefined);
-      unsubscribe = window.wisp.subscribe(
-        hostId,
-        { after: Math.max(t.seq, snapshot), project: t.run.project, logId },
-        (message) => {
-          if (stopped) return;
-          if (message.type === "event")
-            setTranscript((prev) => applyEvents(prev, [message.event], runId));
-          else if (message.type === "resync") void load();
-          else setError(message.error.message);
-        },
-      );
+      const { events, more } = page.result;
+      p.events = [...events, ...p.events];
+      p.before = more ? events[0]?.seq : undefined;
+      setOlder(p.before !== undefined);
+      setTranscript((prev) => rebuild(prev, p.events, runId));
+      return true;
+    },
+    [hostId, runId],
+  );
+
+  // A layout effect, so a run still watched shows before the first paint, not after "Loading…".
+  useLayoutEffect(() => {
+    if (!watchKey) return;
+    let stopped = false;
+
+    // The queue as plxd has it. Messages sent from here keep plxd's text, edits included, so a
+    // dropped one's Send again sends what the user last saw.
+    function showQueue(messages: QueuedMessage[]) {
+      setQueue(messages);
+      setSent((prev) => {
+        if (!messages.some((m) => prev.has(m.id) && prev.get(m.id)!.text !== m.text)) return prev;
+        const next = new Map(prev);
+        for (const m of messages) {
+          const mine = next.get(m.id);
+          if (mine) next.set(m.id, { ...mine, text: m.text });
+        }
+        return next;
+      });
     }
 
-    void load();
+    // Older pages, while the ones in show nothing, as when the newest holds only the run's last
+    // updates.
+    async function fill(p: Pages, t: Transcript) {
+      while (!stopped && t.items.length === 0 && (await loadPage(p)))
+        t = rebuild(t, p.events, runId);
+    }
+
+    // A snapshot and the events since, at once for a run still watched, else one at a time.
+    const stop = watchThread(hostId, runId, (messages) => {
+      if (stopped) return;
+      let t: Transcript | undefined;
+      let events: LoggedEvent[] = [];
+      let reverted = false;
+      let readRuns = false;
+      for (const message of messages) {
+        if (message.type === "error") {
+          failed();
+          return setError(message.error.message);
+        }
+        if (message.type === "snapshot") {
+          const s = message.snapshot;
+          // Its own copy, which live events go on the end of.
+          const p: Pages = {
+            events: [...s.events],
+            before: s.more ? s.events[0]?.seq : undefined,
+          };
+          pages.current = p;
+          t = rebuild({ ...emptyTranscript, run: s.thread, seq: s.seq }, s.events, runId);
+          events = [];
+          reverted = false;
+          setOlder(p.before !== undefined);
+          showQueue(queuedOf(s.runs));
+          setHeld(s.runs.some((r) => r.status === "queued" && r.queueHeld));
+          setBackground(s.background ?? []);
+          setWatching(s.watching ?? []);
+          setRuns(s.runs);
+          setError(undefined);
+          continue;
+        }
+        const event = message.event.event;
+        if (event.kind === "queue.updated" && event.runId === runId) {
+          showQueue(event.messages);
+          setHeld(!!event.held);
+        }
+        if (event.kind === "pr.watches" && event.runId === runId) setWatching(event.urls);
+        if (event.kind === "agent.background" && event.runId === runId) setBackground(event.tasks);
+        // A checkpoint captured or a revert changes the runs, and a run that started after the
+        // snapshot isn't in them yet, so it reads them again.
+        if (
+          (event.kind === "thread.checkpoint" || event.kind === "thread.reverted") &&
+          event.runId === runId
+        )
+          readRuns = true;
+        pages.current?.events.push(message.event);
+        events.push(message.event);
+        if (event.kind === "thread.reverted" && event.runId === runId) {
+          reverted = true;
+          // A message sent from here whose turn the revert undid would otherwise show as on its
+          // way, under a working row that never ends (PLX-712).
+          setSent((prev) => {
+            if (!event.turns.some((id) => prev.has(id))) return prev;
+            const next = new Map(prev);
+            for (const id of event.turns) next.delete(id);
+            return next;
+          });
+        }
+      }
+      if (readRuns)
+        void window.parallax
+          .request(hostId, "orchestration/threadRuns", { threadId: runId })
+          .then((answer) => {
+            if (!stopped && !("error" in answer)) setRuns(answer.result.runs);
+          });
+      const p = pages.current;
+      if (t) {
+        const shown = events.length > 0 ? applyEvents(t, events, runId) : t;
+        setTranscript(shown);
+        if (p) void fill(p, shown);
+        return;
+      }
+      if (events.length > 0) setTranscript((prev) => applyEvents(prev, events, runId));
+      if (reverted && p) void fill(p, rebuild(emptyTranscript, p.events, runId));
+    });
     return () => {
       stopped = true;
-      unsubscribe();
+      stop();
     };
-  }, [hostId, runId, connected]);
+  }, [hostId, runId, watchKey, failed, loadPage]);
+
+  const loadOlder = useCallback(() => {
+    if (pages.current) void loadPage(pages.current);
+  }, [loadPage]);
 
   const send = useCallback(
-    async (text: string, options?: SendOptions, images: PromptImage[] = []) => {
+    async (
+      text: string,
+      options?: SendOptions,
+      images: PromptImage[] = [],
+      threads: string[] = [],
+      delivery?: AgentDelivery,
+    ) => {
       const turnId = uuidv7();
-      setSent((prev) => new Map(prev).set(turnId, { text, images }));
-      const answer = await window.wisp.request(hostId, "agent/send", {
-        runId,
-        turnId,
+      setSent((prev) => new Map(prev).set(turnId, { text, images, threads }));
+      const answer = await window.parallax.request(hostId, "orchestration/dispatch", {
+        type: "message.dispatch",
+        threadId: runId,
+        messageId: turnId,
         text,
         ...options,
         ...(images.length > 0 && { images }),
+        ...(threads.length > 0 && { threads }),
+        dispatchMode: { type: delivery === "steer" ? "steer_active" : "queue_after_active" },
       });
-      if ("result" in answer && isRunning(answer.result.run.status)) return undefined;
+      if (!("error" in answer)) return undefined;
       setSent((prev) => {
         const next = new Map(prev);
         next.delete(turnId);
         return next;
       });
-      // A finished run whose CLI didn't start again answers with the failed run, and no turn
-      // follows for the message.
-      return "error" in answer
-        ? answer.error
-        : { code: -32000, message: answer.result.run.error ?? "The agent couldn't start." };
+      return answer.error;
     },
     [hostId, runId],
   );
 
-  const cancel = useCallback(async () => {
-    const answer = await window.wisp.request(hostId, "agent/cancel", { runId });
-    return "error" in answer ? answer.error.message : undefined;
-  }, [hostId, runId]);
+  const cancel = useCallback(
+    async (drop = false) => {
+      const answer = drop
+        ? await window.parallax.request(hostId, "agent/cancel", { runId })
+        : await window.parallax.request(hostId, "orchestration/dispatch", {
+            type: "run.interrupt",
+            threadId: runId,
+            holdQueue: true,
+          });
+      return "error" in answer ? answer.error.message : undefined;
+    },
+    [hostId, runId],
+  );
 
-  return { transcript, error, sent, send, cancel };
+  return {
+    transcript,
+    error,
+    sent,
+    send,
+    cancel,
+    queue,
+    held,
+    background,
+    watching,
+    runs,
+    older,
+    loadOlder,
+  };
 }

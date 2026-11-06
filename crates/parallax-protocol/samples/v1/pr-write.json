@@ -1,0 +1,79 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "comment", "body": "Fixed in the latest push." }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "review", "event": "requestChanges", "body": "Verdict: changes needed" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "edit", "title": "feat(daemon): paced pull request writes (PLX-1022)" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "pr/write",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "write": { "kind": "replyToThread", "reviewThreadId": "PRRT_kwDOM1a2b3c4", "body": "Done.", "resolve": true }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "GitHub's secondary rate limit is on; call again in a minute",
+      "data": {
+        "kind": "prFailed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "pr/mergeWhenReady",
+    "params": {
+      "runId": "01929a3e-7b5c-7a1e-9d2f-3c4b5a6d7e8f",
+      "url": "https://github.com/ryan-stoffel/parallax/pull/917",
+      "method": "squash"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": { "url": "https://github.com/ryan-stoffel/parallax/pull/917", "watching": true, "wasWatching": false }
+  }
+]

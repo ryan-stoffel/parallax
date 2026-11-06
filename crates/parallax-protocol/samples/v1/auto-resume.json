@@ -1,0 +1,102 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 210,
+      "time": "2026-10-03T14:02:11Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.updated",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "state": {
+          "status": "waiting",
+          "accountId": "claude",
+          "backend": "claude",
+          "sessionId": "session-7f3a",
+          "error": "You've hit your limit",
+          "resumeAt": "2026-10-03T17:00:41Z",
+          "updatedAt": "2026-10-03T14:02:11Z"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 40,
+    "method": "agent/autoResume",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "autoResume": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 40,
+    "result": {
+      "run": {
+        "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "prompt": "Add a README that explains how to build the app.",
+        "policy": "workspaceWrite",
+        "status": "waiting",
+        "backend": "claude",
+        "accountId": "claude",
+        "sessionId": "session-7f3a",
+        "error": "You've hit your limit",
+        "resumeAt": "2026-10-03T17:00:41Z",
+        "autoResume": true,
+        "createdAt": "2026-10-03T12:00:00Z",
+        "updatedAt": "2026-10-03T14:05:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 41,
+    "method": "agent/resumeNow",
+    "params": { "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 41,
+    "result": {
+      "run": {
+        "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+        "prompt": "Add a README that explains how to build the app.",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "sessionId": "session-7f3a",
+        "autoResume": true,
+        "createdAt": "2026-10-03T12:00:00Z",
+        "updatedAt": "2026-10-03T14:06:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 42,
+    "method": "host/settings/get",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 42,
+    "result": { "autoResume": true }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 43,
+    "method": "host/settings/set",
+    "params": { "autoResume": false }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 43,
+    "result": { "autoResume": false }
+  }
+]

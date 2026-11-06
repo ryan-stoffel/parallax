@@ -1,0 +1,283 @@
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+/// Params of `usage/get`.
+///
+/// Empty: plxd has no account registry yet (#114, #117, #118 are still open, and #113's
+/// `AccountRef` is already just a caller-supplied string), so it reports every account id it has
+/// recorded usage or limits for.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageGetParams {}
+
+/// Result of `usage/get`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageGetResult {
+    /// Every account plxd has recorded usage or limits for, in no particular order.
+    pub accounts: Vec<AccountUsage>,
+}
+
+/// One account's usage and latest limit windows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsage {
+    /// plxd's id for the account (#114, #117).
+    pub account_id: String,
+    /// Tokens and cost used today, local time on this host.
+    pub today: UsagePeriod,
+    /// Tokens and cost used this week (Monday to now), local time on this host.
+    pub week: UsagePeriod,
+    /// The account's limit windows, as last reported. Empty when the vendor reports none (0004:
+    /// Cursor's headless output has no usage API).
+    pub limits: Vec<UsageLimitWindow>,
+}
+
+/// Tokens and cost over a period.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsagePeriod {
+    /// Input tokens, not counting cache reads and writes.
+    pub input_tokens: u64,
+    /// Output tokens, including reasoning.
+    pub output_tokens: u64,
+    /// Input tokens read from the prompt cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to the prompt cache.
+    pub cache_write_tokens: u64,
+    /// The cost, when the vendor reports one for this account in the period. Absent, not zero,
+    /// when it never does (0004: Codex and Cursor report no cost).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost_usd_micros: Option<u64>,
+}
+
+/// One of an account's limit windows, as a vendor reported it (0004's `rate_limit_event` and
+/// Codex's `account/rateLimits/updated` in `usage/get`, Claude Code's `get_usage` and Codex's
+/// `account/rateLimits/read` in `usage/limits`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLimitWindow {
+    /// The vendor's name for the window, such as `five_hour`, `seven_day`, `seven_day_opus`,
+    /// `primary`, or `secondary`. `usage/limits` names Codex's five-hour and weekly windows
+    /// `five_hour` and `seven_day`, as Claude's are.
+    pub window: String,
+    /// How much of the window is used, from 0 to 100, when the vendor says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub used_percent: Option<f64>,
+    /// When the window resets, when the vendor says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resets_at: Option<Timestamp>,
+    /// When plxd captured this snapshot.
+    pub captured_at: Timestamp,
+}
+
+/// Params of `usage/limits`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLimitsParams {}
+
+/// Result of `usage/limits`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLimitsResult {
+    /// Every subscription account whose CLI reports limits and could be started, in no
+    /// particular order.
+    pub accounts: Vec<AccountLimits>,
+}
+
+/// One subscription account's limit windows, as its CLI reports them now.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountLimits {
+    /// plxd's id for the account: its backend's name, such as `claude`.
+    pub account_id: String,
+    /// The windows. Empty when the account has none, such as an API key login, or when
+    /// `problem` says why the CLI didn't answer.
+    pub limits: Vec<UsageLimitWindow>,
+    /// Why the CLI didn't report its windows, for people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<String>,
+}
+
+/// Params of `usage/history`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHistoryParams {
+    /// The start of the range, inclusive. The range ends now.
+    pub since: Timestamp,
+}
+
+/// Result of `usage/history`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHistoryResult {
+    /// Usage summed per UTC hour, account, and model, oldest hour first. Hours with no usage are
+    /// left out.
+    pub hours: Vec<UsageHour>,
+    /// How many runs each account used in the range. Accounts with none are left out.
+    pub runs: Vec<AccountRuns>,
+}
+
+/// Params of `usage/report/claim`. Empty: plxd names the whole hours by its own clock.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportClaimParams {}
+
+/// Result of `usage/report/claim`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportClaimResult {
+    /// This claim's id, for `usage/report/release`.
+    pub claim_id: String,
+    /// The usage from the end of the last claim to the start of the current UTC hour, as in
+    /// `usage/history`. Empty on a host's first claim, which reports none of its past usage. No
+    /// later claim returns these hours, unless they are released.
+    pub hours: Vec<UsageHour>,
+}
+
+/// Params of `usage/report/release`: a claim whose hours couldn't be reported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportReleaseParams {
+    /// The claim's `claimId`.
+    pub claim_id: String,
+}
+
+/// Result of `usage/report/release`. Empty, and the same when the claim was released already or a
+/// later claim came first, which keeps its place.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportReleaseResult {}
+
+/// One account's usage of one model within one UTC hour.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHour {
+    /// The start of the UTC hour, such as `2026-09-29T19:00:00Z`.
+    pub hour: Timestamp,
+    /// plxd's id for the account (#114, #117).
+    pub account_id: String,
+    /// The model, when the vendor named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Input tokens, not counting cache reads and writes.
+    pub input_tokens: u64,
+    /// Output tokens, including reasoning.
+    pub output_tokens: u64,
+    /// Input tokens read from the prompt cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to the prompt cache.
+    pub cache_write_tokens: u64,
+    /// The cost, when the vendor reported one in this hour. Absent, not zero, when it did not
+    /// (0004: Codex and Cursor report no cost).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost_usd_micros: Option<u64>,
+}
+
+/// How many distinct runs used an account in a range.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRuns {
+    /// plxd's id for the account (#114, #117).
+    pub account_id: String,
+    /// Runs with at least one usage delta in the range.
+    pub runs: u32,
+}
+
+/// Params of `usage/daily`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDailyParams {
+    /// The first local day of the range, such as `2026-09-30`. The range ends today.
+    pub since: jiff::civil::Date,
+    /// The IANA time zone whose local days the usage is grouped by, such as
+    /// `America/Los_Angeles`.
+    pub time_zone: String,
+}
+
+/// Result of `usage/daily`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDailyResult {
+    /// Usage per local day, agent, and model. Days with no usage are left out.
+    pub days: Vec<UsageDay>,
+    /// Each source that failed, so the others still show.
+    pub problems: Vec<UsageProblem>,
+    /// Sessions per local day and agent, counted on the day of their last activity: Claude
+    /// Code's and Codex's, from ccusage. Absent when they couldn't be counted, and from a plxd
+    /// older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sessions: Option<Vec<UsageSessions>>,
+}
+
+/// How many of one agent's sessions last did something on one local day.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSessions {
+    /// The local day.
+    pub date: jiff::civil::Date,
+    /// The agent: Claude Code or Codex.
+    pub agent: crate::CliKind,
+    /// Sessions whose last activity was that day.
+    pub sessions: u32,
+}
+
+/// One agent's usage of one model on one local day, from every session on the host, not only
+/// runs plxd started (0039).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDay {
+    /// The local day.
+    pub date: jiff::civil::Date,
+    /// The agent: Claude Code, Codex, or Cursor.
+    pub agent: crate::CliKind,
+    /// The model, as the agent names it.
+    pub model: String,
+    /// Input tokens, not counting cache reads and writes.
+    pub input_tokens: u64,
+    /// Output tokens, including reasoning.
+    pub output_tokens: u64,
+    /// Input tokens read from the prompt cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to the prompt cache.
+    pub cache_write_tokens: u64,
+    /// The cost, when the source priced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cost_usd_micros: Option<u64>,
+}
+
+/// A source of `usage/daily` that failed, and why, for people.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProblem {
+    /// Which source.
+    pub source: UsageSource,
+    /// What went wrong, written for people, such as "Install Node.js or ccusage on this host to
+    /// see Claude Code and Codex usage."
+    pub message: String,
+}
+
+/// Where `usage/daily` gets usage from.
+///
+/// A newer plxd may send sources that are not listed here. Treat those as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageSource {
+    /// `ccusage`, for Claude Code and Codex.
+    Ccusage,
+    /// Cursor's usage API.
+    Cursor,
+    /// A source this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}

@@ -1,0 +1,280 @@
+// The models each provider instance offers, the reasoning efforts, and the access levels, as the
+// desktop's pickers and the mobile app's composer list them. Pure, so both apps share it; models.ts
+// adds this device's choices and the host's providers.
+
+import type { AgentEffort, AgentPermission, ProviderInfo } from "../protocol/generated/protocol";
+
+// The models each worker backend's CLI took on 2026-10-12, and what to send for each. A
+// placeholder until plxd reports them per host (PLX-154). Sources:
+// - Claude Code 2.1.295: the models its `initialize` control response lists, which T3 Code's
+//   catalog matches, plus Opus 4.5. `--model` takes these ids as they are. List a longer id
+//   before the shorter one it extends (`claude-opus-5-5`, then `claude-opus-5`): `knownModel`
+//   matches a dated id by prefix.
+// - codex-cli 0.159.3: the slugs ~/.codex/models_cache.json listed (visibility "list") on
+//   2026-10-02, which `-m` takes.
+// - Cursor Agent 2026.10.01-14929f9: a model of each family `agent models` listed on 2026-10-01,
+//   by the ids `--model` takes, effort included (0036).
+// Context windows and fast mode, checked on Claude Code 2.1.295 and codex-cli 0.159.3: Claude's
+// models run 1M natively and can be capped at 200K, but Opus 4.6, Opus 4.5, Sonnet 4.6, and
+// Haiku 4.5 have 200K only, and only Opus 5.5, Opus 5, and Opus 4.8 have fast mode.
+// Codex's catalog gives every model 272K by default and all but GPT-5.5 up to 872K, and every one
+// the Fast service tier.
+// Cursor's backend maps neither, so its models offer none.
+// Release dates are the makers' announcements, except Haiku 5.5's, the day Claude Code took it.
+// Each model's `provider` here is the kind of instance that runs it: on an old plxd, the built-in
+// instance of that id; on one with `providers`, every instance of that kind (`instanceModels`).
+
+/** A provider instance's id, which is also its backend's name (`AccountChoice`'s `backend`). */
+export type Provider = string;
+
+export interface Model {
+  /** What the backend's CLI takes, sent as `thread/start`'s `model`. */
+  id: string;
+  name: string;
+  /** The instance that runs it. */
+  provider: Provider;
+  /** Upstream release date or persisted discovery timestamp, for `isNew`. */
+  released?: string;
+  /** The context windows it offers, in tokens, its default first. */
+  contexts: number[];
+  /** Whether it has fast mode. */
+  fast?: boolean;
+  /** One the user added to its instance (`ProviderInstance.models`). */
+  custom?: boolean;
+}
+
+const week = 7 * 24 * 60 * 60 * 1000;
+
+/** Whether release or first discovery was within the past week. */
+export const isNew = (model: Model, now = Date.now()) =>
+  !!model.released && now >= Date.parse(model.released) && now - Date.parse(model.released) < week;
+
+const claude1M = [1_000_000, 200_000];
+const codex872K = [272_000, 872_000];
+
+/** The built-in catalog, by kind. */
+export const models: Model[] = [
+  {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    provider: "claude",
+    released: "2026-09-22",
+    contexts: claude1M,
+    fast: true,
+  },
+  {
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
+    provider: "claude",
+    released: "2026-09-29",
+    contexts: claude1M,
+  },
+  { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "claude", contexts: claude1M },
+  { id: "claude-fable-5", name: "Claude Fable 5", provider: "claude", contexts: claude1M },
+  {
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    provider: "claude",
+    contexts: claude1M,
+    fast: true,
+  },
+  {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    provider: "claude",
+    contexts: claude1M,
+    fast: true,
+  },
+  { id: "claude-opus-4-7", name: "Claude Opus 4.7", provider: "claude", contexts: claude1M },
+  { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "claude", contexts: [200_000] },
+  { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "claude", contexts: [200_000] },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "claude", contexts: claude1M },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "claude", contexts: [200_000] },
+  {
+    id: "claude-haiku-5-5",
+    name: "Claude Haiku 5.5",
+    provider: "claude",
+    released: "2026-10-11",
+    contexts: claude1M,
+  },
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "claude", contexts: [200_000] },
+  {
+    id: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    provider: "codex",
+    released: "2026-09-29",
+    contexts: codex872K,
+    fast: true,
+  },
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    provider: "codex",
+    released: "2026-09-03",
+    contexts: codex872K,
+    fast: true,
+  },
+  {
+    id: "gpt-6-sol",
+    name: "GPT-6 Sol",
+    provider: "codex",
+    released: "2026-09-22",
+    contexts: codex872K,
+    fast: true,
+  },
+  {
+    id: "gpt-6-luna",
+    name: "GPT-6 Luna",
+    provider: "codex",
+    released: "2026-09-22",
+    contexts: codex872K,
+    fast: true,
+  },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "codex", contexts: codex872K, fast: true },
+  {
+    id: "gpt-5.6-terra",
+    name: "GPT-5.6 Terra",
+    provider: "codex",
+    contexts: codex872K,
+    fast: true,
+  },
+  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "codex", contexts: codex872K, fast: true },
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "codex", contexts: [272_000], fast: true },
+  { id: "auto", name: "Auto", provider: "cursor", contexts: [] },
+  {
+    id: "composer-2.5",
+    name: "Composer 2.5",
+    provider: "cursor",
+    contexts: [],
+    released: "2026-05-18",
+  },
+  { id: "composer-2.5-fast", name: "Composer 2.5 Fast", provider: "cursor", contexts: [] },
+  { id: "claude-opus-5-5-medium", name: "Claude Opus 5.5", provider: "cursor", contexts: [] },
+  { id: "claude-fable-5-1-high", name: "Claude Fable 5.1", provider: "cursor", contexts: [] },
+  { id: "claude-sonnet-5-high", name: "Claude Sonnet 5", provider: "cursor", contexts: [] },
+  { id: "gpt-5.6-sol-medium", name: "GPT-5.6 Sol", provider: "cursor", contexts: [] },
+  { id: "gpt-5.5-medium", name: "GPT-5.5", provider: "cursor", contexts: [] },
+  { id: "gpt-5.3-codex", name: "Codex 5.3", provider: "cursor", contexts: [] },
+  { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", provider: "cursor", contexts: [] },
+  { id: "grok-4.7-high", name: "Grok 4.7 High", provider: "cursor", contexts: [] },
+  { id: "kimi-k3-max", name: "Kimi K3", provider: "cursor", contexts: [] },
+];
+
+/** Readable hub labels for raw model slugs, preserving routes, aliases, and upstream labels. */
+export function hubModelName(model: { id: string; name: string }): string {
+  const { id, name } = model;
+  if (name !== id || !/^[a-z0-9][a-z0-9._/-]*$/.test(name)) return name;
+  const slash = name.lastIndexOf("/");
+  const route = name.slice(0, slash + 1);
+  // Anthropic's snapshot dates (`-20251101`) say nothing a person picks by; the id keeps them.
+  const slug = undated(name.slice(slash + 1));
+  // Versions such as Claude's 5-5 become 5.5. Dashed date suffixes remain intact.
+  const words =
+    slug.replace(/(\d{1,2})-(\d)(?=-|$)/g, "$1.$2").match(/\d{4}-\d{2}-\d{2}|[^-_]+/g) ?? [];
+  const marks: Record<string, string> = {
+    gpt: "GPT",
+    oss: "OSS",
+    deepseek: "DeepSeek",
+    openai: "OpenAI",
+  };
+  return (
+    route +
+    words
+      .map(
+        (word) =>
+          marks[word] ??
+          (/^\d+(?:\.\d+)?[bm]$/.test(word)
+            ? word.toUpperCase()
+            : word.replace(/^[a-z]/, (c) => c.toUpperCase())),
+      )
+      .join(" ")
+  );
+}
+
+/** What a hub serves that can't run an agent's thread: image models and Codex's reviewer. */
+const hubOnly = /(?:^|\/)(?:gpt-image|codex-auto-review)/;
+
+/** A dated id, such as `claude-opus-4-5-20251101`, without its date. */
+const undated = (id: string) => id.replace(/-\d{8}$/, "");
+
+/** A label's version: 6.1 in "GPT 6.1 Terra", none in "GPT OSS 120B". */
+const versionIn = (name: string) => Number(/\b\d+(?:\.\d+)?\b/.exec(name)?.[0] ?? 0);
+
+/**
+ * An instance's discovered models, or its legacy catalog when discovery is unavailable, then
+ * the user's own, each id once. A hub answers in no order, so its models have readable labels,
+ * and keep their exact ids, newest first, then Z to A, which leads with Terra and Sol and leaves
+ * Haiku last. One that lists none offers its agent's own default, whose empty id sends no `model`.
+ */
+export function instanceModels(info: ProviderInfo): Model[] {
+  const { instance } = info;
+  const seen = new Set<string>();
+  // Availability and names belong to the upstream catalog. Built-ins supply only optional
+  // capabilities, and remain a fallback for older CLIs that cannot list models.
+  const discovered = info.models
+    .filter((m) => !info.hub || !hubOnly.test(m.id))
+    .map((m) => ({
+      ...models.find((c) => c.provider === instance.kind && c.id === m.id),
+      ...m,
+      name: info.hub
+        ? hubModelName(m)
+        : instance.kind === "opencode" && m.id.startsWith("opencode/")
+          ? m.name.replace(/^[^/]*\//, "")
+          : m.name,
+      contexts: models.find((c) => c.provider === instance.kind && c.id === m.id)?.contexts ?? [],
+    }));
+  if (info.hub) {
+    // Snapshots that would share a label with another model keep their dates, to tell them apart.
+    const labels = discovered.map((m) => m.name);
+    for (const m of discovered)
+      if (undated(m.id) !== m.id && labels.filter((label) => label === m.name).length > 1)
+        m.name += ` ${m.id.slice(-8)}`;
+    discovered.sort(
+      (a, b) => versionIn(b.name) - versionIn(a.name) || b.name.localeCompare(a.name),
+    );
+  }
+  const listed = [
+    ...(discovered.length || info.hub
+      ? discovered
+      : models.filter((m) => m.provider === instance.kind)),
+    ...instance.models.map((m) => ({ ...m, contexts: [] })),
+  ];
+  if (info.hub && !listed.length) return [];
+  return (listed.length ? listed : [{ id: "", name: "Default model", contexts: [] }])
+    .filter((m) => !seen.has(m.id) && !!seen.add(m.id))
+    .map((m) => ({
+      ...m,
+      provider: instance.id,
+      ...(instance.models.some((c) => c.id === m.id) && { custom: true }),
+    }));
+}
+
+/**
+ * Each reasoning effort plxd takes, a line about it, and how fast EffortMenu's sheen sweeps: the
+ * smaller, the faster.
+ */
+export const effortLevels: { value: AgentEffort; name: string; blurb: string; speed: number }[] = [
+  { value: "low", name: "Low", blurb: "A little thought first", speed: 3 },
+  { value: "medium", name: "Medium", blurb: "Thinks it over", speed: 2 },
+  { value: "high", name: "High", blurb: "Digs in on the hard parts", speed: 1.3 },
+  { value: "xhigh", name: "Extra high", blurb: "Takes its time on the hardest parts", speed: 0.8 },
+  { value: "max", name: "Max", blurb: "Everything it's got", speed: 0.4 },
+];
+
+// One set of access levels for every provider (0054), from most to least supervised. Each backend
+// maps the ones it can honor, and a thread is full Claude Code in every mode (0034). An
+// orchestrator's worker keeps its sandbox in every mode but Full access (0013). What would prompt
+// comes to the chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
+export const accessLevels: Record<AgentPermission, { label: string; description: string }> = {
+  manual: { label: "Supervised", description: "Asks you before commands and file changes." },
+  edit: {
+    label: "Auto-accept edits",
+    description: "Accepts file edits, asks before other actions.",
+  },
+  auto: {
+    label: "Auto",
+    description: "The provider approves routine actions for you and blocks the risky ones.",
+  },
+  plan: { label: "Plan", description: "Explores and writes a plan without editing files." },
+  bypass: { label: "Full access", description: "Runs commands and edits files without asking." },
+};

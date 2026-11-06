@@ -1,0 +1,38 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 40,
+      "time": "2026-09-29T12:10:02Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
+        "items": [
+          {
+            "kind": "turnStarted",
+            "turnId": "01a0d3a0-3d4e-7f5a-8b6c-7d8e9f0a1b2c",
+            "text": "Parallax, not the user: runs you started ended.\n\n- Run 01a0d395-1a2b-7c3d-8e4f-5a6b7c8d9e0f (Add the dark mode toggle.): completed, saying: Added the toggle and its tests. Branch parallax/01a0d395 changes 3 files (+84 -2).\n\nReview them with agent_status and agent_diff, message or start runs if more is needed, and tell the user where things stand.",
+            "wake": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 95,
+      "time": "2026-09-29T13:30:00Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.wakeupsPaused",
+        "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b"
+      }
+    }
+  }
+]

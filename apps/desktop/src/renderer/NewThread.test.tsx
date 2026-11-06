@@ -4,27 +4,59 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
-import type { RpcResponse, SubscriptionMessage, WispBridge } from "../preload/bridge";
+import type { RpcResponse, ParallaxBridge } from "../preload/bridge";
 import type { Capabilities, ErrorKind, Repo, Thread } from "../protocol/generated/protocol";
+import { accessDefaults, accessPrefs } from "./accessPrefs";
 import { App } from "./App";
+import { flushToasts } from "./undo";
+import { drafts, threadDrafts } from "./drafts";
+import { dragThread } from "./threadDrag";
+import { fakeWatch } from "./fakeWatch";
+import { localId } from "./hosts";
+import { newThreadDefaults, newThreadPrefs, setRepoPrefs } from "./prefs";
+import { sectionsStore } from "./Sidebar";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-// happy-dom has no popovers. The row menu's buttons are in the DOM either way.
+// happy-dom has no popovers. `openRowMenus` sends the rows' menus the event a browser sends as one
+// opens, which renders their items.
 HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
+// The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
+// timers, which a fixed wait races when the event loop stalls (PLX-277).
+const reads = vi.hoisted(() => [] as Promise<unknown>[]);
+vi.mock(import("./images"), async (importOriginal) => {
+  const images = await importOriginal();
+  return {
+    ...images,
+    readImage: (...args) => {
+      const read = images.readImage(...args);
+      reads.push(read);
+      return read;
+    },
+  };
+});
 // happy-dom lays nothing out. A tall transcript with small rows renders every row.
-Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-  get(this: HTMLElement) {
-    return this.getAttribute("role") === "log" ? 10_000 : 20;
+// The list reads the transcript's height from clientHeight and each row's from offsetHeight.
+Object.defineProperties(HTMLElement.prototype, {
+  clientHeight: {
+    get(this: HTMLElement) {
+      return this.getAttribute("role") === "log" ? 10_000 : 0;
+    },
+  },
+  offsetHeight: {
+    get(this: HTMLElement) {
+      return this.getAttribute("role") === "log" ? 10_000 : 20;
+    },
   },
 });
 
-const wisp: Repo = {
-  id: "r-wisp",
-  name: "wisp",
-  path: "/src/wisp",
+const parallax: Repo = {
+  id: "r-parallax",
+  name: "parallax",
+  path: "/src/parallax",
   createdAt: "2026-09-26T12:00:00Z",
 };
-const thread: Thread = { id: "t-1", repo: wisp.id, createdAt: "2026-09-26T12:00:01Z" };
+const thread: Thread = { id: "t-1", repo: parallax.id, createdAt: "2026-09-26T12:00:01Z" };
 const run = (id: string, prompt: string, status = "running") => ({ id, prompt, status });
 
 type Answer = (params: Record<string, unknown>) => RpcResponse<unknown>;
@@ -35,41 +67,70 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
 });
 const pickFolder = vi.fn<() => Promise<string | null>>();
 let capabilities: Capabilities;
-const nameThread = vi.fn<WispBridge["nameThread"]>(async () => ({}));
 
 beforeEach(() => {
   request.mockClear();
   capabilities = {};
-  nameThread.mockReset().mockResolvedValue({});
   localStorage.clear();
+  // Working starts folded (0075); these tests read the rows in it.
+  sectionsStore.set({ all: { working: true } });
+  accessPrefs.set(accessDefaults);
+  newThreadPrefs.set(newThreadDefaults);
+  // A test that ends with text in New Thread leaves it as a draft.
+  for (const d of drafts.get()) drafts.remove(d.id);
+  for (const key of Object.keys(threadDrafts.get())) threadDrafts.remove(key);
   answers = {
-    "thread/list": () => ({ result: { repos: [wisp], threads: [thread], seq: 7 } }),
+    "thread/list": () => ({ result: { repos: [parallax], threads: [thread], seq: 7 } }),
     "agent/list": () => ({
       result: { runs: [run(thread.id, "Fix the flaky test\nPlease.")], seq: 7 },
     }),
-    "project/list": () => ({ result: { projects: [], seq: 7 } }),
+    "orchestrator/list": () => ({ result: { orchestrators: [], seq: 7 } }),
   };
-  window.wisp = {
+  window.parallax = {
+    onProfile: () => () => {},
+    onConnectNotice: () => () => {},
+    onRelayUsage: () => () => {},
     platform: "darwin",
     setThemeSource: vi.fn(),
     connectionState: async () => ({
       status: "connected",
-      wispd: "0.1.0",
+      plxd: "0.1.0",
       protocol: 1,
       capabilities,
     }),
     onConnectionState: () => () => {},
+    onHostUpdate: () => () => {},
+    watch: fakeWatch(() => window.parallax),
     subscribe: () => () => {},
     request,
-    nameThread,
     pickFolder,
     hosts: async () => [],
     onHosts: () => () => {},
-  } as Partial<WispBridge> as WispBridge;
+    onConnect: () => () => {},
+    onDevices: () => () => {},
+    onAccessRequests: () => () => {},
+    onLocalName: (listener: (name: string) => void) => {
+      listener("This Mac");
+      return () => {};
+    },
+    setZoom: () => {},
+    openTargets: async () => [],
+    terminalApps: async () => [],
+    terminalApp: async () => null,
+    openTargetIcons: async () => ({}),
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
+  act(() => unmount());
+  vi.useRealTimers();
+});
 
 async function renderApp() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -88,18 +149,36 @@ const button = (name: string) =>
   [...document.querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
   );
-// A thread's row: its title, then its age.
+// A thread's row, by its title.
 const threadRow = (title: string) =>
-  [...document.querySelectorAll("#sidebar li > button:first-child")].find((b) =>
-    b.textContent?.startsWith(title),
+  [...document.querySelectorAll('#sidebar li[data-kind="thread"] > button:first-child')].find((b) =>
+    b.querySelector("[data-title]")?.textContent?.startsWith(title),
   );
+const openRowMenus = () =>
+  act(() => {
+    for (const menu of document.querySelectorAll('#sidebar li[data-kind="thread"] [role="menu"]'))
+      menu.dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
+  });
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 const heading = () => document.querySelector("h1")?.textContent;
+/** The newest notification's title and body. */
+const notice = () => {
+  const toast = document.querySelector('[aria-label="Notifications"] > div');
+  return toast && [toast.querySelector("span")?.textContent, toast.querySelector("p")?.textContent];
+};
 const crumbs = () =>
-  [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
+  // The trail, then the tab, on a page that has one, where it names the page instead of a crumb.
+  [
+    ...new Set(
+      [
+        ...document.querySelectorAll('[aria-label="Breadcrumb"] li'),
+        ...document.querySelectorAll('[aria-label="Open tabs"] [aria-selected="true"]'),
+      ].map((el) => el.textContent),
+    ),
+  ];
 
-// A main pane menu's option. The sidebar's Create Project dialog has a Repository menu too.
+// A main pane menu's option. The sidebar's Create orchestrator dialog has a Repository menu too.
 async function choose(label: string, option: string) {
   const item = [
     ...document.querySelectorAll<HTMLElement>(
@@ -124,25 +203,18 @@ async function pick(text: string) {
 const composer = () =>
   document.querySelector<TiptapEditorHTMLElement>('[role="textbox"][aria-label="Message"]')!;
 
-async function send(text: string) {
+/** Sends `text` in place of what the box holds, or without one, what it holds. */
+async function send(text?: string) {
   const box = composer();
-  act(() => void box.editor!.commands.setContent(text));
+  if (text !== undefined) act(() => void box.editor!.commands.setContent(text));
   await act(async () => {
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
   await settle();
 }
 
-test("lists threads by repository, titled by their first prompt line, with No Repo last", async () => {
-  await renderApp();
-  const groups = [...document.querySelectorAll('[aria-labelledby="repositories-heading"] > div')];
-  expect(groups.map((g) => g.querySelector("button")!.textContent)).toEqual(["wisp", "No Repo"]);
-  expect(groups[0]!.contains(threadRow("Fix the flaky test")!)).toBe(true);
-  expect(heading()).toBe("What should we build in wisp?");
-});
-
 test("New Thread adds a picked folder, starts there, and reuses its run id on a retry", async () => {
-  const other: Repo = { ...wisp, id: "", name: "other", path: "/src/other" };
+  const other: Repo = { ...parallax, id: "", name: "other", path: "/src/other" };
   pickFolder.mockResolvedValue("/src/other");
   answers["repo/add"] = (p) => ({ result: { repo: { ...other, id: p["id"] } } });
   await renderApp();
@@ -154,9 +226,9 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
   expect(heading()).toBe("What should we build in other?");
 
   // The first try fails, the retry with the same prompt succeeds.
-  answers["thread/start"] = () => ({ error: { code: -32000, message: "wispd is busy" } });
+  answers["thread/start"] = () => ({ error: { code: -32000, message: "plxd is busy" } });
   await send("Tidy the README");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("wispd is busy");
+  expect(notice()?.[1]).toBe("plxd is busy");
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
@@ -170,6 +242,7 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
     runId: expect.any(String),
     repo: calls("repo/add")[0]!["id"],
     prompt: "Tidy the README",
+    branchSlug: "tidy-the-readme",
   });
   expect(retry).toEqual(first);
   // The thread opens, and its row is in the sidebar under its repository.
@@ -180,9 +253,11 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
 // The transcript's message bubble, and the musing under it until the agent does anything.
 const bubble = () => document.querySelector('[role="log"] .bg-selected')?.textContent;
 const musing = () =>
-  document.querySelector('[role="log"] button[aria-expanded] .sr-only')?.textContent;
+  [...document.querySelectorAll('[role="log"] [data-slot=trace-line][data-status=running]')].find(
+    (line) => !line.closest("summary"),
+  )?.textContent;
 
-test("Send shows the prompt at once while wispd starts the thread, and a failure puts it back", async () => {
+test("Send shows the prompt at once while plxd starts the thread, and a failure puts it back", async () => {
   let answer: (response: RpcResponse<unknown>) => void = () => {};
   answers["thread/start"] = () =>
     new Promise((resolve) => (answer = resolve)) as unknown as RpcResponse<unknown>;
@@ -190,94 +265,27 @@ test("Send shows the prompt at once while wispd starts the thread, and a failure
   await send("Tidy the README");
   expect(heading()).toBeUndefined();
   expect(bubble()).toBe("Tidy the README");
-  expect(document.querySelector('[role="log"] [class*="opacity"]')).toBeNull();
+  expect(document.querySelector('[role="log"] .bg-selected')!.className).not.toContain("opacity");
   expect(musing()).toBe("Working");
-  expect(composer().getAttribute("aria-placeholder")).toBe("Starting thread…");
+  // The box looks as it did, and a send meanwhile stays in it.
+  expect(composer().getAttribute("aria-placeholder")).toBe(
+    "Build a feature, fix a bug, paste an image, use /skills, @files or threads",
+  );
+  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+  await send("And the CHANGELOG");
+  expect(composer().textContent).toBe("And the CHANGELOG");
+  expect(calls("thread/start")).toHaveLength(1);
+  act(() => void composer().editor!.commands.clearContent());
 
-  await act(async () => answer({ error: { code: -32000, message: "wispd is busy" } }));
+  await act(async () => answer({ error: { code: -32000, message: "plxd is busy" } }));
   await settle();
-  expect(heading()).toBe("What should we build in wisp?");
+  expect(heading()).toBe("What should we build in parallax?");
   expect(composer().textContent).toBe("Tidy the README");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("wispd is busy");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(notice()?.[1]).toBe("plxd is busy");
+  expect(document.querySelector("[data-status=running]")).toBeNull();
 });
 
-test("the loader under the prompt carries on as the thread opens and loads", async () => {
-  let answer = () => {};
-  answers["thread/start"] = (p) =>
-    new Promise((resolve) => {
-      answer = () =>
-        resolve({
-          result: {
-            thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
-            run: run(p["runId"] as string, "Tidy the README", "starting"),
-          },
-        });
-    }) as unknown as RpcResponse<unknown>;
-  // The opened thread's transcript is still on its way.
-  answers["agent/events"] = () => new Promise(() => {}) as unknown as RpcResponse<unknown>;
-  await renderApp();
-  await send("Tidy the README");
-  expect(musing()).toBe("Working");
-
-  await act(async () => answer());
-  await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
-  expect(bubble()).toBe("Tidy the README");
-  expect(musing()).toBe("Working");
-  // Its word carries on rather than fading in again.
-  expect(document.querySelector('[role="log"] .working-in')).toBeNull();
-});
-
-test("a thread started here that finished reopens with no loader while its transcript loads", async () => {
-  answers["thread/start"] = (p) => ({
-    result: {
-      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
-      run: run(p["runId"] as string, "Tidy the README", "starting"),
-    },
-  });
-  // Each run's log: it started, and it's already done. Then, once `held`, none comes.
-  let held = false;
-  answers["agent/events"] = (p) => {
-    if (held) return new Promise(() => {}) as unknown as RpcResponse<unknown>;
-    const done = {
-      ...run(p["runId"] as string, "Tidy the README", "completed"),
-      project: wisp.id,
-      backend: "claude",
-    };
-    const events = [
-      {
-        seq: 1,
-        time: "2026-09-26T12:05:00Z",
-        event: { kind: "agent.started", runId: done.id, run: done },
-      },
-    ];
-    const after = p["after"] as number;
-    return {
-      result: { events: events.filter((e) => e.seq > after), more: false },
-      logId: "log-1",
-    } as RpcResponse<unknown>;
-  };
-  await renderApp();
-  await send("Tidy the README");
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
-  expect(bubble()).toBe("Tidy the README");
-  expect(document.querySelector(".loader")).toBeNull();
-
-  // The host's list still says it's starting, but it isn't the thread just started anymore.
-  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
-  await settle();
-  held = true;
-  await act(async () => (threadRow("Tidy the README") as HTMLElement).click());
-  await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
-  expect(bubble()).toBe("Tidy the README");
-  expect(document.querySelector(".loader")).toBeNull();
-  expect(musing()).toBeUndefined();
-  expect(document.querySelector("main")!.textContent).not.toContain("Working");
-});
-
-test("a finished thread opens on its prompt with no loader while its transcript loads", async () => {
+test("a finished thread opens on Loading…, not its prompt alone, while its transcript loads", async () => {
   answers["agent/list"] = () => ({
     result: { runs: [run(thread.id, "Fix the flaky test", "completed")], seq: 7 },
   });
@@ -285,28 +293,155 @@ test("a finished thread opens on its prompt with no loader while its transcript 
   await renderApp();
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
   await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix the flaky test"]);
-  expect(bubble()).toBe("Fix the flaky test");
-  expect(document.querySelector(".loader")).toBeNull();
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+  expect(bubble()).toBeUndefined();
+  expect(document.querySelector("main")!.textContent).toContain("Loading…");
+  expect(document.querySelector("[data-status=running]")).toBeNull();
   expect(musing()).toBeUndefined();
 });
 
-test("No Repo starts a thread with no repo", async () => {
+test("leaving New Thread keeps its prompt as a draft atop the list, which reopens it (PLX-788)", async () => {
+  capabilities = { threadContext: { maxThreads: 8 } };
   answers["thread/start"] = (p) => ({
     result: {
-      thread: { id: p["runId"], repo: "scratch", createdAt: "2026-09-26T12:05:00Z" },
-      run: run(p["runId"] as string, "Hi"),
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Tidy the README"),
     },
   });
   await renderApp();
-  await choose("Repository", "No Repo");
-  expect(heading()).toBe("What should we work on without a repo?");
-  await send("Hi");
-  expect(calls("thread/start")).toEqual([{ runId: expect.any(String), prompt: "Hi" }]);
-  expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
+  const data = new DataTransfer();
+  dragThread(data, "local", thread.id);
+  act(() => {
+    document.querySelector("main .composer-shell")!.dispatchEvent(
+      Object.defineProperty(new Event("drop", { bubbles: true }), "dataTransfer", {
+        value: data,
+      }),
+    );
+    void composer().editor!.commands.insertContent("Tidy the README");
+  });
+  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
+  await settle();
+
+  const draft = () => document.querySelector<HTMLElement>('#sidebar li[data-kind="draft"] button');
+  const rows = document.querySelectorAll("#sidebar [data-row]");
+  expect(rows[0]!.getAttribute("data-kind")).toBe("draft");
+  expect(draft()!.textContent).toBe('parallaxDraft@"Fix the flaky test" Tidy the README');
+
+  await act(async () => draft()!.click());
+  await settle();
+  expect(draft()).toBeNull();
+  expect(heading()).toBe("What should we build in parallax?");
+  // With the thread's chip back where it was.
+  expect(composer().textContent).toBe("Fix the flaky test Tidy the README");
+
+  // Starting it leaves no draft behind.
+  await send();
+  expect(calls("thread/start")).toEqual([
+    expect.objectContaining({
+      prompt: '@"Fix the flaky test" Tidy the README',
+      threads: [thread.id],
+    }),
+  ]);
+  expect(draft()).toBeNull();
 });
 
-describe("with wispd's run options", () => {
+test("each New thread is its own draft, so several list at once, newest first, and X discards one with Undo (PLX-1150)", async () => {
+  await renderApp();
+  // The sidebar's mark opens a New thread at once.
+  const newThread = () => act(async () => button("Parallax")!.click());
+  const listed = () =>
+    [...document.querySelectorAll('#sidebar ul[aria-label="Drafts"] [data-title]')].map(
+      (t) => t.textContent,
+    );
+  act(() => void composer().editor!.commands.insertContent("First idea"));
+  await newThread();
+  await settle();
+  expect(composer().textContent).toBe("");
+  act(() => void composer().editor!.commands.insertContent("Second idea"));
+  await newThread();
+  await settle();
+  expect(listed()).toEqual(["Second idea", "First idea"]);
+
+  const first = document.querySelectorAll<HTMLElement>('#sidebar li[data-kind="draft"]')[1]!;
+  await act(async () => first.querySelector<HTMLElement>('[aria-label="Discard draft"]')!.click());
+  expect(listed()).toEqual(["Second idea"]);
+  await act(async () => button("Undo")!.click());
+  expect(listed()).toEqual(["First idea", "Second idea"]);
+});
+
+test("leaving a thread keeps its unsent prompt as a draft, which coming back restores (PLX-887)", async () => {
+  // Seen and finished, so their rows show no news in place of a draft.
+  const seen = {
+    repo: parallax.id,
+    createdAt: "2026-09-26T12:00:01Z",
+    seenAt: "2026-09-26T13:00:00Z",
+  };
+  const done = (id: string, prompt: string) => ({
+    ...run(id, prompt, "completed"),
+    updatedAt: "2026-09-26T12:30:00Z",
+  });
+  answers["thread/list"] = () => ({
+    result: {
+      repos: [parallax],
+      threads: [
+        { ...seen, id: "t-1" },
+        { ...seen, id: "t-2" },
+      ],
+      seq: 7,
+    },
+  });
+  answers["agent/list"] = () => ({
+    result: { runs: [done("t-1", "Fix the flaky test"), done("t-2", "Tidy the README")], seq: 7 },
+  });
+  await renderApp();
+  // Its Draft status and outline.
+  const drafted = (title: string) => {
+    const li = threadRow(title)!.closest("li")!;
+    const status = li.textContent!.includes("Draft");
+    expect(li.className.includes("ring-warning")).toBe(status);
+    return status;
+  };
+  const open = async (title: string) => {
+    await act(async () => (threadRow(title) as HTMLElement).click());
+    await settle();
+  };
+
+  await open("Fix the flaky test");
+  act(() => void composer().editor!.commands.setContent("Half a thought"));
+  await open("Tidy the README");
+  expect(composer().textContent).toBe("");
+  expect(drafted("Fix the flaky test")).toBe(true);
+
+  await open("Fix the flaky test");
+  expect(composer().textContent).toBe("Half a thought");
+  expect(drafted("Fix the flaky test")).toBe(false);
+
+  // An emptied box leaves no draft behind.
+  act(() => void composer().editor!.commands.setContent(""));
+  await open("Tidy the README");
+  expect(drafted("Fix the flaky test")).toBe(false);
+});
+
+test("a new thread asks plxd to forward its permission requests only when plxd advertises approvals (PLX-196)", async () => {
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: parallax.id, createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Hi"),
+    },
+  });
+  // An older plxd never gets the flag.
+  await renderApp();
+  await send("Hi");
+  act(() => unmount());
+  capabilities = { approvals: {} };
+  await renderApp();
+  await send("Hi");
+  const [older, newer] = calls("thread/start");
+  expect(older).not.toHaveProperty("approvals");
+  expect(newer).toMatchObject({ prompt: "Hi", approvals: true });
+});
+
+describe("with plxd's run options", () => {
   const started = (p: Record<string, unknown>) => ({
     result: {
       thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
@@ -333,33 +468,38 @@ describe("with wispd's run options", () => {
         : started(p);
     await renderApp();
     // No worker default yet, so Claude's choices, as the account chooser only offers Claude.
-    expect(control("Model: Claude Opus 5.5")).not.toBeNull();
-    expect(control("Access: Accept Edits")).not.toBeNull();
+    expect(document.querySelector('main [aria-label^="Model: Claude Opus 5.5"]')).not.toBeNull();
+    expect(control("Access: Auto-accept edits")).not.toBeNull();
 
+    // Plan is a legacy level, so the picker lists it only once Settings turns it on.
+    const levels = () =>
+      [...document.querySelectorAll('[role="menu"][aria-label="Access"] [role="menuitemradio"]')]
+        .map((o) => o.textContent)
+        .join("|");
+    await act(async () => (control("Access: Auto-accept edits") as HTMLElement).click());
+    expect(levels()).not.toContain("Plan");
+    await act(async () => (control("Access: Auto-accept edits") as HTMLElement).click());
+    act(() => accessPrefs.set({ legacyPlan: true }));
     await pick("Claude Fable 5.1");
     await pick("Plan");
     const effort = (level: string) =>
-      act(() => {
-        const slider = document.querySelector<HTMLInputElement>('main input[type="range"]')!;
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-          slider,
-          level,
-        );
-        slider.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-    effort("4");
+      act(() =>
+        [...document.querySelectorAll<HTMLElement>('main [aria-label="Reasoning"] button')]
+          .find((b) => b.textContent === level)!
+          .click(),
+      );
+    effort("Max");
     await send("Plan the settings split");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-      "the claude backend can't run with effort max",
-    );
-    effort("3");
+    expect(notice()?.[1]).toBe("the claude backend can't run with effort max");
+    effort("Extra high");
     await send("Plan the settings split");
 
     const [refused, retry] = calls("thread/start");
     expect(refused).toEqual({
       runId: expect.any(String),
-      repo: wisp.id,
+      repo: parallax.id,
       prompt: "Plan the settings split",
+      branchSlug: "plan-the-settings-split",
       model: "claude-fable-5-1",
       effort: "max",
       permission: "plan",
@@ -368,129 +508,92 @@ describe("with wispd's run options", () => {
     expect(retry!["runId"]).not.toBe(refused!["runId"]);
   });
 
-  test("an OpenAI key default offers Codex's models and no plan", async () => {
-    answers["accounts/defaults/get"] = () => ({ result: { worker: { kind: "key", id: "k-1" } } });
-    answers["accounts/keys/list"] = () => ({
-      result: { accounts: [{ id: "k-1", provider: "openai", label: "Work" }] },
-    });
+  test("Diagnose a problem opens a New thread on Full access with the doctor's prompt", async () => {
     await renderApp();
-    expect(control("Model: GPT-6 Astra")).not.toBeNull();
-    expect(document.querySelector('main [aria-label^="Access"]')).toBeNull();
+    act(
+      () =>
+        void window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", metaKey: true })),
+    );
+    await settle();
+    const row = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((o) =>
+      o.textContent?.startsWith("Diagnose a problem"),
+    );
+    await act(async () => row?.click());
+    await settle();
 
-    await send("Tidy the README");
-    expect(calls("thread/start")).toEqual([
-      {
-        runId: expect.any(String),
-        repo: wisp.id,
-        prompt: "Tidy the README",
-        model: "gpt-6-astra",
-        effort: "high",
-        permission: "edit",
-      },
-    ]);
+    expect(control("Access: Full access")).not.toBeNull();
+    expect(document.querySelector("main .ProseMirror")?.textContent).toContain(
+      "npx -y plx-cli@latest doctor",
+    );
+    expect(composer().contains(document.activeElement)).toBe(true);
+    await send();
+    expect(calls("thread/start")[0]).toMatchObject({
+      permission: "bypass",
+      prompt: expect.stringContaining("What went wrong:"),
+    });
+  });
+
+  test("New Thread starts on the repository's own defaults (Settings > Projects)", async () => {
+    answers["thread/start"] = (p) => started(p);
+    setRepoPrefs(localId, parallax.id, {
+      model: { provider: "claude", id: "claude-fable-5-1" },
+      effort: "low",
+    });
+    try {
+      await renderApp();
+      await send("Use the repository's defaults");
+    } finally {
+      setRepoPrefs(localId, parallax.id, { model: undefined, effort: undefined });
+    }
+    expect(calls("thread/start")[0]).toMatchObject({
+      model: "claude-fable-5-1",
+      effort: "low",
+    });
   });
 });
 
-test("without run options, New Thread offers no model, effort, or access", async () => {
-  await renderApp();
-  expect(
-    document.querySelector('main :is([aria-label^="Model"], [aria-label^="Reasoning"])'),
-  ).toBeNull();
-  expect(calls("accounts/defaults/get")).toEqual([]);
-});
-
-test("a thread starts on the branch its prompt was named for, and takes the name as its title", async () => {
-  nameThread.mockResolvedValue({ title: "Fix flaky test", slug: "fix-flaky-test" });
+test("A send while the picked computer adds the repository waits, then starts the thread there (PLX-905)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  const added: Repo = { ...parallax, id: "r-mini-parallax" };
+  let finish: (answer: RpcResponse<unknown>) => void = () => {};
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini" && method === "thread/list")
+      return { result: { repos: [], threads: [], seq: 1 } };
+    if (host === "ssh-mini" && method === "repo/add")
+      return new Promise((resolve) => (finish = resolve));
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
   answers["thread/start"] = (p) => ({
     result: {
-      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
-      run: run(p["runId"] as string, "the flaky test is flaky, please fix it"),
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
     },
   });
   await renderApp();
-  await send("the flaky test is flaky, please fix it");
-  expect(calls("thread/start")).toEqual([
-    {
-      runId: expect.any(String),
-      prompt: "the flaky test is flaky, please fix it",
-      repo: wisp.id,
-      branchSlug: "fix-flaky-test",
-    },
-  ]);
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix flaky test"]);
-});
-
-test("a thread can start with an image alone, titled Image, and nothing to name it by", async () => {
-  capabilities = {
-    promptImages: { maxImages: 10, maxImageBytes: 5_242_880, maxTotalBytes: 6_291_456 },
-  };
-  vi.stubGlobal("createImageBitmap", async () => ({ width: 1, height: 1, close() {} }));
-  answers["thread/start"] = (p) => ({
-    result: {
-      thread: { id: p["runId"], repo: wisp.id, createdAt: "2026-09-26T12:05:00Z" },
-      run: run(p["runId"] as string, ""),
-    },
-  });
-  await renderApp();
-  const data = new DataTransfer();
-  data.items.add(new File([Uint8Array.of(0xff, 0xd8, 0xff)], "a.jpg", { type: "image/jpeg" }));
-  act(() => {
-    composer().dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
-  });
-  await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
-  await send("");
-  expect(calls("thread/start")).toEqual([
-    {
-      runId: expect.any(String),
-      prompt: "",
-      images: [{ mediaType: "image/jpeg", data: "/9j/" }],
-      repo: wisp.id,
-    },
-  ]);
-  expect(nameThread).not.toHaveBeenCalled();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Image"]);
-  vi.unstubAllGlobals();
-});
-
-test("a folder that isn't a repository says so under the composer", async () => {
-  pickFolder.mockResolvedValue("/tmp/notes");
-  answers["repo/add"] = () => ({
-    error: {
-      code: -32000,
-      message: "/tmp/notes is not the top folder of a git repository: it has no .git.",
-      data: { kind: "notARepository" },
-    },
-  });
-  await renderApp();
-  await choose("Repository", "Add repository…");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-    "/tmp/notes is not the top folder of a git repository: it has no .git.",
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
+  // Picked at once, with a spinner while it's set up.
+  expect(control("Runs on: mac mini, New worktree")?.getAttribute("aria-busy")).toBe("true");
+  await send("Fix it");
+  // Not on the computer being left.
+  expect(calls("thread/start")).toEqual([]);
+  await act(async () => finish({ result: { repo: added } }));
+  await settle();
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "thread/start",
+    expect.objectContaining({ prompt: "Fix it", repo: added.id }),
   );
-  expect(heading()).toBe("What should we build in wisp?");
-});
-
-test("the row menu archives into Archived, and unarchives back", async () => {
-  answers["thread/archive"] = (p) => ({
-    result: { thread: { ...thread, archived: p["archived"] } },
-  });
-  await renderApp();
-  await act(async () => button("Archive")!.click());
-  expect(calls("thread/archive")).toEqual([{ runId: thread.id, archived: true }]);
-  const archived = document.querySelector("details")!;
-  expect(archived.textContent).toContain("Fix the flaky test");
-
-  await act(async () => button("Unarchive")!.click());
-  expect(calls("thread/archive").at(-1)).toEqual({ runId: thread.id, archived: false });
-  expect(document.querySelector("details")).toBeNull();
 });
 
 test("Delete asks first, and only deletes once confirmed", async () => {
   answers["thread/delete"] = () => ({ result: {} });
   await renderApp();
   await act(async () => button("Thread actions")!.click());
+  openRowMenus();
   await act(async () => button("Delete…")!.click());
-  const dialog = document.querySelector<HTMLDialogElement>(
-    '[aria-labelledby="delete-thread-title"]',
+  const dialog = [...document.querySelectorAll("dialog")].find((d) =>
+    d.querySelector("h2")?.textContent?.startsWith("Delete this"),
   )!;
   expect(dialog.open).toBe(true);
   expect(dialog.textContent).toContain("Fix the flaky test");
@@ -502,8 +605,22 @@ test("Delete asks first, and only deletes once confirmed", async () => {
   await act(async () => button("Delete…")!.click());
   await act(async () => button("Delete")!.click());
   await settle();
-  expect(calls("thread/delete")).toEqual([{ runId: thread.id }]);
+  // Held back, out of the list, while its toast's Undo can bring it back.
   expect(dialog.open).toBe(false);
+  expect(threadRow("Fix the flaky test")).toBeUndefined();
+  expect(calls("thread/delete")).toEqual([]);
+  await act(async () => button("Undo")!.click());
+  expect(threadRow("Fix the flaky test")).toBeDefined();
+  expect(calls("thread/delete")).toEqual([]);
+
+  // Once Undo can't take it back, it goes.
+  await act(async () => button("Thread actions")!.click());
+  openRowMenus();
+  await act(async () => button("Delete…")!.click());
+  await act(async () => button("Delete")!.click());
+  await act(async () => flushToasts());
+  await settle();
+  expect(calls("thread/delete")).toEqual([{ runId: thread.id }]);
   expect(threadRow("Fix the flaky test")).toBeUndefined();
 });
 
@@ -515,7 +632,9 @@ describe("a host with no usable default account for threads", () => {
     answers["accounts/keys/list"] = () => ({ result: { accounts: keys } });
   };
   const chooserLabels = () =>
-    [...document.querySelectorAll("fieldset label")].map((l) => l.textContent);
+    [...document.querySelector("legend")!.closest("fieldset")!.querySelectorAll("label")].map(
+      (l) => l.textContent,
+    );
   // `thread/start` fails with `failure` until a default is set.
   let failure: ErrorKind;
   beforeEach(() => {
@@ -545,7 +664,7 @@ describe("a host with no usable default account for threads", () => {
     await renderApp();
     await send("Tidy the README");
 
-    const chooser = document.querySelector("fieldset")!;
+    const chooser = document.querySelector("legend")!.closest("fieldset")!;
     expect(chooser.querySelector("legend")?.textContent).toContain(
       "Choose an account to run this thread",
     );
@@ -563,94 +682,6 @@ describe("a host with no usable default account for threads", () => {
     ]);
     const [first, retry] = calls("thread/start");
     expect(retry).toEqual(first);
-    expect(crumbs()).toEqual(["This Mac", "wisp", "Tidy the README"]);
+    expect(crumbs()).toEqual(["This Mac", "parallax", "Tidy the README"]);
   });
-
-  test("a default naming a removed key account asks again", async () => {
-    failure = "accountNotFound";
-    accounts([cli("claude", true)], [key("Work", "anthropic")]);
-    await renderApp();
-    await send("Hi");
-    expect(chooserLabels()).toEqual(["Claude Code", "Work (API key)"]);
-  });
-
-  test("uses the only account there is, and says so", async () => {
-    accounts([cli("claude", true), cli("codex", true)], [key("Other", "openai")]);
-    await renderApp();
-    await send("Hi");
-    expect(document.querySelector("fieldset")).toBeNull();
-    expect(calls("accounts/defaults/set")).toEqual([
-      { role: "worker", account: { kind: "subscription", backend: "claude" } },
-    ]);
-    const [first, retry] = calls("thread/start");
-    expect(retry).toEqual(first);
-    expect(crumbs()).toEqual(["This Mac", "wisp", "Hi"]);
-    expect(document.querySelector("main")!.textContent).toContain(
-      "Using Claude Code for new threads on this host.",
-    );
-  });
-
-  test("shows wispd's error when it can't list accounts", async () => {
-    accounts([]);
-    answers["accounts/list"] = () => ({ error: { code: -32601, message: "Method not found" } });
-    await renderApp();
-    await send("Hi");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe("Method not found");
-  });
-
-  test("says how to add one when there is none", async () => {
-    accounts([cli("claude", false)]);
-    await renderApp();
-    await send("Hi");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-      "No account can run this thread yet. Sign in to Claude Code, or add an API key, then try again.",
-    );
-    expect(calls("accounts/defaults/set")).toEqual([]);
-  });
-});
-
-test("known error kinds read plainly, and unknown ones show wispd's message", async () => {
-  const alert = () => document.querySelector('[role="alert"]')?.textContent;
-  answers["thread/start"] = () => ({
-    error: { code: -32000, message: "no repo entry has id r-9", data: { kind: "repoNotFound" } },
-  });
-  await renderApp();
-  await send("Hi");
-  expect(alert()).toBe("That repository isn't in wisp anymore. Choose another one.");
-
-  answers["thread/start"] = () => ({
-    // A kind from a newer wispd.
-    error: {
-      code: -32000,
-      message: "wispd is shy today",
-      data: { kind: "somethingNew" as ErrorKind },
-    },
-  });
-  await send("Hi");
-  expect(alert()).toBe("wispd is shy today");
-});
-
-test("an open thread deleted by another client goes back to New Thread", async () => {
-  let deliver: (message: SubscriptionMessage) => void = () => {};
-  window.wisp.subscribe = (_host, _params, listener) => {
-    deliver = listener;
-    return () => {};
-  };
-  await renderApp();
-  await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
-  expect(crumbs()).toEqual(["This Mac", "wisp", "Fix the flaky test"]);
-
-  await act(async () =>
-    deliver({
-      type: "event",
-      event: {
-        subscription: "s-1",
-        seq: 8,
-        time: "2026-09-26T12:06:00Z",
-        event: { kind: "thread.deleted", runId: thread.id, repo: wisp.id },
-      },
-    }),
-  );
-  await settle();
-  expect(crumbs()).toEqual(["This Mac", "wisp", "New thread"]);
 });

@@ -1,0 +1,15 @@
+# Synthetic, in OpenCode 2.0.22's shapes (0040): its model and mode are config options, it leaves a tool call open at the turn's end, and it answers the prompt with the turn's usage.
+@read
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"agentInfo":{"name":"OpenCode","version":"2.0.22"},"authMethods":[{"id":"opencode-login","description":"Run `opencode auth login` in the terminal"}]}}
+@read
+{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ses_1","configOptions":[{"id":"model","category":"model","currentValue":"opencode/fledge-alpha-free","options":[{"value":"opencode/big-pickle","name":"Big Pickle"}]},{"id":"mode","category":"mode","currentValue":"build","options":[{"value":"build","name":"Build"},{"value":"plan","name":"Plan"}]}]}}
+@read
+@read
+{"jsonrpc":"2.0","id":3,"result":{}}
+{"jsonrpc":"2.0","id":4,"result":{}}
+@read
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"shell","kind":"execute","status":"in_progress","rawInput":{"command":"ls"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"usage_update","used":1200,"size":200000,"cost":{"amount":0,"currency":"USD"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"planned"}}}}
+{"jsonrpc":"2.0","id":5,"result":{"stopReason":"end_turn","usage":{"inputTokens":100,"outputTokens":20,"thoughtTokens":10,"totalTokens":130}}}
+@eof

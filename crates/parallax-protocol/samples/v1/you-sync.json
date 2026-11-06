@@ -1,0 +1,69 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "memory/syncList",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "entries": [
+        {
+          "path": "memory/gotcha/ci.md",
+          "hash": "",
+          "clock": { "nA1": 2 },
+          "machine": { "id": "nA1", "name": "Studio" },
+          "writtenAt": "2026-10-23T18:00:00Z",
+          "deleted": true
+        },
+        {
+          "path": "memory/preference/tabs.md",
+          "hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "clock": { "nA1": 1, "nB2": 3 },
+          "machine": { "id": "nB2", "name": "MacBook" },
+          "writtenAt": "2026-10-23T18:05:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "memory/syncRead",
+    "params": { "path": "memory/preference/tabs.md" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "content": "Kind: preference\nTitle: Indent with tabs\nSource: user\nDate: 2026-10-23\nWriter: user\n\nTabs, width 4.\n"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "memory/list",
+    "params": { "scope": { "kind": "you" } }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "files": [
+        {
+          "path": "memory/preference/tabs.md",
+          "size": 88,
+          "modifiedAt": "2026-10-23T18:05:01Z",
+          "kind": "preference",
+          "title": "Indent with tabs",
+          "source": "user",
+          "date": "2026-10-23",
+          "writer": "user",
+          "machine": { "id": "nB2", "name": "MacBook" }
+        }
+      ]
+    }
+  }
+]

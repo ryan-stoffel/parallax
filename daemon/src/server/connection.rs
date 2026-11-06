@@ -5,12 +5,16 @@
 //! client. Every reply goes through a bounded queue to the writer. The writer empties that queue
 //! before it writes any event, and it takes events from the event log through each
 //! subscription's cursor rather than from a queue of its own, so a subscriber that lags reads from
-//! the log until it catches up.
+//! the log until it catches up. A subscriber that falls behind the log's retention ends with
+//! `events/resync` when its client declared `resyncNotice`; otherwise the connection closes. Before
+//! plxd restarts for an update, the writer sends `host/updating` once `initialize` is answered.
 //!
 //! When the client closes its side, or the server starts shutting down, the reader stops, and the
 //! connection closes once every request it read has been answered. When the client is gone, has
-//! been silent too long, stops reading what wispd writes, or sends an oversized frame, the
+//! been silent too long, stops reading what plxd writes, or sends an oversized frame, the
 //! connection closes at once and its requests are cancelled.
+//!
+//! Each connection's end gets one line in `plxd.log`, whose format [`Closed::log`] documents.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -20,6 +24,20 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::{FutureExt, SinkExt, StreamExt};
+use parallax_protocol::framing::{FrameCodec, FrameError};
+use parallax_protocol::jsonrpc::{
+    CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
+    Response,
+};
+use parallax_protocol::legacy;
+use parallax_protocol::methods::{
+    CancelRequest, DeviceClose, DeviceSend, EventsEvent, EventsResync, HostUpdating, Initialize,
+    NotificationMethod, RequestMethod, TerminalDetach, TerminalResize, TerminalWrite,
+};
+use parallax_protocol::{
+    ErrorKind, EventsResyncParams, HostUpdatingParams, TerminalKey, TerminalResizeParams,
+    TerminalWriteParams,
+};
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{Semaphore, mpsc};
@@ -28,33 +46,150 @@ use tokio::time::{self, Instant};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, debug_span, error, info, warn};
-use wisp_protocol::framing::{FrameCodec, FrameError};
-use wisp_protocol::jsonrpc::{
-    CancelRequestParams, ErrorObject, INVALID_REQUEST, Message, Notification, Request, RequestId,
-    Response,
-};
-use wisp_protocol::methods::{
-    CancelRequest, EventsEvent, Initialize, NotificationMethod, RequestMethod,
-};
-use wisp_protocol::{ErrorKind, EventsEventParams};
 
 use super::Daemon;
 use crate::event_log::EventLog;
 use crate::logging::{untrusted, untrusted_id};
-use crate::methods::{self, Context, Cursors, Reply, Session};
+use crate::methods::{self, Context, Cursors, Delivery, Reply, Session, read_only};
 
 type InFlight = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
-/// Serves one connection until it closes. `closing` closes it at once; `stop_reading` stops
-/// reading and closes it after the requests already read are answered.
+/// How a client reached plxd. An SSH client comes through `plxd attach` and the socket, so it's
+/// [`Route::Local`] here. Its desktop's own log says `ssh`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Local,
+    Lan,
+    Tailnet,
+    Relay,
+}
+
+impl Route {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Lan => "lan",
+            Self::Tailnet => "tailnet",
+            Self::Relay => "relay",
+        }
+    }
+}
+
+/// Why a connection ended, as [`Closed::log`] writes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reason {
+    /// The client closed its side cleanly: EOF, or a WebSocket close frame on the remote listener.
+    ClientClosed,
+    /// A remote client's transport ended without a WebSocket close frame.
+    TransportClosed,
+    /// Reading from the client failed.
+    ReadError,
+    /// Writing to the client failed.
+    WriteError,
+    /// A write made no progress until it timed out.
+    ClientStoppedReading,
+    /// Nothing arrived for `idle_timeout`.
+    IdleTimeout,
+    /// The client sent a frame over the limit.
+    OversizedFrame,
+    /// A subscriber without `resyncNotice` fell behind the event log's retention.
+    SubscriberBehind,
+    /// plxd is stopping. The lines before it say why, and the next `listening` has its version.
+    Shutdown,
+    /// plxd closed it while running: a revoked session, or the remote setting going off.
+    HostClosed,
+    /// The `relay` setting went off, which ends its streams.
+    RelayOff,
+    /// The relay closed the stream for its own reason, in `close_code` and `close_reason`.
+    RelayClosed,
+}
+
+impl Reason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientClosed => "client_closed",
+            Self::TransportClosed => "transport_closed",
+            Self::ReadError => "read_error",
+            Self::WriteError => "write_error",
+            Self::ClientStoppedReading => "client_stopped_reading",
+            Self::IdleTimeout => "idle_timeout",
+            Self::OversizedFrame => "oversized_frame",
+            Self::SubscriberBehind => "subscriber_behind",
+            Self::Shutdown => "shutdown",
+            Self::HostClosed => "host_closed",
+            Self::RelayOff => "relay_off",
+            Self::RelayClosed => "relay_closed",
+        }
+    }
+}
+
+/// A connection that ended and why. The listener that accepted it adds what only it knows, then
+/// calls [`Closed::log`].
+#[derive(Debug)]
+pub(crate) struct Closed {
+    pub(crate) session: Option<Session>,
+    pub(crate) reason: Reason,
+    /// The transport's error, when there was one. Never holds request data.
+    pub(crate) error: Option<String>,
+    /// The relay's close code and reason for this stream, on [`Route::Relay`].
+    pub(crate) close_code: Option<u16>,
+    pub(crate) close_reason: Option<String>,
+    pub(crate) lived: Duration,
+}
+
+impl Closed {
+    /// Writes the connection's one line. Counting client disconnects by reason and route reads
+    /// it, so its message and field names are stable:
+    ///
+    /// ```text
+    /// client disconnected route=relay reason=relay_closed lived_ms=660123 close_code=4409 close_reason="replaced" error="..." client="parallax" protocol=1
+    /// ```
+    ///
+    /// `grep 'client disconnected' plxd.log`. `route` is a [`Route`] and `reason` a [`Reason`].
+    /// `close_code`, `close_reason`, and `error` appear only when there's one. A connection that
+    /// ended before `initialize` is no client session, so it logs at debug instead. Client text is
+    /// quoted and cut by [`untrusted`], and no field holds a token.
+    pub(crate) fn log(&self, route: Route) {
+        let Some(session) = &self.session else {
+            return debug!(
+                route = %route.as_str(),
+                reason = %self.reason.as_str(),
+                "disconnected before initialize"
+            );
+        };
+        info!(
+            route = %route.as_str(),
+            reason = %self.reason.as_str(),
+            lived_ms = u64::try_from(self.lived.as_millis()).unwrap_or(u64::MAX),
+            close_code = self.close_code,
+            close_reason = self.close_reason.as_deref(),
+            error = self.error.as_deref(),
+            client = ?untrusted(&session.client.name),
+            protocol = session.protocol,
+            "client disconnected"
+        );
+    }
+}
+
+/// Serves one connection until it closes, and says why it did. `closing` closes it at once;
+/// `stop_reading` stops reading and closes it after the requests already read are answered.
+/// `over_connect` says it came through Parallax Connect's listener and its `whois` check
+/// ([`Context::over_connect`]). `read_only` says its device is limited to reads
+/// ([`Context::read_only`]), and `over_relay` that it came through a relay stream
+/// ([`Context::over_relay`]).
 pub(crate) async fn serve<S>(
     stream: S,
     daemon: Arc<Daemon>,
     stop_reading: CancellationToken,
     closing: CancellationToken,
-) where
+    over_connect: bool,
+    read_only: bool,
+    over_relay: bool,
+) -> Closed
+where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
+    let started = Instant::now();
     let (read, write) = tokio::io::split(stream);
     let (replies, queue) = mpsc::channel(daemon.limits.outbound_queue);
     let reader = Reader {
@@ -65,8 +200,14 @@ pub(crate) async fn serve<S>(
         session: None,
         in_flight: InFlight::default(),
         handlers: JoinSet::new(),
+        stopped_reading: stop_reading.child_token(),
         stop_reading: stop_reading.clone(),
         closing: closing.clone(),
+        over_connect,
+        read_only,
+        reason: Reason::HostClosed,
+        error: None,
+        over_relay,
     };
     let stall = Stall {
         timeout: daemon.limits.idle_timeout,
@@ -76,19 +217,28 @@ pub(crate) async fn serve<S>(
         FramedWrite::new(write, FrameCodec::new()),
         queue,
         Arc::clone(&daemon.log),
+        daemon.self_update.update_notice.clone(),
         closing,
         stall,
     );
     debug!("connected");
-    let (session, ()) = tokio::join!(reader.run(), writer);
-    if let Some(session) = session {
-        info!(
-            client = ?untrusted(&session.client.name),
-            protocol = session.protocol,
-            "disconnected"
-        );
-    } else {
-        debug!("disconnected before initialize");
+    let ((session, read_reason, read_error), written) = tokio::join!(reader.run(), writer);
+    // The reader sees only `closing` when the writer gave up first, so the writer knows why.
+    let (reason, error) = match written {
+        Some((reason, error)) if read_reason == Reason::HostClosed => (reason, error),
+        _ => (read_reason, read_error),
+    };
+    Closed {
+        session,
+        reason: if reason == Reason::HostClosed && stop_reading.is_cancelled() {
+            Reason::Shutdown
+        } else {
+            reason
+        },
+        error,
+        close_code: None,
+        close_reason: None,
+        lived: started.elapsed(),
     }
 }
 
@@ -108,12 +258,23 @@ struct Reader<S> {
     handlers: JoinSet<()>,
     permits: Arc<Semaphore>,
     stop_reading: CancellationToken,
+    /// Cancelled once this connection stops reading, for any reason, so a request that waits
+    /// on something else ends instead of holding the drain open ([`Context::stopped_reading`]).
+    stopped_reading: CancellationToken,
     closing: CancellationToken,
+    over_connect: bool,
+    read_only: bool,
+    /// Why reading stopped. [`Reason::HostClosed`] until something else ends it.
+    reason: Reason,
+    error: Option<String>,
+    over_relay: bool,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
-    async fn run(mut self) -> Option<Session> {
-        match self.read().await {
+    async fn run(mut self) -> (Option<Session>, Reason, Option<String>) {
+        let end = self.read().await;
+        self.stopped_reading.cancel();
+        match end {
             End::Drain => self.drain().await,
             End::Close => self.closing.cancel(),
         }
@@ -122,7 +283,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             cancel.cancel();
         }
         self.handlers.shutdown().await;
-        self.session.take()
+        (self.session.take(), self.reason, self.error.take())
     }
 
     async fn read(&mut self) -> End {
@@ -132,13 +293,17 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             let next = tokio::select! {
                 biased;
                 () = self.closing.cancelled() => return End::Close,
-                () = self.stop_reading.cancelled() => return End::Drain,
+                () = self.stop_reading.cancelled() => {
+                    self.reason = Reason::Shutdown;
+                    return End::Drain;
+                }
                 Some(joined) = self.handlers.join_next() => {
                     log_join(joined);
                     continue;
                 }
                 () = time::sleep_until(deadline) => {
                     info!(?idle, "closing a connection that has been silent too long");
+                    self.reason = Reason::IdleTimeout;
                     return End::Close;
                 }
                 next = self.frames.next() => next,
@@ -147,6 +312,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             let frame = match next {
                 None => {
                     debug!("the client closed its side");
+                    self.reason = Reason::ClientClosed;
                     return End::Drain;
                 }
                 Some(Ok(frame)) => frame,
@@ -155,10 +321,13 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
                         max_frame_bytes,
                         "closing a connection that sent an oversized frame"
                     );
+                    self.reason = Reason::OversizedFrame;
                     return End::Close;
                 }
                 Some(Err(error)) => {
                     debug!(%error, "reading failed");
+                    self.reason = Reason::ReadError;
+                    self.error = Some(error.to_string());
                     return End::Close;
                 }
             };
@@ -192,7 +361,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             Ok(Message::Response(response)) => {
                 debug!(
                     id = ?response.id.as_ref().map(untrusted_id),
-                    "ignored a response; wispd sends no requests"
+                    "ignored a response; plxd sends no requests"
                 );
                 true
             }
@@ -206,10 +375,18 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         }
     }
 
-    async fn request(&mut self, request: Request) -> bool {
+    async fn request(&mut self, mut request: Request) -> bool {
         if self.session.is_none() {
             return self.before_initialize(request).await;
         }
+        let old_client = self.session.as_ref().is_some_and(|session| session.legacy);
+        // 0093's old method names run as the new ones: an old client's `project/*` is an
+        // orchestrator's, and a new client's is a Project's.
+        if let Some(new) = legacy::new_method(&request.method, old_client) {
+            new.clone_into(&mut request.method);
+        }
+        // For a client from before 0093, the method its reply's names depend on.
+        let legacy = old_client.then(|| request.method.clone());
         if lock(&self.in_flight).contains_key(&request.id) {
             let error = ErrorObject::new(
                 INVALID_REQUEST,
@@ -228,9 +405,22 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         };
         let cancel = CancellationToken::new();
         lock(&self.in_flight).insert(request.id.clone(), cancel.clone());
+        let listed = crate::commands::keeps_receipt(&request.method);
+        // A listed method runs on a task the connection never cancels or aborts (0052).
+        let (cancel, stopped_reading) = if listed {
+            (CancellationToken::new(), CancellationToken::new())
+        } else {
+            (cancel, self.stopped_reading.clone())
+        };
         let context = Context {
             daemon: Arc::clone(&self.daemon),
             cancel,
+            stopped_reading,
+            command_id: None,
+            replies: self.replies.clone(),
+            over_connect: self.over_connect,
+            read_only: self.read_only,
+            over_relay: self.over_relay,
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -239,58 +429,120 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             id = ?untrusted_id(&request.id),
             method = ?untrusted(&request.method)
         );
-        self.handlers.spawn(
-            async move {
-                let id = request.id.clone();
-                let dispatched = AssertUnwindSafe(methods::dispatch(context, request))
-                    .catch_unwind()
-                    .await;
-                let reply = dispatched.unwrap_or_else(|_| {
-                    error!("the request's handler panicked");
-                    let error = ErrorObject::internal_error("the request failed unexpectedly");
-                    Reply::Response(Response::error(Some(id.clone()), error))
-                });
-                // Out of the map before the answer is queued, so a late cancel can't produce a
-                // second answer.
-                lock(&in_flight).remove(&id);
-                debug!("answered");
-                let _ = replies.send(reply).await;
-                drop(permit);
-            }
-            .instrument(span),
-        );
+        let id = request.id.clone();
+        if listed {
+            let work = self.daemon.commands.spawn(async move {
+                let _permit = permit;
+                let reply = dispatch_reply(context, request).await;
+                in_names(reply, legacy.as_deref())
+            });
+            self.handlers.spawn(
+                async move {
+                    let reply = work.await.unwrap_or_else(|_| panic_reply(&id));
+                    lock(&in_flight).remove(&id);
+                    debug!("answered");
+                    let _ = replies.send(reply).await;
+                }
+                .instrument(span),
+            );
+        } else {
+            self.handlers.spawn(
+                async move {
+                    let reply = dispatch_reply(context, request).await;
+                    let reply = in_names(reply, legacy.as_deref());
+                    lock(&in_flight).remove(&id);
+                    debug!("answered");
+                    let _ = replies.send(reply).await;
+                    drop(permit);
+                }
+                .instrument(span),
+            );
+        }
         true
     }
 
     // Requests before `initialize` run in order, right here, so a request pipelined behind
     // `initialize` already sees the connection initialized.
     async fn before_initialize(&mut self, request: Request) -> bool {
-        let response = if request.method == Initialize::NAME {
+        let reply = if request.method == Initialize::NAME {
             match methods::initialize(&self.daemon, &request) {
                 Ok((session, result)) => {
+                    let resync_notice = session.resync_notice;
                     self.session = Some(session);
-                    methods::success(request.id, &result)
+                    Reply::Initialized {
+                        response: methods::success(request.id, &result),
+                        resync_notice,
+                    }
                 }
-                Err(error) => Response::error(Some(request.id), error),
+                Err(error) => Reply::Response(Response::error(Some(request.id), error)),
             }
         } else {
-            let error = ErrorObject::wisp(
+            let error = ErrorObject::parallax(
                 ErrorKind::NotInitialized,
                 "initialize must be the first request",
             );
-            Response::error(Some(request.id), error)
+            Reply::Response(Response::error(Some(request.id), error))
         };
-        self.reply(Reply::Response(response)).await
+        self.reply(reply).await
     }
 
     fn notification(&self, notification: &Notification) {
-        if notification.method != CancelRequest::NAME {
-            debug!(
-                method = ?untrusted(&notification.method),
-                "ignored a notification"
-            );
-            return;
+        if self.read_only && !read_only::allows_notification(&notification.method) {
+            let method = untrusted(&notification.method);
+            return debug!(?method, "ignored a read-only device's notification");
         }
+        // A terminal's input is written here, so it reaches the terminal in the order it was
+        // sent, and a detach lands before a later open.
+        let terminals = &self.daemon.terminals;
+        let initialized = self.session.is_some();
+        match notification.method.as_str() {
+            TerminalWrite::NAME if initialized => {
+                if let Ok(TerminalWriteParams {
+                    thread_id,
+                    terminal_id,
+                    data,
+                }) = notification.params()
+                {
+                    terminals.write(thread_id, terminal_id, data);
+                }
+            }
+            TerminalResize::NAME if initialized => {
+                if let Ok(TerminalResizeParams {
+                    thread_id,
+                    terminal_id,
+                    cols,
+                    rows,
+                }) = notification.params()
+                {
+                    terminals.resize(thread_id, terminal_id, cols, rows);
+                }
+            }
+            TerminalDetach::NAME if initialized => {
+                if let Ok(TerminalKey {
+                    thread_id,
+                    terminal_id,
+                }) = notification.params()
+                {
+                    terminals.detach(thread_id, terminal_id, &self.replies);
+                }
+            }
+            DeviceSend::NAME if initialized => {
+                if let Ok(params) = notification.params() {
+                    self.daemon.devices.send(&self.replies, params);
+                }
+            }
+            DeviceClose::NAME if initialized => {
+                if let Ok(params) = notification.params() {
+                    self.daemon.devices.close(&self.replies, &params);
+                }
+            }
+            CancelRequest::NAME => self.cancel(notification),
+            method => debug!(method = ?untrusted(method), "ignored a notification"),
+        }
+    }
+
+    /// `$/cancelRequest`: cancels the request in flight with its id.
+    fn cancel(&self, notification: &Notification) {
         match notification.params::<<CancelRequest as NotificationMethod>::Params>() {
             Ok(CancelRequestParams { id }) => {
                 if let Some(cancel) = lock(&self.in_flight).get(&id) {
@@ -319,6 +571,22 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
     }
 }
 
+async fn dispatch_reply(context: Context, request: Request) -> Reply {
+    let id = request.id.clone();
+    AssertUnwindSafe(methods::dispatch(context, request))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| panic_reply(&id))
+}
+
+fn panic_reply(id: &RequestId) -> Reply {
+    error!("the request's handler panicked");
+    Reply::Response(Response::error(
+        Some(id.clone()),
+        ErrorObject::internal_error("the request failed unexpectedly"),
+    ))
+}
+
 fn log_join(joined: Result<(), JoinError>) {
     if let Err(error) = joined
         && error.is_panic()
@@ -335,19 +603,25 @@ async fn run_writer<W: AsyncWrite + Unpin>(
     sink: FramedWrite<W, FrameCodec>,
     queue: mpsc::Receiver<Reply>,
     log: Arc<EventLog>,
+    update_notice: CancellationToken,
     closing: CancellationToken,
     stall: Stall,
-) {
-    tokio::select! {
+) -> Option<(Reason, Option<String>)> {
+    let ended = tokio::select! {
         biased;
-        () = closing.cancelled() => {}
-        written = write_loop(sink, queue, &log, &stall) => {
-            if let Err(error) = written {
+        () = closing.cancelled() => None,
+        written = write_loop(sink, queue, &log, &update_notice, &stall) => match written {
+            Ok(behind) => behind.then_some((Reason::SubscriberBehind, None)),
+            Err(error) => {
                 debug!(%error, "writing failed");
+                let stalled = matches!(&error, FrameError::Io(io) if io.kind() == io::ErrorKind::TimedOut);
+                let reason = if stalled { Reason::ClientStoppedReading } else { Reason::WriteError };
+                Some((reason, Some(error.to_string())))
             }
         }
-    }
+    };
     closing.cancel();
+    ended
 }
 
 /// When a write that makes no progress gives up: after `timeout`, or [`SHUTDOWN_WRITE_TIMEOUT`]
@@ -388,19 +662,65 @@ impl Stall {
     }
 }
 
+/// `reply` in 0093's old names, for a client from before it: `method` is its request's method
+/// then, and `None` for any other client.
+fn in_names(mut reply: Reply, method: Option<&str>) -> Reply {
+    let Some(method) = method else {
+        return reply;
+    };
+    let response = match &mut reply {
+        Reply::Response(response)
+        | Reply::Initialized { response, .. }
+        | Reply::Unsubscribe { response, .. } => response,
+        Reply::Subscribe { response, cursor } => {
+            cursor.legacy = true;
+            response
+        }
+        Reply::Notification(_) => return reply,
+    };
+    match &mut response.result {
+        Ok(result) => legacy::to_legacy(method, result),
+        Err(error) => {
+            if let Some(serde_json::Value::Object(data)) = &mut error.data
+                && let Some(serde_json::Value::String(kind)) = data.get_mut("kind")
+                && let Some(old) = legacy::old_error_kind(kind)
+            {
+                old.clone_into(kind);
+            }
+        }
+    }
+    reply
+}
+
+/// Writes until the connection ends. True means it closed because a subscriber fell behind.
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut sink: FramedWrite<W, FrameCodec>,
     mut queue: mpsc::Receiver<Reply>,
     log: &EventLog,
+    update_notice: &CancellationToken,
     stall: &Stall,
-) -> Result<(), FrameError> {
+) -> Result<bool, FrameError> {
     let mut appended = log.watch();
     let mut cursors = Cursors::default();
+    let mut resync_notice = false;
+    let mut initialized = false;
+    let mut told_of_update = false;
     loop {
+        if initialized && !told_of_update && update_notice.is_cancelled() {
+            told_of_update = true;
+            let updating = Notification::new::<HostUpdating>(HostUpdatingParams {});
+            stall.guard(sink.feed(updating)).await?;
+        }
         match queue.try_recv() {
             Ok(reply) => {
+                initialized |= matches!(reply, Reply::Initialized { .. });
                 stall
-                    .guard(send_reply(&mut sink, reply, &mut cursors))
+                    .guard(send_reply(
+                        &mut sink,
+                        reply,
+                        &mut cursors,
+                        &mut resync_notice,
+                    ))
                     .await?;
                 continue;
             }
@@ -415,21 +735,34 @@ async fn write_loop<W: AsyncWrite + Unpin>(
                 continue;
             }
             Ok(None) => {}
+            Err(subscription) if resync_notice => {
+                info!(
+                    %subscription,
+                    "a subscriber fell behind the event log's retention; ending it with events/resync"
+                );
+                let resync = Notification::new::<EventsResync>(EventsResyncParams { subscription });
+                stall.guard(sink.feed(resync)).await?;
+                continue;
+            }
             Err(subscription) => {
                 warn!(
                     %subscription,
                     "a subscriber fell behind the event log's retention; closing the connection so it resubscribes"
                 );
-                return Ok(());
+                return Ok(true);
             }
         }
         // FramedWrite is a Sink for every serializable item, so flush and close name one.
         stall.guard(SinkExt::<Response>::flush(&mut sink)).await?;
         tokio::select! {
+            // First, so a shutdown closing the queue right after it can't lose the notice.
+            biased;
+            () = update_notice.cancelled(), if initialized && !told_of_update => {}
             reply = queue.recv() => match reply {
                 Some(reply) => {
+                    initialized |= matches!(reply, Reply::Initialized { .. });
                     stall
-                        .guard(send_reply(&mut sink, reply, &mut cursors))
+                        .guard(send_reply(&mut sink, reply, &mut cursors, &mut resync_notice))
                         .await?;
                 }
                 None => break,
@@ -439,16 +772,25 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             },
         }
     }
-    stall.guard(SinkExt::<Response>::close(&mut sink)).await
+    stall.guard(SinkExt::<Response>::close(&mut sink)).await?;
+    Ok(false)
 }
 
 async fn send_reply<W: AsyncWrite + Unpin>(
     sink: &mut FramedWrite<W, FrameCodec>,
     reply: Reply,
     cursors: &mut Cursors,
+    resync_notice: &mut bool,
 ) -> Result<(), FrameError> {
     match reply {
         Reply::Response(response) => send_response(sink, response).await,
+        Reply::Initialized {
+            response,
+            resync_notice: declared,
+        } => {
+            *resync_notice = declared;
+            send_response(sink, response).await
+        }
         Reply::Subscribe { response, cursor } => {
             send_response(sink, response).await?;
             cursors.add(cursor);
@@ -461,6 +803,7 @@ async fn send_reply<W: AsyncWrite + Unpin>(
             cursors.remove(subscription);
             send_response(sink, response).await
         }
+        Reply::Notification(notification) => sink.feed(notification).await,
     }
 }
 
@@ -484,14 +827,19 @@ async fn send_response<W: AsyncWrite + Unpin>(
 }
 
 // An event too large for a frame fails the connection rather than being skipped, so a subscriber
-// never goes on with a gap it can't see. Project fields have size limits, which keep M1's events
-// far below the frame limit.
+// never goes on with a gap it can't see. Orchestrator fields have size limits, which keep M1's
+// events far below the frame limit.
 async fn send_event<W: AsyncWrite + Unpin>(
     sink: &mut FramedWrite<W, FrameCodec>,
-    event: EventsEventParams,
+    event: Delivery,
 ) -> Result<(), FrameError> {
-    let seq = event.seq;
-    let sent = sink.feed(Notification::new::<EventsEvent>(event)).await;
+    let seq = event.entry.seq;
+    let sent = sink
+        .feed(Notification {
+            method: EventsEvent::NAME.to_owned(),
+            params: Some(event.params()),
+        })
+        .await;
     if let Err(FrameError::TooLarge { max_frame_bytes }) = &sent {
         error!(
             seq,
@@ -509,16 +857,16 @@ mod tests {
 
     use futures_util::StreamExt;
     use jiff::Timestamp;
+    use parallax_protocol::framing::FrameCodec;
+    use parallax_protocol::jsonrpc::Message;
+    use parallax_protocol::{Orchestrator, ParallaxEvent, ScopeId};
     use serde_json::{Value, json};
     use tokio::io::{AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
     use tokio::time::timeout;
-    use tokio_util::codec::{FramedRead, FramedWrite};
+    use tokio_util::codec::FramedRead;
     use tokio_util::sync::CancellationToken;
-    use wisp_protocol::framing::{FrameCodec, FrameError};
-    use wisp_protocol::jsonrpc::Message;
-    use wisp_protocol::{EventsEventParams, Project, ProjectId, SubscriptionId, WispEvent};
 
-    use super::{send_event, serve};
+    use super::{Closed, Reason, serve};
     use crate::server::Daemon;
 
     const PATIENCE: Duration = Duration::from_secs(10);
@@ -529,24 +877,41 @@ mod tests {
         Daemon::for_tests(dir, retention, Duration::from_secs(90))
     }
 
+    /// A new project named `name`, on `repo_path`, with nothing else set.
+    fn project(name: &str, repo_path: &str) -> Orchestrator {
+        Orchestrator {
+            id: ScopeId::generate(),
+            name: name.to_owned(),
+            icon: None,
+            repo_path: repo_path.to_owned(),
+            branch: None,
+            run: None,
+            permission: None,
+            autonomy: None,
+            created_at: Timestamp::now(),
+            updated_at: Timestamp::now(),
+            base_branch: None,
+            integration_branch: None,
+            auto_land: false,
+            allow_api_keys: None,
+            max_children: None,
+            checks: None,
+            proposed_checks: None,
+            computer: None,
+        }
+    }
+
     async fn append(daemon: &Daemon, count: usize) {
         for _ in 0..count {
-            let project = Project {
-                id: ProjectId::generate(),
-                name: "wisp".to_owned(),
-                icon: None,
-                repo_path: "/src/wisp".to_owned(),
-                branch: None,
-                coordinator: None,
-                created_at: Timestamp::now(),
-                updated_at: Timestamp::now(),
-            };
+            let project = project("parallax", "/src/parallax");
             daemon
-                .log
+                .store
                 .append(
                     Timestamp::now(),
                     None,
-                    WispEvent::ProjectCreated { project },
+                    ParallaxEvent::OrchestratorCreated {
+                        orchestrator: project,
+                    },
                 )
                 .await;
         }
@@ -561,6 +926,9 @@ mod tests {
             daemon,
             CancellationToken::new(),
             CancellationToken::new(),
+            false,
+            false,
+            false,
         ));
         let (read, mut write) = tokio::io::split(client);
         for request in requests {
@@ -571,12 +939,12 @@ mod tests {
         (FramedRead::new(read, FrameCodec::new()), write)
     }
 
-    fn requests(after: u64) -> [Value; 3] {
+    fn requests_with(after: u64, capabilities: &Value) -> [Value; 3] {
         [
             json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocol": {"min": 1, "max": 1},
                 "client": {"name": "test", "version": "0"},
-                "capabilities": {}
+                "capabilities": capabilities
             }}),
             json!({"jsonrpc": "2.0", "id": 2, "method": "events/subscribe", "params": {"after": after}}),
             json!({"jsonrpc": "2.0", "id": 3, "method": "host/health"}),
@@ -590,110 +958,86 @@ mod tests {
         Some(Message::from_frame(&frame.ok()?).unwrap())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_answer_goes_out_ahead_of_a_long_replay() {
+    #[tokio::test]
+    async fn a_connection_says_why_it_ended() {
         let dir = tempfile::tempdir().unwrap();
-        let daemon = daemon(dir.path(), 10_000);
-        append(&daemon, 5_000).await;
-        let (mut frames, _write) = connect(daemon, &requests(0)).await;
+        let daemon = daemon(dir.path(), 5);
+        let start = |daemon: &Arc<Daemon>| {
+            let (client, server) = tokio::io::duplex(1024);
+            let (stop, closing) = (CancellationToken::new(), CancellationToken::new());
+            let serve = tokio::spawn(serve(
+                server,
+                Arc::clone(daemon),
+                stop.clone(),
+                closing.clone(),
+                false,
+                false,
+                false,
+            ));
+            (client, stop, closing, serve)
+        };
+        let ended = async |serve: tokio::task::JoinHandle<Closed>| {
+            timeout(PATIENCE, serve).await.unwrap().unwrap().reason
+        };
 
-        let mut events_before_health = 0;
-        loop {
-            match next(&mut frames).await.expect("the connection stays open") {
-                Message::Notification(_) => events_before_health += 1,
-                Message::Response(response) if response.id == Some(3.into()) => break,
-                Message::Response(response) => assert!(response.result.is_ok()),
-                Message::Request(request) => panic!("unexpected {request:?}"),
-            }
-        }
-        assert!(
-            events_before_health < 100,
-            "{events_before_health} of 5000 replayed events went out before the answer"
-        );
+        let (client, _stop, _closing, serve) = start(&daemon);
+        drop(client);
+        assert_eq!(ended(serve).await, Reason::ClientClosed);
+
+        let (_client, stop, _closing, serve) = start(&daemon);
+        stop.cancel();
+        assert_eq!(ended(serve).await, Reason::Shutdown);
+
+        let (_client, _stop, closing, serve) = start(&daemon);
+        closing.cancel();
+        assert_eq!(ended(serve).await, Reason::HostClosed);
+
+        // An abort during a shutdown is the shutdown.
+        let (_client, stop, closing, serve) = start(&daemon);
+        closing.cancel();
+        stop.cancel();
+        assert_eq!(ended(serve).await, Reason::Shutdown);
     }
 
     #[tokio::test]
-    async fn a_subscriber_that_falls_out_of_the_retention_is_disconnected() {
+    async fn a_lagging_subscriber_with_resync_notice_gets_events_resync_and_keeps_its_connection() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = daemon(dir.path(), 5);
-        let (mut frames, _write) = connect(Arc::clone(&daemon), &requests(0)).await;
+        let capabilities = json!({"resyncNotice": {}});
+        let (mut frames, mut write) =
+            connect(Arc::clone(&daemon), &requests_with(0, &capabilities)).await;
+        let mut subscription = None;
         for _ in 0..3 {
-            assert!(matches!(
-                next(&mut frames).await,
-                Some(Message::Response(_))
-            ));
+            let Some(Message::Response(response)) = next(&mut frames).await else {
+                panic!("expected a response");
+            };
+            if response.id == Some(2.into()) {
+                subscription = Some(response.result.unwrap()["subscription"].clone());
+            }
         }
         append(&daemon, 1_000).await;
 
-        let mut delivered = 0;
-        while let Some(message) = next(&mut frames).await {
-            assert!(matches!(message, Message::Notification(_)));
-            delivered += 1;
-        }
-        assert!(
-            delivered < 1_000,
-            "{delivered} events, then the connection should close"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_client_that_stops_reading_is_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let idle = Duration::from_millis(300);
-        let daemon = Daemon::for_tests(dir.path(), 10, idle);
-        let (client, server) = tokio::io::duplex(1024);
-        tokio::spawn(serve(
-            server,
-            daemon,
-            CancellationToken::new(),
-            CancellationToken::new(),
-        ));
-        // The read half stays open and unread, so wispd's writes back up instead of failing.
-        let (_unread, mut write) = tokio::io::split(client);
-        let started = std::time::Instant::now();
-        let flood = async move {
-            let mut initialize = serde_json::to_vec(&requests(0)[0]).unwrap();
-            initialize.push(b'\n');
-            write.write_all(&initialize).await?;
-            for id in 2_u64.. {
-                let line =
-                    format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"host/health\"}}\n");
-                write.write_all(line.as_bytes()).await?;
+        let resync = loop {
+            match next(&mut frames).await.expect("the connection stays open") {
+                Message::Notification(n) if n.method == "events/resync" => break n,
+                Message::Notification(n) => assert_eq!(n.method, "events/event"),
+                other => panic!("unexpected {other:?}"),
             }
-            Ok::<(), std::io::Error>(())
         };
-        let flooded = timeout(PATIENCE, flood)
-            .await
-            .expect("wispd drops the connection instead of waiting forever");
-        assert!(flooded.is_err(), "writes fail once wispd has closed");
-        assert!(started.elapsed() >= idle, "{:?}", started.elapsed());
-    }
+        assert_eq!(
+            resync.params.unwrap()["subscription"],
+            subscription.unwrap()
+        );
 
-    #[tokio::test]
-    async fn an_event_too_large_for_a_frame_is_an_error_not_a_gap() {
-        let mut sink = FramedWrite::new(tokio::io::sink(), FrameCodec::with_max_frame_bytes(1024));
-        let event = |name: &str| EventsEventParams {
-            subscription: SubscriptionId::generate(),
-            seq: 1,
-            time: Timestamp::now(),
-            project: None,
-            event: WispEvent::ProjectCreated {
-                project: Project {
-                    id: ProjectId::generate(),
-                    name: name.to_owned(),
-                    icon: None,
-                    repo_path: "/src".to_owned(),
-                    branch: None,
-                    coordinator: None,
-                    created_at: Timestamp::now(),
-                    updated_at: Timestamp::now(),
-                },
-            },
+        // The connection still answers, and the ended subscription sends nothing more.
+        write
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"host/health\"}\n")
+            .await
+            .unwrap();
+        let Some(Message::Response(health)) = next(&mut frames).await else {
+            panic!("expected the health answer");
         };
-        assert!(send_event(&mut sink, event("wisp")).await.is_ok());
-        assert!(matches!(
-            send_event(&mut sink, event(&"n".repeat(2000))).await,
-            Err(FrameError::TooLarge { .. })
-        ));
+        assert_eq!(health.id, Some(4.into()));
+        assert!(health.result.is_ok());
     }
 }

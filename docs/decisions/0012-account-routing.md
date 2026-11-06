@@ -1,6 +1,6 @@
 # 0012: Routing a task to a backend and account
 
-- Status: accepted; the coordinator's turns call `snapshot` and `check` as of [0024](0024-coordinator-chat.md), and no longer since [0027](0027-claude-permission-modes.md)
+- Status: accepted; the coordinator's turns call `snapshot` and `check` as of [0024](0024-coordinator-chat.md), and no longer since [0027](0027-claude-permission-modes.md); a Project's children may use several accounts of one backend and use an API key only when the Project allows it since [0046](0046-project-scheduler.md)
 - Date: 2026-09-25
 - Issue: #119
 
@@ -8,26 +8,26 @@
 
 M2 needs a task to resolve to a backend and an account: named outright, or the task's role's
 stored default. #114 (detecting installed CLIs and their sign-in state) had not shipped when this
-was written, so wisp had no store-backed notion of a "subscription account" distinct from the
+was written, so Parallax had no store-backed notion of a "subscription account" distinct from the
 backend that runs it, and #119 had to let a task name one anyway. #114 has since shipped, but
 wiring `accounts/defaults/set` to its detection and giving a subscription account a real identity
 is #170's job, not this one's.
 
 ## Decision
 
-- **`AccountChoice`** (`crates/wisp-protocol/src/defaults.rs`) is either `Subscription { backend }`
+- **`AccountChoice`** (`crates/parallax-protocol/src/defaults.rs`) is either `Subscription { backend }`
   — the user's own login in the named backend, such as `claude` — or `Key { id }`, a key account
   from `accounts/keys/*` (#117). A subscription account has no id of its own yet; it is named by
   the backend that runs it, since M2 ships one account per backend. #114 can add a real
   `AccountId`-style identity for a second login on the same machine later without changing this
   shape: `Subscription` gains an optional field, defaulting to today's one-per-backend meaning.
-- **Per-host defaults** live in a new `role_defaults` store table (`crates/wisp-store`), one row
+- **Per-host defaults** live in a new `role_defaults` store table (`crates/parallax-store`), one row
   per role, set and read over `accounts/defaults/get` and `accounts/defaults/set`
   (`daemon/src/methods/defaults.rs`). Setting `account: null` clears a role's default.
 - **`daemon/src/routing.rs`** is the decision engine `resolve()` (account + backend, in-memory, no
   I/O) and `start()` (reads the credential and starts the run). `Resolved`'s fields are private:
   `resolve()` is the only place that decides a coordinator's policy, `start()` re-applies
-  `ToolPolicy::NoWrite` for `Role::Coordinator` from `Resolved::role()` regardless of what
+  `ToolPolicy::NoWrite` for `Role::Coordinator` from the run's role regardless of what
   `Resolved::policy()` already says, and nothing between the two calls can substitute a
   `workspace-write` policy for it.
 - **A `BackendRegistry` maps one backend per `Provider`.** A backend takes both a subscription

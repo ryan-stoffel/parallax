@@ -1,551 +1,2799 @@
 import {
+  AlarmClock,
+  Archive,
   ArchiveRestore,
-  ArrowLeft,
+  ArrowUp,
   Bot,
-  ChartNoAxesColumn,
+  CalendarClock,
   Check,
   ChevronDown,
   ChevronRight,
+  Columns2,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
+  CircleDot,
   CirclePause,
   CircleSlash,
-  Download,
+  CircleX,
   Ellipsis,
   FileDiff,
+  FlaskConical,
   Folder,
-  FolderKanban,
-  FolderOpen,
+  FolderGit2,
   FolderPlus,
   GitBranch,
+  GitFork,
   GitMerge,
-  House,
-  Laptop,
+  Globe,
+  HardDrive,
+  Info,
+  Keyboard,
+  Layers,
+  LayoutGrid,
+  ListFilter,
   LoaderCircle,
-  PanelLeft,
+  MessageSquare,
+  MousePointerClick,
+  Network,
+  Palette,
+  PanelLeftClose,
+  PanelTop,
+  PencilLine,
+  PersonStanding,
+  Pin,
   Plus,
-  RefreshCw,
+  RotateCcw,
   Search,
   Server,
   Settings,
+  ShieldCheck,
+  MessagesSquare,
+  SquareDashed,
   SquarePen,
+  Smartphone,
+  Trash2,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import {
+  createContext,
+  Fragment,
+  useContext,
   useEffect,
   useId,
+  useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
+  type CSSProperties,
   type ComponentType,
+  type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent,
   type ReactNode,
+  type Ref,
+  type RefObject,
   type SVGProps,
   type ToggleEvent,
 } from "react";
 
-import type { UpdateState } from "../preload/bridge";
-import type { AgentRun, AgentStatus, Thread } from "../protocol/generated/protocol";
+import type {
+  AgentRun,
+  AgentStatus,
+  GitStatus,
+  Orchestrator,
+  OrchestratorAutonomy,
+  ChosenIcon,
+  Repo,
+  Thread,
+} from "../protocol/generated/protocol";
+import type { RpcError } from "../preload/bridge";
 import type { Selection, SettingsSection } from "./App";
-import { ConnectionStatus, StatusDot, statusLabel, useConnection } from "./ConnectionStatus";
+import { clock } from "./Approval";
+import { drafts, threadDrafts, type Draft } from "./drafts";
+import { AddDialog, type AddDialogHandle } from "./AddDialog";
+import {
+  highlight,
+  jumpTarget,
+  parseScope,
+  scopeStore,
+  searchMatch,
+  searchWords,
+  type Scope,
+} from "./scope";
+import {
+  shortBranch,
+  initials,
+  lastUserPrompt,
+  mostUrgent,
+  snoozeChoices,
+  snoozed,
+  type Attention,
+} from "./attention";
+import { AttentionBadge, RingingAlarmMark } from "./AttentionMark";
+import { locale } from "./locale";
+import { AutonomyChoice } from "./OrchestratorPermission";
+import { resumeTime } from "./ResumeCard";
+import { ConnectionStatus } from "./ConnectionStatus";
+import { DeviceIcon } from "./DeviceIcon";
+import { hostIcon } from "./RunTargetMenu";
+import { ProfileButton } from "./ProfileMenu";
 import { localId, type Host } from "./hosts";
-import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
-import { AddRepositoryDialog } from "./AddRepositoryDialog";
-import { NewProjectDialog } from "./NewProjectDialog";
-import { groupOf, groupThreads, noRepo, type ThreadsView } from "./threads";
-import { accountLabel, statusLabel as runStatusLabel } from "./transcript";
-import { IconButton, menuItem, menuPanel, moveFocus, TopBar } from "./ui";
+import { IconPicker } from "./IconPicker";
+import { imageUrl } from "./images";
+import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
+import { NightSky } from "./NightSky";
+import { dismiss, notify } from "./notifications";
+import { iconColors, iconLook } from "./projectIcons";
+import { ForkMenu } from "./Fork";
+import {
+  archivePageSize,
+  pinnedProjects,
+  togglePinnedProject,
+  sidebarMode,
+  sidebarPrefs,
+  type NavRow,
+} from "./sidebarPrefs";
+import {
+  draftItems,
+  folderGroups,
+  placeOf,
+  sidebarItems,
+  todayGroups,
+  type DraftItem,
+  type Group,
+  type HostThreads,
+  type Item,
+} from "./sidebarItems";
+import { RowCard, rowTool } from "./RowCard";
+import { PinnedSection, SidebarNav, navRow, pinnedFolded } from "./SidebarNav";
+import { ProjectCard } from "./ProjectsPage";
+import { projectChoices, ProjectPicker } from "./ThreadProjectMenu";
+import { projectEntries, type ProjectEntry } from "./projectList";
+import { stored } from "./stored";
+
+import { useFlip } from "./flip";
+import { draggedThread, dragThread } from "./threadDrag";
+import {
+  groupOf,
+  repoIconOf,
+  setRepoIcons,
+  type ForkChoice,
+  type OrchestratorChange,
+  type ThreadsView,
+} from "./threads";
+import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
+import {
+  ConfirmDialog,
+  IconButton,
+  Menu,
+  menuItem,
+  ToolbarMenuRow,
+  toolbarMenuDivider,
+  menuPanel,
+  moveFocus,
+  openOnContextMenu,
+  RowBadge,
+  rowShortcut,
+  searchField,
+  shortcut,
+  TopBar,
+  useModHeld,
+} from "./ui";
+import { PanelResize } from "./PanelResize";
+import { numberOf } from "./github";
+import { lookOf, usePullRequests, type PullRequests } from "./PullRequests";
+import { instanceLogo, instanceName } from "./providers";
+import { UpdateButton } from "./Update";
+import { clockOptions } from "./prefs";
+import { flushToasts, toast, undo, useToasts } from "./undo";
+
+import {
+  autoClear,
+  compactRows,
+  draggedPin,
+  favoriteOrder,
+  forgetPin,
+  pinDragType,
+  pinIcons,
+  orderOf,
+  pinFavorites,
+  pinLayout,
+  pinUnread,
+  todayGroup,
+  todayFolded,
+  folderFolded,
+} from "./pins";
+import { Favorites, type FavoriteAction } from "./Favorites";
+import { close, Fold, quietFor, shownRows, Tick, ViewOptions } from "./SidebarParts";
+import { DropLine, PinList, type PinDrag } from "./PinList";
+import { searchSettings, settingsSections } from "./settings/search";
+import { cancelPrefetch, prefetchThread } from "./threadWatches";
+import { RemoteControlBadge } from "./ClaudeRemoteControl";
+import { isRemoteControl } from "./remoteControl";
 
 const row =
-  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
+  "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body hover:bg-hover";
 const current = "bg-selected text-foreground";
-const heading = "text-[11.5px] font-medium text-faint-foreground";
+const emptyNote = "px-2 py-1 text-body text-faint-foreground";
 
 interface SidebarProps {
+  width?: number;
+  onResize?: (width: number) => void;
   open: boolean;
   onClose: () => void;
   onNewThread: () => void;
+  /** Back and Forward, at the end of its top row. */
+  history?: ReactNode;
   children: ReactNode;
 }
 
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
- * spot the main pane shows it while this column is hidden, then the app's name.
+ * spot the main pane shows it while this column is hidden, then the app's mark and name, which
+ * open a new thread, and Back and Forward. A nightly build paints a sky behind that row and the Search row under it, as
+ * the column's own background (index.css), with stars and clouds (NightSky.tsx).
  */
-export function Sidebar({ open, onClose, onNewThread, children }: SidebarProps) {
+export function Sidebar({
+  open,
+  onClose,
+  onNewThread,
+  history,
+  children,
+  width = 288,
+  onResize,
+}: SidebarProps) {
+  // The layout releases its sidebar width on close; keep it while the exit transition runs.
+  const lastWidth = useRef(width);
+  useLayoutEffect(() => {
+    if (open) lastWidth.current = width;
+  }, [open, width]);
   return (
     <nav
       id="sidebar"
       aria-label="Sidebar"
       hidden={!open}
-      className="flex w-64 shrink-0 flex-col border-r border-border bg-sidebar"
+      style={{ "--sidebar-width": `${open ? width : lastWidth.current}px` } as CSSProperties}
+      className="night-sky-host relative flex min-w-0 shrink-0 flex-col bg-pane-sidebar"
     >
-      <TopBar className="traffic-light-inset">
+      <NightSky />
+      {onResize && <PanelResize side="left" width={width} onResize={onResize} />}
+      {/* Positioned, so it paints over the sky. */}
+      <TopBar className="traffic-light-inset night-sky-text relative">
         <IconButton
           label="Hide sidebar"
-          keys="B"
+          command="sidebar"
           aria-expanded
           aria-controls="sidebar"
           onClick={onClose}
         >
-          <PanelLeft />
+          <PanelLeftClose />
         </IconButton>
-        <span className="flex-1 text-[13px] font-bold text-muted-foreground">wisp</span>
-        <IconButton label="New thread" keys="N" onClick={onNewThread}>
-          <SquarePen />
-        </IconButton>
+        <button
+          type="button"
+          onClick={onNewThread}
+          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-reading font-semibold tracking-tight text-foreground hover:bg-hover"
+        >
+          <ParallaxMark className="size-5" />
+          Parallax
+        </button>
+        {history}
       </TopBar>
       {children}
     </nav>
   );
 }
 
+export type { HostThreads } from "./sidebarItems";
+
 interface ThreadListProps {
-  hosts: Host[];
-  /** The open host, whose Projects and threads show under its row. */
+  /** Every host's list, this computer first. */
+  hosts: HostThreads[];
+  /** The open host: where a new orchestrator goes by default, and whose connection the footer shows. */
   host: Host;
-  onHostChange: (hostId: string) => void;
   selection: Selection;
-  onSelect: (selection: Selection) => void;
-  /** Opens a Project, on another host by opening that host first. */
-  onOpenProject: (hostId: string, projectId: string) => void;
-  onOpenSettings: (section: SettingsSection, addHost?: boolean) => void;
-  threads: ThreadsView;
+  /** Opens something on `hostId`, which becomes the open host. */
+  onSelect: (hostId: string, selection: Selection) => void;
+  /** Opens an orchestrator, on another host by opening that host first. */
+  onOpenOrchestrator: (hostId: string, orchestratorId: string) => void;
+  onOpenSettings: (section: SettingsSection) => void;
+  /** The page open in place of the main pane, whose nav row reads as selected (0090). */
+  page?: NavRow;
+  /** Opens Projects, Pull requests, or Usage in place of the main pane. */
+  onOpenPage: (page: NavRow) => void;
+  /** The open Project, as `<host>/<id>`, whose pinned row reads as selected. */
+  openProject?: string;
+  /** An orchestrator's menu, for the orchestrators page's cards (0090). */
+  orchestratorMenu?: Ref<ProjectMenuHandle>;
+  /** Opens Create Project, from the add palette's New Project, where the open host makes Projects. */
+  onNewProject?: () => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
-  onDelete: (thread: Thread) => Promise<string | undefined>;
+  onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
+  /** The add palette, for the command menu's New orchestrator and Add repository (PLX-993). */
+  addDialog?: Ref<AddDialogHandle>;
+  /** New thread, which opens Mod+N's picker of the repository it goes in. */
+  onNewThread: () => void;
+  /** Tiles a thread beside the open one. */
+  onOpenBeside: (threadId: string) => void;
+  /** Opens a thread in a new tab, or the tab it's already in. Absent with tabs off. */
+  onOpenInTab?: (hostId: string, threadId: string) => void;
 }
 
-/** Every Project's icon, in the sidebar, the breadcrumb, and its chat, in the accent. */
-export function ProjectIcon({ className = "" }: { className?: string }) {
-  return <FolderKanban aria-hidden className={`text-accent ${className}`} />;
+/**
+ * An orchestrator's icon, in the sidebar, the breadcrumb, its chat, and Create orchestrator: its
+ * uploaded image as a rounded square (0038), else its glyph in its color, or `Layers` in the accent
+ * for none, or for a name or color this app doesn't know.
+ */
+export function ProjectIcon({ icon, className = "" }: { icon?: ChosenIcon; className?: string }) {
+  // An <svg> like the glyph's, so every place's glyph size (`[&_svg]:size-*`) fits the image too.
+  if (icon?.image)
+    return (
+      <svg
+        aria-hidden
+        data-icon-image
+        viewBox="0 0 24 24"
+        width={24}
+        height={24}
+        className={`[clip-path:inset(0_round_22%)] ${className}`}
+      >
+        <image
+          href={imageUrl(icon.image)}
+          width={24}
+          height={24}
+          preserveAspectRatio="xMidYMid slice"
+        />
+      </svg>
+    );
+  const { Icon, color } = iconLook(icon);
+  return <Icon aria-hidden className={`${color} ${className}`} />;
+}
+
+/**
+ * Every computer's repository icons by name (`sharedRepoIcons`), which App provides, so a repo
+ * with no icon of its own draws its namesake's.
+ */
+export const SharedRepoIcons = createContext<ReadonlyMap<string, ChosenIcon>>(new Map());
+
+/**
+ * A repo's color: `icon`'s, its own or its namesake's (`repoIconOf`), or else one picked from its
+ * name, as its initials' tile shows.
+ */
+function repoColor(repo: Repo, icon: ChosenIcon | undefined) {
+  const palette = iconColors.slice(1);
+  if (icon?.color) return `var(--project-${icon.color})`;
+  if (icon) return "var(--accent)";
+  let hash = 0;
+  for (let i = 0; i < repo.name.length; i++) hash = (hash * 31 + repo.name.charCodeAt(i)) | 0;
+  return `var(--project-${palette[Math.abs(hash) % palette.length]!.key})`;
+}
+
+/**
+ * A repo's icon: the one the user chose or the app took from the repository (`useRepoLogos`), in an
+ * orchestrator's shape (0033), or its namesake's on another computer, or else its initials on a
+ * tile in a color picked from its name. No repo is a
+ * dashed square, and a Project with no icon of its own two speech bubbles (0090).
+ */
+export function RepoIcon({ repo, size = "size-4" }: { repo?: Repo; size?: string }) {
+  const shared = useContext(SharedRepoIcons);
+  if (!repo || repo.scratch)
+    return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
+  const icon = repoIconOf(repo, shared);
+  if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
+  // A Project with no icon draws the Project glyph, as on the orchestrators page (0090).
+  if (repo.project)
+    return <MessagesSquare aria-hidden className={`${size} shrink-0 text-project-gray`} />;
+  return (
+    <span
+      aria-hidden
+      style={{ color: repoColor(repo, undefined) }}
+      className={`grid ${size} shrink-0 place-items-center rounded-sm bg-current/15 text-micro leading-none font-semibold`}
+    >
+      {/* Drawn from the attribute, so the tile adds nothing to the text around it. */}
+      <span data-initials={initials(repo.name)} className="before:content-[attr(data-initials)]" />
+    </span>
+  );
 }
 
 // How long a pointer rests on a thread before its card shows. Moving to another thread while
 // one shows switches at once.
 const cardDelay = 450;
 
+/** A scope's drawers, by whether each is open. */
+type Sections = Record<"working" | "snoozed" | "archived", boolean>;
+const sectionDefaults: Sections = {
+  working: false,
+  snoozed: false,
+  archived: false,
+};
+const record = <T,>(raw: unknown, fallback: Record<string, T>) =>
+  raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, T>) : fallback;
+/** What's stored for `sectionsStore`, with Working collapsed: it starts so on every launch. */
+export const parseSections = (raw: unknown, fallback: Record<string, Partial<Sections>>) =>
+  Object.fromEntries(
+    Object.entries(record(raw, fallback)).map(([scope, kept]) => [
+      scope,
+      { ...kept, working: false },
+    ]),
+  );
+/** Which drawers each scope has open (PLX-789), kept on this computer. */
+export const sectionsStore = stored<Record<string, Partial<Sections>>>(
+  "parallax:sections",
+  {},
+  parseSections,
+);
+/** Each scope's last open row, by key, so switching back reopens it. */
+const lastOpenStore = stored<Record<string, string>>("parallax:lastOpen", {}, record);
+
 /**
- * Search, then the hosts: the open one shows its Projects (one row each) and its repositories
- * with their threads, and Archived sits under the list. Resting on a thread shows a card with
- * where and how it runs.
+ * Why Local folder can't browse a computer, by id. This computer's folders are read by main, so it
+ * always can; another needs a connected plxd with `hostFolders`.
+ */
+const unbrowsable = (hosts: HostThreads[]) =>
+  new Map(
+    hosts.flatMap(({ host, view }): [string, string][] =>
+      host.id === localId || "hostFolders" in view.capabilities
+        ? []
+        : [[host.id, Object.keys(view.capabilities).length ? "Update plxd to browse" : "Offline"]],
+    ),
+  );
+
+const mac = () => window.parallax.platform === "darwin";
+/** Whether a press is Mod (Cmd on macOS, Ctrl elsewhere) and nothing else, as with Mod+Z. */
+const modOnly = (e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }) =>
+  (mac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey && !e.shiftKey;
+/** The threads auto-archive archived this session, each once, so an Undo sticks. */
+const autoArchived = new Set<string>();
+
+/** Text cut to fit a toast. */
+const short = (text: string) => (text.length > 30 ? `${text.slice(0, 28).trimEnd()}…` : text);
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const working = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
+/** Whether a host keeps thread pins: `pins`, or `areas` on a plxd from before areas were removed. */
+const pinsOn = (view: ThreadsView) => "pins" in view.capabilities || "areas" in view.capabilities;
+
+/**
+ * Slides sidebar rows out, each `stagger` ms after the one above, before they're archived; the
+ * rows under them then close the gap (flip.ts). `done` settles once they're gone, and is absent
+ * with nothing to slide, as under reduced motion, so archiving waits only on a slide.
+ * `restore(keys)` brings those rows back, every one by default, for archives that failed.
+ */
+function sweepOut(keys: string[], to: string, stagger = 0) {
+  const still = document.documentElement.classList.contains("reduce-motion");
+  const moves = new Map(
+    (still ? [] : keys).flatMap((key, n) => {
+      const row = document.querySelector<HTMLElement>(`#sidebar [data-flip="${CSS.escape(key)}"]`);
+      if (typeof row?.animate !== "function") return [];
+      const move = row.animate(
+        [
+          { opacity: 1, transform: "none" },
+          { opacity: 0, transform: to },
+        ],
+        // A long sweep staggers only its first rows, so it never drags on.
+        {
+          duration: 180,
+          delay: Math.min(n, 8) * stagger,
+          easing: "cubic-bezier(.4,0,1,1)",
+          fill: "forwards",
+        },
+      );
+      return [[key, move] as const];
+    }),
+  );
+  return {
+    done: moves.size
+      ? Promise.all([...moves.values()].map((m) => m.finished.catch(() => {}))).then(() => {})
+      : undefined,
+    restore: (back = keys) => {
+      for (const key of back) moves.get(key)?.cancel();
+    },
+  };
+}
+
+/**
+ * Search, the repo filter, a menu to create a Project or add a repository, and New thread, then the
+ * favorites (pinned threads moved up), the other pinned threads (0075), a divider with Clear and the
+ * View panel, and Today: every other open thread, orchestrator threads among them (0093), most
+ * recently active first, so one that finishes rises to the top, grouped as View says.
+ * Nothing left, Today is blank. A thread row shows its title, how long ago it was last active or
+ * what it asks of the user, its repo, git status, and pull request; its card adds its branch, which
+ * search also matches. Threads another thread started don't list (0041); an orchestrator's show
+ * only inside it (0042). While a thread is working it sits in a Working drawer above Snoozed and
+ * Archived, until it finishes. Rows that move slide to their place. Changes the user makes show a
+ * toast with Undo, which ⌘Z also runs. Resting on a thread shows a card.
  */
 export function ThreadList({
   hosts,
   host,
-  onHostChange,
   selection,
   onSelect,
-  onOpenProject,
+  onOpenOrchestrator,
   onOpenSettings,
-  threads,
+  page,
+  onOpenPage,
+  openProject,
+  orchestratorMenu,
+  onNewProject,
   onDelete,
+  addDialog: addDialogRef,
+  onNewThread,
+  onOpenBeside,
+  onOpenInTab,
 }: ThreadListProps) {
-  const newProject = useRef<HTMLDialogElement>(null);
-  const addRepositoryDialog = useRef<HTMLDialogElement>(null);
+  const addDialog = useRef<AddDialogHandle>(null);
+  useImperativeHandle(addDialogRef, () => ({
+    open: (start, workspace) => addDialog.current?.open(start, workspace),
+  }));
   const deleteDialog = useRef<HTMLDialogElement>(null);
-  const [toDelete, setToDelete] = useState<Thread>();
+  const search = useRef<HTMLInputElement>(null);
+  const entryDialogs = useRef<EntryDialogsHandle>(null);
+  const projectDelete = useRef<HTMLDialogElement>(null);
+  // The Project the delete dialog asks about, and its host's view.
+  const [projectToDelete, setProjectToDelete] = useState<ProjectEntry>();
+  const pins = pinnedProjects.use();
+  // Which sidebar shows (0094): Inbox's head is the search box and its buttons, and its threads one
+  // list; Traditional's head is rows, and it lists the threads in a folder per repo.
+  const mode = sidebarMode.use();
+  const inbox = mode === "inbox";
+  const folders = mode === "traditional";
+  // The thread or orchestrator the delete dialog asks about.
+  const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
-  const [actionError, setActionError] = useState<string>();
+  // Threads deleted with Undo still offered: hidden until the toast goes, then deleted.
+  const [doomed, setDoomed] = useState<ReadonlySet<string>>(new Set());
+  // Threads sliding out to be archived, so a second E, click, or Clear meanwhile does nothing.
+  const leaving = useRef(new Set<string>());
   const [query, setQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const [card, setCard] = useState<{ thread: Thread; top: number; left: number }>();
-  const cardTimer = useRef<number>(undefined);
-  // Repositories listed again since the card opened, so sweeping across rows lists each once.
-  const refreshed = useRef(new Set<string>());
-  const { groups, archived } = groupThreads(threads.state);
-  const title = (t: Thread) => threads.state.titles[t.id] ?? "Thread";
+  const { workingSection, pageArchived } = sidebarPrefs.use();
+  // The rows picked with ⌘-click, ⇧-click, or X, by key, and where a ⇧-click range starts.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const anchor = useRef<string>(undefined);
+  const [renaming, setRenaming] = useState<string>();
+  // Threads that just finished, flashing once.
+  const [flashing, setFlashing] = useState<ReadonlySet<string>>(new Set());
+  // The row to focus after the next render: by key, or by place, as the one that takes an
+  // archived row's place.
+  const focusNext = useRef<{ key?: string; index?: number; skip?: string }>(undefined);
+  // Bumped to render once more after setting `focusNext` outside a render, as when plxd answers.
+  const [, refocus] = useState(0);
+  const card = useRef<CardHandle>(null);
+  // Snoozes end on time even with nothing else changing.
+  const now = useMinute();
+  // The hosts as they are now, for an Undo that runs after later changes.
+  const latest = useRef(hosts);
+  useEffect(() => {
+    latest.current = hosts;
+  });
+  const viewOf = (hostId: string) => latest.current.find((h) => h.host.id === hostId)?.view;
+  // Changes that aren't moves, such as switching repos or typing a search, don't slide rows.
+  const quiet = useFlip("#sidebar");
 
-  const q = query.trim().toLowerCase();
-  const matches = (text: string) => !q || text.toLowerCase().includes(q);
-  // Most recently active first, as threads are newest first.
-  const shownProjects = threads.state.projects
-    .filter((p) => matches(p.name))
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const shownGroups = groups
-    .map((g) => ({ ...g, threads: g.threads.filter((t) => matches(title(t))) }))
-    .filter((g) => !q || g.threads.length > 0);
-  const shownArchived = archived.filter((t) => matches(title(t)));
+  const open = hosts.find((h) => h.host.id === host.id)?.view;
+  const many = hosts.length > 1;
+  // Threads marked unread (pins.ts) read as Done or Failed again until opened.
+  const unread = pinUnread.use();
+  const sharedIcons = useContext(SharedRepoIcons);
 
-  const showCard = (thread: Thread, row: HTMLElement) => {
-    window.clearTimeout(cardTimer.current);
-    const open = () => {
-      const rect = row.getBoundingClientRect();
-      // A little clear of the sidebar, and kept on screen: it is at most about 15rem tall.
-      const edge = (row.closest("#sidebar") ?? row).getBoundingClientRect().right;
-      setCard({ thread, top: Math.min(rect.top, window.innerHeight - 248), left: edge + 12 });
-      if (!refreshed.current.has(thread.repo)) {
-        refreshed.current.add(thread.repo);
-        threads.refresh(thread.repo);
+  // A chosen repo that's gone, deleted or not loaded yet, shows everything, keeping the choice
+  // for its return. A Project chosen while Projects showed (0073) shows everything too.
+  const chosen = scopeStore.use();
+  const parsed = parseScope(chosen);
+  const scopeRepo =
+    parsed.kind === "repo"
+      ? hosts
+          .find((h) => h.host.id === parsed.hostId)
+          ?.view.state.repos.find((r) => !r.scratch && !r.project && r.id === parsed.id)
+      : undefined;
+  const scope: Scope = parsed.kind === "repo" && !scopeRepo ? "all" : chosen;
+  const scopeLabel = scopeRepo
+    ? { name: scopeRepo.name, color: repoColor(scopeRepo, repoIconOf(scopeRepo, sharedIcons)) }
+    : scope === "none"
+      ? { name: "No repo", color: "var(--faint-foreground)" }
+      : undefined;
+  const sections = { ...sectionDefaults, ...sectionsStore.use()[scope] };
+  const toggleSection = (name: keyof Sections, value = !sections[name]) => {
+    quiet();
+    const all = sectionsStore.get();
+    sectionsStore.set({ ...all, [scope]: { ...all[scope], [name]: value } });
+  };
+
+  // What arrives animates in (index.css), but not the first load: the sidebar settles a moment
+  // after its threads first list, and again each time the list mounts, as back from Settings.
+  const loaded = hosts.some(({ view }) => view.state.threads.length > 0);
+  useEffect(() => {
+    if (!loaded) return;
+    const sidebar = document.getElementById("sidebar");
+    const timer = window.setTimeout(() => sidebar?.setAttribute("data-settled", ""), 400);
+    return () => {
+      window.clearTimeout(timer);
+      sidebar?.removeAttribute("data-settled");
+    };
+  }, [loaded]);
+
+  const items = sidebarItems(hosts, unread);
+  const byKey = new Map(items.map((i) => [i.key, i]));
+  // Drag payloads name runs; orchestrator row keys keep their stable orchestration id.
+  const byRun = new Map<string, Item & { kind: "thread" }>(
+    items.flatMap((i) =>
+      i.kind === "thread" ? [[`${i.host.id}/${i.thread.id}`, i] as const] : [],
+    ),
+  );
+  // The thread at the top of `key`'s family, as far up as it lists; `key` for one no thread started.
+  const topOf = (key: string) => {
+    let top = key;
+    for (const seen = new Set<string>(); !seen.has(top);) {
+      seen.add(top);
+      const i = byKey.get(top);
+      const up =
+        i?.kind === "thread" && i.thread.parent ? `${i.host.id}/${i.thread.parent}` : undefined;
+      if (!up || !byKey.has(up)) break;
+      top = up;
+    }
+    return top;
+  };
+  // Threads another started don't list (0075), so the row at the top of a family also says when one
+  // of them waits on the user, or failed since that row was last read. Counts and ⌥↓ go by each
+  // thread's own status. A family with one still working, or waiting out a usage limit, isn't
+  // cleared.
+  const familyNews = new Map<string, Attention>();
+  const busyFamilies = new Set<string>();
+  for (const i of items) {
+    const top = byKey.get(topOf(i.key));
+    if (i.kind !== "thread" || top === i || top?.kind !== "thread") continue;
+    if (working(i.attention) || i.run?.status === "waiting") busyFamilies.add(top.key);
+    const read = top.thread.seenAt ? Date.parse(top.thread.seenAt) : 0;
+    const failedSince = i.attention === "failed" && !!i.run && Date.parse(i.run.updatedAt) > read;
+    if (i.attention === "needsYou" || failedSince)
+      familyNews.set(top.key, mostUrgent([familyNews.get(top.key) ?? top.attention, i.attention]));
+  }
+  // What a row shows, and where: its own status, or its family's news.
+  const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
+  // The Project a thread was added to (0090), which it shows and filters as, over where it works.
+  const addedTo = (item: Item) => (item.kind === "thread" ? item.thread.project : undefined);
+
+  const inScope = (item: Item, s: Scope) => {
+    const p = parseScope(s);
+    if (p.kind === "all") return true;
+    if (p.kind === "none") return (!item.repo || item.repo.scratch) && !addedTo(item);
+    return (
+      p.kind === "repo" &&
+      item.host.id === p.hostId &&
+      (item.repo?.id === p.id || addedTo(item) === p.id)
+    );
+  };
+  const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
+  // A snoozed thread wakes early when it, or one it started, needs the user.
+  const isSnoozed = (i: Item) => i.kind === "thread" && snoozed(i.thread, rowAttention(i), now);
+  const needsYou = (i: Item) => i.attention === "needsYou" && !isArchived(i) && !doomed.has(i.key);
+  const needsIn = (s: Scope) => items.filter((i) => needsYou(i) && inScope(i, s)).length;
+  const outside =
+    scope === "all" ? 0 : items.filter((i) => needsYou(i) && !inScope(i, scope)).length;
+  // Every row that needs the user, newest first, in one order across every scope (PLX-789).
+  const jumpList = items
+    .filter(needsYou)
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || a.key.localeCompare(b.key))
+    .map((i) => i.key);
+
+  // Search reads each row's text, and plxd's index of its messages (PLX-372), word by word.
+  const words = searchWords(query);
+  const wordsKey = words.join(" ");
+  const [found, setFound] = useState<{
+    words: string;
+    hits: Map<string, Set<string>>;
+    snippets: Map<string, string>;
+  }>();
+  useEffect(() => {
+    if (!wordsKey) return;
+    let live = true;
+    const timer = setTimeout(async () => {
+      const hits = new Map<string, Set<string>>();
+      const snippets = new Map<string, string>();
+      const searchable = latest.current.filter(({ view }) => "threadContext" in view.capabilities);
+      await Promise.all(
+        wordsKey.split(" ").flatMap((word) =>
+          searchable.map(async ({ host: h }) => {
+            const answer = await window.parallax.request(h.id, "thread/search", {
+              query: word,
+              limit: 100,
+            });
+            if (!("result" in answer)) return;
+            const set = hits.get(word) ?? new Set<string>();
+            hits.set(word, set);
+            for (const t of answer.result.threads) set.add(`${h.id}/${t.id}`);
+            for (const [id, text] of Object.entries(answer.result.snippets ?? {}))
+              if (text && !snippets.has(`${h.id}/${id}`)) snippets.set(`${h.id}/${id}`, text);
+          }),
+        ),
+      );
+      if (live) setFound({ words: wordsKey, hits, snippets });
+    }, 150);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [wordsKey]);
+  const hits = found?.words === wordsKey ? found : undefined;
+  // By key: the words each shown row matched only in its messages.
+  const matched = new Map<string, string[]>();
+  for (const i of items) {
+    const m = searchMatch(words, i.text, (w) => !!hits?.hits.get(w)?.has(i.key));
+    if (m) matched.set(i.key, m);
+  }
+  // While plxd's matches in messages are on their way, an empty list isn't "No matches" yet.
+  const searching = !hits && hosts.some(({ view }) => "threadContext" in view.capabilities);
+  const snippetOf = (i: Item) =>
+    matched.get(i.key)?.length ? hits?.snippets.get(i.key) : undefined;
+
+  // Threads another thread started, subagents among them, don't list (0075).
+  const shown = items
+    .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
+    .filter((i) => !(i.kind === "thread" && i.thread.parent))
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  // Traditional's pinned orchestrator threads, as cards with its pinned threads, in the order pinned,
+  // and so out of their folders. Otherwise an orchestrator lists as a thread does (0093): in Today
+  // by activity, in Working while it works, and in its repo's folder.
+  const pinnedOrchestrators = folders
+    ? pins.flatMap((key) =>
+        shown.flatMap((p) => (p.kind === "orchestrator" && p.key === key ? [p] : [])),
+      )
+    : [];
+  // The favorite threads stay in the order they're moved into (pins.ts).
+  const favOrder = favoriteOrder.use();
+  const favRank = (key: string) => {
+    const n = favOrder.indexOf(key);
+    return n < 0 ? Infinity : n;
+  };
+  const pool = shown.filter((i) => !isArchived(i) && !isSnoozed(i));
+  const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
+  const archived = shown.filter(isArchived);
+  // Unsent New Thread prompts (PLX-788), atop the list, on hosts still listed.
+  const draftRows = draftItems(drafts.use(), hosts, scope, words);
+
+  // Pinned threads stay put; the rest sit in Working while they work (PLX-777: a thread waiting on
+  // background work or a watched pull request stays there too).
+  const pinned = pool.filter((i) => i.kind === "thread" && i.thread.pinned);
+  const unpinned = pool.filter(
+    (i) => !pinned.includes(i) && !pinnedOrchestrators.some((p) => p === i),
+  );
+  // The pinned threads moved up into the favorites, which leave the pinned rows.
+  const favoriteKeys = pinFavorites.use();
+  const favoriteThreads = favoriteKeys.flatMap((k) => {
+    const i = byKey.get(k);
+    return i?.kind === "thread" &&
+      i.thread.pinned &&
+      !isArchived(i) &&
+      !isSnoozed(i) &&
+      !doomed.has(k) &&
+      matched.has(k)
+      ? [i]
+      : [];
+  });
+  // The other pinned threads, as rows atop Today in the order dragged into (PLX-1043).
+  const pinOrder = pinLayout.use();
+  const pinnedRows = orderOf(
+    pinOrder,
+    pinned.flatMap((i) => (favoriteThreads.some((f) => f === i) ? [] : [i.key])),
+  ).map((k) => byKey.get(k)!);
+  const workingTops = workingSection ? unpinned.filter((i) => working(rowAttention(i))) : [];
+  const topThreads = unpinned.filter((i) => !workingTops.includes(i));
+  const selectedKey =
+    selection.kind === "thread"
+      ? `${host.id}/${selection.threadId}`
+      : selection.kind === "orchestrator"
+        ? `${host.id}/${selection.orchestratorId}`
+        : undefined;
+  // The row that reads as open: the open thread's, or while a thread another started is open, which
+  // doesn't list, the row of the thread at the top of its family.
+  const openKey = selectedKey && topOf(selectedKey);
+  // Opening a thread marked unread reads it.
+  useEffect(() => {
+    if (selectedKey && unread.includes(selectedKey))
+      pinUnread.set(pinUnread.get().filter((k) => k !== selectedKey));
+  }, [selectedKey, unread.includes(selectedKey ?? "")]);
+  // Today, grouped as its View says, under each repo or each day (Inbox), or Traditional's
+  // folders, a repo's threads and orchestrators in each, by name (0094). Each kind folds in its own store.
+  const todayBy = todayGroup.use();
+  const compact = compactRows.use();
+  const todayShut = todayFolded.use();
+  const foldersShut = folderFolded.use();
+  const foldStore = folders ? folderFolded : todayFolded;
+  const foldedGroups = folders ? foldersShut : todayShut;
+  // A search shows every match, folded or not.
+  const isFolded = (key: string) => !words.length && foldedGroups.includes(key);
+  const groups: Group[] | undefined = folders
+    ? folderGroups(topThreads, many)
+    : todayBy === "none"
+      ? undefined
+      : todayGroups(topThreads, todayBy, now, many);
+  // Today's rows in the order they show, none from a folded group.
+  const todayRows = groups ? groups.flatMap((g) => (isFolded(g.key) ? [] : g.rows)) : topThreads;
+  // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
+  // pinned rows, unless Traditional's Pinned is folded, then Today's, then Working's, while it's open.
+  const pinsShut = pinnedFolded.use() && folders;
+  // A search shows what it finds in Working, as it does in a folded group.
+  const workingOpen = sections.working || words.length > 0;
+  const listed = [
+    ...(pinsShut ? [] : [...pinnedOrchestrators, ...pinnedRows]),
+    ...todayRows,
+    ...(workingOpen ? workingTops : []),
+  ];
+  const modHeld = useModHeld();
+  // Opening a row hides its card, which would cover what it opens.
+  const openItem = (item: Item) => {
+    hideCard();
+    onSelect(
+      item.host.id,
+      item.kind === "orchestrator"
+        ? { kind: "orchestrator", orchestratorId: item.orchestrator.id }
+        : item.orchestration
+          ? { kind: "orchestrator", orchestratorId: item.orchestration.orchestrator.id }
+          : { kind: "thread", threadId: item.thread.id },
+    );
+  };
+
+  // Switching scope reopens the row last open there, if it still is and isn't archived.
+  const setScope = (next: Scope, reopen = true) => {
+    quiet();
+    scopeStore.set(next);
+    setPicked(new Set());
+    const last = reopen ? byKey.get(lastOpenStore.get()[next] ?? "") : undefined;
+    if (last && last.key !== selectedKey && inScope(last, next) && !isArchived(last))
+      openItem(last);
+  };
+  useEffect(() => {
+    const item = selectedKey ? byKey.get(selectedKey) : undefined;
+    if (!item || !inScope(item, scope) || lastOpenStore.get()[scope] === selectedKey) return;
+    lastOpenStore.set({ ...lastOpenStore.get(), [scope]: selectedKey! });
+  });
+
+  // ⌥↓ and ⌥↑: the next or previous row that needs the user, switching to every thread when it's
+  // outside this scope.
+  const jump = (step: 1 | -1) => {
+    const key = jumpTarget(jumpList, selectedKey, step);
+    const item = key ? byKey.get(key) : undefined;
+    if (!item) return toast("Nothing needs you right now");
+    if (!inScope(item, scope)) {
+      setScope("all", false);
+      toast(`Switched to All threads for “${short(item.title)}”`);
+    }
+    if (!matched.has(item.key)) setQuery("");
+    focusNext.current = { key: item.key };
+    openItem(item);
+  };
+
+  useLayoutEffect(() => {
+    const next = focusNext.current;
+    if (!next) return;
+    const rows = shownRows().filter((r) => r.dataset["row"] !== next.skip);
+    focusNext.current = undefined;
+    const row =
+      next.key !== undefined
+        ? rows.find((r) => r.dataset["row"] === next.key)
+        : rows[Math.min(next.index ?? 0, rows.length - 1)];
+    row?.focus({ preventScroll: true });
+    row?.scrollIntoView({ block: "nearest" });
+  });
+
+  // A thread that just finished flashes once.
+  const lastAttention = useRef(new Map<string, Attention>());
+  useEffect(() => {
+    const done = items.filter(
+      (i) => i.attention === "done" && working(lastAttention.current.get(i.key) ?? "settled"),
+    );
+    lastAttention.current = new Map(items.map((i) => [i.key, i.attention]));
+    if (!done.length) return;
+    const keys = done.map((i) => i.key);
+    setFlashing((f) => new Set([...f, ...keys]));
+    setTimeout(() => setFlashing((f) => new Set([...f].filter((k) => !keys.includes(k)))), 1800);
+  });
+
+  // Held-back deletes go through once the list closes, or the window does, so nothing is left
+  // half done; their Undo ends then.
+  useEffect(() => {
+    window.addEventListener("beforeunload", flushToasts);
+    return () => {
+      window.removeEventListener("beforeunload", flushToasts);
+      flushToasts();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector("dialog[open]")) return;
+      const target = e.target as HTMLElement;
+      const n = rowShortcut(e);
+      const item = n === undefined ? undefined : listed[n];
+      if (item) {
+        e.preventDefault();
+        return openItem(item);
+      }
+      // ⌥↓ and ⌥↑, but not where they move the caret through text.
+      const prose = target.tagName === "TEXTAREA" || target.isContentEditable;
+      const plainAlt = e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey;
+      if (plainAlt && !prose && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        e.preventDefault();
+        return jump(e.key === "ArrowDown" ? 1 : -1);
+      }
+      const typing = prose || target.tagName === "INPUT" || target.tagName === "SELECT";
+      if (typing) return;
+      if (modOnly(e) && e.code === "KeyZ") {
+        if (undo()) e.preventDefault();
+      } else if (e.key === "Escape" && picked.size) {
+        e.preventDefault();
+        setPicked(new Set());
+      } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        search.current?.focus();
       }
     };
-    if (card) open();
-    // A card that shows after the delay starts afresh; moving between rows keeps the set.
-    else
-      cardTimer.current = window.setTimeout(() => {
-        refreshed.current.clear();
-        open();
-      }, cardDelay);
-  };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
   const hideCard = () => {
-    window.clearTimeout(cardTimer.current);
-    setCard(undefined);
+    cancelPrefetch();
+    card.current?.hide();
   };
 
-  const threadRow = (t: Thread) => (
-    <ThreadRow
-      key={t.id}
-      thread={t}
-      title={title(t)}
-      run={threads.state.runs[t.id]}
-      selected={selection.kind === "thread" && selection.threadId === t.id}
-      onOpen={() => onSelect({ kind: "thread", threadId: t.id })}
-      onArchive={async () => setActionError(await threads.archive(t.id, !t.archived))}
-      onDelete={() => {
-        setToDelete(t);
-        setDeleteError(undefined);
-        deleteDialog.current?.showModal();
-      }}
-      onRest={(row) => showCard(t, row)}
-      onLeave={hideCard}
-    />
-  );
+  const askDelete = (item: Item) => {
+    // Orchestration owns its children, so keep its cascading delete and confirmation.
+    setToDelete(
+      item.kind === "thread" && item.orchestration
+        ? { ...item, kind: "orchestrator", ...item.orchestration }
+        : item,
+    );
+    setDeleteError(undefined);
+    deleteDialog.current?.showModal();
+  };
 
-  const addRepository = async () => {
-    const path = await window.wisp.pickFolder();
-    if (!path) return;
-    const repo = await threads.addRepo(path);
-    if (typeof repo === "string") return setActionError(repo);
-    setActionError(undefined);
-    onSelect({ kind: "new", groupId: repo.id });
+  // What the user changes shows a toast with Undo, which puts back only what they changed.
+  // After E or S on the row `key`, once plxd answers: focus the row now at `focusAt`, the one that
+  // took its place, unless focus has moved on since, as to another row or into the search box. The
+  // row that left can still list for a render, until its host's change arrives, so it's skipped.
+  const focusAfter = (key: string, focusAt?: number) => {
+    const here = document.activeElement;
+    const on = here?.closest<HTMLElement>("[data-row]")?.dataset["row"];
+    if (focusAt === undefined || (here && here !== document.body && on !== key)) return;
+    focusNext.current = { index: focusAt, skip: key };
+    refocus((n) => n + 1);
+  };
+  // `focusAt` comes from E, for `focusAfter`.
+  const archive = async (item: Item, focusAt?: number) => {
+    if (item.kind !== "thread" || leaving.current.has(item.key)) return;
+    const { thread: t, host: h } = item;
+    const was = !!t.archived;
+    leaving.current.add(item.key);
+    // Archiving, the row slides away first; it comes back if plxd says no.
+    const sweep = was ? undefined : sweepOut([item.key], "translateX(-12px)");
+    if (sweep?.done) await sweep.done;
+    const error = await item.view.archive(t.id, !was);
+    leaving.current.delete(item.key);
+    actionFailed(error, was ? "Couldn't unarchive the thread" : "Couldn't archive the thread");
+    if (error) return sweep?.restore();
+    focusAfter(item.key, focusAt);
+    toast(was ? "Unarchived" : `Archived “${short(item.title)}”`, () => {
+      void viewOf(h.id)?.archive(t.id, was);
+    });
+  };
+  const snoozeUntil = async (item: Item, until: Date, focusAt?: number) => {
+    if (item.kind !== "thread") return;
+    const { thread: t, host: h } = item;
+    const was = t.snoozedUntil;
+    const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
+    actionFailed(error, "Couldn't snooze the thread");
+    if (error) return;
+    // A row that stays, as one already snoozed or archived or that needs the user, keeps focus.
+    const stays = isSnoozed(item) || isArchived(item) || rowAttention(item) === "needsYou";
+    focusAfter(item.key, stays ? undefined : focusAt);
+    const ending = until.getTime() <= Date.now();
+    toast(ending ? "Unsnoozed" : `Snoozed until ${when(until)}`, () => {
+      // With no snooze to restore, a past time ends this one. Its creation keeps its place in the list.
+      void viewOf(h.id)?.update(t.id, { snoozedUntil: was ?? t.createdAt });
+    });
+  };
+  // A thread row dragged onto another section (PLX-1095): Today takes it out of Archived or
+  // Snoozed, Snoozed snoozes it for an hour, and Archived archives it.
+  const takes = (to: "today" | "snoozed" | "archived", item: Item) =>
+    to === "today"
+      ? isArchived(item) || isSnoozed(item)
+      : to === "snoozed"
+        ? "threadAttention" in item.view.capabilities && (isArchived(item) || !isSnoozed(item))
+        : !isArchived(item);
+  const moveTo = async (to: "today" | "snoozed" | "archived", item: Item) => {
+    setMovingKey(undefined);
+    if (to === "archived") return archive(item);
+    if (isArchived(item)) await archive(item);
+    if (to === "snoozed") await snoozeUntil(item, new Date(Date.now() + 36e5));
+    else if (isSnoozed(item)) await snoozeUntil(item, new Date());
+  };
+  // The section a dragged row would land in, if it takes the row.
+  const dropOn = (to: "snoozed" | "archived") =>
+    moving && takes(to, moving) ? () => void moveTo(to, moving) : undefined;
+  const markUnread = (item: Item) => {
+    pinUnread.set([...pinUnread.get().filter((k) => k !== item.key), item.key]);
+    toast(`Marked “${short(item.title)}” unread`, () =>
+      pinUnread.set(pinUnread.get().filter((k) => k !== item.key)),
+    );
+  };
+  const pin = async (item: Item) => {
+    if (item.kind !== "thread" || item.thread.parent) return;
+    const { thread: t, host: h } = item;
+    const was = !!t.pinned;
+    const error = await item.view.update(t.id, { pinned: !was });
+    actionFailed(error, was ? "Couldn't unpin the thread" : "Couldn't pin the thread");
+    if (!error)
+      toast(was ? "Unpinned" : "Pinned to top", () => {
+        void viewOf(h.id)?.update(t.id, { pinned: was });
+      });
+  };
+  const rename = async (item: Item, title: string | undefined) => {
+    setRenaming(undefined);
+    focusNext.current = { key: item.key };
+    const next = title?.trim();
+    if (item.kind !== "thread" || !next || next === item.title) return;
+    const { thread: t, host: h } = item;
+    const was = t.title ?? "";
+    const error = item.orchestration
+      ? await item.view.updateOrchestrator(item.orchestration.orchestrator.id, { name: next })
+      : await item.view.update(t.id, { title: next });
+    actionFailed(error, "Couldn't rename the thread");
+    if (!error)
+      toast("Renamed", () => {
+        if (item.orchestration)
+          void viewOf(h.id)?.updateOrchestrator(item.orchestration.orchestrator.id, {
+            name: item.title,
+          });
+        else void viewOf(h.id)?.update(t.id, { title: was });
+      });
+  };
+  // The picked threads that are still listed, including backed orchestrator threads.
+  const pickedItems = [...picked].flatMap((k) => {
+    const i = byKey.get(k);
+    return i?.kind === "thread" && !doomed.has(k) ? [i] : [];
+  });
+  const pick = (item: Item, range: boolean) => {
+    if (item.kind !== "thread") return;
+    const next = new Set(picked);
+    const from = anchor.current;
+    if (range && from) {
+      const keys = shownRows('[data-kind="thread"]').map((r) => r.dataset["row"]!);
+      const [a, b] = [keys.indexOf(from), keys.indexOf(item.key)];
+      if (a >= 0 && b >= 0)
+        for (const k of keys.slice(Math.min(a, b), Math.max(a, b) + 1)) next.add(k);
+    } else if (!next.delete(item.key)) next.add(item.key);
+    anchor.current = item.key;
+    setPicked(next);
+  };
+  const bulk = async (action: "archive" | "snooze" | "pin") => {
+    const list = pickedItems.map((i) => ({ item: i, t: i.thread }));
+    if (!list.length) return;
+    const n = plural(list.length, "thread");
+    const errors: (string | undefined)[] = [];
+    if (action === "archive") {
+      const keys = list.map(({ item }) => item.key);
+      if (keys.some((k) => leaving.current.has(k))) return;
+      for (const k of keys) leaving.current.add(k);
+      const sweep = sweepOut(keys, "translateX(-12px)", 25);
+      if (sweep.done) await sweep.done;
+      errors.push(...(await Promise.all(list.map(({ item, t }) => item.view.archive(t.id, true)))));
+      for (const k of keys) leaving.current.delete(k);
+      sweep.restore(keys.filter((_, n) => errors[n]));
+      setPicked(new Set());
+      toast(`Archived ${n}`, () => {
+        for (const { item, t } of list)
+          if (!t.archived) void viewOf(item.host.id)?.archive(t.id, false);
+      });
+    } else if (action === "snooze") {
+      // Only where plxd keeps snoozes (`threadAttention`).
+      const able = list.filter(({ item }) => "threadAttention" in item.view.capabilities);
+      if (!able.length) return;
+      const until = new Date(Date.now() + 3_600_000).toISOString();
+      errors.push(
+        ...(await Promise.all(
+          able.map(({ item, t }) => item.view.update(t.id, { snoozedUntil: until })),
+        )),
+      );
+      setPicked(new Set());
+      toast(`Snoozed ${plural(able.length, "thread")} for an hour`, () => {
+        for (const { item, t } of able)
+          void viewOf(item.host.id)?.update(t.id, {
+            snoozedUntil: t.snoozedUntil ?? t.createdAt,
+          });
+      });
+    } else {
+      // Only top-level threads, where plxd keeps pins.
+      const tops = list.filter(({ item, t }) => !t.parent && pinsOn(item.view));
+      if (!tops.length) return;
+      const on = !tops.every(({ t }) => t.pinned);
+      errors.push(
+        ...(await Promise.all(tops.map(({ item, t }) => item.view.update(t.id, { pinned: on })))),
+      );
+      toast(`${on ? "Pinned" : "Unpinned"} ${plural(tops.length, "thread")}`, () => {
+        for (const { item, t } of tops)
+          void viewOf(item.host.id)?.update(t.id, { pinned: !!t.pinned });
+      });
+    }
+    actionFailed(errors.find(Boolean), `Couldn't ${action} every thread`);
+  };
+  // Down or Up from the focused row to the next or previous one shown, drafts among them.
+  const stepRows = (e: ReactKeyboardEvent<HTMLElement>) => {
+    e.preventDefault();
+    const rows = shownRows();
+    const next = rows[rows.indexOf(e.currentTarget) + (e.key === "ArrowDown" ? 1 : -1)];
+    next?.focus();
+    next?.scrollIntoView({ block: "nearest" });
+  };
+  const rowKeys = (e: ReactKeyboardEvent<HTMLElement>, item: Item) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return;
+    const at = shownRows().indexOf(e.currentTarget);
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const thread = item.kind === "thread";
+    const can = (capability: string) => thread && capability in item.view.capabilities;
+    const act = (run: () => void, after?: { key?: string }) => {
+      e.preventDefault();
+      focusNext.current = after;
+      run();
+    };
+    if (key === "ArrowDown" || key === "ArrowUp") stepRows(e);
+    else if (key === "e" && thread) act(() => void archive(item, at));
+    else if (key === "s" && can("threadAttention") && !e.shiftKey)
+      act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000), at));
+    else if (key === "p" && thread && pinsOn(item.view) && !item.thread.parent)
+      act(() => void pin(item), { key: item.key });
+    else if (
+      key === "r" &&
+      can(thread && item.orchestration ? "orchestratorEdit" : "threadLineage")
+    )
+      act(() => setRenaming(item.key));
+    else if (key === "u" && thread && item.attention === "settled") act(() => markUnread(item));
+    else if (key === "a")
+      act(() =>
+        e.currentTarget
+          .closest("li")
+          ?.querySelector<HTMLElement>('[aria-label$="actions"]')
+          ?.click(),
+      );
+    else if (key === "x" && thread) act(() => pick(item, e.shiftKey), { key: item.key });
+    else if ((key === "Backspace" || key === "Delete") && thread) act(() => askDelete(item));
+  };
+
+  // A thread's row. `nested`, under its repo's heading, it needn't name the repo. A pinned one
+  // moves among the pins with `pinDrag`.
+  const row = (item: Item, nested = false, pinDrag?: PinDrag) => {
+    if (item.kind !== "thread") return null;
+    const n = modHeld ? listed.indexOf(item) : -1;
+    const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
+    const selected = item.key === openKey;
+    const { thread: t, view } = item;
+    const pinnable = pinsOn(view) && !t.parent;
+    const projects = t.parent ? undefined : projectChoices(t, view, hosts);
+    return (
+      <ThreadRow
+        key={item.key}
+        look={compact ? "compact" : folders ? "dense" : undefined}
+        at={item.at}
+        {...(pinDrag && { pinDrag })}
+        rowKey={item.key}
+        orchestration={
+          item.orchestration
+            ? orchestratorActions({ ...item, kind: "orchestrator", ...item.orchestration }).filter(
+                (a) => a.label !== "Rename…" && !a.danger,
+              )
+            : undefined
+        }
+        orchestratorBranch={
+          item.orchestration &&
+          (item.orchestration.orchestrator.integrationBranch ??
+            item.orchestration.orchestrator.branch)
+        }
+        thread={t}
+        hostId={item.host.id}
+        device={item.host}
+        title={item.title}
+        run={item.run}
+        repo={item.repo}
+        project={t.project ? view.state.repos.find((r) => r.id === t.project) : undefined}
+        attention={rowAttention(item)}
+        selected={selected}
+        picked={picked.has(item.key)}
+        flash={flashing.has(item.key)}
+        badge={badge}
+        nested={nested}
+        words={words}
+        snippet={snippetOf(item)}
+        renaming={renaming === item.key}
+        snoozable={"threadAttention" in view.capabilities}
+        renamable={
+          item.orchestration
+            ? "orchestratorEdit" in view.capabilities
+            : "threadLineage" in view.capabilities
+        }
+        autoResumable={"autoResume" in view.capabilities}
+        onOpen={(e) => {
+          const mod = mac() ? e.metaKey : e.ctrlKey;
+          if (mod || e.shiftKey) return pick(item, e.shiftKey);
+          setPicked(new Set());
+          anchor.current = item.key;
+          openItem(item);
+        }}
+        onOpenPr={(url) => {
+          setPicked(new Set());
+          anchor.current = item.key;
+          if (item.orchestration) openItem(item);
+          else onSelect(item.host.id, { kind: "thread", threadId: t.id, pr: { url } });
+        }}
+        onKeys={(e) => rowKeys(e, item)}
+        onArchive={() => void archive(item)}
+        onSnooze={(until) => void snoozeUntil(item, until)}
+        onPin={pinnable ? () => void pin(item) : undefined}
+        onMarkUnread={
+          item.attention === "settled" && item.run && !isRunning(item.run.status)
+            ? () => markUnread(item)
+            : undefined
+        }
+        onRename={(title) => void rename(item, title)}
+        onStartRename={() => setRenaming(item.key)}
+        onDelete={() => askDelete(item)}
+        onOpenInTab={
+          item.orchestration || !onOpenInTab ? undefined : () => onOpenInTab(item.host.id, t.id)
+        }
+        onOpenBeside={
+          !item.orchestration &&
+          item.host.id === host.id &&
+          selection.kind === "thread" &&
+          !selected
+            ? () => onOpenBeside(t.id)
+            : undefined
+        }
+        onFork={
+          "threadFork" in view.capabilities
+            ? async (choice) => {
+                const forked = await view.fork(t.id, undefined, choice);
+                if (typeof forked !== "string") return forked;
+                onSelect(item.host.id, { kind: "thread", threadId: forked });
+                return undefined;
+              }
+            : undefined
+        }
+        projectPicker={
+          projects && !projects.startedIn ? { view, projects: projects.projects } : undefined
+        }
+        onAutoResume={async (autoResume) => {
+          const answer = await window.parallax.request(item.host.id, "agent/autoResume", {
+            runId: t.id,
+            ...(autoResume !== undefined && { autoResume }),
+          });
+          actionFailed(
+            "error" in answer ? answer.error.message : undefined,
+            "Couldn't change auto-resume",
+          );
+        }}
+        onRest={restCard(item)}
+        onLeave={hideCard}
+      />
+    );
+  };
+  // The open thread's card would only repeat what the thread shows. Another's watch opens, so a
+  // click shows it at once.
+  const restCard = (item: Item) => (el: HTMLElement) => {
+    if (item.kind !== "thread" || item.key === selectedKey) return;
+    prefetchThread(item.host.id, item.thread.id);
+    const place = placeOf(item);
+    card.current?.show(el, {
+      title: item.title,
+      run: item.run,
+      repo: { name: place?.name ?? "No repo", icon: <RepoIcon repo={place} /> },
+      host: item.host,
+      snoozedUntil: item.thread.snoozedUntil,
+    });
   };
 
   const confirmDelete = async () => {
     if (!toDelete) return;
+    if (toDelete.kind === "thread") {
+      // Held back while Undo can take it back; it goes once the toast does.
+      const { key, host: h, thread: t, title } = toDelete;
+      deleteDialog.current?.close();
+      setDoomed((d) => new Set(d).add(key));
+      if (key === selectedKey)
+        onSelect(h.id, { kind: "new", groupId: groupOf(toDelete.view.state, t) });
+      const restore = () =>
+        setDoomed((d) => {
+          const next = new Set(d);
+          next.delete(key);
+          return next;
+        });
+      toast(`Deleted “${short(title)}”`, restore, () => {
+        void onDelete(h.id, t).then((error) => {
+          restore();
+          actionFailed(error, "Couldn't delete the thread");
+        });
+      });
+      return;
+    }
     setDeleting(true);
-    // A running thread's agent is stopped first, so this can take a moment.
-    const error = await onDelete(toDelete);
+    // Running agents are stopped first, so this can take a moment. Deleting the open orchestrator
+    // leaves it once it's gone from the list (App.tsx).
+    const error = await toDelete.view.removeOrchestrator(toDelete.orchestrator.id);
     setDeleting(false);
     if (error) setDeleteError(error);
     else deleteDialog.current?.close();
   };
 
-  const cardGroup = card && groups.find((g) => g.id === groupOf(threads.state, card.thread));
+  const confirmProjectDelete = async () => {
+    if (!projectToDelete) return;
+    setDeleting(true);
+    const error = await projectToDelete.view.removeProject(projectToDelete.id);
+    setDeleting(false);
+    if (error) return setDeleteError(error);
+    projectDelete.current?.close();
+    pinnedProjects.set(pinnedProjects.get().filter((k) => k !== projectToDelete.key));
+    if (openProject === projectToDelete.key) onSelect(projectToDelete.host.id, { kind: "new" });
+  };
 
-  // The open host's Projects and repositories, under its row.
-  const openHost = (
-    <div className="pb-3">
-      {(!q || shownProjects.length > 0) && (
-        <section aria-labelledby="projects-heading" className="mt-2">
-          <header className="flex items-center justify-between pr-0.5 pl-2">
-            <h2 id="projects-heading" className={heading}>
-              Projects
-            </h2>
-            <IconButton label="New project" onClick={() => newProject.current?.showModal()}>
-              <Plus />
-            </IconButton>
-          </header>
-          <ul>
-            {shownProjects.map((p) => {
-              const selected = selection.kind === "project" && selection.projectId === p.id;
-              return (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    aria-current={selected ? "page" : undefined}
-                    onClick={() => onSelect({ kind: "project", projectId: p.id })}
-                    className={`${row} ${selected ? current : "text-foreground/80"}`}
-                  >
-                    <ProjectIcon className="size-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                    <span className="shrink-0 text-[11.5px] text-faint-foreground">
-                      {age(p.updatedAt)}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
+  // Each favorite's icon, chosen for it, else its repo's.
+  const pinIconsNow = pinIcons.use();
+  const [listOver, setListOver] = useState(false);
+  // The thread row being dragged, for the sections it could move to (PLX-1095).
+  const [movingKey, setMovingKey] = useState<string>();
+  useEffect(() => {
+    const start = (e: DragEvent) => {
+      const t = e.dataTransfer ? draggedThread(e.dataTransfer) : undefined;
+      setMovingKey(t && `${t.hostId}/${t.runId}`);
+    };
+    const end = () => setMovingKey(undefined);
+    window.addEventListener("dragstart", start);
+    window.addEventListener("dragend", end);
+    return () => {
+      window.removeEventListener("dragstart", start);
+      window.removeEventListener("dragend", end);
+    };
+  }, []);
+  const moving = movingKey === undefined ? undefined : byRun.get(movingKey);
+  // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
+  const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
+    ...(!i.orchestration && onOpenInTab
+      ? [
+          {
+            label: "Open in new tab",
+            icon: <PanelTop aria-hidden />,
+            run: () => onOpenInTab(i.host.id, i.thread.id),
+          },
+        ]
+      : []),
+    ...(!i.orchestration &&
+    i.host.id === host.id &&
+    selection.kind === "thread" &&
+    i.key !== openKey
+      ? [
+          {
+            label: "Open side by side",
+            icon: <Columns2 aria-hidden />,
+            run: () => onOpenBeside(i.thread.id),
+          },
+        ]
+      : []),
+    { label: "Archive", icon: <Archive aria-hidden />, shortcut: "E", run: () => void archive(i) },
+    ...("threadAttention" in i.view.capabilities
+      ? [
+          {
+            label: "Snooze for an hour",
+            icon: <AlarmClock aria-hidden />,
+            shortcut: "S",
+            run: () => void snoozeUntil(i, new Date(Date.now() + 3_600_000)),
+          },
+        ]
+      : []),
+    {
+      label: "Delete…",
+      icon: <Trash2 aria-hidden />,
+      danger: true,
+      shortcut: "⌫",
+      run: () => askDelete(i),
+    },
+  ];
+  // A favorite's square: its chosen icon, else its repo's, its status, and its thread's actions.
+  const pinOf = (i: Item & { kind: "thread" }) => {
+    const chosen = pinIconsNow[i.key];
+    const repo = i.repo && !i.repo.scratch ? i.repo : undefined;
+    return {
+      icon: chosen ? (
+        <ProjectIcon icon={chosen} className="size-4" />
+      ) : repo ? (
+        <RepoIcon repo={repo} />
+      ) : (
+        <MessageSquare aria-hidden className="size-4 text-muted-foreground" />
+      ),
+      attention: rowAttention(i),
+      thread: { hostId: i.host.id, id: i.thread.id },
+      actions: threadActions(i),
+      onKeys: (e: ReactKeyboardEvent<HTMLElement>) => {
+        if (/^(e|s|backspace|delete)$/i.test(e.key)) rowKeys(e, i);
+      },
+    };
+  };
+  // Moves `key` into the favorites, last (pins.ts).
+  const favorite = (key: string) =>
+    pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key]);
+  const unfavorite = (key: string) => {
+    if (pinFavorites.get().includes(key))
+      pinFavorites.set(pinFavorites.get().filter((k) => k !== key));
+  };
+  const unpinKey = (key: string) => {
+    const item = byKey.get(key);
+    if (item?.kind === "thread" && item.thread.pinned) void pin(item);
+  };
+  // A favorite's or pin's row opens, or shows its card, by its key.
+  const openKeyed = (key: string) => {
+    const item = byKey.get(key);
+    if (item) openItem(item);
+  };
+  const restKeyed = (key: string, el: HTMLElement) => {
+    const item = byKey.get(key);
+    if (item) restCard(item)(el);
+  };
 
-      <section aria-labelledby="repositories-heading" className="mt-4">
-        <header className="flex items-center justify-between pr-0.5 pl-2">
-          <h2 id="repositories-heading" className={heading}>
-            Repositories
-          </h2>
-          <IconButton
-            label="Add repository"
-            onClick={() => addRepositoryDialog.current?.showModal()}
-          >
-            <FolderPlus />
-          </IconButton>
-        </header>
-        {(threads.error ?? actionError) && (
-          <p role="alert" className="px-2 pb-1 text-[12px] text-danger">
-            {threads.error ?? actionError}
-          </p>
-        )}
-        {shownGroups.map((g) => {
-          // A search shows every match, collapsed or not.
-          const open = !!q || !collapsed.has(g.id);
-          const Icon = g.id === noRepo ? House : open ? FolderOpen : Folder;
-          const Chevron = open ? ChevronDown : ChevronRight;
-          return (
-            <div key={g.id} className="mb-1">
-              {/* Clicking shows or hides its threads; hovering swaps the icon for a chevron
-                  and shows New thread, lined up with the header's buttons. */}
-              <div className="group/repo relative">
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() =>
-                    setCollapsed((prev) => {
-                      const next = new Set(prev);
-                      if (!next.delete(g.id)) next.add(g.id);
-                      return next;
-                    })
-                  }
-                  className={`${row} pr-9 text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0`}
-                >
-                  <Icon
-                    aria-hidden
-                    className="group-has-[:focus-visible]/repo:hidden group-hover/repo:hidden"
-                  />
-                  <Chevron
-                    aria-hidden
-                    className="hidden group-has-[:focus-visible]/repo:block group-hover/repo:block"
-                  />
-                  <span className="truncate">{g.name}</span>
-                </button>
-                <div className="absolute top-1/2 right-0.5 -translate-y-1/2 opacity-0 group-has-[:focus-visible]/repo:opacity-100 group-hover/repo:opacity-100">
-                  <IconButton
-                    label={`New thread in ${g.name}`}
-                    onClick={() => onSelect({ kind: "new", groupId: g.id })}
-                  >
-                    <SquarePen />
-                  </IconButton>
-                </div>
-              </div>
-              {open &&
-                (g.threads.length > 0 ? (
-                  <ul>{g.threads.map(threadRow)}</ul>
-                ) : (
-                  g.id !== noRepo && (
-                    <p className="py-1 pl-7.5 text-[12.5px] text-faint-foreground">
-                      No threads yet
-                    </p>
-                  )
-                ))}
-            </div>
-          );
-        })}
-        {q &&
-          shownGroups.length === 0 &&
-          shownProjects.length === 0 &&
-          shownArchived.length === 0 && (
-            <p className="px-2 py-1 text-[12.5px] text-faint-foreground">Nothing matches</p>
+  const pinList = (
+    <PinList
+      keys={pinnedRows.map((i) => i.key)}
+      searching={words.length > 0}
+      row={(key, drag) => {
+        const item = byKey.get(key);
+        return item && row(item, false, drag);
+      }}
+      onPinThread={(hostId, threadId) => {
+        const item = byRun.get(`${hostId}/${threadId}`);
+        if (item?.kind !== "thread") return;
+        // An archived or snoozed row dropped on the pins comes back too (PLX-1095).
+        if (takes("today", item)) void moveTo("today", item);
+        if (!item.thread.pinned && !item.thread.parent) void pin(item);
+      }}
+      onPlaced={unfavorite}
+    />
+  );
+  // A pinned thread dragged onto the thread list unpins, and an archived or snoozed one comes back.
+  const unpinning = (e: ReactDragEvent<HTMLElement>) =>
+    e.dataTransfer.types.includes(pinDragType) && draggedPin()?.kind === "thread";
+  const listZone = {
+    onDragOver: (e: ReactDragEvent<HTMLElement>) => {
+      if (!unpinning(e) && !(moving && takes("today", moving))) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setListOver(true);
+    },
+    onDragLeave: (e: ReactDragEvent<HTMLElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setListOver(false);
+    },
+    onDrop: (e: ReactDragEvent<HTMLElement>) => {
+      setListOver(false);
+      const dragged = draggedPin();
+      if (dragged?.kind === "thread") {
+        e.preventDefault();
+        forgetPin(dragged.key);
+        unfavorite(dragged.key);
+        unpinKey(dragged.key);
+      } else if (moving && takes("today", moving)) {
+        e.preventDefault();
+        void moveTo("today", moving);
+      }
+    },
+  };
+  const listLook = listOver ? dropLook : "";
+  const newsDot: Partial<Record<Attention, string>> = {
+    failed: "bg-danger",
+    done: "bg-added",
+    needsYou: "bg-warning",
+  };
+  // Opening a row in a folded group opens the group, so its row shows.
+  const openGroupKey = groups?.find((g) => g.rows.some((i) => i.key === openKey))?.key;
+  useEffect(() => {
+    if (openGroupKey && foldStore.get().includes(openGroupKey))
+      foldStore.set(foldStore.get().filter((k) => k !== openGroupKey));
+  }, [openKey, mode]);
+  // A row of the list: a thread's, or an orchestrator thread's.
+  const rowOf = (i: Item, nested = false) =>
+    i.kind === "orchestrator" ? orchestratorCard(i, nested) : row(i, nested);
+  // Each group under a heading that folds it, which while folded shows whether anything in it
+  // finished or failed, and sticks to the top while its rows scroll under it. Alt-click folds or
+  // opens them all. Today's headings are quiet labels on a rule; Traditional's are rows, as a repo's
+  // folder is in Codex, with its rows set in under it.
+  const groupList = (list: Group[]) => {
+    const keys = list.map((g) => g.key);
+    const fold = (key: string, open: boolean, all: boolean) =>
+      foldStore.set(
+        all
+          ? open
+            ? [...new Set([...foldedGroups, ...keys])]
+            : foldedGroups.filter((k) => !keys.includes(k))
+          : open
+            ? [...foldedGroups, key]
+            : foldedGroups.filter((k) => k !== key),
+      );
+    return list.map((g) => {
+      const open = !isFolded(g.key);
+      const urgent = mostUrgent(g.rows.map(rowAttention));
+      const news = !open && newsDot[urgent] && (
+        <span aria-hidden className={`dot-in size-1.5 shrink-0 rounded-full ${newsDot[urgent]}`} />
+      );
+      const count = <Tick value={g.rows.length} />;
+      const label = (
+        <>
+          {g.byRepo && <RepoIcon repo={g.repo} />}
+          <span className="min-w-0 truncate">{g.label}</span>
+          {/* Repos on two computers can share a name. */}
+          {g.host && (
+            <span className="min-w-0 truncate font-normal text-faint-foreground">{g.host}</span>
           )}
-      </section>
-    </div>
+        </>
+      );
+      return (
+        <li key={g.key} className={folders ? "mt-0.5 first:mt-0" : "mt-2 first:mt-0"}>
+          <div className="sticky top-0 z-10 bg-sidebar">
+            <button
+              type="button"
+              aria-expanded={open}
+              disabled={words.length > 0}
+              onClick={(e) => fold(g.key, open, e.altKey)}
+              className={folders ? folderHeading : groupHeading}
+            >
+              {folders ? (
+                <>
+                  {label}
+                  {news}
+                  <span className="ml-auto shrink-0 text-meta font-normal text-faint-foreground">
+                    {count}
+                  </span>
+                  <ChevronRight
+                    aria-hidden
+                    className={`size-3.5 shrink-0 text-faint-foreground transition-transform duration-200 ${open ? "rotate-90" : ""}`}
+                  />
+                </>
+              ) : (
+                <>
+                  {label}
+                  <span className="shrink-0 overflow-hidden rounded-full bg-foreground/[0.06] px-1.5 text-caption leading-4 text-faint-foreground">
+                    {count}
+                  </span>
+                  {news}
+                  <span aria-hidden className="mx-1 h-px flex-1 bg-border" />
+                  <ChevronDown
+                    aria-hidden
+                    className={`text-faint-foreground transition-[transform,opacity] duration-200 ${open ? "opacity-0 group-enabled/heading:group-hover/heading:opacity-100" : "-rotate-90"}`}
+                  />
+                </>
+              )}
+            </button>
+          </div>
+          <Fold open={open}>
+            {/* Under its repo's heading, a row needn't name the repo: title and status, then details. */}
+            <ul className={folders ? "flex flex-col gap-0.5 py-0.5 pl-3" : cardGap}>
+              {g.rows.map((i) => rowOf(i, g.byRepo))}
+            </ul>
+          </Fold>
+        </li>
+      );
+    });
+  };
+  // With nothing left, Today is blank (PLX-1043); a search that finds nothing says so.
+  const threadList = () => {
+    const empty = draftRows.length === 0 && todayRows.length === 0 && !groups?.length;
+    return (
+      // It fills the space left, so a pinned, archived, or snoozed thread can drop anywhere in it.
+      <div {...listZone} className={`flex-1 rounded-lg transition-colors ${listLook}`}>
+        <ul aria-label="Threads" className={cardGap}>
+          {groups ? groupList(groups) : topThreads.map((i) => rowOf(i))}
+        </ul>
+        {empty && words.length > 0 && <p className={emptyNote}>Nothing matches</p>}
+      </div>
+    );
+  };
+  // Discards a draft, with Undo.
+  const discardDraft = (draft: Draft) => {
+    drafts.remove(draft.id);
+    toast("Discarded the draft", () => drafts.put(draft));
+  };
+  // A draft's keys: Up and Down move through the rows, and Backspace or Delete discards it.
+  const draftKeys = (e: ReactKeyboardEvent<HTMLElement>, d: DraftItem) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") stepRows(e);
+    else if (e.key === "Backspace" || e.key === "Delete") {
+      e.preventDefault();
+      focusNext.current = { index: shownRows().indexOf(e.currentTarget), skip: d.key };
+      discardDraft(d.draft);
+    }
+  };
+  // The unsent New Thread prompts, atop the list under a line (0094).
+  const draftList = draftRows.length > 0 && (
+    <>
+      <ul aria-label="Drafts" className={cardGap}>
+        {draftRows.map((d) => (
+          <DraftRow
+            key={d.key}
+            rowKey={d.key}
+            draft={d.draft}
+            repo={d.repo}
+            compact={compact}
+            dense={folders}
+            onOpen={() =>
+              onSelect(d.draft.hostId, {
+                kind: "new",
+                groupId: d.draft.groupId,
+                draft: d.draft.id,
+              })
+            }
+            onDiscard={() => discardDraft(d.draft)}
+            onKeys={(e) => draftKeys(e, d)}
+          />
+        ))}
+      </ul>
+      <Rule />
+    </>
+  );
+
+  // What auto-archive may archive: a finished thread in Today already seen, but not one waiting
+  // out a usage limit (0049), which resumes on its own, or one whose family is still at work.
+  const archivable = topThreads.filter(
+    (i) =>
+      i.kind === "thread" &&
+      rowAttention(i) === "settled" &&
+      i.run?.status !== "waiting" &&
+      !busyFamilies.has(i.key),
+  );
+  // Arc archives a tab left alone long enough; so does Today, for a finished thread you've seen
+  // that's been quiet, neither prompted nor running, longer than you chose.
+  const autoHours = autoClear.use();
+  useEffect(() => {
+    if (autoHours === null) return;
+    const cutoff = now - autoHours * 36e5;
+    const stale = archivable.flatMap((i) =>
+      i.kind === "thread" &&
+      Math.max(Date.parse(i.at), i.run ? Date.parse(i.run.updatedAt) : 0) < cutoff &&
+      !autoArchived.has(i.key)
+        ? [i]
+        : [],
+    );
+    if (!stale.length) return;
+    for (const i of stale) autoArchived.add(i.key);
+    void Promise.all(stale.map((i) => i.view.archive(i.thread.id, true))).then((errors) => {
+      const archived = stale.filter((_, n) => !errors[n]);
+      if (!archived.length) return;
+      toast(
+        `Archived ${plural(archived.length, "thread")} quiet for over ${quietFor(autoHours)}`,
+        () => {
+          for (const i of archived) void viewOf(i.host.id)?.archive(i.thread.id, false);
+        },
+      );
+    });
+  });
+  // An orchestrator's own menu items, where its plxd allows each (0043, PLX-803).
+  const orchestratorActions = (item: Item & { kind: "orchestrator" }): FavoriteAction[] => {
+    const { orchestrator, view } = item;
+    const open = (what: EntryDialog) => (square: HTMLElement) =>
+      entryDialogs.current?.open(what, orchestrator, view, square);
+    const can = (capability: string) => capability in view.capabilities;
+    return [
+      ...(can("orchestratorEdit")
+        ? [
+            { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
+            { label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") },
+          ]
+        : []),
+      ...(can("orchestratorPermission") && orchestrator.permission !== "bypass"
+        ? [{ label: "Full access…", icon: <ShieldCheck aria-hidden />, run: open("access") }]
+        : []),
+      ...(can("orchestratorAutonomy")
+        ? [{ label: "Autonomy…", icon: <Bot aria-hidden />, run: open("autonomy") }]
+        : []),
+      // Its orchestrator's next message starts a new session from the orchestrator's state (0079).
+      ...(can("orchestratorEpochs") && orchestrator.run
+        ? [
+            {
+              label: "Fresh session",
+              icon: <RotateCcw aria-hidden />,
+              run: async () => {
+                const answer = await window.parallax.request(item.host.id, "orchestrator/fresh", {
+                  orchestrator: orchestrator.id,
+                });
+                actionFailed(
+                  "error" in answer ? answer.error.message : undefined,
+                  "Couldn't start a fresh session",
+                );
+              },
+            },
+          ]
+        : []),
+      ...(can("orchestratorDelete")
+        ? [
+            {
+              label: "Delete…",
+              icon: <Trash2 aria-hidden />,
+              danger: true,
+              run: () => askDelete(item),
+            },
+          ]
+        : []),
+    ];
+  };
+  // A Project's menu items (0090): Rename and Change icon where its plxd keeps icons, and
+  // Delete.
+  const projectActions = (entry: ProjectEntry): FavoriteAction[] => {
+    const project = entry.view.state.repos.find((r) => r.id === entry.id);
+    if (!project) return [];
+    const open = (what: EntryDialog) => (square: HTMLElement) =>
+      entryDialogs.current?.open(what, project, entry.view, square);
+    return [
+      { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
+      ...("threadAttention" in entry.view.capabilities
+        ? [{ label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") }]
+        : []),
+      {
+        label: "Delete…",
+        icon: <Trash2 aria-hidden />,
+        danger: true,
+        run: () => {
+          setProjectToDelete(entry);
+          setDeleteError(undefined);
+          projectDelete.current?.showModal();
+        },
+      },
+    ];
+  };
+  const entryActions = (entry: ProjectEntry): FavoriteAction[] => projectActions(entry);
+  useImperativeHandle(orchestratorMenu, () => ({ actionsFor: entryActions }));
+  // Every Project, for Pinned, in the order pinned.
+  const entries = projectEntries(hosts);
+  const pinnedEntries = pins.flatMap((key) => entries.filter((e) => e.key === key));
+  const openEntry = (entry: ProjectEntry) => {
+    hideCard();
+    onSelect(entry.host.id, { kind: "new", groupId: entry.id });
+  };
+
+  // The pinned threads moved up into the favorites, in the order moved into.
+  const favorites = favoriteThreads
+    .map((i) => {
+      const pin = pinOf(i);
+      return {
+        key: i.key,
+        title: i.title,
+        icon: pin.icon,
+        attention: pin.attention,
+        selected: i.key === openKey,
+        thread: pin.thread,
+        actions: pin.actions,
+        onKeys: pin.onKeys,
+      };
+    })
+    .sort((a, b) => favRank(a.key) - favRank(b.key));
+  // An orchestrator thread's card, as a thread's is (0093): dense in Traditional, and `nested` under
+  // its repo's heading, it leaves out its first line.
+  const orchestratorCard = (p: Item & { kind: "orchestrator" }, nested = false) => {
+    const n = modHeld ? listed.indexOf(p) : -1;
+    return (
+      <OrchestratorRow
+        key={p.key}
+        rowKey={p.key}
+        look={compact ? "compact" : folders ? "dense" : undefined}
+        nested={nested}
+        orchestrator={p.orchestrator}
+        repo={p.repo}
+        runs={p.runs}
+        hostId={p.host.id}
+        device={p.host}
+        at={p.at}
+        attention={p.attention}
+        selected={p.key === openKey}
+        badge={n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined}
+        words={words}
+        actions={orchestratorActions(p)}
+        onOpen={() => {
+          setPicked(new Set());
+          openItem(p);
+        }}
+        onKeys={(e) => rowKeys(e, p)}
+        onUnpin={pinnedOrchestrators.includes(p) ? () => togglePinnedProject(p.key) : undefined}
+      />
+    );
+  };
+  // Traditional's pinned Projects, as cards the size of a pinned thread's (0093).
+  const pinnedProjectList = pinnedEntries.length > 0 && (
+    <ul aria-label="Pinned projects" className={cardGap}>
+      {pinnedEntries.map((e) => (
+        <ProjectCard
+          key={e.key}
+          entry={e}
+          pinned
+          dense
+          selected={e.key === openProject}
+          onOpen={() => openEntry(e)}
+          onTogglePin={() => togglePinnedProject(e.key)}
+          actionsFor={() => entryActions(e)}
+        />
+      ))}
+    </ul>
+  );
+  const pinnedOrchestratorList = pinnedOrchestrators.length > 0 && (
+    <ul aria-label="Pinned orchestrator threads" className={cardGap}>
+      {pinnedOrchestrators.map((p) => orchestratorCard(p))}
+    </ul>
+  );
+  const anyPinned = pinnedEntries.length + pinnedOrchestrators.length + pinnedRows.length > 0;
+  // In every mode (0094): the drafts, then the favorites and pinned rows, each under a line, then
+  // the rest. Traditional's pinned rows are one section under one folding heading: its pinned
+  // Projects, then orchestrator threads, then threads. View lives in the filter menu.
+  const list = (
+    <>
+      {draftList}
+      <Favorites
+        items={favorites}
+        onReorder={
+          words.length
+            ? undefined
+            : (keys) =>
+                favoriteOrder.set([
+                  ...keys,
+                  ...favoriteOrder.get().filter((k) => !keys.includes(k)),
+                ])
+        }
+        onRest={restKeyed}
+        onLeave={hideCard}
+        onOpen={openKeyed}
+        onAdd={(key) => {
+          forgetPin(key);
+          favorite(key);
+        }}
+        onPinRow={(hostId, threadId) => {
+          const item = byRun.get(`${hostId}/${threadId}`);
+          if (item?.kind !== "thread" || item.thread.parent) return;
+          if (!item.thread.pinned) void pin(item);
+          favorite(item.key);
+        }}
+        onRemove={unfavorite}
+      />
+      {folders && anyPinned ? (
+        <PinnedSection>
+          {pinnedProjectList}
+          {pinnedOrchestratorList}
+          {pinList}
+        </PinnedSection>
+      ) : (
+        pinList
+      )}
+      {(favorites.length > 0 || (folders ? anyPinned : pinnedRows.length > 0)) && <Rule />}
+      {threadList()}
+    </>
+  );
+
+  // Why a host's list couldn't load or stopped updating, which is the list's own state.
+  const errors = [...new Set(hosts.map((h) => h.view.error).filter(Boolean))];
+  const nothingShown =
+    !pool.length && !snoozedItems.length && !archived.length && !draftRows.length;
+
+  // The search box and the filter, which Inbox's head and Traditional's Search row each lay out.
+  const searchInput = (className: string) => (
+    <input
+      ref={search}
+      type="search"
+      aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and orchestrators"}
+      placeholder={scopeLabel ? `Search ${scopeLabel.name}` : "Search"}
+      value={query}
+      onChange={(e) => {
+        quiet();
+        setQuery(e.target.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          if (query) setQuery("");
+          else e.currentTarget.blur();
+        } else if (e.key === "Enter" || e.key === "ArrowDown") {
+          // Into the list: Enter opens the first row, Down focuses it.
+          const first = shownRows()[0];
+          if (!first) return;
+          e.preventDefault();
+          if (e.key === "Enter") first.click();
+          else first.focus();
+        }
+      }}
+      className={className}
+    />
+  );
+  const scopeMenu = (
+    <ScopeMenu
+      hosts={hosts}
+      scope={scope}
+      current={scopeLabel}
+      onScope={(next) => setScope(next)}
+      many={many}
+      needs={needsIn}
+      outside={outside}
+      tucked={!inbox}
+      view={
+        <ViewOptions
+          autoHours={autoHours}
+          onAutoHours={(hours) => autoClear.set(hours)}
+          compact={compact}
+          onCompact={(on) => compactRows.set(on)}
+          group={folders ? undefined : todayBy}
+          onGroup={(next) => todayGroup.set(next)}
+        />
+      }
+    />
   );
 
   return (
     <>
-      <div className="px-2">
-        <label className="flex items-center gap-2 rounded-lg bg-hover px-2.5 py-1.5 focus-within:outline-2 focus-within:outline-ring">
-          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-          <input
-            type="search"
-            aria-label="Search threads and Projects"
-            placeholder="Search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
-          />
-        </label>
-      </div>
-      <div onScroll={hideCard} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <header className="mt-3 flex items-center justify-between pr-0.5 pl-2">
-          <h2 id="hosts-heading" className={heading}>
-            Hosts
-          </h2>
-          <IconButton label="Add host" onClick={() => onOpenSettings("hosts", true)}>
-            <Plus />
+      {inbox ? (
+        <div className="flex items-center gap-1 px-2">
+          <label className={`sky-search min-w-0 flex-1 ${searchField}`}>
+            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+            {searchInput(
+              "min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none",
+            )}
+          </label>
+          {scopeMenu}
+          {/* The Projects page, which Inbox has instead of a Projects drawer; pressed while open. */}
+          <IconButton
+            label="Projects"
+            aria-pressed={page === "projects"}
+            onClick={() => onOpenPage("projects")}
+          >
+            <LayoutGrid />
           </IconButton>
-        </header>
-        <ul aria-labelledby="hosts-heading">
-          {hosts.map((h) => (
-            <li key={h.id}>
-              <HostRow host={h} open={h.id === host.id} onOpen={() => onHostChange(h.id)} />
-              {h.id === host.id && openHost}
-            </li>
-          ))}
-        </ul>
-      </div>
-      {shownArchived.length > 0 && (
-        // Pinned under the list, like a drawer: the threads you're done with.
-        <details className="group/archived max-h-[40%] shrink-0 overflow-y-auto px-2 pb-1">
-          <summary className="flex cursor-default list-none items-center gap-3 rounded-md px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-            <span>
-              Archived <span className="text-faint-foreground">({shownArchived.length})</span>
-            </span>
-            <span aria-hidden className="h-px flex-1 bg-border" />
-            <ChevronDown
-              aria-hidden
-              className="size-4 shrink-0 transition-transform group-open/archived:rotate-180"
-            />
-          </summary>
-          <ul>{shownArchived.map(threadRow)}</ul>
-        </details>
-      )}
-      {card && (
-        <ThreadCard
-          title={title(card.thread)}
-          run={threads.state.runs[card.thread.id]}
-          repo={{
-            name: cardGroup?.name ?? "No Repo",
-            icon: cardGroup && cardGroup.id !== noRepo ? <FolderOpen /> : <House />,
-          }}
-          host={host}
-          top={card.top}
-          left={card.left}
+          <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
+            <FolderPlus />
+          </IconButton>
+          <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+            <SquarePen />
+          </IconButton>
+        </div>
+      ) : (
+        <SidebarNav
+          current={page}
+          onNewThread={onNewThread}
+          onOpen={onOpenPage}
+          onAdd={() => addDialog.current?.open()}
+          search={
+            <label className={`sky-search ${navRow} focus-within:bg-hover`}>
+              <Search aria-hidden />
+              {searchInput(
+                "min-w-0 flex-1 truncate bg-transparent text-body text-foreground placeholder:text-foreground/90 focus:placeholder:text-faint-foreground focus-visible:outline-none",
+              )}
+              {scopeMenu}
+            </label>
+          }
         />
       )}
-      <NewProjectDialog
-        ref={newProject}
-        hosts={hosts}
-        hostId={host.id}
-        repos={threads.state.repos}
-        create={threads.createProject}
-        onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
-      />
-      <AddRepositoryDialog
-        ref={addRepositoryDialog}
-        local={host.id === localId}
-        onLocalFolder={() => void addRepository()}
-      />
-      <dialog
-        ref={deleteDialog}
-        aria-labelledby="delete-thread-title"
-        className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+      <div
+        onScroll={hideCard}
+        data-flip-scroll
+        className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 *:shrink-0 ${fadeBottom}`}
       >
-        <form method="dialog" className="px-5 pt-4 pb-4">
-          <h2 id="delete-thread-title" className="text-[15px] font-semibold">
-            Delete this thread?
-          </h2>
-          <p className="mt-1.5 text-[13px] text-muted-foreground">
-            “{toDelete && title(toDelete)}” goes for good, with its transcript, worktree, and
-            branch.
+        {errors.map((e) => (
+          <p key={e} role="alert" className="px-2 pb-1 text-meta text-danger">
+            {e}
           </p>
-          {deleteError && (
-            <p role="alert" className="mt-2 text-[12.5px] text-danger">
-              {deleteError}
-            </p>
-          )}
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="submit"
-              value="cancel"
-              className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
-            >
-              Cancel
-            </button>
+        ))}
+        {words.length > 0 && nothingShown && !searching ? (
+          <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
+            Nothing matches “{query.trim()}”.
+            {scope !== "all" && (
+              <button type="button" onClick={() => setScope("all", false)} className={cardButton}>
+                Search all threads
+              </button>
+            )}
+          </EmptyCard>
+        ) : (
+          list
+        )}
+      </div>
+      <Drawer
+        label="Working"
+        quiet
+        items={workingTops}
+        row={(item) => rowOf(item)}
+        open={workingOpen}
+        onOpenChange={(o) => toggleSection("working", o)}
+      />
+      <Drawer
+        label="Snoozed"
+        items={snoozedItems}
+        row={(i) => rowOf(i)}
+        open={sections.snoozed}
+        onOpenChange={(o) => toggleSection("snoozed", o)}
+        onDrop={dropOn("snoozed")}
+      />
+      <Drawer
+        label="Archived"
+        items={archived}
+        row={(i) => rowOf(i)}
+        open={sections.archived}
+        onOpenChange={(o) => toggleSection("archived", o)}
+        onDrop={dropOn("archived")}
+        pageSize={pageArchived ? archivePageSize : undefined}
+      />
+      {pickedItems.length > 0 && (
+        <BulkBar
+          count={pickedItems.length}
+          can={{
+            snooze: pickedItems.some((i) => "threadAttention" in i.view.capabilities),
+            pin: pickedItems.some((i) => !i.thread.parent && pinsOn(i.view)),
+          }}
+          onAction={(a) => void bulk(a)}
+          onClear={() => setPicked(new Set())}
+        />
+      )}
+      <RowPeek ref={card} />
+      <Toasts />
+      <AddDialog
+        ref={addDialog}
+        hosts={hosts.map((h) => h.host)}
+        unbrowsable={unbrowsable(hosts)}
+        hostId={host.id}
+        repos={open?.state.repos ?? []}
+        create={open?.createOrchestrator ?? (async () => "Not connected")}
+        onCreated={(hostId, orchestrator) => onOpenOrchestrator(hostId, orchestrator.id)}
+        onNewProject={onNewProject}
+      />
+      <EntryDialogs
+        ref={entryDialogs}
+        onError={(error) => actionFailed(error, "Couldn't change the orchestrator")}
+      />
+      <ConfirmDialog
+        ref={deleteDialog}
+        title={
+          toDelete?.kind === "orchestrator" ? "Delete this orchestrator?" : "Delete this thread?"
+        }
+        action="Delete"
+        busy={deleting ? "Deleting…" : undefined}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
+      >
+        “{toDelete?.title}” goes for good
+        {toDelete?.kind === "orchestrator"
+          ? orchestratorLoss(toDelete.runs.length)
+          : ", with its transcript, worktree, and branch."}
+      </ConfirmDialog>
+      <ConfirmDialog
+        ref={projectDelete}
+        title="Delete this Project?"
+        action="Delete"
+        busy={deleting ? "Deleting…" : undefined}
+        error={deleteError}
+        onConfirm={() => void confirmProjectDelete()}
+      >
+        “{projectToDelete?.name}” goes for good, with{" "}
+        {projectToDelete?.threads === 1
+          ? "its thread"
+          : `its ${projectToDelete?.threads ?? 0} threads`}
+        , instructions, and files.
+      </ConfirmDialog>
+      <div className="p-2">
+        <ConnectionStatus hostId={host.id} />
+        <Footer
+          listed={hosts}
+          onOpenSettings={onOpenSettings}
+          onOpenPage={inbox ? onOpenPage : undefined}
+        />
+      </div>
+    </>
+  );
+}
+
+/** A section a dragged row is over and would drop into. */
+const dropLook = "bg-hover outline-1 outline-border outline-dashed";
+
+/**
+ * Rows that scroll past a list's bottom edge fade out in place of a line. Padding the fade's height
+ * lets the last row clear it, and scroll padding stops a row stepped to by key above it. A mask,
+ * since glass shows through the sidebar.
+ */
+const fadeBottom =
+  "pb-4 scroll-pb-4 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1rem),transparent)]";
+
+const quietRows =
+  "[&>li:not(:hover,:focus-within,:has([aria-current]))]:opacity-55 [&>li:not(:hover,:focus-within,:has([aria-current]))]:grayscale";
+
+const cardButton =
+  "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-body font-medium text-foreground hover:bg-hover";
+
+/** A dashed card in place of the list, for a search with no matches. */
+function EmptyCard({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="mx-1 my-3.5 flex flex-col items-center rounded-xl border border-dashed border-border px-4 py-5 text-center text-body leading-normal text-faint-foreground">
+      <p className="text-body font-semibold text-foreground">{title}</p>
+      <div className="mt-0.75">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * The bar over the footer while threads are picked (PLX-789): how many, then Archive, Snooze for
+ * an hour, Pin, and Clear, as Escape does.
+ */
+function BulkBar({
+  count,
+  can,
+  onAction,
+  onClear,
+}: {
+  count: number;
+  /** Whether any picked thread's host keeps snoozes, and pins. */
+  can: { snooze: boolean; pin: boolean };
+  onAction: (action: "archive" | "snooze" | "pin") => void;
+  onClear: () => void;
+}) {
+  const button =
+    "grid h-6 min-w-6 place-items-center rounded-md px-1 text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
+  return (
+    <div
+      role="toolbar"
+      aria-label="Selected threads"
+      className="mx-2 mt-1 mb-1.5 flex shrink-0 items-center gap-0.5 rounded-xl bg-surface py-1 pr-1 pl-3 shadow-composer ring-1 ring-border motion-safe:animate-[sidebar-rise_140ms_ease-out]"
+    >
+      <span className="flex-1 text-meta font-semibold tabular-nums">{count} selected</span>
+      <button
+        type="button"
+        aria-label="Archive"
+        title="Archive (E)"
+        onClick={() => onAction("archive")}
+        className={button}
+      >
+        <Archive />
+      </button>
+      <button
+        type="button"
+        aria-label="Snooze"
+        title="Snooze for an hour (S)"
+        disabled={!can.snooze}
+        onClick={() => onAction("snooze")}
+        className={`${button} disabled:pointer-events-none disabled:opacity-40`}
+      >
+        <AlarmClock />
+      </button>
+      <button
+        type="button"
+        aria-label="Pin"
+        title="Pin (P)"
+        disabled={!can.pin}
+        onClick={() => onAction("pin")}
+        className={`${button} disabled:pointer-events-none disabled:opacity-40`}
+      >
+        <Pin />
+      </button>
+      <button
+        type="button"
+        aria-label="Clear selection"
+        title="Clear selection (Esc)"
+        onClick={onClear}
+        className={button}
+      >
+        <X />
+      </button>
+    </div>
+  );
+}
+
+/** The undo toasts (undo.ts), at the bottom left of the main pane, newest last. */
+function Toasts() {
+  const list = useToasts();
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none absolute bottom-3.5 left-[calc(100%+1rem)] z-50 flex w-max flex-col items-start gap-1.5"
+    >
+      {list.map((t) => (
+        <div
+          key={t.id}
+          className="pointer-events-auto flex max-w-85 items-center gap-2.5 rounded-xl bg-foreground py-1.5 pr-1.5 pl-3 text-body text-background shadow-composer motion-safe:animate-[sidebar-rise_160ms_ease-out]"
+        >
+          <span className="min-w-0 truncate">{t.text}</span>
+          {t.undo && (
             <button
               type="button"
-              disabled={deleting}
-              onClick={() => void confirmDelete()}
-              className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
+              onClick={() => undo(t.id)}
+              title={`Undo (${shortcut("Z")})`}
+              className="shrink-0 rounded-md bg-background/15 px-2.25 py-0.75 font-semibold hover:bg-background/25"
             >
-              {deleting ? "Deleting…" : "Delete"}
+              Undo
             </button>
-          </div>
-        </form>
-      </dialog>
-      <div className="border-t border-border p-2">
-        <ConnectionStatus hostId={host.id} />
-        <Footer onOpenSettings={onOpenSettings} onOpenUsage={() => onSelect({ kind: "usage" })} />
+          )}
+          {!t.undo && <span className="w-1.5" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The rest of Delete orchestrator's warning, after "“name” goes for good", for an orchestrator of `agents` runs. */
+function orchestratorLoss(agents: number): string {
+  if (agents === 0) return ".";
+  if (agents === 1)
+    return ", with its agent's transcript, worktree, and branch. A running agent is stopped first.";
+  return `, with its ${agents} agents' transcripts, worktrees, and branches. Running agents are stopped first.`;
+}
+
+/** `Date.now()`, rendering again each minute. */
+function useMinute() {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => tick((n) => n + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return Date.now();
+}
+
+/**
+ * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
+ * rows, which render only while it's open. Its rows scroll under a cap, below its summary, so
+ * collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
+ * that many more. Whether it's open is the scope's (PLX-789). With `onDrop`, a row it would take is
+ * dragging: it shows even while empty, and a drop on it moves the row in (PLX-1095). With `quiet`,
+ * its rows are gray unless hovered, focused, or open.
+ */
+function Drawer<T>({
+  label,
+  quiet = false,
+  items,
+  row,
+  pageSize,
+  open,
+  onOpenChange,
+  onDrop,
+}: {
+  label: string;
+  quiet?: boolean;
+  items: T[];
+  row: (item: T) => ReactNode;
+  pageSize?: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDrop?: () => void;
+}) {
+  const [pages, setPages] = useState(1);
+  // Its rows rise in as the user opens it, but not when it mounts open.
+  const [opened, setOpened] = useState(false);
+  const [over, setOver] = useState(false);
+  if (over && !onDrop) setOver(false);
+  if (items.length === 0 && !onDrop) return null;
+  const visible = pageSize ? items.slice(0, pageSize * pages) : items;
+  const remaining = items.length - visible.length;
+  const more = pageSize && remaining > 0 ? Math.min(pageSize, remaining) : 0;
+  return (
+    <details
+      open={open}
+      onToggle={(e) => e.currentTarget.open !== open && onOpenChange(e.currentTarget.open)}
+      onDragOver={
+        onDrop &&
+        ((e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setOver(true);
+        })
+      }
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={
+        onDrop &&
+        ((e) => {
+          e.preventDefault();
+          setOver(false);
+          onDrop();
+        })
+      }
+      className={`group/drawer mx-2 flex max-h-[40%] min-h-0 shrink-0 flex-col transition-colors details-content:flex details-content:min-h-0 details-content:flex-col ${over ? `rounded-lg ${dropLook}` : ""}`}
+    >
+      {/* Space sets a drawer's rows apart from the list's and the next drawer's; an open drawer's
+          heading reads brighter, so it's clear which rows are under it. */}
+      <summary
+        onClick={(e) => {
+          e.preventDefault();
+          setOpened(!open);
+          onOpenChange(!open);
+        }}
+        className="group/summary flex shrink-0 cursor-default list-none items-center gap-1.5 px-2 pt-2 pb-1.5 text-meta font-medium text-muted-foreground select-none group-open/drawer:text-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+      >
+        {label}
+        <span className="ml-auto text-faint-foreground tabular-nums group-hover/summary:text-muted-foreground">
+          <Tick value={items.length} />
+        </span>
+        <ChevronRight
+          aria-hidden
+          className="size-3.5 shrink-0 transition-transform duration-150 group-open/drawer:rotate-90"
+        />
+      </summary>
+      {/* Only the rows scroll, so none pass under the heading, which has no fill of its own. */}
+      <div data-flip-scroll className={`min-h-0 overflow-y-auto ${open ? fadeBottom : ""}`}>
+        {open && (
+          <ul className={`${cardGap} ${opened ? "rise-in" : ""} ${quiet ? quietRows : ""}`}>
+            {visible.map(row)}
+          </ul>
+        )}
+        {open && more > 0 && (
+          <button
+            type="button"
+            onClick={() => setPages((n) => n + 1)}
+            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground"
+          >
+            <Plus aria-hidden className="size-3.5 shrink-0" />
+            Show {more} more
+          </button>
+        )}
       </div>
+    </details>
+  );
+}
+
+/**
+ * The repo filter (PLX-789, 0033): a searchable menu of All threads, every repo, and Chat, each
+ * row with how many of its threads need the user, then the sidebar's View options (PLX-1043).
+ * Where the repo's plxd keeps icons, its gear opens the icon picker. Its button stays pressed while
+ * a repo is chosen, with a dot in its color, and counts what needs the user elsewhere.
+ */
+function ScopeMenu({
+  hosts,
+  scope,
+  current,
+  onScope,
+  many,
+  needs,
+  outside,
+  tucked,
+  view,
+}: {
+  hosts: HostThreads[];
+  scope: Scope;
+  /** What's chosen, unless every thread is. */
+  current?: { name: string; color: string };
+  onScope: (scope: Scope) => void;
+  many: boolean;
+  /** How many threads in `scope` need the user. */
+  needs: (scope: Scope) => number;
+  /** How many threads outside the chosen scope need the user. */
+  outside: number;
+  /** In the new sidebar's Search row (0090): hidden until hovered or focused, or a scope is chosen. */
+  tucked?: boolean;
+  /** The View options (PLX-1043), under the repos. */
+  view: ReactNode;
+}) {
+  const menuId = useId();
+  const pickerId = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const picker = useRef<HTMLDivElement>(null);
+  const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState<{ view: ThreadsView; repo: Repo }>();
+  const sharedIcons = useContext(SharedRepoIcons);
+  const q = query.trim().toLowerCase();
+  // Projects (0069) don't list.
+  const repos = hosts
+    .flatMap(({ host, view }) =>
+      view.state.repos
+        .filter((r) => !r.scratch && !r.project)
+        .map((repo) => ({ host, view, repo })),
+    )
+    .filter((r) => !q || r.repo.name.toLowerCase().includes(q));
+  const choose = (next: Scope) => {
+    onScope(next);
+    menu.current?.hidePopover();
+  };
+  const check = (on: boolean) => (
+    <Check aria-hidden className={`text-accent ${on ? "" : "hidden"}`} />
+  );
+  const count = (n: number) =>
+    n > 0 && (
+      <span
+        title={`${n} ${n === 1 ? "needs" : "need"} you`}
+        className="grid h-4.25 min-w-4.25 place-items-center rounded-full bg-warning/15 px-1.25 text-caption font-semibold text-warning tabular-nums"
+      >
+        {n}
+      </span>
+    );
+  const heading = (text: string, extra?: ReactNode) => (
+    <p
+      role="presentation"
+      className="flex items-center px-2 pt-2.5 pb-1 text-caption font-medium text-faint-foreground"
+    >
+      {text}
+      {extra}
+    </p>
+  );
+  const trailing =
+    "ml-auto flex shrink-0 items-center gap-2 pl-1.5 text-meta text-faint-foreground";
+  const actionButton =
+    "grid size-6 place-items-center rounded-md text-faint-foreground hover:bg-background hover:text-foreground [&_svg]:size-3.5";
+
+  const row = ({ host, view, repo }: (typeof repos)[number]) => {
+    const key = `repo:${host.id}/${repo.id}` as const;
+    const canIcon = "threadAttention" in view.capabilities;
+    return (
+      <div key={key} className="group/repo relative">
+        <button
+          type="button"
+          role="menuitemradio"
+          aria-checked={scope === key}
+          className={`${menuItem} ${canIcon ? "group-focus-within/repo:pr-8 group-hover/repo:pr-8" : ""}`}
+          onClick={() => choose(key)}
+        >
+          <RepoIcon repo={repo} />
+          <span className="min-w-0 truncate">{repo.name}</span>
+          <span
+            className={`${trailing} ${canIcon ? "group-focus-within/repo:hidden group-hover/repo:hidden" : ""}`}
+          >
+            {many && <span className="truncate">{host.name}</span>}
+            {count(needs(key))}
+            {check(scope === key)}
+          </span>
+        </button>
+        <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5 opacity-0 group-hover/repo:opacity-100 focus-within:opacity-100">
+          {canIcon && (
+            <button
+              type="button"
+              aria-label={`Change ${repo.name}'s icon`}
+              title="Change icon"
+              onClick={(e) => {
+                setEditing({ view, repo });
+                picker.current?.showPopover({ source: e.currentTarget });
+              }}
+              className={actionButton}
+            >
+              <Settings />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // The All threads and Chat rows, around the repos.
+  const fixedRow = (key: "all" | "none", icon: ReactNode, name: string) => (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={scope === key}
+      className={menuItem}
+      onClick={() => choose(key)}
+    >
+      {icon}
+      {name}
+      <span className={trailing}>
+        {count(needs(key))}
+        {check(scope === key)}
+      </span>
+    </button>
+  );
+
+  const label = current?.name ?? "All threads";
+  const title = current
+    ? `Showing ${current.name}${outside ? `. ${outside} waiting elsewhere` : ""}`
+    : "Filter by repo";
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Showing ${label}`}
+        title={title}
+        aria-pressed={scope !== "all"}
+        aria-haspopup="menu"
+        popoverTarget={menuId}
+        className={`relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-opacity hover:bg-hover hover:text-foreground aria-pressed:text-foreground [&_svg]:size-4 ${tucked ? (scope === "all" && !outside ? "opacity-0 group-focus-within/nav:opacity-100 group-hover/nav:opacity-100" : "") : "aria-pressed:bg-selected"}`}
+      >
+        <ListFilter />
+        {current && (
+          <span
+            aria-hidden
+            style={{ background: current.color }}
+            className="absolute top-1 right-1 size-1.75 rounded-full ring-2 ring-sidebar"
+          />
+        )}
+        {outside > 0 && (
+          <span
+            aria-hidden
+            className="absolute -right-1 -bottom-0.75 grid h-3.25 min-w-3.25 place-items-center rounded-full bg-warning px-0.75 text-micro font-semibold text-white ring-2 ring-sidebar tabular-nums"
+          >
+            {outside}
+          </span>
+        )}
+      </button>
+      <div
+        ref={menu}
+        id={menuId}
+        popover="auto"
+        role="menu"
+        aria-label="Repos"
+        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+          if (e.newState === "open") e.currentTarget.querySelector("input")?.focus();
+          else setQuery("");
+        }}
+        onKeyDown={moveFocus}
+        className={`${menuPanel("end")} open:flex max-h-[min(70vh,32rem)] w-72 flex-col overflow-hidden p-0`}
+      >
+        <label className="flex shrink-0 items-center gap-2 border-b border-border px-3.5 py-2.5">
+          <Search aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+          <input
+            aria-label="Search repos"
+            placeholder="Search repos…"
+            value={query}
+            autoComplete="off"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+              e.preventDefault();
+              e.currentTarget
+                .closest('[role="menu"]')
+                ?.querySelector<HTMLElement>('[role^="menuitem"]')
+                ?.click();
+            }}
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
+          />
+        </label>
+        <div className="min-h-0 overflow-y-auto p-1.5">
+          {!q && fixedRow("all", <Layers aria-hidden />, "All threads")}
+          {(repos.length > 0 || !q) && heading("Repos")}
+          {repos.map(row)}
+          {!q && fixedRow("none", <SquareDashed aria-hidden />, "No repo")}
+          {q && repos.length === 0 && (
+            <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
+          )}
+        </div>
+        <div className="shrink-0 border-t border-border p-3">{view}</div>
+        <div className="flex shrink-0 gap-3 border-t border-border px-3.5 py-1.5 text-caption text-faint-foreground">
+          <span>↑↓ move</span>
+          <span>↵ open</span>
+        </div>
+      </div>
+      {/* Each pick saves at once; the picker stays open for the next. */}
+      <IconPicker
+        ref={picker}
+        id={pickerId}
+        value={editing && repoIconOf(editing.repo, sharedIcons)}
+        onPick={(icon) =>
+          editing &&
+          setRepoIcons(
+            hosts.map((h) => h.view),
+            editing.repo.name,
+            icon,
+          )
+        }
+        maxImageBytes={editing?.view.iconImageBytes}
+      />
     </>
   );
 }
 
 /**
- * The footer's buttons: Settings, Usage, and Update when `updatable`, which shows a download
- * icon with a dot while an update is ready to install: a downloaded release, or under `pnpm dev`
- * the commits the channel's branch has. Its label carries the updater's note, such as an error.
+ * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
+ * (ProfileMenu.tsx), and at the far end Update when `updatable` (Update.tsx), where it has always
+ * been.
  */
 function Footer({
+  listed,
   onOpenSettings,
-  onOpenUsage,
-}: Pick<ThreadListProps, "onOpenSettings"> & { onOpenUsage: () => void }) {
-  // "Updating…" while Update runs, then its answer until the next click.
-  const [update, setUpdate] = useState<string>();
-  const updating = update === "Updating…";
-  const [state, setState] = useState<UpdateState>({});
-  useEffect(() => (window.wisp.updatable ? window.wisp.onUpdateState(setState) : undefined), []);
-  const ready = state.ready !== undefined && !updating;
-  const runUpdate = async () => {
-    setUpdate("Updating…");
-    setUpdate(await window.wisp.update());
-  };
+  onOpenPage,
+}: Pick<ThreadListProps, "onOpenSettings"> & {
+  listed: HostThreads[];
+  /** Inbox's Pull requests and Usage, in the Profile menu. Traditional lists them in its head. */
+  onOpenPage?: (page: NavRow) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <ProfileButton listed={listed} onOpenSettings={onOpenSettings} onOpenPage={onOpenPage} />
+      <span className="flex-1" />
+      {window.parallax.updatable && <UpdateButton />}
+    </div>
+  );
+}
+
+/** `text` with a search's words marked. */
+function Marked({ text, words }: { text: string; words: readonly string[] }) {
   return (
     <>
-      {update && (
-        <p role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
-          {update}
-        </p>
+      {highlight(text, words).map((part, i) =>
+        part.mark ? (
+          <mark key={i} className="rounded-sm bg-warning/30 px-px text-inherit">
+            {part.text}
+          </mark>
+        ) : (
+          part.text
+        ),
       )}
-      <div className="flex items-center gap-1">
-        <IconButton label="Settings" keys="," onClick={() => onOpenSettings("general")}>
-          <Settings />
-        </IconButton>
-        <IconButton label="Usage" onClick={onOpenUsage}>
-          <ChartNoAxesColumn />
-        </IconButton>
-        {window.wisp.updatable && (
-          <span className="ml-auto">
-            <IconButton
-              label={ready ? `Update ready: ${state.ready}` : (state.note ?? "Update wisp")}
-              disabled={updating}
-              onClick={() => void runUpdate()}
-            >
-              {ready ? (
-                <span className="relative grid">
-                  <Download />
-                  <span
-                    aria-hidden
-                    className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-accent"
-                  />
-                </span>
-              ) : (
-                <RefreshCw className={updating ? "animate-spin" : undefined} />
-              )}
-            </IconButton>
-          </span>
-        )}
-      </div>
     </>
   );
 }
 
-/** A host's row: its name and a status dot. The open host's error is in the footer. */
-function HostRow({ host, open, onOpen }: { host: Host; open: boolean; onOpen: () => void }) {
-  const state = useConnection(host.id);
-  const Icon = host.destination ? Server : Laptop;
-  const status = state && statusLabel(state);
+/** What an orchestrator row's menu opens. */
+type EntryDialog = "rename" | "icon" | "access" | "autonomy";
+/** Says why a sidebar action failed, when `error` says one did, and closes that once one works. */
+function actionFailed(error: string | undefined, title: string) {
+  if (error) notify({ key: "sidebar", tone: "error", title, body: error });
+  else dismiss("sidebar");
+}
+
+type EntryDialogsHandle = {
+  /** Opens `what` for an orchestrator, or for a Project's entry (0090), which renames and recolors only. */
+  open: (
+    what: EntryDialog,
+    orchestrator: Orchestrator | Repo,
+    view: ThreadsView,
+    square: HTMLElement,
+  ) => void;
+};
+
+/** Orchestrator handle the orchestrators page reads an orchestrator's menu through (0090). */
+export type ProjectMenuHandle = { actionsFor: (entry: ProjectEntry) => FavoriteAction[] };
+
+/**
+ * An orchestrator's or a Project's dialogs, opened from its row's or card's menu: Rename, the icon
+ * picker beside its row, and for an orchestrator Full access (a one-way move to Bypass) and
+ * Autonomy (0043). Each saves through `orchestrator/update` or `repo/update` and reports plxd's
+ * error through `onError`. Only the one open is drawn.
+ */
+function EntryDialogs({
+  ref,
+  onError,
+}: {
+  ref: RefObject<EntryDialogsHandle | null>;
+  onError: (error?: string) => void;
+}) {
+  const [opened, setOpened] = useState<{
+    what: EntryDialog;
+    orchestrator: Orchestrator | Repo;
+    view: ThreadsView;
+    square: HTMLElement;
+  }>();
+  const [name, setName] = useState("");
+  const [autonomy, setAutonomy] = useState<OrchestratorAutonomy>("routine");
+  const dialog = useRef<HTMLDialogElement>(null);
+  const picker = useRef<HTMLDivElement>(null);
+  const pickerId = useId();
+  useImperativeHandle(ref, () => ({
+    open(what, orchestrator, view, square) {
+      setName(orchestrator.name);
+      setAutonomy(("autonomy" in orchestrator && orchestrator.autonomy) || "routine");
+      setOpened({ what, orchestrator, view, square });
+    },
+  }));
+  // What was just opened shows once it's drawn.
+  useEffect(() => {
+    if (opened?.what === "icon") picker.current?.showPopover({ source: opened.square });
+    else if (opened) dialog.current?.showModal();
+  }, [opened]);
+  const update = async (change: OrchestratorChange) => {
+    if (!opened) return;
+    const { orchestrator, view } = opened;
+    onError(
+      "repoPath" in orchestrator
+        ? await view.updateOrchestrator(orchestrator.id, change)
+        : await view.updateRepo(orchestrator.id, {
+            ...(change.name && { name: change.name }),
+            ...(change.icon && { icon: change.icon }),
+          }),
+    );
+  };
+  const orchestrator = opened?.orchestrator;
+  const close = () => setOpened(undefined);
   return (
-    <button
-      type="button"
-      aria-expanded={open}
-      onClick={onOpen}
-      title={state?.status === "failed" ? state.error.message : status}
-      className={`${row} font-medium ${open ? "text-foreground" : "text-muted-foreground"}`}
+    <>
+      {/* Each pick saves at once; the picker stays open for the next. */}
+      <IconPicker
+        ref={picker}
+        id={pickerId}
+        value={orchestrator?.icon}
+        onPick={(icon) => void update({ icon })}
+        maxImageBytes={opened?.view.iconImageBytes}
+      />
+      {opened?.what === "rename" && (
+        <SettingDialog
+          ref={dialog}
+          label={
+            opened.orchestrator && "repoPath" in opened.orchestrator
+              ? "Rename orchestrator"
+              : "Rename Project"
+          }
+          action="Rename"
+          onClose={close}
+          onSave={() => {
+            // An empty name, or the same one, saves nothing.
+            const next = name.trim();
+            if (next && next !== opened.orchestrator.name) void update({ name: next });
+          }}
+        >
+          <label className="block text-body font-medium">
+            Name
+            <input
+              aria-label="Orchestrator name"
+              autoFocus
+              value={name}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full rounded-md border border-border bg-transparent px-2 py-1.5 font-normal focus-visible:outline-none"
+            />
+          </label>
+        </SettingDialog>
+      )}
+      {opened?.what === "access" && (
+        <SettingDialog
+          ref={dialog}
+          label={`${opened.orchestrator.name} full access`}
+          action="Give full access"
+          onClose={close}
+          onSave={() => void update({ permission: "bypass" })}
+        >
+          <p className="text-body font-medium">Full access</p>
+          <p className="mt-1 text-body text-muted-foreground">
+            New agents in this orchestrator run commands and edit files without asking, as in new
+            orchestrators. Agents running now keep asking until they next start. Agents on Cursor,
+            Grok Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
+            switch back.
+          </p>
+        </SettingDialog>
+      )}
+      {opened?.what === "autonomy" && (
+        <SettingDialog
+          ref={dialog}
+          label={`${opened.orchestrator.name} autonomy`}
+          onClose={close}
+          onSave={() => void update({ autonomy })}
+        >
+          <AutonomyChoice value={autonomy} onChange={setAutonomy} />
+        </SettingDialog>
+      )}
+    </>
+  );
+}
+
+/** An orchestrator setting's dialog: its choice, then Cancel and `action`, which closes it and saves. */
+function SettingDialog({
+  ref,
+  label,
+  action = "Save",
+  onSave,
+  onClose,
+  children,
+}: {
+  ref: RefObject<HTMLDialogElement | null>;
+  label: string;
+  action?: string;
+  onSave: () => void;
+  onClose?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <dialog
+      ref={ref}
+      aria-label={label}
+      onClose={onClose}
+      className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
     >
-      <Icon aria-hidden className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">{host.name}</span>
-      <StatusDot state={state} />
-      {status && <span className="sr-only">{status}</span>}
-    </button>
+      {/* Save is the submit button, so Enter on a radio saves. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          ref.current?.close();
+          onSave();
+        }}
+        className="px-5 pt-4 pb-4"
+      >
+        {children}
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => ref.current?.close()}
+            className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground hover:opacity-90"
+          >
+            {action}
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 
@@ -556,154 +2804,1108 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
   cursor: CursorLogo,
 };
 
+/** A backend's logo: its own, or a provider instance's (providers.ts). */
+export const backendLogo = (backend: string) => backendLogos[backend] ?? instanceLogo(backend);
+
 /**
- * A thread's row: its title and age (or Failed), then its branch, diff, and provider. Resting
- * on it shows its card; hovering or focusing it swaps the age for Archive and more actions,
- * which also open by right-clicking the row: a native popover, so Escape and clicking away
- * close it.
+ * An orchestrator thread's card (0093), the same card a thread's is: its repo's icon and name, with
+ * its status at the end (what it asks of the user, or how long ago it was last active), then its
+ * name, then its branch, computer, its run's provider, and pull requests (`useRowDetails`). Under
+ * its repo's folder it leaves out the repo, as a thread does. Hovering or focusing it shows its
+ * actions button, whose menu also opens by right-clicking the row, or with A: Rename, Change icon,
+ * and the rest its plxd allows.
+ */
+function OrchestratorRow({
+  rowKey,
+  look,
+  nested = false,
+  orchestrator,
+  repo,
+  runs,
+  hostId,
+  device,
+  at,
+  attention,
+  selected,
+  badge,
+  words,
+  actions,
+  onOpen,
+  onKeys,
+  onUnpin,
+}: {
+  /** Its key in the list, for keyboard moves and sliding when the list moves. */
+  rowKey: string;
+  /** Today's one-line look (pins.ts), or Traditional's dense card, as a thread's. */
+  look?: "compact" | "dense";
+  /** Under its repo's heading, which names the repo. */
+  nested?: boolean;
+  orchestrator: Orchestrator;
+  /** The repo it works in, which its first line names. */
+  repo?: Repo;
+  /** Its own and its children's runs (0042), its own among them for its provider and PRs. */
+  runs: readonly AgentRun[];
+  hostId: string;
+  /** Its computer, whose icon shows beside the provider's while there are several (0056). */
+  device?: Host;
+  /** When it was last active, for its age. */
+  at: string;
+  attention: Attention;
+  selected: boolean;
+  /** Its Mod+number badge, shown in place of its status while Mod is held. */
+  badge?: ReactNode;
+  /** A search's words, marked where they're found. */
+  words: readonly string[];
+  /** Its menu's items, each run with the row, which the icon picker opens beside. */
+  actions: FavoriteAction[];
+  onOpen: () => void;
+  /** Keyboard moves on the focused row. */
+  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
+  /** For a pinned one: its pin, in its top-right as a pinned thread's is, unpins it. */
+  onUnpin?: () => void;
+}) {
+  const menuId = useId();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const compact = look === "compact";
+  const { aside, line } = useRowDetails({
+    hostId,
+    run: runs.find((r) => r.id === orchestrator.run),
+    // Its integration branch (0045), once cut.
+    branch: orchestrator.integrationBranch ?? orchestrator.branch,
+    device,
+    selected,
+    compact,
+    words,
+    noRepo: !repo || repo.scratch,
+  });
+  return (
+    <RowCard
+      rowKey={rowKey}
+      kind="orchestrator"
+      compact={compact}
+      dense={look === "dense"}
+      place={
+        !nested && (compact ? <RepoIcon repo={repo} /> : <RowPlace repo={repo} words={words} />)
+      }
+      status={
+        badge ?? (attention === "settled" ? age(at) : <AttentionBadge attention={attention} />)
+      }
+      title={<Marked text={orchestrator.name} words={words} />}
+      aside={aside}
+      dim={attention === "settled"}
+      selected={selected}
+      main={{
+        onClick: onOpen,
+        onKeyDown: onKeys,
+        onContextMenu: actions.length ? (e) => openOnContextMenu(e, trigger.current) : undefined,
+      }}
+      details={line}
+      trailing={
+        onUnpin && (
+          <button
+            type="button"
+            aria-label="Unpin"
+            title="Unpin"
+            onClick={onUnpin}
+            className={rowTool}
+          >
+            <Pin aria-hidden className="size-3.5" />
+          </button>
+        )
+      }
+      actions={
+        actions.length > 0 && (
+          <button
+            ref={trigger}
+            type="button"
+            aria-label="Orchestrator actions"
+            title="More (or right-click)"
+            popoverTarget={menuId}
+            className={rowTool}
+          >
+            <Ellipsis className="size-4" />
+          </button>
+        )
+      }
+    >
+      {actions.length > 0 && (
+        <Menu
+          id={menuId}
+          label="Orchestrator actions"
+          align="end"
+          focus='[role^="menuitem"]'
+          className="min-w-56 p-1"
+        >
+          {actions.map((a, n) => (
+            <Fragment key={a.label}>
+              {/* Delete sits apart, as in a thread's menu. */}
+              {a.danger && n > 0 && <div role="separator" className="my-1 h-px bg-border" />}
+              <button
+                type="button"
+                role="menuitem"
+                className={`${menuItem} ${a.danger ? "text-danger" : ""}`}
+                onClick={close(() => {
+                  const row = trigger.current?.closest("li");
+                  if (row) a.run(row);
+                })}
+              >
+                {a.icon}
+                {a.label}
+              </button>
+            </Fragment>
+          ))}
+        </Menu>
+      )}
+    </RowCard>
+  );
+}
+
+/**
+ * Where a row is, as a card's first line shows it: its repo's icon and name, or No repo. `label`
+ * names it otherwise, as a Project's card says "Project".
+ */
+export function RowPlace({
+  repo,
+  label,
+  words = [],
+}: {
+  repo?: Repo;
+  label?: string;
+  words?: readonly string[];
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <RepoIcon repo={repo} />
+      <span className="min-w-0 truncate">
+        <Marked text={label ?? (repo && !repo.scratch ? repo.name : "No repo")} words={words} />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A row's details (0094), the same for a thread's card and an orchestrator's: its branch, cut in the
+ * middle to fit (`shortBranch`), its git status, its linked pull requests (the number of one, or +N
+ * for more) and their checks, its computer, and its run's provider, in color while open. With only
+ * the computer and provider to show, they go at the title's end as `aside`, so they never take a
+ * `line` of their own. A compact row has neither.
+ */
+function useRowDetails({
+  hostId,
+  run,
+  branch,
+  device,
+  selected,
+  compact,
+  words,
+  onOpenPr,
+  noRepo,
+}: {
+  hostId: string;
+  run?: AgentRun;
+  branch?: string;
+  device?: Host;
+  selected: boolean;
+  compact: boolean;
+  words: readonly string[];
+  /**
+   * Opens the row with the pull request `url` in its side panel, or with no `url` its Pull requests
+   * list. Without it, the chip's number opens the row.
+   */
+  onOpenPr?: (url?: string) => void;
+  /** A thread with no repo, whose git status isn't read. */
+  noRepo?: boolean;
+}): { aside?: ReactNode; line?: ReactNode } {
+  const providers = [
+    ...new Set([...(run?.backends ?? []), ...(run?.backend ? [run.backend] : [])]),
+  ].flatMap((backend) => {
+    const Logo = backendLogo(backend);
+    return Logo ? [{ backend, Logo }] : [];
+  });
+  // Read once, not polled: a row's state is as of when the sidebar loaded it.
+  const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
+  // A worktree's or checkout's status is read, for what's unpushed and uncommitted, again as its
+  // run's status changes. A plxd without `git` leaves it out, and a thread with no repo skips it.
+  const [git, setGit] = useState<GitStatus | null>(null);
+  const statusRun = (run?.checkout || run?.branch) && !noRepo ? run.id : undefined;
+  const runStatus = run?.status;
+  useEffect(() => {
+    if (!statusRun) return;
+    let live = true;
+    void window.parallax
+      .request(hostId, "agent/gitStatus", { runId: statusRun })
+      .then((answer) => live && setGit("result" in answer ? answer.result : null));
+    return () => {
+      live = false;
+    };
+  }, [hostId, statusRun, runStatus]);
+  if (compact) return {};
+  const prLook = majorityLook(prs);
+  // The open pull requests' checks, as one: failed if any failed, else running if any are, else
+  // passed once all have.
+  const checks = prs.urls.flatMap((url) => {
+    const pr = prs.get(url)?.pr;
+    return pr?.state === "open" && pr.checksState ? [pr.checksState] : [];
+  });
+  const checksState = checks.includes("failed")
+    ? "failed"
+    : checks.includes("pending")
+      ? "pending"
+      : checks.length && checks.every((c) => c === "passed")
+        ? "passed"
+        : undefined;
+  const changed = !!git && !!(git.ahead || git.changes);
+  // A pin isn't a detail: it sits in the row's top-right, so pinning doesn't change its height.
+  const hasDetails = changed || prs.urls.length > 0 || providers.length > 0 || !!device?.icon;
+  // Its computer, then its provider's logo: in gray, so a list isn't striped with providers' colors,
+  // but in color while open.
+  const marks = (
+    <>
+      {device?.icon && (
+        <span title={device.name} role="img" aria-label={device.name} className="flex shrink-0">
+          <DeviceIcon icon={device.icon} className="size-3.5" />
+        </span>
+      )}
+      {providers.length > 0 && (
+        <span
+          role="img"
+          aria-label={`Providers: ${providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}`}
+          title={providers.map(({ backend }) => instanceName(backend) ?? backend).join(", ")}
+          className={`flex shrink-0 items-center gap-1 ${selected ? "" : "opacity-80 grayscale"}`}
+        >
+          {providers.map(({ backend, Logo }) => (
+            <Logo key={backend} aria-hidden className="size-3.5 shrink-0" />
+          ))}
+        </span>
+      )}
+    </>
+  );
+  if (!branch && !changed && !prs.urls.length && !isRemoteControl(run))
+    return { aside: hasDetails ? marks : undefined };
+  const first = prs.urls[0]!;
+  return {
+    line: (
+      <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
+        <span className="flex min-w-0 flex-1 items-center gap-1">
+          {branch && (
+            <>
+              <GitBranch aria-hidden className="size-3 shrink-0" />
+              <BranchName branch={branch} words={words} />
+            </>
+          )}
+          {git && <GitCounts git={git} />}
+        </span>
+        {prs.urls.length > 0 && (
+          <span
+            title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
+            className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
+          >
+            <prLook.Icon aria-hidden className="size-3.5" />
+            {/* Inside the row's button, so a span: clicking it opens the row with the PR, or several
+                PRs' list, in its side panel, not GitHub. */}
+            <span
+              className={onOpenPr ? "hover:underline" : undefined}
+              onClick={
+                onOpenPr &&
+                ((e) => {
+                  e.stopPropagation();
+                  onOpenPr(prs.urls.length > 1 ? undefined : first);
+                })
+              }
+            >
+              {prs.urls.length > 1 ? (
+                `+${prs.urls.length - 1}`
+              ) : (
+                <Marked text={`#${numberOf(first)}`} words={words} />
+              )}
+            </span>
+            {checksState && <ChecksMark state={checksState} />}
+          </span>
+        )}
+        {/* A Claude Remote Control thread (PLX-1140): its session runs on another computer. */}
+        {isRemoteControl(run) && <RemoteControlBadge />}
+        {marks}
+      </span>
+    ),
+  };
+}
+
+// Measures text for `BranchName`, made once.
+let measure: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * A branch name in the room its line leaves, cut in the middle at word breaks to fit
+ * (`shortBranch`), as `feature/PLX-49-…implementation`, and refit as the sidebar resizes. Its title
+ * is the whole name.
+ */
+function BranchName({ branch, words }: { branch: string; words: readonly string[] }) {
+  const self = useRef<HTMLSpanElement>(null);
+  const [max, setMax] = useState(branch.length);
+  useLayoutEffect(() => {
+    const el = self.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      measure ??= document.createElement("canvas").getContext("2d");
+      if (!measure || !el.clientWidth) return;
+      measure.font = getComputedStyle(el).font;
+      let n = branch.length;
+      while (n > 12 && measure.measureText(shortBranch(branch, n)).width > el.clientWidth) n--;
+      setMax(n);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [branch]);
+  return (
+    <span ref={self} title={branch} className="min-w-0 flex-1 truncate">
+      <Marked text={shortBranch(branch, max)} words={words} />
+    </span>
+  );
+}
+
+/** The space between cards in a list. */
+const cardGap = "flex flex-col gap-1";
+
+/** The thin line under the drafts and under the pins (0094). */
+function Rule() {
+  return <div role="separator" className="mx-2 my-2 h-px bg-border" />;
+}
+
+/** Today's group heading: a quiet label on a rule. */
+const groupHeading =
+  "group/heading flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-meta font-medium text-muted-foreground transition-colors outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0";
+/** A Traditional folder's heading: a row with its repo's icon and name, its count, and a chevron. */
+const folderHeading =
+  "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body font-medium text-foreground/90 transition-colors outline-none enabled:hover:bg-hover enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
+
+/**
+ * The look of a thread's linked pull requests: that of the most common state among those read,
+ * and the newest linked one on a tie.
+ */
+function majorityLook(prs: PullRequests) {
+  const read = prs.urls.flatMap((url) => prs.get(url)?.pr ?? []);
+  let best: (typeof read)[number] | undefined;
+  let top = 0;
+  for (const pr of read) {
+    const n = read.filter((p) => p.state === pr.state).length;
+    if (n >= top) [best, top] = [pr, n];
+  }
+  return lookOf(best);
+}
+
+/** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
+function DraftStatus() {
+  return (
+    <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+      <PencilLine aria-hidden />
+      Draft
+    </span>
+  );
+}
+
+/**
+ * An unsent New Thread prompt's card (PLX-788): its repo and a Draft status, then its first line,
+ * outlined in the warning color (PLX-932). Opening it reopens New Thread with it, which takes it
+ * off the list; its X, shown on hover, discards it.
+ */
+function DraftRow({
+  rowKey,
+  draft,
+  repo,
+  compact,
+  dense = false,
+  onOpen,
+  onDiscard,
+  onKeys,
+}: {
+  rowKey: string;
+  draft: Draft;
+  repo?: Repo;
+  /** Today's one-line look (pins.ts). */
+  compact: boolean;
+  /** The denser card, as every row in the Traditional sidebar is. */
+  dense?: boolean;
+  onOpen: () => void;
+  onDiscard: () => void;
+  /** Keyboard moves on the focused row. */
+  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
+}) {
+  const attached = draft.images.length + draft.files.length + draft.threads.length;
+  const title =
+    draft.text.trim().split("\n")[0] ||
+    `${attached} ${attached === 1 ? "attachment" : "attachments"}`;
+  return (
+    <RowCard
+      rowKey={rowKey}
+      kind="draft"
+      compact={compact}
+      dense={dense}
+      place={compact ? <RepoIcon repo={repo} /> : <RowPlace repo={repo} />}
+      status={<DraftStatus />}
+      title={title}
+      outlined
+      main={{ onClick: onOpen, onKeyDown: onKeys }}
+      actions={
+        <button
+          type="button"
+          aria-label="Discard draft"
+          title="Discard (⌫)"
+          onClick={onDiscard}
+          className={rowTool}
+        >
+          <X className="size-3.5" />
+        </button>
+      }
+    />
+  );
+}
+
+/**
+ * A thread's card (0033, 0075, PLX-1043): its repo's icon and name with its status at the end (what
+ * it asks of the user, when its snooze ends, or how long ago it was last active), its title in bold, then its branch (not
+ * a Chat's), cut in the middle (`shortBranch`), its git status, linked pull requests (the number
+ * of one, or +N for more) and their checks, its computer, and its provider, in color while it's
+ * open. A pinned one keeps its pin in its top-right, which unpins it (0094). Under a search, the
+ * words found are marked, and a match only in its messages shows a line of them. Resting on it
+ * shows its card; hovering or focusing it swaps the status for Snooze, Archive, and more actions,
+ * which also open by right-clicking the row: native popovers, so Escape and clicking away close
+ * them. Double-clicking the title renames it in place.
  */
 function ThreadRow({
+  orchestration,
+  orchestratorBranch,
+  look,
+  at,
+  rowKey,
   thread,
+  hostId,
+  device,
   title,
   run,
+  repo,
+  project,
+  attention,
   selected,
+  picked,
+  flash,
+  badge,
+  nested,
+  words,
+  snippet,
+  renaming,
+  snoozable,
+  renamable,
+  autoResumable,
   onOpen,
+  onOpenPr,
+  onKeys,
   onArchive,
+  onSnooze,
+  onPin,
+  onMarkUnread,
+  onRename,
+  onStartRename,
   onDelete,
+  onOpenBeside,
+  onOpenInTab,
+  onFork,
+  projectPicker,
+  onAutoResume,
   onRest,
   onLeave,
+  pinDrag,
 }: {
+  /** Orchestrator-only actions alongside the shared thread menu (0093). */
+  orchestration?: FavoriteAction[];
+  /** An orchestrator thread's branch, since its run's detached worktree has none (0045). */
+  orchestratorBranch?: string;
+  /** Today's one-line look (pins.ts): where it is, its title, and its status. Dense is a card with
+   *  less padding, as every row in the Traditional sidebar is. */
+  look?: "compact" | "dense";
+  /** A pinned row's move among the pins (PinList.tsx). */
+  pinDrag?: PinDrag;
+  /** When it was last active (`activeAt`), for its age. */
+  at: string;
+  /** Its key in the list, for keyboard moves and sliding when the list moves. */
+  rowKey: string;
   thread: Thread;
+  /** Its host, which a drag onto the composer names (PLX-378). */
+  hostId: string;
+  /** Its computer, whose icon shows beside the provider's while there are several (0056). */
+  device?: Host;
   title: string;
   run?: AgentRun;
+  repo?: Repo;
+  /** The Project it was added to (0090), which it shows as its place over `repo`. */
+  project?: Repo;
+  attention: Attention;
   selected: boolean;
-  onOpen: () => void;
+  /** Whether it's one of the threads picked for a bulk action. */
+  picked: boolean;
+  /** Whether it just finished, so it flashes once. */
+  flash: boolean;
+  /** Its Mod+number badge, shown in place of its status while Mod is held. */
+  badge?: ReactNode;
+  /** Under its repo's heading, which names the repo: its status goes beside its title instead. */
+  nested?: boolean;
+  /** A search's words, marked where they're found. */
+  words: readonly string[];
+  /** A line of its messages where the search found what its title and branch don't have. */
+  snippet?: string;
+  /** Whether its title is being edited in place. */
+  renaming: boolean;
+  /** Whether its plxd keeps seen and snooze state (`threadAttention`). */
+  snoozable: boolean;
+  /** Whether its plxd keeps its title (`threadLineage`). */
+  renamable: boolean;
+  /** Whether its plxd resumes runs after usage limits (`autoResume`, 0049). */
+  autoResumable: boolean;
+  /** A click: opens it, or with Mod or Shift, picks it. */
+  onOpen: (e: MouseEvent<HTMLElement>) => void;
+  /** Opens it with the pull request `url` in its side panel, or with no `url` its Pull requests list. */
+  onOpenPr: (url?: string) => void;
+  /** Keyboard triage on the focused row (PLX-789). */
+  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
   onArchive: () => void;
+  onSnooze: (until: Date) => void;
+  /** Pins or unpins it, for a top-level thread where its plxd keeps pins. */
+  onPin?: () => void;
+  /** Mark as unread (pins.ts), for a finished thread already seen. */
+  onMarkUnread?: () => void;
+  /** Ends a rename: saves `title`, or with undefined, keeps the old one. */
+  onRename: (title: string | undefined) => void;
+  onStartRename: () => void;
   onDelete: () => void;
+  /** Opens it beside the open thread (PLX-587), while another thread of its host is open. */
+  onOpenBeside?: () => void;
+  onOpenInTab?: () => void;
+  /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
+  onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
+  /** The Projects it can be added to (ThreadProjectMenu.tsx), for Add to Project. */
+  projectPicker?: { view: ThreadsView; projects: Repo[] };
+  /** Sets its run's auto-resume override, or clears it with undefined. */
+  onAutoResume: (autoResume?: boolean) => void;
   onRest: (row: HTMLElement) => void;
   onLeave: () => void;
 }) {
   const menuId = useId();
+  const snoozeId = useId();
+  const forkId = useId();
+  const projectMenuId = useId();
   const menu = useRef<HTMLDivElement>(null);
+  const forkMenu = useRef<HTMLDivElement>(null);
+  const projectMenu = useRef<HTMLDivElement>(null);
+  const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
+  const [custom, setCustom] = useState("");
+  // Each menu's items render only while it's open: set before it shows, so its first item takes
+  // focus, and cleared once it has hidden, so focus goes back to its button.
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Set while the title box is open, so Enter and the blur that follows save once.
+  const editing = useRef(false);
+  if (renaming) editing.current = true;
+  // The host's auto-resume setting, read as the menu opens, for the run's own toggle.
+  const [hostResumes, setHostResumes] = useState<boolean>();
+  const resumes = run?.autoResume ?? hostResumes ?? false;
   const choose = (action: () => void) => () => {
     menu.current?.hidePopover();
+    snoozeMenu.current?.hidePopover();
     onLeave();
     action();
   };
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
-  const hasDetails = !!(run?.branch || run?.diff || Logo);
-  const archiveLabel = (
+  const endRename = (value: string | undefined) => {
+    if (!editing.current) return;
+    editing.current = false;
+    onRename(value);
+  };
+  const compact = look === "compact";
+  // A thread with no repo leaves out its scratch branch, and a Project's thread the branch plxd made
+  // in its repository.
+  const branch =
+    orchestratorBranch ?? (repo && !repo.scratch && !repo.project ? run?.branch : undefined);
+  const { aside, line } = useRowDetails({
+    hostId,
+    run,
+    branch,
+    device,
+    selected,
+    compact,
+    words,
+    onOpenPr,
+    noRepo: repo?.scratch,
+  });
+  const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
+  const mainLabel = (
     <>
-      {thread.archived ? <ArchiveRestore aria-hidden /> : <Check aria-hidden />}
+      {thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
       {thread.archived ? "Unarchive" : "Archive"}
     </>
   );
-  return (
-    <li
-      className="group/row relative"
-      onMouseEnter={(e) => onRest(e.currentTarget)}
-      onMouseLeave={onLeave}
+  // A rule between the actions menu's groups, gone where a group has no rows.
+  const menuRule = <hr className={`${toolbarMenuDivider} first:hidden [&+hr]:hidden`} />;
+  // An unsent prompt left in its composer (PLX-887): outlined, and Draft in place of its age.
+  const drafted = threadDrafts.use(`${hostId}/${thread.id}`);
+  const status =
+    badge ??
+    (!thread.archived && snoozed(thread, attention) ? (
+      <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+        <RingingAlarmMark />
+        Wakes {resumeTime(thread.snoozedUntil!)}
+      </span>
+    ) : run?.status === "waiting" && attention === "settled" && !thread.archived ? (
+      <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+        <AlarmClock aria-hidden />
+        {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
+      </span>
+    ) : attention === "settled" ? (
+      drafted ? (
+        <DraftStatus />
+      ) : (
+        age(at)
+      )
+    ) : (
+      <AttentionBadge attention={attention} since={lastUserPrompt(thread)} />
+    ));
+  const titleText = renaming ? (
+    <input
+      aria-label="Thread name"
+      defaultValue={title}
+      autoFocus
+      maxLength={256}
+      spellCheck={false}
+      autoComplete="off"
+      onFocus={(e) => e.currentTarget.select()}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        // Enter and Escape belong to an input method while it composes.
+        if (e.nativeEvent.isComposing) return;
+        if (e.key === "Enter") endRename(e.currentTarget.value);
+        else if (e.key === "Escape") endRename(undefined);
+      }}
+      onBlur={(e) => endRename(e.currentTarget.value)}
+      className="-mx-1 w-[calc(100%+0.5rem)] min-w-0 rounded-sm bg-background px-1 text-body font-medium text-foreground ring-[1.5px] ring-ring focus-visible:outline-none"
+    />
+  ) : (
+    <span
+      onDoubleClick={
+        renamable
+          ? (e) => {
+              e.preventDefault();
+              onStartRename();
+            }
+          : undefined
+      }
     >
+      <Marked text={title} words={words} />
+    </span>
+  );
+  // A pinned thread's pin, in its top-right whether hovered or not; clicking it unpins.
+  const pin =
+    thread.pinned &&
+    (onPin ? (
       <button
         type="button"
-        aria-current={selected ? "page" : undefined}
-        onClick={onOpen}
-        onContextMenu={(e) => {
-          e.preventDefault();
+        aria-label="Unpin"
+        title="Unpin (P)"
+        onClick={() => {
           onLeave();
-          actions.current?.click();
+          onPin();
         }}
-        className={`flex w-full flex-col gap-0.5 rounded-lg py-1.5 pr-2 pl-7.5 text-left hover:bg-hover ${selected ? current : ""}`}
+        className={rowTool}
       >
-        <span className="flex w-full items-center gap-2">
-          <span
-            className={`min-w-0 flex-1 truncate text-[13px] ${selected ? "text-foreground" : "text-foreground/80"}`}
-          >
-            {title}
-          </span>
-          <span className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden">
-            {run?.status === "failed" ? (
-              <span className="flex items-center gap-1 text-danger">
-                <CircleAlert aria-hidden className="size-3.5" />
-                Failed
-              </span>
-            ) : (
-              age(thread.createdAt)
-            )}
-          </span>
-          {/* An invisible copy of the actions below, holding their width while they show, so a
-              long title ends in an ellipsis before them. pr-7.5 is Archive's right padding, the
-              gap, and the actions button. */}
-          <span
-            aria-hidden
-            className="invisible hidden shrink-0 items-center gap-1 pr-7.5 pl-1.5 text-[11.5px] group-has-[:focus-visible]/row:flex group-hover/row:flex [&_svg]:size-3.5"
-          >
-            {archiveLabel}
-          </span>
-        </span>
-        {hasDetails && (
-          <span className="flex w-full items-center gap-2 text-[11.5px] text-faint-foreground">
-            <span className="min-w-0 flex-1 truncate">{run?.branch}</span>
-            {run?.diff && (
-              <span className="shrink-0 tabular-nums">
-                <span className="text-emerald-500">+{run.diff.insertions}</span>{" "}
-                <span className="text-danger">−{run.diff.deletions}</span>
-              </span>
-            )}
-            {Logo && <Logo className="size-3.5 shrink-0" />}
-          </span>
-        )}
+        <Pin aria-hidden className="size-3.5" />
       </button>
-      <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
-        <button
-          type="button"
-          onClick={() => {
-            onLeave();
-            onArchive();
-          }}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+    ) : (
+      <span
+        title="Pinned"
+        role="img"
+        aria-label="Pinned"
+        className={`${rowTool} hover:bg-transparent`}
+      >
+        <Pin className="size-3.5" />
+      </span>
+    ));
+  return (
+    // A card (PLX-1043): where it is and its status, its title, then its branch and details, or one
+    // line of its repo's icon, title, and status. Under its repo's heading, it leaves out the repo.
+    // A draft outlines it in the warning color, as a New Thread draft's row is (PLX-887); an open
+    // thread holds its own draft, so that doesn't show while it's open.
+    <RowCard
+      rowKey={rowKey}
+      kind={orchestration ? "orchestrator" : "thread"}
+      compact={compact}
+      dense={look === "dense"}
+      place={
+        compact
+          ? !nested && <RepoIcon repo={project ?? repo} />
+          : !nested && <RowPlace repo={project ?? repo} words={words} />
+      }
+      status={status}
+      title={titleText}
+      aside={aside}
+      dim={attention === "settled"}
+      selected={selected}
+      picked={picked}
+      outlined={drafted}
+      flash={flash}
+      faded={pinDrag?.dragging}
+      editing={renaming}
+      before={pinDrag?.drop && <DropLine edge={pinDrag.drop} />}
+      li={{
+        onMouseEnter: (e) => onRest(e.currentTarget),
+        onMouseLeave: onLeave,
+        ...(pinDrag && {
+          onDragOver: pinDrag.onDragOver,
+          onDragLeave: pinDrag.onDragLeave,
+          onDrop: pinDrag.onDrop,
+        }),
+      }}
+      main={{
+        "aria-description": picked ? "Selected" : undefined,
+        onClick: renaming ? undefined : onOpen,
+        // A middle click opens it in a new tab, as in a browser.
+        onAuxClick: (e) => {
+          if (e.button !== 1 || !onOpenInTab) return;
+          e.preventDefault();
+          onOpenInTab();
+        },
+        onKeyDown: renaming ? undefined : onKeys,
+        onContextMenu: (e) => {
+          onLeave();
+          openOnContextMenu(e, actions.current);
+        },
+        // Dropped on the composer, it attaches the thread to the message (PLX-378).
+        draggable: !renaming,
+        onDragStart: (e) => {
+          onLeave();
+          dragThread(e.dataTransfer, hostId, thread.id);
+          pinDrag?.onDragStart(e);
+        },
+        onDragEnd: pinDrag?.onDragEnd,
+      }}
+      details={
+        <>
+          {line}
+          {snippet && (
+            <span className="flex w-full min-w-0 items-center gap-1.5 text-meta text-faint-foreground">
+              <Search aria-hidden className="size-3 shrink-0" />
+              <span className="min-w-0 truncate">
+                <Marked text={snippet} words={words} />
+              </span>
+            </span>
+          )}
+        </>
+      }
+      actions={
+        <>
+          {snoozable && (
+            <button
+              type="button"
+              aria-label={snoozedNow ? "Snoozed" : "Snooze"}
+              title={snoozedNow ? `Snoozed until ${clock(thread.snoozedUntil!)}` : "Snooze (S)"}
+              popoverTarget={snoozeId}
+              onClick={onLeave}
+              className={rowTool}
+            >
+              <AlarmClock className="size-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            title={`${thread.archived ? "Unarchive" : "Archive"} (E)`}
+            onClick={() => {
+              onLeave();
+              onArchive();
+            }}
+            className="flex h-5.5 items-center gap-1 rounded-md px-1.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          >
+            {mainLabel}
+          </button>
+          <button
+            ref={actions}
+            type="button"
+            aria-label={orchestration ? "Orchestrator actions" : "Thread actions"}
+            title="More (or right-click)"
+            popoverTarget={menuId}
+            onClick={onLeave}
+            className={rowTool}
+          >
+            <Ellipsis className="size-4" />
+          </button>
+        </>
+      }
+      trailing={pin}
+    >
+      {snoozable && (
+        <Menu
+          ref={snoozeMenu}
+          id={snoozeId}
+          label="Snooze"
+          align="end"
+          className="min-w-56 p-1"
+          onBeforeToggle={(e) => e.newState === "open" && setSnoozeOpen(true)}
+          onClose={() => setSnoozeOpen(false)}
         >
-          {archiveLabel}
-        </button>
-        <button
-          ref={actions}
-          type="button"
-          aria-label="Thread actions"
-          title="Thread actions"
-          popoverTarget={menuId}
-          className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-        >
-          <Ellipsis />
-        </button>
-      </div>
-      <div
+          {snoozeOpen && (
+            <>
+              {snoozeChoices().map((c) => (
+                <button
+                  key={c.label}
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() => onSnooze(c.until))}
+                >
+                  {c.label}
+                  <span className="ml-auto text-meta text-faint-foreground tabular-nums">
+                    {c.label.startsWith("In") ? clock(c.until.toISOString()) : when(c.until)}
+                  </span>
+                </button>
+              ))}
+              <div className="my-1 h-px bg-border" />
+              <form
+                className="flex items-center gap-1 px-1 py-0.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const until = new Date(custom);
+                  if (!Number.isNaN(until.getTime())) choose(() => onSnooze(until))();
+                }}
+              >
+                <input
+                  type="datetime-local"
+                  aria-label="Snooze until"
+                  value={custom}
+                  onChange={(e) => setCustom(e.target.value)}
+                  className="min-w-0 flex-1 rounded-md bg-hover px-1.5 py-1 text-meta [color-scheme:inherit]"
+                />
+                <button
+                  type="submit"
+                  disabled={!custom}
+                  className="rounded-md px-2 py-1 text-meta hover:bg-hover disabled:opacity-50"
+                >
+                  Custom
+                </button>
+              </form>
+              {snoozedNow && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() => onSnooze(new Date()))}
+                >
+                  Unsnooze
+                </button>
+              )}
+            </>
+          )}
+        </Menu>
+      )}
+      <Menu
         ref={menu}
         id={menuId}
-        popover="auto"
-        role="menu"
-        aria-label="Thread actions"
-        onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "open")
-            e.currentTarget.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        label={orchestration ? "Orchestrator actions" : "Thread actions"}
+        align="end"
+        focus='[role^="menuitem"]'
+        className="min-w-60 p-1.5"
+        onBeforeToggle={(e) => e.newState === "open" && setMenuOpen(true)}
+        onClose={() => setMenuOpen(false)}
+        onOpen={() => {
+          if (autoResumable && run)
+            void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
+              if ("result" in answer) setHostResumes(answer.result.autoResume);
+            });
         }}
-        onKeyDown={moveFocus}
-        className={`${menuPanel("end")} min-w-36 p-1`}
       >
-        <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
-          {thread.archived ? "Unarchive" : "Archive"}
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          className={`${menuItem} text-danger`}
-          onClick={choose(onDelete)}
-        >
-          Delete…
-        </button>
-      </div>
-    </li>
+        {menuOpen && (
+          <>
+            {onOpenInTab && (
+              <ToolbarMenuRow
+                icon={<PanelTop aria-hidden />}
+                label="Open in new tab"
+                onClick={choose(onOpenInTab)}
+              />
+            )}
+            {onOpenBeside && (
+              <ToolbarMenuRow
+                icon={<Columns2 aria-hidden />}
+                label="Open side by side"
+                onClick={choose(onOpenBeside)}
+              />
+            )}
+            {menuRule}
+            {onPin && (
+              <ToolbarMenuRow
+                icon={<Pin aria-hidden />}
+                label={thread.pinned ? "Unpin" : "Pin to top"}
+                keys="P"
+                onClick={choose(onPin)}
+              />
+            )}
+            {onMarkUnread && (
+              <ToolbarMenuRow
+                icon={<CircleDot aria-hidden />}
+                label="Mark as unread"
+                keys="U"
+                onClick={choose(onMarkUnread)}
+              />
+            )}
+            {renamable && (
+              <ToolbarMenuRow
+                icon={<PencilLine aria-hidden />}
+                label="Rename"
+                keys="R"
+                onClick={choose(onStartRename)}
+              />
+            )}
+            {menuRule}
+            {projectPicker && (
+              // The Projects' menu opens under the actions button, as Fork's does.
+              <ToolbarMenuRow
+                icon={<MessagesSquare aria-hidden />}
+                label={thread.project ? "Move to Project…" : "Add to Project…"}
+                onClick={choose(() =>
+                  projectMenu.current?.showPopover({ source: actions.current ?? undefined }),
+                )}
+              />
+            )}
+            {onFork && run && (
+              // Its latest turn forks once it ends; Fork's own menu opens under the actions button.
+              <ToolbarMenuRow
+                icon={<GitFork aria-hidden />}
+                label="Fork…"
+                disabled={isRunning(run.status)}
+                title={isRunning(run.status) ? "Fork once this turn finishes" : undefined}
+                onClick={choose(() =>
+                  forkMenu.current?.showPopover({ source: actions.current ?? undefined }),
+                )}
+              />
+            )}
+            {autoResumable && run && (
+              // Choosing the host's setting clears the override, so the thread follows the host again.
+              <ToolbarMenuRow
+                icon={<AlarmClock aria-hidden />}
+                label="Resume after usage limits"
+                checked={resumes}
+                onClick={choose(() =>
+                  onAutoResume(!resumes === hostResumes ? undefined : !resumes),
+                )}
+              />
+            )}
+            {orchestration?.map((a) => (
+              <ToolbarMenuRow
+                key={a.label}
+                icon={a.icon}
+                label={a.label}
+                onClick={choose(() => {
+                  const row = actions.current?.closest("li");
+                  if (row) a.run(row);
+                })}
+              />
+            ))}
+            {menuRule}
+            <ToolbarMenuRow
+              icon={thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+              label={thread.archived ? "Unarchive" : "Archive"}
+              keys="E"
+              onClick={choose(onArchive)}
+            />
+            <ToolbarMenuRow
+              // Wrapped, so the row doesn't mute it as it does a bare icon.
+              icon={
+                <span className="flex">
+                  <Trash2 aria-hidden />
+                </span>
+              }
+              label="Delete…"
+              keys="⌫"
+              className="text-danger"
+              onClick={choose(onDelete)}
+            />
+          </>
+        )}
+      </Menu>
+      {onFork && run && (
+        <ForkMenu
+          ref={forkMenu}
+          id={forkId}
+          hostId={hostId}
+          run={run}
+          onFork={onFork}
+          align="end"
+        />
+      )}
+      {projectPicker && (
+        <ProjectPicker
+          ref={projectMenu}
+          id={projectMenuId}
+          thread={thread}
+          view={projectPicker.view}
+          projects={projectPicker.projects}
+        />
+      )}
+    </RowCard>
   );
+}
+
+/**
+ * A row's git status, after its repo: commits not pushed, then uncommitted lines.
+ * plxd doesn't count commits behind yet.
+ */
+function GitCounts({ git }: { git: GitStatus }) {
+  return (
+    <>
+      {git.ahead > 0 && (
+        <span
+          title={`${plural(git.ahead, "commit")} not pushed`}
+          className="flex shrink-0 items-center tabular-nums"
+        >
+          <ArrowUp aria-hidden className="size-3" />
+          {git.ahead}
+        </span>
+      )}
+      {git.changes > 0 && (
+        <span
+          title={`${plural(git.changes, "file")} uncommitted`}
+          className="shrink-0 tabular-nums"
+        >
+          <span className="text-diff-added">+{git.insertions ?? 0}</span>{" "}
+          <span className="text-diff-removed">−{git.deletions ?? 0}</span>
+        </span>
+      )}
+    </>
+  );
+}
+
+const checksLook = {
+  passed: { Icon: CircleCheck, color: "text-added", label: "Checks passed" },
+  failed: { Icon: CircleX, color: "text-danger", label: "Checks failed" },
+  pending: { Icon: CircleDashed, color: "text-warning", label: "Checks running" },
+};
+
+/** A pull request's checks, as one mark beside its number. */
+function ChecksMark({ state }: { state: keyof typeof checksLook }) {
+  const { Icon, color, label } = checksLook[state];
+  return <Icon role="img" aria-label={label} className={`ml-0.5 size-3 ${color}`} />;
+}
+
+/** A menu item's key, at its end. */
+export function MenuKey({ children }: { children: string }) {
+  // Drawn from the attribute, so the item's name stays its whole text.
+  return (
+    <kbd
+      aria-hidden
+      data-key={children}
+      className="ml-auto pl-3 font-sans text-caption text-faint-foreground before:content-[attr(data-key)]"
+    />
+  );
+}
+
+/** A day and time a snooze ends, as its menu writes it: "Mon 9:00 AM". */
+function when(date: Date): string {
+  return date.toLocaleString(locale(), { weekday: "short", ...clockOptions() });
 }
 
 /** A run's status as its icon and color, in a thread's card and the Agents list. */
@@ -714,18 +3916,66 @@ export const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color:
   failed: { Icon: CircleAlert, color: "text-danger" },
   cancelled: { Icon: CircleSlash, color: "text-muted-foreground" },
   interrupted: { Icon: CirclePause, color: "text-amber-500" },
+  waiting: { Icon: AlarmClock, color: "text-warning" },
   accepted: { Icon: GitMerge, color: "text-violet-500" },
 };
 
+type CardContent = Omit<ComponentProps<typeof ThreadCard>, "top" | "left">;
+type CardHandle = { show: (row: HTMLElement, content: CardContent) => void; hide: () => void };
+
 /**
- * What a thread is, shown beside its row: its title, repository, computer, branch, account,
- * changes, and status, from its run as last listed (resting on the row lists it again).
+ * The card of the thread row the pointer rests on, which the rows show and hide through `ref`, so
+ * resting on one re-renders only the card, not the list.
+ */
+function RowPeek({ ref }: { ref: RefObject<CardHandle | null> }) {
+  const [card, setCard] = useState<ComponentProps<typeof ThreadCard>>();
+  const timer = useRef<number>(undefined);
+  // The row it's for. One that went away under the pointer, as a pin moved into the favorites or
+  // a row archived, sends no mouseleave, so the next move off it hides the card.
+  const shownFor = useRef<HTMLElement>(undefined);
+  useEffect(() => {
+    if (!card) return;
+    const check = () => {
+      if (shownFor.current?.matches(":hover")) return;
+      window.clearTimeout(timer.current);
+      setCard(undefined);
+    };
+    document.addEventListener("pointermove", check);
+    return () => document.removeEventListener("pointermove", check);
+  }, [!card]);
+  useImperativeHandle(ref, () => ({
+    show(row, content) {
+      window.clearTimeout(timer.current);
+      shownFor.current = row;
+      const place = () => {
+        if (!row.isConnected) return;
+        const rect = row.getBoundingClientRect();
+        // A little clear of the sidebar, and kept on screen: it is at most about 15rem tall.
+        const edge = (row.closest("#sidebar") ?? row).getBoundingClientRect().right;
+        setCard({ ...content, top: Math.min(rect.top, window.innerHeight - 248), left: edge + 12 });
+      };
+      if (card) place();
+      else timer.current = window.setTimeout(place, cardDelay);
+    },
+    hide() {
+      window.clearTimeout(timer.current);
+      setCard(undefined);
+    },
+  }));
+  return card && <ThreadCard {...card} />;
+}
+
+/**
+ * What a thread is, shown beside its row: its title, repository, computer, worktree branch or local
+ * checkout, account, changes, and status, from its run as last listed (resting on the row lists it
+ * again).
  */
 function ThreadCard({
   title,
   run,
   repo,
   host,
+  snoozedUntil,
   top,
   left,
 }: {
@@ -733,37 +3983,47 @@ function ThreadCard({
   run?: AgentRun;
   repo: { name: string; icon: ReactNode };
   host: Host;
+  snoozedUntil?: string;
   top: number;
   left: number;
 }) {
-  const Logo = run?.backend ? backendLogos[run.backend] : undefined;
+  const Logo = run?.backend ? backendLogo(run.backend) : undefined;
   const look = run && (statusLooks[run.status] ?? statusLooks.completed!);
   return (
     <div
       role="tooltip"
       style={{ top, left }}
-      className="pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-surface p-3 text-foreground shadow-composer"
+      className="card-in pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-surface p-3 text-foreground shadow-composer transition-[top] duration-150 ease-out motion-reduce:transition-none"
     >
-      <p className="line-clamp-2 text-[13px] font-medium">{title}</p>
-      <ul className="mt-2 flex flex-col gap-1.5 text-[12.5px] text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&>li]:flex [&>li]:min-w-0 [&>li]:items-center [&>li]:gap-2">
+      <p className="line-clamp-2 text-body font-medium">{title}</p>
+      <ul className="mt-2 flex flex-col gap-1.5 text-body text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&>li]:flex [&>li]:min-w-0 [&>li]:items-center [&>li]:gap-2">
         <li>
           {repo.icon}
           <span className="truncate">{repo.name}</span>
         </li>
         <li>
-          {host.destination ? <Server /> : <Laptop />}
+          {hostIcon(host)}
           <span className="truncate">{host.name}</span>
         </li>
-        {run?.branch && (
+        {run?.checkout ? (
           <li>
-            <GitBranch />
-            <span className="truncate">{run.branch}</span>
+            <Folder />
+            <span className="truncate">Local checkout</span>
           </li>
+        ) : (
+          run?.branch && (
+            <li>
+              <FolderGit2 />
+              <span className="truncate">{run.branch}</span>
+            </li>
+          )
         )}
         {run?.accountId && (
           <li>
             {Logo ? <Logo /> : <Bot />}
-            <span className="truncate">{accountLabel(run.accountId)}</span>
+            <span className="truncate">
+              {instanceName(run.accountId) ?? accountLabel(run.accountId)}
+            </span>
           </li>
         )}
         {run?.diff && (
@@ -771,9 +4031,15 @@ function ThreadCard({
             <FileDiff />
             <span className="tabular-nums">
               {run.diff.files} {run.diff.files === 1 ? "file" : "files"}{" "}
-              <span className="text-emerald-500">+{run.diff.insertions}</span>{" "}
-              <span className="text-danger">−{run.diff.deletions}</span>
+              <span className="text-diff-added">+{run.diff.insertions}</span>{" "}
+              <span className="text-diff-removed">−{run.diff.deletions}</span>
             </span>
+          </li>
+        )}
+        {snoozedUntil && Date.parse(snoozedUntil) > Date.now() && (
+          <li>
+            <AlarmClock />
+            <span className="truncate">Snoozed until {clock(snoozedUntil)}</span>
           </li>
         )}
         {run && look && (
@@ -782,6 +4048,9 @@ function ThreadCard({
             <span className="line-clamp-2">
               {runStatusLabel(run.status)}
               {run.status === "failed" && run.error && `: ${run.error}`}
+              {run.status === "waiting" &&
+                run.resumeAt &&
+                `: resumes at ${resumeTime(run.resumeAt)}`}
             </span>
           </li>
         )}
@@ -801,44 +4070,194 @@ export function age(time: string, now = Date.now()): string {
   return days < 7 ? `${days}d` : `${Math.floor(days / 7)}w`;
 }
 
-/** Each Settings section's name, in the nav's order. */
-export const settingsNames: Record<SettingsSection, string> = {
-  general: "General",
-  hosts: "Hosts",
-  providers: "Providers",
+/** Each Settings section's icon. */
+const sectionIcons: Record<SettingsSection, LucideIcon> = {
+  general: Settings,
+  threads: MessageSquare,
+  appearance: Palette,
+  browser: Globe,
+  keybinds: Keyboard,
+  accessibility: PersonStanding,
+  providers: Bot,
+  orchestrators: Network,
+  devices: Smartphone,
+  projects: FolderGit2,
+  schedules: CalendarClock,
+  sourceControl: GitBranch,
+  worktrees: GitFork,
+  computerUse: MousePointerClick,
+  connections: Server,
+  storage: HardDrive,
+  beta: FlaskConical,
+  about: Info,
 };
-const sections = Object.entries(settingsNames).map(([id, name]) => ({
-  id: id as SettingsSection,
-  name,
-}));
+export const settingsNames = Object.fromEntries(
+  settingsSections.map((s) => [s.id, s.name]),
+) as Record<SettingsSection, string>;
 
-/** The sidebar while Settings is open. */
+/**
+ * Settings' nav (SettingsDialog): a search box and the sections. `/` anywhere outside a field
+ * focuses the box. Typed words list the matching sections and settings in the sections' place
+ * (search.ts); Up and Down choose one, Enter or a click opens it, and Escape clears.
+ */
 export function SettingsNav({
   section,
   onSection,
-  onBack,
 }: {
   section: SettingsSection;
-  onSection: (section: SettingsSection) => void;
-  onBack: () => void;
+  /** Opens a section, scrolled to the setting with `anchor` as its `data-setting`. */
+  onSection: (section: SettingsSection, anchor?: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const box = useRef<HTMLInputElement>(null);
+  const results = query.trim() ? searchSettings(query) : [];
+  const chosen = results[Math.min(active, results.length - 1)];
+  const list = useId();
+  const words = query.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (target.closest("input, textarea, select, [contenteditable]")) return;
+      e.preventDefault();
+      box.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
-    <div className="flex flex-col gap-px px-2">
-      <button type="button" onClick={onBack} className={`${row} mb-3 text-muted-foreground`}>
-        <ArrowLeft className="size-4" />
-        Back to app
-      </button>
-      {sections.map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          aria-current={s.id === section ? "page" : undefined}
-          onClick={() => onSection(s.id)}
-          className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
-        >
-          {s.name}
-        </button>
-      ))}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="px-2 pb-3">
+        <label className="sky-search flex h-9 min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 pr-1.5 pl-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+          <input
+            ref={box}
+            type="search"
+            role="combobox"
+            aria-label="Search settings"
+            aria-expanded={results.length > 0}
+            aria-controls={list}
+            aria-activedescendant={chosen ? `${list}-${results.indexOf(chosen)}` : undefined}
+            placeholder="Search settings"
+            value={query}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActive(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                // Clearing the search leaves Settings open; Escape again closes it.
+                if (query) {
+                  e.preventDefault();
+                  setQuery("");
+                }
+              } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && results.length) {
+                e.preventDefault();
+                const step = e.key === "ArrowDown" ? 1 : -1;
+                setActive((i) => (i + step + results.length) % results.length);
+              } else if (e.key === "Enter" && chosen) onSection(chosen.section, chosen.anchor);
+            }}
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery("");
+                box.current?.focus();
+              }}
+              className="grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground"
+            >
+              <X aria-hidden className="size-3.5" />
+            </button>
+          ) : (
+            <kbd
+              aria-hidden
+              className="grid size-6 shrink-0 place-items-center rounded-md border border-border/60 bg-background/60 font-sans text-meta text-faint-foreground"
+            >
+              /
+            </kbd>
+          )}
+        </label>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2">
+        {query.trim() ? (
+          <div
+            id={list}
+            role="listbox"
+            aria-label="Settings found"
+            className="flex flex-col gap-px"
+          >
+            {results.map((r, i) => {
+              const Icon = sectionIcons[r.section];
+              return (
+                <button
+                  key={`${r.section}/${r.anchor ?? ""}`}
+                  id={`${list}-${i}`}
+                  type="button"
+                  role="option"
+                  aria-selected={r === chosen}
+                  tabIndex={-1}
+                  onMouseMove={() => setActive(i)}
+                  onClick={() => onSection(r.section, r.anchor)}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left aria-selected:bg-selected"
+                >
+                  <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border/60 bg-background/60 text-muted-foreground">
+                    <Icon aria-hidden className="size-3.5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-body text-foreground">
+                      <Marked text={r.title} words={words} />
+                    </span>
+                    {r.place && (
+                      <span className="block truncate text-meta text-faint-foreground">
+                        {r.place}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+            {results.length === 0 && (
+              <p className="px-2 py-6 text-center text-body text-faint-foreground">
+                No settings match “{query.trim()}”
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4 pb-4">
+            {[...new Set(settingsSections.map((s) => s.group))].map((group) => (
+              <div key={group} role="group" aria-label={group} className="flex flex-col gap-px">
+                <span className="px-2 pb-1 text-meta font-medium text-faint-foreground">
+                  {group}
+                </span>
+                {settingsSections
+                  .filter((s) => s.group === group)
+                  .map((s) => {
+                    const Icon = sectionIcons[s.id];
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        aria-current={s.id === section ? "page" : undefined}
+                        onClick={() => onSection(s.id)}
+                        className={`${row} ${s.id === section ? current : "text-foreground/80"}`}
+                      >
+                        <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                        {s.name}
+                      </button>
+                    );
+                  })}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

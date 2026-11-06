@@ -1,0 +1,1087 @@
+//! Terminals plxd owns (PLX-637), as T3 Code's server does: a pseudo-terminal per thread and
+//! terminal id, with its recent output kept, so a terminal outlives the app that shows it and
+//! works the same on every host.
+//!
+//! Each terminal has three threads: one reads what it prints, one writes what's typed in the order
+//! it came, and one waits for its program to exit. What it prints is appended to its history and
+//! broadcast under one lock, which `terminal/open` also takes to copy the history and subscribe, so
+//! a client sees each byte exactly once.
+//!
+//! Over the relay, where every frame counts as at least 16 KiB of the host's daily budget (0091), a
+//! stream batches and paces what it sends ([`Pace`]). A flood is skipped: about once a second the
+//! client gets the end of what it hasn't seen, added to what it shows. Reopening the terminal gets
+//! the whole history. Other connections get every chunk as it's printed.
+
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
+
+use parallax_protocol::jsonrpc::{ErrorObject, INTERNAL_ERROR, INVALID_PARAMS, Notification};
+use parallax_protocol::methods::{NotificationMethod, TerminalExit, TerminalOutput};
+use parallax_protocol::{
+    TerminalCommand, TerminalExitParams, TerminalKey, TerminalOpenParams, TerminalOutputParams,
+};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use tokio::sync::{broadcast, mpsc};
+use tokio::task::AbortHandle;
+use tokio::time::{self, Instant};
+use tokio_util::sync::CancellationToken;
+use tracing::debug;
+use uuid::Uuid;
+
+use crate::methods::Reply;
+
+/// The most lines a terminal keeps, as T3 Code does.
+const MAX_LINES: usize = 5_000;
+/// The most bytes a terminal keeps.
+const MAX_BYTES: usize = 8 * 1024 * 1024;
+/// The most text one `terminal/output` carries, so even all-escapes output stays under the frame
+/// limit once JSON escapes it.
+const MAX_CHUNK: usize = 512 * 1024;
+/// The output chunks a slow connection may fall behind by before it gets the history again.
+const LAG: usize = 256;
+/// How long a stream over the relay gathers output after it last sent some. Output after a quiet
+/// moment goes at once. Five frames a second is about 7 hours of nonstop output, however little of
+/// it, to spend the host's 2 GiB a day.
+const BATCH_WINDOW: Duration = Duration::from_millis(200);
+/// The same while someone is typing in the terminal, so that quick keystrokes' echoes aren't held.
+const TYPING_BATCH_WINDOW: Duration = Duration::from_millis(50);
+/// How long after a keystroke a terminal counts as being typed in.
+const TYPING_LINGERS: Duration = Duration::from_secs(1);
+/// The most bytes a second a stream over the relay sends for as long as its terminal floods.
+const PACE_BYTES_PER_SECOND: f64 = 256.0 * 1024.0;
+/// How much output a stream over the relay sends at once before pacing starts, so printing a file
+/// of about this size shows all of it.
+const PACE_BURST: f64 = 512.0 * 1024.0;
+/// How many messages may wait to go out on a connection before its streams over the relay count as
+/// behind. The queue is the connection's, shared by its terminals and answers, since a client
+/// that's slower than the pace is slow for all of them, and more would only make every answer on it
+/// wait longer.
+const QUEUE_BEHIND: usize = 4;
+/// How long a stream over the relay waits after it finds its terminal flooding, and so how often
+/// the client's terminal is redrawn during a flood.
+const FLOOD_PAUSE: Duration = Duration::from_secs(1);
+/// The most of what a client hasn't seen that a stream over the relay sends each time it skips
+/// ahead: about 1,600 full lines. Under what it earns in [`FLOOD_PAUSE`], so when a flood ends it
+/// owes nothing, and the next keystroke's echo goes as output, not as another skip.
+const FLOOD_TAIL: usize = 128 * 1024;
+/// The most text one `terminal/output` over the relay carries. Terminal output typically takes
+/// under twice its bytes in JSON, so a message fits one of a relay stream's 64 KiB frames
+/// (`crate::relay`), and a large batch doesn't hold an answer behind it on the connection for long.
+/// A message that escapes larger fills its frames, which count their real size.
+const RELAY_CHUNK: usize = 32 * 1024;
+
+type Key = (String, String);
+type Open = Arc<Mutex<HashMap<Key, Arc<Terminal>>>>;
+
+/// Every running terminal, by thread and terminal id.
+#[derive(Default)]
+pub(crate) struct Terminals {
+    open: Open,
+}
+
+struct Terminal {
+    key: Key,
+    /// A program the client named, such as a sign-in, which ends with its connection.
+    command: bool,
+    shared: Mutex<Shared>,
+    output: broadcast::Sender<Output>,
+    input: std_mpsc::Sender<String>,
+    /// When a client last wrote to it.
+    typed: Mutex<Option<Instant>>,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    /// The connections it streams to, so opening it again on one replaces that stream.
+    streams: Mutex<Vec<Stream>>,
+    /// The program it runs: for a shell, the one its user's `$SHELL` or account names.
+    shell: String,
+    /// Its program's process id and its terminal device, to find what still runs there.
+    #[cfg(unix)]
+    pid: Option<u32>,
+    #[cfg(unix)]
+    tty: Option<String>,
+}
+
+/// A connection a terminal streams to, and the task that streams it.
+type Stream = (mpsc::Sender<Reply>, AbortHandle);
+
+/// What the reader, `terminal/open`, and the exit share.
+struct Shared {
+    history: History,
+    /// Dropped once its program exits, which ends a Windows pseudo-console's output.
+    master: Option<Box<dyn MasterPty + Send>>,
+    exit: Option<i32>,
+}
+
+#[derive(Clone, Debug)]
+enum Output {
+    Data(Arc<str>),
+    Exit(i32),
+}
+
+impl Terminals {
+    /// `terminal/open`: attaches `replies`' connection to the running terminal with this key,
+    /// resized, else starts one. Its output goes to `replies` until the terminal exits, the
+    /// connection detaches it, or `stopped` (the connection closing), which also ends a command
+    /// terminal. With `over_relay`, the output is batched and paced.
+    pub(crate) fn open(
+        &self,
+        params: TerminalOpenParams,
+        replies: &mpsc::Sender<Reply>,
+        stopped: &CancellationToken,
+        over_relay: bool,
+    ) -> Result<(), ErrorObject> {
+        let key = (params.thread_id.clone(), params.terminal_id.clone());
+        let size = pty_size(params.cols, params.rows);
+        let terminal = {
+            let mut open = lock(&self.open);
+            if let Some(terminal) = open.get(&key) {
+                terminal.resize(size);
+                Arc::clone(terminal)
+            } else {
+                let terminal = start(key.clone(), params, size, Arc::clone(&self.open), &[])?;
+                open.insert(key, Arc::clone(&terminal));
+                terminal
+            }
+        };
+        let (output, history, printed, exit) = terminal.subscribe_raw();
+        let stream = tokio::spawn(stream(
+            Arc::clone(&terminal),
+            replies.clone(),
+            stopped.clone(),
+            output,
+            without_queries(&history),
+            exit,
+            over_relay.then(|| Pace::new(Instant::now(), printed)),
+        ));
+        terminal
+            .detach(replies)
+            .push((replies.clone(), stream.abort_handle()));
+        Ok(())
+    }
+
+    /// `terminal/detach`: stops the terminal's stream to `replies`' connection. It keeps running
+    /// and keeping its output, for the next `terminal/open`. A command keeps its stream, which
+    /// ends it with its connection, so a close racing its open can't leave it running.
+    pub(crate) fn detach(
+        &self,
+        thread_id: String,
+        terminal_id: String,
+        replies: &mpsc::Sender<Reply>,
+    ) {
+        let terminal = lock(&self.open).get(&(thread_id, terminal_id)).cloned();
+        if let Some(terminal) = terminal.filter(|terminal| !terminal.command) {
+            drop(terminal.detach(replies));
+        }
+    }
+
+    /// `terminal/write`: queues `data` for the terminal's program, if it runs.
+    pub(crate) fn write(&self, thread_id: String, terminal_id: String, data: String) {
+        if let Some(terminal) = lock(&self.open).get(&(thread_id, terminal_id)) {
+            *lock(&terminal.typed) = Some(Instant::now());
+            let _ = terminal.input.send(data);
+        }
+    }
+
+    /// `terminal/resize`.
+    pub(crate) fn resize(&self, thread_id: String, terminal_id: String, cols: u16, rows: u16) {
+        if let Some(terminal) = lock(&self.open).get(&(thread_id, terminal_id)) {
+            terminal.resize(pty_size(cols, rows));
+        }
+    }
+
+    /// `terminal/close`: kills the terminal's program. Its exit reaches its connections.
+    pub(crate) fn close(&self, thread_id: String, terminal_id: String) {
+        let terminal = lock(&self.open).remove(&(thread_id, terminal_id));
+        if let Some(terminal) = terminal {
+            terminal.kill();
+        }
+    }
+
+    /// Closes thread `thread_id`'s terminals, as its archive or delete does.
+    pub(crate) fn close_thread(&self, thread_id: &str) {
+        let mut open = lock(&self.open);
+        let closed: Vec<Key> = open.keys().filter(|k| k.0 == thread_id).cloned().collect();
+        for key in closed {
+            if let Some(terminal) = open.remove(&key) {
+                terminal.kill();
+            }
+        }
+    }
+
+    /// Starts the user's shell in a new terminal `(thread_id, terminal_id)` in `cwd`, in place of
+    /// any with that key, with `env`, and types `command` into it, wrapped as T3 Code's setup
+    /// scripts are so the shell prints a line with its exit code after a per-run token (PLX-650).
+    /// Resolves to that code, or `None` if the terminal ended first. The shell stays open.
+    pub(crate) fn run_script(
+        &self,
+        thread_id: &str,
+        terminal_id: &str,
+        cwd: &str,
+        command: &str,
+        env: &[(&str, &str)],
+    ) -> Result<impl Future<Output = Option<i32>> + Send + 'static, ErrorObject> {
+        let key = (thread_id.to_owned(), terminal_id.to_owned());
+        let params = TerminalOpenParams {
+            thread_id: key.0.clone(),
+            terminal_id: key.1.clone(),
+            cwd: Some(cwd.to_owned()),
+            command: None,
+            cols: 120,
+            rows: 30,
+        };
+        let size = pty_size(params.cols, params.rows);
+        let terminal = start(key.clone(), params, size, Arc::clone(&self.open), env)?;
+        if let Some(old) = lock(&self.open).insert(key, Arc::clone(&terminal)) {
+            old.kill();
+        }
+        let sentinel = format!("__PLX_SCRIPT_DONE_{}__", Uuid::now_v7().simple());
+        // Subscribed before typing, so the line can't pass unseen.
+        let (output, seen, exit) = terminal.subscribe();
+        let typed = wrap_script(command, &sentinel, &terminal.shell);
+        let _ = terminal.input.send(format!("{typed}\r"));
+        Ok(async move { watch_script(&terminal, output, seen, exit, &sentinel).await })
+    }
+
+    /// Closes a script's terminal unless something it started still runs there, as T3 Code's
+    /// `closeIdle` keeps a terminal with a running subprocess: any process on its terminal
+    /// device besides its shell. Keeps it when that can't be checked. Blocks on `ps`.
+    pub(crate) fn close_idle(&self, thread_id: &str, terminal_id: &str) {
+        let key = (thread_id.to_owned(), terminal_id.to_owned());
+        let Some(terminal) = lock(&self.open).get(&key).cloned() else {
+            return;
+        };
+        if !busy(&terminal) {
+            self.close(key.0, key.1);
+        }
+    }
+
+    /// `terminal/list`: the running terminals, or one thread's, in no particular order.
+    pub(crate) fn list(&self, thread_id: Option<&str>) -> Vec<TerminalKey> {
+        lock(&self.open)
+            .keys()
+            .filter(|(thread, _)| thread_id.is_none_or(|id| id == thread))
+            .map(|(thread_id, terminal_id)| TerminalKey {
+                thread_id: thread_id.clone(),
+                terminal_id: terminal_id.clone(),
+            })
+            .collect()
+    }
+}
+
+impl Terminal {
+    fn resize(&self, size: PtySize) {
+        if let Some(master) = &lock(&self.shared).master
+            && let Err(error) = master.resize(size)
+        {
+            debug!(%error, "couldn't resize a terminal");
+        }
+    }
+
+    fn kill(&self) {
+        if let Err(error) = lock(&self.killer).kill() {
+            debug!(%error, "couldn't kill a terminal's program; it may have exited");
+        }
+    }
+
+    /// Stops its stream to `replies`' connection, and forgets those of closed connections.
+    /// Returns its streams, still locked.
+    fn detach(&self, replies: &mpsc::Sender<Reply>) -> MutexGuard<'_, Vec<Stream>> {
+        let mut streams = lock(&self.streams);
+        streams.retain(|(other, task)| {
+            let detached = other.same_channel(replies);
+            if detached {
+                task.abort();
+            }
+            !detached && !other.is_closed()
+        });
+        streams
+    }
+
+    /// How long a stream over the relay gathers output now.
+    fn batch_window(&self) -> Duration {
+        let typing = lock(&self.typed).is_some_and(|typed| typed.elapsed() < TYPING_LINGERS);
+        if typing {
+            TYPING_BATCH_WINDOW
+        } else {
+            BATCH_WINDOW
+        }
+    }
+
+    /// A receiver for what it prints from now on, what it printed until now without its queries,
+    /// and its exit code if it already exited. The queries are stripped after the lock, which the
+    /// reader needs, is let go.
+    fn subscribe(&self) -> (broadcast::Receiver<Output>, String, Option<i32>) {
+        let (output, history, _, exit) = self.subscribe_raw();
+        (output, without_queries(&history), exit)
+    }
+
+    /// [`Self::subscribe`] with the queries still in the history, and how many bytes it has printed
+    /// in all, which the history ends at.
+    fn subscribe_raw(&self) -> (broadcast::Receiver<Output>, String, u64, Option<i32>) {
+        let mut shared = lock(&self.shared);
+        let history = shared.history.text();
+        (
+            self.output.subscribe(),
+            history,
+            shared.history.printed,
+            shared.exit,
+        )
+    }
+}
+
+/// Starts `params`' program, or the user's login shell (`PowerShell` on Windows), in a new
+/// pseudo-terminal, with the threads that serve it.
+fn start(
+    key: Key,
+    params: TerminalOpenParams,
+    size: PtySize,
+    open: Open,
+    env: &[(&str, &str)],
+) -> Result<Arc<Terminal>, ErrorObject> {
+    let cwd = params.cwd.filter(|cwd| cwd != "~");
+    if let Some(cwd) = &cwd
+        && !(Path::new(cwd).is_absolute() && Path::new(cwd).is_dir())
+    {
+        return Err(ErrorObject::new(
+            INVALID_PARAMS,
+            format!("{cwd} isn't a folder on this host anymore."),
+        ));
+    }
+    let failed = |error: &dyn std::fmt::Display| {
+        ErrorObject::new(
+            INTERNAL_ERROR,
+            format!("The terminal couldn't start: {error}"),
+        )
+    };
+    let command = params.command.is_some();
+    let (builder, shell) = command_builder(params.command, cwd, env);
+    let pair = native_pty_system().openpty(size).map_err(|e| failed(&e))?;
+    let child = pair.slave.spawn_command(builder).map_err(|e| failed(&e))?;
+    #[cfg(unix)]
+    let tty = pair.master.tty_name().map(|path| {
+        path.to_string_lossy()
+            .trim_start_matches("/dev/")
+            .to_owned()
+    });
+    #[cfg(unix)]
+    let pid = child.process_id();
+    drop(pair.slave);
+    let reader = pair.master.try_clone_reader().map_err(|e| failed(&e))?;
+    let writer = pair.master.take_writer().map_err(|e| failed(&e))?;
+    let (input, typed) = std_mpsc::channel();
+    let terminal = Arc::new(Terminal {
+        key,
+        command,
+        shared: Mutex::new(Shared {
+            history: History::new(MAX_LINES, MAX_BYTES),
+            master: Some(pair.master),
+            exit: None,
+        }),
+        output: broadcast::channel(LAG).0,
+        input,
+        typed: Mutex::default(),
+        killer: Mutex::new(child.clone_killer()),
+        streams: Mutex::default(),
+        shell,
+        #[cfg(unix)]
+        pid,
+        #[cfg(unix)]
+        tty,
+    });
+    if let Err(error) = serve(&terminal, reader, writer, typed, child, open) {
+        terminal.kill();
+        return Err(failed(&error));
+    }
+    Ok(terminal)
+}
+
+/// The command for `command`, or else the user's login shell (`PowerShell` on Windows), in `cwd`
+/// or its home folder, with `env`; and the program it runs.
+fn command_builder(
+    command: Option<TerminalCommand>,
+    cwd: Option<String>,
+    env: &[(&str, &str)],
+) -> (CommandBuilder, String) {
+    let mut builder = match command {
+        Some(command) => {
+            let mut builder = CommandBuilder::new(command.program);
+            builder.args(command.args);
+            for (name, value) in command.env {
+                builder.env(name, value);
+            }
+            builder
+        }
+        None if cfg!(windows) => {
+            let mut builder = CommandBuilder::new("powershell.exe");
+            builder.arg("-NoLogo");
+            builder
+        }
+        None => CommandBuilder::new_default_prog(),
+    };
+    let shell = match &builder.get_argv().first() {
+        Some(program) => program.to_string_lossy().into_owned(),
+        None => builder.get_shell(),
+    };
+    // Its home folder when absent.
+    if let Some(cwd) = cwd {
+        builder.cwd(cwd);
+    }
+    builder.env("TERM", "xterm-256color");
+    // An app started from this terminal stops its plxd with itself, not with ours (PLX-990).
+    builder.env_remove(crate::server::EXIT_WITH_ENV);
+    for (name, value) in env {
+        builder.env(name, value);
+    }
+    // In the C locale, as when launchd starts plxd, zsh counts each byte of a character like a
+    // prompt's U+E0A0 as a column, so its line editor draws in the wrong place.
+    if ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .all(|name| builder.get_env(name).is_none_or(std::ffi::OsStr::is_empty))
+    {
+        builder.env("LANG", "en_US.UTF-8");
+    }
+    (builder, shell)
+}
+
+/// Starts `terminal`'s three threads: one reads what it prints from `reader`, one writes what's
+/// `typed` to `writer`, and one waits for `child` to exit, then forgets it in `open`.
+fn serve(
+    terminal: &Arc<Terminal>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    typed: std_mpsc::Receiver<String>,
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    open: Open,
+) -> std::io::Result<()> {
+    let (read_done, reading) = std_mpsc::channel::<()>();
+    let printed = Arc::clone(terminal);
+    std::thread::Builder::new()
+        .name("terminal-read".to_owned())
+        .spawn(move || {
+            let _done = read_done;
+            read(&printed, reader);
+        })?;
+    std::thread::Builder::new()
+        .name("terminal-write".to_owned())
+        .spawn(move || write(writer, &typed))?;
+    let exited = Arc::clone(terminal);
+    std::thread::Builder::new()
+        .name("terminal-wait".to_owned())
+        .spawn(move || {
+            let code = child
+                .wait()
+                .ok()
+                .and_then(|status| i32::try_from(status.exit_code()).ok())
+                .unwrap_or(-1);
+            // A Windows pseudo-console's output ends only once it closes. Closing it waits for
+            // the reader, which needs the lock, so it's dropped outside it.
+            let master = lock(&exited.shared).master.take();
+            drop(master);
+            // The last of its output, unless a process it left behind holds the terminal.
+            let _ = reading.recv_timeout(Duration::from_secs(2));
+            finish(&exited, code, &open);
+        })?;
+    Ok(())
+}
+
+/// Asks for the cursor's position, which a Windows pseudo-console does first, and prints nothing
+/// until it's answered (portable-pty opens it with `PSEUDOCONSOLE_INHERIT_CURSOR`).
+const CURSOR_QUERY: &str = "\x1b[6n";
+
+/// Appends what the terminal prints to its history and sends it to its streams, until it ends.
+fn read(terminal: &Terminal, mut reader: Box<dyn Read + Send>) {
+    let mut buffer = vec![0; 64 * 1024];
+    let mut pending = Vec::new();
+    let mut started = !cfg!(windows);
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => return,
+            Ok(read) => {
+                pending.extend_from_slice(&buffer[..read]);
+                let mut text = take_text(&mut pending);
+                // plxd answers the pseudo-console's first query itself, at the top left of a new
+                // screen, so it never waits for a client, and a replay never asks a client again.
+                if !started && let Some(at) = text.find(CURSOR_QUERY) {
+                    started = true;
+                    text.replace_range(at..at + CURSOR_QUERY.len(), "");
+                    let _ = terminal.input.send("\x1b[1;1R".to_owned());
+                }
+                if text.is_empty() {
+                    continue;
+                }
+                let mut shared = lock(&terminal.shared);
+                shared.history.push(&text);
+                let _ = terminal.output.send(Output::Data(text.into()));
+            }
+        }
+    }
+}
+
+/// Writes what's typed to the terminal, in order, until it closes.
+fn write(mut writer: Box<dyn Write + Send>, typed: &std_mpsc::Receiver<String>) {
+    for data in typed {
+        if writer
+            .write_all(data.as_bytes())
+            .and_then(|()| writer.flush())
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
+/// Records the terminal's exit, sends it to its streams, and forgets it.
+fn finish(terminal: &Arc<Terminal>, code: i32, open: &Open) {
+    {
+        let mut shared = lock(&terminal.shared);
+        shared.exit = Some(code);
+        let _ = terminal.output.send(Output::Exit(code));
+    }
+    let mut open = lock(open);
+    if open
+        .get(&terminal.key)
+        .is_some_and(|current| Arc::ptr_eq(current, terminal))
+    {
+        open.remove(&terminal.key);
+    }
+}
+
+/// What one stream over the relay may still send, as a token bucket, when it last sent, and how far
+/// into all its terminal printed the client has been sent.
+struct Pace {
+    tokens: f64,
+    filled: Instant,
+    sent: Instant,
+    delivered: u64,
+}
+
+impl Pace {
+    /// A stream whose client has been sent the first `delivered` bytes the terminal printed.
+    fn new(now: Instant, delivered: u64) -> Self {
+        Self {
+            tokens: PACE_BURST,
+            filled: now,
+            sent: now.checked_sub(BATCH_WINDOW).unwrap_or(now),
+            delivered,
+        }
+    }
+
+    /// Whether `bytes` fit what's left.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a batch is far under 2^52 bytes"
+    )]
+    fn afford(&mut self, bytes: usize, now: Instant) -> bool {
+        let earned = now.duration_since(self.filled).as_secs_f64() * PACE_BYTES_PER_SECOND;
+        self.tokens = (self.tokens + earned).min(PACE_BURST);
+        self.filled = now;
+        self.tokens >= bytes as f64
+    }
+
+    /// Pays for `batch`, sent at `now`.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a batch is far under 2^52 bytes"
+    )]
+    fn spend(&mut self, batch: &str, now: Instant) {
+        self.tokens -= batch.len() as f64;
+        self.sent = now;
+        self.delivered += batch.len() as u64;
+    }
+
+    /// Skips ahead on `terminal`: a new receiver, the end of what the client hasn't been sent
+    /// ([`unsent`]) to add to what it shows, paid for, and the exit code if it exited.
+    fn skip(
+        &mut self,
+        terminal: &Terminal,
+        now: Instant,
+    ) -> (broadcast::Receiver<Output>, String, Option<i32>) {
+        let (output, history, printed, exit) = terminal.subscribe_raw();
+        let unsent = unsent(&history, printed.saturating_sub(self.delivered));
+        let unsent = without_queries(unsent);
+        self.spend(&unsent, now);
+        self.delivered = printed;
+        (output, unsent, exit)
+    }
+}
+
+/// The part of `history` a client that hasn't been sent its last `owed` bytes gets when its stream
+/// skips ahead: all of them when they fit in [`FLOOD_TAIL`], else the last [`FLOOD_TAIL`] bytes
+/// ([`flood_tail`]).
+fn unsent(history: &str, owed: u64) -> &str {
+    usize::try_from(owed)
+        .ok()
+        .filter(|&owed| owed <= FLOOD_TAIL)
+        .and_then(|owed| history.get(history.len().checked_sub(owed)?..))
+        .unwrap_or_else(|| flood_tail(history))
+}
+
+/// The last [`FLOOD_TAIL`] bytes of `history`, from a line's start when there is one to start at.
+fn flood_tail(history: &str) -> &str {
+    let Some(from) = history.len().checked_sub(FLOOD_TAIL) else {
+        return history;
+    };
+    let from = history.ceil_char_boundary(from);
+    let line = history[from..].find('\n').map_or(from, |at| from + at + 1);
+    &history[line..]
+}
+
+/// Whether more than [`QUEUE_BEHIND`] messages wait to go out on `replies`.
+fn behind(replies: &mpsc::Sender<Reply>) -> bool {
+    !replies.is_closed() && replies.max_capacity() - replies.capacity() > QUEUE_BEHIND
+}
+
+/// Waits out a flood's pause, and until the connection isn't [`behind`], so a flood adds at most
+/// [`FLOOD_TAIL`] to what a slow client has to read. Answers false when the connection stopped.
+async fn flood_pause(replies: &mpsc::Sender<Reply>, stopped: &CancellationToken) -> bool {
+    loop {
+        tokio::select! {
+            () = stopped.cancelled() => return false,
+            () = time::sleep(FLOOD_PAUSE) => {}
+        }
+        if !behind(replies) {
+            return true;
+        }
+    }
+}
+
+/// How gathering a batch ended.
+enum Gathered {
+    /// Its window ended.
+    Due,
+    /// The terminal exited with this code.
+    Exit(i32),
+    /// More came than the stream could keep up with.
+    Lagged,
+    Stopped,
+}
+
+/// Adds what's printed to `batch` until `until`.
+async fn gather(
+    output: &mut broadcast::Receiver<Output>,
+    stopped: &CancellationToken,
+    batch: &mut String,
+    until: Instant,
+) -> Gathered {
+    while Instant::now() < until {
+        let next = tokio::select! {
+            () = stopped.cancelled() => return Gathered::Stopped,
+            () = time::sleep_until(until) => return Gathered::Due,
+            next = output.recv() => next,
+        };
+        match next {
+            Ok(Output::Data(data)) => batch.push_str(&data),
+            Ok(Output::Exit(code)) => return Gathered::Exit(code),
+            Err(broadcast::error::RecvError::Lagged(_)) => return Gathered::Lagged,
+            Err(broadcast::error::RecvError::Closed) => return Gathered::Due,
+        }
+    }
+    Gathered::Due
+}
+
+/// Sends a terminal's history, then what it prints, then its exit, to one connection. A
+/// connection that falls [`LAG`] chunks behind gets the history again. With `pace`, what's printed
+/// goes in batches of messages up to [`RELAY_CHUNK`], and a batch it can't afford, or a
+/// connection that's behind, skips ahead ([`Pace::skip`]).
+#[expect(
+    clippy::too_many_lines,
+    reason = "one loop over what a terminal prints and how it's sent"
+)]
+async fn stream(
+    terminal: Arc<Terminal>,
+    replies: mpsc::Sender<Reply>,
+    stopped: CancellationToken,
+    mut output: broadcast::Receiver<Output>,
+    mut history: String,
+    mut exit: Option<i32>,
+    mut pace: Option<Pace>,
+) {
+    let (thread_id, terminal_id) = terminal.key.clone();
+    let send = async |message: Output, replay: bool| {
+        let notification = match message {
+            Output::Data(data) => notification::<TerminalOutput>(TerminalOutputParams {
+                thread_id: thread_id.clone(),
+                terminal_id: terminal_id.clone(),
+                data: data.to_string(),
+                replay,
+            }),
+            Output::Exit(exit_code) => notification::<TerminalExit>(TerminalExitParams {
+                thread_id: thread_id.clone(),
+                terminal_id: terminal_id.clone(),
+                exit_code,
+            }),
+        };
+        replies
+            .send(Reply::Notification(notification))
+            .await
+            .is_ok()
+    };
+    let most = if pace.is_some() {
+        RELAY_CHUNK
+    } else {
+        MAX_CHUNK
+    };
+    // The first output is always the history, even when empty. Over the relay, only that one
+    // replays: a skip ahead adds to what the client shows, and may add nothing.
+    let mut replay = true;
+    loop {
+        // Sent, and let go: a stream holds only what it's sending.
+        let text = std::mem::take(&mut history);
+        if replay || !text.is_empty() {
+            for (i, part) in chunks(&text, most).enumerate() {
+                if !send(Output::Data(part.into()), replay && i == 0).await {
+                    return;
+                }
+            }
+        }
+        replay = pace.is_none();
+        if let Some(code) = exit {
+            send(Output::Exit(code), false).await;
+            return;
+        }
+        loop {
+            let next = tokio::select! {
+                () = stopped.cancelled() => {
+                    if terminal.command {
+                        terminal.kill();
+                    }
+                    return;
+                }
+                next = output.recv() => next,
+            };
+            match next {
+                Ok(Output::Data(data)) if pace.is_some() => {
+                    let Some(pace) = pace.as_mut() else { return };
+                    let mut batch = data.to_string();
+                    let until = pace.sent + terminal.batch_window();
+                    let gathered = gather(&mut output, &stopped, &mut batch, until).await;
+                    if matches!(gathered, Gathered::Stopped) {
+                        if terminal.command {
+                            terminal.kill();
+                        }
+                        return;
+                    }
+                    let now = Instant::now();
+                    if matches!(gathered, Gathered::Lagged)
+                        || !pace.afford(batch.len(), now)
+                        || behind(&replies)
+                    {
+                        if !flood_pause(&replies, &stopped).await {
+                            if terminal.command {
+                                terminal.kill();
+                            }
+                            return;
+                        }
+                        (output, history, exit) = pace.skip(&terminal, Instant::now());
+                        break;
+                    }
+                    pace.spend(&batch, now);
+                    for part in chunks(&batch, most) {
+                        if !send(Output::Data(part.into()), false).await {
+                            return;
+                        }
+                    }
+                    if let Gathered::Exit(code) = gathered {
+                        send(Output::Exit(code), false).await;
+                        return;
+                    }
+                }
+                Ok(message @ Output::Data(_)) => {
+                    if !send(message, false).await {
+                        return;
+                    }
+                }
+                Ok(message @ Output::Exit(_)) => {
+                    send(message, false).await;
+                    return;
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    (output, history, exit) = match pace.as_mut() {
+                        Some(pace) => pace.skip(&terminal, Instant::now()),
+                        None => terminal.subscribe(),
+                    };
+                    break;
+                }
+                Err(broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    }
+}
+
+/// Whether a process other than `terminal`'s shell runs on its terminal device outside its
+/// foreground process group, or that can't be told. Once a script's exit line has printed, the
+/// foreground holds only what the shell runs for its prompt, such as a `direnv` hook, while what
+/// the script left running in the background stays outside it.
+#[cfg(unix)]
+fn busy(terminal: &Terminal) -> bool {
+    let (Some(tty), Some(pid)) = (&terminal.tty, terminal.pid) else {
+        return true;
+    };
+    let listed = std::process::Command::new("ps")
+        .args(["-o", "pid=,stat=", "-t", tty])
+        .output();
+    let listed = match listed {
+        Ok(listed) if listed.status.success() => listed,
+        _ => return true,
+    };
+    let pid = pid.to_string();
+    String::from_utf8_lossy(&listed.stdout).lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let (Some(other), Some(stat)) = (fields.next(), fields.next()) else {
+            return false;
+        };
+        other != pid && !stat.contains('+')
+    })
+}
+
+// ponytail: Windows has no `ps`, so a clean exit closes the shell there; listing the
+// pseudo-console's processes is PLX-677.
+#[cfg(windows)]
+fn busy(_: &Terminal) -> bool {
+    false
+}
+
+/// `command` as it's typed into `shell`, as T3 Code's `wrapCommandForCompletion` types it: run in a block
+/// that closes on its own line, so a trailing comment or heredoc can't swallow the line after it,
+/// then printing `sentinel` and the exit code on a line of their own. Lines end in `\r`, the
+/// Enter key for every shell's line editor. The echoed input never matches: there `sentinel` is
+/// followed by `%s` or `$`, not digits.
+fn wrap_script(command: &str, sentinel: &str, shell: &str) -> String {
+    let body = command.replace("\r\n", "\r").replace('\n', "\r");
+    let shell = shell.rsplit(['/', '\\']).next().unwrap_or_default();
+    let shell = shell.strip_suffix(".exe").unwrap_or(shell);
+    if shell == "pwsh" || shell == "powershell" {
+        format!(
+            "$global:LASTEXITCODE = $null; & {{\r{body}\r}}; if ($null -ne $LASTEXITCODE) {{ $__plxc = $LASTEXITCODE }} elseif ($?) {{ $__plxc = 0 }} else {{ $__plxc = 1 }}; Write-Host \"{sentinel}$__plxc\""
+        )
+    } else if shell == "fish" {
+        format!("begin\r{body}\rend; printf '\\n{sentinel}%s\\n' $status")
+    } else {
+        format!("( {body}\r); printf '\\n{sentinel}%s\\n' \"$?\"")
+    }
+}
+
+/// Waits for the line [`wrap_script`] prints and returns its exit code, reading what the
+/// terminal printed so far (`seen`) and then its output. `None` once the terminal exits without
+/// it. Keeps only the tail a split line could still need.
+async fn watch_script(
+    terminal: &Arc<Terminal>,
+    mut output: broadcast::Receiver<Output>,
+    mut seen: String,
+    mut exit: Option<i32>,
+    sentinel: &str,
+) -> Option<i32> {
+    loop {
+        if let Some(code) = script_exit(&seen, sentinel) {
+            return Some(code);
+        }
+        if exit.is_some() {
+            return None;
+        }
+        let keep = seen.floor_char_boundary(seen.len().saturating_sub(sentinel.len() + 16));
+        seen.drain(..keep);
+        match output.recv().await {
+            Ok(Output::Data(data)) => seen.push_str(&data),
+            Ok(Output::Exit(code)) => exit = Some(code),
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                (output, seen, exit) = terminal.subscribe();
+            }
+            Err(broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
+/// The exit code after `sentinel` in `text`, once its line has ended.
+fn script_exit(text: &str, sentinel: &str) -> Option<i32> {
+    text.match_indices(sentinel).find_map(|(at, _)| {
+        let rest = &text[at + sentinel.len()..];
+        let end = rest.find(['\r', '\n'])?;
+        rest[..end].parse().ok()
+    })
+}
+
+/// `text` in pieces of at most `most` bytes, cut between characters. At least one, so an empty
+/// history still resets the client.
+fn chunks(text: &str, most: usize) -> impl Iterator<Item = &str> {
+    let mut rest = Some(text);
+    std::iter::from_fn(move || {
+        let text = rest?;
+        let end = text.floor_char_boundary(most);
+        let (part, after) = text.split_at(end);
+        rest = (!after.is_empty()).then_some(after);
+        Some(part)
+    })
+}
+
+/// The UTF-8 text at the front of `pending`, leaving a character a read split for the next one.
+/// Invalid bytes become U+FFFD.
+fn take_text(pending: &mut Vec<u8>) -> String {
+    let mut text = String::new();
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(valid) => {
+                text.push_str(valid);
+                pending.clear();
+                return text;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                text.push_str(&String::from_utf8_lossy(&pending[..valid]));
+                let Some(invalid) = error.error_len() else {
+                    pending.drain(..valid);
+                    return text;
+                };
+                text.push(char::REPLACEMENT_CHARACTER);
+                pending.drain(..valid + invalid);
+            }
+        }
+    }
+}
+
+/// A terminal's latest output: at most `max_lines` lines, counting an unfinished last one, and
+/// `max_bytes` bytes, as T3 Code's `BoundedTerminalHistory` keeps it.
+struct History {
+    text: VecDeque<u8>,
+    newlines: usize,
+    max_lines: usize,
+    max_bytes: usize,
+    /// How many bytes were ever pushed, which `text` ends at.
+    printed: u64,
+}
+
+impl History {
+    fn new(max_lines: usize, max_bytes: usize) -> Self {
+        Self {
+            text: VecDeque::new(),
+            newlines: 0,
+            max_lines,
+            max_bytes,
+            printed: 0,
+        }
+    }
+
+    fn push(&mut self, data: &str) {
+        self.printed += data.len() as u64;
+        self.text.extend(data.as_bytes());
+        self.newlines += data.bytes().filter(|&b| b == b'\n').count();
+        while self.newlines + usize::from(self.text.back() != Some(&b'\n')) > self.max_lines {
+            let Some(end) = self.text.iter().position(|&b| b == b'\n') else {
+                break;
+            };
+            self.text.drain(..=end);
+            self.newlines -= 1;
+        }
+        if self.text.len() > self.max_bytes {
+            let mut cut = self.text.len() - self.max_bytes;
+            // Never half a character.
+            while self.text.get(cut).is_some_and(|&b| b & 0xC0 == 0x80) {
+                cut += 1;
+            }
+            self.newlines -= self.text.range(..cut).filter(|&&b| b == b'\n').count();
+            self.text.drain(..cut);
+        }
+    }
+
+    /// The kept output.
+    fn text(&mut self) -> String {
+        String::from_utf8_lossy(self.text.make_contiguous()).into_owned()
+    }
+}
+
+/// `text` less the escape sequences that ask a terminal something or answer it, so a client that
+/// replays a history doesn't answer them again and type the answers into the shell. T3 Code strips
+/// the same from its history: cursor position and status reports, device attributes, mode,
+/// version, and keyboard queries, color queries, and setting and capability queries.
+fn without_queries(text: &str) -> String {
+    let mut kept = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\x1b') {
+        kept.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let (len, query) = match after.as_bytes().first() {
+            Some(b'[') => csi(&after[1..]).map_or((0, false), |(len, query)| (len + 1, query)),
+            Some(b']') => string(&after[1..]).map_or((0, false), |(len, body)| {
+                let color = ["10;", "11;", "12;"].iter().any(|p| body.starts_with(p))
+                    && (body[3..].starts_with('?') || body[3..].starts_with("rgb:"));
+                (len + 1, color)
+            }),
+            Some(b'P') => string(&after[1..]).map_or((0, false), |(len, body)| {
+                let body = body.strip_prefix(['0', '1']).unwrap_or(body);
+                let query = ["$q", "$r", "+q", "+r"].iter().any(|p| body.starts_with(p));
+                (len + 1, query)
+            }),
+            _ => (0, false),
+        };
+        if !query {
+            kept.push('\x1b');
+        }
+        let skip = if query { len } else { 0 };
+        rest = &after[skip..];
+    }
+    kept.push_str(rest);
+    kept
+}
+
+/// The length of a control sequence's body and final byte at the start of `text`, after `ESC [`,
+/// and whether it's a query or a reply.
+fn csi(text: &str) -> Option<(usize, bool)> {
+    let end = text.find(|c: char| ('\x40'..='\x7e').contains(&c))?;
+    let (body, last) = (&text[..end], text.as_bytes()[end]);
+    if !body.bytes().all(|b| (0x20..=0x3f).contains(&b)) {
+        return None;
+    }
+    let digits = |s: &str| {
+        s.bytes()
+            .all(|b| b.is_ascii_digit() || b == b';' || b == b'?')
+    };
+    let query = match last {
+        b'n' => true,
+        b'R' => digits(body),
+        b'c' => digits(body.trim_start_matches('>')),
+        b'p' | b'y' => body.strip_suffix('$').is_some_and(digits),
+        b'q' => body.strip_prefix('>').is_some_and(digits),
+        b'u' => body.starts_with('?'),
+        _ => false,
+    };
+    Some((end + 1, query))
+}
+
+/// The length of an OSC or DCS string at the start of `text` with its terminator (BEL or
+/// `ESC \`), and its content.
+fn string(text: &str) -> Option<(usize, &str)> {
+    let end = text.find(['\x07', '\x1b'])?;
+    let terminator = match text.as_bytes()[end] {
+        0x07 => 1,
+        _ if text[end..].starts_with("\x1b\\") => 2,
+        _ => return None,
+    };
+    Some((end + terminator, &text[..end]))
+}
+
+/// A terminal `cols` wide and `rows` high, at least one of each.
+fn pty_size(cols: u16, rows: u16) -> PtySize {
+    PtySize {
+        rows: rows.max(1),
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
+fn notification<N: NotificationMethod>(params: N::Params) -> Notification {
+    Notification {
+        method: N::NAME.to_owned(),
+        params: serde_json::to_value(params).ok(),
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests;

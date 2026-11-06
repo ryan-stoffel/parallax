@@ -1,40 +1,50 @@
-//! Where wispd keeps its files.
+//! Where plxd keeps its files.
 //!
 //! Everything lives in one data folder (0009, 0023), which the editor shares:
-//! `~/Library/Application Support/wisp` on macOS, `$XDG_DATA_HOME/wisp` or
-//! `~/.local/share/wisp` on Linux, and `%LOCALAPPDATA%\wisp` on Windows. wispd's own entries are:
+//! `~/.parallax` (`%USERPROFILE%\.parallax` on Windows), or the older OS folder where the store is
+//! still there (see [`DataDir::default_location`]). `serve` moves that folder to `~/.parallax` on
+//! macOS and Linux, and leaves a symlink where it was (see [`move_to_default`]). plxd's own entries are:
 //!
-//! - `wispd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
+//! - `plxd.sock`: the socket, unless its path is too long (see [`DataDir::socket_path`]). Windows
 //!   listens on a named pipe instead, so there it isn't in the folder.
-//! - `wispd.lock`: locked (`flock`, or `LockFileEx` on Windows) while a `wispd serve` runs. It
+//! - `plxd.lock`: locked (`flock`, or `LockFileEx` on Windows) while a `plxd serve` runs. It
 //!   contains that process's pid.
-//! - `wispd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
+//! - `plxd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
-//! - `tmp/`: files wispd writes for a run and deletes when it ends, such as a Claude worker's
-//!   `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141). See
+//! - `integration/` and `coordinators/`: each orchestrator's integration worktree (0045) and its
+//!   orchestrator's detached worktree (0042).
+//! - `tmp/`: files plxd writes for a run and deletes when it ends, such as a Claude worker's
+//!   `CLAUDE_ENV_FILE` (PLX-126) and a Codex thread's prompt images (PLX-191). See
 //!   [`DataDir::temp_dir`].
-//! - `logs/wispd.log`: the log.
+//! - `tools/`: CLIs plxd installs itself: `gh` (`tools/gh/`, PLX-423), and on Linux the `bwrap`
+//!   and `socat` a release plxd carries (`tools/sandbox/`, PLX-895). See [`DataDir::tools_dir`].
+//!   `tools/gh-shim/` holds the `gh` shim agents run, and `github-budget.json` the GitHub quota it
+//!   checks (PLX-1023, [`gh_shim`](crate::gh_shim)).
+//! - `logs/plxd.log`: the log.
+//! - `ci-logs/`: failed CI jobs' log excerpts, one file per head commit and job (PLX-1019). See
+//!   [`DataDir::ci_logs_dir`].
 //!
-//! One folder is outside it: `/tmp/wisp-<hash>/`, which holds each worker run's own temp folder
-//! (RYA-130). See [`DataDir::run_temp_roots`].
+//! - `secrets/`: secrets the user gave an agent's commands, `<run>/<id>`, each deleted after 24
+//!   hours (0098). See [`secret_files_dir`].
+//!
+//! One folder is outside it: `/tmp/parallax-<hash>/`, which holds each worker run's own temp folder
+//! (PLX-130). See [`DataDir::run_temp_roots`].
 //!
 //! `--data-dir` or [`DATA_DIR_ENV`] moves the whole folder. Every subcommand that reaches the
 //! socket must resolve the folder and the socket path with [`DataDir`], so that `serve` and
-//! `attach` always agree. Every process wispd starts is built with [`DataDir::command`], which
-//! passes the folder on, so a `wispd` that an agent runs reaches the same socket.
+//! `attach` always agree. Every process plxd starts is built with [`DataDir::command`], which
+//! passes the folder on, so a `plxd` that an agent runs reaches the same socket.
 
 use std::ffi::OsStr;
-use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sha2::{Digest, Sha256};
-use wisp_protocol::ProjectId;
+use parallax_protocol::{RunId, ScopeId};
 
 /// The environment variable that sets the data folder when `--data-dir` is not given.
-pub const DATA_DIR_ENV: &str = "WISPD_DATA_DIR";
+pub const DATA_DIR_ENV: &str = "PLXD_DATA_DIR";
 
 /// The longest socket path the OS accepts: `sun_path` holds 104 bytes on macOS, including the
 /// final NUL.
@@ -46,16 +56,209 @@ pub const MAX_SOCKET_PATH_BYTES: usize = 103;
 pub const MAX_SOCKET_PATH_BYTES: usize = 107;
 
 /// The data folder under the home folder.
-#[cfg(target_os = "macos")]
-const DEFAULT_DATA_DIR: &str = "Library/Application Support/wisp";
-/// The data folder under the home folder, when `XDG_DATA_HOME` doesn't name one.
-#[cfg(target_os = "linux")]
-const DEFAULT_DATA_DIR: &str = ".local/share/wisp";
+const DEFAULT_DATA_DIR: &str = ".parallax";
+
+/// `secrets/` in data folder `data_dir`: what `request_secret` wrote for shell commands (0098).
+#[must_use]
+pub fn secrets_root(data_dir: &Path) -> PathBuf {
+    data_dir.join("secrets")
+}
+
+/// The folder of run `run`'s secret files in data folder `data_dir`, the only one of them its
+/// sandbox can read.
+#[must_use]
+pub fn secret_files_dir(data_dir: &Path, run: RunId) -> PathBuf {
+    secrets_root(data_dir).join(run.to_string())
+}
+
+/// The data folder's [`DataDir::uploads_dir`], by name.
+pub const UPLOADS_DIR: &str = "uploads";
+
+/// Where in the data folder a Linux plxd built with its own `bwrap` and `socat` puts them for
+/// Claude Code's worker sandbox (PLX-895, `linux_sandbox::bundled_dir`).
+pub const SANDBOX_TOOLS_DIR: &str = "tools/sandbox";
+
+/// The store's name in the data folder.
+const STORE_FILE: &str = "plxd.sqlite3";
+
+/// Whether `path` is the `legacy` folder's link to `default`.
+fn links_to_default(path: &Path, legacy: &Path, default: &Path) -> bool {
+    path == legacy
+        && path.is_symlink()
+        && std::fs::canonicalize(path).ok() == std::fs::canonicalize(default).ok()
+}
+
+/// `default`, unless only the `legacy` folder has a store. Other things create `default`, such as
+/// New Repository's `projects/`, so the folder existing doesn't make it the data folder (PLX-1262).
+fn pick_default(default: PathBuf, legacy: Option<PathBuf>) -> PathBuf {
+    match legacy {
+        Some(legacy) if !default.join(STORE_FILE).exists() && legacy.join(STORE_FILE).exists() => {
+            legacy
+        }
+        _ => default,
+    }
+}
+
+/// Where versions before `~/.parallax` kept the data folder: `~/Library/Application Support/parallax`
+/// on macOS, `$XDG_DATA_HOME/parallax` (when absolute) or `~/.local/share/parallax` on Linux, and
+/// `%LOCALAPPDATA%\parallax` on Windows.
+fn legacy_location(home: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        return Some(home.join("Library/Application Support/parallax"));
+    }
+    if cfg!(windows) {
+        return std::env::var_os("LOCALAPPDATA").map(|local| Path::new(&local).join("parallax"));
+    }
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".local/share"));
+    Some(data_home.join("parallax"))
+}
+
+/// Where [`move_to_default`] keeps what `~/.parallax` held while the older folder takes its place.
+#[cfg(unix)]
+const ASIDE_NAME: &str = ".parallax.pre-move";
+
+/// The folder in `~/.parallax` for what the older folder also had a copy of, which wins.
+#[cfg(unix)]
+const COLLISIONS_DIR: &str = "pre-move";
+
+/// The data folder to use: `data_dir`, unless it is the older OS folder with the only store, which
+/// this moves to `~/.parallax`. A symlink takes its place, so the absolute paths in events, in
+/// git's worktree links, and in agents' sessions still work. Only the store's worktree and repo
+/// paths, which running code compares with real paths, change (PLX-1264).
+/// The service's plist names that link until its next `service install --replace`, and
+/// [`DataDir::resolve`] follows it. It holds the folder's instance lock during the move, and leaves a folder
+/// another `serve` runs in where it is.
+///
+/// # Errors
+///
+/// If the rename or the symlink fails, as a rename to another volume does. Everything is put back,
+/// so the caller keeps using `data_dir`.
+#[cfg(unix)]
+pub fn move_to_default(data_dir: &DataDir) -> io::Result<DataDir> {
+    let Some(home) = std::env::home_dir().filter(|home| home.is_absolute()) else {
+        return Ok(data_dir.clone());
+    };
+    let default = home.join(DEFAULT_DATA_DIR);
+    if legacy_location(&home).as_deref() != Some(data_dir.root()) {
+        return Ok(data_dir.clone());
+    }
+    if data_dir.root().is_symlink() {
+        return Ok(data_dir.clone());
+    }
+    let Some(_held) = crate::server::lock_for_move(data_dir) else {
+        return Ok(data_dir.clone());
+    };
+    // Another `serve` may have moved it before the lock was free.
+    if data_dir.root().is_symlink() {
+        return DataDir::resolve(Some(data_dir.root()));
+    }
+    if !data_dir.store_file().exists() || default.join(STORE_FILE).exists() {
+        return Ok(data_dir.clone());
+    }
+    // Read before the folder is only a link.
+    let real_legacy = std::fs::canonicalize(data_dir.root())?;
+    move_folder(data_dir.root(), &default)?;
+    let moved = DataDir::new(default)?;
+    if let Err(error) = move_stored_paths(data_dir.root(), &real_legacy, &moved) {
+        // Those paths still resolve through the link.
+        eprintln!("plxd: couldn't update the store's paths after the move: {error}");
+    }
+    Ok(moved)
+}
+
+/// Points the store's paths under the older folder at `to`. With a link in the home folder's path,
+/// the store has both spellings: worktrees under the data folder as given, and repositories' real
+/// paths.
+#[cfg(unix)]
+fn move_stored_paths(
+    legacy: &Path,
+    real_legacy: &Path,
+    to: &DataDir,
+) -> Result<(), parallax_store::StoreError> {
+    let real_to = std::fs::canonicalize(to.root())?;
+    let mut store = parallax_store::Store::open(to.store_file())?;
+    for (from, to) in [(legacy, to.root()), (real_legacy, real_to.as_path())] {
+        if let (Some(from), Some(to)) = (from.to_str(), to.to_str()) {
+            store.move_paths(from, to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Renames `legacy` to `default` and leaves a symlink at `legacy`, with what `default` held kept
+/// inside it. A rename that fails, such as to another volume, puts everything back.
+///
+/// ponytail: a crash between the rename and the symlink, two syscalls apart, leaves old paths
+/// without their link. Add a check at start if a report ever shows one.
+#[cfg(unix)]
+fn move_folder(legacy: &Path, default: &Path) -> io::Result<()> {
+    let aside = default.with_file_name(ASIDE_NAME);
+    if default.exists() {
+        std::fs::rename(default, &aside)?;
+    }
+    let moved = std::fs::rename(legacy, default).and_then(|()| {
+        std::os::unix::fs::symlink(default, legacy).inspect_err(|_| {
+            let _ = std::fs::rename(default, legacy);
+        })
+    });
+    if let Err(error) = moved {
+        if aside.exists() {
+            std::fs::rename(&aside, default)?;
+        }
+        return Err(error);
+    }
+    // The move stands by now, so a failure here only leaves those files in `aside`.
+    if aside.exists()
+        && let Err(error) = merge_aside(&aside, default)
+    {
+        eprintln!(
+            "plxd: couldn't move everything back from {}: {error}",
+            aside.display()
+        );
+    }
+    Ok(())
+}
+
+/// Moves `aside`'s entries into `default`, and those whose names `default` already has into
+/// [`COLLISIONS_DIR`] there, then removes `aside`.
+#[cfg(unix)]
+fn merge_aside(aside: &Path, default: &Path) -> io::Result<()> {
+    for entry in std::fs::read_dir(aside)? {
+        let entry = entry?;
+        let mut to = default.join(entry.file_name());
+        if to.symlink_metadata().is_ok() {
+            let collisions = default.join(COLLISIONS_DIR);
+            std::fs::create_dir_all(&collisions)?;
+            to = collisions.join(entry.file_name());
+        }
+        std::fs::rename(entry.path(), to)?;
+    }
+    std::fs::remove_dir(aside)
+}
+
+/// Where desktop apps such as Cursor and Claude keep their files: `~/Library/Application Support`
+/// on macOS, `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (when absolute) or `~/.config` on
+/// Linux.
+pub(crate) fn app_config_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        return Some(std::env::home_dir()?.join("Library/Application Support"));
+    }
+    if cfg!(windows) {
+        return std::env::var_os("APPDATA").map(PathBuf::from);
+    }
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| std::env::home_dir().map(|home| home.join(".config")))
+}
 
 #[cfg(target_os = "macos")]
 const GETCONF: &str = "/usr/bin/getconf";
 
-/// wispd's data folder, as an absolute path.
+/// plxd's data folder, as an absolute path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataDir {
     root: PathBuf,
@@ -78,59 +281,51 @@ impl DataDir {
         })
     }
 
-    /// The OS's data folder for wisp (0023): `~/Library/Application Support/wisp` on macOS. On
-    /// Linux, `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset or,
-    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\wisp`.
+    /// The data folder for Parallax (0023): `~/.parallax`, with `%USERPROFILE%\.parallax` on Windows.
+    /// A computer whose store is only in the folder older versions used keeps using that one until
+    /// `serve` moves it ([`move_to_default`]): see [`legacy_location`].
     ///
     /// # Errors
     ///
-    /// If the home folder, or on Windows `LOCALAPPDATA`, is needed and unknown.
-    #[cfg(windows)]
+    /// If the home folder is unknown.
     pub fn default_location() -> io::Result<Self> {
-        let local = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "LOCALAPPDATA isn't set to an absolute path",
-                )
-            })?;
-        Self::new(local.join("wisp"))
-    }
-
-    /// The OS's data folder for wisp (0023): `~/Library/Application Support/wisp` on macOS. On
-    /// Linux, `$XDG_DATA_HOME/wisp`, or `~/.local/share/wisp` when `XDG_DATA_HOME` is unset or,
-    /// as the XDG spec says, not absolute. On Windows, `%LOCALAPPDATA%\wisp`.
-    ///
-    /// # Errors
-    ///
-    /// If the home folder is needed and unknown.
-    #[cfg(unix)]
-    pub fn default_location() -> io::Result<Self> {
-        #[cfg(target_os = "linux")]
-        if let Some(data_home) = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-        {
-            return Self::new(data_home.join("wisp"));
-        }
         let home = std::env::home_dir()
             .filter(|home| home.is_absolute())
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the home folder is unknown"))?;
-        Self::new(home.join(DEFAULT_DATA_DIR))
+        Self::new(pick_default(
+            home.join(DEFAULT_DATA_DIR),
+            legacy_location(&home),
+        ))
     }
 
-    /// `path` if given, which is `--data-dir` or [`DATA_DIR_ENV`], else the default location.
+    /// `path` if given, which is `--data-dir` or [`DATA_DIR_ENV`], else the default location. A
+    /// `path` that is the link [`move_to_default`] left, as the service's plist names until its
+    /// next `service install --replace`, means `~/.parallax`.
     ///
     /// # Errors
     ///
     /// See [`DataDir::new`] and [`DataDir::default_location`].
     pub fn resolve(path: Option<&Path>) -> io::Result<Self> {
-        match path {
-            Some(path) => Self::new(path),
-            None => Self::default_location(),
-        }
+        let Some(path) = path else {
+            return Self::default_location();
+        };
+        let given = Self::new(path)?;
+        let moved = std::env::home_dir().and_then(|home| {
+            let default = home.join(DEFAULT_DATA_DIR);
+            links_to_default(given.root(), &legacy_location(&home)?, &default).then_some(default)
+        });
+        moved.map_or(Ok(given), Self::new)
+    }
+
+    /// `path`, which an old message may name, under this folder if it is under the link
+    /// [`move_to_default`] left, for checks that compare paths without following links.
+    #[must_use]
+    pub fn current_path(&self, path: &str) -> PathBuf {
+        let inside = std::env::home_dir()
+            .and_then(|home| legacy_location(&home))
+            .filter(|legacy| links_to_default(legacy, legacy, &self.root))
+            .and_then(|legacy| Some(self.root.join(Path::new(path).strip_prefix(legacy).ok()?)));
+        inside.unwrap_or_else(|| path.into())
     }
 
     /// The folder itself.
@@ -139,49 +334,71 @@ impl DataDir {
         &self.root
     }
 
-    /// `wispd.lock`, which a running `serve` holds locked.
+    /// `plxd.lock`, which a running `serve` holds locked.
     #[must_use]
     pub fn lock_file(&self) -> PathBuf {
-        self.root.join("wispd.lock")
+        self.root.join("plxd.lock")
     }
 
-    /// `wispd.sqlite3`, the project store.
+    /// `plxd.sqlite3`, the project store.
     #[must_use]
     pub fn store_file(&self) -> PathBuf {
-        self.root.join("wispd.sqlite3")
+        self.root.join(STORE_FILE)
     }
 
-    /// `logs/wispd.log`.
+    /// `logs/plxd.log`.
     #[must_use]
     pub fn log_file(&self) -> PathBuf {
-        self.root.join("logs").join("wispd.log")
+        self.root.join("logs").join("plxd.log")
     }
 
-    /// `tmp/`: files wispd writes for a run and deletes when the run ends, such as a Claude
-    /// worker's `CLAUDE_ENV_FILE` (RYA-126) and a Codex worker's `ZDOTDIR` (RYA-141), and `serve`
-    /// sweeps at startup. No worker's commands can write them or read another run's, since the
-    /// data folder is unreadable to every worker (0013). A Codex worker's own `ZDOTDIR` is
-    /// readable to it.
+    /// `tmp/`: files plxd writes for a run and deletes when the run ends, such as a Claude
+    /// worker's `CLAUDE_ENV_FILE` (PLX-126) and a Codex thread's prompt images (PLX-191), and
+    /// `serve` sweeps at startup. No worker's commands can write them or read another run's,
+    /// since the data folder is unreadable to every worker (0013).
     #[must_use]
     pub fn temp_dir(&self) -> PathBuf {
         self.root.join("tmp")
     }
 
-    /// Where each worker run gets its own temp folder (RYA-130), in order: `/tmp/wisp-<hash>`,
-    /// then `wisp-<hash>` in `$TMPDIR`, for when `/tmp` can't be written, such as inside a
-    /// worker's sandbox running wispd's own tests. `<hash>` is the socket fallback's, so each
-    /// wispd has its own. They are outside the data folder because the path has to be short:
+    /// Where each worker run gets its own temp folder (PLX-130), in order: `/tmp/parallax-<hash>`,
+    /// then `parallax-<hash>` in `$TMPDIR`, for when `/tmp` can't be written, such as inside a
+    /// worker's sandbox running plxd's own tests. `<hash>` is the socket fallback's, so each
+    /// plxd has its own. They are outside the data folder because the path has to be short:
     /// Claude Code gives a worker's commands `$CLAUDE_CODE_TMPDIR/claude-<uid>` as `TMPDIR` only
     /// when that fits in 44 bytes. Windows, which runs no workers (0023), has only the second.
     #[must_use]
     pub fn run_temp_roots(&self) -> Vec<PathBuf> {
-        let name = format!("wisp-{}", self.hash(4));
+        let name = format!("parallax-{}", self.hash(4));
         let mut roots = vec![std::env::temp_dir().join(&name)];
         if cfg!(unix) {
             roots.insert(0, Path::new("/tmp").join(&name));
         }
         roots.dedup();
         roots
+    }
+
+    /// `tools/`: CLIs plxd installs itself, each in a folder of its own, such as `gh/` with
+    /// `bin/gh` (PLX-423, 0050). Installs unpack into a temp folder inside it and are renamed into
+    /// place.
+    #[must_use]
+    pub fn tools_dir(&self) -> PathBuf {
+        self.root.join("tools")
+    }
+
+    /// `uploads/`: files attached to messages (PLX-779, 0071), each in a folder of its own, which
+    /// is `<id>.partial` while its pieces arrive (0074). A worker's sandbox may read it, though
+    /// the rest of the data folder stays unreadable.
+    #[must_use]
+    pub fn uploads_dir(&self) -> PathBuf {
+        self.root.join(UPLOADS_DIR)
+    }
+
+    /// `ci-logs/`: `pr/failureLog`'s cache (PLX-1019), `<head sha>/<job id>.log`, each the
+    /// trimmed log of a failed CI job.
+    #[must_use]
+    pub fn ci_logs_dir(&self) -> PathBuf {
+        self.root.join("ci-logs")
     }
 
     /// The folder holding every project's shared context (0005, #155): `context/` in the data
@@ -194,15 +411,15 @@ impl DataDir {
     /// One project's shared context folder: `context/<project-id>/` in the data folder. The
     /// runner (#156) makes it writable for the project's workers.
     #[must_use]
-    pub fn context_dir(&self, project: ProjectId) -> PathBuf {
+    pub fn context_dir(&self, project: ScopeId) -> PathBuf {
         self.context_root().join(project.to_string())
     }
 
     /// A command for `program` with [`DATA_DIR_ENV`] set to this folder.
     ///
-    /// Every process wispd starts is built with it, so a `wispd attach` or `wispd mcp` that an
-    /// agent starts reaches this wispd's socket even when `serve` was given `--data-dir`.
-    /// (Setting the variable on wispd's own environment instead is `unsafe` in Rust 2024.)
+    /// Every process plxd starts is built with it, so a `plxd attach` or `plxd mcp` that an
+    /// agent starts reaches this plxd's socket even when `serve` was given `--data-dir`.
+    /// (Setting the variable on plxd's own environment instead is `unsafe` in Rust 2024.)
     #[must_use]
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut command = Command::new(program);
@@ -212,9 +429,9 @@ impl DataDir {
 
     /// Where the socket goes.
     ///
-    /// That is `wispd.sock` in the data folder, unless that path is longer than
+    /// That is `plxd.sock` in the data folder, unless that path is longer than
     /// [`MAX_SOCKET_PATH_BYTES`], which on macOS happens when the home folder's path is longer
-    /// than 59 bytes. Then it is `wispd-<hash>.sock` in a per-user, 0700 folder (0023): the one
+    /// than 56 bytes. Then it is `plxd-<hash>.sock` in a per-user, 0700 folder (0023): the one
     /// `getconf DARWIN_USER_TEMP_DIR` prints on macOS, and `$XDG_RUNTIME_DIR` on Linux. `<hash>`
     /// is the first 8 hex digits of the SHA-256 of the data folder's path, as [`DataDir::root`]
     /// spells it.
@@ -225,14 +442,14 @@ impl DataDir {
     /// long too.
     #[cfg(unix)]
     pub fn socket_path(&self) -> io::Result<SocketPath> {
-        let default = self.root.join("wispd.sock");
+        let default = self.root.join("plxd.sock");
         if fits(&default) {
             return Ok(SocketPath {
                 path: default,
                 fallback: false,
             });
         }
-        let path = fallback_socket_dir()?.join(format!("wispd-{}.sock", self.hash(4)));
+        let path = fallback_socket_dir()?.join(format!("plxd-{}.sock", self.hash(4)));
         if !fits(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -248,7 +465,7 @@ impl DataDir {
         })
     }
 
-    /// The named pipe `serve` listens on (0023): `\\.\pipe\wispd-<hash>`, where `<hash>` is the
+    /// The named pipe `serve` listens on (0023): `\\.\pipe\plxd-<hash>`, where `<hash>` is the
     /// first 16 hex digits of the SHA-256 of the data folder's path. Pipe names share one
     /// machine-wide namespace, hence twice the digits of the socket's fallback name. Only this
     /// user may connect; see [`crate::transport`].
@@ -259,7 +476,7 @@ impl DataDir {
     #[cfg(windows)]
     pub fn socket_path(&self) -> io::Result<SocketPath> {
         Ok(SocketPath {
-            path: PathBuf::from(format!(r"\\.\pipe\wispd-{}", self.hash(8))),
+            path: PathBuf::from(format!(r"\\.\pipe\plxd-{}", self.hash(8))),
             fallback: false,
         })
     }
@@ -267,11 +484,7 @@ impl DataDir {
     /// The first `bytes` bytes of the SHA-256 of the folder's path, in hex. On Windows, the path's
     /// bytes are its WTF-8 encoding, which is UTF-8 for any path that is valid Unicode.
     fn hash(&self, bytes: usize) -> String {
-        let digest = Sha256::digest(self.root.as_os_str().as_encoded_bytes());
-        digest[..bytes].iter().fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+        crate::sha256_hex(self.root.as_os_str().as_encoded_bytes())[..bytes * 2].to_owned()
     }
 }
 
@@ -332,7 +545,7 @@ fn fits(path: &Path) -> bool {
 }
 
 /// `path` as Windows programs and the vendors' sandbox settings spell it, without the verbatim
-/// `\\?\` prefix that [`Path::canonicalize`] puts on every path on Windows (RYA-109): `\\?\C:\x`
+/// `\\?\` prefix that [`Path::canonicalize`] puts on every path on Windows (PLX-109): `\\?\C:\x`
 /// becomes `C:\x`, and `\\?\UNC\server\share\x` becomes `\\server\share\x`. A path without the
 /// prefix is returned as it is, and so is every path on macOS and Linux.
 ///
@@ -421,122 +634,103 @@ fn plain_name(name: &OsStr) -> bool {
             .any(|reserved| stem.eq_ignore_ascii_case(reserved))
 }
 
+/// plxd's own executable, for a process plxd starts to run it, such as a run's `plxd mcp`. On
+/// Linux `/proc/<pid>/exe`, which still runs this binary after a self-update renamed a new one
+/// over it, where `current_exe` reads `… (deleted)`. It lives as long as this process does.
+///
+/// # Errors
+///
+/// If `current_exe` can't tell, off Linux.
+pub fn own_exe() -> io::Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok(proc_exe(std::process::id()))
+    } else {
+        std::env::current_exe()
+    }
+}
+
+/// Process `pid`'s executable, as Linux's `/proc` names it.
+fn proc_exe(pid: u32) -> PathBuf {
+    PathBuf::from(format!("/proc/{pid}/exe"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::DataDir;
+    #[cfg(unix)]
+    use super::{COLLISIONS_DIR, links_to_default, move_folder};
+    use super::{STORE_FILE, pick_default};
 
+    #[cfg(unix)]
     #[test]
-    fn spellings_of_one_folder_resolve_the_same() {
-        let plain = DataDir::new("/Users/me/data").unwrap();
-        for other in ["/Users/me/data/", "/Users/me/./data", "/Users/me//data"] {
-            assert_eq!(DataDir::new(other).unwrap(), plain, "{other}");
-        }
-        assert_eq!(
-            plain.hash(4),
-            DataDir::new("/Users/me/data/").unwrap().hash(4)
-        );
-        assert_ne!(
-            plain.hash(4),
-            DataDir::new("/Users/me/data2").unwrap().hash(4)
-        );
-    }
+    fn only_the_moved_folders_link_means_the_default_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let (legacy, default) = (root.path().join("legacy"), root.path().join(".parallax"));
+        let other = root.path().join("other");
+        std::fs::create_dir(&default).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&default, &legacy).unwrap();
+        assert!(links_to_default(&legacy, &legacy, &default));
+        assert!(!links_to_default(&other, &legacy, &default));
 
-    #[test]
-    fn a_relative_folder_is_taken_from_the_current_directory() {
-        let dir = DataDir::new("relative/data").unwrap();
-        assert!(dir.root().is_absolute());
-        assert!(dir.root().ends_with("relative/data"));
+        std::fs::remove_file(&legacy).unwrap();
+        std::os::unix::fs::symlink(&other, &legacy).unwrap();
+        assert!(!links_to_default(&legacy, &legacy, &default));
     }
 
     #[cfg(unix)]
     #[test]
-    fn files_live_in_the_folder() {
-        use std::path::Path;
+    fn moving_leaves_a_link_and_keeps_what_the_default_folder_held() {
+        let root = tempfile::tempdir().unwrap();
+        let (legacy, default) = (root.path().join("legacy"), root.path().join(".parallax"));
+        std::fs::create_dir_all(default.join("projects/repo")).unwrap();
+        std::fs::write(default.join("remote-device-key"), "default").unwrap();
+        std::fs::create_dir_all(legacy.join("worktrees/run")).unwrap();
+        std::fs::write(legacy.join(STORE_FILE), "").unwrap();
+        std::fs::write(legacy.join("remote-device-key"), "legacy").unwrap();
 
-        let dir = DataDir::new("/d").unwrap();
-        assert_eq!(dir.lock_file(), Path::new("/d/wispd.lock"));
-        assert_eq!(dir.store_file(), Path::new("/d/wispd.sqlite3"));
-        assert_eq!(dir.log_file(), Path::new("/d/logs/wispd.log"));
-        assert_eq!(dir.context_root(), Path::new("/d/context"));
-        let runs = format!("wisp-{}", dir.hash(4));
-        assert_eq!(dir.run_temp_roots()[0], Path::new("/tmp").join(&runs));
+        move_folder(&legacy, &default).unwrap();
+
+        assert!(legacy.is_symlink());
+        assert!(legacy.join("worktrees/run").is_dir());
+        assert!(default.join(STORE_FILE).exists());
+        assert!(default.join("projects/repo").is_dir());
+        let key = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap();
+        assert_eq!(key(default.join("remote-device-key")), "legacy");
         assert_eq!(
-            dir.run_temp_roots().last(),
-            Some(&std::env::temp_dir().join(runs))
+            key(default.join(COLLISIONS_DIR).join("remote-device-key")),
+            "default"
         );
-        let project = wisp_protocol::ProjectId::generate();
-        assert_eq!(
-            dir.context_dir(project),
-            Path::new("/d/context").join(project.to_string())
-        );
+        assert!(!root.path().join(".parallax.pre-move").exists());
     }
 
     #[cfg(unix)]
     #[test]
-    fn commands_pass_the_data_folder_on() {
-        let dir = DataDir::new("/tmp/wispd-data/./x/").unwrap();
-        let output = dir.command("/usr/bin/env").output().unwrap();
-        let env = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            env.lines()
-                .any(|line| line == "WISPD_DATA_DIR=/tmp/wispd-data/x"),
-            "{env}"
-        );
+    fn a_failed_move_puts_everything_back() {
+        let root = tempfile::tempdir().unwrap();
+        let (legacy, default) = (root.path().join("legacy"), root.path().join(".parallax"));
+        std::fs::create_dir_all(default.join("projects")).unwrap();
+        // A rename fails on a missing folder, as it does across volumes.
+        move_folder(&legacy, &default).unwrap_err();
+        assert!(default.join("projects").is_dir());
+        assert!(!root.path().join(".parallax.pre-move").exists());
     }
 
-    #[cfg(unix)]
     #[test]
-    fn the_hash_is_the_first_8_hex_digits_of_the_paths_sha256() {
-        // printf '%s' /Users/me/Library/Application\ Support/wisp | shasum -a 256
-        let dir = DataDir::new("/Users/me/Library/Application Support/wisp").unwrap();
-        assert_eq!(dir.hash(4), "625c7f6d");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_default_socket_is_used_up_to_the_limit() {
-        use super::MAX_SOCKET_PATH_BYTES;
-
-        let folder = "/Library/Application Support/wisp";
-        let home = format!(
-            "/Users/{}",
-            "u".repeat(MAX_SOCKET_PATH_BYTES - "/Users//wispd.sock".len() - folder.len())
-        );
-        // On macOS, that leaves 59 bytes for the home folder, as 0007 says.
-        #[cfg(target_os = "macos")]
-        assert_eq!(home.len(), 59);
-        let dir = DataDir::new(format!("{home}{folder}")).unwrap();
-        let socket = dir.socket_path().unwrap();
-        assert!(!socket.fallback);
-        assert_eq!(socket.path.as_os_str().len(), MAX_SOCKET_PATH_BYTES);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn a_longer_path_falls_back_to_the_user_temp_dir() {
-        use super::MAX_SOCKET_PATH_BYTES;
-
-        let home = format!("/Users/{}", "u".repeat(53));
-        let dir = DataDir::new(format!("{home}/Library/Application Support/wisp")).unwrap();
-        let socket = dir.socket_path().unwrap();
-        assert!(socket.fallback);
-        let temp = super::fallback_socket_dir().unwrap();
-        assert_eq!(
-            socket.path,
-            temp.join(format!("wispd-{}.sock", dir.hash(4)))
-        );
-        assert!(socket.path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn the_pipe_is_named_after_16_hex_digits_of_the_paths_sha256() {
-        // printf %s 'C:\wisp' | shasum -a 256
-        let dir = DataDir::new(r"C:\wisp").unwrap();
-        assert_eq!(dir.hash(8), "bb46ad6a4ea41022");
-        let socket = dir.socket_path().unwrap();
-        assert_eq!(socket.path.as_os_str(), r"\\.\pipe\wispd-bb46ad6a4ea41022");
-        assert!(!socket.fallback);
+    fn the_default_folder_gives_way_only_to_a_legacy_store() {
+        let root = tempfile::tempdir().unwrap();
+        let default = root.path().join(".parallax");
+        let legacy = root.path().join("legacy");
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), default);
+        // A legacy folder without a store, like Linux's, which also holds the `parallax` command.
+        std::fs::create_dir(&legacy).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), default);
+        std::fs::write(legacy.join(STORE_FILE), "").unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
+        // New Repository created the default folder: the store still decides (PLX-1262).
+        std::fs::create_dir_all(default.join("projects")).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
+        std::fs::write(default.join(STORE_FILE), "").unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy)), default);
     }
 
     #[cfg(windows)]
@@ -615,39 +809,19 @@ mod tests {
         }
     }
 
-    /// A name that isn't Unicode, here with an unpaired surrogate, gets the same checks.
-    #[cfg(windows)]
+    /// A process started from `own_exe`'s path runs this very binary.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn a_name_that_isnt_unicode_is_checked_too() {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::OsStringExt;
-        use std::path::PathBuf;
-
-        use super::without_verbatim_prefix;
-
-        let with_surrogate = |prefix: &str, suffix: &str| {
-            let mut wide: Vec<u16> = prefix.encode_utf16().collect();
-            wide.push(0xD800);
-            wide.extend(suffix.encode_utf16());
-            PathBuf::from(OsString::from_wide(&wide))
-        };
-        for suffix in [".", " ", ":s", "/x"] {
-            let path = with_surrogate(r"\\?\C:\x\a", suffix);
-            assert_eq!(without_verbatim_prefix(&path), None, "{}", path.display());
-        }
-        assert_eq!(
-            without_verbatim_prefix(&with_surrogate(r"\\?\C:\x\a", "b")),
-            Some(with_surrogate(r"C:\x\a", "b"))
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn the_default_folder_is_wisp_in_local_app_data() {
-        let local = std::env::var_os("LOCALAPPDATA").unwrap();
-        assert_eq!(
-            DataDir::default_location().unwrap().root(),
-            std::path::Path::new(&local).join("wisp")
+    fn own_exe_runs_this_binary_from_another_process() {
+        let exe = super::own_exe().unwrap();
+        assert!(exe.starts_with("/proc"), "{}", exe.display());
+        let listed = std::process::Command::new(&exe)
+            .args(["--list", "own_exe_runs_this_binary"])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&listed.stdout).contains("own_exe_runs_this_binary"),
+            "{listed:?}"
         );
     }
 }

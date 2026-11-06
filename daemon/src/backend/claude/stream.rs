@@ -1,22 +1,24 @@
 //! Turning Claude Code's `stream-json` output into [`Event`]s, one line at a time.
 //!
 //! The shapes follow the Agent SDK's types (0004 [14]) and the headless docs (0004 [11]). Fields
-//! wisp doesn't use are ignored, as 0004 asks, so a newer CLI that adds fields still parses.
+//! Parallax doesn't use are ignored, as 0004 asks, so a newer CLI that adds fields still parses.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Instant;
 
 use jiff::Timestamp;
 use serde_json::{Map, Value};
 
 use super::{
-    BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, NO_WRITE_TOOLS, WORKER_MIN_VERSION,
-    WORKER_TOOLS,
+    BYPASS_PERMISSION_MODE, DEFAULT_PERMISSION_MODE, EXIT_PLAN_MODE, NO_WRITE_TOOLS,
+    WORKER_MIN_VERSION, WORKER_TOOLS,
 };
-use crate::backend::ToolPolicy;
 use crate::backend::event::{
-    Event, Failure, FailureKind, LimitStatus, LimitWindow, ModelUsage, TodoItem, TodoStatus,
-    ToolStatus, Usage, WarningKind,
+    ApprovalRequest, BackgroundKind, BackgroundTask, Event, Failure, FailureKind, LimitStatus,
+    LimitWindow, MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES, ModelUsage, SubagentStatus,
+    TodoItem, ToolStatus, Usage, WarningKind, todo,
 };
+use crate::backend::{ApprovalId, ToolPolicy};
 
 /// A `major.minor.patch` version, for comparing. Anything after the patch number, such as a
 /// pre-release tag, is ignored.
@@ -39,6 +41,10 @@ const END_CONVERSATION: &str = "EndConversation";
 /// The provider `result.modelUsage` names for Anthropic's own API, which a subscription uses.
 const FIRST_PARTY: &str = "firstParty";
 
+/// How a `result`'s `errors` start when `--resume` names a session Claude Code doesn't have, as
+/// 2.1.309 says for one it pruned.
+const NO_SESSION: &str = "No conversation found with session ID";
+
 /// `result` subtypes for limits the run set itself, which say nothing about the account.
 const RUN_LIMITS: &[&str] = &[
     "error_max_turns",
@@ -46,7 +52,7 @@ const RUN_LIMITS: &[&str] = &[
     "error_max_structured_output_retries",
 ];
 
-/// Message types that carry nothing wisp shows, and are skipped without a log line.
+/// Message types that carry nothing Parallax shows, and are skipped without a log line.
 /// `command_lifecycle` tracks a queued message's fate, which `result` already reports.
 const IGNORED_TYPES: &[&str] = &[
     "auth_status",
@@ -54,13 +60,28 @@ const IGNORED_TYPES: &[&str] = &[
     "conversation_reset",
     "keep_alive",
     "prompt_suggestion",
-    "stream_event",
     "tool_progress",
     "tool_use_summary",
 ];
 
 /// The longest failure message kept from the CLI's output.
 const MAX_MESSAGE_CHARS: usize = 2000;
+
+/// The modes a `system/init` may report besides the requested one once an `ExitPlanMode` was
+/// approved (0031): `default` (Manual), the mode a CLI that started in plan mode leaves it for,
+/// and [`DEFAULT_PERMISSION_MODE`], should a newer CLI pick Accept Edits. Anything else still
+/// fails the run.
+const LEFT_PLAN_MODES: &[&str] = &["default", DEFAULT_PERMISSION_MODE];
+
+/// The modes plxd starts Claude Code in ([`super::permission_mode`]), which a thread's
+/// `system/status` may report switching to.
+const PERMISSION_MODES: &[&str] = &[
+    "default",
+    DEFAULT_PERMISSION_MODE,
+    "auto",
+    "plan",
+    BYPASS_PERMISSION_MODE,
+];
 
 /// What one line of output asks the driver to do.
 #[derive(Debug, PartialEq)]
@@ -73,6 +94,34 @@ pub(super) enum Step {
     TurnDone(TurnDone),
     /// The run broke its account or tool policy. The driver stops the CLI at once.
     Violation(Failure),
+    /// A `can_use_tool` control request (PLX-222): the event to report, and what answering it
+    /// needs. The CLI waits for the answer.
+    Ask(ApprovalRequest, Ask),
+    /// A `control_cancel_request`: the CLI no longer waits for the answer to this request id.
+    Withdraw(String),
+    /// A control request plxd doesn't serve, which the driver answers with this error, as the
+    /// Agent SDK does, so the CLI never waits on it.
+    Refuse {
+        /// The request's id.
+        request_id: String,
+        /// Why.
+        error: String,
+    },
+}
+
+/// What answering a `can_use_tool` request needs (PLX-222).
+#[derive(Debug, PartialEq)]
+pub(super) struct Ask {
+    /// The CLI's id for the request, which the answer repeats.
+    pub request_id: String,
+    /// The tool call's id, which the answer repeats as `toolUseID`.
+    pub tool_use_id: Option<String>,
+    /// The tool.
+    pub tool_name: String,
+    /// The tool's input, which an allow sends back as `updatedInput` unless the user edited it.
+    pub input: Value,
+    /// The request's allow rules, as `updatedPermissions` for an answer with `always`.
+    pub updates: Vec<Value>,
 }
 
 /// A `result` message, for the driver's turn bookkeeping.
@@ -84,68 +133,245 @@ pub(super) struct TurnDone {
     pub queued: Option<u64>,
     /// The turn's final text, when it succeeded.
     pub result: Option<String>,
+    /// Where the session stood when it ended, for a rewind to it.
+    pub cursor: Option<String>,
+    /// The CLI started the turn itself, for a task notification or a wake, not for a message
+    /// (PLX-724): its `origin` is set and isn't `human`.
+    pub foreign: bool,
 }
+
+/// The least output and streaming time a turn's speed sample takes: a reply of a few tokens
+/// streams in one burst, whose rate says nothing.
+const MIN_SPEED_TOKENS: u64 = 20;
+const MIN_SPEED_MS: u64 = 250;
 
 /// The state that reading one run's output needs.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about one run's output, not states of one thing"
+)]
 pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
-    /// wispd's MCP tools were attached, so a no-write run is a coordinator: full Claude Code in
+    /// plxd's MCP tools were attached, so a no-write run is an orchestrator: full Claude Code in
     /// its permission mode (0027), whose `system/init` may list any tool.
-    coordinator_tools: bool,
-    /// The permission mode a worker or a coordinator asked for, which its `system/init` must
-    /// report.
+    orchestrator_tools: bool,
+    /// A normal thread's run: full Claude Code in every mode (0034), whose `system/init` may list
+    /// any tool, as a bypass worker's may.
+    thread: bool,
+    /// The permission mode a worker or an orchestrator asked for, which its `system/init` must
+    /// report. A thread's follows the mode its CLI reports switching to ([`Translator::system`]).
     permission_mode: &'static str,
+    /// The CLI asks plxd before a tool call that would prompt (PLX-222), so its control
+    /// requests are plxd's to answer.
+    prompts: bool,
+    /// A worker's `--tools` named `ExitPlanMode` too (PLX-243), so its `system/init` may list it.
+    plan_exit: bool,
+    /// The user approved an `ExitPlanMode`, so the CLI left plan mode for the mode it was in
+    /// before, which later `system/init`s report.
+    left_plan: bool,
     verified: bool,
     session_id: Option<String>,
     denied: HashSet<String>,
+    /// The tool calls whose `task_started` named a subagent type, so their `task_notification`
+    /// ends a subagent (PLX-382), not a background command.
+    subagents: HashSet<String>,
+    /// The background commands and subagents still running, by `task_id` (PLX-725).
+    tasks: BTreeMap<String, BackgroundTask>,
+    /// The `Monitor` calls whose task hasn't started, by call id (PLX-777): Claude Code reports a
+    /// monitor as `local_bash`, like a plain background command.
+    monitors: HashSet<String>,
+    /// The monitors' tasks, by `task_id`, as T3 Code keeps them: `background_tasks_changed`
+    /// names no call, so a monitor is known by its task once `task_started` tied the two.
+    monitor_tasks: HashSet<String>,
+    /// The calls that started the subagents still running, by `task_id` (PLX-929):
+    /// `background_tasks_changed` names no call, so `task_started` ties the two.
+    agent_calls: HashMap<String, String>,
     turn_error: Option<FailureKind>,
     limit_rejected: bool,
     /// How many `result`s arrived.
     pub results: usize,
+    /// Last main-session request, so result.modelUsage supplies only its reported window.
+    request_usage: Option<parallax_protocol::AgentRequestUsage>,
+    /// The window the last `result` reported for a model, reused for that model's later requests.
+    known_window: Option<(String, u64)>,
+    /// The session's running output tokens and API milliseconds, as of the last `result`.
+    api_totals: Option<(u64, u64)>,
+    /// The last turn's output tokens and milliseconds, a speed sample: their streaming time when
+    /// partial messages came, else the turn's share of the session's API time.
+    speed: Option<(u64, u64)>,
+    /// When the line being read arrived, for timing what streams.
+    now: Instant,
+    /// When the main session's response streaming now sent its first delta.
+    stream_start: Option<Instant>,
+    /// This turn's main-session output tokens and the milliseconds they streamed for, from each
+    /// response's first delta to its `message_delta`, so the wait for the first token is left out.
+    turn_stream: (u64, u64),
+    /// The request whose usage was last sent, as each of its content blocks repeats it.
+    usage_message: Option<String>,
+    /// The id of the message streaming now, from its `message_start`, for its text deltas.
+    streaming: Option<String>,
+    /// The CLI resumed a session, whose running totals include turns from before this process.
+    resumed: bool,
     /// The last `result`'s failure, if it was one.
     pub last_failure: Option<Failure>,
     /// The last successful `result`'s text.
     pub last_result: Option<String>,
+    /// The `uuid` of the session's last transcript entry the CLI wrote: its last assistant
+    /// message or tool result outside a subagent, where a rewind resumes ([`Event::TurnCursor`]).
+    cursor: Option<String>,
 }
 
 impl Translator {
+    /// Takes the turn's speed sample. With partial messages, it's the main session's output tokens
+    /// over the time they streamed, which leaves out each request's wait for its first token and
+    /// subagents; a turn too short to time keeps the last sample. Without them, it's the turn's
+    /// output tokens and API time from the `result`'s running session totals, which include both,
+    /// so the rate is approximate. A resumed session's totals carry over from before (0004), so its
+    /// first `result` only sets their baseline, as does a total that went down.
+    fn sample_speed(&mut self, message: &Map<String, Value>, totals: Option<&Map<String, Value>>) {
+        let streamed = std::mem::take(&mut self.turn_stream);
+        self.stream_start = None;
+        let api = self.api_sample(message, totals);
+        if streamed != (0, 0) {
+            if streamed.0 >= MIN_SPEED_TOKENS && streamed.1 >= MIN_SPEED_MS {
+                self.speed = Some(streamed);
+            }
+        } else if let Some(sample) = api {
+            self.speed = Some(sample);
+        }
+    }
+
+    /// The turn's output tokens and API milliseconds from the `result`'s running session totals,
+    /// when they rose, keeping the totals as the next turn's baseline.
+    fn api_sample(
+        &mut self,
+        message: &Map<String, Value>,
+        totals: Option<&Map<String, Value>>,
+    ) -> Option<(u64, u64)> {
+        let ms = message.get("duration_api_ms").and_then(Value::as_u64)?;
+        let tokens = totals.map(|totals| {
+            totals
+                .values()
+                .filter_map(|usage| usage.get("outputTokens").and_then(Value::as_u64))
+                .sum::<u64>()
+        })?;
+        let turn = match self.api_totals {
+            Some((before_tokens, before_ms)) => tokens
+                .checked_sub(before_tokens)
+                .zip(ms.checked_sub(before_ms)),
+            None if self.resumed => None,
+            None => Some((tokens, ms)),
+        };
+        self.api_totals = Some((tokens, ms));
+        turn.filter(|&(turn_tokens, turn_ms)| turn_tokens > 0 && turn_ms > 0)
+    }
+
     /// A translator for a run under `policy` whose `system/init` must report
     /// `expected_key_source` as its `apiKeySource`.
     pub fn new(policy: ToolPolicy, expected_key_source: &'static str) -> Self {
         Self {
             policy,
             expected_key_source,
-            coordinator_tools: false,
+            orchestrator_tools: false,
+            thread: false,
             permission_mode: DEFAULT_PERMISSION_MODE,
+            prompts: false,
+            plan_exit: false,
+            left_plan: false,
             verified: false,
             session_id: None,
             denied: HashSet::new(),
+            subagents: HashSet::new(),
+            tasks: BTreeMap::new(),
+            monitors: HashSet::new(),
+            monitor_tasks: HashSet::new(),
+            agent_calls: HashMap::new(),
             turn_error: None,
             limit_rejected: false,
             results: 0,
+            request_usage: None,
+            known_window: None,
+            api_totals: None,
+            speed: None,
+            now: Instant::now(),
+            stream_start: None,
+            turn_stream: (0, 0),
+            resumed: false,
+            usage_message: None,
+            streaming: None,
             last_failure: None,
             last_result: None,
+            cursor: None,
         }
     }
 
-    /// Checks `system/init` as a coordinator's when wispd's MCP tools were `attached` (0019, 0027).
-    pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
-        self.coordinator_tools = attached;
+    /// A translator for the transcript entries of a Claude Remote Control session (PLX-1140),
+    /// which runs on another computer: no `system/init` comes, so there are no credentials or
+    /// tools of plxd's to check, and every entry is the main session's or a subagent's.
+    pub fn transcript() -> Self {
+        let mut translator = Self::new(ToolPolicy::WorkspaceWrite, "").with_thread(true);
+        translator.verified = true;
+        translator
+    }
+
+    /// Checks `system/init` as an orchestrator's when plxd's MCP tools were `attached` (0019,
+    /// 0027).
+    pub fn with_orchestrator_tools(mut self, attached: bool) -> Self {
+        self.orchestrator_tools = attached;
         self
     }
 
-    /// Expects a worker's or a coordinator's `system/init` to report `mode` instead of
-    /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (RYA-97, 0027).
+    /// Checks `system/init` as a normal thread's, which may list any tool (0034).
+    pub fn with_thread(mut self, thread: bool) -> Self {
+        self.thread = thread;
+        self
+    }
+
+    /// Expects a worker's or an orchestrator's `system/init` to report `mode` instead of
+    /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (PLX-97, 0027).
     /// [`BYPASS_PERMISSION_MODE`] also lifts a worker's tool check: it runs as full Claude Code.
     pub fn with_permission_mode(mut self, mode: &'static str) -> Self {
         self.permission_mode = mode;
         self
     }
 
+    /// Takes the CLI's permission requests when it was started with `--permission-prompt-tool
+    /// stdio` (PLX-222). Otherwise its control requests are skipped, as before.
+    pub fn with_prompts(mut self, prompts: bool) -> Self {
+        self.prompts = prompts;
+        self
+    }
+
+    /// Reads the first `result`'s running totals as the resumed session's baseline (0004).
+    pub fn with_resumed(mut self, resumed: bool) -> Self {
+        self.resumed = resumed;
+        self
+    }
+
+    /// Lets a worker's `system/init` list `ExitPlanMode` besides [`WORKER_TOOLS`], when its
+    /// `--tools` named it (`hands_over_plans`, PLX-243).
+    pub fn with_plan_exit(mut self, plan_exit: bool) -> Self {
+        self.plan_exit = plan_exit;
+        self
+    }
+
+    /// Accepts [`LEFT_PLAN_MODES`] as well in later `system/init`s: the user approved an
+    /// `ExitPlanMode`, and Claude Code then runs in the mode it was in before plan mode, `default`
+    /// when it started in plan mode.
+    pub fn left_plan_mode(&mut self) {
+        self.left_plan = true;
+    }
+
     /// Reads one line of stdout.
     pub fn line(&mut self, line: &[u8]) -> Vec<Step> {
+        self.line_at(line, Instant::now())
+    }
+
+    /// Reads one line of stdout that arrived at `now`.
+    pub fn line_at(&mut self, line: &[u8], now: Instant) -> Vec<Step> {
+        self.now = now;
         if line.iter().all(u8::is_ascii_whitespace) {
             return Vec::new();
         }
@@ -159,12 +385,24 @@ impl Translator {
                 "a line that is not a JSON object".into(),
             )];
         };
+        if matches!(text(&message, "type"), Some("assistant" | "user"))
+            && message.get("parent_tool_use_id").is_none_or(Value::is_null)
+            && let Some(uuid) = text(&message, "uuid")
+        {
+            self.cursor = Some(uuid.to_owned());
+        }
         match text(&message, "type") {
             Some("system") => self.system(&message),
             Some("assistant") => self.assistant(&message),
             Some("user") => self.user(&message),
             Some("result") => self.result(&message),
             Some("rate_limit_event") => self.rate_limit(&message),
+            Some("stream_event") => self.stream_event(&message),
+            Some("control_request") if self.prompts => self.control_request(&message),
+            Some("control_cancel_request") if self.prompts => text(&message, "request_id")
+                .map(|id| Step::Withdraw(id.to_owned()))
+                .into_iter()
+                .collect(),
             Some(kind) if IGNORED_TYPES.contains(&kind) => Vec::new(),
             // A newer CLI's unknown message types stay out of the chat, in the spirit of 0004's
             // "ignore unknown fields". Runs still end and fail through `result` and the exit code.
@@ -180,6 +418,15 @@ impl Translator {
     }
 
     fn system(&mut self, message: &Map<String, Value>) -> Vec<Step> {
+        // A thread's mode can change while it runs (`agent/setPermission`). Claude Code reports
+        // the switch it made in `system/status`, and the next `system/init` then reports it.
+        if self.thread
+            && text(message, "subtype") == Some("status")
+            && let Some(mode) = text(message, "permissionMode")
+            && let Some(mode) = PERMISSION_MODES.iter().find(|known| **known == mode)
+        {
+            self.permission_mode = mode;
+        }
         match text(message, "subtype") {
             Some("init") => self.init(message),
             Some("permission_denied") => {
@@ -187,6 +434,19 @@ impl Translator {
                     self.denied.insert(id.to_owned());
                 }
                 Vec::new()
+            }
+            Some("task_started") => self.task_started(message).into_iter().collect(),
+            Some("background_tasks_changed") => {
+                self.background_tasks_changed(message).into_iter().collect()
+            }
+            Some("task_notification") => self.task_notification(message),
+            Some("status") if text(message, "status") == Some("compacting") => {
+                self.request_usage = None;
+                vec![Step::Emit(Event::ContextCompaction { done: false })]
+            }
+            Some("compact_boundary") => {
+                self.request_usage = None;
+                vec![Step::Emit(Event::ContextCompaction { done: true })]
             }
             Some("api_retry") => {
                 let error = text(message, "error").unwrap_or("unknown");
@@ -203,6 +463,110 @@ impl Translator {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// A `task_started`: ties the task to its call, as a subagent's, a monitor's, or an agent's,
+    /// and adds it to the running set.
+    fn task_started(&mut self, message: &Map<String, Value>) -> Option<Step> {
+        let call = text(message, "tool_use_id");
+        let id = text(message, "task_id");
+        if let (Some(call), Some(_)) = (call, text(message, "subagent_type")) {
+            self.subagents.insert(call.to_owned());
+        }
+        if let (Some(call), Some(id)) = (call, id)
+            && self.monitors.remove(call)
+        {
+            self.monitor_tasks.insert(id.to_owned());
+        }
+        if let (Some(call), Some(id), Some("local_agent")) = (call, id, text(message, "task_type"))
+        {
+            self.agent_calls.insert(id.to_owned(), call.to_owned());
+        }
+        let mut tasks = self.tasks.clone();
+        if let Some(task) = self.counted(message) {
+            tasks.insert(task.task_id.clone(), task);
+        }
+        self.tasks_changed(tasks)
+    }
+
+    /// A `background_tasks_changed`: every live task, which replaces the running set, so a missed
+    /// `task_notification` can't leave a task running.
+    fn background_tasks_changed(&mut self, message: &Map<String, Value>) -> Option<Step> {
+        let listed = message.get("tasks").and_then(Value::as_array)?;
+        let listed: Vec<_> = listed.iter().filter_map(Value::as_object).collect();
+        let is_listed = |id: &str| listed.iter().any(|task| text(task, "task_id") == Some(id));
+        // A monitor gone from the roster has ended.
+        self.monitor_tasks.retain(|id| is_listed(id));
+        self.agent_calls.retain(|id, _| is_listed(id));
+        let tasks = listed
+            .iter()
+            .filter_map(|task| self.counted(task))
+            .map(|task| (task.task_id.clone(), task))
+            .collect();
+        self.tasks_changed(tasks)
+    }
+
+    /// A `task_notification`: a task ended, and with it a subagent, if it was one (PLX-382).
+    fn task_notification(&mut self, message: &Map<String, Value>) -> Vec<Step> {
+        let mut steps = Vec::new();
+        if let Some(call_id) = text(message, "tool_use_id")
+            && self.subagents.remove(call_id)
+        {
+            let status = match text(message, "status") {
+                Some("completed") => SubagentStatus::Completed,
+                Some("failed") => SubagentStatus::Failed,
+                Some("stopped") => SubagentStatus::Stopped,
+                _ => SubagentStatus::Unknown,
+            };
+            steps.push(Step::Emit(Event::SubagentFinished {
+                call_id: call_id.to_owned(),
+                status,
+                summary: text(message, "summary")
+                    .filter(|summary| !summary.is_empty())
+                    .map(str::to_owned),
+            }));
+        }
+        let mut tasks = self.tasks.clone();
+        if let Some(id) = text(message, "task_id") {
+            tasks.remove(id);
+            self.monitor_tasks.remove(id);
+            self.agent_calls.remove(id);
+        }
+        steps.extend(self.tasks_changed(tasks));
+        steps
+    }
+
+    /// The [`Event::BackgroundTasks`] for `tasks`, if they differ from the ones running.
+    fn tasks_changed(&mut self, tasks: BTreeMap<String, BackgroundTask>) -> Option<Step> {
+        if tasks == self.tasks {
+            return None;
+        }
+        self.tasks = tasks;
+        let tasks = self.tasks.values().cloned().collect();
+        Some(Step::Emit(Event::BackgroundTasks { tasks }))
+    }
+
+    /// The task a `task_started` or `background_tasks_changed` entry names, if it counts as
+    /// background work, as T3 Code counts it: a background command (which a Monitor runs as too)
+    /// or a subagent, unless Claude Code marks it `ambient`, as its housekeeping tasks and
+    /// live-update watchers are, which hosts must not treat as activity.
+    fn counted(&self, task: &Map<String, Value>) -> Option<BackgroundTask> {
+        if task.get("ambient").and_then(Value::as_bool) == Some(true) {
+            return None;
+        }
+        let id = text(task, "task_id")?;
+        let kind = match text(task, "task_type")? {
+            "local_bash" if self.monitor_tasks.contains(id) => BackgroundKind::Monitor,
+            "local_bash" => BackgroundKind::Command,
+            "local_agent" => BackgroundKind::Agent,
+            _ => return None,
+        };
+        Some(BackgroundTask {
+            task_id: id.to_owned(),
+            kind,
+            description: text(task, "description").unwrap_or_default().to_owned(),
+            call_id: self.agent_calls.get(id).cloned(),
+        })
     }
 
     /// `system/init`, which stream-json input repeats at the start of every turn.
@@ -227,21 +591,21 @@ impl Translator {
             let message = match source {
                 Some(source) => format!(
                     "Claude Code took its credentials from {source:?} instead of the account's \
-                     ({:?}), so wisp stopped it before it could bill that",
+                     ({:?}), so Parallax stopped it before it could bill that",
                     self.expected_key_source
                 ),
-                None => "Claude Code did not say where it took its credentials from, so wisp \
+                None => "Claude Code did not say where it took its credentials from, so Parallax \
                          stopped it"
                     .to_owned(),
             };
             steps.push(violation(FailureKind::UnexpectedApiKey, message));
             return steps;
         }
-        let coordinator = self.policy == ToolPolicy::NoWrite && self.coordinator_tools;
-        let bypass = self.policy == ToolPolicy::WorkspaceWrite
-            && self.permission_mode == BYPASS_PERMISSION_MODE;
+        let orchestrator = self.policy == ToolPolicy::NoWrite && self.orchestrator_tools;
+        let unsandboxed = self.policy == ToolPolicy::WorkspaceWrite
+            && (self.thread || self.permission_mode == BYPASS_PERMISSION_MODE);
         let (allowed, run) = match self.policy {
-            ToolPolicy::NoWrite if coordinator => (&[][..], "a coordinator run"),
+            ToolPolicy::NoWrite if orchestrator => (&[][..], "an orchestrator run"),
             ToolPolicy::NoWrite => (NO_WRITE_TOOLS, "a no-write run"),
             ToolPolicy::WorkspaceWrite => (WORKER_TOOLS, "a worker run"),
         };
@@ -251,14 +615,14 @@ impl Translator {
             steps.push(violation(FailureKind::PolicyViolation, message));
             return steps;
         };
-        // A coordinator and a bypass worker are full Claude Code, whose tools are whatever its
-        // configuration loads (0027).
+        // An orchestrator, a thread, and a bypass worker are full Claude Code, whose tools are
+        // whatever its configuration loads (0027, 0034).
         let offered: Vec<&str> = tools
             .iter()
             .map(|tool| tool.as_str().unwrap_or("<not a string>"))
-            .filter(|tool| !allowed.contains(tool) && *tool != END_CONVERSATION)
+            .filter(|tool| !allowed.contains(tool) && !self.also_allowed(tool))
             .collect();
-        if !coordinator && !bypass && !offered.is_empty() {
+        if !orchestrator && !unsandboxed && !offered.is_empty() {
             let message = format!(
                 "Claude Code offered tools beyond {} in {run}: {}",
                 allowed.join(", "),
@@ -280,31 +644,47 @@ impl Translator {
         }
         // Claude Code writes init before its first request, so this stops the run before any
         // tool runs.
-        let mode = text(message, "permissionMode");
-        if (self.policy == ToolPolicy::WorkspaceWrite || coordinator)
-            && mode != Some(self.permission_mode)
+        if (self.policy == ToolPolicy::WorkspaceWrite || orchestrator)
+            && let Some(step) =
+                self.mode_violation(text(message, "permissionMode"), orchestrator, run)
         {
-            let reported = match mode {
-                Some(mode) => format!("permission mode {mode:?}"),
-                None => "no permission mode".to_owned(),
-            };
-            let danger = if coordinator {
-                ""
-            } else {
-                ", which on Linux lets a worker's commands write all of /home, /tmp, /var, /opt, \
-                 /run, /mnt, and /root"
-            };
-            let message = format!(
-                "Claude Code reported {reported} in {run} instead of {expected:?}. It forces \
-                 \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on{danger}. wispd doesn't \
-                 set it for this run, so check the env block of Claude Code's managed settings",
-                expected = self.permission_mode,
-            );
-            steps.push(violation(FailureKind::PolicyViolation, message));
+            steps.push(step);
             return steps;
         }
         self.verified = true;
         steps
+    }
+
+    /// The violation of a worker's or an orchestrator's `system/init` that reports `mode` instead
+    /// of the one it asked for, or one of [`LEFT_PLAN_MODES`] once it left plan mode.
+    fn mode_violation(&self, mode: Option<&str>, orchestrator: bool, run: &str) -> Option<Step> {
+        let left_plan = self.left_plan && mode.is_some_and(|mode| LEFT_PLAN_MODES.contains(&mode));
+        if mode == Some(self.permission_mode) || left_plan {
+            return None;
+        }
+        let reported = match mode {
+            Some(mode) => format!("permission mode {mode:?}"),
+            None => "no permission mode".to_owned(),
+        };
+        let danger = if orchestrator {
+            ""
+        } else {
+            ", which on Linux lets a worker's commands write all of /home, /tmp, /var, /opt, /run, \
+             /mnt, and /root"
+        };
+        let message = format!(
+            "Claude Code reported {reported} in {run} instead of {expected:?}. It forces \
+             \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on{danger}. plxd doesn't set it \
+             for this run, so check the env block of Claude Code's managed settings",
+            expected = self.permission_mode,
+        );
+        Some(violation(FailureKind::PolicyViolation, message))
+    }
+
+    /// Whether `system/init` may list `tool` whatever the run's policy allows: `EndConversation`,
+    /// which `--tools` leaves in place, and `ExitPlanMode` when a worker's `--tools` named it.
+    fn also_allowed(&self, tool: &str) -> bool {
+        tool == END_CONVERSATION || (self.plan_exit && tool == EXIT_PLAN_MODE)
     }
 
     fn assistant(&mut self, message: &Map<String, Value>) -> Vec<Step> {
@@ -323,6 +703,12 @@ impl Translator {
         let message_id = text(inner, "id").map(str::to_owned);
         let blocks = inner.get("content").and_then(Value::as_array);
         let mut steps = Vec::new();
+        // Subagents' usage belongs to their own context, not the main session's composer.
+        if message.get("parent_tool_use_id").is_none_or(Value::is_null)
+            && let Some(usage) = inner.get("usage")
+        {
+            steps.extend(self.request_usage(inner, usage, message_id.as_deref()));
+        }
         for block in blocks.into_iter().flatten().filter_map(Value::as_object) {
             match text(block, "type") {
                 Some("text") => {
@@ -351,6 +737,9 @@ impl Translator {
                     };
                     let input = block.get("input").cloned().unwrap_or(Value::Null);
                     let todos = (name == "TodoWrite").then(|| todo_list(&input)).flatten();
+                    if name == "Monitor" {
+                        self.monitors.insert(id.to_owned());
+                    }
                     steps.push(Step::Emit(Event::ToolCall {
                         call_id: id.to_owned(),
                         name: name.to_owned(),
@@ -363,7 +752,111 @@ impl Translator {
                 _ => {}
             }
         }
-        steps
+        in_subagent(message, text(inner, "model"), steps)
+    }
+
+    /// The main session's [`Event::RequestUsage`] for an `assistant` message's `usage`, unless an
+    /// earlier line of the same request, `message_id`, sent it: Claude Code sends a request's
+    /// content blocks as separate lines with the same usage.
+    fn request_usage(
+        &mut self,
+        inner: &Map<String, Value>,
+        usage: &Value,
+        message_id: Option<&str>,
+    ) -> Option<Step> {
+        if message_id.is_some() && self.usage_message.as_deref() == message_id {
+            return None;
+        }
+        let count = |key| usage.get(key).and_then(Value::as_u64);
+        let input = count("input_tokens").and_then(|input| {
+            input
+                .checked_add(count("cache_read_input_tokens")?)?
+                .checked_add(count("cache_creation_input_tokens")?)
+        });
+        let model = text(inner, "model");
+        let reported = parallax_protocol::AgentRequestUsage {
+            model: model.map(str::to_owned),
+            context_tokens: input,
+            input_tokens: input,
+            cached_input_tokens: count("cache_read_input_tokens"),
+            context_window: self
+                .known_window
+                .as_ref()
+                .and_then(|(known, window)| (model == Some(known.as_str())).then_some(*window)),
+            output_tokens: self.speed.map(|(tokens, _)| tokens),
+            output_ms: self.speed.map(|(_, ms)| ms),
+        };
+        self.usage_message = message_id.map(str::to_owned);
+        self.request_usage = Some(reported.clone());
+        Some(Step::Emit(Event::RequestUsage(reported)))
+    }
+
+    /// A partial message (`--include-partial-messages`, PLX-714): its text as it streams, as
+    /// deltas the whole `assistant` message replaces, and each tool call as its block starts,
+    /// with a null input the whole message's call replaces. Other blocks wait for that message,
+    /// and a subagent's are skipped, as T3 Code skips them. Each response is timed from its first
+    /// delta to its `message_delta`, for the turn's speed sample.
+    fn stream_event(&mut self, message: &Map<String, Value>) -> Vec<Step> {
+        let Some(event) = message.get("event").and_then(Value::as_object) else {
+            return Vec::new();
+        };
+        if !self.verified
+            || message
+                .get("parent_tool_use_id")
+                .is_some_and(|id| !id.is_null())
+        {
+            return Vec::new();
+        }
+        match text(event, "type") {
+            Some("message_start") => {
+                self.stream_start = None;
+                self.streaming = event
+                    .get("message")
+                    .and_then(|inner| text(inner.as_object()?, "id"))
+                    .map(str::to_owned);
+                Vec::new()
+            }
+            Some("content_block_start") => {
+                let block = event.get("content_block").and_then(Value::as_object);
+                match block.and_then(|b| Some((text(b, "type")?, text(b, "id")?, text(b, "name")?)))
+                {
+                    Some(("tool_use", id, name)) => vec![Step::Emit(Event::ToolCall {
+                        call_id: id.to_owned(),
+                        name: name.to_owned(),
+                        input: Value::Null,
+                    })],
+                    _ => Vec::new(),
+                }
+            }
+            Some("message_delta") => {
+                let tokens = event
+                    .get("usage")
+                    .and_then(|usage| usage.get("output_tokens"))
+                    .and_then(Value::as_u64);
+                if let (Some(start), Some(tokens)) = (self.stream_start.take(), tokens) {
+                    let ms = u64::try_from(self.now.saturating_duration_since(start).as_millis())
+                        .unwrap_or(u64::MAX);
+                    self.turn_stream.0 = self.turn_stream.0.saturating_add(tokens);
+                    self.turn_stream.1 = self.turn_stream.1.saturating_add(ms);
+                }
+                Vec::new()
+            }
+            Some("content_block_delta") => {
+                // Any delta, text, thinking, or a tool call's input, is output streaming.
+                self.stream_start.get_or_insert(self.now);
+                let delta = event.get("delta").and_then(Value::as_object);
+                match delta.and_then(|delta| Some((text(delta, "type")?, text(delta, "text")?))) {
+                    Some(("text_delta", text)) if !text.is_empty() => {
+                        vec![Step::Emit(Event::TextDelta {
+                            message_id: self.streaming.clone(),
+                            text: text.to_owned(),
+                        })]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn user(&mut self, message: &Map<String, Value>) -> Vec<Step> {
@@ -394,9 +887,13 @@ impl Translator {
                 call_id: call_id.to_owned(),
                 status,
                 output: block.get("content").and_then(tool_output),
+                images: block
+                    .get("content")
+                    .map(crate::images::from_blocks)
+                    .unwrap_or_default(),
             }));
         }
-        steps
+        in_subagent(message, None, steps)
     }
 
     fn result(&mut self, message: &Map<String, Value>) -> Vec<Step> {
@@ -424,6 +921,18 @@ impl Translator {
         self.results += 1;
         let result = text(message, "result").map(str::to_owned);
         let mut steps = Vec::new();
+        self.sample_speed(message, totals);
+        self.usage_message = None;
+        if let Some(usage) = &mut self.request_usage {
+            usage.output_tokens = self.speed.map(|(tokens, _)| tokens);
+            usage.output_ms = self.speed.map(|(_, ms)| ms);
+            usage.context_window = usage
+                .model
+                .as_deref()
+                .and_then(|model| reported_context_window(model, totals));
+            self.known_window = usage.model.clone().zip(usage.context_window);
+            steps.push(Step::Emit(Event::RequestUsage(usage.clone())));
+        }
         for (model, usage) in totals.into_iter().flatten() {
             let usage = model_usage(usage);
             if !is_zero(&usage) {
@@ -434,35 +943,7 @@ impl Translator {
             }
         }
         if failed {
-            let failure = if RUN_LIMITS.contains(&subtype) {
-                FailureKind::VendorError
-            } else if self.limit_rejected {
-                FailureKind::RateLimited
-            } else if let Some(kind) = self.turn_error {
-                kind
-            } else if result.as_deref().is_some_and(signed_out) {
-                FailureKind::NotSignedIn
-            } else {
-                FailureKind::VendorError
-            };
-            let errors: Vec<&str> = message
-                .get("errors")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            let text = match (&result, errors.is_empty()) {
-                (Some(result), _) if !result.is_empty() => result.clone(),
-                (_, false) => errors.join("; "),
-                _ => format!("Claude Code ended the turn with {subtype:?}"),
-            };
-            self.last_failure = Some(Failure {
-                failure,
-                message: truncate(&text),
-                exit: None,
-                stderr_tail: None,
-            });
+            self.last_failure = Some(self.turn_failure(message, subtype, result.as_deref()));
             self.last_result = None;
         } else {
             self.last_failure = None;
@@ -470,23 +951,121 @@ impl Translator {
         }
         self.turn_error = None;
         self.limit_rejected = false;
-        let uuids = match message.get("user_message_uuids").and_then(Value::as_array) {
-            Some(uuids) => uuids
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect(),
-            None => text(message, "user_message_uuid")
-                .map(str::to_owned)
-                .into_iter()
-                .collect(),
-        };
+        let origin = message
+            .get("origin")
+            .and_then(Value::as_object)
+            .and_then(|origin| text(origin, "kind"));
         steps.push(Step::TurnDone(TurnDone {
-            uuids,
+            uuids: answered(message, origin),
             queued: message.get("queued_turn_count").and_then(Value::as_u64),
             result: if failed { None } else { result },
+            cursor: self.cursor.clone(),
+            foreign: origin.is_some_and(|kind| kind != "human"),
         }));
         steps
+    }
+
+    /// Why a failed `result` of `subtype`, whose text is `result`, failed.
+    fn turn_failure(
+        &self,
+        message: &Map<String, Value>,
+        subtype: &str,
+        result: Option<&str>,
+    ) -> Failure {
+        let errors: Vec<&str> = message
+            .get("errors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let kind = if RUN_LIMITS.contains(&subtype) {
+            FailureKind::VendorError
+        } else if self.limit_rejected {
+            FailureKind::RateLimited
+        } else if let Some(kind) = self.turn_error {
+            kind
+        } else if result.is_some_and(signed_out) {
+            FailureKind::NotSignedIn
+        } else if errors.iter().any(|error| error.starts_with(NO_SESSION)) {
+            FailureKind::SessionNotFound
+        } else {
+            FailureKind::VendorError
+        };
+        let text = match result {
+            Some(result) if !result.is_empty() => result.to_owned(),
+            _ if !errors.is_empty() => errors.join("; "),
+            _ => format!("Claude Code ended the turn with {subtype:?}"),
+        };
+        Failure::new(kind, truncate(&text))
+    }
+
+    /// A `control_request` from a CLI started with `--permission-prompt-tool stdio`: a
+    /// `can_use_tool` asks whether a tool call may run, and any other subtype is refused.
+    fn control_request(&self, message: &Map<String, Value>) -> Vec<Step> {
+        let Some(request_id) = text(message, "request_id") else {
+            return vec![warning(
+                WarningKind::MalformedLine,
+                "a control request without a request_id".into(),
+            )];
+        };
+        let refuse = |error: String| Step::Refuse {
+            request_id: request_id.to_owned(),
+            error,
+        };
+        let request = message.get("request").and_then(Value::as_object);
+        let subtype = request.and_then(|request| text(request, "subtype"));
+        let (Some(request), Some("can_use_tool")) = (request, subtype) else {
+            let subtype = subtype.unwrap_or("untyped");
+            return vec![refuse(format!(
+                "plxd doesn't answer {subtype} control requests"
+            ))];
+        };
+        // A permission request follows the model's turn, so it can't come before init.
+        if !self.verified {
+            return vec![unverified()];
+        }
+        let Some(tool_name) = text(request, "tool_name") else {
+            return vec![refuse("a can_use_tool request without a tool_name".into())];
+        };
+        let input = request
+            .get("input")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        let suppressed = request
+            .get("suppress_always_allow_rule")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let (updates, rules) = if suppressed {
+            (Vec::new(), Vec::new())
+        } else {
+            allow_rules(request.get("permission_suggestions"))
+        };
+        let tool_use_id = text(request, "tool_use_id").map(str::to_owned);
+        let event = ApprovalRequest {
+            approval_id: ApprovalId::generate(),
+            tool_name: tool_name.to_owned(),
+            input: input.clone(),
+            call_id: tool_use_id.clone(),
+            reason: text(request, "decision_reason")
+                .map(plain)
+                .filter(|reason| !reason.trim().is_empty()),
+            blocked_path: text(request, "blocked_path").map(str::to_owned),
+            subagent: text(request, "agent_id").map(str::to_owned),
+            always_allow: rules,
+            interactive: request
+                .get("requires_user_interaction")
+                .and_then(Value::as_bool)
+                == Some(true),
+        };
+        let ask = Ask {
+            request_id: request_id.to_owned(),
+            tool_use_id,
+            tool_name: tool_name.to_owned(),
+            input,
+            updates,
+        };
+        vec![Step::Ask(event, ask)]
     }
 
     fn rate_limit(&mut self, message: &Map<String, Value>) -> Vec<Step> {
@@ -519,6 +1098,29 @@ impl Translator {
     }
 }
 
+/// `steps`, with each event wrapped as a subagent's when `message` came from one of the agent's
+/// own subagents (PLX-382): it names the tool call that started it as `parent_tool_use_id`, and
+/// its type as `subagent_type`. `model` is the model that wrote an assistant message.
+fn in_subagent(message: &Map<String, Value>, model: Option<&str>, steps: Vec<Step>) -> Vec<Step> {
+    let Some(call_id) = text(message, "parent_tool_use_id") else {
+        return steps;
+    };
+    let agent_type = text(message, "subagent_type");
+    steps
+        .into_iter()
+        .map(|step| match step {
+            Step::Emit(event @ Event::Warning { .. }) => Step::Emit(event),
+            Step::Emit(event) => Step::Emit(Event::Subagent {
+                call_id: call_id.to_owned(),
+                agent_type: agent_type.map(str::to_owned),
+                model: model.map(str::to_owned),
+                event: Box::new(event),
+            }),
+            step => step,
+        })
+        .collect()
+}
+
 fn text<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     object.get(key).and_then(Value::as_str)
 }
@@ -528,12 +1130,7 @@ fn warning(warning: WarningKind, detail: String) -> Step {
 }
 
 fn violation(failure: FailureKind, message: String) -> Step {
-    Step::Violation(Failure {
-        failure,
-        message,
-        exit: None,
-        stderr_tail: None,
-    })
+    Step::Violation(Failure::new(failure, message))
 }
 
 /// Output before a `system/init` passed the credential check: the CLI may already be using
@@ -541,7 +1138,7 @@ fn violation(failure: FailureKind, message: String) -> Step {
 fn unverified() -> Step {
     violation(
         FailureKind::UnexpectedApiKey,
-        "Claude Code answered before it reported its credentials, so wisp stopped it".into(),
+        "Claude Code answered before it reported its credentials, so Parallax stopped it".into(),
     )
 }
 
@@ -561,7 +1158,118 @@ fn signed_out(result: &str) -> bool {
     result.contains("not logged in") || result.contains("/login")
 }
 
-/// A `tool_result`'s content: a string, or text blocks.
+/// The `uuid`s of the user messages a `result`'s turn consumed, oldest first. A task notification
+/// Claude answered without a model turn, as on a resume, answers none, whatever it echoes: T3
+/// Code drops it too (PLX-724). If it is the only result that ever names plxd's prompt, as when a
+/// wake fails before any model turn, that turn stays running until Stop or the CLI's exit, as in
+/// T3 Code.
+fn answered(message: &Map<String, Value>, origin: Option<&str>) -> Vec<String> {
+    if origin == Some("task-notification")
+        && message.get("num_turns").and_then(Value::as_u64) == Some(0)
+    {
+        return Vec::new();
+    }
+    match message.get("user_message_uuids").and_then(Value::as_array) {
+        Some(uuids) => uuids
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        None => text(message, "user_message_uuid")
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// The allow rules among a `can_use_tool` request's `permission_suggestions`, as updates that
+/// last the rest of the CLI process, and as `Tool(content)` for people (PLX-222). Their own
+/// destination, often a settings file, is replaced with `session`. Every other suggestion, such
+/// as a mode or an added directory, is dropped: an added directory would let a worker's file
+/// tools out of its worktree. Only the rules `approvalRequested` shows whole are kept, at most
+/// [`MAX_ALWAYS_ALLOW_RULES`], so an answer with `always` adds nothing the user didn't see.
+fn allow_rules(suggestions: Option<&Value>) -> (Vec<Value>, Vec<String>) {
+    let mut updates = Vec::new();
+    let mut names = Vec::new();
+    for suggestion in suggestions.and_then(Value::as_array).into_iter().flatten() {
+        if suggestion.get("type").and_then(Value::as_str) != Some("addRules")
+            || suggestion.get("behavior").and_then(Value::as_str) != Some("allow")
+        {
+            continue;
+        }
+        let mut rules = Vec::new();
+        for rule in suggestion
+            .get("rules")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(tool) = rule.get("toolName").and_then(Value::as_str) else {
+                continue;
+            };
+            let name = match rule.get("ruleContent").and_then(Value::as_str) {
+                Some(content) => format!("{tool}({content})"),
+                None => tool.to_owned(),
+            };
+            if name.len() <= MAX_ALWAYS_ALLOW_RULE_BYTES && names.len() < MAX_ALWAYS_ALLOW_RULES {
+                names.push(name);
+                rules.push(rule);
+            }
+        }
+        if rules.is_empty() {
+            continue;
+        }
+        updates.push(serde_json::json!({
+            "type": "addRules",
+            "rules": rules,
+            "behavior": "allow",
+            "destination": "session",
+        }));
+    }
+    (updates, names)
+}
+
+/// `text` without terminal escape sequences or control characters other than line breaks and
+/// tabs, which a `decision_reason` may carry (the Agent SDK's types).
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            skip_escape(&mut chars);
+        } else if !c.is_control() || c == '\n' || c == '\t' {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Skips the rest of a terminal escape sequence whose ESC `chars` just read.
+fn skip_escape(chars: &mut std::str::Chars<'_>) {
+    match chars.next() {
+        // A CSI sequence ends at its final byte, from `@` to `~`.
+        Some('[') => {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    return;
+                }
+            }
+        }
+        // An OSC sequence ends at BEL, or at ESC and `\`.
+        Some(']') => {
+            let mut escaped = false;
+            for c in chars.by_ref() {
+                if c == '\u{7}' || (escaped && c == '\\') {
+                    return;
+                }
+                escaped = c == '\u{1b}';
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A `tool_result`'s content: a string, or its text blocks. Its images are the event's `images`.
 fn tool_output(content: &Value) -> Option<String> {
     let text = match content {
         Value::String(text) => text.clone(),
@@ -581,17 +1289,7 @@ fn todo_list(input: &Value) -> Option<Vec<TodoItem>> {
     Some(
         todos
             .iter()
-            .filter_map(|todo| {
-                Some(TodoItem {
-                    text: todo.get("content")?.as_str()?.to_owned(),
-                    status: match todo.get("status").and_then(Value::as_str) {
-                        Some("pending") => TodoStatus::Pending,
-                        Some("in_progress") => TodoStatus::InProgress,
-                        Some("completed") => TodoStatus::Completed,
-                        _ => TodoStatus::Other,
-                    },
-                })
-            })
+            .filter_map(|entry| todo(entry, "content"))
             .collect(),
     )
 }
@@ -626,7 +1324,7 @@ fn is_zero(usage: &Usage) -> bool {
     clippy::cast_sign_loss,
     reason = "a finite, non-negative cost in dollars fits in u64 micros"
 )]
-fn micros(usd: f64) -> Option<u64> {
+pub(crate) fn micros(usd: f64) -> Option<u64> {
     (usd.is_finite() && usd >= 0.0).then(|| (usd * 1_000_000.0).round() as u64)
 }
 
@@ -659,4 +1357,32 @@ fn truncate(text: &str) -> String {
         Some((end, _)) => format!("{}...", &text[..end]),
         None => text.to_owned(),
     }
+}
+
+/// Match a reported model, including an unambiguous dated alias, without borrowing a subagent's
+/// capacity or a catalog default. Ambiguous and unknown models stay unavailable.
+fn reported_context_window(actual: &str, totals: Option<&Map<String, Value>>) -> Option<u64> {
+    let matches = |name: &str| {
+        actual == name
+            || actual.strip_prefix(name).is_some_and(|suffix| {
+                suffix.strip_prefix('-').is_some_and(|date| {
+                    date.len() == 8 && date.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            })
+    };
+    let mut candidates = totals?.iter().filter(|(name, value)| {
+        matches(name)
+            || value
+                .get("canonicalModel")
+                .and_then(Value::as_str)
+                .is_some_and(matches)
+    });
+    let (_, model) = candidates.next()?;
+    if candidates.next().is_some() {
+        return None;
+    }
+    model
+        .get("contextWindow")?
+        .as_u64()
+        .filter(|window| *window > 0)
 }

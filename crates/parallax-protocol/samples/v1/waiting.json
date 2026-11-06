@@ -1,0 +1,64 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 412,
+      "time": "2026-10-13T18:20:11Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.background",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "tasks": [
+          {
+            "taskId": "b7k2m9qx1",
+            "kind": "monitor",
+            "description": "Watching pull request #746"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 413,
+      "time": "2026-10-13T18:20:12Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "pr.watches",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "urls": ["https://github.com/ryan-stoffel/parallax/pull/746"]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 50,
+    "method": "agent/stopTask",
+    "params": { "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01", "taskId": "b7k2m9qx1" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 50,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",
+      "seq": 414,
+      "time": "2026-10-13T18:20:14Z",
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "event": {
+        "kind": "agent.background",
+        "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "tasks": []
+      }
+    }
+  }
+]

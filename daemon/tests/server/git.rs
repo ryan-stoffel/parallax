@@ -1,0 +1,470 @@
+//! The Git menu's methods end to end (PLX-298): `agent/gitStatus`, `agent/commit`, and
+//! `agent/push` in a run's worktree and in a Current checkout thread's checkout, pushing to a
+//! local bare `origin`, with `open_pr`'s fake `gh` for Create PR.
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use parallax_protocol::methods::{
+    AgentAccept, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentSend, AgentStart,
+    OrchestratorDelete, QueueList, QueueSteer, ThreadStart,
+};
+use parallax_protocol::{
+    AcceptId, AgentAcceptParams, AgentCommitParams, AgentGitStatusParams, AgentOutputItem,
+    AgentPushParams, AgentStatus, ErrorKind, GitStatus, OrchestratorDeleteParams, ParallaxEvent,
+    QueueListParams, QueueSteerParams, RunId, ThreadStartParams, TurnId,
+};
+use tokio::task::JoinHandle;
+
+use crate::agents::{
+    Conn, Host, create, git, orchestrator_params, real_repo, scope, send_params, start_params,
+    subscribe, until, updated_to,
+};
+use crate::open_pr::{Tools, add_origin, editing, open, start, thread};
+use crate::support::{PATIENCE, kind, temp_dir};
+
+async fn status(client: &mut Conn, run_id: RunId) -> GitStatus {
+    client
+        .call::<AgentGitStatus>(AgentGitStatusParams { run_id })
+        .await
+        .unwrap()
+}
+
+fn commit(run_id: RunId, message: &str) -> AgentCommitParams {
+    AgentCommitParams {
+        run_id,
+        message: message.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn a_worktree_run_commits_the_user_s_edits_and_pushes_its_branch() {
+    let tools = Tools::new();
+    let dir = temp_dir();
+    let params = orchestrator_params(dir.path());
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
+    let origin = add_origin(&repo, dir.path());
+    let host = start(dir, editing(), &tools);
+    let mut client = host.client().await;
+    let project = create(&mut client, params).await;
+    subscribe(&mut client, project.id, 0).await;
+    let start = start_params(project.id, "Rewrite the README");
+    let run_id = start.run_id;
+    let run = client.call::<AgentStart>(start).await.unwrap().run;
+    let branch = run.branch.unwrap();
+    let worktree = PathBuf::from(run.worktree_path.unwrap());
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // The turn's commit, and the repository's first, are on none of origin's branches.
+    assert_eq!(
+        status(&mut client, run_id).await,
+        GitStatus {
+            branch: Some(branch.clone()),
+            changes: 0,
+            insertions: 0,
+            deletions: 0,
+            upstream: None,
+            ahead: 2,
+            origin: true,
+        }
+    );
+
+    fs::write(worktree.join("NOTES.md"), "notes\n").unwrap();
+    assert_eq!(status(&mut client, run_id).await.changes, 1);
+    let committed = client
+        .call::<AgentCommit>(commit(run_id, "Add notes"))
+        .await
+        .unwrap();
+    assert_eq!((committed.changes, committed.ahead), (0, 3));
+    assert_eq!(git(&worktree, &["log", "-1", "--format=%s"]), "Add notes");
+    // The commit is the run's now, for Accept and Open PR.
+    let head = git(&worktree, &["rev-parse", "HEAD"]);
+    until(
+        &mut client,
+        |e| matches!(&e.event, ParallaxEvent::AgentUpdated { state, .. } if state.diff.as_ref().is_some_and(|diff| diff.commit == head)),
+    )
+    .await;
+
+    let nothing = client
+        .call::<AgentCommit>(commit(run_id, "Again"))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&nothing), ErrorKind::GitRefused);
+    assert!(
+        nothing.message.contains("no changes"),
+        "{}",
+        nothing.message
+    );
+    let blank = client
+        .call::<AgentCommit>(commit(run_id, " \n "))
+        .await
+        .unwrap_err();
+    assert_eq!(blank.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
+
+    let pushed = client
+        .call::<AgentPush>(AgentPushParams { run_id })
+        .await
+        .unwrap();
+    assert_eq!(pushed.upstream, Some(format!("origin/{branch}")));
+    assert_eq!(pushed.ahead, 0);
+    assert_eq!(git(&origin, &["rev-parse", &branch]), head);
+
+    // Ahead of the upstream now.
+    git(&worktree, &["commit", "-q", "--allow-empty", "-m", "More"]);
+    assert_eq!(status(&mut client, run_id).await.ahead, 1);
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn a_checkout_thread_commits_pushes_and_opens_a_pull_request_on_its_branch() {
+    let tools = Tools::new();
+    let work = temp_dir();
+    let repo = real_repo(work.path());
+    let origin = add_origin(&repo, work.path());
+    let host = start(temp_dir(), editing(), &tools);
+    let mut client = host.client().await;
+    let entry = client.add(&repo).await;
+    subscribe(&mut client, scope(entry.id), 0).await;
+    let start = ThreadStartParams {
+        checkout: true,
+        ..thread(Some(entry.id))
+    };
+    let run_id = start.run_id;
+    client.call::<ThreadStart>(start).await.unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // The thread rewrote README.md in the checkout, and a checkout is never committed for it.
+    assert_eq!(
+        status(&mut client, run_id).await,
+        GitStatus {
+            branch: Some("main".to_owned()),
+            changes: 1,
+            insertions: 1,
+            deletions: 1,
+            upstream: None,
+            ahead: 1,
+            origin: true,
+        }
+    );
+    let committed = client
+        .call::<AgentCommit>(commit(run_id, "Rewrite the README"))
+        .await
+        .unwrap();
+    assert_eq!((committed.changes, committed.ahead), (0, 2));
+    assert_eq!(
+        git(&repo, &["log", "-1", "--format=%s %an"]),
+        "Rewrite the README Test User"
+    );
+
+    let pushed = client
+        .call::<AgentPush>(AgentPushParams { run_id })
+        .await
+        .unwrap();
+    assert_eq!(
+        (pushed.upstream.as_deref(), pushed.ahead),
+        (Some("origin/main"), 0)
+    );
+    assert_eq!(
+        git(&origin, &["rev-parse", "main"]),
+        git(&repo, &["rev-parse", "HEAD"])
+    );
+
+    // Create PR pushes the branch the checkout has out.
+    let opened = client
+        .call::<AgentOpenPr>(open(run_id, "Rewrite the README", None))
+        .await
+        .unwrap();
+    assert!(opened.url.ends_with("/pull/7"), "{}", opened.url);
+    assert!(tools.log()[0].contains("--head=main"), "{:?}", tools.log());
+
+    // A detached HEAD has no branch to push or open a pull request from.
+    git(&repo, &["checkout", "-q", "--detach"]);
+    assert_eq!(status(&mut client, run_id).await.branch, None);
+    let push = client
+        .call::<AgentPush>(AgentPushParams { run_id })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&push), ErrorKind::GitRefused);
+    assert!(push.message.contains("detached HEAD"), "{}", push.message);
+    let pr = client
+        .call::<AgentOpenPr>(open(run_id, "Rewrite the README", None))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&pr), ErrorKind::PrRefused);
+    assert!(pr.message.contains("detached HEAD"), "{}", pr.message);
+    host.server.stop().await;
+}
+
+/// Makes `origin` slow: its `pre-receive` hook creates the first path returned, then waits until
+/// the second exists.
+fn hold_pushes(origin: &Path) -> (PathBuf, PathBuf) {
+    let (started, gate) = (origin.join("push-started"), origin.join("push-gate"));
+    let hook = origin.join("hooks/pre-receive");
+    fs::write(
+        &hook,
+        format!(
+            // Gives up after about 30 s, so a failed test leaves no hook running.
+            "#!/bin/sh\n: > '{}'\ni=0\nwhile [ ! -e '{}' ] && [ \"$i\" -lt 600 ]; do \
+             /bin/sleep 0.05; i=$((i + 1)); done\n",
+            started.display(),
+            gate.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    (started, gate)
+}
+
+/// Starts `agent/push` for `run_id` on a client of its own, and returns once `origin` holds it.
+async fn held_push(host: &Host, run_id: RunId, started: &Path) -> JoinHandle<GitStatus> {
+    let mut client = host.client().await;
+    let push = tokio::spawn(async move {
+        client
+            .call::<AgentPush>(AgentPushParams { run_id })
+            .await
+            .unwrap()
+    });
+    let deadline = Instant::now() + PATIENCE;
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "the push never reached origin");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    push
+}
+
+/// Checks that what would touch `run_id`'s folder or branch, or start its CLI with `queued`, its
+/// waiting message, is refused while its push runs.
+async fn refused_while_pushing(client: &mut Conn, run_id: RunId, queued: TurnId) {
+    let refusals = [
+        (
+            client
+                .call::<AgentCommit>(commit(run_id, "More"))
+                .await
+                .unwrap_err(),
+            ErrorKind::GitRefused,
+        ),
+        (
+            client
+                .call::<AgentPush>(AgentPushParams { run_id })
+                .await
+                .unwrap_err(),
+            ErrorKind::GitRefused,
+        ),
+        (
+            client
+                .call::<AgentOpenPr>(open(run_id, "Rewrite the README", None))
+                .await
+                .unwrap_err(),
+            ErrorKind::PrRefused,
+        ),
+        (
+            client
+                .call::<AgentAccept>(AgentAcceptParams {
+                    run_id,
+                    id: AcceptId::generate(),
+                    commit: None,
+                })
+                .await
+                .unwrap_err(),
+            ErrorKind::MergeRefused,
+        ),
+        // A steer has no turn to go into, and starts no CLI while the push runs.
+        (
+            client
+                .call::<QueueSteer>(QueueSteerParams { run_id, id: queued })
+                .await
+                .unwrap_err(),
+            ErrorKind::RunNotResumable,
+        ),
+    ];
+    for (error, expected) in refusals {
+        assert_eq!(kind(&error), expected);
+        assert!(error.message.contains("pushing"), "{}", error.message);
+    }
+}
+
+#[tokio::test]
+async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
+    let tools = Tools::new();
+    let dir = temp_dir();
+    let params = orchestrator_params(dir.path());
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
+    let origin = add_origin(&repo, dir.path());
+    let (started, gate) = hold_pushes(&origin);
+    let host = start(dir, editing(), &tools);
+    let mut client = host.client().await;
+    let project = create(&mut client, params).await;
+    subscribe(&mut client, project.id, 0).await;
+    let start = start_params(project.id, "Rewrite the README");
+    let run_id = start.run_id;
+    let run = client.call::<AgentStart>(start).await.unwrap().run;
+    let (branch, worktree) = (run.branch, PathBuf::from(run.worktree_path.unwrap()));
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let push = held_push(&host, run_id, &started).await;
+
+    // The run answers while origin holds the push: a follow-up waits in its queue, and what would
+    // touch its folder or branch is refused.
+    let turn = TurnId::generate();
+    let sent = tokio::time::timeout(
+        PATIENCE,
+        client.call::<AgentSend>(send_params(run_id, turn, "Now the CHANGELOG")),
+    )
+    .await
+    .expect("the follow-up waited for the push")
+    .unwrap();
+    assert_eq!(sent.run.status, AgentStatus::Completed);
+    let queued = client
+        .call::<QueueList>(QueueListParams { run_id })
+        .await
+        .unwrap();
+    assert_eq!(queued.messages.len(), 1);
+    refused_while_pushing(&mut client, run_id, turn).await;
+    assert!(!push.is_finished());
+
+    // Once the push is done, the follow-up goes to the run as its next turn.
+    fs::write(&gate, "").unwrap();
+    let pushed = push.await.unwrap();
+    assert_eq!(pushed.ahead, 0);
+    assert_eq!(
+        pushed.upstream,
+        branch.map(|branch| format!("origin/{branch}"))
+    );
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| {
+            matches!(item, AgentOutputItem::TurnStarted { turn_id: Some(id), .. } if *id == turn)
+        }))
+    })
+    .await;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // `orchestrator/delete` waits for a push rather than stopping with some of its runs deleted.
+    fs::remove_file(&started).unwrap();
+    fs::remove_file(&gate).unwrap();
+    git(&worktree, &["commit", "-q", "--allow-empty", "-m", "More"]);
+    let push = held_push(&host, run_id, &started).await;
+    let mut other = host.client().await;
+    let delete = tokio::spawn(async move {
+        other
+            .call::<OrchestratorDelete>(OrchestratorDeleteParams {
+                orchestrator: project.id,
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!delete.is_finished());
+    fs::write(&gate, "").unwrap();
+    assert_eq!(push.await.unwrap().ahead, 0);
+    delete.await.unwrap().unwrap();
+    host.server.stop().await;
+}
+
+/// PLX-781's sweep removes a merged thread's worktree and branch; a message to it makes both again
+/// from the default branch, fetched first so it has a merge made on GitHub, and resumes there.
+#[tokio::test]
+async fn a_message_makes_a_swept_worktree_again() {
+    let tools = Tools::new();
+    let dir = temp_dir();
+    let params = orchestrator_params(dir.path());
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
+    let origin = add_origin(&repo, dir.path());
+    let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    git(&repo, &["push", "-q", "-u", "origin", &main]);
+    git(&repo, &["remote", "set-head", "origin", &main]);
+    let other = dir.path().join("other");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            &main,
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    let host = start(dir, editing(), &tools);
+    let mut client = host.client().await;
+    let project = create(&mut client, params).await;
+    subscribe(&mut client, project.id, 0).await;
+    let start = start_params(project.id, "Rewrite the README");
+    let run_id = start.run_id;
+    let run = client.call::<AgentStart>(start).await.unwrap().run;
+    let (branch, worktree) = (run.branch.unwrap(), run.worktree_path.unwrap());
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    // The pull request merges on GitHub, then the sweep removes the worktree and its branch.
+    fs::write(other.join("MERGED.md"), "merged\n").unwrap();
+    git(&other, &["add", "MERGED.md"]);
+    git(
+        &other,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "Merge",
+        ],
+    );
+    git(&other, &["push", "-q", "origin", &main]);
+    git(&repo, &["worktree", "remove", "--force", &worktree]);
+    git(&repo, &["branch", "-D", &branch]);
+
+    client
+        .call::<AgentSend>(send_params(run_id, TurnId::generate(), "One more thing"))
+        .await
+        .unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    assert!(Path::new(&worktree).join("MERGED.md").is_file());
+    assert_eq!(status(&mut client, run_id).await.branch, Some(branch));
+    host.server.stop().await;
+}
+
+#[tokio::test]
+async fn a_missing_worktree_refuses_git_without_touching_the_checkout() {
+    let tools = Tools::new();
+    let dir = temp_dir();
+    let params = orchestrator_params(dir.path());
+    let repo = PathBuf::from(params.repo_path.as_deref().unwrap());
+    let origin = add_origin(&repo, dir.path());
+    let host = start(dir, editing(), &tools);
+    let mut client = host.client().await;
+    let project = create(&mut client, params).await;
+    subscribe(&mut client, project.id, 0).await;
+    let start = start_params(project.id, "Rewrite the README");
+    let run_id = start.run_id;
+    let run = client.call::<AgentStart>(start).await.unwrap().run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    fs::remove_dir_all(run.worktree_path.unwrap()).unwrap();
+    fs::write(repo.join("USER.txt"), "untouched\n").unwrap();
+    let before = git(&repo, &["status", "--porcelain"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let errors = [
+        client
+            .call::<AgentGitStatus>(AgentGitStatusParams { run_id })
+            .await
+            .unwrap_err(),
+        client
+            .call::<AgentCommit>(commit(run_id, "Must refuse"))
+            .await
+            .unwrap_err(),
+        client
+            .call::<AgentPush>(AgentPushParams { run_id })
+            .await
+            .unwrap_err(),
+        client
+            .call::<AgentOpenPr>(open(run_id, "Must refuse", None))
+            .await
+            .unwrap_err(),
+    ];
+    for error in errors {
+        assert_eq!(kind(&error), ErrorKind::WorktreeMissing, "{error:?}");
+    }
+    assert_eq!(git(&repo, &["status", "--porcelain"]), before);
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+    assert!(git(&origin, &["for-each-ref", "--format=%(refname)"]).is_empty());
+}

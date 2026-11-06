@@ -1,0 +1,227 @@
+/**
+ * The sidecar against the real SDK, running the daemon's fake `claude` (fake-claude.sh) on a
+ * fixture. Skipped until the SDK is installed here (`npm ci --omit=dev --omit=optional
+ * --omit=peer`).
+ */
+import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import readline from "node:readline";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const fixtures = path.join(here, "../../../daemon/src/backend/claude/fixtures");
+const installed = existsSync(path.join(here, "../node_modules/@anthropic-ai/claude-agent-sdk"));
+const supervisor = process.env.PLXD_CLAUDE_PROCESS ?? path.join(here, "../../../target/debug/plxd");
+
+function scratchSidecar(t, entry = path.join(here, "main.mjs")) {
+  const dir = mkdtempSync(path.join(tmpdir(), "claude-sidecar-"));
+  copyFileSync(path.join(fixtures, "fake-claude.sh"), path.join(dir, "claude"));
+  chmodSync(path.join(dir, "claude"), 0o755);
+  const sidecar = spawn(process.execPath, [entry], {
+    stdio: ["pipe", "pipe", "inherit"],
+    detached: process.platform !== "win32",
+  });
+  const lines = [];
+  const cleanup = [];
+  const output = readline.createInterface({ input: sidecar.stdout });
+  output.on("line", (line) => lines.push(line));
+  t.after(() => {
+    sidecar.stdin.end();
+    for (const fn of cleanup) fn();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const send = (value) => sidecar.stdin.write(`${JSON.stringify(value)}\n`);
+  const until = async (predicate) => {
+    const deadline = Date.now() + 5000;
+    while (!predicate(lines)) {
+      assert.equal(sidecar.exitCode, null, "shared sidecar exited");
+      assert.ok(Date.now() < deadline, `timed out: ${lines.join("\n")}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  const open = (id, args, overrides = {}) => send({
+    id, type: "open", supervisor, executable: path.join(dir, "claude"), args, cwd: dir,
+    env: { PATH: "/usr/bin:/bin", HOME: dir, FAKE_CLAUDE_DIR: dir,
+      FAKE_CLAUDE_FIXTURE: path.join(fixtures, "read-only.jsonl") },
+    ...overrides,
+  });
+  const prompt = (id) => send({ id, stdin: { type: "user", message: { role: "user", content: "hi" },
+    parent_tool_use_id: null, uuid: "01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01" } });
+  const exit = async (id) => {
+    await until((lines) => lines.some((line) => line.startsWith(`${id} exit `)));
+    return JSON.parse(lines.find((line) => line.startsWith(`${id} exit `)).slice(`${id} exit `.length));
+  };
+  return { dir, lines, cleanup, send, until, open, prompt, exit, sidecar };
+}
+
+test("the files plxd embeds run a query through the real SDK and Rust supervisor, with plxd's flags and answers",
+  { skip: !installed, timeout: 10000 }, async (t) => {
+    const staged = mkdtempSync(path.join(tmpdir(), "claude-embedded-"));
+    t.after(() => rmSync(staged, { recursive: true, force: true }));
+    // What plxd embeds and installs (daemon/src/backend/claude/sdk.rs): every src/*.mjs but the
+    // tests, so an import from anywhere else fails this test.
+    mkdirSync(path.join(staged, "src"));
+    copyFileSync(path.join(here, "../package.json"), path.join(staged, "package.json"));
+    const embedded = (name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs");
+    for (const name of readdirSync(here).filter(embedded)) {
+      copyFileSync(path.join(here, name), path.join(staged, "src", name));
+    }
+    // The SDK is installed separately on first use.
+    symlinkSync(path.join(here, "../node_modules"), path.join(staged, "node_modules"), "dir");
+    const { dir, lines, open, prompt, until, send, exit } = scratchSidecar(t, path.join(staged, "src/main.mjs"));
+    const flags = [["--permission-mode", "default"], ["--permission-prompt-tool", "stdio"], ["--restricted"],
+      ["--settings", '{"env":{}}'], ["--add-dir", "/tmp/a"]];
+    open("packaged", flags.flat(), {
+      env: { PATH: "/usr/bin:/bin", HOME: dir, FAKE_CLAUDE_DIR: dir,
+        FAKE_CLAUDE_FIXTURE: path.join(fixtures, "approval.jsonl") },
+    });
+    prompt("packaged");
+    const ask = (line) => line.startsWith("packaged ") && line.includes('"can_use_tool"');
+    await until((lines) => lines.some(ask));
+    const request = JSON.parse(lines.find(ask).slice("packaged ".length));
+    send({ id: "packaged", stdin: { type: "control_response", response: { subtype: "success",
+      request_id: request.request_id, response: { behavior: "allow", updatedInput: { command: "pnpm test" } } } } });
+    await until((lines) => lines.some((line) => line.startsWith("packaged ") && line.includes('"type":"result"')));
+    send({ id: "packaged", type: "end" });
+    assert.deepEqual(await exit("packaged"), { code: 0, signal: null, stderr: "" });
+    assert.equal(lines.filter((line) => line.startsWith("packaged exit ")).length, 1);
+    // Every flag plxd gave reached the CLI with its value, beside the SDK's own. The SDK may write
+    // a value as `--flag value` or `--flag=value`.
+    const argv = readFileSync(path.join(dir, "argv"), "utf8").trim().split("\n");
+    for (const [flag, value] of flags) {
+      const passed = value === undefined
+        ? argv.includes(flag)
+        : argv.includes(`${flag}=${value}`) || argv.some((arg, i) => arg === flag && argv[i + 1] === value);
+      assert.ok(passed, `${flag}: ${argv}`);
+    }
+    // The SDK initialized the CLI, then sent plxd's prompt and its answer as plxd wrote them.
+    const stdin = readFileSync(path.join(dir, "stdin"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(stdin[0].request.subtype, "initialize");
+    assert.equal(stdin[1].uuid, "01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01");
+    assert.equal(stdin[2].response.response.behavior, "allow");
+  });
+
+test("killing the shared sidecar group still cleans up a live CLI and its child",
+  { skip: !installed || process.platform === "win32", timeout: 10000 }, async (t) => {
+    const { dir, cleanup, open, prompt, until, sidecar } = scratchSidecar(t);
+    const pidFile = path.join(dir, "pids");
+    const cli = path.join(dir, "cli.mjs");
+    writeFileSync(cli, `import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+  stdio: ["ignore", "inherit", "inherit"]
+});
+writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify([process.pid, child.pid]));
+setTimeout(() => {}, 60000);
+`);
+    writeFileSync(path.join(dir, "claude"), `#!/bin/sh\nexec '${process.execPath}' '${cli}'\n`, { mode: 0o755 });
+    cleanup.push(() => {
+      if (existsSync(pidFile)) {
+        for (const pid of JSON.parse(readFileSync(pidFile, "utf8"))) {
+          try { process.kill(pid, "SIGKILL"); } catch {}
+        }
+      }
+    });
+    open("q", []);
+    prompt("q");
+    await until(() => existsSync(pidFile));
+    const pids = JSON.parse(readFileSync(pidFile, "utf8"));
+    const exited = new Promise((resolve) => sidecar.once("close", resolve));
+    process.kill(-sidecar.pid, "SIGKILL");
+    await exited;
+    for (const pid of pids) {
+      const deadline = Date.now() + 5000;
+      while (true) {
+        try { process.kill(pid, 0); }
+        catch (error) { assert.equal(error.code, "ESRCH"); break; }
+        assert.ok(Date.now() < deadline, `process ${pid} survived sidecar group cleanup`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  });
+
+test("file MCP configs and startup failures leave a second live SDK query healthy",
+  { skip: !installed, timeout: 15000 }, async (t) => {
+    const { dir, lines, open, prompt, until, send, exit } = scratchSidecar(t);
+    open("healthy", ["--permission-mode", "default", "--permission-prompt-tool", "stdio"], {
+      env: { PATH: "/usr/bin:/bin", HOME: dir, FAKE_CLAUDE_DIR: dir,
+        FAKE_CLAUDE_FIXTURE: path.join(fixtures, "approval.jsonl") },
+    });
+    prompt("healthy");
+    await until((lines) => lines.some((line) => line.startsWith("healthy ") && line.includes('"can_use_tool"')));
+    writeFileSync(path.join(dir, "mcp.json"), '{"mcpServers":{}}');
+    open("configured", ["--mcp-config", "mcp.json"]);
+    prompt("configured");
+    await until((lines) => lines.some((line) => line.startsWith("configured ") && line.includes('"type":"result"')));
+    send({ id: "configured", type: "end" });
+    assert.equal((await exit("configured")).code, 0);
+    for (const [id, config] of [["bad-json", "{broken"], ["missing-file", "missing.json"]]) {
+      open(id, ["--mcp-config", config]);
+      const status = await exit(id);
+      assert.equal(status.code, null);
+      assert.ok(status.stderr.length > 0);
+    }
+    open("sdk-error", [], { cwd: 42 });
+    assert.ok((await exit("sdk-error")).stderr.length > 0);
+    // The healthy query was awaiting approval throughout the failed startups.
+    const request = JSON.parse(lines.find((line) => line.startsWith("healthy ") && line.includes('"can_use_tool"')).slice(8));
+    send({ id: "healthy", stdin: { type: "control_response", response: { subtype: "success",
+      request_id: request.request_id, response: { behavior: "allow", updatedInput: { command: "pnpm test" } } } } });
+    await until((lines) => lines.some((line) => line.startsWith("healthy ") && line.includes('"type":"result"')));
+    send({ id: "healthy", type: "end" });
+    assert.equal((await exit("healthy")).code, 0);
+  });
+
+// PLX-805: a stray `pkill` killed idle CLIs' helpers, and their queries never reported an exit.
+test("a helper killed by a signal ends its query with that signal",
+  { skip: !installed || process.platform === "win32", timeout: 10000 }, async (t) => {
+    const { dir, lines, open, prompt, until, exit } = scratchSidecar(t);
+    open("q", []);
+    prompt("q");
+    await until((lines) => lines.some((line) => line.includes('"type":"result"')));
+    const helper = execFileSync("pgrep", ["-f", `sdk-process -- ${dir}/claude`], { encoding: "utf8" });
+    process.kill(Number(helper.trim()), "SIGTERM");
+    assert.equal((await exit("q")).signal, 15);
+    assert.equal(lines.filter((line) => line.startsWith("q exit ")).length, 1);
+  });
+
+for (const escaped of [false, true]) {
+  test(`CLI exit drains output once while a ${escaped ? "detached" : "same-group"} child holds stdout`,
+    { skip: !installed, timeout: 10000 }, async (t) => {
+      const { dir, lines, cleanup, open, prompt, send, exit } = scratchSidecar(t);
+      const cli = path.join(dir, "cli.mjs");
+      const stream = readFileSync(path.join(fixtures, "read-only.jsonl"), "utf8")
+        .split("\n").filter((line) => line.startsWith("{"));
+      writeFileSync(cli, `import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+  stdio: ["ignore", "inherit", "inherit"], detached: ${escaped}
+});
+writeFileSync(${JSON.stringify(path.join(dir, "pid"))}, String(child.pid));
+process.stderr.write("captured stderr\\n");
+process.stdout.write(${JSON.stringify(stream.join("\n") + "\n")}, () => process.exit(0));
+`);
+      cleanup.push(() => {
+        if (existsSync(path.join(dir, "pid"))) {
+          try { process.kill(Number(readFileSync(path.join(dir, "pid"), "utf8")), "SIGKILL"); } catch {}
+        }
+      });
+      // The SDK adds its CLI flags, so use a shell that forwards only the test script.
+      writeFileSync(path.join(dir, "claude"), `#!/bin/sh\nexec '${process.execPath}' '${cli}'\n`, { mode: 0o755 });
+      open("q", [], { executable: path.join(dir, "claude") });
+      prompt("q");
+      const status = await exit("q");
+      assert.deepEqual(status, { code: 0, signal: null, stderr: "captured stderr" });
+      send({ id: "q", type: "end" });
+      send({ id: "q", type: "kill" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(lines, [...stream.map((line) => `q ${line}`), `q exit ${JSON.stringify(status)}`]);
+      const pid = Number(readFileSync(path.join(dir, "pid"), "utf8"));
+      if (escaped) process.kill(pid, "SIGKILL");
+      else assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    });
+}

@@ -1,0 +1,237 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use ts_rs::TS;
+
+use crate::ProtocolRange;
+use crate::jsonrpc::{ErrorObject, PLX_ERROR};
+
+/// What went wrong, in a Parallax error's `data.kind`. Receivers match on it, never on the message.
+///
+/// A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
+/// `switch` over this type must not end in an exhaustiveness assertion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorKind {
+    /// A request came before `initialize`.
+    NotInitialized,
+    /// The client's protocol range does not overlap plxd's. Its `detail` is an
+    /// `IncompatibleProtocolDetail` in every protocol version.
+    IncompatibleProtocol,
+    /// The events after the requested `seq` are gone or too many to replay. Reload the snapshots
+    /// and subscribe again.
+    ResyncRequired,
+    /// No orchestrator has the given id.
+    #[serde(alias = "projectNotFound")]
+    OrchestratorNotFound,
+    /// No key account has the given id.
+    AccountNotFound,
+    /// The Keychain is locked, or access to an item was denied. Distinct from a bare internal
+    /// error so the client can tell "locked" from "broken" (#117).
+    KeychainUnavailable,
+    /// A create reused an existing id with different params, `orchestrator/start` named a new run
+    /// while the orchestrator is starting or running, or a `commandId` was reused with a
+    /// different method or params (0052).
+    IdConflict,
+    /// No shared context file has the given path (#155).
+    ContextNotFound,
+    /// The content would be over `context/write`'s per-file or per-project size cap (#155).
+    ContextTooLarge,
+    /// A new project's `repoPath` is not the top folder of a git working tree on this host. The
+    /// message says what is wrong with it.
+    NotARepository,
+    /// No agent run has the given id (#156).
+    RunNotFound,
+    /// `agent/send` can't resume the run: it ended before its CLI reported a session, or it is
+    /// still starting. `agent/resumeNow` and `queue/steer` fail with it while the run's push or
+    /// Open PR runs (PLX-458).
+    RunNotResumable,
+    /// plxd won't start a worker as asked: its backend doesn't implement the worker sandbox (0013),
+    /// the CLI is missing or older than the version the sandbox needs, or a path it would sandbox
+    /// holds `*`, `?`, `[`, or `]`. The message says which, and for an old CLI names both versions.
+    /// `orchestrator/start` fails with it too when the account's backend can't coordinate.
+    WorkerUnavailable,
+    /// plxd could not create the run's worktree, for example because the project's repository
+    /// has uncommitted changes, or read the git state of the run's folder (PLX-298). The message
+    /// says what to do.
+    WorktreeFailed,
+    /// The recorded run worktree no longer exists. No alternative checkout is used.
+    WorktreeMissing,
+    /// The run was accepted (#157): its worktree and branch are gone, so there is nothing left to
+    /// review, and it takes no more messages.
+    RunAccepted,
+    /// `agent/accept` refused before changing anything: the run, or its push or Open PR
+    /// (PLX-458), is still running, or it has no commit, the repository's HEAD is detached or a
+    /// merge or rebase is in progress there, uncommitted changes in the user's checkout touch
+    /// files the merge would change, or the run has committed since the reviewed commit. The
+    /// message says which.
+    MergeRefused,
+    /// `agent/accept` refused because the run's commit conflicts with the project's branch, which
+    /// has moved on since the run started. The message names the conflicting files. Nothing was
+    /// changed.
+    MergeConflict,
+    /// No repo entry has the given id (#110).
+    RepoNotFound,
+    /// No normal thread has the given run id (#110).
+    ThreadNotFound,
+    /// A run named no account, and its role has no default (0012). Set one with
+    /// `accounts/defaults/set`, then retry with the same run id.
+    NoDefaultAccount,
+    /// The run's backend can't honor a `model`, `effort`, `permission`, `contextWindow`, or
+    /// `fast` that `agent/start` or `thread/start` asked for, or the model's name can't be passed
+    /// to its CLI (PLX-97). Nothing was created. The message names the option, the value, and the
+    /// backend.
+    UnsupportedOption,
+    /// `agent/openPr` refused before pushing anything: the run is still running, its push or Open
+    /// PR is (PLX-458), it has no commit beyond its base, or it is a thread with no repo, which
+    /// has no `origin` (PLX-168).
+    PrRefused,
+    /// `agent/openPr` could not push the run's branch: the repository has no `origin`, or git
+    /// failed. The message carries git's stderr.
+    PushFailed,
+    /// `gh` isn't installed on the host, or isn't signed in. The message says which, with gh's
+    /// stderr. For `agent/openPr`, the branch was pushed first.
+    GhUnavailable,
+    /// `gh` could not find or open the pull request, for example because `origin` isn't a GitHub
+    /// repository, or `pr/view` or `pr/act` failed, as for a merge GitHub refuses (PLX-318). The
+    /// message carries gh's stderr. For `agent/openPr`, the branch was pushed first.
+    PrFailed,
+    /// An image in `images` is over the per-image cap, or a message's images are over the
+    /// per-message cap or count, which `promptImages`' options give (PLX-191). The message says
+    /// which. Nothing was sent. `orchestrator/create`, `orchestrator/update`, and `repo/update`
+    /// also return it when `icon.image` is over `iconImages`' `maxBytes` (PLX-339, 0038); nothing
+    /// changed.
+    ImageTooLarge,
+    /// No image of the run has the given id (PLX-191).
+    ImageNotFound,
+    /// The run has no permission request with the given id, as a run started without
+    /// `approvals` never has, or none this plxd has seen since it started (PLX-222).
+    ApprovalNotFound,
+    /// `agent/commit` or `agent/push` refused with nothing changed (PLX-298): the run is still
+    /// running, its push or Open PR is (PLX-458), there is nothing to commit, or its folder has a
+    /// detached HEAD, with no branch to push. The message says which. `thread/delete` fails with it
+    /// too while the thread's push or Open PR runs; `orchestrator/delete` waits for its runs'
+    /// instead.
+    GitRefused,
+    /// `agent/commit`'s git failed, such as for a missing `user.name`. The message carries git's
+    /// stderr.
+    CommitFailed,
+    /// `github/install` refused because a `gh` is already on the host, or `github/signIn` could
+    /// not start `gh auth login` or read its one-time code (PLX-423). The message says why.
+    GithubSetupFailed,
+    /// The run's queue has no waiting message with the given id: it was sent, cancelled, or never
+    /// queued (PLX-370).
+    QueuedMessageNotFound,
+    /// `land/queue` refused a run that isn't an orchestrator's completed child with a branch, such
+    /// as a orchestrator or a run started with `explore`, or `land/approve` or `land/sendBack` one
+    /// that isn't waiting for approval (PLX-410). The message says which. Nothing changed.
+    LandRefused,
+    /// `host/update` couldn't install or won't install the release (PLX-700): the download or
+    /// its checksum failed, the version is older than plxd's, plxd runs from a development build,
+    /// or the host's OS can't update plxd this way. The message says why, for people.
+    HostUpdateFailed,
+    /// A `hubs/accounts/*` call reached the hub and it refused, or it couldn't be reached
+    /// (PLX-1070). The message names the kind of failure and an HTTP status, never what the hub
+    /// answered.
+    HubFailed,
+    /// `checkpoint.rollback` refused before changing anything (0062): a turn is still running,
+    /// the thread's push or Open PR is, the checkpoint isn't `ready`, the thread's provider can't
+    /// rewind its conversation, or `restoreFiles` was asked of a folder that isn't the thread's
+    /// own worktree. The message says which.
+    RevertRefused,
+    /// `repo/clone`'s git failed or stopped making progress (PLX-905). The message is git's
+    /// reason, for people, such as a repository that doesn't exist or needs a sign-in.
+    CloneFailed,
+    /// `git/startMerge` refused because the run is starting or running, so plxd won't change its
+    /// worktree under it (0057).
+    RunBusy,
+    /// A bundle would be over the 64 MiB cap of `bundle/prepare` or `bundle/begin` (0057).
+    /// Nothing was kept.
+    BundleTooLarge,
+    /// A `bundle/*` call failed (0057): the bundle is gone or expired, its SHA-256 or tip isn't
+    /// what was promised, or `git bundle verify` failed. The message says which. The
+    /// repository's refs didn't change.
+    BundleFailed,
+    /// `bundle/apply` refused a bundle that needs commits the run's repository doesn't have
+    /// (0057). The message names them. Fetching the repository there gets them. The
+    /// repository's refs didn't change.
+    BundleMissingCommits,
+    /// `relay/hosts` couldn't reach Parallax Relay, or it answered with a server error (PLX-1351).
+    RelayUnreachable,
+    /// Parallax Relay answered that it can't read Clerk's keys, so no sign-in can be checked
+    /// (PLX-1351).
+    ClerkUnreachable,
+    /// This device is read-only on this host and the method isn't a read (PLX-1364).
+    ReadOnly,
+    /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// The `data` of a Parallax error (code -32000).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorData {
+    /// What went wrong.
+    pub kind: ErrorKind,
+    /// More about it, in a shape that depends on `kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<Value>,
+}
+
+/// The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it
+/// from every plxd.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct IncompatibleProtocolDetail {
+    /// The versions the client asked for.
+    pub requested: ProtocolRange,
+    /// The versions plxd speaks.
+    pub supported: ProtocolRange,
+    /// plxd's release version, so the client can say which side to update.
+    pub plxd: String,
+}
+
+impl ErrorObject {
+    /// A Parallax error of `kind`, with no detail.
+    pub fn parallax(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            code: PLX_ERROR,
+            message: message.into(),
+            data: serde_json::to_value(ErrorData { kind, detail: None }).ok(),
+        }
+    }
+
+    /// The `incompatibleProtocol` answer to an `initialize` whose range does not overlap.
+    #[must_use]
+    pub fn incompatible_protocol(detail: &IncompatibleProtocolDetail) -> Self {
+        let IncompatibleProtocolDetail {
+            requested,
+            supported,
+            plxd,
+        } = detail;
+        let message = format!(
+            "plxd {plxd} speaks protocol versions {} to {}, but the client asked for {} to {}",
+            supported.min, supported.max, requested.min, requested.max,
+        );
+        let data = ErrorData {
+            kind: ErrorKind::IncompatibleProtocol,
+            detail: serde_json::to_value(detail).ok(),
+        };
+        Self {
+            code: PLX_ERROR,
+            message,
+            data: serde_json::to_value(data).ok(),
+        }
+    }
+
+    /// The error's data, when it is a Parallax error.
+    #[must_use]
+    pub fn parallax_data(&self) -> Option<ErrorData> {
+        if self.code != PLX_ERROR {
+            return None;
+        }
+        ErrorData::deserialize(self.data.as_ref()?).ok()
+    }
+}

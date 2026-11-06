@@ -1,0 +1,168 @@
+import { GitFork } from "lucide-react";
+import { createContext, useContext, useId, useRef, useState, type RefObject } from "react";
+
+import type { RpcError } from "../preload/bridge";
+import type { AgentRun } from "../protocol/generated/protocol";
+import { forkError } from "./errors";
+import { useCatalog } from "./models";
+import { notify } from "./notifications";
+import { kindOf, logoOf } from "./providers";
+import { forkChoiceOf, type ForkChoice } from "./threads";
+import { isRunning } from "./transcript";
+import { Menu, menuItem } from "./ui";
+
+export { forkError };
+
+/**
+ * Fork's menu (0050): keep the thread's model, or pick another of the host's, which may be another
+ * provider's. Choosing one calls `onFork`, which opens the fork, and the menu shows plxd's refusal
+ * if it has one. A native popover with `id`, opened by a button naming it or by `showPopover`.
+ */
+export function ForkMenu({
+  id,
+  hostId,
+  run,
+  onFork,
+  align = "start",
+  ref,
+}: {
+  id: string;
+  hostId: string;
+  run: AgentRun;
+  onFork: (choice: ForkChoice) => Promise<RpcError | undefined>;
+  align?: "start" | "end";
+  ref?: RefObject<HTMLDivElement | null>;
+}) {
+  const catalog = useCatalog(hostId);
+  const own = useRef<HTMLDivElement>(null);
+  const menu = ref ?? own;
+  const [busy, setBusy] = useState(false);
+  // Its items render only while it's open: set before it shows, so the first takes focus, and
+  // cleared once it has hidden, so focus goes back to the button that opened it.
+  const [open, setOpen] = useState(false);
+  const instance = (p: string) => catalog.instances.find((i) => i.id === p);
+  const logo = (p: string) => {
+    const found = instance(p);
+    return found ? logoOf(found) : kindOf(p).Logo;
+  };
+  const kept = catalog.known.find((m) => m.provider === run.backend && m.id === (run.model ?? ""));
+  const keptName = kept?.name ?? run.model ?? "the current model";
+  const others = catalog.models.filter((m) => m !== kept && instance(m.provider)?.enabled);
+  const KeptLogo = logo(run.backend);
+
+  const pick = async (choice: ForkChoice) => {
+    setBusy(true);
+    const failed = await onFork(choice);
+    setBusy(false);
+    menu.current?.hidePopover();
+    if (failed)
+      notify({
+        tone: "error",
+        title: "Couldn't fork the thread",
+        body: forkError(failed, isRunning(run.status)),
+      });
+  };
+
+  return (
+    <Menu
+      ref={menu}
+      id={id}
+      label="Fork"
+      align={align}
+      className="w-64 p-1 text-body"
+      onBeforeToggle={(e) => e.newState === "open" && setOpen(true)}
+      onClose={() => setOpen(false)}
+    >
+      {open && (
+        <>
+          <p className="px-2 pt-1 pb-1.5 text-meta font-medium text-faint-foreground">
+            Fork into a new thread
+          </p>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => void pick({})}
+            className={`${menuItem} disabled:opacity-50`}
+          >
+            <KeptLogo aria-hidden />
+            <span className="truncate">Keep {keptName}</span>
+          </button>
+          {others.length > 0 && (
+            <>
+              <div className="my-1 h-px bg-border" />
+              <p className="px-2 pt-0.5 pb-1 text-meta font-medium text-faint-foreground">
+                Or pick another model
+              </p>
+              <div className="max-h-56 overflow-y-auto">
+                {others.map((m) => {
+                  const Logo = logo(m.provider);
+                  // Two providers can offer a model of the same name.
+                  const found = instance(m.provider);
+                  const where = found?.name ?? m.provider;
+                  return (
+                    <button
+                      key={`${m.provider}/${m.id}`}
+                      type="button"
+                      role="menuitem"
+                      aria-label={`${m.name} (${found?.name ?? m.provider})`}
+                      disabled={busy}
+                      onClick={() => void pick(forkChoiceOf(m, run))}
+                      className={`${menuItem} disabled:opacity-50`}
+                    >
+                      <Logo aria-hidden />
+                      <span className="truncate">{m.name}</span>
+                      <span className="ml-auto shrink-0 text-meta text-faint-foreground">
+                        {where}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </Menu>
+  );
+}
+
+/** The run a transcript's Fork buttons fork, on its host, and what forks it at a turn. */
+export interface ForkTarget {
+  hostId: string;
+  run: AgentRun;
+  onFork: (turnId: string, choice: ForkChoice) => Promise<RpcError | undefined>;
+}
+
+/** Set by a thread's chat, so its messages offer Fork; an orchestrator's chats leave it unset. */
+export const ForkContext = createContext<ForkTarget | undefined>(undefined);
+
+/**
+ * Fork in a message's hover row, beside Copy: forks at that message's turn, `turnId`, or with
+ * none, the run's prompt's turn, which plxd names by the run's id (0050).
+ */
+export function ForkButton({ turnId }: { turnId?: string }) {
+  const target = useContext(ForkContext);
+  const id = useId();
+  if (!target) return null;
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Fork from here"
+        title="Fork from here"
+        popoverTarget={id}
+        className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+      >
+        <GitFork />
+      </button>
+      <ForkMenu
+        id={id}
+        hostId={target.hostId}
+        run={target.run}
+        onFork={(choice) => target.onFork(turnId ?? target.run.id, choice)}
+        align="end"
+      />
+    </>
+  );
+}

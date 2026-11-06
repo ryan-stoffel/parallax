@@ -1,16 +1,12 @@
 //! Reviewing and accepting a run's commit (#157), against real temporary repositories.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use wisp_protocol::RunId;
+use parallax_protocol::RunId;
 
 use super::{git, git_output, init_repo, manager, rev_parse, write_sentinel_script};
 use crate::worktree::review::Target;
-use crate::worktree::{
-    AcceptError, ChangeStatus, CreatedWorktree, MAX_BLOB_BYTES, MergeHow, WorktreeError,
-    WorktreeManager,
-};
+use crate::worktree::{AcceptError, CreatedWorktree, MAX_BLOB_BYTES, MergeHow, WorktreeManager};
 
 struct Fixture {
     _repo_dir: tempfile::TempDir,
@@ -29,7 +25,10 @@ async fn fixture() -> Fixture {
     git(&repo, &["commit", "-q", "-m", "more files"]);
     let data_dir = tempfile::tempdir().unwrap();
     let mgr = manager(data_dir.path());
-    let created = mgr.create(&repo, RunId::generate(), None).await.unwrap();
+    let created = mgr
+        .create_named(&repo, RunId::generate(), None, None)
+        .await
+        .unwrap();
     Fixture {
         _repo_dir: repo_dir,
         _data_dir: data_dir,
@@ -58,115 +57,11 @@ impl Fixture {
             .sha
     }
 
-    async fn accept(&self, commit: &str) -> Result<crate::worktree::Accepted, AcceptError> {
+    async fn accept(&self, commit: &str) -> Result<crate::worktree::review::Accepted, AcceptError> {
         self.mgr
-            .accept(&self.repo, commit, "Merge wisp run: test\n")
+            .accept(&self.repo, commit, "Merge Parallax run: test\n")
             .await
     }
-}
-
-#[tokio::test]
-async fn diff_commits_lists_each_file_with_its_stats_and_diff() {
-    let f = fixture().await;
-    let base = f.created.base.clone();
-    assert_eq!(
-        f.mgr
-            .diff_commits(f.worktree(), &f.created.git_dir, &base, &base)
-            .await
-            .unwrap()
-            .files,
-        [],
-        "no commit yet: nothing to review"
-    );
-
-    std::fs::write(f.worktree().join("README.md"), "hello\nworld\n").unwrap();
-    std::fs::write(f.worktree().join("new file.md"), "# New\n").unwrap();
-    std::fs::remove_file(f.worktree().join("old.txt")).unwrap();
-    std::fs::rename(
-        f.worktree().join("notes.txt"),
-        f.worktree().join("moved.txt"),
-    )
-    .unwrap();
-    std::fs::write(f.worktree().join("logo.bin"), [0_u8, 159, 146, 150, 0]).unwrap();
-    let head = f.commit().await;
-
-    let diff = f
-        .mgr
-        .diff_commits(f.worktree(), &f.created.git_dir, &base, &head)
-        .await
-        .unwrap();
-    let summary: Vec<_> = diff
-        .files
-        .iter()
-        .map(|file| {
-            (
-                file.status.clone(),
-                file.path.as_str(),
-                file.old_path.as_deref(),
-                file.insertions,
-                file.deletions,
-                file.binary,
-            )
-        })
-        .collect();
-    assert_eq!(
-        summary,
-        [
-            (ChangeStatus::Modified, "README.md", None, 1, 0, false),
-            (ChangeStatus::Added, "logo.bin", None, 0, 0, true),
-            (
-                ChangeStatus::Renamed,
-                "moved.txt",
-                Some("notes.txt"),
-                0,
-                0,
-                false
-            ),
-            (ChangeStatus::Added, "new file.md", None, 1, 0, false),
-            (ChangeStatus::Deleted, "old.txt", None, 0, 1, false),
-        ]
-    );
-    assert_eq!(diff.stat.files, 5);
-    assert_eq!(diff.stat.insertions, 2);
-    assert_eq!(diff.stat.deletions, 1);
-    assert!(!diff.truncated);
-    let readme = diff.files[0].diff.as_deref().unwrap();
-    assert!(
-        readme.starts_with("diff --git a/README.md b/README.md\n"),
-        "{readme}"
-    );
-    assert!(readme.contains("\n+world\n"), "{readme}");
-    assert_eq!(diff.files[1].diff, None, "a binary file has no text diff");
-    assert!(
-        diff.files[4]
-            .diff
-            .as_deref()
-            .unwrap()
-            .contains("-going away")
-    );
-}
-
-#[tokio::test]
-async fn a_huge_file_diff_is_cut_short_but_keeps_its_stats() {
-    let f = fixture().await;
-    let big = "a line of text\n".repeat(40_000);
-    std::fs::write(f.worktree().join("big.txt"), &big).unwrap();
-    std::fs::write(f.worktree().join("small.txt"), "small\n").unwrap();
-    let head = f.commit().await;
-    let diff = f
-        .mgr
-        .diff_commits(f.worktree(), &f.created.git_dir, &f.created.base, &head)
-        .await
-        .unwrap();
-    let big_file = &diff.files[0];
-    assert_eq!(big_file.path, "big.txt");
-    assert_eq!(big_file.insertions, 40_000);
-    assert!(big_file.diff_truncated);
-    assert!(big_file.diff.as_ref().unwrap().len() <= 256 * 1024);
-    assert_eq!(
-        diff.files[1].diff.as_deref().map(|d| d.contains("+small")),
-        Some(true)
-    );
 }
 
 #[tokio::test]
@@ -207,118 +102,6 @@ async fn diff_caps_count_json_escapes() {
         diff.files.iter().any(|file| file.diff.is_none()),
         "past the total cap, files have no diff"
     );
-}
-
-#[tokio::test]
-async fn a_file_list_too_long_to_read_fails_the_diff_and_accept() {
-    let f = fixture().await;
-    for n in 0..100 {
-        std::fs::write(f.worktree().join(format!("file-{n:03}.txt")), "x\n").unwrap();
-    }
-    let head = f.commit().await;
-    let (worktree, git_dir, base) = (f.worktree(), &f.created.git_dir, &f.created.base);
-    let files = |diff: crate::worktree::CommitDiff| diff.files.len();
-    assert_eq!(
-        f.mgr
-            .diff_commits(worktree, git_dir, base, &head)
-            .await
-            .map(files)
-            .unwrap(),
-        100
-    );
-
-    // Every `-z` list is one line; 100 paths make it longer than this.
-    let small = f.mgr.clone().with_max_git_line_bytes(1024);
-    let too_long = |error: &WorktreeError| matches!(error, WorktreeError::GitFailed { detail, .. } if detail.contains("too long"));
-    let error = small
-        .diff_commits(worktree, git_dir, base, &head)
-        .await
-        .unwrap_err();
-    assert!(too_long(&error), "{error}");
-    let refused = small
-        .accept(&f.repo, &head, "Merge wisp run: test\n")
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(&refused, AcceptError::Git(error) if too_long(error)),
-        "{refused}"
-    );
-    assert_eq!(rev_parse(&f.repo, "HEAD"), *base);
-    assert!(!f.repo.join("file-000.txt").exists());
-}
-
-#[tokio::test]
-async fn read_blob_returns_either_side_byte_for_byte() {
-    let f = fixture().await;
-    let base = f.created.base.clone();
-    let exact: &[(&str, &[u8])] = &[
-        ("no-newline.txt", b"last line has no newline"),
-        ("crlf.txt", b"one\r\ntwo\r\n"),
-        ("binary.bin", &[0, 10, 255, 10, 10, 0, 13]),
-        ("empty.txt", b""),
-        ("trailing.txt", b"two newlines\n\n"),
-    ];
-    for (name, bytes) in exact {
-        std::fs::write(f.worktree().join(name), bytes).unwrap();
-    }
-    std::fs::write(f.worktree().join("README.md"), "changed\n").unwrap();
-    std::fs::create_dir_all(f.worktree().join("dir")).unwrap();
-    std::fs::write(f.worktree().join("dir/inner.md"), "inner\n").unwrap();
-    std::fs::write(f.worktree().join("*.md"), "literally star\n").unwrap();
-    let head = f.commit().await;
-    let (path, git_dir) = (f.worktree(), &f.created.git_dir);
-
-    for (name, bytes) in exact {
-        let blob = f
-            .mgr
-            .read_blob(path, git_dir, &head, name, MAX_BLOB_BYTES)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(blob.content.as_deref(), Some(*bytes), "{name}");
-        assert_eq!(blob.size, bytes.len() as u64, "{name}");
-    }
-    let base_readme = f
-        .mgr
-        .read_blob(path, git_dir, &base, "README.md", MAX_BLOB_BYTES)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(base_readme.content.as_deref(), Some(&b"hello\n"[..]));
-    assert_eq!(
-        f.mgr
-            .read_blob(path, git_dir, &base, "no-newline.txt", MAX_BLOB_BYTES)
-            .await
-            .unwrap(),
-        None,
-        "added files have no base side"
-    );
-    assert_eq!(
-        f.mgr
-            .read_blob(path, git_dir, &head, "dir", MAX_BLOB_BYTES)
-            .await
-            .unwrap(),
-        None,
-        "a folder is not a file"
-    );
-    let star = f
-        .mgr
-        .read_blob(path, git_dir, &head, "*.md", MAX_BLOB_BYTES)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        star.content.as_deref(),
-        Some(&b"literally star\n"[..]),
-        "paths are literal, never patterns"
-    );
-    let capped = f
-        .mgr
-        .read_blob(path, git_dir, &head, "crlf.txt", 3)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!((capped.size, capped.content), (10, None));
 }
 
 #[tokio::test]
@@ -398,37 +181,6 @@ async fn accept_fast_forwards_the_current_branch_and_keeps_unrelated_uncommitted
 }
 
 #[tokio::test]
-async fn accept_makes_a_merge_commit_when_the_branch_moved_on() {
-    let f = fixture().await;
-    std::fs::write(f.worktree().join("README.md"), "hello from the agent\n").unwrap();
-    let commit = f.commit().await;
-    std::fs::write(f.repo.join("notes.txt"), "one\ntwo\nthree\nfour\n").unwrap();
-    git(&f.repo, &["commit", "-q", "-am", "user work"]);
-    let user_head = rev_parse(&f.repo, "HEAD");
-
-    let accepted = f.accept(&commit).await.unwrap();
-    assert_eq!(accepted.how, MergeHow::Merge);
-    assert_eq!(rev_parse(&f.repo, "HEAD"), accepted.commit);
-    assert_eq!(
-        git_output(&f.repo, &["log", "-1", "--format=%P"]),
-        format!("{user_head} {commit}")
-    );
-    assert_eq!(
-        git_output(&f.repo, &["log", "-1", "--format=%s%n%an <%ae>"]),
-        "Merge wisp run: test\nTest User <test@example.com>"
-    );
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("README.md")).unwrap(),
-        "hello from the agent\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("notes.txt")).unwrap(),
-        "one\ntwo\nthree\nfour\n"
-    );
-    assert_eq!(git_output(&f.repo, &["status", "--porcelain"]), "");
-}
-
-#[tokio::test]
 async fn accept_refuses_uncommitted_changes_to_a_file_the_agent_changed() {
     let f = fixture().await;
     std::fs::write(f.worktree().join("README.md"), "hello from the agent\n").unwrap();
@@ -460,6 +212,231 @@ async fn accept_refuses_uncommitted_changes_to_a_file_the_agent_changed() {
         "mine, untracked\n"
     );
     assert_eq!(rev_parse(&f.repo, "HEAD"), head);
+}
+
+/// Plants an executable hook named `name` in `dir` that creates `<sentinels>/<name>` when run.
+fn plant_hook(dir: &Path, name: &str, sentinels: &Path) {
+    write_sentinel_script(&dir.join(name), &sentinels.join(name));
+}
+
+fn ran(sentinels: &Path) -> Vec<String> {
+    let mut ran: Vec<String> = std::fs::read_dir(sentinels)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    ran.sort();
+    ran
+}
+
+const HOOKS: &[&str] = &[
+    "post-merge",
+    "post-checkout",
+    "reference-transaction",
+    "post-rewrite",
+];
+
+#[tokio::test]
+async fn no_hook_runs_through_accept_remove_and_the_next_create() {
+    let f = fixture().await;
+    let sentinels = tempfile::tempdir().unwrap();
+    // The repository points hooks at a tracked folder, as husky does, and the agent commits hooks
+    // there. The user also has hooks of their own in .git/hooks, for when the path is unset.
+    git(&f.repo, &["config", "core.hooksPath", ".husky"]);
+    for hook in HOOKS {
+        plant_hook(&f.worktree().join(".husky"), hook, sentinels.path());
+        plant_hook(&f.repo.join(".git/hooks"), hook, sentinels.path());
+    }
+    std::fs::write(f.worktree().join("README.md"), "agent\n").unwrap();
+    let commit = f.commit().await;
+
+    let accepted = f.accept(&commit).await.unwrap();
+    assert_eq!(accepted.how, MergeHow::FastForward);
+    assert!(
+        f.repo.join(".husky/reference-transaction").exists(),
+        "merged"
+    );
+    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "accept");
+
+    // What `agent/accept` does next: remove the worktree and delete its branch, which fires
+    // `reference-transaction` when hooks are on.
+    f.mgr
+        .remove(&f.repo, &f.created.path, &f.created.branch)
+        .await
+        .unwrap();
+    assert!(!f.created.path.exists());
+    assert_eq!(
+        git_output(&f.repo, &["branch", "--list", &f.created.branch]),
+        ""
+    );
+    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "remove");
+
+    // The next `agent/start` makes a worktree, which fires `post-checkout` when hooks are on.
+    let second = f
+        .mgr
+        .create_named(&f.repo, RunId::generate(), None, None)
+        .await
+        .unwrap();
+    assert!(second.path.join(".husky/post-checkout").exists());
+    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "create");
+
+    // A merge commit takes the other path, through merge-tree and commit-tree.
+    std::fs::write(second.path.join("second.txt"), "agent\n").unwrap();
+    let second_commit = f
+        .mgr
+        .commit_all(&second.path, &second.git_dir, &f.repo, "agent")
+        .await
+        .unwrap()
+        .unwrap()
+        .sha;
+    std::fs::write(f.repo.join("notes.txt"), "user\n").unwrap();
+    git(
+        &f.repo,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-am",
+            "user",
+        ],
+    );
+    let merged = f
+        .mgr
+        .accept(&f.repo, &second_commit, "Merge Parallax run: second\n")
+        .await
+        .unwrap();
+    assert_eq!(merged.how, MergeHow::Merge);
+    f.mgr
+        .remove(&f.repo, &second.path, &second.branch)
+        .await
+        .unwrap();
+    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "merge path");
+
+    // The sentinel scripts do work: git run by hand fires them.
+    git(&f.repo, &["branch", "proof"]);
+    assert!(ran(sentinels.path()).contains(&"reference-transaction".to_owned()));
+}
+
+#[tokio::test]
+async fn accept_never_overwrites_an_ignored_file() {
+    let f = fixture().await;
+    std::fs::write(f.repo.join(".gitignore"), ".env\n").unwrap();
+    git(&f.repo, &["add", ".gitignore"]);
+    git(&f.repo, &["commit", "-q", "-m", "ignore .env"]);
+    std::fs::write(f.repo.join(".env"), "SECRET=user\n").unwrap();
+    // A worktree cut from the new HEAD, whose agent force-adds its own .env.
+    let run = f
+        .mgr
+        .create_named(&f.repo, RunId::generate(), None, None)
+        .await
+        .unwrap();
+    std::fs::write(run.path.join(".env"), "SECRET=agent\n").unwrap();
+    git(&run.path, &["add", "--force", ".env"]);
+    let commit = f
+        .mgr
+        .commit_all(&run.path, &run.git_dir, &f.repo, "agent")
+        .await
+        .unwrap()
+        .unwrap()
+        .sha;
+    let head = rev_parse(&f.repo, "HEAD");
+
+    let error = f.accept(&commit).await.unwrap_err();
+    assert!(
+        matches!(&error, AcceptError::Refused(message) if message.contains(".env")),
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join(".env")).unwrap(),
+        "SECRET=user\n"
+    );
+    assert_eq!(rev_parse(&f.repo, "HEAD"), head);
+
+    // Once the user moves their file away, the accept goes through.
+    std::fs::rename(f.repo.join(".env"), f.repo.join(".env.mine")).unwrap();
+    assert_eq!(f.accept(&commit).await.unwrap().how, MergeHow::FastForward);
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join(".env")).unwrap(),
+        "SECRET=agent\n"
+    );
+}
+
+#[tokio::test]
+async fn a_file_someone_else_writes_during_the_checkout_is_left_alone_and_named() {
+    let f = fixture().await;
+    let readme = f.repo.join("README.md");
+    // The user's filter, when git checks out b.txt, stands in for another writer: it saves the
+    // user's edit to README.md (which git has already written) and then fails.
+    let smudge = format!(
+        "sh -c 'printf \"the user'\\''s edit\\n\" > \"{}\"; exit 1'",
+        readme.display()
+    );
+    git(&f.repo, &["config", "filter.boom.clean", "cat"]);
+    git(&f.repo, &["config", "filter.boom.smudge", &smudge]);
+    git(&f.repo, &["config", "filter.boom.required", "true"]);
+    std::fs::write(f.worktree().join(".gitattributes"), "b.txt filter=boom\n").unwrap();
+    std::fs::write(f.worktree().join("README.md"), "agent\n").unwrap();
+    std::fs::write(f.worktree().join("b.txt"), "agent\n").unwrap();
+    std::fs::write(f.worktree().join("notes.txt"), "agent notes\n").unwrap();
+    let commit = f.commit().await;
+    let head = rev_parse(&f.repo, "HEAD");
+
+    let error = f.accept(&commit).await.unwrap_err();
+    let AcceptError::Refused(message) = &error else {
+        panic!("{error:?}");
+    };
+    assert!(
+        message.contains("left alone README.md"),
+        "the other writer's file is named: {message}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&readme).unwrap(),
+        "the user's edit\n",
+        "and kept"
+    );
+    assert_eq!(rev_parse(&f.repo, "HEAD"), head);
+    assert!(!f.repo.join(".gitattributes").exists());
+    assert!(!f.repo.join("b.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("notes.txt")).unwrap(),
+        "one\ntwo\nthree\n"
+    );
+    assert_eq!(
+        git_output(&f.repo, &["status", "--porcelain"]),
+        "M README.md",
+        "only the other writer's change is left"
+    );
+}
+
+#[tokio::test]
+async fn accept_makes_a_merge_commit_when_the_branch_moved_on() {
+    let f = fixture().await;
+    std::fs::write(f.worktree().join("README.md"), "hello from the agent\n").unwrap();
+    let commit = f.commit().await;
+    std::fs::write(f.repo.join("notes.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+    git(&f.repo, &["commit", "-q", "-am", "user work"]);
+    let user_head = rev_parse(&f.repo, "HEAD");
+
+    let accepted = f.accept(&commit).await.unwrap();
+    assert_eq!(accepted.how, MergeHow::Merge);
+    assert_eq!(rev_parse(&f.repo, "HEAD"), accepted.commit);
+    assert_eq!(
+        git_output(&f.repo, &["log", "-1", "--format=%P"]),
+        format!("{user_head} {commit}")
+    );
+    assert_eq!(
+        git_output(&f.repo, &["log", "-1", "--format=%s%n%an <%ae>"]),
+        "Merge Parallax run: test\nTest User <test@example.com>"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("README.md")).unwrap(),
+        "hello from the agent\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("notes.txt")).unwrap(),
+        "one\ntwo\nthree\nfour\n"
+    );
+    assert_eq!(git_output(&f.repo, &["status", "--porcelain"]), "");
 }
 
 #[tokio::test]
@@ -526,224 +503,6 @@ async fn accept_refuses_a_detached_head_or_an_operation_in_progress() {
     assert_eq!(f.accept(&commit).await.unwrap().how, MergeHow::FastForward);
 }
 
-/// Plants an executable hook named `name` in `dir` that creates `<sentinels>/<name>` when run.
-fn plant_hook(dir: &Path, name: &str, sentinels: &Path) {
-    write_sentinel_script(&dir.join(name), &sentinels.join(name));
-}
-
-fn ran(sentinels: &Path) -> Vec<String> {
-    let mut ran: Vec<String> = std::fs::read_dir(sentinels)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    ran.sort();
-    ran
-}
-
-const HOOKS: &[&str] = &[
-    "post-merge",
-    "post-checkout",
-    "reference-transaction",
-    "post-rewrite",
-];
-
-#[tokio::test]
-async fn no_hook_runs_through_accept_remove_and_the_next_create() {
-    let f = fixture().await;
-    let sentinels = tempfile::tempdir().unwrap();
-    // The repository points hooks at a tracked folder, as husky does, and the agent commits hooks
-    // there. The user also has hooks of their own in .git/hooks, for when the path is unset.
-    git(&f.repo, &["config", "core.hooksPath", ".husky"]);
-    for hook in HOOKS {
-        plant_hook(&f.worktree().join(".husky"), hook, sentinels.path());
-        plant_hook(&f.repo.join(".git/hooks"), hook, sentinels.path());
-    }
-    std::fs::write(f.worktree().join("README.md"), "agent\n").unwrap();
-    let commit = f.commit().await;
-
-    let accepted = f.accept(&commit).await.unwrap();
-    assert_eq!(accepted.how, MergeHow::FastForward);
-    assert!(
-        f.repo.join(".husky/reference-transaction").exists(),
-        "merged"
-    );
-    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "accept");
-
-    // What `agent/accept` does next: remove the worktree and delete its branch, which fires
-    // `reference-transaction` when hooks are on.
-    f.mgr
-        .remove(&f.repo, &f.created.path, &f.created.branch)
-        .await
-        .unwrap();
-    assert!(!f.created.path.exists());
-    assert_eq!(
-        git_output(&f.repo, &["branch", "--list", &f.created.branch]),
-        ""
-    );
-    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "remove");
-
-    // The next `agent/start` makes a worktree, which fires `post-checkout` when hooks are on.
-    let second = f
-        .mgr
-        .create(&f.repo, RunId::generate(), None)
-        .await
-        .unwrap();
-    assert!(second.path.join(".husky/post-checkout").exists());
-    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "create");
-
-    // A merge commit takes the other path, through merge-tree and commit-tree.
-    std::fs::write(second.path.join("second.txt"), "agent\n").unwrap();
-    let second_commit = f
-        .mgr
-        .commit_all(&second.path, &second.git_dir, &f.repo, "agent")
-        .await
-        .unwrap()
-        .unwrap()
-        .sha;
-    std::fs::write(f.repo.join("notes.txt"), "user\n").unwrap();
-    git(
-        &f.repo,
-        &[
-            "-c",
-            "core.hooksPath=/dev/null",
-            "commit",
-            "-q",
-            "-am",
-            "user",
-        ],
-    );
-    let merged = f
-        .mgr
-        .accept(&f.repo, &second_commit, "Merge wisp run: second\n")
-        .await
-        .unwrap();
-    assert_eq!(merged.how, MergeHow::Merge);
-    f.mgr
-        .remove(&f.repo, &second.path, &second.branch)
-        .await
-        .unwrap();
-    assert_eq!(ran(sentinels.path()), Vec::<String>::new(), "merge path");
-
-    // The sentinel scripts do work: git run by hand fires them.
-    git(&f.repo, &["branch", "proof"]);
-    assert!(ran(sentinels.path()).contains(&"reference-transaction".to_owned()));
-}
-
-#[tokio::test]
-async fn accept_never_overwrites_an_ignored_file() {
-    let f = fixture().await;
-    std::fs::write(f.repo.join(".gitignore"), ".env\n").unwrap();
-    git(&f.repo, &["add", ".gitignore"]);
-    git(&f.repo, &["commit", "-q", "-m", "ignore .env"]);
-    std::fs::write(f.repo.join(".env"), "SECRET=user\n").unwrap();
-    // A worktree cut from the new HEAD, whose agent force-adds its own .env.
-    let run = f
-        .mgr
-        .create(&f.repo, RunId::generate(), None)
-        .await
-        .unwrap();
-    std::fs::write(run.path.join(".env"), "SECRET=agent\n").unwrap();
-    git(&run.path, &["add", "--force", ".env"]);
-    let commit = f
-        .mgr
-        .commit_all(&run.path, &run.git_dir, &f.repo, "agent")
-        .await
-        .unwrap()
-        .unwrap()
-        .sha;
-    let head = rev_parse(&f.repo, "HEAD");
-
-    let error = f.accept(&commit).await.unwrap_err();
-    assert!(
-        matches!(&error, AcceptError::Refused(message) if message.contains(".env")),
-        "{error:?}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join(".env")).unwrap(),
-        "SECRET=user\n"
-    );
-    assert_eq!(rev_parse(&f.repo, "HEAD"), head);
-
-    // Once the user moves their file away, the accept goes through.
-    std::fs::rename(f.repo.join(".env"), f.repo.join(".env.mine")).unwrap();
-    assert_eq!(f.accept(&commit).await.unwrap().how, MergeHow::FastForward);
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join(".env")).unwrap(),
-        "SECRET=agent\n"
-    );
-}
-
-#[tokio::test]
-async fn a_failing_user_filter_leaves_the_checkout_as_it_was() {
-    let f = fixture().await;
-    // The user's own filter, as Git LFS configures one: required, and here its smudge fails, as
-    // a download would. The agent routes its files to it with .gitattributes.
-    git(&f.repo, &["config", "filter.boom.clean", "cat"]);
-    git(&f.repo, &["config", "filter.boom.smudge", "false"]);
-    git(&f.repo, &["config", "filter.boom.required", "true"]);
-    std::fs::write(f.worktree().join(".gitattributes"), "*.txt filter=boom\n").unwrap();
-    std::fs::write(f.worktree().join("a-new.txt"), "agent\n").unwrap();
-    std::fs::write(f.worktree().join("notes.txt"), "one\ntwo\nthree\nagent\n").unwrap();
-    std::fs::write(f.worktree().join("README.md"), "agent\n").unwrap();
-    std::fs::remove_file(f.worktree().join("old.txt")).unwrap();
-    let commit = f.commit().await;
-    std::fs::write(f.repo.join("mine.md"), "untouched\n").unwrap();
-    let head = rev_parse(&f.repo, "HEAD");
-    let status = git_output(&f.repo, &["status", "--porcelain"]);
-
-    let error = f.accept(&commit).await.unwrap_err();
-    assert!(
-        matches!(&error, AcceptError::Refused(message) if message.contains("put back")),
-        "{error:?}"
-    );
-    assert_eq!(rev_parse(&f.repo, "HEAD"), head);
-    assert_eq!(
-        git_output(&f.repo, &["status", "--porcelain"]),
-        status,
-        "only the user's own untracked file"
-    );
-    assert!(!f.repo.join(".gitattributes").exists());
-    assert!(!f.repo.join("a-new.txt").exists());
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("old.txt")).unwrap(),
-        "going away\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("notes.txt")).unwrap(),
-        "one\ntwo\nthree\n"
-    );
-    assert!(!f.repo.join(".git/index.lock").exists());
-}
-
-/// The agent's commit, and the changes Accept's checkout would make for it, from HEAD.
-async fn fast_forward_target(f: &Fixture) -> (String, String, Vec<(char, String)>) {
-    std::fs::write(f.worktree().join("README.md"), "agent\n").unwrap();
-    std::fs::write(f.worktree().join("new/dir/added.txt"), "agent\n")
-        .or_else(|_| {
-            std::fs::create_dir_all(f.worktree().join("new/dir"))?;
-            std::fs::write(f.worktree().join("new/dir/added.txt"), "agent\n")
-        })
-        .unwrap();
-    let commit = f.commit().await;
-    let head = rev_parse(&f.repo, "HEAD");
-    let changes = git_output(
-        &f.repo,
-        &[
-            "diff",
-            "--name-status",
-            "-z",
-            "--no-renames",
-            &head,
-            &commit,
-        ],
-    );
-    (
-        head,
-        commit,
-        crate::worktree::review::parse_changes(&changes),
-    )
-}
-
 #[tokio::test]
 async fn a_merge_blocked_by_another_gits_index_lock_puts_nothing_back() {
     let f = fixture().await;
@@ -775,108 +534,31 @@ async fn a_merge_blocked_by_another_gits_index_lock_puts_nothing_back() {
     assert_eq!(rev_parse(&f.repo, "HEAD"), head);
 }
 
-#[tokio::test]
-async fn a_failed_ref_update_puts_back_the_index_and_the_files_git_wrote() {
-    let f = fixture().await;
-    let (head, commit, changes) = fast_forward_target(&f).await;
-    // git checks out the result, index and files, then can't move the branch.
-    let ref_lock = f.repo.join(".git/refs/heads/main.lock");
-    std::fs::write(&ref_lock, "").unwrap();
-
-    let target = Target {
-        repo_root: &f.repo,
-        repo: "repo",
-        into: "main",
-        head: &head,
-        result: &commit,
-        changes: &changes,
-    };
-    let error = f.mgr.check_out(&target).await.unwrap_err();
-    assert!(
-        matches!(&error, AcceptError::Refused(message) if message.contains("nothing changed")),
-        "{error:?}"
-    );
-    std::fs::remove_file(&ref_lock).unwrap();
-    assert_eq!(rev_parse(&f.repo, "HEAD"), head);
-    assert_eq!(git_output(&f.repo, &["status", "--porcelain"]), "");
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("README.md")).unwrap(),
-        "hello\n"
-    );
-    assert!(
-        !f.repo.join("new").exists(),
-        "the added file and the folders it needed are gone"
-    );
-}
-
-#[tokio::test]
-async fn a_file_someone_else_writes_during_the_checkout_is_left_alone_and_named() {
-    let f = fixture().await;
-    let readme = f.repo.join("README.md");
-    // The user's filter, when git checks out b.txt, stands in for another writer: it saves the
-    // user's edit to README.md (which git has already written) and then fails.
-    let smudge = format!(
-        "sh -c 'printf \"the user'\\''s edit\\n\" > \"{}\"; exit 1'",
-        readme.display()
-    );
-    git(&f.repo, &["config", "filter.boom.clean", "cat"]);
-    git(&f.repo, &["config", "filter.boom.smudge", &smudge]);
-    git(&f.repo, &["config", "filter.boom.required", "true"]);
-    std::fs::write(f.worktree().join(".gitattributes"), "b.txt filter=boom\n").unwrap();
+/// The agent's commit, and the changes Accept's checkout would make for it, from HEAD.
+async fn fast_forward_target(f: &Fixture) -> (String, String, Vec<(char, String)>) {
     std::fs::write(f.worktree().join("README.md"), "agent\n").unwrap();
-    std::fs::write(f.worktree().join("b.txt"), "agent\n").unwrap();
-    std::fs::write(f.worktree().join("notes.txt"), "agent notes\n").unwrap();
+    std::fs::write(f.worktree().join("new/dir/added.txt"), "agent\n")
+        .or_else(|_| {
+            std::fs::create_dir_all(f.worktree().join("new/dir"))?;
+            std::fs::write(f.worktree().join("new/dir/added.txt"), "agent\n")
+        })
+        .unwrap();
     let commit = f.commit().await;
     let head = rev_parse(&f.repo, "HEAD");
-
-    let error = f.accept(&commit).await.unwrap_err();
-    let AcceptError::Refused(message) = &error else {
-        panic!("{error:?}");
-    };
-    assert!(
-        message.contains("left alone README.md"),
-        "the other writer's file is named: {message}"
+    let changes = git_output(
+        &f.repo,
+        &[
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            &head,
+            &commit,
+        ],
     );
-    assert_eq!(
-        std::fs::read_to_string(&readme).unwrap(),
-        "the user's edit\n",
-        "and kept"
-    );
-    assert_eq!(rev_parse(&f.repo, "HEAD"), head);
-    assert!(!f.repo.join(".gitattributes").exists());
-    assert!(!f.repo.join("b.txt").exists());
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("notes.txt")).unwrap(),
-        "one\ntwo\nthree\n"
-    );
-    assert_eq!(
-        git_output(&f.repo, &["status", "--porcelain"]),
-        "M README.md",
-        "only the other writer's change is left"
-    );
-}
-
-#[tokio::test]
-async fn a_checkout_stopped_at_the_timeout_names_the_lock_it_left() {
-    let f = fixture().await;
-    git(&f.repo, &["config", "filter.slow.clean", "cat"]);
-    git(&f.repo, &["config", "filter.slow.smudge", "sleep 10"]);
-    git(&f.repo, &["config", "filter.slow.required", "true"]);
-    std::fs::write(f.worktree().join(".gitattributes"), "*.txt filter=slow\n").unwrap();
-    std::fs::write(f.worktree().join("slow.txt"), "agent\n").unwrap();
-    let commit = f.commit().await;
-    let head = rev_parse(&f.repo, "HEAD");
-
-    let mgr = f.mgr.clone().with_merge_timeout(Duration::from_secs(1));
-    let error = mgr
-        .accept(&f.repo, &commit, "Merge wisp run: test\n")
-        .await
-        .unwrap_err();
-    let lock = f.repo.join(".git/index.lock");
-    assert!(lock.exists(), "git was killed holding the index lock");
-    assert!(
-        matches!(&error, AcceptError::Refused(message) if message.contains("index.lock") && message.contains("remove the lock")),
-        "{error:?}"
-    );
-    assert_eq!(rev_parse(&f.repo, "HEAD"), head);
+    (
+        head,
+        commit,
+        crate::worktree::review::parse_changes(&changes),
+    )
 }

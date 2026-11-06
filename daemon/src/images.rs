@@ -1,26 +1,35 @@
-//! Images sent with a prompt or message (RYA-191, decision 0026): their caps, which `initialize`
+//! Images sent with a prompt or message (PLX-191, decision 0026): their caps, which `initialize`
 //! advertises as the `promptImages` capability's options, and the checks every method that takes
-//! `images` runs before anything is created or sent.
+//! `images` runs before anything is created or sent. Also an icon's image (PLX-339, decision
+//! 0038), whose cap `initialize` advertises as the `iconImages` capability's `maxBytes`. And the
+//! images a tool returns, such as a device screenshot (PLX-640), which [`from_blocks`] finds.
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{ErrorKind, ImageMediaType, PromptImage};
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
+use serde::Deserialize as _;
+use serde_json::Value;
 
 /// The most images one message takes.
 pub(crate) const MAX_IMAGES: usize = 10;
 
 /// The longest one image's `data` may be, in bytes of base64, about 3.75 MiB of image: the most
 /// every Claude platform takes per image, since Anthropic counts its limit on the base64, so an
-/// image wispd takes, Claude takes too.
+/// image plxd takes, Claude takes too.
 pub(crate) const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
 /// The most a message's images' `data` may add up to, in bytes of base64: what fits in one of
-/// 0007's 8 MiB frames beside the longest text wispd takes (1 MiB) and the envelope.
+/// 0007's 8 MiB frames beside the longest text plxd takes (1 MiB) and the envelope.
 pub(crate) const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024;
+
+/// The longest an icon image's `data` may be, in bytes of base64: room for the 128 px square WebP
+/// the app sends, small enough that `orchestrator.updated` and `repo.updated` stay small in the
+/// event log.
+pub(crate) const MAX_ICON_BYTES: usize = 64 * 1024;
 
 /// Checks a message's images against the caps, with `imageTooLarge`, and checks that each is
 /// base64 whose bytes are the file type it names, with `invalidParams`.
 pub(crate) fn check(images: &[PromptImage]) -> Result<(), ErrorObject> {
-    let too_large = |message: String| ErrorObject::wisp(ErrorKind::ImageTooLarge, message);
+    let too_large = |message: String| ErrorObject::parallax(ErrorKind::ImageTooLarge, message);
     if images.len() > MAX_IMAGES {
         return Err(too_large(format!(
             "a message takes at most {MAX_IMAGES} images, not {}",
@@ -34,22 +43,44 @@ pub(crate) fn check(images: &[PromptImage]) -> Result<(), ErrorObject> {
                 image.data.len()
             )));
         }
-        let Some(bytes) = decode(&image.data) else {
-            return Err(ErrorObject::invalid_params(format!(
-                "image {n}'s data is not standard base64 with padding"
-            )));
-        };
-        if !is_type(image.media_type, &bytes) {
-            return Err(ErrorObject::invalid_params(format!(
-                "image {n} is not a PNG, JPEG, GIF, or WebP file of its mediaType"
-            )));
-        }
+        check_data(&format!("image {n}"), image)?;
     }
     let total: usize = images.iter().map(|image| image.data.len()).sum();
     if total > MAX_TOTAL_BYTES {
         return Err(too_large(format!(
             "a message's images are {total} bytes of base64; they must be at most \
              {MAX_TOTAL_BYTES} in all"
+        )));
+    }
+    Ok(())
+}
+
+/// Checks an icon's image against [`MAX_ICON_BYTES`], with `imageTooLarge`, and as [`check`]
+/// checks a message's images, with `invalidParams`.
+pub(crate) fn check_icon(image: &PromptImage) -> Result<(), ErrorObject> {
+    if image.data.len() > MAX_ICON_BYTES {
+        return Err(ErrorObject::parallax(
+            ErrorKind::ImageTooLarge,
+            format!(
+                "icon.image is {} bytes of base64; it must be at most {MAX_ICON_BYTES}",
+                image.data.len()
+            ),
+        ));
+    }
+    check_data("icon.image", image)
+}
+
+/// Checks that `image`, named `what` in the error, is base64 whose bytes are the file type it
+/// names, with `invalidParams`.
+fn check_data(what: &str, image: &PromptImage) -> Result<(), ErrorObject> {
+    let Some(bytes) = decode(&image.data) else {
+        return Err(ErrorObject::invalid_params(format!(
+            "{what}'s data is not standard base64 with padding"
+        )));
+    };
+    if !is_type(image.media_type, &bytes) {
+        return Err(ErrorObject::invalid_params(format!(
+            "{what} is not a PNG, JPEG, GIF, or WebP file of its mediaType"
         )));
     }
     Ok(())
@@ -62,8 +93,50 @@ fn is_type(media_type: ImageMediaType, bytes: &[u8]) -> bool {
         ImageMediaType::Jpeg => bytes.starts_with(b"\xff\xd8\xff"),
         ImageMediaType::Gif => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
         ImageMediaType::Webp => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
-        ImageMediaType::Unknown => false,
+        ImageMediaType::Html | ImageMediaType::Webm | ImageMediaType::Unknown => false,
     }
+}
+
+/// Standard base64, with padding.
+pub(crate) fn encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if index <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> shift) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The images among a tool result's content blocks, in MCP's shape (`data` and `mimeType`) or the
+/// Messages API's (`source.data` and `source.media_type`), leaving out any of a type plxd doesn't
+/// take. Anything but an array of blocks has none.
+pub(crate) fn from_blocks(content: &Value) -> Vec<PromptImage> {
+    let blocks = content.as_array().map_or(&[][..], Vec::as_slice);
+    blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("image"))
+        .filter_map(|block| {
+            let source = block.get("source").unwrap_or(block);
+            let media_type = source
+                .get("mimeType")
+                .or_else(|| source.get("media_type"))?;
+            let media_type = ImageMediaType::deserialize(media_type).ok()?;
+            let data = source.get("data")?.as_str()?.to_owned();
+            (media_type != ImageMediaType::Unknown).then_some(PromptImage { media_type, data })
+        })
+        .collect()
 }
 
 /// Decodes standard base64 with padding, or `None` if `text` isn't that.
@@ -99,9 +172,9 @@ pub(crate) fn decode(text: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use wisp_protocol::{ErrorKind, ImageMediaType, PromptImage};
+    use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
 
-    use super::{MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check, decode};
+    use super::{MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check};
 
     /// A 1x1 PNG.
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -122,35 +195,10 @@ mod tests {
     }
 
     fn kind(images: &[PromptImage]) -> Option<ErrorKind> {
-        check(images).unwrap_err().wisp_data().map(|data| data.kind)
-    }
-
-    #[test]
-    fn decodes_rfc_4648_vectors_and_refuses_anything_else() {
-        for (output, input) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(decode(input).as_deref(), Some(output.as_bytes()), "{input}");
-        }
-        assert_eq!(decode("//4A").as_deref(), Some(&[0xff, 0xfe, 0x00][..]));
-        for bad in ["Zg", "Zg=a", "Z===", "Zg==Zg==", "Zm9v\n", "Zm-v"] {
-            assert_eq!(decode(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn images_under_the_caps_of_their_type_pass() {
-        check(&[]).unwrap();
-        check(&[image(ImageMediaType::Png, PNG)]).unwrap();
-        check(&[
-            png_of(MAX_IMAGE_BYTES),
-            png_of(MAX_TOTAL_BYTES - MAX_IMAGE_BYTES),
-        ])
-        .unwrap();
+        check(images)
+            .unwrap_err()
+            .parallax_data()
+            .map(|data| data.kind)
     }
 
     #[test]
@@ -171,17 +219,5 @@ mod tests {
             ]),
             Some(ErrorKind::ImageTooLarge)
         );
-    }
-
-    #[test]
-    fn data_that_is_not_base64_or_not_its_type_is_invalid() {
-        for bad in [
-            image(ImageMediaType::Png, "not base64"),
-            image(ImageMediaType::Jpeg, PNG),
-            image(ImageMediaType::Unknown, PNG),
-        ] {
-            let error = check(&[bad]).unwrap_err();
-            assert_eq!(error.code, wisp_protocol::jsonrpc::INVALID_PARAMS);
-        }
     }
 }

@@ -1,0 +1,1335 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+
+use rusqlite::{Connection, TransactionBehavior, params};
+
+use crate::error::StoreError;
+use crate::timestamp;
+
+struct Migration {
+    version: i64,
+    sql: &'static str,
+}
+
+/// Versioned migrations, applied in order. Add new tables here by appending
+/// a migration; never edit one that has already shipped.
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: "CREATE TABLE projects (
+            id TEXT NOT NULL PRIMARY KEY,
+            name TEXT NOT NULL,
+            repo_path TEXT NOT NULL,
+            host TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );",
+    },
+    // A plxd's store only holds projects on its own host, so the column
+    // had nothing to say (decision record 0009).
+    Migration {
+        version: 2,
+        sql: "ALTER TABLE projects DROP COLUMN host;",
+    },
+    // A key account's record: metadata only. The API key itself lives in the Keychain and never
+    // reaches this database (#117); `masked_key` is the display form, such as `sk-ant-...abcd`.
+    Migration {
+        version: 3,
+        sql: "CREATE TABLE accounts (
+            id TEXT NOT NULL PRIMARY KEY,
+            provider TEXT NOT NULL,
+            label TEXT NOT NULL,
+            masked_key TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );",
+    },
+    // Per-account usage (#120): append-only token/cost deltas, one replaced snapshot per account
+    // limit window, and one replaced running total per session and model, so a resumed session
+    // can pass its baseline (#113's `Resume::usage_totals`). `model` uses `''`, not `NULL`, as the
+    // "no model reported" sentinel: SQLite treats two `NULL`s as distinct, which would stop
+    // `session_usage_totals` from replacing an existing row for the unnamed model.
+    Migration {
+        version: 4,
+        sql: "CREATE TABLE usage_deltas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            cache_read_tokens INTEGER NOT NULL,
+            cache_write_tokens INTEGER NOT NULL,
+            cost_usd_micros INTEGER,
+            at TEXT NOT NULL
+        );
+        CREATE INDEX usage_deltas_account_at ON usage_deltas (account_id, at);
+
+        CREATE TABLE limit_snapshots (
+            account_id TEXT NOT NULL,
+            window TEXT NOT NULL,
+            used_percent REAL,
+            resets_at TEXT,
+            captured_at TEXT NOT NULL,
+            PRIMARY KEY (account_id, window)
+        );
+
+        CREATE TABLE session_usage_totals (
+            session_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            cache_read_tokens INTEGER NOT NULL,
+            cache_write_tokens INTEGER NOT NULL,
+            cost_usd_micros INTEGER,
+            PRIMARY KEY (session_id, model)
+        );",
+    },
+    // A run's worktree (#154): one row per run, keyed by the run id, so startup garbage
+    // collection can tell a worktree the store still knows about from an orphan left behind by
+    // a crash. `base` is the concrete commit the worktree was created from, resolved once at
+    // creation time so a later diff or commit is never against a base that moved.
+    Migration {
+        version: 5,
+        sql: "CREATE TABLE worktrees (
+            id TEXT NOT NULL PRIMARY KEY,
+            repo_path TEXT NOT NULL,
+            path TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            base TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX worktrees_repo_path ON worktrees (repo_path);",
+    },
+    // Per-host role defaults for account routing (#119): the account a task's role falls back to
+    // when it doesn't name one outright. `account_kind` is 'subscription' or 'key'; exactly one of
+    // `backend` (a backend's name, such as 'claude') and `key_account_id` (a row in `accounts`,
+    // though not enforced by a foreign key, since a key account can be removed after being set as
+    // a default) is set, matching `account_kind`.
+    Migration {
+        version: 6,
+        sql: "CREATE TABLE role_defaults (
+            role TEXT NOT NULL PRIMARY KEY,
+            account_kind TEXT NOT NULL,
+            backend TEXT,
+            key_account_id TEXT,
+            updated_at TEXT NOT NULL
+        );",
+    },
+    // Agent runs and the persisted event log (#156, decision 0014).
+    //
+    // - `worktrees.git_dir`: the linked worktree's private git directory, resolved once at
+    //   creation (#166), so a restart never has to trust the worktree's own `.git` file again.
+    // - `runs`: one row per `agent/start`, keyed by its client-generated run id. The params that
+    //   make a retry idempotent (`project_id`, `prompt`, `requested_account`, `policy`) never
+    //   change; the rest is the run's latest state. `requested_account` is the JSON of the
+    //   account the request named, or NULL for the worker role's default.
+    // - `log_meta` and `events`: 0007's event log, numbered by the daemon-wide `seq`, so the
+    //   editor can replay after a reconnect or a restart. `payload` is the event's JSON;
+    //   `run_id` is set for an agent run's events, for `agent/events`.
+    Migration {
+        version: 7,
+        sql: "ALTER TABLE worktrees ADD COLUMN git_dir TEXT NOT NULL DEFAULT '';
+
+        CREATE TABLE runs (
+            id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            requested_account TEXT,
+            policy TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            session_id TEXT,
+            error TEXT,
+            commit_sha TEXT,
+            files_changed INTEGER,
+            insertions INTEGER,
+            deletions INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX runs_project ON runs (project_id, created_at);
+
+        CREATE TABLE log_meta (
+            id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+            log_id TEXT NOT NULL
+        );
+
+        CREATE TABLE events (
+            seq INTEGER NOT NULL PRIMARY KEY,
+            time TEXT NOT NULL,
+            project_id TEXT,
+            run_id TEXT,
+            kind TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX events_run ON events (run_id, seq);",
+    },
+    // Accepting a run (#157): `agent/accept`'s client-generated id, for its idempotency, and what
+    // the merge did to the project's repository (`merge_how` is `fastForward`, `merge`, or
+    // `upToDate`). All NULL until the run is accepted.
+    Migration {
+        version: 8,
+        sql: "ALTER TABLE runs ADD COLUMN accept_id TEXT;
+        ALTER TABLE runs ADD COLUMN merge_commit TEXT;
+        ALTER TABLE runs ADD COLUMN merge_into TEXT;
+        ALTER TABLE runs ADD COLUMN merge_how TEXT;",
+    },
+    // Normal threads (#110, decision 0017).
+    //
+    // - `repos`: lightweight repo entries that normal threads run in, one per canonical path.
+    //   `scratch` marks plxd's own entry for threads with no repo.
+    // - `threads`: one row per normal thread, keyed by its run's id. The run's `project_id`
+    //   holds the same `repo_id`, so its events and `agent/list` use the repo entry's id.
+    Migration {
+        version: 9,
+        sql: "CREATE TABLE repos (
+            id TEXT NOT NULL PRIMARY KEY,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL UNIQUE,
+            scratch INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE threads (
+            id TEXT NOT NULL PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            archived INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX threads_repo ON threads (repo_id, created_at);",
+    },
+    // Turn idempotency across a restart (#190): `Actor::turns` kept sent turns only in memory, so
+    // a plxd restart lost `agent/send`'s idempotency (0014) for a run's `turnId`s, and a retried
+    // `agent/send` could resume a session twice with the same message. No foreign key to `runs`,
+    // matching this database's existing style (`role_defaults`, `events`), and no retention of its
+    // own yet: a row is small (an id and the sent text) and nothing prunes a finished run's rows
+    // at all today (0016, #207), so this waits on the same removal feature `events` does rather
+    // than growing its own ad hoc rule (#190 review non-blocking note). `Store::delete_thread`
+    // (#110) also deletes a deleted thread's `turns` rows, since this table has no cascade.
+    Migration {
+        version: 10,
+        sql: "CREATE TABLE turns (
+            run_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, turn_id)
+        );",
+    },
+    // The coordinator thread that started a run through its Parallax tools (#195, decision 0019), or
+    // NULL for a run a client started itself. Part of `agent/start`'s idempotent params.
+    Migration {
+        version: 11,
+        sql: "ALTER TABLE runs ADD COLUMN coordinator_thread TEXT;",
+    },
+    // Whether a worktree's base was resolved from a dirty `HEAD` (#257): its repository's tracked
+    // files had uncommitted changes not included in the worktree. A caller shows the user a
+    // notice; it never blocks creating the worktree. Always 0 for an explicit base, and for a row
+    // written before this column existed.
+    Migration {
+        version: 12,
+        sql: "ALTER TABLE worktrees ADD COLUMN base_dirty INTEGER NOT NULL DEFAULT 0;",
+    },
+    // The model, effort, and permission a run asked for (PLX-97), each NULL for the CLI's
+    // default. Part of `agent/start`'s idempotent params, and passed again when a run resumes.
+    Migration {
+        version: 13,
+        sql: "ALTER TABLE runs ADD COLUMN model TEXT;
+        ALTER TABLE runs ADD COLUMN effort TEXT;
+        ALTER TABLE runs ADD COLUMN permission TEXT;",
+    },
+    // A coordinator's wake-up count and pause (PLX-178, decision 0025), so a restart neither
+    // resets the cap nor lifts a pause. No row means none in a row and not paused. No foreign
+    // key, like `turns`.
+    Migration {
+        version: 14,
+        sql: "CREATE TABLE wakes (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            in_a_row INTEGER NOT NULL,
+            paused INTEGER NOT NULL
+        );",
+    },
+    // Images sent with a run's messages (PLX-191, decision 0026), which `turnStarted` names by id
+    // and `agent/image` serves: kept out of `events`, since one can be megabytes. `data` is the
+    // base64 the client sent. No foreign key, like `turns`, so `Store::delete_thread` deletes a
+    // thread's rows, and they wait on #207 otherwise, as its events do.
+    Migration {
+        version: 15,
+        sql: "CREATE TABLE images (
+            run_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, id)
+        );",
+    },
+    // A project's icon (PLX-227, decision 0032), as the client sent it: a Lucide icon's name and
+    // an optional palette key. A NULL `icon_name` means no icon, so existing projects have none.
+    Migration {
+        version: 16,
+        sql: "ALTER TABLE projects ADD COLUMN icon_name TEXT;
+        ALTER TABLE projects ADD COLUMN icon_color TEXT;",
+    },
+    // Whether a run forwards its CLI's permission requests to the client (PLX-222, decision
+    // 0031), which only a client that answers them asks for. 0 for every run before, which keeps
+    // denying what would prompt. Part of the start methods' idempotent params, and passed again
+    // when a run resumes.
+    Migration {
+        version: 17,
+        sql: "ALTER TABLE runs ADD COLUMN approvals INTEGER NOT NULL DEFAULT 0;",
+    },
+    // Whether a thread runs in its repository's own checkout instead of a worktree of its own,
+    // as the Workspace menu's "Current checkout" asks. 0 for every run before, which all got a
+    // worktree.
+    Migration {
+        version: 18,
+        sql: "ALTER TABLE runs ADD COLUMN checkout INTEGER NOT NULL DEFAULT 0;",
+    },
+    // What the sidebar needs to show which threads need the user (PLX-270, decision 0033): when
+    // the user last saw each thread, until when it is snoozed, and each repo entry's icon in
+    // 0032's shape. Existing threads count as seen now, so an upgrade doesn't mark every old
+    // thread as new.
+    Migration {
+        version: 19,
+        sql: "ALTER TABLE threads ADD COLUMN seen_at TEXT;
+        ALTER TABLE threads ADD COLUMN snoozed_until TEXT;
+        UPDATE threads SET seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+        ALTER TABLE repos ADD COLUMN icon_name TEXT;
+        ALTER TABLE repos ADD COLUMN icon_color TEXT;",
+    },
+    // A run's context window in tokens and whether it runs in fast mode, each NULL for the CLI's
+    // default. Kept and passed again, as `model` is.
+    Migration {
+        version: 20,
+        sql: "ALTER TABLE runs ADD COLUMN context_window INTEGER;
+        ALTER TABLE runs ADD COLUMN fast INTEGER;",
+    },
+    // The web URLs of the pull requests linked to a run (PLX-318), oldest first, one per line.
+    // Empty for every run before, which had none linked.
+    Migration {
+        version: 21,
+        sql: "ALTER TABLE runs ADD COLUMN pull_requests TEXT NOT NULL DEFAULT '';",
+    },
+    // An uploaded image as a project's or repo entry's icon (PLX-339, decision 0038): its media
+    // type and base64 data, as the client sent them. A NULL type means no image, so existing
+    // icons keep their glyph.
+    Migration {
+        version: 22,
+        sql: "ALTER TABLE projects ADD COLUMN icon_image_type TEXT;
+        ALTER TABLE projects ADD COLUMN icon_image_data TEXT;
+        ALTER TABLE repos ADD COLUMN icon_image_type TEXT;
+        ALTER TABLE repos ADD COLUMN icon_image_data TEXT;",
+    },
+    // Thread lineage (PLX-369, decision 0041). `runs.parent` is the run that launched a run, on
+    // `runs` because a coordinator's subagents have no thread row: existing runs a coordinator
+    // started get its thread as their parent, except the coordinator itself, which carries its
+    // own id (0024). A thread's fork origin (a run and a turn), title, and settled flag go on
+    // `threads`. No foreign keys, like the rest: deleting a run clears these on its children.
+    Migration {
+        version: 23,
+        sql: "ALTER TABLE runs ADD COLUMN parent TEXT;
+        UPDATE runs SET parent = coordinator_thread
+            WHERE coordinator_thread IS NOT NULL AND coordinator_thread != id;
+        ALTER TABLE threads ADD COLUMN forked_from_run TEXT;
+        ALTER TABLE threads ADD COLUMN forked_from_turn TEXT;
+        ALTER TABLE threads ADD COLUMN title TEXT;
+        ALTER TABLE threads ADD COLUMN settled INTEGER NOT NULL DEFAULT 0;",
+    },
+    // Auto-resume after a usage limit (PLX-371, decision 0049): a run's override (NULL for the
+    // host's setting), when its stored timer fires (NULL when it doesn't wait), and how many
+    // resumes in a row found no reset time, for the backoff. `host_settings` holds the host's
+    // settings by key; no row means the default.
+    Migration {
+        version: 24,
+        sql: "ALTER TABLE runs ADD COLUMN auto_resume INTEGER;
+        ALTER TABLE runs ADD COLUMN resume_at TEXT;
+        ALTER TABLE runs ADD COLUMN resume_tries INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE host_settings (
+            key TEXT NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    },
+    // A Project's inbox (PLX-401, decision 0043): what its children did, built from the events
+    // plxd handles. `run_id` is the run an item is about, `kind` one of 0043's kinds, and
+    // `seen_at` NULL until a client marks it seen. No foreign keys, like the rest:
+    // `Store::delete_project` deletes a project's items.
+    Migration {
+        version: 25,
+        sql: "CREATE TABLE inbox (
+            id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            seen_at TEXT
+        );
+        CREATE INDEX inbox_project ON inbox (project_id, created_at);",
+    },
+    // A project's permission mode (PLX-394, decision 0042), `auto` or `bypass`, which its
+    // coordinator and every run in it start in. Existing projects get `auto`.
+    Migration {
+        version: 26,
+        sql: "ALTER TABLE projects ADD COLUMN permission TEXT NOT NULL DEFAULT 'auto';",
+    },
+    // A run's waiting messages (PLX-370, decision 0048), so a restart keeps them: `position`
+    // orders them, first to be sent first, and `extra` is the daemon's JSON for what else goes
+    // with the message (its images, run options, and account). No foreign key, like `turns`.
+    Migration {
+        version: 27,
+        sql: "CREATE TABLE queued (
+            run_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            extra TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, turn_id)
+        );",
+    },
+    // Whether a child wakes its parent when a CLI process of its ends (PLX-380, decisions 0025
+    // and 0041): `thread_launch`'s `notify`. Existing runs keep what they did: a coordinator's
+    // subagents woke it, and a thread's children didn't wake it.
+    Migration {
+        version: 28,
+        sql: "ALTER TABLE runs ADD COLUMN notify_parent INTEGER NOT NULL DEFAULT 0;
+        UPDATE runs SET notify_parent = 1
+            WHERE parent IS NOT NULL AND coordinator_thread IS NOT NULL;",
+    },
+    // A project's base branch and integration branch (PLX-409, decision 0045), NULL until set or
+    // cut, and whether a run in a project is an exploration child, which never lands.
+    Migration {
+        version: 29,
+        sql: "ALTER TABLE projects ADD COLUMN base_branch TEXT;
+        ALTER TABLE projects ADD COLUMN integration_branch TEXT;
+        ALTER TABLE runs ADD COLUMN explore INTEGER NOT NULL DEFAULT 0;",
+    },
+    // A Project's children's questions (PLX-402, decision 0043): what a child asked with `ask`
+    // and the assumption it went on with, its status (`open`, `escalated`, `decided`, or
+    // `answered`), and the answer once there is one. `Store::delete_project` deletes a project's
+    // questions.
+    Migration {
+        version: 30,
+        sql: "CREATE TABLE questions (
+            id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            question TEXT NOT NULL,
+            assumption TEXT NOT NULL,
+            status TEXT NOT NULL,
+            answer TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX questions_project ON questions (project_id, created_at);",
+    },
+    // A project's autonomy level (PLX-403, decision 0043), `ask`, `routine`, or `full`: who
+    // answers its children's questions. Existing projects get `routine`.
+    Migration {
+        version: 31,
+        sql: "ALTER TABLE projects ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'routine';",
+    },
+    // The coordinator whose wake-up turn carried a question to its CLI (PLX-469), NULL until one
+    // did, so a restart's catch-up names only questions that coordinator hasn't seen.
+    Migration {
+        version: 32,
+        sql: "ALTER TABLE questions ADD COLUMN delivered_to TEXT;",
+    },
+    // A Project's landing queue (PLX-410, decision 0045): one row per child the coordinator
+    // queued with `land`, its status (`waiting`, `queued`, `sentBack`, `landed`, or `needsYou`),
+    // how many times landing it conflicted, and when it was last queued, which orders the queue.
+    // And whether a project lands its children without waiting for the user's approval.
+    Migration {
+        version: 33,
+        sql: "CREATE TABLE landings (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            conflicts INTEGER NOT NULL DEFAULT 0,
+            queued_at TEXT NOT NULL
+        );
+        CREATE INDEX landings_project ON landings (project_id, status, queued_at);
+        ALTER TABLE projects ADD COLUMN auto_land INTEGER NOT NULL DEFAULT 0;",
+    },
+    // Placing a Project's children (PLX-413, decision 0046): how many may run at once, whether
+    // they may use an API key, and the children waiting to be placed, oldest first. `prompt` is
+    // a child's first message with its attached threads, and `extra` the daemon's JSON for its
+    // images, threads, and requested account. `Store::delete_project` deletes a project's rows.
+    Migration {
+        version: 34,
+        sql: "ALTER TABLE projects ADD COLUMN max_children INTEGER NOT NULL DEFAULT 10;
+        ALTER TABLE projects ADD COLUMN allow_api_keys INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE placements (
+            run_id TEXT NOT NULL PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            extra TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );",
+    },
+    // A Project's checks (PLX-411, decision 0045): the command the user confirmed, which runs
+    // after each landing, and the one its coordinator proposed, which never runs. NULL is none.
+    // And how many times a child's landing failed the checks since it was queued.
+    Migration {
+        version: 35,
+        sql: "ALTER TABLE projects ADD COLUMN checks TEXT;
+        ALTER TABLE projects ADD COLUMN proposed_checks TEXT;
+        ALTER TABLE landings ADD COLUMN failures INTEGER NOT NULL DEFAULT 0;",
+    },
+    // `thread/search`'s full-text index (PLX-487): a run's messages, never tool calls or their
+    // output. The triggers on `runs` and `turns` index a prompt and each sent turn as they're
+    // stored, and `Store::index_run_text` adds the agent's `text` replies when a turn ends. A
+    // reply row's `seq` is the newest event it covers, where the next one starts; a message's
+    // row keeps the run's current one. `thread_text_fts` indexes `text` without a copy of it,
+    // the `thread_text` triggers keep it in step, and `delete_run_rows` deletes a run's rows.
+    // Existing runs get their prompt, their turns, and one row of all their replies.
+    Migration {
+        version: 36,
+        sql: "CREATE TABLE thread_text (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE INDEX thread_text_run ON thread_text (run_id, seq);
+        CREATE VIRTUAL TABLE thread_text_fts USING fts5(
+            text, content = 'thread_text', content_rowid = 'id',
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER thread_text_insert AFTER INSERT ON thread_text BEGIN
+            INSERT INTO thread_text_fts (rowid, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER thread_text_delete AFTER DELETE ON thread_text BEGIN
+            INSERT INTO thread_text_fts (thread_text_fts, rowid, text)
+            VALUES ('delete', old.id, old.text);
+        END;
+        INSERT INTO thread_text (run_id, seq, text) SELECT id, 0, prompt FROM runs;
+        INSERT INTO thread_text (run_id, seq, text) SELECT run_id, 0, text FROM turns;
+        INSERT INTO thread_text (run_id, seq, text)
+        SELECT events.run_id, MAX(events.seq),
+            group_concat(json_extract(item.value, '$.text'), char(10))
+        FROM events, json_each(events.payload, '$.items') AS item
+        WHERE events.kind = 'agent.output' AND events.run_id IS NOT NULL
+            AND json_extract(item.value, '$.kind') = 'text'
+            AND json_extract(item.value, '$.text') IS NOT NULL
+        GROUP BY events.run_id;
+        CREATE TRIGGER thread_text_prompt AFTER INSERT ON runs BEGIN
+            INSERT INTO thread_text (run_id, seq, text) VALUES (new.id, 0, new.prompt);
+        END;
+        CREATE TRIGGER thread_text_turn AFTER INSERT ON turns BEGIN
+            INSERT INTO thread_text (run_id, seq, text)
+            VALUES (new.run_id, COALESCE((SELECT MAX(seq) FROM thread_text
+                WHERE run_id = new.run_id), 0), new.text);
+        END;",
+    },
+    // The newest source `seq` an attached thread's summary already covered for a target run
+    // (0052, PLX-486). The next attach sends only what was logged after it. Rows go with either
+    // run. No foreign key, like `turns`.
+    Migration {
+        version: 37,
+        sql: "CREATE TABLE attached_seen (
+            target_run TEXT NOT NULL,
+            source_run TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (target_run, source_run)
+        );
+        CREATE INDEX attached_seen_source ON attached_seen (source_run);",
+    },
+    // Command receipts (0052, PLX-482): a client-chosen commandId claims a row before a listed
+    // method runs. `result` stays null until the command ends; `effect_id` is for PLX-483.
+    Migration {
+        version: 38,
+        sql: "CREATE TABLE command_receipts (
+            command_id TEXT NOT NULL PRIMARY KEY,
+            method TEXT NOT NULL,
+            params_hash TEXT NOT NULL,
+            run_id TEXT,
+            effect_id INTEGER,
+            result TEXT,
+            created_at TEXT NOT NULL,
+            finished_at TEXT
+        );
+        CREATE INDEX command_receipts_run ON command_receipts (run_id, created_at);
+        CREATE INDEX command_receipts_age ON command_receipts (created_at);",
+    },
+    // The dispatcher's core (0059, PLX-643). `events` names the thread it belongs to
+    // `thread_id` (a run's row, until phase 2 splits threads from runs) and its kind `type`, and
+    // gains the command that staged it and, for phase 2, the run (turn) and node. `events_run`
+    // now indexes `(thread_id, seq)`. `orchestration_receipts` holds a command's outcome,
+    // written with its change; 0052's `command_receipts` stays until its last method moves.
+    // `effects` is the outbox the effect worker runs, one open row per thread at a time, oldest
+    // first: `effects_open` indexes the open rows by `(thread_id, rowid)`, as every index ends
+    // with the rowid.
+    // `projection_meta` is for phase 2's projections.
+    Migration {
+        version: 39,
+        sql: "ALTER TABLE events RENAME COLUMN run_id TO thread_id;
+        ALTER TABLE events RENAME COLUMN kind TO type;
+        ALTER TABLE events ADD COLUMN command_id TEXT;
+        ALTER TABLE events ADD COLUMN run_id TEXT;
+        ALTER TABLE events ADD COLUMN node_id TEXT;
+        CREATE INDEX events_command ON events (command_id, seq) WHERE command_id IS NOT NULL;
+        CREATE TABLE orchestration_receipts (
+            command_id TEXT NOT NULL PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_seq INTEGER,
+            error TEXT,
+            at TEXT NOT NULL
+        );
+        CREATE INDEX orchestration_receipts_at ON orchestration_receipts (at);
+        CREATE TABLE effects (
+            id TEXT NOT NULL PRIMARY KEY,
+            command_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            available_at TEXT NOT NULL,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+        CREATE INDEX effects_open ON effects (thread_id) WHERE status IN ('pending', 'running');
+        CREATE TABLE projection_meta (
+            name TEXT NOT NULL PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            last_seq INTEGER NOT NULL
+        );",
+    },
+    // 0063: scheduled tasks and pull request watches, each as indexed columns plus a JSON
+    // payload the daemon owns. `scheduled_tasks_due` indexes the tasks with a next run, for the
+    // one timer. A watch goes with its run.
+    Migration {
+        version: 40,
+        sql: "CREATE TABLE scheduled_tasks (
+            id TEXT NOT NULL PRIMARY KEY,
+            next_run_at TEXT,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX scheduled_tasks_due ON scheduled_tasks (next_run_at)
+            WHERE next_run_at IS NOT NULL;
+        CREATE TABLE pr_watches (
+            run_id TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (run_id, url)
+        );",
+    },
+    // The thread graph (0059 phase 2, PLX-644): projections of each thread's events, written in
+    // the event's own transaction. `thread_runs` is T3's Run, one counted turn (`runs` is still
+    // the thread's row); a queued one has a `position` and no `ordinal` until it starts.
+    // `run_attempts` are its provider executions, `nodes` its execution tree (the root turn,
+    // tools, approvals, user-input requests, subagents), and `runtime_requests` the approvals a
+    // provider waits on. Each keeps its filtered columns and a `payload` of the daemon's JSON,
+    // keyed by its thread first: a fork copies its source's turns with their ids.
+    // `thread_runs_open` keeps the fold's read of a thread's open runs, once per batch, from
+    // scanning a long thread's finished ones. `graph_imports` lists the threads whose stored
+    // events are folded in already.
+    Migration {
+        version: 41,
+        sql: "CREATE TABLE thread_runs (
+            id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            ordinal INTEGER,
+            status TEXT NOT NULL,
+            position INTEGER,
+            first_seq INTEGER,
+            attempt INTEGER,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (thread_id, id)
+        );
+        CREATE INDEX thread_runs_thread ON thread_runs (thread_id, ordinal);
+        CREATE INDEX thread_runs_open ON thread_runs (thread_id, ordinal)
+            WHERE status IN ('starting', 'running', 'waiting');
+        CREATE TABLE run_attempts (
+            thread_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            status TEXT NOT NULL,
+            PRIMARY KEY (thread_id, run_id, ordinal)
+        );
+        CREATE TABLE nodes (
+            thread_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            run_id TEXT,
+            parent_id TEXT,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (thread_id, id)
+        );
+        CREATE TABLE runtime_requests (
+            thread_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            node_id TEXT,
+            status TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (thread_id, id)
+        );
+        CREATE INDEX runtime_requests_pending ON runtime_requests (thread_id)
+            WHERE status = 'pending';
+        CREATE TABLE graph_imports (thread_id TEXT NOT NULL PRIMARY KEY);",
+    },
+    // Delegation (0063, PLX-648). `thread_lineage` is a thread that works in another's
+    // workspace (`workspace_of`), and with `relationship` `subagent`, a task that thread
+    // delegated, with its completion wake and delivery in `payload`. `context_transfers` holds
+    // T3's `merge_back` transfers: the source's log through `seq`, for the target's next
+    // message, `pending` until that message carries it.
+    Migration {
+        version: 42,
+        sql: "CREATE TABLE thread_lineage (
+            thread_id TEXT NOT NULL PRIMARY KEY,
+            relationship TEXT,
+            workspace_of TEXT,
+            payload TEXT NOT NULL
+        );
+        CREATE TABLE context_transfers (
+            id TEXT NOT NULL PRIMARY KEY,
+            type TEXT NOT NULL,
+            source TEXT NOT NULL,
+            target TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX context_transfers_pending ON context_transfers (target)
+            WHERE status = 'pending';",
+    },
+    // `request_secret` (0063, PLX-648): each one-time secret ref still unused, with the thread
+    // that asked for it and when it expires. The value is in the host's keystore under the ref's
+    // id, never here. A store that ran 40 to 42, which kept webhook secrets in task rows, gets
+    // `wipe_freed_pages`, so plxd's next start rebuilds it once: a task deleted then left its
+    // secret in a freed page. `migrating_from` is the version the store had (see `run`).
+    Migration {
+        version: 43,
+        sql: "CREATE TABLE secret_refs (
+            id TEXT NOT NULL PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX secret_refs_expiry ON secret_refs (expires_at);
+        INSERT INTO host_settings (key, value)
+            SELECT 'wipe_freed_pages', 'true' FROM migrating_from WHERE version BETWEEN 40 AND 42;",
+    },
+    // Spaces (0069, PLX-732): a repo entry the user made for chats with no repository, backed by
+    // a repository plxd made.
+    Migration {
+        version: 44,
+        sql: "ALTER TABLE repos ADD COLUMN space INTEGER NOT NULL DEFAULT 0;",
+    },
+    // When a thread was last unarchived (PLX-795), so the merge sweep doesn't archive it again.
+    Migration {
+        version: 45,
+        sql: "ALTER TABLE threads ADD COLUMN unarchived_at TEXT;",
+    },
+    // Areas (PLX-789): named, colored lists of top-level threads and Projects, in creation order,
+    // each member in the order it was added. A member's row goes with its area, thread, or Project.
+    // `pinned` keeps a thread at the top of the sidebar.
+    Migration {
+        version: 46,
+        sql: "ALTER TABLE threads ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE areas (
+            id TEXT NOT NULL PRIMARY KEY,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE area_threads (
+            area_id TEXT NOT NULL REFERENCES areas (id) ON DELETE CASCADE,
+            thread_id TEXT NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (area_id, thread_id)
+        );
+        CREATE INDEX area_threads_thread ON area_threads (thread_id);
+        CREATE TABLE area_projects (
+            area_id TEXT NOT NULL REFERENCES areas (id) ON DELETE CASCADE,
+            project_id TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (area_id, project_id)
+        );
+        CREATE INDEX area_projects_project ON area_projects (project_id);",
+    },
+    // Repo entries and Spaces as area members (PLX-852), each listing every thread in it. A row
+    // goes with its area or repo entry.
+    Migration {
+        version: 47,
+        sql: "CREATE TABLE area_repos (
+            area_id TEXT NOT NULL REFERENCES areas (id) ON DELETE CASCADE,
+            repo_id TEXT NOT NULL REFERENCES repos (id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (area_id, repo_id)
+        );
+        CREATE INDEX area_repos_repo ON area_repos (repo_id);",
+    },
+    // The Connect device a Project's children run on (0057, PLX-909): its Tailscale node ID.
+    // NULL is the plxd that has the Project.
+    Migration {
+        version: 48,
+        sql: "ALTER TABLE projects ADD COLUMN computer TEXT;",
+    },
+    // A Project's status board as items (0081, PLX-940), which plxd renders to `notes.md` and
+    // `archived.md`. `links` is plxd's JSON. Each Project the store has gets a
+    // `board_migration:<id>` key, so plxd parses its hand-written board into items once, and
+    // doesn't render it until then.
+    Migration {
+        version: 49,
+        sql: "CREATE TABLE board_items (
+            id INTEGER PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            status TEXT NOT NULL,
+            section TEXT NOT NULL,
+            links TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            done_at TEXT
+        );
+        CREATE INDEX board_items_project ON board_items (project_id);
+        INSERT INTO host_settings (key, value)
+            SELECT 'board_migration:' || id, 'pending' FROM projects;",
+    },
+    // The newest child end a coordinator's wake-up turn delivered (PLX-936, decision 0025), from
+    // which a Start over or a restart rebuilds what its coordinators never delivered. An existing
+    // coordinator starts from its newest turn, or its creation, the cursor plxd used before.
+    Migration {
+        version: 50,
+        sql: "ALTER TABLE wakes ADD COLUMN woken_at TEXT;
+        INSERT INTO wakes (run_id, in_a_row, paused)
+            SELECT id, 0, 0 FROM runs
+            WHERE policy = 'noWrite' AND id NOT IN (SELECT run_id FROM wakes);
+        UPDATE wakes SET woken_at = (
+            SELECT COALESCE(MAX(turns.created_at), runs.created_at)
+            FROM runs LEFT JOIN turns ON turns.run_id = runs.id
+            WHERE runs.id = wakes.run_id
+        )
+        WHERE run_id IN (SELECT id FROM runs WHERE policy = 'noWrite');",
+    },
+    // A coordinator's provider sessions, its epochs (PLX-937, decision 0079), numbered from 1 in
+    // its run; the open one has no end. A coordinator with a session becomes epoch 1, from its
+    // creation. And whether each turn is the user's own, not plxd's or another thread's, for the
+    // packet's last messages; an older turn counts as the user's.
+    Migration {
+        version: 51,
+        sql: "ALTER TABLE turns ADD COLUMN from_user INTEGER NOT NULL DEFAULT 1;
+        CREATE TABLE coordinator_sessions (
+            run_id TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+            epoch INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            end_reason TEXT,
+            PRIMARY KEY (run_id, epoch)
+        );
+        INSERT INTO coordinator_sessions (run_id, epoch, session_id, started_at)
+            SELECT id, 1, session_id, created_at FROM runs
+            WHERE policy = 'noWrite' AND session_id IS NOT NULL;",
+    },
+    // The version of each You entry and knowledge file, which plxd syncs between the user's
+    // Connect devices (0082, PLX-946). `clock` is plxd's JSON version vector. A deleted row is
+    // a tombstone, kept so an offline host can't bring the file back.
+    Migration {
+        version: 52,
+        sql: "CREATE TABLE you_entries (
+            path TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            clock TEXT NOT NULL,
+            machine TEXT NOT NULL,
+            machine_name TEXT NOT NULL,
+            written_at TEXT NOT NULL,
+            deleted INTEGER NOT NULL
+        );",
+    },
+    // Areas are gone (0087, PLX-1043): drop migrations 46 and 47's tables, members first. Their
+    // indexes go with them. `threads.pinned` stays.
+    Migration {
+        version: 53,
+        sql: "DROP TABLE area_repos;
+        DROP TABLE area_threads;
+        DROP TABLE area_projects;
+        DROP TABLE areas;",
+    },
+    // A Space's instructions and files, which every thread in it gets (0090, PLX-1108). `files`
+    // holds absolute paths, one per line.
+    Migration {
+        version: 54,
+        sql: "ALTER TABLE repos ADD COLUMN instructions TEXT;
+        ALTER TABLE repos ADD COLUMN files TEXT;",
+    },
+    // The Space the user added a thread to (0090, PLX-1108), apart from the repo entry it works
+    // in, which a Space it started in is.
+    Migration {
+        version: 55,
+        sql: "ALTER TABLE threads ADD COLUMN space_id TEXT;",
+    },
+    // A Project and its coordinator are an orchestrator (0093, PLX-1174): their tables and
+    // columns take the new name, and so does the accounts default for one. `runs.project_id`
+    // stays, since it holds a repo entry's id too.
+    Migration {
+        version: 56,
+        sql: "ALTER TABLE projects RENAME TO orchestrators;
+        ALTER TABLE coordinator_sessions RENAME TO orchestrator_sessions;
+        ALTER TABLE runs RENAME COLUMN coordinator_thread TO orchestrator_thread;
+        ALTER TABLE inbox RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE questions RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE landings RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE placements RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE board_items RENAME COLUMN project_id TO orchestrator_id;
+        DROP INDEX inbox_project;
+        CREATE INDEX inbox_orchestrator ON inbox (orchestrator_id, created_at);
+        DROP INDEX questions_project;
+        CREATE INDEX questions_orchestrator ON questions (orchestrator_id, created_at);
+        DROP INDEX landings_project;
+        CREATE INDEX landings_orchestrator ON landings (orchestrator_id, status, queued_at);
+        DROP INDEX board_items_project;
+        CREATE INDEX board_items_orchestrator ON board_items (orchestrator_id);
+        UPDATE role_defaults SET role = 'orchestrator' WHERE role = 'coordinator';",
+    },
+    // A Space is a Project (0093 step 2, PLX-1175): the repo entry's flag and the Project a thread
+    // was added to take the new name. The folders under `spaces/` keep theirs, which rows name.
+    Migration {
+        version: 57,
+        sql: "ALTER TABLE repos RENAME COLUMN space TO project;
+        ALTER TABLE threads RENAME COLUMN space_id TO project_id;",
+    },
+    // A pull request's guide (0095, PLX-1188): the newest one plxd wrote, as JSON with its head
+    // commit, which a guide for a newer head replaces.
+    Migration {
+        version: 58,
+        sql: "CREATE TABLE pr_guides (
+            repo TEXT NOT NULL,
+            number INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (repo, number)
+        );",
+    },
+    // Preserve provider switches for sidebar cards (PLX-1214). Read historical metadata once,
+    // rather than replaying every thread's transcript whenever the sidebar connects.
+    Migration {
+        version: 59,
+        sql: "ALTER TABLE runs ADD COLUMN backends TEXT NOT NULL DEFAULT '';
+        CREATE TEMP TABLE provider_history AS
+        SELECT json_extract(payload, '$.runId') AS id,
+               CASE type WHEN 'agent.started' THEN json_extract(payload, '$.run.backend')
+                         ELSE json_extract(payload, '$.state.backend') END AS backend,
+               seq
+        FROM events WHERE type IN ('agent.started', 'agent.updated') AND json_valid(payload);
+        INSERT INTO provider_history SELECT id, backend, 9223372036854775807 FROM runs;
+        CREATE INDEX provider_history_id ON provider_history (id);
+        UPDATE runs SET backends = (
+            SELECT group_concat(backend, char(10)) FROM (
+                SELECT backend FROM provider_history WHERE provider_history.id = runs.id
+                    AND backend IS NOT NULL AND backend != ''
+                GROUP BY backend ORDER BY min(seq)
+            )
+        );
+        DROP TABLE provider_history;",
+    },
+    // An orchestrator is a thread (0093 step 3, PLX-1176). `threads.orchestrator_id` is the
+    // orchestrator whose orchestration a thread runs, set on at most one thread each, and
+    // `wake_reason` plxd's JSON for why it last un-archived itself. Each orchestrator's newest
+    // no-write run, its current one, gets a thread row in the orchestrator, as its children's rows
+    // are, seen as of its creation. Its id, and so its `coordinators/` folder, memory, board,
+    // schedules, and children, stay as they were. An orchestrator with no repo keeps `''` in
+    // `repo_path`, which stays NOT NULL: rebuilding the table would cascade to `board_items`.
+    Migration {
+        version: 60,
+        sql: "ALTER TABLE threads ADD COLUMN orchestrator_id TEXT;
+        ALTER TABLE threads ADD COLUMN wake_reason TEXT;
+        INSERT INTO threads (id, repo_id, archived, created_at, seen_at, orchestrator_id)
+            SELECT runs.id, runs.project_id, 0, runs.created_at, runs.created_at, runs.project_id
+            FROM runs JOIN orchestrators ON orchestrators.id = runs.project_id
+            WHERE runs.id = (
+                SELECT newest.id FROM runs AS newest
+                WHERE newest.project_id = runs.project_id AND newest.policy = 'noWrite'
+                ORDER BY newest.created_at DESC, newest.id DESC LIMIT 1)
+            ON CONFLICT (id) DO UPDATE SET orchestrator_id = excluded.orchestrator_id;
+        CREATE UNIQUE INDEX threads_orchestrator ON threads (orchestrator_id)
+            WHERE orchestrator_id IS NOT NULL;",
+    },
+];
+
+/// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
+/// WAL database consistently where a file copy could miss the WAL (0059). There is no downgrade,
+/// so the copy is the way back. It is `<database>.pre-<version>`, written once: before the
+/// oldest of these a store is missing, so one copy covers a jump over several.
+const BACKUP_BEFORE: &[i64] = &[39, 41, 56, 57, 60];
+
+/// Bootstraps the `schema_version` table and applies every migration whose
+/// version isn't recorded, in order. A missing version below the newest
+/// recorded one still applies, for a developer database that ran a branch's
+/// migration before an earlier-numbered one landed. Versions must be exactly
+/// `1..=N` (a test checks it), so two branches can't both ship the same one.
+pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER NOT NULL PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        );",
+    )?;
+
+    let applied = applied_versions(conn)?;
+    let current = applied.last().copied().unwrap_or(0);
+
+    let supported = MIGRATIONS.last().map_or(0, |m| m.version);
+    if current > supported {
+        return Err(StoreError::UnsupportedSchemaVersion {
+            found: current,
+            supported,
+        });
+    }
+
+    if current > 0
+        && let Some(version) = BACKUP_BEFORE
+            .iter()
+            .find(|version| !applied.contains(version))
+    {
+        back_up(conn, *version)?;
+    }
+
+    if MIGRATIONS.iter().all(|m| applied.contains(&m.version)) {
+        return Ok(());
+    }
+
+    // One write lock for every missing migration, so connections opening a new store at once
+    // wait for it once rather than contending for it per migration. `applied` was read before
+    // the lock, so another connection may have applied some meanwhile: re-read it under the
+    // lock, which sees that connection's commit, and apply only what is still missing.
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let applied = applied_versions(&tx)?;
+    // The version the store had, for a migration that depends on it, as 43 does.
+    tx.execute(
+        "CREATE TEMP TABLE migrating_from AS SELECT ?1 AS version",
+        params![applied.last().copied().unwrap_or(0)],
+    )?;
+    for migration in MIGRATIONS.iter().filter(|m| !applied.contains(&m.version)) {
+        tx.execute_batch(migration.sql)?;
+        tx.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
+            params![migration.version, timestamp::now()],
+        )?;
+    }
+    tx.execute_batch("DROP TABLE temp.migrating_from")?;
+    tx.commit()?;
+
+    Ok(())
+}
+
+/// The versions `schema_version` records.
+fn applied_versions(conn: &Connection) -> Result<BTreeSet<i64>, StoreError> {
+    Ok(conn
+        .prepare("SELECT version FROM schema_version")?
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<_, _>>()?)
+}
+
+/// Writes `<database>.pre-<version>` with `VACUUM INTO`, unless it exists already: a start that
+/// stopped before the migration committed made it from the same schema. The copy is written
+/// under a name of its own and then renamed, since two connections opening the store at once
+/// can't both write one file. A copy that fails, as on a full disk, is removed with its journal,
+/// so a retry at the next start doesn't leave another one.
+fn back_up(conn: &Connection, version: i64) -> Result<(), StoreError> {
+    let Some(path) = conn.path().filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+    let backup = format!("{path}.pre-{version}");
+    if Path::new(&backup).exists() {
+        return Ok(());
+    }
+    let partial = format!("{backup}.{}", uuid::Uuid::now_v7());
+    let copied = conn
+        .execute("VACUUM INTO ?1", params![partial])
+        .map_err(StoreError::from)
+        .and_then(|_| fs::rename(&partial, &backup).map_err(StoreError::from));
+    if copied.is_err() {
+        let _ = fs::remove_file(&partial);
+        let _ = fs::remove_file(format!("{partial}-journal"));
+    }
+    copied
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::MIGRATIONS;
+
+    /// Makes the database at `path` as a build whose newest migration was `through` left it.
+    fn migrated_through(path: &Path, through: i64) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);
+            CREATE TEMP TABLE migrating_from AS SELECT 0 AS version;",
+        )
+        .unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.version <= through) {
+            conn.execute_batch(migration.sql).unwrap();
+            conn.execute(
+                "INSERT INTO schema_version VALUES (?1, 'then')",
+                [migration.version],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// Versions are exactly `1..=N`: a duplicate would be skipped silently as already applied,
+    /// and a gap would let a later release apply a migration beneath a newer schema. Two branches
+    /// that each add one must take distinct numbers, and this fails whichever merges second.
+    #[test]
+    fn versions_are_exactly_one_to_n() {
+        let versions: Vec<i64> = MIGRATIONS.iter().map(|m| m.version).collect();
+        let expected: Vec<i64> = (1..=i64::try_from(MIGRATIONS.len()).unwrap()).collect();
+        assert_eq!(versions, expected);
+    }
+
+    /// An existing store copies itself to `<database>.pre-39` before migration 39, and the copy
+    /// keeps the old schema and rows, while the store's events keep their thread under the new
+    /// column name.
+    #[test]
+    fn an_existing_store_backs_up_before_migration_39() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        migrated_through(&path, 38)
+            .execute(
+                "INSERT INTO events (seq, time, run_id, kind, payload) VALUES (1, 't', 'r', 'k', '{}')",
+                [],
+            )
+            .unwrap();
+        crate::Store::open(&path).unwrap();
+
+        let backup = rusqlite::Connection::open(dir.path().join("plxd.sqlite3.pre-39")).unwrap();
+        let version: i64 = backup
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 38);
+        let old: String = backup
+            .query_row("SELECT run_id FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(old, "r");
+        let migrated: (String, String) = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT thread_id, type FROM events", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(migrated, ("r".to_owned(), "k".to_owned()));
+    }
+
+    /// Only a store that ran migrations 40 to 42, which kept webhook secrets in task rows, is
+    /// marked for the one-time wipe at migration 43: not a new store or one from before 40.
+    #[test]
+    fn only_a_store_that_had_schedules_is_marked_for_the_wipe() {
+        let marked = |from: i64| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("plxd.sqlite3");
+            drop(migrated_through(&path, from));
+            crate::Store::open(&path)
+                .unwrap()
+                .wipe_freed_pages()
+                .unwrap()
+        };
+        assert!(!marked(0), "a new store");
+        assert!(!marked(39), "a store from before schedules");
+        assert!(marked(40));
+        assert!(marked(42));
+    }
+
+    /// Migration 49 marks each Project the store had for the one-time board migration (0081),
+    /// and the daemon clears each mark.
+    #[test]
+    fn each_existing_project_is_marked_for_the_board_migration() {
+        let project = uuid::Uuid::parse_str("01a0f8a0-0000-7000-8000-000000000021").unwrap();
+        let pending = |with_project: bool| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("plxd.sqlite3");
+            let conn = migrated_through(&path, 48);
+            if with_project {
+                conn.execute(
+                    "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
+                     VALUES (?1, 'n', '/r', 'then', 'then')",
+                    [project.to_string()],
+                )
+                .unwrap();
+            }
+            drop(conn);
+            let store = crate::Store::open(&path).unwrap();
+            let pending = store.board_migrations_pending().unwrap();
+            assert_eq!(
+                store.board_migration_pending(project).unwrap(),
+                with_project
+            );
+            store.finish_board_migration(project).unwrap();
+            assert!(store.board_migrations_pending().unwrap().is_empty());
+            pending
+        };
+        assert!(pending(false).is_empty());
+        assert_eq!(pending(true), [project]);
+    }
+
+    /// Migration 56 (0093) keeps a Project as an orchestrator, its inbox under the new column,
+    /// and the coordinator's accounts default as the orchestrator's.
+    #[test]
+    fn a_version_55_database_keeps_its_projects_as_orchestrators() {
+        let id = uuid::Uuid::parse_str("01a0f8a0-0000-7000-8000-000000000056").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let conn = migrated_through(&path, 55);
+        let at = "2026-10-30T12:00:00Z";
+        conn.execute_batch(&format!(
+            "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
+             VALUES ('{id}', 'formula fly', '/r', '{at}', '{at}');
+             INSERT INTO inbox (id, project_id, run_id, kind, text, created_at)
+             VALUES ('{id}', '{id}', '{id}', 'k', 't', '{at}');
+             INSERT INTO role_defaults (role, account_kind, backend, updated_at)
+             VALUES ('coordinator', 'subscription', 'claude', '{at}');"
+        ))
+        .unwrap();
+        drop(conn);
+        let store = crate::Store::open(&path).unwrap();
+        let orchestrator = store.get_orchestrator(id).unwrap().unwrap();
+        assert_eq!(orchestrator.name, "formula fly");
+        assert_eq!(store.inbox(id).unwrap().len(), 1);
+        assert!(store.get_role_default("orchestrator").unwrap().is_some());
+        assert!(store.get_role_default("coordinator").unwrap().is_none());
+        assert!(dir.path().join("plxd.sqlite3.pre-56").exists());
+    }
+
+    /// Migration 57 (0093 step 2) keeps a Space as a Project.
+    #[test]
+    fn a_version_56_database_keeps_its_spaces_as_projects() {
+        let id = uuid::Uuid::parse_str("01a0f8a0-0000-7000-8000-000000000057").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let conn = migrated_through(&path, 56);
+        conn.execute(
+            "INSERT INTO repos (id, name, path, scratch, space, created_at)
+             VALUES (?1, 'Coursework', '/data/spaces/c', 0, 1, '2026-10-30T12:00:00Z')",
+            [id.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+        let store = crate::Store::open(&path).unwrap();
+        let repo = store.get_repo(id).unwrap().unwrap();
+        assert!(repo.fields.project);
+        assert_eq!(repo.fields.name, "Coursework");
+    }
+
+    /// Migration 60 (0093 step 3) makes an orchestrator's current run its thread, with
+    /// orchestration on, and leaves the run it replaced, its child, schedule, watch, and board as
+    /// they were, under the same ids.
+    #[test]
+    fn a_version_59_database_makes_each_orchestrator_a_thread() {
+        let id =
+            |n: u32| uuid::Uuid::parse_str(&format!("01a0f8a0-0000-7000-8000-{n:012}")).unwrap();
+        let (orchestrator, old, current, child, task) = (id(1), id(2), id(3), id(4), id(5));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let conn = migrated_through(&path, 59);
+        let run = |run: uuid::Uuid, policy: &str, at: &str, parent: Option<uuid::Uuid>| {
+            conn.execute(
+                "INSERT INTO runs (id, project_id, prompt, policy, backend, account_id, status,
+                     created_at, updated_at, orchestrator_thread, parent)
+                 VALUES (?1, ?2, 'p', ?3, 'claude', 'a', 'completed', ?4, ?4, ?5, ?6)",
+                rusqlite::params![
+                    run.to_string(),
+                    orchestrator.to_string(),
+                    policy,
+                    at,
+                    (policy == "noWrite").then(|| run.to_string()),
+                    parent.map(|parent| parent.to_string())
+                ],
+            )
+            .unwrap();
+        };
+        conn.execute(
+            "INSERT INTO orchestrators (id, name, repo_path, created_at, updated_at, autonomy)
+             VALUES (?1, 'formula fly', '/r', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', 'full')",
+            [orchestrator.to_string()],
+        )
+        .unwrap();
+        run(old, "noWrite", "2026-10-01T00:00:00Z", None);
+        run(current, "noWrite", "2026-10-02T00:00:00Z", None);
+        run(
+            child,
+            "workspaceWrite",
+            "2026-10-03T00:00:00Z",
+            Some(current),
+        );
+        conn.execute_batch(&format!(
+            "INSERT INTO threads (id, repo_id, created_at) VALUES ('{child}', '{orchestrator}', '2026-10-01T00:00:00Z');
+             INSERT INTO scheduled_tasks (id, payload) VALUES ('{task}', '{{\"orchestrator\":\"{orchestrator}\"}}');
+             INSERT INTO pr_watches (run_id, url, payload) VALUES ('{current}', 'https://github.com/o/r/pull/1', '{{}}');
+             INSERT INTO board_items (orchestrator_id, text, status, section, links, created_at, updated_at)
+             VALUES ('{orchestrator}', 'ship it', 'open', 'now', '[]', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z');"
+        ))
+        .unwrap();
+        drop(conn);
+
+        let store = crate::Store::open(&path).unwrap();
+        let thread = store.orchestrator_thread(orchestrator).unwrap().unwrap();
+        assert_eq!(thread.id, current);
+        assert_eq!(thread.repo_id, orchestrator);
+        assert_eq!(thread.orchestrator_id, Some(orchestrator));
+        assert!(!thread.archived);
+        assert_eq!(thread.seen_at, Some(thread.created_at));
+        assert!(
+            store.get_thread(old).unwrap().is_none(),
+            "a replaced run stays a run"
+        );
+        let child_row = store.get_thread(child).unwrap().unwrap();
+        assert_eq!(
+            (child_row.parent, child_row.orchestrator_id),
+            (Some(current), None)
+        );
+        let row = store.get_orchestrator(orchestrator).unwrap().unwrap();
+        assert_eq!(
+            (row.repo_path.as_deref(), row.autonomy.as_str()),
+            (Some("/r"), "full")
+        );
+        assert!(store.scheduled_task(task).unwrap().is_some());
+        assert!(
+            store
+                .pr_watch(current, "https://github.com/o/r/pull/1")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(store.board_items(orchestrator).unwrap().len(), 1);
+        assert!(dir.path().join("plxd.sqlite3.pre-60").exists());
+    }
+
+    /// A backup that fails partway, here on a corrupt page, leaves no partial copy or journal
+    /// behind, so each failed start doesn't use up more of a full disk.
+    #[test]
+    fn a_failed_backup_leaves_no_partial_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t (x TEXT);").unwrap();
+            for _ in 0..200 {
+                conn.execute("INSERT INTO t VALUES (?1)", ["y".repeat(500)])
+                    .unwrap();
+            }
+        }
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[4096 * 3..4096 * 4].fill(0xff);
+        std::fs::write(&path, bytes).unwrap();
+
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert!(super::back_up(&conn, 39).is_err());
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains(".pre-39"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+}

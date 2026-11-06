@@ -4,25 +4,25 @@
 //! touches the real Keychain. Run it explicitly on a Mac:
 //!
 //! ```sh
-//! cargo test -p wispd --test keychain_manual -- --ignored --nocapture
+//! cargo test -p plxd --test keychain_manual -- --ignored --nocapture
 //! ```
 //!
-//! It uses a throwaway, test-only service name, never `wispd::keystore::SERVICE`, so it can't
+//! It uses a throwaway, test-only service name, never `plxd::keystore::SERVICE`, so it can't
 //! disturb a real stored key, and it cleans up after itself. If it panics partway through, remove
 //! the leftover item by hand:
 //!
 //! ```sh
-//! security delete-generic-password -s io.github.ryan-stoffel.wisp.keychain-manual-test
+//! security delete-generic-password -s io.github.ryan-stoffel.parallax.keychain-manual-test
 //! ```
 
 #![cfg(target_os = "macos")]
 
 use std::process::Command;
 
-use wisp_protocol::AccountId;
-use wispd::keystore::{KeyStore, KeychainStore};
+use parallax_protocol::AccountId;
+use plxd::keystore::{KeyStore, KeychainStore};
 
-const TEST_SERVICE: &str = "io.github.ryan-stoffel.wisp.keychain-manual-test";
+const TEST_SERVICE: &str = "io.github.ryan-stoffel.parallax.keychain-manual-test";
 
 /// Whether `security find-generic-password` reports an item for `service`/`account`: the same
 /// tool and check the issue's manual test calls for.
@@ -50,12 +50,12 @@ fn add_list_and_remove_a_throwaway_key() {
     store.set(account, key).expect("store the throwaway key");
     assert!(
         security_finds_it(TEST_SERVICE, &account_text),
-        "security find-generic-password should see the item wispd just wrote"
+        "security find-generic-password should see the item plxd just wrote"
     );
     assert_eq!(
         store.get(account).unwrap().as_deref().map(String::as_str),
         Some(key),
-        "wispd should read back exactly what it stored"
+        "plxd should read back exactly what it stored"
     );
 
     store.delete(account).expect("remove the throwaway key");

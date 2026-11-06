@@ -1,10 +1,11 @@
 //! Claude Code's worker sandbox, for real (0013). Runs the Claude Code named in
-//! `WISP_SANDBOX_CLAUDE` with the arguments wispd gives a worker, against a fake Messages API on
+//! `PLX_SANDBOX_CLAUDE` with the arguments plxd gives a worker, against a fake Messages API on
 //! 127.0.0.1 that asks for one Bash command, then checks what that command could do. Nothing
 //! reaches Anthropic, and no login is used.
 //!
-//! Skipped when `WISP_SANDBOX_CLAUDE` is unset. CI's Linux legs install bubblewrap, socat, and a
-//! pinned Claude Code, and set it.
+//! Skipped when `PLX_SANDBOX_CLAUDE` is unset. CI's Linux legs install bubblewrap, socat, and a
+//! pinned Claude Code, and set it. A plxd built with `--features sandbox-tools` needs neither
+//! installed (PLX-895).
 #![cfg(unix)]
 
 mod common;
@@ -15,46 +16,47 @@ use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
-use common::{run_worker, tool_result, worker_request};
-use wispd::backend::RunRequest;
-use wispd::backend::claude::{commands_temp, worker_temp};
-use wispd::backend::run_temp;
-use wispd::paths::DataDir;
+use common::{Worktree, claude_under_test, run_worker, tool_result, worker_request};
+use parallax_protocol::RunId;
+use plxd::backend::RunRequest;
+use plxd::backend::claude::{commands_temp, worker_temp};
+use plxd::backend::run_temp;
+use plxd::paths::{DataDir, secret_files_dir};
 
-const SECRET: &str = "wisp-sandbox-test-secret";
+const SECRET: &str = "parallax-sandbox-test-secret";
+
+/// Held for a whole test, since [`a_worker_s_temp_is_its_own`] makes and removes `/tmp/claude`.
+/// Claude Code binds it into a command's sandbox if it exists when the command is wrapped, and
+/// bwrap fails if it is gone by the time bwrap starts (PLX-665).
+static TMP_CLAUDE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_sockets() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: WISP_SANDBOX_CLAUDE doesn't name a Claude Code to test");
+    let Some(claude) = claude_under_test() else {
         return;
     };
+    let _tmp_claude = TMP_CLAUDE.lock().await;
     let dir = tempfile::tempdir().unwrap();
     // Canonical, since Seatbelt matches real paths and macOS's temp folder is behind a symlink.
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
-    let worktree = data.join("worktrees/run");
-    let context = data.join("context/p");
-    let git_dir = root.join("repo/.git");
-    for folder in [
-        &home.join(".ssh"),
-        &worktree,
-        &context,
-        &data.join("context/other"),
-        &git_dir,
-    ] {
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&root, &data);
+    for folder in [&home.join(".ssh"), &data.join("context/other")] {
         fs::create_dir_all(folder).unwrap();
     }
-    // A key in the home folder, and another project's context in wispd's data folder.
+    // A key in the home folder, and another project's context in plxd's data folder.
     fs::write(home.join(".ssh/id_ed25519"), format!("{SECRET}-key")).unwrap();
     fs::write(
         data.join("context/other/notes.md"),
         format!("{SECRET}-notes"),
     )
     .unwrap();
-    let git_file = format!("gitdir: {}/worktrees/run\n", git_dir.display());
-    fs::write(worktree.join(".git"), &git_file).unwrap();
+    let git_file = fs::read_to_string(worktree.join(".git")).unwrap();
     let socket = root.join("probe.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -79,6 +81,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
         note = path(&context.join("note")),
     );
     let (mut request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
+    let my_secret = probe_secret_files(&mut probe, &mut request, &data);
     if cfg!(target_os = "linux") {
         // The seccomp filter's job: no Unix sockets, such as the D-Bus session bus.
         writeln!(
@@ -87,18 +90,26 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
             path(&socket)
         )
         .unwrap();
+        // socat must run inside the sandbox, where Claude Code runs its network relays.
+        probe.push_str("socat -V >/dev/null && echo socat-ran\n");
         probe_registry_login(&mut probe, &mut request, &root);
+    }
+    // plxd's own bwrap, which the next worker runs, is readable but not writable (PLX-895).
+    let bundled_bwrap = data.join("tools/sandbox/bwrap");
+    if cfg!(feature = "sandbox-tools") {
+        writeln!(
+            probe,
+            "echo x > '{}' && echo wrote-tools",
+            path(&bundled_bwrap)
+        )
+        .unwrap();
     }
     fs::write(worktree.join("probe.sh"), probe).unwrap();
 
-    let (stdout, transcript) = run_worker(
-        &claude,
-        &request,
-        &root,
-        &home,
-        &[("ANTHROPIC_API_KEY", "sk-ant-wisp-sandbox-test")],
-    )
-    .await;
+    let path = plxd_path(&claude, &data, &worktree).await;
+    let mut env = vec![("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")];
+    env.extend(path.as_deref().map(|path| ("PATH", path)));
+    let (stdout, transcript) = run_worker(&claude, &request, &root, &home, &env).await;
 
     let result = tool_result(&stdout).unwrap_or_else(|| panic!("no Bash result:\n{transcript}"));
     assert!(result.contains("wrote-inside"), "{transcript}");
@@ -106,11 +117,18 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     assert!(worktree.join("inside").exists());
     assert!(context.join("note").exists());
     assert!(!stdout.contains(SECRET), "a secret was read:\n{result}");
+    assert!(result.contains("my-thread-s-value"), "{transcript}");
+    assert_eq!(fs::read_to_string(my_secret).unwrap(), "my-thread-s-value");
     assert!(!home.join("outside").exists(), "{result}");
     assert!(!root.join("outside").exists(), "{result}");
+    if cfg!(feature = "sandbox-tools") {
+        assert!(!result.contains("wrote-tools"), "{result}");
+        assert_ne!(fs::read(&bundled_bwrap).unwrap(), b"x\n");
+    }
     assert_eq!(fs::read_to_string(worktree.join(".git")).unwrap(), git_file);
     if cfg!(target_os = "linux") {
         assert!(!result.contains("socket-connected"), "{result}");
+        assert!(result.contains("socat-ran"), "{result}");
         assert!(
             listener.accept().is_err(),
             "a Unix socket connect got through"
@@ -118,9 +136,52 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     }
 }
 
+/// Gives `request` a secret file of its thread's, as `request_secret` writes one (0098), and makes
+/// `probe` read it, write it, and read another thread's. Returns this thread's file.
+fn probe_secret_files(probe: &mut String, request: &mut RunRequest, data: &Path) -> PathBuf {
+    let (mine, other) = (RunId::generate(), RunId::generate());
+    let (my_folder, other_folder) = (secret_files_dir(data, mine), secret_files_dir(data, other));
+    let (my_file, other_file) = (my_folder.join("file"), other_folder.join("file"));
+    fs::create_dir_all(&my_folder).unwrap();
+    fs::create_dir_all(&other_folder).unwrap();
+    fs::write(&my_file, "my-thread-s-value").unwrap();
+    fs::write(&other_file, format!("{SECRET}-other-thread")).unwrap();
+    writeln!(
+        probe,
+        "cat '{mine}'\ncat '{other}'\necho x > '{mine}'",
+        mine = my_file.display(),
+        other = other_file.display(),
+    )
+    .unwrap();
+    request.sandbox.as_mut().unwrap().read_only.push(my_folder);
+    my_file
+}
+
+/// On Linux, runs the check plxd runs before a worker starts, which also writes out the bwrap and
+/// socat a release plxd carries (PLX-895), and returns the `PATH` plxd gives the worker, which
+/// ends in their folder. `None` elsewhere.
+#[allow(clippy::unused_async, reason = "awaits only on Linux")]
+async fn plxd_path(claude: &std::ffi::OsStr, data: &Path, cwd: &Path) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        use plxd::backend::process::{Environment, Launcher, ProcessSpec};
+        let launcher = Launcher::new(DataDir::new(data).unwrap(), Environment::inherited());
+        plxd::backend::claude::linux_sandbox::check_host(&launcher, Path::new(claude))
+            .await
+            .unwrap();
+        let env = launcher.environment(&ProcessSpec::new(claude, cwd));
+        Some(env.get("PATH")?.to_str().unwrap().to_owned())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (claude, data, cwd);
+        None
+    }
+}
+
 /// Writes a registry login where rootless Podman keeps one, in a runtime folder under `root`,
 /// denies that folder as `WorkerSandbox::for_worktree` denies the user's runtime folders on Linux,
-/// and adds a read of the login to `probe` (RYA-107). Which folders those are is `sandbox.rs`'s
+/// and adds a read of the login to `probe` (PLX-107). Which folders those are is `sandbox.rs`'s
 /// unit tests' job; this checks that the sandbox holds a deny there.
 fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Path) {
     let runtime = root.join("run");
@@ -132,36 +193,30 @@ fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Pat
     writeln!(probe, "cat '{}'", login.display()).unwrap();
 }
 
-/// A worker's `TMPDIR` is its own run's (RYA-130): it can't read or write another run's temp
+/// A worker's `TMPDIR` is its own run's (PLX-130): it can't read or write another run's temp
 /// folder, the `/tmp/claude-<uid>` every Claude Code session shares, or its CLI's own temp files,
 /// and it can't write the paths Claude Code's sandbox would always allow.
 #[tokio::test]
 async fn a_worker_s_temp_is_its_own() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: WISP_SANDBOX_CLAUDE doesn't name a Claude Code to test");
+    let Some(claude) = claude_under_test() else {
         return;
     };
+    let _tmp_claude = TMP_CLAUDE.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
-    let worktree = data.join("worktrees/run");
-    let context = data.join("context/p");
-    let git_dir = root.join("repo/.git");
-    for folder in [
-        &home.join(".npm/_logs"),
-        &home.join(".claude/debug"),
-        &worktree,
-        &context,
-        &git_dir,
-    ] {
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&root, &data);
+    for folder in [&home.join(".npm/_logs"), &home.join(".claude/debug")] {
         fs::create_dir_all(folder).unwrap();
     }
-    let git_file = format!("gitdir: {}/worktrees/run\n", git_dir.display());
-    fs::write(worktree.join(".git"), git_file).unwrap();
     let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     let temp = &request.sandbox.as_ref().unwrap().temp;
-    // Another run of the same wispd, and what another Claude Code session left in the shared
+    // Another run of the same plxd, and what another Claude Code session left in the shared
     // folder, which this makes if it's missing.
     let other = run_temp::create(&DataDir::new(&data).unwrap()).unwrap();
     fs::write(other.path().join("secret"), format!("{SECRET}-other-run")).unwrap();
@@ -171,7 +226,7 @@ async fn a_worker_s_temp_is_its_own() {
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
     }
     let session = tempfile::Builder::new()
-        .prefix("wisp-sandbox-test-")
+        .prefix("parallax-sandbox-test-")
         .tempdir_in(&shared)
         .unwrap();
     fs::write(session.path().join("output"), format!("{SECRET}-session")).unwrap();
@@ -187,7 +242,7 @@ async fn a_worker_s_temp_is_its_own() {
         session.path().join("planted"),
         home.join(".npm/_logs/planted"),
         home.join(".claude/debug/planted"),
-        PathBuf::from("/tmp/claude/wisp-sandbox-test"),
+        PathBuf::from("/tmp/claude/parallax-sandbox-test"),
     ];
     let mut probe = format!(
         "echo \"tmpdir=$TMPDIR\"\n\
@@ -201,14 +256,10 @@ async fn a_worker_s_temp_is_its_own() {
         writeln!(probe, "echo x > '{}'", file.display()).unwrap();
     }
     fs::write(worktree.join("probe.sh"), probe).unwrap();
-    let (stdout, transcript) = run_worker(
-        &claude,
-        &request,
-        &root,
-        &home,
-        &[("ANTHROPIC_API_KEY", "sk-ant-wisp-sandbox-test")],
-    )
-    .await;
+    let path = plxd_path(&claude, &data, &worktree).await;
+    let mut env = vec![("ANTHROPIC_API_KEY", "sk-ant-parallax-sandbox-test")];
+    env.extend(path.as_deref().map(|path| ("PATH", path)));
+    let (stdout, transcript) = run_worker(&claude, &request, &root, &home, &env).await;
     let written: Vec<&PathBuf> = planted.iter().filter(|file| file.exists()).collect();
     if made_tmp_claude {
         fs::remove_dir_all("/tmp/claude").unwrap();

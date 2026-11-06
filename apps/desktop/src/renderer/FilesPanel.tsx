@@ -1,0 +1,540 @@
+import {
+  ChevronLeft,
+  ChevronRight,
+  Ellipsis,
+  File,
+  FilePlus,
+  FileSymlink,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+} from "lucide-react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+
+import type { RpcError } from "../preload/bridge";
+import type { AgentEntry } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
+import { chunksOf, failure, progressFrom, readWorking } from "./documents";
+import { describeError } from "./errors";
+import { DownloadButton } from "./FileCards";
+import { ConfirmDialog, IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
+
+/** A folder's entries once listed, or why they couldn't be. */
+type Listing = { entries: AgentEntry[]; truncated: boolean } | { error: string };
+
+/** A name being typed in the tree: a new entry in `folder`, or a new name for `path`. */
+type Draft = { folder: string; isFolder: boolean } | { path: string };
+
+/** An entry the menu or Delete acts on. */
+type Target = { path: string; isFolder: boolean };
+
+/** Folders first, then by name, as a file browser lists them. */
+const byKind = (a: AgentEntry, b: AgentEntry) =>
+  Number(b.kind === "dir") - Number(a.kind === "dir") || (a.name < b.name ? -1 : 1);
+
+const join = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
+const parentOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
+const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+const inside = (path: string, folder: string) => path === folder || path.startsWith(`${folder}/`);
+/** `path` after `from` moved to `to`, so what's inside a renamed folder follows it. */
+const moved = (path: string, from: string, to: string) =>
+  inside(path, from) ? to + path.slice(from.length) : path;
+
+/** plxd's reason a change failed, without JSON-RPC's prefix. */
+const reason = (error: RpcError) => describeError(error).replace(/^Invalid params: /, "");
+
+/** `folder` of the run's folder, "" for the folder itself. */
+async function listFolder(hostId: string, runId: string, folder: string): Promise<Listing> {
+  const listed = await window.parallax.request(hostId, "agent/files", {
+    runId,
+    ...(folder && { path: folder }),
+  });
+  return "error" in listed ? { error: describeError(listed.error) } : listed.result;
+}
+
+/**
+ * The side panel's Files view (PLX-296): a run's folder on its host, its worktree or a Current
+ * checkout thread's checkout, as a tree. A folder lists its entries from `agent/files` each time
+ * it opens, so closing and opening it again shows the agent's latest files. A file opens in the
+ * view, read-only, from `agent/file`'s `working` side. `unavailable` says why it can't load, such
+ * as a plxd without the `files` capability.
+ *
+ * `editable`, on a plxd with `fileEdit` (PLX-590), adds New file and New folder above the tree
+ * and a menu on each entry, on right-click or its `…`: New file, New folder, Rename, and Delete.
+ * Names are typed in the tree, where Enter or leaving the field saves and Escape cancels; F2
+ * renames the focused entry and Delete deletes it, after asking.
+ *
+ * Each new `reveal` opens its file in the view, as the command menu's file picks do (PLX-993).
+ */
+export function FilesPanel({
+  hostId,
+  runId,
+  unavailable,
+  editable,
+  reveal,
+}: {
+  hostId: string;
+  runId: string;
+  unavailable?: string;
+  editable?: boolean;
+  reveal?: { path: string };
+}) {
+  // Each listed folder by path, the root's as "".
+  const connectedNow = useConnectedNow(hostId);
+  const [listings, setListings] = useState<Record<string, Listing>>({});
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [openPath, setOpenPath] = useState(reveal?.path);
+  const [revealed, setRevealed] = useState(reveal);
+  if (reveal !== revealed) {
+    setRevealed(reveal);
+    if (reveal) setOpenPath(reveal.path);
+  }
+  const [draft, setDraft] = useState<Draft>();
+  const [draftError, setDraftError] = useState<string>();
+  // The draft on screen, and the one being saved, so Enter and the blur after it save once and a
+  // save that ends after another draft opened leaves that one alone.
+  const active = useRef<Draft>(undefined);
+  const saving = useRef<Draft>(undefined);
+  const [target, setTarget] = useState<Target>();
+  const [toDelete, setToDelete] = useState<Target>();
+  const [deleteError, setDeleteError] = useState<string>();
+  const [deleting, setDeleting] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  const deleteDialog = useRef<HTMLDialogElement>(null);
+
+  const show = (folder: string) => (listing: Listing) =>
+    setListings((prev) => ({ ...prev, [folder]: listing }));
+  useEffect(() => {
+    if (!unavailable && connectedNow) void listFolder(hostId, runId, "").then(show(""));
+  }, [hostId, runId, unavailable, connectedNow]);
+  const relist = (...folders: string[]) =>
+    Promise.all([...new Set(folders)].map((f) => listFolder(hostId, runId, f).then(show(f))));
+
+  const toggle = (folder: string) => {
+    const next = new Set(expanded);
+    if (next.delete(folder)) return setExpanded(next);
+    setExpanded(next.add(folder));
+    void listFolder(hostId, runId, folder).then(show(folder));
+  };
+
+  const startDraft = (next: Draft) => {
+    if ("folder" in next && next.folder && !expanded.has(next.folder)) toggle(next.folder);
+    active.current = next;
+    setDraft(next);
+    setDraftError(undefined);
+  };
+  const cancelDraft = () => {
+    active.current = undefined;
+    setDraft(undefined);
+  };
+  /** Creates or renames `d`'s entry as `value`; a blank or unchanged name just closes it. */
+  const save = async (d: Draft, value: string) => {
+    if (active.current !== d || saving.current === d) return;
+    const name = value.trim();
+    const from = "path" in d ? d.path : undefined;
+    const folder = "path" in d ? parentOf(d.path) : d.folder;
+    if (!name || (from !== undefined && name === nameOf(from))) return cancelDraft();
+    const path = join(folder, name);
+    saving.current = d;
+    const answer =
+      from === undefined
+        ? await window.parallax.request(hostId, "agent/fileCreate", {
+            runId,
+            path,
+            folder: "isFolder" in d && d.isFolder,
+          })
+        : await window.parallax.request(hostId, "agent/fileRename", { runId, from, to: path });
+    saving.current = undefined;
+    if ("error" in answer) {
+      if (active.current === d) setDraftError(reason(answer.error));
+      return;
+    }
+    if (active.current === d) cancelDraft();
+    if (from !== undefined) {
+      setExpanded((prev) => new Set([...prev].map((p) => moved(p, from, path))));
+      setListings((prev) =>
+        Object.fromEntries(Object.entries(prev).map(([k, v]) => [moved(k, from, path), v])),
+      );
+    }
+    await relist(folder, parentOf(path));
+  };
+
+  const askDelete = (entry: Target) => {
+    setToDelete(entry);
+    setDeleteError(undefined);
+    deleteDialog.current?.showModal();
+  };
+  const confirmDelete = async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    const { path } = toDelete;
+    const answer = await window.parallax.request(hostId, "agent/fileDelete", { runId, path });
+    setDeleting(false);
+    if ("error" in answer) return setDeleteError(reason(answer.error));
+    deleteDialog.current?.close();
+    setExpanded((prev) => new Set([...prev].filter((p) => !inside(p, path))));
+    await relist(parentOf(path));
+  };
+
+  /** F2 renames the focused entry and Delete deletes it, as in an IDE. */
+  const onRowKey = (e: KeyboardEvent, entry: Target) => {
+    if (!editable) return;
+    if (e.key === "F2") startDraft({ path: entry.path });
+    else if (e.key === "Delete" || (e.key === "Backspace" && e.metaKey)) askDelete(entry);
+    else return;
+    e.preventDefault();
+  };
+
+  if (unavailable) return <Empty title="Files aren't available" hint={unavailable} />;
+  if (openPath)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <button
+          type="button"
+          onClick={() => setOpenPath(undefined)}
+          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
+        >
+          <ChevronLeft aria-hidden className="size-4 shrink-0" />
+          <span className="truncate">{openPath}</span>
+        </button>
+        <FileView key={openPath} hostId={hostId} runId={runId} path={openPath} />
+      </div>
+    );
+
+  const root = listings[""];
+  const empty = root && "entries" in root && root.entries.length === 0 && !draft;
+  if (empty && !editable) return <Empty title="No files" hint="This thread's folder is empty." />;
+
+  /** The field a name is typed in, in place of a row, with why the last save failed under it. */
+  const nameField = (d: Draft, depth: number, isFolder: boolean, initial = "") => {
+    const indent = { paddingLeft: `${10 + depth * 14}px` };
+    const Icon = isFolder ? Folder : File;
+    return (
+      <div>
+        <div style={indent} className="flex items-center gap-1.5 py-0.5 pr-2">
+          <ChevronRight aria-hidden className="invisible size-3.5 shrink-0" />
+          <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            aria-label={"path" in d ? `Rename ${initial}` : isFolder ? "Folder name" : "File name"}
+            aria-invalid={draftError ? true : undefined}
+            defaultValue={initial}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            onFocus={(e) => {
+              // A file's name is chosen up to its extension, as an IDE does.
+              const dot = isFolder ? -1 : initial.lastIndexOf(".");
+              e.currentTarget.setSelectionRange(0, dot > 0 ? dot : initial.length);
+            }}
+            onChange={() => setDraftError(undefined)}
+            onKeyDown={(e) => {
+              // Enter and Escape belong to an input method while it composes.
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === "Enter") void save(d, e.currentTarget.value);
+              else if (e.key === "Escape") cancelDraft();
+            }}
+            onBlur={(e) => void save(d, e.currentTarget.value)}
+            className={`min-w-0 flex-1 rounded-md border bg-background px-1.5 py-0.5 text-body text-foreground focus-visible:outline-none ${draftError ? "border-danger" : "border-ring"}`}
+          />
+        </div>
+        {draftError && (
+          <p role="alert" style={indent} className="pr-2 pb-1 text-meta text-danger">
+            <span className="pl-10">{draftError}</span>
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  /** `folder`'s entries, each folder's own below it while it's open. */
+  const tree = (folder: string, depth: number) => {
+    const listing = listings[folder];
+    if (!listing) return null;
+    const indent = { paddingLeft: `${10 + depth * 14}px` };
+    if ("error" in listing)
+      return (
+        <p role="alert" style={indent} className="py-1 pr-2 text-body text-danger">
+          {listing.error}
+        </p>
+      );
+    return (
+      <ul role="group">
+        {draft && "folder" in draft && draft.folder === folder && (
+          <li>{nameField(draft, depth, draft.isFolder)}</li>
+        )}
+        {listing.entries.toSorted(byKind).map((entry) => {
+          const path = join(folder, entry.name);
+          const isFolder = entry.kind === "dir";
+          const open = expanded.has(path);
+          const Icon = isFolder
+            ? open
+              ? FolderOpen
+              : Folder
+            : entry.kind === "symlink"
+              ? FileSymlink
+              : File;
+          const renaming = draft && "path" in draft && draft.path === path;
+          return (
+            <li key={entry.name} role="treeitem" aria-expanded={isFolder ? open : undefined}>
+              {renaming ? (
+                nameField(draft, depth, isFolder, entry.name)
+              ) : (
+                // The row and its actions, apart from the folder's entries below it, so hovering
+                // a nested row shows only its own actions.
+                <div className="group/row relative">
+                  <button
+                    type="button"
+                    style={indent}
+                    onClick={() => (isFolder ? toggle(path) : setOpenPath(path))}
+                    onKeyDown={(e) => onRowKey(e, { path, isFolder })}
+                    onContextMenu={
+                      editable
+                        ? (e) =>
+                            openOnContextMenu(
+                              e,
+                              e.currentTarget.parentElement!.querySelector("[data-actions]"),
+                            )
+                        : undefined
+                    }
+                    className={`flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-body hover:bg-hover ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
+                  >
+                    <ChevronRight
+                      aria-hidden
+                      className={`size-3.5 shrink-0 text-faint-foreground ${isFolder ? "" : "invisible"} ${open ? "rotate-90" : ""}`}
+                    />
+                    <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 truncate">{entry.name}</span>
+                  </button>
+                  {editable && (
+                    <span className="absolute top-0.5 right-1 opacity-0 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
+                      <button
+                        data-actions
+                        type="button"
+                        aria-label={`Actions for ${entry.name}`}
+                        title="Actions"
+                        onClick={(e) => {
+                          setTarget({ path, isFolder });
+                          menu.current?.showPopover({ source: e.currentTarget });
+                        }}
+                        className="grid size-5.5 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+                      >
+                        <Ellipsis />
+                      </button>
+                    </span>
+                  )}
+                </div>
+              )}
+              {open && tree(path, depth + 1)}
+            </li>
+          );
+        })}
+        {listing.truncated && (
+          <li style={indent} className="py-1 pr-2 text-body text-faint-foreground">
+            More files not shown.
+          </li>
+        )}
+      </ul>
+    );
+  };
+
+  // New entries from the menu go in the folder it was opened on, or beside the file.
+  const targetFolder = target && (target.isFolder ? target.path : parentOf(target.path));
+  const choose = (action: () => void) => () => {
+    menu.current?.hidePopover();
+    action();
+  };
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {editable && (
+        <div className="flex shrink-0 justify-end gap-0.5 px-2 pb-1">
+          <IconButton label="New file" onClick={() => startDraft({ folder: "", isFolder: false })}>
+            <FilePlus />
+          </IconButton>
+          <IconButton label="New folder" onClick={() => startDraft({ folder: "", isFolder: true })}>
+            <FolderPlus />
+          </IconButton>
+        </div>
+      )}
+      {empty ? (
+        <Empty title="No files" hint="This thread's folder is empty." />
+      ) : (
+        <div role="tree" aria-label="Files" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+          {tree("", 0)}
+        </div>
+      )}
+      {editable && (
+        <>
+          <Menu
+            ref={menu}
+            label={target ? `Actions for ${nameOf(target.path)}` : "File actions"}
+            align="end"
+            className="min-w-36 p-1"
+            onClose={() => setTarget(undefined)}
+          >
+            {target && targetFolder !== undefined && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() => startDraft({ folder: targetFolder, isFolder: false }))}
+                >
+                  <FilePlus aria-hidden />
+                  New file
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() => startDraft({ folder: targetFolder, isFolder: true }))}
+                >
+                  <FolderPlus aria-hidden />
+                  New folder
+                </button>
+                <div className="my-1 h-px bg-border" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={menuItem}
+                  onClick={choose(() => startDraft({ path: target.path }))}
+                >
+                  Rename
+                  <span className="ml-auto text-meta text-faint-foreground">F2</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`${menuItem} text-danger`}
+                  onClick={choose(() => askDelete(target))}
+                >
+                  Delete…
+                </button>
+              </>
+            )}
+          </Menu>
+          <ConfirmDialog
+            ref={deleteDialog}
+            title={<>Delete “{toDelete && nameOf(toDelete.path)}”?</>}
+            titleClass="break-all"
+            action="Delete"
+            busy={deleting ? "Deleting…" : undefined}
+            error={deleteError}
+            onConfirm={() => void confirmDelete()}
+          >
+            {toDelete?.isFolder
+              ? "This folder and everything in it are deleted from disk."
+              : "This is deleted from disk."}{" "}
+            This can't be undone.
+          </ConfirmDialog>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Empty({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
+      <Folder aria-hidden className="mb-1 size-5 text-faint-foreground" />
+      <p className="text-body font-medium text-foreground">{title}</p>
+      <p className="text-body text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+/** A file's text, or a note when it's binary. */
+function fileText(bytes: Uint8Array): { text: string } | { note: string } {
+  if (bytes.includes(0)) return { note: "This is a binary file." };
+  try {
+    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+  } catch {
+    return { note: "This is a binary file." };
+  }
+}
+
+/**
+ * What the view shows of a file: its text, or a note on why not, with its bytes for Download, or
+ * `large` for one only Download reads, or why it couldn't be read.
+ */
+type Shown =
+  | { text: string }
+  | { note: string; bytes?: Uint8Array; large?: boolean }
+  | { error: string };
+
+/**
+ * File `path` as the view shows it. Its size comes first, so a file over `progressFrom` is read
+ * only when it's downloaded, which takes a plxd that reads slices (PLX-835).
+ */
+async function readShown(hostId: string, runId: string, path: string): Promise<Shown> {
+  const stat = await window.parallax.request(hostId, "agent/file", {
+    runId,
+    path,
+    side: "working",
+    sizeOnly: true,
+  });
+  if ("error" in stat) return { error: await failure(hostId, stat.error) };
+  if (!stat.result.exists) return { note: "This file isn't there anymore." };
+  if ((stat.result.size ?? 0) > progressFrom)
+    return { note: "This file is too large to show.", large: !!(await chunksOf(hostId)) };
+  try {
+    const bytes = await readWorking(hostId, runId, path);
+    const shown = fileText(bytes);
+    return "text" in shown ? shown : { ...shown, bytes };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * One file as it is on disk now, as plain monospace text. A binary file offers Download instead
+ * (PLX-834), and so does one too large to show, read in slices with its progress (PLX-835).
+ */
+function FileView({ hostId, runId, path }: { hostId: string; runId: string; path: string }) {
+  const [read, setRead] = useState<Shown>();
+  // The share of a large file read so far, while Download reads it.
+  const [share, setShare] = useState<number>();
+  useEffect(() => {
+    let stopped = false;
+    void readShown(hostId, runId, path).then((next) => !stopped && setRead(next));
+    return () => {
+      stopped = true;
+    };
+  }, [hostId, runId, path]);
+
+  if (!read) return null;
+  if ("text" in read)
+    return (
+      <pre
+        aria-label={path}
+        className="code-lines min-h-0 flex-1 overflow-auto px-4 pt-2 pb-4 font-mono text-meta leading-[1.6] text-foreground"
+      >
+        {read.text}
+      </pre>
+    );
+  const bytes = "bytes" in read ? read.bytes : undefined;
+  const save = bytes
+    ? async () => bytes
+    : "large" in read && read.large
+      ? () => readWorking(hostId, runId, path, setShare).finally(() => setShare(undefined))
+      : undefined;
+  return (
+    <div className="px-4 pt-2">
+      <p
+        role={"error" in read ? "alert" : undefined}
+        className={`text-body ${"error" in read ? "text-danger" : "text-muted-foreground"}`}
+      >
+        {"error" in read ? read.error : read.note}
+      </p>
+      {save && (
+        <div className="-ml-2 flex items-center gap-2 pt-1">
+          <DownloadButton name={nameOf(path)} read={save} />
+          {share !== undefined && (
+            <span className="text-body text-muted-foreground tabular-nums">
+              {Math.round(share * 100)}%
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

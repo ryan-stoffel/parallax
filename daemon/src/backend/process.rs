@@ -1,13 +1,13 @@
 //! Supervising a vendor CLI's process, which every backend shares.
 //!
 //! - **Spawning** goes through `posix_spawn` in `crate::spawn`, so the child holds its three
-//!   pipes and nothing else of wispd's, such as client sockets or the listener (#86). It leads a
-//!   new session and process group, so a terminal that started wispd can't signal it, and
+//!   pipes and nothing else of plxd's, such as client sockets or the listener (#86). It leads a
+//!   new session and process group, so a terminal that started plxd can't signal it, and
 //!   cancelling can reach everything it started. On Windows (0023), it goes through tokio's
 //!   `Command` into a new process group and a job object of its own, which stands in for the
 //!   process group below; `serve` cleared the inherit flag on all its handles at startup, so the
 //!   child gets only its three pipes.
-//! - **The environment is explicit**: a base (wispd's own with the usual install folders on
+//! - **The environment is explicit**: a base (plxd's own with the usual install folders on
 //!   `PATH`, decision 0014; #96 may capture the login shell's instead), minus
 //!   [`ALWAYS_SCRUBBED`] and the backend's scrub list, plus
 //!   [`DATA_DIR_ENV`](crate::paths::DATA_DIR_ENV) from [`DataDir::command`], plus the backend's
@@ -22,9 +22,9 @@
 //!   process that reused the pid. On Windows, a task waits for it and terminates its job.
 //!
 //! **Limit:** a process that leaves the group, with `setsid` or `setpgid`, escapes all of this.
-//! macOS has no way to follow it short of scanning the process table, and wispd doesn't use
+//! macOS has no way to follow it short of scanning the process table, and plxd doesn't use
 //! Linux's ways (a child subreaper or a cgroup). It is reparented to launchd or init, which reaps
-//! it; wispd never waits for it. It can't hold a run open either: once the CLI exits, stdout is
+//! it; plxd never waits for it. It can't hold a run open either: once the CLI exits, stdout is
 //! cut off after [`OutputLimits::drain_after_exit`], though never before what the CLI itself wrote
 //! has been read, and stdin writes stop at a timeout.
 //! Daemons an agent starts on purpose, such as a dev server, therefore outlive the run.
@@ -36,7 +36,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -47,7 +47,9 @@ use tokio::time::{Instant, sleep_until, timeout};
 use zeroize::Zeroize;
 
 use super::event::ExitInfo;
+use super::record::Recorder;
 use crate::paths::DataDir;
+use crate::server::EXIT_WITH_ENV;
 
 /// The write end of a process's stdin.
 #[cfg(unix)]
@@ -56,9 +58,84 @@ pub type StdinPipe = tokio::net::unix::pipe::Sender;
 #[cfg(windows)]
 pub type StdinPipe = tokio::process::ChildStdin;
 
+/// Writes each line to `stdin` in order, off the caller's loop, and closes it once every sender is
+/// gone. Lines carry their own newline.
+pub async fn write_lines(mut stdin: StdinPipe, mut lines: mpsc::UnboundedReceiver<String>) {
+    use tokio::io::AsyncWriteExt as _;
+
+    while let Some(line) = lines.recv().await {
+        if stdin.write_all(line.as_bytes()).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// The SDK sidecar's child bridge. Reuses the normal supervisor, including cleanup before reap,
+/// Windows Job Objects, bounded output drain, and exactly one exit after stdout and stderr.
+/// Input is JSON lines: base64 `stdin`, `end`, or `kill`. Output is base64 `stdout`, `oversized`,
+/// then `exit {code, signal, stderr}`. Closing the bridge kills the CLI's group.
+///
+/// # Errors
+/// If starting the CLI or writing the bridge's output fails.
+pub async fn sdk_process(program: &OsStr, args: &[OsString]) -> io::Result<()> {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+    #[cfg(windows)]
+    crate::windows::stop_inheriting_handles();
+    let cwd = std::env::current_dir()?;
+    let data = DataDir::resolve(
+        std::env::var_os(crate::paths::DATA_DIR_ENV)
+            .as_deref()
+            .map(Path::new),
+    )?;
+    let launcher = Launcher::new(data, Environment::inherited());
+    let mut spec = ProcessSpec::new(program, cwd);
+    spec.args = args.to_vec();
+    spec.stdin = StdinMode::Piped;
+    let mut process = launcher.spawn(&spec).map_err(io::Error::other)?;
+    let signals = process.signals().clone();
+    let mut stdin = process.take_stdin();
+    tokio::spawn(async move {
+        let mut input = BufReader::new(tokio::io::stdin()).lines();
+        while let Ok(Some(mut line)) = input.next_line().await {
+            let message = serde_json::from_str::<serde_json::Value>(&line);
+            line.zeroize();
+            let Ok(message) = message else { break };
+            if message.get("kill").is_some() {
+                let _ = signals.signal_group(Signal::KILL);
+            } else if message.get("end").is_some() {
+                stdin.take();
+            } else if let Some(encoded) = message.get("stdin").and_then(serde_json::Value::as_str)
+                && let Ok(mut bytes) = data_encoding::BASE64.decode(encoded.as_bytes())
+            {
+                if let Some(pipe) = &mut stdin {
+                    let _ = timeout(Duration::from_secs(5), pipe.write_all(&bytes)).await;
+                }
+                bytes.zeroize();
+            }
+        }
+        let _ = signals.signal_group(Signal::KILL);
+    });
+    let mut stdout = tokio::io::stdout();
+    while let Some(output) = process.next().await {
+        let frame = match output {
+            Output::Line(bytes) => {
+                serde_json::json!({ "stdout": data_encoding::BASE64.encode(&bytes) })
+            }
+            Output::Oversized { bytes } => serde_json::json!({ "oversized": bytes }),
+            Output::Exited(exit) => serde_json::json!({ "exit": {
+                "code": exit.info.code, "signal": exit.info.signal, "stderr": exit.stderr_tail,
+            } }),
+        };
+        stdout.write_all(frame.to_string().as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
+    }
+    stdout.flush().await
+}
+
 /// What [`Signals`] can send. Windows has no signals, so there `INT` and `TERM` send nothing (the
 /// backend closes stdin instead) and `KILL` terminates the process's job (0023). The numbers are
-/// POSIX's, for [`ExitInfo`].
+/// POSIX's.
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Signal(i32);
@@ -71,18 +148,19 @@ impl Signal {
     pub const TERM: Self = Self(15);
     /// Kills the process's job.
     pub const KILL: Self = Self(9);
-
-    /// The POSIX number.
-    #[must_use]
-    pub const fn as_raw(self) -> i32 {
-        self.0
-    }
 }
 
-/// Variables no process wispd starts inherits: the SSH session that may have started it (#96).
+/// Variables no process plxd starts inherits: the SSH session that may have started it (#96).
 /// That includes its `SSH_AUTH_SOCK`, which stops working when the session ends and which no
-/// agent needs: workers can't push, and wispd makes every commit locally (decision 0014).
-pub const ALWAYS_SCRUBBED: &[&str] = &["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"];
+/// agent needs: workers can't push, and plxd makes every commit locally (decision 0014). And
+/// [`EXIT_WITH_ENV`], the app this `serve` stops with (PLX-990).
+pub const ALWAYS_SCRUBBED: &[&str] = &[
+    "SSH_CONNECTION",
+    "SSH_CLIENT",
+    "SSH_TTY",
+    "SSH_AUTH_SOCK",
+    EXIT_WITH_ENV,
+];
 
 /// The longest stdout line a backend reads by default. Longer ones are skipped and reported. It
 /// matches 0007's frame limit, which a notification built from the line has to fit anyway.
@@ -104,7 +182,7 @@ const READ_CHUNK: usize = 64 * 1024;
 /// ready. What the process wrote before it exited is unread then: at most a pipe's worth (64 KiB
 /// by default on macOS and Linux, and up to Linux's default `pipe-max-size`, 1 MiB, if the
 /// process grows its pipe; Windows adds tokio's 64 KiB read-ahead) plus one read. A slow reader
-/// can take longer than the drain to get through it (RYA-140).
+/// can take longer than the drain to get through it (PLX-140).
 const READ_BEFORE_CUT: u64 = 1024 * 1024 + READ_CHUNK as u64;
 
 // Sets the working directory, which the safe posix_spawn wrappers can't, then runs the program.
@@ -128,7 +206,7 @@ impl Environment {
         Self::default()
     }
 
-    /// wispd's own environment. Windows' variable names are case-insensitive, and some come
+    /// plxd's own environment. Windows' variable names are case-insensitive, and some come
     /// spelled like `Path`, so there every name is upper-cased.
     #[must_use]
     pub fn inherited() -> Self {
@@ -165,6 +243,20 @@ impl Environment {
     /// The variables' names.
     pub fn names(&self) -> impl Iterator<Item = &OsStr> {
         self.vars.keys().map(OsString::as_os_str)
+    }
+
+    /// The names that start with one of `prefixes`, for [`ProcessSpec::scrub`].
+    #[must_use]
+    pub fn starting_with(&self, prefixes: &[impl AsRef<str>]) -> Vec<OsString> {
+        self.names()
+            .filter(|name| {
+                let name = name.as_encoded_bytes();
+                prefixes
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix.as_ref().as_bytes()))
+            })
+            .map(OsStr::to_owned)
+            .collect()
     }
 
     fn extend(&mut self, other: &Self) {
@@ -209,7 +301,7 @@ impl fmt::Debug for Environment {
 /// What a backend's process gets on stdin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StdinMode {
-    /// `/dev/null` (`NUL` on Windows), for CLIs that must see stdin closed, such as `codex exec`.
+    /// `/dev/null` (`NUL` on Windows), for CLIs and commands that must see stdin closed.
     Null,
     /// A pipe the backend writes to with [`Process::take_stdin`], for follow-up messages.
     Piped,
@@ -254,8 +346,22 @@ pub struct ProcessSpec {
     pub inject: Environment,
     /// What stdin is.
     pub stdin: StdinMode,
+    /// Whether stderr's lines also come as [`Output::Line`]s while the process runs, mixed in
+    /// with stdout's, for a CLI that prints what plxd reads there, such as `gh auth login`'s
+    /// one-time code. They still go into [`Exit::stderr_tail`] too.
+    pub stderr_lines: bool,
+    /// Whether a `\r` ends a stderr line too, for a CLI that redraws a progress line, such as
+    /// `git clone --progress` (PLX-905). Only with `stderr_lines`; empty lines are dropped.
+    pub stderr_progress: bool,
     /// Output limits.
     pub limits: OutputLimits,
+    /// The name a recording of this process's session goes under when plxd records CLI
+    /// sessions (see [`record`](super::record)). `None` for anything that isn't an agent's CLI.
+    pub record: Option<&'static str>,
+    /// Whether this is an agent's process, whose `PATH` starts with the `gh` shim's folder
+    /// ([`gh_shim`](crate::gh_shim), PLX-1023). Never for the user's terminals or plxd's own
+    /// `gh` calls.
+    pub agent: bool,
 }
 
 impl ProcessSpec {
@@ -268,7 +374,11 @@ impl ProcessSpec {
             scrub: Vec::new(),
             inject: Environment::empty(),
             stdin: StdinMode::Null,
+            stderr_lines: false,
+            stderr_progress: false,
             limits: OutputLimits::default(),
+            record: None,
+            agent: false,
         }
     }
 }
@@ -287,7 +397,7 @@ pub enum SpawnError {
     /// On Windows, the program is a batch file, such as an npm `.cmd` shim, and std refused an
     /// argument it can't pass to one safely (0023).
     #[error(
-        "{} is a batch file, which can't be given one of wispd's arguments safely ({source}); \
+        "{} is a batch file, which can't be given one of plxd's arguments safely ({source}); \
          install the CLI's native build instead of its npm package",
         program.display()
     )]
@@ -321,27 +431,42 @@ fn display_dirs(dirs: &[PathBuf]) -> String {
         .join(", ")
 }
 
-/// Starts processes for backends, with wispd's data folder and a base environment.
+/// Builds a [`Launcher`]'s base environment the first time it is needed.
+type MakeBase = Box<dyn FnOnce() -> Environment + Send>;
+
+/// Starts processes for backends, with plxd's data folder and a base environment.
 #[derive(Clone, Debug)]
 pub struct Launcher {
     data_dir: DataDir,
-    base: Environment,
+    base: Arc<LazyLock<Environment, MakeBase>>,
 }
 
 impl Launcher {
-    /// A launcher whose processes start from `base` and reach the wispd that owns `data_dir`.
+    /// A launcher whose processes start from `base` and reach the plxd that owns `data_dir`.
     #[must_use]
     pub fn new(data_dir: DataDir, base: Environment) -> Self {
-        Self { data_dir, base }
+        Self::lazy(data_dir, move || base)
     }
 
-    /// The environment processes start from, before scrubbing and injection.
+    /// Like [`Launcher::new`], with the base built by `make` on first use. `serve` uses it to
+    /// answer clients while the login shell's `PATH` is still being read; whatever needs the
+    /// environment first waits for it.
+    #[must_use]
+    pub fn lazy(data_dir: DataDir, make: impl FnOnce() -> Environment + Send + 'static) -> Self {
+        Self {
+            data_dir,
+            base: Arc::new(LazyLock::new(Box::new(make))),
+        }
+    }
+
+    /// The environment processes start from, before scrubbing and injection. Blocks until a
+    /// [`Launcher::lazy`] base is built.
     #[must_use]
     pub fn base(&self) -> &Environment {
         &self.base
     }
 
-    /// wispd's data folder.
+    /// plxd's data folder.
     #[must_use]
     pub fn data_dir(&self) -> &DataDir {
         &self.data_dir
@@ -350,7 +475,7 @@ impl Launcher {
     /// The environment `spec`'s process gets.
     #[must_use]
     pub fn environment(&self, spec: &ProcessSpec) -> Environment {
-        let mut env = self.base.clone();
+        let mut env = self.base().clone();
         for name in ALWAYS_SCRUBBED {
             env.remove(name);
         }
@@ -367,7 +492,38 @@ impl Launcher {
             };
         }
         env.extend(&spec.inject);
+        if spec.agent
+            && let Some(path) = env.get("PATH")
+            && let Ok(path) = std::env::join_paths(
+                std::iter::once(crate::gh_shim::dir(&self.data_dir))
+                    .chain(std::env::split_paths(path)),
+            )
+        {
+            env.set("PATH", path);
+        }
+        // plxd's own bwrap and socat go last, so the host's win (PLX-895).
+        #[cfg(target_os = "linux")]
+        if let (Some(dir), Some(path)) = (
+            super::claude::linux_sandbox::bundled_dir(self.data_dir.root()),
+            env.get("PATH"),
+        ) && let Ok(path) = std::env::join_paths(std::env::split_paths(path).chain([dir]))
+        {
+            env.set("PATH", path);
+        }
         env
+    }
+
+    /// The environment `spec`'s process gets and the program it runs, once its working directory
+    /// checks out.
+    ///
+    /// # Errors
+    ///
+    /// If the working directory is unusable or the program can't be found.
+    pub(crate) fn resolve(&self, spec: &ProcessSpec) -> Result<(Environment, PathBuf), SpawnError> {
+        let env = self.environment(spec);
+        check_working_directory(&spec.cwd)?;
+        let program = find_program(&spec.program, env.get("PATH"))?;
+        Ok((env, program))
     }
 
     /// Starts `spec`'s process. Must be called inside a tokio runtime.
@@ -376,9 +532,11 @@ impl Launcher {
     ///
     /// If the program or working directory is unusable, or starting the process fails.
     pub fn spawn(&self, spec: &ProcessSpec) -> Result<Process, SpawnError> {
-        let env = self.environment(spec);
-        check_working_directory(&spec.cwd)?;
-        let program = find_program(&spec.program, env.get("PATH"))?;
+        let (env, program) = self.resolve(spec)?;
+        let recorder = match spec.record {
+            Some(name) => Recorder::open(name)?,
+            None => None,
+        };
         let Started {
             signals,
             exited,
@@ -386,10 +544,28 @@ impl Launcher {
             stdout,
             stderr,
         } = start(spec, &program, &env)?;
+        #[cfg(unix)]
+        let stdin = match (&recorder, stdin) {
+            (Some(recorder), Some(child)) => match record_stdin(recorder.clone(), child) {
+                Ok(pipe) => Some(pipe),
+                Err(error) => {
+                    let _ = signals.signal_group(Signal::KILL);
+                    return Err(error.into());
+                }
+            },
+            (_, stdin) => stdin,
+        };
 
         let tail = Arc::new(Mutex::new(Tail::new(spec.limits.stderr_tail_bytes)));
-        let stderr_task = tokio::spawn(read_stderr(stderr, Arc::clone(&tail)));
         let (output_tx, output) = mpsc::channel(64);
+        let lines = spec.stderr_lines.then(|| {
+            (
+                output_tx.clone(),
+                spec.limits.max_line_bytes,
+                spec.stderr_progress,
+            )
+        });
+        let stderr_task = tokio::spawn(read_stderr(stderr, Arc::clone(&tail), lines));
         tokio::spawn(pump(
             LineReader::new(stdout, spec.limits.max_line_bytes),
             exited,
@@ -399,12 +575,76 @@ impl Launcher {
             },
             output_tx,
             spec.limits.drain_after_exit,
+            recorder,
         ));
 
         Ok(Process {
             signals,
             stdin,
             output,
+        })
+    }
+}
+
+/// A process [`Launcher::spawn_raw`] started: its stdin and stdout as raw pipes, for a protocol
+/// that isn't lines, such as Chrome's NUL-delimited `DevTools` pipe (PLX-639). Dropping it kills the
+/// process's group, as dropping a [`Process`] does.
+#[cfg(unix)]
+pub struct RawProcess {
+    signals: Signals,
+    /// The write end of its stdin, until taken.
+    pub stdin: Option<StdinPipe>,
+    /// The read end of its stdout, until taken.
+    pub stdout: Option<tokio::net::unix::pipe::Receiver>,
+    stderr: Arc<Mutex<Tail>>,
+}
+
+#[cfg(unix)]
+impl RawProcess {
+    /// The end of its stderr so far, decoded lossily and trimmed.
+    pub fn stderr_tail(&self) -> String {
+        self.stderr
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .text()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RawProcess {
+    fn drop(&mut self) {
+        let _ = self.signals.signal_group(Signal::KILL);
+    }
+}
+
+#[cfg(unix)]
+impl Launcher {
+    /// Starts `spec` as [`Launcher::spawn`] does, with stdin piped whatever `spec.stdin` says,
+    /// but hands back stdout raw. Its stderr's tail is kept, and it is reaped in the background.
+    ///
+    /// # Errors
+    ///
+    /// As [`Launcher::spawn`].
+    pub fn spawn_raw(&self, spec: &ProcessSpec) -> Result<RawProcess, SpawnError> {
+        let spec = ProcessSpec {
+            stdin: StdinMode::Piped,
+            ..spec.clone()
+        };
+        let (env, program) = self.resolve(&spec)?;
+        let Started {
+            signals,
+            exited: _,
+            stdin,
+            stdout,
+            stderr,
+        } = start(&spec, &program, &env)?;
+        let tail = Arc::new(Mutex::new(Tail::new(spec.limits.stderr_tail_bytes)));
+        tokio::spawn(read_stderr(stderr, Arc::clone(&tail), None));
+        Ok(RawProcess {
+            signals,
+            stdin,
+            stdout: Some(stdout),
+            stderr: tail,
         })
     }
 }
@@ -445,7 +685,7 @@ fn start(
         OsStr::new("sh"),
         OsStr::new("-c"),
         OsStr::new(TRAMPOLINE),
-        OsStr::new("wispd-spawn"),
+        OsStr::new("plxd-spawn"),
         spec.cwd.as_os_str(),
         program.as_os_str(),
     ]
@@ -544,7 +784,6 @@ fn start(
     }
     let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
     let shared = Arc::new(Shared {
-        pid: child.id().unwrap_or(0),
         job,
         reaped: Mutex::new(false),
     });
@@ -686,16 +925,9 @@ impl Drop for Process {
 
 impl Process {
     /// The process's id, which is also its process group's.
-    #[cfg(unix)]
+    #[cfg(all(test, unix))]
     #[must_use]
     pub fn pid(&self) -> rustix::process::Pid {
-        self.signals.shared.pid
-    }
-
-    /// The process's id.
-    #[cfg(windows)]
-    #[must_use]
-    pub fn pid(&self) -> u32 {
         self.signals.shared.pid
     }
 
@@ -749,8 +981,6 @@ pub struct Signals {
 struct Shared {
     #[cfg(unix)]
     pid: rustix::process::Pid,
-    #[cfg(windows)]
-    pid: u32,
     /// The job the process runs in, which stands in for its process group.
     #[cfg(windows)]
     job: crate::windows::Job,
@@ -799,6 +1029,7 @@ impl Signals {
     }
 
     /// Whether the process has exited and been reaped.
+    #[cfg(test)]
     #[must_use]
     pub fn reaped(&self) -> bool {
         *self.shared.lock()
@@ -823,7 +1054,7 @@ impl Signals {
             });
         } else {
             let _ = std::thread::Builder::new()
-                .name("wispd-cancel".into())
+                .name("plxd-cancel".into())
                 .spawn(move || {
                     std::thread::sleep(policy.grace);
                     let _ = signals.signal_group(Signal::KILL);
@@ -865,7 +1096,7 @@ fn reap_in_background(shared: Arc<Shared>) -> oneshot::Receiver<ExitInfo> {
 
     let (tx, rx) = oneshot::channel();
     let spawned = std::thread::Builder::new()
-        .name("wispd-reaper".into())
+        .name("plxd-reaper".into())
         .spawn(move || {
             let pid = shared.pid;
             let exited = loop {
@@ -890,12 +1121,7 @@ fn reap_in_background(shared: Arc<Shared>) -> oneshot::Receiver<ExitInfo> {
                             signal: status.terminating_signal(),
                         };
                     }
-                    _ => {
-                        break ExitInfo {
-                            code: None,
-                            signal: None,
-                        };
-                    }
+                    _ => break ExitInfo::default(),
                 }
             };
             *reaped = true;
@@ -922,11 +1148,8 @@ async fn pump<R: AsyncRead + Unpin>(
     stderr: StderrTail,
     output: mpsc::Sender<Output>,
     drain: Duration,
+    recorder: Option<Recorder>,
 ) {
-    let unknown = ExitInfo {
-        code: None,
-        signal: None,
-    };
     let mut exit = None;
     let mut deadline = None;
     // How much stdout had been read when the exit was seen.
@@ -936,6 +1159,9 @@ async fn pump<R: AsyncRead + Unpin>(
             biased;
             line = lines.next() => match line {
                 Ok(Some(line)) => {
+                    if let (Some(recorder), Output::Line(line)) = (&recorder, &line) {
+                        recorder.stdout(line);
+                    }
                     if output.send(line).await.is_err() {
                         return;
                     }
@@ -959,7 +1185,7 @@ async fn pump<R: AsyncRead + Unpin>(
                 Ok(None) | Err(_) => break,
             },
             info = &mut exited, if exit.is_none() => {
-                exit = Some(info.unwrap_or(unknown));
+                exit = Some(info.unwrap_or_default());
                 deadline = Some(Instant::now() + drain);
                 read_at_exit = lines.read;
             }
@@ -968,7 +1194,7 @@ async fn pump<R: AsyncRead + Unpin>(
     }
     let info = match exit {
         Some(info) => info,
-        None => (&mut exited).await.unwrap_or(unknown),
+        None => (&mut exited).await.unwrap_or_default(),
     };
     let StderrTail { task, tail } = stderr;
     let _ = timeout(drain, task).await;
@@ -978,16 +1204,79 @@ async fn pump<R: AsyncRead + Unpin>(
         .await;
 }
 
-async fn read_stderr<R: AsyncRead + Unpin>(mut stderr: R, tail: Arc<Mutex<Tail>>) {
-    let mut chunk = vec![0; 8192];
-    loop {
-        match stderr.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(n) => tail
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(&chunk[..n]),
+/// A stdin for plxd that marks each line in `recorder` before passing it on to `child`, so a
+/// recording has each `@read` before the output that answers it.
+#[cfg(unix)]
+fn record_stdin(recorder: Recorder, mut child: StdinPipe) -> io::Result<StdinPipe> {
+    use std::os::fd::OwnedFd;
+
+    use tokio::io::AsyncWriteExt as _;
+    use tokio::net::unix::pipe;
+
+    let (reader, writer) = io::pipe()?;
+    let mut reader = pipe::Receiver::from_owned_fd(OwnedFd::from(reader))?;
+    let writer = pipe::Sender::from_owned_fd(OwnedFd::from(writer))?;
+    tokio::spawn(async move {
+        let mut buf = vec![0; 8192];
+        // Ends when plxd closes its end, which drops `child` and closes the CLI's stdin.
+        while let Ok(read @ 1..) = reader.read(&mut buf).await {
+            for _ in buf[..read].iter().filter(|&&byte| byte == b'\n') {
+                recorder.stdin();
+            }
+            if child.write_all(&buf[..read]).await.is_err() {
+                break;
+            }
         }
+    });
+    Ok(writer)
+}
+
+/// Keeps stderr's tail, and with `lines` also sends each line of it up to the size limit, without
+/// its newline. [`pump`] waits for this before it sends the exit, so the lines come first.
+async fn read_stderr<R: AsyncRead + Unpin>(
+    mut stderr: R,
+    tail: Arc<Mutex<Tail>>,
+    lines: Option<(mpsc::Sender<Output>, usize, bool)>,
+) {
+    let mut chunk = vec![0; 8192];
+    let mut line = Vec::new();
+    loop {
+        let n = match stderr.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        tail.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(&chunk[..n]);
+        let Some((output, max, progress)) = &lines else {
+            continue;
+        };
+        line.extend_from_slice(&chunk[..n]);
+        while let Some(end) = line
+            .iter()
+            .position(|&b| b == b'\n' || (*progress && b == b'\r'))
+        {
+            let rest = line.split_off(end + 1);
+            let mut done = std::mem::replace(&mut line, rest);
+            done.pop();
+            if done.last() == Some(&b'\r') {
+                done.pop();
+            }
+            if *progress && done.is_empty() {
+                continue;
+            }
+            if done.len() <= *max && output.send(Output::Line(done)).await.is_err() {
+                return;
+            }
+        }
+        if line.len() > *max {
+            line.clear();
+        }
+    }
+    if let Some((output, _, _)) = lines
+        && !line.is_empty()
+    {
+        let _ = output.send(Output::Line(line)).await;
     }
 }
 
@@ -1014,10 +1303,7 @@ impl Tail {
     }
 
     fn text(&self) -> String {
-        let (front, back) = self.bytes.as_slices();
-        let mut all = Vec::with_capacity(self.bytes.len());
-        all.extend_from_slice(front);
-        all.extend_from_slice(back);
+        let all: Vec<u8> = self.bytes.iter().copied().collect();
         String::from_utf8_lossy(&all).trim().to_owned()
     }
 }
@@ -1125,7 +1411,6 @@ impl<R: AsyncRead + Unpin> LineReader<R> {
 mod tests {
     #[cfg(unix)]
     use std::collections::BTreeSet;
-    use std::ffi::OsString;
     #[cfg(unix)]
     use std::os::fd::AsRawFd;
     use std::time::Duration;
@@ -1134,22 +1419,17 @@ mod tests {
 
     #[cfg(unix)]
     use rustix::process::{Pid, Signal};
-    #[cfg(unix)]
-    use tokio::io::AsyncWriteExt;
 
     #[cfg(unix)]
-    use super::{
-        CancelPolicy, Launcher, OutputLimits, Process, ProcessSpec, SpawnError, StdinMode,
-        find_program,
-    };
-    use super::{Environment, LineReader, Output, Tail};
+    use super::{CancelPolicy, Environment, Launcher, OutputLimits, Process, ProcessSpec};
+    use super::{LineReader, Output, Tail};
     use crate::backend::event::ExitInfo;
     #[cfg(unix)]
     use crate::paths::DataDir;
 
     #[cfg(unix)]
     fn launcher(base: Environment) -> Launcher {
-        Launcher::new(DataDir::new("/tmp/wispd-test-data").unwrap(), base)
+        Launcher::new(DataDir::new("/tmp/plxd-test-data").unwrap(), base)
     }
 
     #[cfg(unix)]
@@ -1191,7 +1471,7 @@ mod tests {
         let mut base = base();
         base.set("SSH_CONNECTION", "1.2.3.4 5 6.7.8.9 22")
             .set("SSH_TTY", "/dev/ttys001")
-            .set("VENDOR_TOKEN", "from-wispd")
+            .set("VENDOR_TOKEN", "from-plxd")
             .set("KEPT", "yes")
             .set("OVERRIDDEN", "base");
         let mut spec = sh("/usr/bin/env | /usr/bin/sort");
@@ -1214,7 +1494,7 @@ mod tests {
             "KEPT=yes",
             "OVERRIDDEN=injected",
             "PATH=/usr/bin:/bin",
-            "WISPD_DATA_DIR=/tmp/wispd-test-data",
+            "PLXD_DATA_DIR=/tmp/plxd-test-data",
         ] {
             assert!(vars.contains(expected), "{expected} missing from {vars:?}");
         }
@@ -1224,26 +1504,6 @@ mod tests {
                 "{scrubbed} leaked: {vars:?}"
             );
         }
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn the_child_runs_in_its_working_directory_with_its_arguments() {
-        let dir = tempfile::tempdir().unwrap();
-        let cwd = dir.path().canonicalize().unwrap();
-        let mut spec = ProcessSpec::new("sh", &cwd);
-        spec.args = vec![
-            "-c".into(),
-            "pwd; printf '%s\\n' \"$@\"".into(),
-            "name".into(),
-            "two words".into(),
-            "--flag".into(),
-        ];
-        let mut process = launcher(base()).spawn(&spec).unwrap();
-        let (lines, exit) = collect(&mut process).await;
-        assert!(exit.info.success());
-        let lines: Vec<&str> = lines.iter().map(text).collect();
-        assert_eq!(lines, [cwd.to_str().unwrap(), "two words", "--flag"]);
     }
 
     #[cfg(unix)]
@@ -1268,46 +1528,6 @@ mod tests {
         drop(leaked);
         let fds: Vec<&str> = lines.iter().map(text).collect();
         assert_eq!(fds, ["0", "1", "2"], "{exit:?}");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_missing_program_names_where_it_was_looked_for() {
-        let mut base = base();
-        base.set("PATH", "/nonexistent/bin:relative:/usr/bin");
-        let error = launcher(base)
-            .spawn(&ProcessSpec::new("wisp-no-such-cli", "/"))
-            .unwrap_err();
-        let SpawnError::NotFound { searched, .. } = &error else {
-            panic!("{error:?}");
-        };
-        assert_eq!(searched.len(), 2);
-        assert_eq!(
-            error.to_string(),
-            "wisp-no-such-cli was not found; looked in /nonexistent/bin, /usr/bin"
-        );
-        assert!(matches!(
-            find_program("relative/sh".as_ref(), None),
-            Err(SpawnError::NotFound { .. })
-        ));
-        assert_eq!(
-            find_program("sh".as_ref(), Some("/bin".as_ref())).unwrap(),
-            std::path::Path::new("/bin/sh")
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_bad_working_directory_is_refused() {
-        for cwd in ["relative", "/nonexistent-wisp-dir", "/bin/sh"] {
-            let error = launcher(base())
-                .spawn(&ProcessSpec::new("sh", cwd))
-                .unwrap_err();
-            assert!(
-                matches!(error, SpawnError::BadWorkingDirectory { .. }),
-                "{cwd}: {error:?}"
-            );
-        }
     }
 
     #[cfg(unix)]
@@ -1345,56 +1565,6 @@ mod tests {
         );
         assert!(exit.stderr_tail.ends_with("eee the end"), "{exit:?}");
         assert!(exit.stderr_tail.len() <= 100);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn stdin_is_a_pipe_when_asked_for() {
-        let mut spec = sh("read line; echo \"got $line\"");
-        spec.stdin = StdinMode::Piped;
-        let mut process = launcher(base()).spawn(&spec).unwrap();
-        let mut stdin = process.take_stdin().unwrap();
-        stdin.write_all(b"hello\n").await.unwrap();
-        drop(stdin);
-        let (lines, exit) = collect(&mut process).await;
-        assert!(exit.info.success());
-        assert_eq!(lines, [Output::Line(b"got hello".to_vec())]);
-        assert!(
-            launcher(base())
-                .spawn(&sh("true"))
-                .unwrap()
-                .take_stdin()
-                .is_none()
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn cancel_asks_first() {
-        // A trap shows which signal arrived. Without one, bash 3.2's exit status after a SIGINT
-        // in `wait` varies. Printing "ready" only after the trap is installed is this test's
-        // deterministic handshake: reading that line can never race the trap's own installation.
-        let mut process = launcher(base())
-            .spawn(&sh(
-                "trap 'echo interrupted; exit 7' INT; echo ready; sleep 30 & wait $!",
-            ))
-            .unwrap();
-        assert_eq!(process.next().await, Some(Output::Line(b"ready".to_vec())));
-        let started = Instant::now();
-        // Signals the process directly instead of `cancel()`, which would also arm the
-        // grace-then-`SIGKILL` escalation. This test is about the trap's own reaction to
-        // `SIGINT`, not the escalation (`cancel_kills_the_group_after_the_grace_period` owns
-        // that), so it never arms a second timer that could race the trap's clean exit (#139).
-        assert!(process.signals().signal(Signal::INT));
-        let (lines, exit) = collect(&mut process).await;
-        assert_eq!(lines, [Output::Line(b"interrupted".to_vec())]);
-        assert_eq!(exit.info.code, Some(7), "{exit:?}");
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(process.signals().reaped());
-        assert!(
-            !process.signals().signal(Signal::TERM),
-            "no signal after the reap"
-        );
     }
 
     #[cfg(unix)]
@@ -1463,39 +1633,6 @@ mod tests {
         wait_until_gone(pid).await;
     }
 
-    #[tokio::test]
-    async fn lines_split_across_reads_and_oversized_ones_are_skipped() {
-        let input: &[u8] = b"one\ntwo\r\nlong-line-here\nthree";
-        let mut reader = LineReader::new(input, 8);
-        let mut out = Vec::new();
-        while let Some(line) = reader.next().await.unwrap() {
-            out.push(line);
-        }
-        assert_eq!(
-            out,
-            [
-                Output::Line(b"one".to_vec()),
-                Output::Line(b"two\r".to_vec()),
-                Output::Oversized { bytes: 14 },
-                Output::Line(b"three".to_vec()),
-            ]
-        );
-        let many = b"a\nbb\n\nccc\n".repeat(10_000);
-        let mut reader = LineReader::new(&many[..], 8);
-        let mut count = 0;
-        while let Some(line) = reader.next().await.unwrap() {
-            assert!(matches!(line, Output::Line(_)), "{line:?}");
-            count += 1;
-        }
-        assert_eq!(count, 40_000);
-        let mut reader = LineReader::new(&b"0123456789"[..], 4);
-        assert_eq!(
-            reader.next().await.unwrap(),
-            Some(Output::Oversized { bytes: 10 })
-        );
-        assert_eq!(reader.next().await.unwrap(), None);
-    }
-
     /// Pumps `stdout` for a process that has already exited, with a drain of `drain`.
     fn pump_exited(
         stdout: impl tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -1519,6 +1656,7 @@ mod tests {
             stderr,
             output_tx,
             drain,
+            None,
         ));
         output
     }
@@ -1526,7 +1664,7 @@ mod tests {
     #[tokio::test]
     async fn the_drain_never_drops_what_the_process_wrote() {
         // More than one read's worth, left unread at the exit, in a pipe something else keeps
-        // open. However long the reader takes, all of it comes through (RYA-140).
+        // open. However long the reader takes, all of it comes through (PLX-140).
         let (mut writer, reader) = tokio::io::duplex(1024 * 1024);
         let written: Vec<String> = (0..20_000).map(|n| format!("line {n}")).collect();
         let text = format!("{}\n", written.join("\n"));
@@ -1559,25 +1697,6 @@ mod tests {
         .expect("the exit never came");
         assert!(exit.info.success());
     }
-
-    #[test]
-    fn the_tail_keeps_the_last_bytes() {
-        let mut tail = Tail::new(5);
-        tail.push(b"abc");
-        tail.push(b"defg");
-        assert_eq!(tail.text(), "cdefg");
-        tail.push(b"0123456789");
-        assert_eq!(tail.text(), "56789");
-    }
-
-    #[test]
-    fn environments_collect_and_hide_values() {
-        let env: Environment = [(OsString::from("A"), OsString::from("1"))]
-            .into_iter()
-            .collect();
-        assert_eq!(env.get("A"), Some("1".as_ref()));
-        assert_eq!(format!("{env:?}"), "{\"A\"}");
-    }
 }
 
 #[cfg(all(test, windows))]
@@ -1595,7 +1714,7 @@ mod windows_tests {
     const PATIENCE: Duration = Duration::from_secs(10);
 
     fn launcher(base: Environment) -> Launcher {
-        let data = std::env::temp_dir().join("wispd-test-data");
+        let data = std::env::temp_dir().join("plxd-test-data");
         Launcher::new(DataDir::new(data).unwrap(), base)
     }
 
@@ -1616,22 +1735,6 @@ mod windows_tests {
                 other => panic!("unexpected {other:?}"),
             }
         }
-    }
-
-    #[tokio::test]
-    async fn the_child_gets_its_environment_working_directory_and_exit_code() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut spec = cmd("echo %WISP_TEST%& cd& exit 3");
-        spec.cwd = dir.path().to_owned();
-        spec.inject.set("WISP_TEST", "set");
-        let mut process = launcher(Environment::inherited()).spawn(&spec).unwrap();
-        let (lines, exit) = collect(&mut process).await;
-        assert_eq!(exit.info.code, Some(3), "{exit:?}");
-        assert_eq!(lines[0], "set");
-        assert!(
-            lines[1].eq_ignore_ascii_case(&dir.path().display().to_string()),
-            "{lines:?}"
-        );
     }
 
     #[tokio::test]

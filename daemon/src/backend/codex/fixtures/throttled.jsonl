@@ -1,7 +1,0 @@
-# Synthetic: a ChatGPT login throttled with a plain HTTP 429, whose body isn't one of Codex's
-# usage-limit, not-included, or quota errors. api_bridge.rs at rust-v0.157.1 then reports
-# RetryLimitReachedError once its retries run out, which exec prints as turn.failed.
-{"type":"thread.started","thread_id":"01a0eb10-5c3d-7e21-9f40-6a1b2c3d4e61"}
-{"type":"turn.started"}
-{"type":"turn.failed","error":{"message":"exceeded retry limit, last status: 429 Too Many Requests, request id: req_8d1c2e7f4a9b4c62"}}
-@exit 1

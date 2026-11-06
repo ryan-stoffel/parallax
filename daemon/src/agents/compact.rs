@@ -1,0 +1,408 @@
+//! Rewrites a finished turn's `agent.output` batches as one row (0052).
+//!
+//! A sweep runs at start and hourly. Each job compacts one turn whose last batch is older than
+//! the in-memory window, so a live subscriber never sees the rewrite. Each sweep looks only past
+//! what earlier ones covered: seqs only grow and only compaction rewrites a row, so nothing
+//! before that point can become compactable.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{AgentOutputItem, Compacted, ParallaxEvent, RunId};
+use tokio::time::{self, MissedTickBehavior};
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
+
+use super::store_error;
+use crate::server::Daemon;
+use crate::store::Tx;
+
+/// How often a sweep looks for another finished turn that has left the window.
+pub(crate) const SWEEP_PERIOD: Duration = Duration::from_hours(1);
+
+/// Compacts every finished turn that has left the window, then one more each hour until `stop`.
+pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
+    let mut done = 0;
+    sweep(&daemon, &stop, &mut done).await;
+    let mut interval = time::interval_at(time::Instant::now() + SWEEP_PERIOD, SWEEP_PERIOD);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            _ = interval.tick() => sweep(&daemon, &stop, &mut done).await,
+        }
+    }
+}
+
+/// Compacts eligible turns after seq `done` one job at a time, so no job holds the writer for a
+/// long turn's rewrite, and moves `done` past what it covered. Stops between jobs once `stop` is
+/// cancelled.
+pub(crate) async fn sweep(daemon: &Daemon, stop: &CancellationToken, done: &mut u64) {
+    while !stop.is_cancelled() {
+        let floor = daemon.log.floor();
+        match compact_one(daemon, floor, *done).await {
+            Ok(Some(last)) => *done = last,
+            Ok(None) => {
+                *done = floor.saturating_sub(1);
+                break;
+            }
+            Err(error) => {
+                warn!(error = %error.message, "could not compact a finished turn");
+                break;
+            }
+        }
+    }
+}
+
+/// Rewrites the oldest finished turn that ends after seq `after` and before `floor`. Returns the
+/// turn's last seq, or `None` if there was none.
+pub(crate) async fn compact_one(
+    daemon: &Daemon,
+    floor: u64,
+    after: u64,
+) -> Result<Option<u64>, ErrorObject> {
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |tx| {
+            compact_one_job(tx, floor, after)
+        })
+        .await
+}
+
+fn compact_one_job(tx: &mut Tx, floor: u64, after: u64) -> Result<Option<u64>, ErrorObject> {
+    let Some(turn) = tx
+        .find_compactable_turn(floor, after)
+        .map_err(|error| store_error(&error))?
+    else {
+        return Ok(None);
+    };
+    let outputs = tx
+        .output_events_in(turn.run_id, turn.from, turn.last)
+        .map_err(|error| store_error(&error))?;
+    let mut items = Vec::new();
+    for stored in &outputs {
+        if let Ok(ParallaxEvent::AgentOutput { items: batch, .. }) =
+            serde_json::from_str(&stored.payload)
+        {
+            items.extend(batch);
+        }
+    }
+    let run_id = RunId::try_from(turn.run_id).map_err(|error| {
+        ErrorObject::internal_error(format!("compacted turn has an invalid run id: {error}"))
+    })?;
+    let event = ParallaxEvent::AgentOutput {
+        run_id,
+        items: compact_items(items),
+        compacted: Some(Compacted { from: turn.from }),
+    };
+    let payload = serde_json::to_string(&event).unwrap_or_default();
+    tx.update_event_payload(turn.last, &payload)
+        .map_err(|error| store_error(&error))?;
+    let others: Vec<u64> = outputs
+        .iter()
+        .filter(|event| event.seq != turn.last)
+        .map(|event| event.seq)
+        .collect();
+    tx.delete_events(&others)
+        .map_err(|error| store_error(&error))?;
+    info!(run = %run_id, from = turn.from, seq = turn.last, "compacted a finished turn");
+    Ok(Some(turn.last))
+}
+
+/// Merges consecutive text deltas, drops deltas that a whole `text` repeats, and drops a tool
+/// call announced without its input (PLX-714) once the call repeats with it. Tool calls and
+/// results stay.
+pub(crate) fn compact_items(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
+    drop_repeated_deltas(merge_consecutive_deltas(items))
+}
+
+fn merge_consecutive_deltas(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
+    let mut out = Vec::new();
+    for item in items {
+        let item = compact_subagent(item);
+        if let (
+            Some(AgentOutputItem::TextDelta {
+                message_id: prev_id,
+                text: prev,
+            }),
+            AgentOutputItem::TextDelta { message_id, text },
+        ) = (out.last_mut(), &item)
+            && prev_id == message_id
+        {
+            prev.push_str(text);
+            continue;
+        }
+        out.push(item);
+    }
+    out
+}
+
+fn drop_repeated_deltas(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
+    let mut out: Vec<AgentOutputItem> = Vec::new();
+    for item in items {
+        if let AgentOutputItem::Text { message_id, text } = &item {
+            // The whole text takes its deltas' place, where the renderer puts it: an identified
+            // message's, across intervening items such as tools; without a message id, only the
+            // partial message just before, since earlier deltas separated by tools are distinct
+            // messages.
+            let at = match message_id {
+                Some(_) => out.iter().rposition(|prev| {
+                    matches!(prev, AgentOutputItem::TextDelta { message_id: id, .. } if id == message_id)
+                }),
+                None => out.len().checked_sub(1).filter(|&last| {
+                    matches!(&out[last], AgentOutputItem::TextDelta { message_id: None, .. })
+                }),
+            };
+            if let Some(at) = at
+                && matches!(&out[at], AgentOutputItem::TextDelta { text: delta, .. }
+                    if text.starts_with(delta.as_str()))
+            {
+                out[at] = item;
+                continue;
+            }
+        }
+        // The whole call takes its announcement's place, as the renderer replaces it.
+        if let AgentOutputItem::ToolCall { call_id, .. } = &item
+            && let Some(at) = out.iter().rposition(|prev| {
+                matches!(prev, AgentOutputItem::ToolCall { call_id: id, input, .. }
+                    if id == call_id && input.is_null())
+            })
+        {
+            out[at] = item;
+            continue;
+        }
+        out.push(item);
+    }
+    out
+}
+
+/// A subagent's item, compacted as the agent's own items are.
+fn compact_subagent(item: AgentOutputItem) -> AgentOutputItem {
+    match item {
+        AgentOutputItem::Subagent {
+            call_id,
+            agent_type,
+            model,
+            item,
+        } => {
+            let compacted = compact_items(vec![*item]);
+            AgentOutputItem::Subagent {
+                call_id,
+                agent_type,
+                model,
+                item: Box::new(
+                    compacted
+                        .into_iter()
+                        .next()
+                        .unwrap_or(AgentOutputItem::Unknown),
+                ),
+            }
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::compact_one;
+    use crate::server::Daemon;
+    use crate::store::StoreHandle;
+    use jiff::Timestamp;
+    use parallax_protocol::{AgentOutputItem, Compacted, ParallaxEvent, RunId, ScopeId, TurnId};
+    use std::sync::Arc;
+
+    fn delta(text: &str) -> AgentOutputItem {
+        AgentOutputItem::TextDelta {
+            message_id: None,
+            text: text.to_owned(),
+        }
+    }
+
+    fn text(text: &str) -> AgentOutputItem {
+        AgentOutputItem::Text {
+            message_id: None,
+            text: text.to_owned(),
+        }
+    }
+
+    fn output(run_id: RunId, items: Vec<AgentOutputItem>) -> ParallaxEvent {
+        ParallaxEvent::AgentOutput {
+            run_id,
+            items,
+            compacted: None,
+        }
+    }
+
+    fn turn_finished() -> AgentOutputItem {
+        AgentOutputItem::TurnFinished {
+            turn_id: Some(TurnId::generate()),
+            result: Some("Hello".to_owned()),
+            cursor: None,
+            session_id: None,
+        }
+    }
+
+    /// Compacts the oldest eligible turn, looking at every row.
+    async fn compact(daemon: &Daemon) -> Option<u64> {
+        compact_one(daemon, daemon.log.floor(), 0).await.unwrap()
+    }
+
+    async fn put(store: &StoreHandle, project: ScopeId, event: ParallaxEvent) -> u64 {
+        store.append(Timestamp::now(), Some(project), event).await
+    }
+
+    /// A stored daemon whose in-memory window holds only the newest `retention` events.
+    fn daemon(retention: usize) -> (tempfile::TempDir, Arc<Daemon>, ScopeId, RunId) {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), retention, Duration::from_secs(90));
+        (dir, daemon, ScopeId::generate(), RunId::generate())
+    }
+
+    async fn finished_turn(store: &StoreHandle, project: ScopeId, run: RunId) -> (u64, u64, u64) {
+        let first = put(
+            store,
+            project,
+            output(
+                run,
+                vec![
+                    AgentOutputItem::TurnStarted {
+                        turn_id: None,
+                        text: None,
+                        wake: false,
+                        hidden: false,
+                        from: None,
+                        images: Vec::new(),
+                        threads: Vec::new(),
+                    },
+                    delta("Hel"),
+                ],
+            ),
+        )
+        .await;
+        let mid = put(
+            store,
+            project,
+            output(
+                run,
+                vec![
+                    delta("lo"),
+                    AgentOutputItem::ToolCall {
+                        call_id: "c1".to_owned(),
+                        name: "Bash".to_owned(),
+                        input: serde_json::json!({"command": "ls"}),
+                    },
+                ],
+            ),
+        )
+        .await;
+        let last = put(
+            store,
+            project,
+            output(run, vec![text("Hello"), turn_finished()]),
+        )
+        .await;
+        (first, mid, last)
+    }
+
+    #[tokio::test]
+    async fn after_a_turn_leaves_the_window_one_output_row_remains() {
+        let (_dir, daemon, project, run) = daemon(2);
+        let (from, mid, last) = finished_turn(&daemon.store, project, run).await;
+        // Evict the turn: two later events leave only those in a retention-2 window.
+        put(&daemon.store, project, ParallaxEvent::Unknown).await;
+        put(&daemon.store, project, ParallaxEvent::Unknown).await;
+        assert_eq!(daemon.log.floor(), last + 1);
+        assert!(compact(&daemon).await.is_some());
+
+        let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
+        let outputs: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.kind() == "agent.output")
+            .collect();
+        assert_eq!(outputs.len(), 1);
+        let ParallaxEvent::AgentOutput {
+            items,
+            compacted,
+            run_id,
+        } = outputs[0].event().into_owned()
+        else {
+            panic!("expected agent.output");
+        };
+        assert_eq!(run_id, run);
+        assert_eq!(outputs[0].seq, last);
+        assert_eq!(compacted, Some(Compacted { from }));
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, AgentOutputItem::TurnStarted { .. }))
+        );
+        assert!(items.iter().any(|item| matches!(
+            item,
+            AgentOutputItem::ToolCall { call_id, .. } if call_id == "c1"
+        )));
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, AgentOutputItem::Text { text, .. } if text == "Hello"))
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, AgentOutputItem::TurnFinished { .. }))
+        );
+        assert!(items.iter().any(
+            |item| matches!(item, AgentOutputItem::TextDelta { text, .. } if text == "Hello")
+        ));
+        assert!(
+            daemon
+                .log
+                .run_events(run, 0, 100, usize::MAX)
+                .unwrap()
+                .0
+                .iter()
+                .all(|entry| entry.seq != mid)
+        );
+    }
+
+    #[tokio::test]
+    async fn other_events_inside_the_turn_keep_their_rows() {
+        let (_dir, daemon, project, run) = daemon(2);
+        let first = put(&daemon.store, project, output(run, vec![delta("Hel")])).await;
+        let updated = put(
+            &daemon.store,
+            project,
+            ParallaxEvent::AgentWakeupsPaused { run_id: run },
+        )
+        .await;
+        let last = put(
+            &daemon.store,
+            project,
+            output(run, vec![text("Hello"), turn_finished()]),
+        )
+        .await;
+        put(&daemon.store, project, ParallaxEvent::Unknown).await;
+        put(&daemon.store, project, ParallaxEvent::Unknown).await;
+        assert!(compact(&daemon).await.is_some());
+
+        let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
+        let seqs: Vec<u64> = entries.iter().map(|entry| entry.seq).collect();
+        assert_eq!(seqs, [updated, last]);
+        assert!(
+            !entries.iter().any(|entry| entry.seq == first),
+            "the earlier output batch is gone"
+        );
+        assert!(matches!(
+            entries
+                .iter()
+                .find(|entry| entry.seq == updated)
+                .unwrap()
+                .event()
+                .into_owned(),
+            ParallaxEvent::AgentWakeupsPaused { .. }
+        ));
+    }
+}

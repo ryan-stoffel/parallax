@@ -1,60 +1,74 @@
-import {
-  BookOpen,
-  ChevronLeft,
-  Circle,
-  CircleCheck,
-  FileText,
-  GitMerge,
-  NotebookText,
-  Search,
-  X,
-} from "lucide-react";
-import { useEffect, useState, type ReactNode, type SVGProps } from "react";
-import type { Components } from "react-markdown";
+import { ChevronLeft, Circle, CircleCheck, FileText, Folder, GitMerge } from "lucide-react";
+import { useEffect, useState, type SVGProps } from "react";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import type { ContextFile, WispEvent } from "../protocol/generated/protocol";
-import { MarkdownText } from "./AgentChat";
+import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
 import { describeError } from "./errors";
+import { dayLabel, locale } from "./locale";
+import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
-import { age } from "./Sidebar";
-import { IconButton } from "./ui";
+import { codeComponents, highlight } from "./AgentChat";
 
-/** The status board the coordinator keeps (coordinator.md), which the view opens on. */
-const board = "notes.md";
+/** The status board the orchestrator keeps, as `orchestrator.md` asks; the orchestrator tab leads with it. */
+export const board = "notes.md";
 
-/** Applies one of a Project's events to its context files: a changed file joins or replaces its row, by path. */
-function applyContextEvent(files: ContextFile[], event: WispEvent): ContextFile[] {
+/** Applies one of an orchestrator's events to its context files: a changed file joins or replaces its row, by path. */
+function applyContextEvent(files: ContextFile[], event: ParallaxEvent): ContextFile[] {
   if (event.kind !== "context.changed") return files;
   const rest = files.filter((f) => f.path !== event.file.path);
   return [...rest, event.file].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
+/** An orchestrator's context files, as `useOrchestratorContext` keeps them, and why they didn't load. */
+export type OrchestratorContext = { files: ContextFile[]; error?: string };
+
 /**
- * A Project's shared context files (0005), by path, kept live: `context/list`, then the Project's
- * `context.changed` events, starting over on `resync`. Loads only while `connected`.
+ * An orchestrator's shared context files (0005), by path, kept live: `context/list`, then the
+ * orchestrator's `context.changed` events, starting over on `resync`. Loads only while `connected`.
  */
-function useProjectContext(hostId: string, project: string, connected: boolean) {
+export function useOrchestratorContext(
+  hostId: string,
+  orchestrator: string,
+  connected: boolean,
+): OrchestratorContext {
   const [files, setFiles] = useState<ContextFile[]>([]);
   const [error, setError] = useState<string>();
+  const connectedNow = useConnectedNow(hostId);
 
   useEffect(() => {
-    if (!connected) return;
+    // Another orchestrator's files, or why they failed, never show under this one.
+    setFiles([]);
+    setError(undefined);
+  }, [hostId, orchestrator, connected]);
+
+  useEffect(() => {
+    if (!connected || !connectedNow) return;
     let stopped = false;
     let unsubscribe = () => {};
 
     async function load() {
-      // ponytail: `context/list` has no `seq` of its own (RYA-187), so subscribe after
+      // ponytail: `context/list` has no `seq` of its own (PLX-187), so subscribe after
       // `agent/list`'s, taken first: a change that lands before the list replays, harmlessly.
-      const position = await window.wisp.request(hostId, "agent/list", { project });
+      const position = await window.parallax.request(hostId, "agent/list", {
+        project: orchestrator,
+      });
       if (stopped) return;
       if ("error" in position) return setError(position.error.message);
-      const list = await window.wisp.request(hostId, "context/list", { project });
+      const list = await window.parallax.request(hostId, "context/list", { project: orchestrator });
       if (stopped) return;
       if ("error" in list) return setError(list.error.message);
       setFiles(list.result.files);
       setError(undefined);
-      const since = { after: position.result.seq, project, logId: position.logId };
-      unsubscribe = window.wisp.subscribe(hostId, since, (message) => {
+      // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
+      const since = {
+        after: position.result.seq,
+        orchestrator,
+        shell: true,
+        logId: position.logId,
+      };
+      unsubscribe = window.parallax.subscribe(hostId, since, (message) => {
         if (stopped) return;
         if (message.type === "resync") return void load();
         if (message.type === "error") return setError(message.error.message);
@@ -67,267 +81,217 @@ function useProjectContext(hostId: string, project: string, connected: boolean) 
       stopped = true;
       unsubscribe();
     };
-  }, [hostId, project, connected]);
+  }, [hostId, orchestrator, connected, connectedNow]);
 
   return { files, error };
 }
 
 /**
- * The side panel's Context view for a Project. It opens on the coordinator's status board,
- * `notes.md`; the book button, or a board not written yet, shows All files and Recents instead,
- * and search filters the files by name. Any file opens in the view as Markdown, and everything
- * follows the agents' writes.
- */
-export function ContextPanel({
-  hostId,
-  project,
-  name,
-  connected,
-}: {
-  hostId: string;
-  project: string;
-  /** The Project's name, for the header. */
-  name: string;
-  connected: boolean;
-}) {
-  const { files, error } = useProjectContext(hostId, project, connected);
-  const [openPath, setOpenPath] = useState<string>();
-  const [allFiles, setAllFiles] = useState(false);
-  // What search filters the files by, or undefined while it's closed.
-  const [query, setQuery] = useState<string>();
-  const notes = files.find((f) => f.path === board);
-  const open = files.find((f) => f.path === openPath);
-  const showFiles = allFiles || !notes || query !== undefined;
-  const components = contextComponents(files, setOpenPath);
-  const doc = (file: ContextFile) => (
-    <ContextDoc
-      key={file.path}
-      hostId={hostId}
-      project={project}
-      file={file}
-      components={components}
-    />
-  );
-
-  let body: ReactNode;
-  if (open)
-    body = (
-      <>
-        <button
-          type="button"
-          onClick={() => setOpenPath(undefined)}
-          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
-        >
-          <ChevronLeft aria-hidden className="size-4 shrink-0" />
-          <span className="truncate">{open.path}</span>
-        </button>
-        {doc(open)}
-      </>
-    );
-  else if (!showFiles) body = doc(notes);
-  else if (files.length === 0)
-    body = (
-      <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
-        <NotebookText aria-hidden className="mb-1 size-5 text-faint-foreground" />
-        <p className="text-[13px] font-medium text-foreground">No context yet</p>
-        <p className="text-[12.5px] text-muted-foreground">{boardHint}</p>
-      </div>
-    );
-  else {
-    const q = query?.toLowerCase() ?? "";
-    const shown = files.filter((f) => f.path.toLowerCase().includes(q));
-    const recent = files
-      .toSorted((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))
-      .slice(0, 3);
-    body = (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-        {!notes && query === undefined && (
-          <p className="px-2.5 pb-2 text-[12.5px] text-muted-foreground">{boardHint}</p>
-        )}
-        <h3 className={sectionHeading}>All files</h3>
-        {shown.length === 0 && (
-          <p className="px-2.5 py-2 text-[13px] text-faint-foreground">No files match.</p>
-        )}
-        <ul aria-label="All files">
-          {shown.map((f) => (
-            <li key={f.path}>
-              <button
-                type="button"
-                onClick={() => setOpenPath(f.path)}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
-              >
-                <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
-                <span className="min-w-0 flex-1 truncate text-[13px]">{f.path}</span>
-                <span className="shrink-0 text-[11.5px] text-faint-foreground">
-                  {age(f.modifiedAt)}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        {query === undefined && (
-          <>
-            <h3 className={`${sectionHeading} mt-3`}>Recents</h3>
-            <ul aria-label="Recents" className="flex flex-col gap-2 px-1">
-              {recent.map((f) => (
-                <RecentCard
-                  key={f.path}
-                  hostId={hostId}
-                  project={project}
-                  file={f}
-                  onOpen={() => setOpenPath(f.path)}
-                />
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 pr-2 pb-1 pl-4">
-        {query === undefined ? (
-          <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium">{name}</h2>
-        ) : (
-          <input
-            autoFocus
-            aria-label="Search files"
-            placeholder="Search files"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "Escape") return;
-              setQuery(undefined);
-              document.getElementById("context-search")?.focus();
-            }}
-            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
-          />
-        )}
-        <IconButton
-          id="context-search"
-          label={query === undefined ? "Search files" : "Close search"}
-          onClick={() => {
-            setOpenPath(undefined);
-            setQuery(query === undefined ? "" : undefined);
-          }}
-        >
-          {query === undefined ? <Search /> : <X />}
-        </IconButton>
-        <IconButton
-          label="All files"
-          aria-pressed={showFiles}
-          disabled={!notes}
-          onClick={() => {
-            setOpenPath(undefined);
-            setQuery(undefined);
-            setAllFiles(!showFiles);
-          }}
-        >
-          <BookOpen />
-        </IconButton>
-      </div>
-      {body}
-      {error && (
-        <p role="alert" className="px-4 pb-2 text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-const boardHint = "The coordinator writes a status board to notes.md as work starts.";
-const sectionHeading = "px-2.5 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground";
-
-/**
  * A context file's content, read again whenever `file` changes: it's a new object for each
  * `context.changed` to it.
  */
-function useContent(hostId: string, project: string, file: ContextFile) {
+function useContent(hostId: string, orchestrator: string, file: ContextFile) {
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
   useEffect(() => {
     let stopped = false;
-    void window.wisp.request(hostId, "context/read", { project, path: file.path }).then((read) => {
-      if (stopped) return;
-      if ("error" in read) return setError(describeError(read.error));
-      setContent(read.result.content);
-      setError(undefined);
-    });
+    void window.parallax
+      .request(hostId, "context/read", { project: orchestrator, path: file.path })
+      .then((read) => {
+        if (stopped) return;
+        if ("error" in read) return setError(describeError(read.error));
+        setContent(read.result.content);
+        setError(undefined);
+      });
     return () => {
       stopped = true;
     };
-  }, [hostId, project, file]);
+  }, [hostId, orchestrator, file]);
   return { content, error };
 }
+
+/**
+ * A context file's Markdown, the user's own notes, with `components` drawing the orchestrator tab's
+ * board (its headings, task circles, and links between files). It stays on react-markdown, whose
+ * components can restyle elements, while transcripts use Enriched Markdown (MarkdownText).
+ */
+function ContextMarkdown({ text, components }: { text: string; components: Components }) {
+  return (
+    <div className="markdown">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={highlight}
+        components={{ ...codeComponents, img: noImage, ...components }}
+      >
+        {text}
+      </Markdown>
+    </div>
+  );
+}
+
+// An agent can write a context file, so its images never load, as a transcript's don't: each is a
+// link with its alt text, which opens externally like any link.
+const noImage: Components["img"] = ({ src, alt }) => (
+  <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
+    {alt || "Image"}
+  </a>
+);
 
 /** A context file, rendered as Markdown with `components`. */
 function ContextDoc({
   hostId,
-  project,
+  orchestrator,
   file,
   components,
 }: {
   hostId: string;
-  project: string;
+  orchestrator: string;
   file: ContextFile;
   components: Components;
 }) {
-  const { content, error } = useContent(hostId, project, file);
+  const { content, error } = useContent(hostId, orchestrator, file);
   return (
     <article
       aria-label={file.path}
       className="context-doc min-h-0 flex-1 overflow-y-auto px-4 pt-2 pb-4"
     >
       {error ? (
-        <p role="alert" className="text-[12.5px] text-danger">
+        <p role="alert" className="text-body text-danger">
           {error}
         </p>
       ) : (
-        content !== undefined && <MarkdownText text={content} components={components} />
+        content !== undefined && <ContextMarkdown text={content} components={components} />
       )}
     </article>
   );
 }
 
 /**
- * A recently changed file: its name and age, then the top of it rendered small, with nothing in it
- * to click. The name's button stretches over the whole card.
+ * A context file's Markdown inside another view's scroll, as the orchestrator tab shows the status
+ * board: tasks as circles, pull requests and issues with their icons, and links to other context
+ * files that open them with `onOpen`.
  */
-function RecentCard({
+export function ContextBody({
   hostId,
-  project,
+  orchestrator,
+  files,
   file,
   onOpen,
 }: {
   hostId: string;
-  project: string;
+  orchestrator: string;
+  files: ContextFile[];
   file: ContextFile;
-  onOpen: () => void;
+  onOpen: (path: string) => void;
 }) {
-  const { content } = useContent(hostId, project, file);
+  const { content, error } = useContent(hostId, orchestrator, file);
   return (
-    <li className="relative rounded-lg border border-border hover:bg-hover">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex w-full items-center gap-2 px-3 pt-2 text-left after:absolute after:inset-0"
-      >
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{file.path}</span>
-        <span className="shrink-0 text-[11.5px] text-faint-foreground">{age(file.modifiedAt)}</span>
-      </button>
-      <div
-        aria-hidden
-        className="context-preview max-h-24 overflow-hidden mask-b-from-60% px-3 pb-2"
-      >
-        {/* More than a card shows, without rendering all of a large file. */}
-        {content !== undefined && (
-          <MarkdownText text={content.slice(0, 2000)} components={previewComponents} />
-        )}
-      </div>
-    </li>
+    <div aria-label={file.path} className="context-doc context-board">
+      {error ? (
+        <p role="alert" className="text-body text-danger">
+          {error}
+        </p>
+      ) : (
+        content !== undefined && (
+          <ContextMarkdown
+            text={content}
+            components={{ ...contextComponents(files, onOpen), ...boardHeadings }}
+          />
+        )
+      )}
+    </div>
+  );
+}
+
+// The board's own headings sit under the orchestrator's name (h2) as the tab's sections do (h3):
+// its title an h3, and its sections h4.
+const boardHeadings: Components = {
+  h1: ({ children }) => <h3 className="board-title">{children}</h3>,
+  h2: ({ children }) => <h4 className="board-section">{children}</h4>,
+};
+
+/** "Today at 8:49 AM", "Yesterday at…", or "Oct 20 at…": when `at` was. */
+function when(at: string): string {
+  const time = Date.parse(at);
+  const day = dayLabel(time, Date.now(), { month: "short", day: "numeric" });
+  return `${day} at ${new Date(time).toLocaleTimeString(locale(), clockOptions())}`;
+}
+
+/** An orchestrator's context files as a tree: each folder once, above its files, by path. */
+function fileTree(files: readonly ContextFile[]) {
+  // `key` is a folder's whole path, as two folders may share a name under different parents.
+  const rows: { key: string; name: string; depth: number; at: string; path?: string }[] = [];
+  const folders = new Map<string, (typeof rows)[number]>();
+  for (const f of files.toSorted((a, b) => a.path.localeCompare(b.path, locale()))) {
+    const parts = f.path.split("/");
+    parts.slice(0, -1).forEach((name, depth) => {
+      const key = parts.slice(0, depth + 1).join("/");
+      const folder = folders.get(key);
+      // A folder shows when anything in it last changed.
+      if (folder) folder.at = f.modifiedAt > folder.at ? f.modifiedAt : folder.at;
+      else {
+        const row = { key, name, depth, at: f.modifiedAt };
+        folders.set(key, row);
+        rows.push(row);
+      }
+    });
+    rows.push({
+      key: f.path,
+      name: parts.at(-1)!,
+      depth: parts.length - 1,
+      at: f.modifiedAt,
+      path: f.path,
+    });
+  }
+  return rows;
+}
+
+/**
+ * All of an orchestrator's context files, as a tree of folders and files, each with when it last
+ * changed. A file opens with `onOpen`.
+ */
+export function AllFiles({
+  files,
+  onOpen,
+}: {
+  files: readonly ContextFile[];
+  onOpen: (path: string) => void;
+}) {
+  return (
+    <ul aria-label="All files" className="pb-4">
+      {fileTree(files).map((row) => {
+        const inner = (
+          <>
+            {row.path ? (
+              <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+            ) : (
+              <Folder aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+            )}
+            <span className="min-w-0 flex-1 truncate font-mono text-body">{row.name}</span>
+            <span className="shrink-0 text-meta text-faint-foreground">{when(row.at)}</span>
+          </>
+        );
+        const indent = { paddingLeft: 10 + row.depth * 16 };
+        return (
+          <li key={row.key}>
+            {row.path ? (
+              <button
+                type="button"
+                onClick={() => onOpen(row.path!)}
+                style={indent}
+                className="flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2.5 text-left hover:bg-hover"
+              >
+                {inner}
+              </button>
+            ) : (
+              <div style={indent} className="flex items-center gap-2.5 py-1.5 pr-2.5">
+                {inner}
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -337,7 +301,7 @@ const issue = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/;
 const contextLink = /^(?:\.\/)?([^/:?#]+)$/;
 
 /**
- * How context files render beyond `MarkdownText`: tasks as an open or a check circle, GitHub pull
+ * How context files render beyond ContextMarkdown: tasks as an open or a check circle, GitHub pull
  * request and issue links with their icons, and a link to another context file as a button that
  * opens it here, off while that file doesn't exist.
  */
@@ -352,7 +316,7 @@ function contextComponents(files: ContextFile[], onOpen: (path: string) => void)
             type="button"
             disabled={!files.some((f) => f.path === path)}
             onClick={() => onOpen(path)}
-            className="text-accent underline underline-offset-2 disabled:text-faint-foreground disabled:no-underline"
+            className="text-accent underline-offset-2 hover:underline disabled:text-faint-foreground disabled:no-underline"
           >
             <MarkdownMark className={inlineIcon} />
             {children}
@@ -380,15 +344,6 @@ const taskIcon: Components["input"] = ({ type, checked }) =>
     <Circle aria-label="Open" className={inlineIcon} />
   );
 
-// A Recents card's preview has nothing to click: links and images are text, and code has no copy
-// button.
-const previewComponents: Components = {
-  input: taskIcon,
-  a: ({ children }) => <span>{children}</span>,
-  img: ({ alt }) => <span>{alt || "Image"}</span>,
-  pre: ({ children }) => <pre>{children}</pre>,
-};
-
 /** The Markdown mark (dcurtis/markdown-mark, CC0), sized like a lucide icon. */
 function MarkdownMark(props: SVGProps<SVGSVGElement>) {
   return (
@@ -396,5 +351,42 @@ function MarkdownMark(props: SVGProps<SVGSVGElement>) {
       <path d="M15 10h178a5 5 0 0 1 5 5v98a5 5 0 0 1-5 5H15a5 5 0 0 1-5-5V15a5 5 0 0 1 5-5zm0-10A15 15 0 0 0 0 15v98a15 15 0 0 0 15 15h178a15 15 0 0 0 15-15V15A15 15 0 0 0 193 0z" />
       <path d="M30 98V30h20l20 25 20-25h20v68H90V59L70 84 50 59v39zm125 0l-30-33h20V30h20v35h20z" />
     </svg>
+  );
+}
+
+/** A context file opened from the orchestrator tab, with a way back and its links to other files. */
+export function ContextReader({
+  hostId,
+  orchestrator,
+  files,
+  file,
+  onOpen,
+  onBack,
+}: {
+  hostId: string;
+  orchestrator: string;
+  files: ContextFile[];
+  file: ContextFile;
+  onOpen: (path: string) => void;
+  onBack: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
+      >
+        <ChevronLeft aria-hidden className="size-4 shrink-0" />
+        <span className="truncate">{file.path}</span>
+      </button>
+      <ContextDoc
+        key={file.path}
+        hostId={hostId}
+        orchestrator={orchestrator}
+        file={file}
+        components={contextComponents(files, onOpen)}
+      />
+    </div>
   );
 }

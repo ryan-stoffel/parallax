@@ -1,0 +1,661 @@
+//! `memory/list`, `memory/read`, `memory/write`, `memory/delete`, and `memory/propose` (PLX-405,
+//! decision 0044), behind the `memory` capability.
+//!
+//! Memory lives in a scope's context folder ([`crate::context`]): You in `context/you`, a repo
+//! entry's in `context/<repo id>`, an orchestrator's in `context/<project id>`. The app writes as
+//! the user. A thread's Parallax tools name their run in `from`: only an orchestrator's current
+//! orchestrator writes, though not the brief, and its write adds a `learned` item to the
+//! orchestrator's inbox (0043). A proposal is saved as `proposals/<slug>.md`: an orchestrator's
+//! child's in the orchestrator's folder, naming the scope it is for, until its orchestrator's next
+//! wake-up carries it; an orchestrator's the same way, for the user, such as a rewrite the Memory
+//! tab asked for, naming the entry it replaces, or the brief's; and a plain thread's in its
+//! repository's folder, for the user.
+//!
+//! `memory/syncList` and `memory/syncRead`, behind `youSync`, are another plxd's, which pulls
+//! You memory with them ([`crate::context::you_sync`], 0082).
+
+use std::path::{Path, PathBuf};
+
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST};
+use parallax_protocol::{
+    ErrorKind, InboxKind, MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind,
+    MemoryListParams, MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult,
+    MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemorySyncListParams,
+    MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult, MemoryWriteParams,
+    MemoryWriteResult, RunId, ScopeId,
+};
+use uuid::Uuid;
+
+use super::Context;
+use super::context::{io_error, run_blocking};
+use crate::context::corrections::Change;
+use crate::context::{self, memory, you_sync};
+use crate::store::store_error;
+
+/// The longest title, in bytes.
+const MAX_TITLE_BYTES: usize = 256;
+
+/// The longest proposal, in bytes: an entry is a short, lasting fact (0044).
+pub(crate) const MAX_PROPOSAL_BYTES: usize = 4 * 1024;
+
+/// What a path holds, by its folder.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Brief,
+    Entry,
+    Knowledge,
+    Proposal,
+    History,
+    /// Any other shared context file, such as the orchestrator's `notes.md` board.
+    Other,
+}
+
+fn place(path: &str) -> Place {
+    match path.split_once('/') {
+        None if path == "brief.md" => Place::Brief,
+        Some(("memory", _)) => Place::Entry,
+        Some(("knowledge", _)) => Place::Knowledge,
+        Some(("proposals", _)) => Place::Proposal,
+        Some(("history", _)) => Place::History,
+        _ => Place::Other,
+    }
+}
+
+/// `path`, checked as a shared context path and as one of `allowed`'s places.
+fn checked<'a>(path: &'a str, allowed: &[Place], method: &str) -> Result<&'a str, ErrorObject> {
+    let path = context::validate_relative_path(path)?;
+    if !allowed.contains(&place(path)) {
+        return Err(ErrorObject::invalid_params(format!(
+            "memory/{method} doesn't take {path}; memory is brief.md, memory/<kind>/<slug>.md, \
+             and knowledge/<slug>.md"
+        )));
+    }
+    Ok(path)
+}
+
+pub(super) async fn list(
+    context: &Context,
+    params: MemoryListParams,
+) -> Result<MemoryListResult, ErrorObject> {
+    let dir = scope_dir(context, params.scope).await?;
+    // Which machine last wrote each You entry (0082).
+    let versions = match params.scope {
+        MemoryScope::You => Some(you_sync::recorded(&context.daemon.reader).await?),
+        _ => None,
+    };
+    run_blocking(move || {
+        let mut files = Vec::new();
+        for (path, metadata) in context::list_files(&dir).map_err(io_error(""))? {
+            if matches!(place(&path), Place::History | Place::Other) {
+                continue;
+            }
+            let header = header_of(&dir, &path);
+            let mut file = memory_file(&path, &metadata, header);
+            if let Some(versions) = &versions {
+                file.machine = you_sync::machine(&dir, &path, versions);
+            }
+            files.push(file);
+        }
+        Ok(MemoryListResult { files })
+    })
+    .await
+}
+
+pub(super) async fn read(
+    context: &Context,
+    params: MemoryReadParams,
+) -> Result<MemoryReadResult, ErrorObject> {
+    let all = [
+        Place::Brief,
+        Place::Entry,
+        Place::Knowledge,
+        Place::Proposal,
+        Place::History,
+    ];
+    let path = checked(&params.path, &all, "read")?.to_owned();
+    let dir = scope_dir(context, params.scope).await?;
+    let agent = params.from.is_some();
+    // An agent's read stamps the entry, which sync mustn't overwrite or race (0082).
+    let _sync = if agent {
+        you_lock(context, params.scope).await
+    } else {
+        None
+    };
+    run_blocking(move || {
+        let (bytes, mut metadata) = context::read_file(&dir, &path).map_err(io_error(&path))?;
+        let mut text = String::from_utf8(bytes)
+            .map_err(|_| ErrorObject::internal_error(format!("{path} is not valid UTF-8 text")))?;
+        // An agent's read of an entry is a use of it (PLX-943), stamped at most once a day. The
+        // stamp keeps the file's modified time, so the app doesn't show a read as an edit. A
+        // failed stamp still reads.
+        // ponytail: a write to the entry between this read and the stamp is lost; serialize
+        // writes per folder if that race ever shows up.
+        if agent
+            && place(&path) == Place::Entry
+            && let Some(stamped) = memory::used(&text, &today())
+            && let Ok(modified) = metadata.modified()
+        {
+            match context::write_file_keeping(&dir, &path, stamped.as_bytes(), modified) {
+                Ok(written) => (text, metadata) = (stamped, written),
+                Err(error) => tracing::warn!(path, %error, "could not record a memory entry's use"),
+            }
+        }
+        let (header, body) = if has_header(&path) {
+            let (header, body) = memory::parse(&text);
+            (header, body.to_owned())
+        } else {
+            (memory::Header::default(), text)
+        };
+        Ok(MemoryReadResult {
+            file: memory_file(&path, &metadata, header),
+            content: body,
+        })
+    })
+    .await
+}
+
+pub(super) async fn write(
+    context: &Context,
+    params: MemoryWriteParams,
+) -> Result<MemoryWriteResult, ErrorObject> {
+    let MemoryWriteParams {
+        scope,
+        path,
+        content,
+        title,
+        source,
+        from,
+    } = params;
+    let allowed = [Place::Brief, Place::Entry, Place::Knowledge];
+    let path = checked(&path, &allowed, "write")?.to_owned();
+    let entry = memory::entry_kind(&path);
+    let title = match (entry, title) {
+        (Some(_), Some(title)) => Some(check_title(&title)?),
+        (Some(_), None) => {
+            return Err(ErrorObject::invalid_params("an entry needs a title"));
+        }
+        (None, _) => None,
+    };
+    let writer = match from {
+        Some(from) => {
+            let project = orchestrator_of_run(context, from).await?;
+            // 0044: the user writes or approves the brief.
+            if place(&path) == Place::Brief {
+                return Err(ErrorObject::invalid_params(
+                    "only the user writes the brief; propose your rewrite with memory_propose",
+                ));
+            }
+            Some((from, project))
+        }
+        None => None,
+    };
+    let dir = scope_dir(context, scope).await?;
+    let text = match (entry, &title) {
+        (Some(kind), Some(title)) => {
+            let (who, default_source) = match writer {
+                Some((from, _)) => (format!("orchestrator {from}"), format!("run {from}")),
+                None => ("user".to_owned(), "user".to_owned()),
+            };
+            let source = source.unwrap_or(default_source);
+            memory::render(kind, title, &source, &today(), &who, &[], &content)
+        }
+        _ => content,
+    };
+    let written_path = path.clone();
+    let sync = you_lock(context, scope).await;
+    let (file, changed) = run_blocking(move || {
+        let target = dir.join(&written_path);
+        let existed = std::fs::symlink_metadata(&target).is_ok();
+        let before = std::fs::read_to_string(&target).ok();
+        let changed = existed && before.is_none_or(|before| reads_differently(&before, &text));
+        Ok((save(&dir, &written_path, &text)?, changed))
+    })
+    .await?;
+    drop(sync);
+    // A new entry corrects nothing, and neither does a rewrite that only re-dates one, as the
+    // Knowledge tab's Keep does, so only a changed one is sent to running children. Saving a
+    // proposal that `replaces` an entry writes over it, so it counts as a change.
+    if changed {
+        context::corrections::tell(
+            &context.daemon,
+            scope,
+            &path,
+            title.as_deref(),
+            Change::Updated,
+        );
+    }
+    if let Some((from, project)) = writer {
+        let what = title.as_deref().unwrap_or(&path);
+        let text = format!("Memory: {what} ({} scope)", scope_name(scope));
+        super::inbox::add(&context.daemon, project, from, InboxKind::Learned, text).await;
+    }
+    Ok(MemoryWriteResult { file })
+}
+
+pub(super) async fn delete(
+    context: &Context,
+    params: MemoryDeleteParams,
+) -> Result<MemoryDeleteResult, ErrorObject> {
+    let allowed = [
+        Place::Brief,
+        Place::Entry,
+        Place::Knowledge,
+        Place::Proposal,
+    ];
+    let path = checked(&params.path, &allowed, "delete")?.to_owned();
+    let dir = scope_dir(context, params.scope).await?;
+    let deleted = path.clone();
+    let sync = you_lock(context, params.scope).await;
+    run_blocking(move || {
+        context::delete_file(&dir, &deleted).map_err(io_error(&deleted))?;
+        Ok(MemoryDeleteResult {})
+    })
+    .await?;
+    drop(sync);
+    context::corrections::tell(&context.daemon, params.scope, &path, None, Change::Deleted);
+    Ok(MemoryDeleteResult {})
+}
+
+pub(super) async fn propose(
+    context: &Context,
+    params: MemoryProposeParams,
+) -> Result<MemoryProposeResult, ErrorObject> {
+    let MemoryProposeParams {
+        from,
+        scope,
+        kind,
+        title,
+        content,
+        replaces,
+    } = params;
+    let title = check_title(&title)?;
+    if kind.is_some_and(|kind| memory::kind_name(kind).is_none()) {
+        return Err(ErrorObject::invalid_params("unknown memory kind"));
+    }
+    // An entry is short (0044); a brief is a whole file.
+    let cap = if kind.is_some() {
+        MAX_PROPOSAL_BYTES as u64
+    } else {
+        context::MAX_FILE_BYTES
+    };
+    if content.trim().is_empty() || content.len() as u64 > cap {
+        return Err(ErrorObject::invalid_params(format!(
+            "a proposal needs content of at most {cap} bytes"
+        )));
+    }
+    // A child's proposal waits in its orchestrator's folder, naming the scope it is for, until the
+    // orchestrator's next wake-up carries it ([`crate::agents::wake`]); an orchestrator's waits
+    // there for the user, and a plain thread's in its repository's folder. Only an orchestrator
+    // proposes the brief, its orchestrator's, as a proposal with no kind.
+    let proposer = proposer(context, from).await?;
+    let own_orchestrator = match proposer {
+        Proposer::Orchestrator { project } => Some(MemoryScope::Orchestrator { id: project }),
+        Proposer::Child { .. } | Proposer::Thread { .. } => None,
+    };
+    if kind.is_none() && own_orchestrator != Some(scope) {
+        return Err(ErrorObject::invalid_params(
+            "only an orchestrator proposes a brief, its orchestrator's; anything else needs a kind",
+        ));
+    }
+    let (folder, for_scope, to, who) = match proposer {
+        Proposer::Child { project } => (
+            MemoryScope::Orchestrator { id: project },
+            Some(scope_name(scope)),
+            MemoryProposalTo::Orchestrator,
+            "thread",
+        ),
+        Proposer::Orchestrator { project } => (
+            MemoryScope::Orchestrator { id: project },
+            Some(scope_name(scope)),
+            MemoryProposalTo::User,
+            "orchestrator",
+        ),
+        Proposer::Thread { repo } => {
+            if scope != (MemoryScope::Repo { id: repo }) {
+                return Err(ErrorObject::invalid_params(
+                    "a thread outside an orchestrator proposes only at its repository's scope",
+                ));
+            }
+            (scope, None, MemoryProposalTo::User, "thread")
+        }
+    };
+    if let Some(replaces) = &replaces {
+        check_replaces(context, own_orchestrator.is_some(), scope, kind, replaces).await?;
+    }
+    let dir = scope_dir(context, folder).await?;
+    let writer = format!("{who} {from}");
+    let extra: Vec<(&str, &str)> = [("Scope", for_scope), ("Replaces", replaces.as_deref())]
+        .into_iter()
+        .filter_map(|(field, value)| Some((field, value?)))
+        .collect();
+    let text = memory::render(
+        kind.unwrap_or(MemoryKind::Unknown),
+        &title,
+        &writer,
+        &today(),
+        &writer,
+        &extra,
+        &content,
+    );
+    let slug = memory::slug(&title);
+    let file = run_blocking(move || {
+        let path = free_path(&dir, &slug);
+        save(&dir, &path, &text)
+    })
+    .await?;
+    Ok(MemoryProposeResult {
+        to,
+        file: Some(file),
+    })
+}
+
+pub(super) async fn sync_list(
+    context: &Context,
+    _: MemorySyncListParams,
+) -> Result<MemorySyncListResult, ErrorObject> {
+    connect_only(context, "syncList")?;
+    you_sync::list(&context.daemon).await
+}
+
+pub(super) async fn sync_read(
+    context: &Context,
+    params: MemorySyncReadParams,
+) -> Result<MemorySyncReadResult, ErrorObject> {
+    connect_only(context, "syncRead")?;
+    you_sync::read(&context.daemon, params.path).await
+}
+
+/// Holds You memory's sync lock for a write to You, so a pull never overwrites it (0082).
+async fn you_lock(
+    context: &Context,
+    scope: MemoryScope,
+) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+    match scope {
+        MemoryScope::You => Some(context.daemon.you_sync.lock().await),
+        _ => None,
+    }
+}
+
+/// Refuses a sync method on a connection that didn't come over Parallax Connect (0082).
+fn connect_only(context: &Context, method: &str) -> Result<(), ErrorObject> {
+    if context.over_connect {
+        return Ok(());
+    }
+    Err(ErrorObject::new(
+        INVALID_REQUEST,
+        format!("memory/{method} is only for another of your devices over Parallax Connect"),
+    ))
+}
+
+/// Checks the entry a proposal `replaces`: only an orchestrator names one, and it is an existing
+/// entry of the proposal's `kind` at `scope`.
+async fn check_replaces(
+    context: &Context,
+    orchestrator: bool,
+    scope: MemoryScope,
+    kind: Option<MemoryKind>,
+    replaces: &str,
+) -> Result<(), ErrorObject> {
+    if !orchestrator {
+        return Err(ErrorObject::invalid_params(
+            "only an orchestrator names the entry a proposal replaces",
+        ));
+    }
+    let path = context::validate_relative_path(replaces)?.to_owned();
+    if kind.is_none() || memory::entry_kind(&path) != kind {
+        return Err(ErrorObject::invalid_params(format!(
+            "{path} isn't an entry of the proposal's kind, memory/<kind>/<name>.md"
+        )));
+    }
+    let dir = scope_dir(context, scope).await?;
+    if !run_blocking(move || Ok(dir.join(&path).is_file())).await? {
+        return Err(ErrorObject::invalid_params(format!(
+            "{replaces} isn't an entry at the {} scope",
+            scope_name(scope)
+        )));
+    }
+    Ok(())
+}
+
+/// Who proposes, by its run.
+enum Proposer {
+    /// An orchestrator's run other than its orchestrator.
+    Child { project: ScopeId },
+    /// An orchestrator's current run, proposing for the user.
+    Orchestrator { project: ScopeId },
+    /// A thread in a repo entry with a repository.
+    Thread { repo: parallax_protocol::RepoId },
+}
+
+async fn proposer(context: &Context, from: RunId) -> Result<Proposer, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |db| {
+            let run = db
+                .get_run(from.into())
+                .map_err(|e| store_error(&e))?
+                .ok_or_else(|| crate::agents::run_not_found(from))?;
+            let project = run.fields.project_id;
+            if db
+                .get_orchestrator(project)
+                .map_err(|e| store_error(&e))?
+                .is_some()
+            {
+                let orchestrator = crate::agents::orchestrator::orchestrator_of(db, project)?;
+                let project = ScopeId::try_from(project).map_err(|_| corrupt(project))?;
+                return Ok(if orchestrator == Some(from) {
+                    Proposer::Orchestrator { project }
+                } else {
+                    Proposer::Child { project }
+                });
+            }
+            let repo = db
+                .get_thread(from.into())
+                .map_err(|e| store_error(&e))?
+                .map(|thread| thread.repo_id);
+            let repo = match repo {
+                Some(repo) => db.get_repo(repo).map_err(|e| store_error(&e))?,
+                None => None,
+            };
+            match repo {
+                Some(repo) if !repo.fields.scratch => Ok(Proposer::Thread {
+                    repo: parallax_protocol::RepoId::try_from(repo.id)
+                        .map_err(|_| corrupt(repo.id))?,
+                }),
+                _ => Err(ErrorObject::invalid_params(
+                    "only an orchestrator's child or a thread in a repository proposes memory",
+                )),
+            }
+        })
+        .await
+}
+
+/// The Orchestrator whose current orchestrator run `from` is, or `invalidParams`: only an
+/// orchestrator writes memory (0044).
+async fn orchestrator_of_run(context: &Context, from: RunId) -> Result<ScopeId, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |db| {
+            let run = db
+                .get_run(from.into())
+                .map_err(|e| store_error(&e))?
+                .ok_or_else(|| crate::agents::run_not_found(from))?;
+            let project = run.fields.project_id;
+            let orchestrator = match db.get_orchestrator(project).map_err(|e| store_error(&e))? {
+                Some(_) => crate::agents::orchestrator::orchestrator_of(db, project)?,
+                None => None,
+            };
+            if orchestrator != Some(from) {
+                return Err(ErrorObject::invalid_params(
+                    "only an orchestrator writes memory; propose it with memory_propose",
+                ));
+            }
+            ScopeId::try_from(project).map_err(|_| corrupt(project))
+        })
+        .await
+}
+
+fn scope_name(scope: MemoryScope) -> &'static str {
+    match scope {
+        MemoryScope::You => "you",
+        MemoryScope::Repo { .. } => "repo",
+        MemoryScope::Orchestrator { .. } => "orchestrator",
+    }
+}
+
+/// `scope`'s folder, created if it doesn't exist yet, once its repo entry or Orchestrator is found.
+async fn scope_dir(context: &Context, scope: MemoryScope) -> Result<PathBuf, ErrorObject> {
+    let data_dir = &context.daemon.data_dir;
+    let dir = match scope {
+        MemoryScope::You => context::you_dir(data_dir),
+        MemoryScope::Repo { id } => {
+            let found = context
+                .daemon
+                .store
+                .run(&context.cancel, move |db| {
+                    Ok(db
+                        .get_repo(id.into())
+                        .map_err(|e| store_error(&e))?
+                        .is_some_and(|repo| !repo.fields.scratch))
+                })
+                .await?;
+            if !found {
+                return Err(ErrorObject::parallax(
+                    ErrorKind::RepoNotFound,
+                    format!("no repo entry with a repository has id {id}"),
+                ));
+            }
+            data_dir.context_dir(ScopeId::try_from(Uuid::from(id)).map_err(|_| corrupt(id))?)
+        }
+        MemoryScope::Orchestrator { id } => {
+            let found = context
+                .daemon
+                .store
+                .run(&context.cancel, move |db| {
+                    Ok(db
+                        .get_orchestrator(id.into())
+                        .map_err(|e| store_error(&e))?
+                        .is_some())
+                })
+                .await?;
+            if !found {
+                return Err(ErrorObject::parallax(
+                    ErrorKind::OrchestratorNotFound,
+                    format!("no project has id {id}"),
+                ));
+            }
+            data_dir.context_dir(id)
+        }
+    };
+    run_blocking(move || context::ensure(dir).map_err(io_error(""))).await
+}
+
+/// Whether rewriting `before` as `after` changes what an agent reads of it: its title or its
+/// body. A new date, writer, or source alone doesn't.
+fn reads_differently(before: &str, after: &str) -> bool {
+    let (old, old_body) = memory::parse(before);
+    let (new, new_body) = memory::parse(after);
+    old.title != new.title || old_body != new_body
+}
+
+/// Writes `text` to `path` in `dir` within the shared context caps, and returns it.
+pub(crate) fn save(dir: &Path, path: &str, text: &str) -> Result<MemoryFile, ErrorObject> {
+    let size = text.len() as u64;
+    let other = context::other_files_total(dir, path).map_err(io_error(path))?;
+    if size > context::MAX_FILE_BYTES || other + size > context::MAX_PROJECT_BYTES {
+        return Err(ErrorObject::parallax(
+            ErrorKind::ContextTooLarge,
+            format!("{path} would be over the shared context size cap"),
+        ));
+    }
+    let metadata = context::write_file(dir, path, text.as_bytes()).map_err(io_error(path))?;
+    let header = if has_header(path) {
+        memory::parse(text).0
+    } else {
+        memory::Header::default()
+    };
+    Ok(memory_file(path, &metadata, header))
+}
+
+/// A proposal path for `slug` that no file has yet in `dir`.
+fn free_path(dir: &Path, slug: &str) -> String {
+    let taken = |path: &str| std::fs::symlink_metadata(dir.join(path)).is_ok();
+    let mut path = format!("proposals/{slug}.md");
+    let mut n = 2;
+    while taken(&path) {
+        path = format!("proposals/{slug}-{n}.md");
+        n += 1;
+    }
+    path
+}
+
+fn has_header(path: &str) -> bool {
+    matches!(place(path), Place::Entry | Place::Proposal)
+}
+
+/// The header of `path` in `dir`, for an entry or proposal; empty for any other file, or one that
+/// can't be read.
+fn header_of(dir: &Path, path: &str) -> memory::Header {
+    if !has_header(path) {
+        return memory::Header::default();
+    }
+    context::read_file(dir, path)
+        .ok()
+        .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
+        .map(|text| memory::parse(&text).0)
+        .unwrap_or_default()
+}
+
+fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header) -> MemoryFile {
+    let unused = place(path) == Place::Entry && memory::unused(&header, today_date());
+    MemoryFile {
+        path: path.to_owned(),
+        size: metadata.len(),
+        modified_at: context::modified_at(metadata),
+        kind: header.kind,
+        title: header.title,
+        source: header.source,
+        date: header.date,
+        writer: header.writer,
+        for_scope: header.scope.as_deref().and_then(|scope| match scope {
+            "you" => Some(MemoryScopeKind::You),
+            "repo" => Some(MemoryScopeKind::Repo),
+            // `project` is its name in a proposal from before 0093.
+            "orchestrator" | "project" => Some(MemoryScopeKind::Orchestrator),
+            _ => None,
+        }),
+        replaces: header.replaces,
+        stale: header.stale.is_some(),
+        unused,
+        last_used: header.last_used,
+        machine: None,
+    }
+}
+
+/// A title, trimmed, one line, and at most [`MAX_TITLE_BYTES`].
+fn check_title(title: &str) -> Result<String, ErrorObject> {
+    let title = title.trim();
+    if title.is_empty() || title.len() > MAX_TITLE_BYTES || title.contains(['\n', '\r']) {
+        return Err(ErrorObject::invalid_params(format!(
+            "a title must be one line of 1 to {MAX_TITLE_BYTES} bytes"
+        )));
+    }
+    Ok(title.to_owned())
+}
+
+/// Today's date in UTC, as an entry's header gives it.
+fn today() -> String {
+    today_date().to_string()
+}
+
+fn today_date() -> jiff::civil::Date {
+    jiff::Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+}
+
+fn corrupt(id: impl std::fmt::Display) -> ErrorObject {
+    ErrorObject::internal_error(format!("the stored id {id} is invalid"))
+}

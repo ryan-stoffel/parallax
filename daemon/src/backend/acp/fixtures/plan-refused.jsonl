@@ -1,0 +1,8 @@
+# Synthetic: an agent whose config has no `plan` mode refuses the switch, so the thread must not run in its build mode.
+@read
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[]}}
+@read
+{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ses_2","configOptions":[{"id":"mode","category":"mode","currentValue":"build","options":[{"value":"build","name":"Build"}]}]}}
+@read
+{"jsonrpc":"2.0","id":3,"error":{"code":-32602,"message":"unknown mode plan"}}
+@eof

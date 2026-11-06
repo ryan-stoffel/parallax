@@ -1,7 +1,7 @@
-//! Real Claude Code regression for RYA-126: a worker's Bash finds a tool that only wispd's `PATH`
+//! Real Claude Code regression for PLX-126: a worker's Bash finds a tool that only plxd's `PATH`
 //! has, even when the user's zsh startup files set `PATH` outright, and its commands can't read or
 //! write the script that puts `PATH` back. A local fake Messages API asks for Bash, so no account
-//! or Anthropic connection is needed. Set `WISP_SANDBOX_CLAUDE` to the CLI under test; it needs
+//! or Anthropic connection is needed. Set `PLX_SANDBOX_CLAUDE` to the CLI under test; it needs
 //! `/bin/zsh`.
 #![cfg(unix)]
 
@@ -11,14 +11,13 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use common::{run_worker, tool_result, worker_request};
-use wispd::backend::claude::{ENV_FILE_ENV, write_env_file};
-use wispd::paths::DataDir;
+use common::{Worktree, claude_under_test, run_worker, tool_result, worker_request};
+use plxd::backend::claude::{ENV_FILE_ENV, write_env_file};
+use plxd::paths::DataDir;
 
 #[tokio::test]
-async fn a_worker_keeps_wispds_path_when_zsh_startup_resets_it() {
-    let Some(claude) = std::env::var_os("WISP_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set WISP_SANDBOX_CLAUDE to test the real Claude Code CLI");
+async fn a_worker_keeps_plxds_path_when_zsh_startup_resets_it() {
+    let Some(claude) = claude_under_test() else {
         return;
     };
     assert!(
@@ -29,23 +28,20 @@ async fn a_worker_keeps_wispds_path_when_zsh_startup_resets_it() {
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
-    let worktree = data.join("worktrees/run");
-    let context = data.join("context/p");
-    let git_dir = root.join("repo/.git");
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&root, &data);
     let tools = root.join("tools");
-    for folder in [&home, &worktree, &context, &git_dir, &tools] {
+    for folder in [&home, &tools] {
         fs::create_dir_all(folder).unwrap();
     }
     // As nix-darwin's /etc/zshenv does: every zsh reads it, even `zsh -c`.
     fs::write(home.join(".zshenv"), "export PATH=/usr/bin:/bin\n").unwrap();
-    let tool = tools.join("wisp-path-probe");
+    let tool = tools.join("parallax-path-probe");
     fs::write(&tool, "#!/bin/sh\necho found-the-tool\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(
-        worktree.join(".git"),
-        format!("gitdir: {}/worktrees/run\n", git_dir.display()),
-    )
-    .unwrap();
 
     let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     let path = format!(
@@ -57,7 +53,7 @@ async fn a_worker_keeps_wispds_path_when_zsh_startup_resets_it() {
     fs::write(
         worktree.join("probe.sh"),
         format!(
-            "wisp-path-probe\n\
+            "parallax-path-probe\n\
              cat '{0}' 2>/dev/null || echo denied-read\n\
              echo x >> '{0}' 2>/dev/null || echo denied-write\n",
             env_file.display()
@@ -73,7 +69,7 @@ async fn a_worker_keeps_wispds_path_when_zsh_startup_resets_it() {
         &root,
         &home,
         &[
-            ("ANTHROPIC_API_KEY", "sk-ant-wisp-test-key-never-send"),
+            ("ANTHROPIC_API_KEY", "sk-ant-parallax-test-key-never-send"),
             ("PATH", &path),
             ("SHELL", "/bin/zsh"),
             ("CLAUDE_CONFIG_DIR", config.to_str().unwrap()),

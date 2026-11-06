@@ -1,23 +1,47 @@
-//! Integration tests: real servers in temporary folders, driven through `wisp_protocol`.
+//! Integration tests: real servers in temporary folders, driven through `parallax_protocol`.
 //!
-//! Most tests run the `wispd serve` binary. Tests of timers and limits that the command line
+//! Most tests run the `plxd serve` binary. Tests of timers and limits that the command line
 //! doesn't expose run the same server in-process with a shorter `Config`.
 //!
 //! Unix only: they stop servers with signals, check sockets and modes, and run shell-script
 //! CLIs. `tests/windows.rs` covers `serve` on Windows.
 #![cfg(unix)]
 
+mod account;
+mod agent_wait;
 mod agents;
+mod approvals;
+mod auto_resume;
+mod bundles;
+mod checks;
+mod commands;
+mod connect;
 mod context;
-mod coordinator;
 mod events;
+mod git;
 mod handshake;
+mod inbox;
 mod keys;
+mod landing;
+mod legacy_names;
 mod lifecycle;
 mod mcp;
+mod memory;
+mod memory_upkeep;
 mod open_pr;
-mod projects;
+mod orchestration;
+mod orchestrator;
+mod orchestrator_computer;
+mod orchestrator_threads;
+mod orchestrators;
+mod peer;
+mod pull_requests;
+mod questions;
+mod queue;
+mod relay;
+mod remote;
 mod requests;
 mod support;
+mod thread_tools;
 mod threads;
-mod usage;
+mod you_sync;

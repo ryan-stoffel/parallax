@@ -1,0 +1,359 @@
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::id::uuid_v7_id;
+use crate::{
+    AgentBackgroundTask, AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun,
+    AgentRunState, ContextFile, InboxItem, Orchestrator, QueuedMessage, Repo, RepoId, RunId,
+    ScopeId, ScriptStatus, ScriptTrigger, Thread, TurnCheckpoint, TurnId,
+};
+
+uuid_v7_id! {
+    /// Identifies one `events/subscribe` on one connection. plxd generates it.
+    SubscriptionId
+}
+
+uuid_v7_id! {
+    /// Identifies plxd's event log. It changes only when the log starts over.
+    LogId
+}
+
+/// Params of `events/subscribe`.
+///
+/// plxd replays the events after `after`, then sends new ones as they happen, each as an
+/// `events/event` notification. If those events are gone or too many to replay, it fails with
+/// `resyncRequired`.
+///
+/// `run` and `shell` narrow the `project` subscription, only for a plxd that advertises
+/// `eventFilters` (PLX-453); an older one ignores them and sends everything. Either one without
+/// `project` fails with `invalidParams` (PLX-455). Like a scope, a filter skips the `seq`s of the
+/// events it leaves out: `seq` only ever increases, and resuming from the last one delivered is
+/// still exact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsSubscribeParams {
+    /// Replay the events whose `seq` is greater than this: usually the `seq` of a snapshot, such
+    /// as `orchestrator/list`'s, or of the last event received. `seq` starts at 1.
+    pub after: u64,
+    /// Subscribe to one project's events. Without it, the subscription gets host-level events,
+    /// such as `orchestrator.created`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<ScopeId>,
+    /// Only this run's events, for an open transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run: Option<RunId>,
+    /// Every event, but each `agent.output` cut down to its `approvalRequested` and
+    /// `approvalResolved` items, for a sidebar. A batch with neither is left out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shell: bool,
+}
+
+/// Result of `events/subscribe`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsSubscribeResult {
+    /// The new subscription, which its `events/event` notifications name.
+    pub subscription: SubscriptionId,
+}
+
+/// Params of `events/unsubscribe`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsUnsubscribeParams {
+    /// The subscription to end. Ending one that does not exist succeeds.
+    pub subscription: SubscriptionId,
+}
+
+/// Result of `events/unsubscribe`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsUnsubscribeResult {}
+
+/// Params of `events/event`: one event from plxd's event log.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsEventParams {
+    /// The subscription it belongs to.
+    pub subscription: SubscriptionId,
+    /// The event's position in plxd's log. It increases by one for every change on the host,
+    /// across all projects.
+    pub seq: u64,
+    /// When the change happened, in RFC 3339 UTC.
+    pub time: Timestamp,
+    /// The project it belongs to. Absent for host-level events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<ScopeId>,
+    /// What happened.
+    pub event: ParallaxEvent,
+}
+
+/// Params of `events/resync`: plxd ended a subscription that fell behind its event log's
+/// retention (PLX-455). Reload the snapshot it started from and subscribe again. plxd sends it
+/// only to a client that declared the `resyncNotice` capability; it closes any other client's
+/// connection instead.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsResyncParams {
+    /// The subscription plxd ended.
+    pub subscription: SubscriptionId,
+}
+
+/// A finished turn rewritten in place as one `agent.output` row (0052).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Compacted {
+    /// The turn's first `seq`. A reader that meets this row first drops any `agent.output` of
+    /// the same run with `seq` in [`from`, this row's `seq`), then takes the row.
+    pub from: u64,
+}
+
+/// What happened, by `kind`.
+///
+/// A newer plxd may send kinds that are not listed here. Skip those events but still count their
+/// `seq` as received, and don't end a `switch` over this type in an exhaustiveness assertion.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all_fields = "camelCase")]
+pub enum ParallaxEvent {
+    /// An orchestrator was created. Host-level. Was `project.created` (0093).
+    #[serde(rename = "orchestrator.created", alias = "project.created")]
+    OrchestratorCreated {
+        /// The new orchestrator.
+        #[serde(alias = "project")]
+        orchestrator: Orchestrator,
+    },
+    /// `orchestrator/update` renamed an orchestrator or changed its icon (PLX-227). Host-level,
+    /// like `orchestrator.created`. Was `project.updated` (0093).
+    #[serde(rename = "orchestrator.updated", alias = "project.updated")]
+    OrchestratorUpdated {
+        /// The orchestrator as it stands.
+        #[serde(alias = "project")]
+        orchestrator: Orchestrator,
+    },
+    /// `orchestrator/delete` deleted an orchestrator with every run in it (PLX-338). Host-level,
+    /// like `orchestrator.created`. Was `project.deleted` (0093).
+    #[serde(rename = "orchestrator.deleted", alias = "project.deleted")]
+    OrchestratorDeleted {
+        /// The deleted orchestrator's id.
+        #[serde(alias = "project")]
+        orchestrator: ScopeId,
+    },
+    /// A shared context file was created or changed (0005, #155): from `context/write`, or from
+    /// an agent's own write, detected on disk. Project-scoped.
+    #[serde(rename = "context.changed")]
+    ContextChanged {
+        /// The changed file.
+        file: ContextFile,
+    },
+    /// An agent run was created (#156). Project-scoped, like every `agent.*` event.
+    #[serde(rename = "agent.started")]
+    AgentStarted {
+        /// The run's id.
+        run_id: RunId,
+        /// The run as it was created. plxd always sends it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        run: Option<AgentRun>,
+    },
+    /// Something about a run changed: its status, its session, its account, or its latest diff.
+    /// It carries only the part of the run that changes; apply it to the run from
+    /// `agent.started` or `agent/list`.
+    #[serde(rename = "agent.updated")]
+    AgentUpdated {
+        /// The run's id.
+        run_id: RunId,
+        /// The run's changing fields as they stand now.
+        state: AgentRunState,
+    },
+    /// Part of a run's transcript. plxd sends at most one per run every 50 ms, with everything
+    /// that happened in between. A finished turn that has left the in-memory window is rewritten
+    /// in place as one row (0052), and then carries [`Compacted`].
+    #[serde(rename = "agent.output")]
+    AgentOutput {
+        /// The run's id.
+        run_id: RunId,
+        /// What happened, in order.
+        items: Vec<AgentOutputItem>,
+        /// Set when this row is a finished turn's batches rewritten as one (0052).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        compacted: Option<Compacted>,
+    },
+    /// Routing (#119) moved a run to another account after its subscription failed signed out
+    /// or rate limited. Its usage from here on is charged to `toAccount`.
+    #[serde(rename = "agent.accountFallback")]
+    AgentAccountFallback {
+        /// The run's id.
+        run_id: RunId,
+        /// The account it was on.
+        from_account: String,
+        /// The account it is on now.
+        to_account: String,
+        /// Why it moved.
+        reason: AgentFailureKind,
+    },
+    /// A run's CLI process ended. A later `agent/send` can start another in the same run.
+    #[serde(rename = "agent.finished")]
+    AgentFinished {
+        /// The run's id.
+        run_id: RunId,
+        /// How it ended.
+        outcome: AgentOutcome,
+    },
+    /// `agent/accept` merged a run's commit into the project's branch on the host (#157). The
+    /// run's worktree and branch are gone; an `agent.updated` with status `accepted` follows.
+    #[serde(rename = "agent.accepted")]
+    AgentAccepted {
+        /// The run's id.
+        run_id: RunId,
+        /// What happened to the project's repository.
+        merge: AgentMerge,
+    },
+    /// plxd stopped waking an orchestrator on its own (PLX-42, decision 0025): it took
+    /// 10 wake-up turns in a row without a message from the user, the user stopped it with
+    /// `agent/cancel`, or a wake-up couldn't start it. Runs that finish meanwhile are kept, and
+    /// the user's next `agent/send` to the orchestrator lets them through.
+    #[serde(rename = "agent.wakeupsPaused")]
+    AgentWakeupsPaused {
+        /// The orchestrator's run id.
+        run_id: RunId,
+    },
+    /// plxd added an item to an orchestrator's inbox (PLX-401, decision 0043). Project-scoped, and
+    /// never in a run's `agent/events`.
+    #[serde(rename = "inbox.added")]
+    InboxAdded {
+        /// The new item.
+        item: InboxItem,
+    },
+    /// A run's agent's background tasks still running changed (PLX-777): every one, replacing
+    /// the last such event's. Empty once none runs, and when the CLI exits, which ends them all.
+    #[serde(rename = "agent.background")]
+    AgentBackground {
+        /// The run's id.
+        run_id: RunId,
+        /// Every one still running, oldest first.
+        tasks: Vec<AgentBackgroundTask>,
+    },
+    /// The pull requests plxd watches for a run changed (PLX-777): `pr/watch`, `pr/unwatch`, or
+    /// a watch that ended on its own, such as on a merge.
+    #[serde(rename = "pr.watches")]
+    PrWatches {
+        /// The run's id.
+        run_id: RunId,
+        /// The URLs it watches now, as `pr/watches` has them.
+        urls: Vec<String>,
+    },
+    /// A run's queue of waiting messages changed (PLX-370, decision 0048): one was queued,
+    /// edited, reordered, cancelled, steered, sent, or dropped.
+    #[serde(rename = "queue.updated")]
+    QueueUpdated {
+        /// The run's id.
+        run_id: RunId,
+        /// The queue as it is now, first to be sent first.
+        messages: Vec<QueuedMessage>,
+        /// True while a Stop holds it until `queue.resume` (PLX-644). Absent means false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        held: bool,
+    },
+    /// `repo/add` registered a repository for normal threads, or plxd made its scratch entry
+    /// (#110). Host-level.
+    #[serde(rename = "repo.added")]
+    RepoAdded {
+        /// The entry.
+        repo: Repo,
+    },
+    /// `repo/update` changed a repo entry's icon (0033). Host-level.
+    #[serde(rename = "repo.updated")]
+    RepoUpdated {
+        /// The entry as it stands.
+        repo: Repo,
+    },
+    /// `project/delete` removed a Project (0069), after its threads' `thread.deleted`. Host-level.
+    #[serde(rename = "repo.removed")]
+    RepoRemoved {
+        /// The removed entry's id.
+        repo: RepoId,
+    },
+    /// `thread/start` started a normal thread (#110). Host-level; its run's `agent.*` events go
+    /// to its repo entry's id.
+    #[serde(rename = "thread.started")]
+    ThreadStarted {
+        /// The thread.
+        thread: Thread,
+    },
+    /// A thread was archived or brought back (#110), marked seen or snoozed, or sent a message
+    /// (0033). Host-level.
+    #[serde(rename = "thread.updated")]
+    ThreadUpdated {
+        /// The thread as it stands.
+        thread: Thread,
+    },
+    /// `thread/delete` deleted a thread and its run (#110). Host-level.
+    #[serde(rename = "thread.deleted")]
+    ThreadDeleted {
+        /// The thread's run id.
+        run_id: RunId,
+        /// Its repo entry.
+        repo: RepoId,
+    },
+    /// A thread's setup or settle script started or ended (PLX-650). Project-scoped, like every
+    /// `agent.*` event, and in the run's own events.
+    #[serde(rename = "thread.script")]
+    ThreadScript {
+        /// The thread's run id.
+        run_id: RunId,
+        /// When it ran.
+        trigger: ScriptTrigger,
+        /// The script's name.
+        name: String,
+        /// The plxd terminal it runs in, under the thread.
+        terminal_id: String,
+        /// True for a setup script that holds the agent's first turn until it exits.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        blocking: bool,
+        /// Where it is.
+        status: ScriptStatus,
+        /// Its exit code, once it exited.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        exit_code: Option<i32>,
+        /// Why it couldn't start.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<String>,
+    },
+    /// plxd captured a turn's checkpoint (0062), or couldn't. Project-scoped, and in the run's
+    /// own events.
+    #[serde(rename = "thread.checkpoint")]
+    ThreadCheckpoint {
+        /// The thread's run id.
+        run_id: RunId,
+        /// The turn: its run in `orchestration/threadRuns`.
+        turn_id: TurnId,
+        /// That run's ordinal, which names the checkpoint.
+        ordinal: u32,
+        /// The checkpoint.
+        checkpoint: TurnCheckpoint,
+    },
+    /// `checkpoint.rollback` reverted a thread to the checkpoint after run `ordinal` (0062).
+    /// Project-scoped, and in the run's own events.
+    #[serde(rename = "thread.reverted")]
+    ThreadReverted {
+        /// The thread's run id.
+        run_id: RunId,
+        /// The run it went back to, or 0 for the thread's start.
+        ordinal: u32,
+        /// The runs it undid, oldest first, now `rolledBack`.
+        turns: Vec<TurnId>,
+        /// Whether the files went back too.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        restore_files: bool,
+    },
+    /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}

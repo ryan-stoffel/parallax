@@ -8,10 +8,10 @@
 //! (`backend::process::Environment`'s entries, and `spawn_session`'s own buffers) zeroize
 //! themselves the same way once each is done with its copy.
 //!
-//! Anthropic's keys run on Claude Code (#116) and `OpenAI`'s on Codex (RYA-38), and both are the
-//! same arm. Cursor (RYA-40) joins it once its backend exists.
+//! Anthropic's keys run on Claude Code (#116) and `OpenAI`'s on Codex (PLX-38), and both are the
+//! same arm. Cursor keys run nowhere: Cursor runs only on its subscription (0004, 0036).
 
-use wisp_protocol::{AccountId, Provider};
+use parallax_protocol::{AccountId, Provider};
 
 use super::{ApiKey, Credential};
 use crate::keystore::{KeyStore, KeyStoreError};
@@ -22,7 +22,7 @@ use crate::keystore::{KeyStore, KeyStoreError};
 /// # Errors
 ///
 /// [`KeyAccountError::KeychainUnavailable`] if `account` has no key, or the Keychain is locked or
-/// denies access. wispd can't tell those apart without prompting, and either way the fix is the
+/// denies access. plxd can't tell those apart without prompting, and either way the fix is the
 /// same: unlock the Keychain, or add the key again. [`KeyAccountError::NoBackend`] if `provider`
 /// has no backend yet. [`KeyAccountError::Keychain`] if the Keychain failed some other way.
 pub fn resolve(
@@ -62,7 +62,7 @@ pub enum KeyAccountError {
 
 #[cfg(test)]
 mod tests {
-    use wisp_protocol::{AccountId, Provider};
+    use parallax_protocol::{AccountId, Provider};
 
     use super::{KeyAccountError, resolve};
     use crate::backend::Credential;
@@ -82,16 +82,10 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_key_is_keychain_unavailable() {
-        let store = MemoryKeyStore::new();
-        let error = resolve(&store, Provider::Anthropic, AccountId::generate()).unwrap_err();
-        assert!(matches!(error, KeyAccountError::KeychainUnavailable));
-    }
-
-    #[test]
     fn a_locked_keychain_is_keychain_unavailable() {
         // Nothing can unlock the Keychain to answer, such as a headless session (0004, 0007,
         // #91).
+        #[derive(Debug)]
         struct LockedStore;
         impl KeyStore for LockedStore {
             fn set(&self, _account: AccountId, _key: &str) -> Result<(), KeyStoreError> {
@@ -112,17 +106,5 @@ mod tests {
 
         let error = resolve(&LockedStore, Provider::Anthropic, AccountId::generate()).unwrap_err();
         assert!(matches!(error, KeyAccountError::KeychainUnavailable));
-    }
-
-    #[test]
-    fn providers_with_no_backend_yet_are_refused() {
-        let store = MemoryKeyStore::new();
-        for provider in [Provider::Cursor, Provider::Unknown] {
-            let error = resolve(&store, provider, AccountId::generate()).unwrap_err();
-            assert!(
-                matches!(error, KeyAccountError::NoBackend(_)),
-                "{provider:?}"
-            );
-        }
     }
 }

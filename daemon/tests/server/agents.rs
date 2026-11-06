@@ -2,36 +2,39 @@
 //! is the fake CLI, in a real git repository.
 
 use std::collections::VecDeque;
+#[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parallax_protocol::jsonrpc::{
+    ErrorObject, INVALID_PARAMS, Message, Notification, Request, RequestId,
+};
+use parallax_protocol::methods::{
+    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentList, AgentRequestChanges,
+    AgentSend, AgentStart, EventsEvent, EventsSubscribe, NotificationMethod, OrchestratorCreate,
+    RepoAdd, RequestMethod,
+};
+use parallax_protocol::{
+    AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
+    AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFileParams,
+    AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge, AgentMergeKind,
+    AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams, AgentRun,
+    AgentSendParams, AgentStartParams, AgentStatus, DiffSummary, ErrorKind, EventsEventParams,
+    EventsSubscribeParams, InitializeResult, Orchestrator, OrchestratorCreateParams, ParallaxEvent,
+    Provider, Repo, RepoAddParams, RepoId, RunId, ScopeId, TurnId,
+};
+use plxd::backend::Event;
+use plxd::backend::fake::{FakeBackend, Script, Step};
+use plxd::backend::process::{CancelPolicy, Environment, Launcher};
+use plxd::paths::DataDir;
+use plxd::routing::BackendRegistry;
 use rustix::process::Signal;
+use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tokio::time::Instant;
-use wisp_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification};
-use wisp_protocol::methods::{
-    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
-    AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
-    NotificationMethod, ProjectCreate, RequestMethod, UsageGet,
-};
-use wisp_protocol::{
-    AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
-    AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
-    AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentImageParams,
-    AgentListParams, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
-    AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
-    CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ImageId, ImageMediaType, InitializeResult, Project, ProjectCreateParams,
-    ProjectId, PromptImage, Provider, RunId, TurnId, UsageGetParams, WispEvent,
-};
-use wispd::backend::fake::{FakeBackend, Script, Step};
-use wispd::backend::process::{CancelPolicy, Environment, Launcher};
-use wispd::backend::{Event, FailureKind, ModelUsage, Usage};
-use wispd::paths::DataDir;
-use wispd::routing::BackendRegistry;
 
 use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
@@ -48,7 +51,12 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
 
 /// A repository under `dir` with one commit and its own identity, as a user's checkout would be.
 pub(crate) fn real_repo(dir: &Path) -> PathBuf {
-    let repo = dir.join("repos").join("app");
+    named_repo(dir, "app")
+}
+
+/// [`real_repo`] at `dir/repos/<name>`.
+pub(crate) fn named_repo(dir: &Path, name: &str) -> PathBuf {
+    let repo = dir.join("repos").join(name);
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "--initial-branch=main"]);
     git(&repo, &["config", "user.name", "Test User"]);
@@ -106,7 +114,7 @@ fn hang() -> Vec<Step> {
     vec![init("hang-1"), text("Working"), Step::Hang]
 }
 
-pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams {
+pub(crate) fn start_params(project: ScopeId, prompt: &str) -> AgentStartParams {
     AgentStartParams {
         run_id: RunId::generate(),
         project,
@@ -115,11 +123,17 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
         }),
-        coordinator_thread: None,
+        orchestrator_thread: None,
+        notify: None,
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
         images: Vec::new(),
+        approvals: false,
+        threads: Vec::new(),
+        explore: false,
     }
 }
 
@@ -131,11 +145,17 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         model: None,
         effort: None,
         permission: None,
+        context_window: None,
+        fast: None,
+        account: None,
         images: Vec::new(),
+        threads: Vec::new(),
+        from: None,
+        delivery: None,
     }
 }
 
-/// An in-process wispd and its data folder.
+/// An in-process plxd and its data folder.
 pub(crate) struct Host {
     pub(crate) dir: TempDir,
     pub(crate) server: InProcess,
@@ -149,6 +169,19 @@ impl Host {
         Self { dir, server }
     }
 
+    /// A host whose API keys and secrets live in `keys`, never the real keystore.
+    pub(crate) fn start_with_keys(
+        dir: TempDir,
+        backends: BackendRegistry,
+        keys: std::sync::Arc<dyn plxd::keystore::KeyStore>,
+    ) -> Self {
+        let mut config = InProcess::config(dir.path());
+        config.backends = Some(backends);
+        config.keys = Some(keys);
+        let server = InProcess::start(config);
+        Self { dir, server }
+    }
+
     pub(crate) async fn restart(self, backends: BackendRegistry) -> Self {
         let Self { dir, server } = self;
         server.stop().await;
@@ -158,27 +191,50 @@ impl Host {
     pub(crate) async fn client(&self) -> Conn {
         Conn::ready(&self.server.socket).await
     }
-}
 
-/// Params for a project on a new real repository under `dir`.
-pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
-    ProjectCreateParams {
-        id: ProjectId::generate(),
-        name: "app".to_owned(),
-        repo_path: real_repo(dir).to_str().unwrap().to_owned(),
-        icon: None,
+    /// A client on a new orchestrator in a new real repository, subscribed to its events from the
+    /// start.
+    pub(crate) async fn orchestrator_client(&self) -> (Conn, Orchestrator) {
+        let mut client = self.client().await;
+        let project = create(&mut client, orchestrator_params(self.dir.path())).await;
+        subscribe(&mut client, project.id, 0).await;
+        (client, project)
     }
 }
 
-pub(crate) async fn create(client: &mut Conn, params: ProjectCreateParams) -> Project {
-    client.call::<ProjectCreate>(params).await.unwrap().project
+/// The project id a repo entry's events carry: the entry's own id.
+pub(crate) fn scope(repo: RepoId) -> ScopeId {
+    ScopeId::try_from(uuid::Uuid::from(repo)).unwrap()
 }
 
-pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
+/// Params for a project on a new real repository under `dir`.
+pub(crate) fn orchestrator_params(dir: &Path) -> OrchestratorCreateParams {
+    OrchestratorCreateParams {
+        id: ScopeId::generate(),
+        name: "app".to_owned(),
+        repo_path: Some(real_repo(dir).to_str().unwrap().to_owned()),
+        icon: None,
+        permission: None,
+        autonomy: None,
+        base_branch: None,
+    }
+}
+
+pub(crate) async fn create(client: &mut Conn, params: OrchestratorCreateParams) -> Orchestrator {
+    client
+        .call::<OrchestratorCreate>(params)
+        .await
+        .unwrap()
+        .orchestrator
+}
+
+pub(crate) async fn subscribe(client: &mut Conn, project: ScopeId, after: u64) {
     client
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
             project: Some(project),
+            run: None,
+            shell: false,
         })
         .await
         .unwrap();
@@ -188,7 +244,7 @@ pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64)
 /// `pending` for [`until`], so none is lost.
 pub(crate) struct Conn {
     client: Client,
-    pending: VecDeque<EventsEventParams>,
+    pub(crate) pending: VecDeque<EventsEventParams>,
 }
 
 fn event(notification: Notification) -> EventsEventParams {
@@ -207,7 +263,7 @@ impl Conn {
         }
     }
 
-    async fn ready(socket: &Path) -> Self {
+    pub(crate) async fn ready(socket: &Path) -> Self {
         let mut conn = Self::connect(socket).await;
         conn.initialize().await;
         conn
@@ -222,6 +278,33 @@ impl Conn {
         params: M::Params,
     ) -> Result<M::Result, ErrorObject> {
         let id = self.client.send::<M>(params).await;
+        self.response(id).await
+    }
+
+    /// [`Conn::call`] with `commandId` in its params (0052, 0059).
+    pub(crate) async fn command<M: RequestMethod>(
+        &mut self,
+        params: M::Params,
+        command_id: uuid::Uuid,
+    ) -> Result<M::Result, ErrorObject> {
+        let mut value = serde_json::to_value(params).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "commandId".to_owned(),
+            serde_json::json!(command_id.hyphenated().to_string()),
+        );
+        let id = RequestId::String(uuid::Uuid::now_v7().hyphenated().to_string());
+        self.client
+            .send_message(&Request {
+                id: id.clone(),
+                method: M::NAME.to_owned(),
+                params: Some(value),
+            })
+            .await;
+        self.response(id).await
+    }
+
+    /// The answer to `id`, which must be the next response, keeping the events before it.
+    async fn response<T: DeserializeOwned>(&mut self, id: RequestId) -> Result<T, ErrorObject> {
         loop {
             match self.client.next().await {
                 Some(Message::Response(response)) => {
@@ -236,6 +319,17 @@ impl Conn {
         }
     }
 
+    /// Adds the repository at `path` as a repo entry, and returns the entry.
+    pub(crate) async fn add(&mut self, path: &Path) -> Repo {
+        self.call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: path.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo
+    }
+
     async fn next_event(&mut self) -> EventsEventParams {
         if let Some(event) = self.pending.pop_front() {
             return event;
@@ -244,11 +338,6 @@ impl Conn {
             Some(Message::Notification(notification)) => event(notification),
             other => panic!("expected an event, got {other:?}"),
         }
-    }
-
-    async fn stays_quiet(&mut self, within: Duration) {
-        assert!(self.pending.is_empty(), "{:?}", self.pending);
-        self.client.stays_quiet(within).await;
     }
 }
 
@@ -274,18 +363,18 @@ pub(crate) async fn until(
 }
 
 pub(crate) fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
-    move |event| matches!(&event.event, WispEvent::AgentUpdated { state, .. } if state.status == status)
+    move |event| matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.status == status)
 }
 
-fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
-    move |event| matches!(&event.event, WispEvent::AgentOutput { items, .. } if items.contains(&item))
+pub(crate) fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
+    move |event| matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.contains(&item))
 }
 
 pub(crate) fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
     events
         .iter()
         .filter_map(|event| match &event.event {
-            WispEvent::AgentOutput { items, .. } => Some(items.clone()),
+            ParallaxEvent::AgentOutput { items, .. } => Some(items.clone()),
             _ => None,
         })
         .flatten()
@@ -308,20 +397,10 @@ pub(crate) fn outcomes(events: &[EventsEventParams]) -> Vec<AgentOutcome> {
     events
         .iter()
         .filter_map(|event| match &event.event {
-            WispEvent::AgentFinished { outcome, .. } => Some(outcome.clone()),
+            ParallaxEvent::AgentFinished { outcome, .. } => Some(outcome.clone()),
             _ => None,
         })
         .collect()
-}
-
-/// How many run worktrees wispd has under the data folder `dir`.
-fn worktree_count(dir: &Path) -> usize {
-    let Ok(repos) = std::fs::read_dir(dir.join("worktrees")) else {
-        return 0;
-    };
-    repos
-        .map(|repo| std::fs::read_dir(repo.unwrap().path()).unwrap().count())
-        .sum()
 }
 
 async fn list(client: &mut Conn) -> Vec<AgentRun> {
@@ -357,7 +436,7 @@ fn editing_script(note: &Path) -> Vec<Step> {
 fn assert_committed(repo: &Path, branch: &str, worktree: &Path, diff: &DiffSummary) {
     assert_eq!(git(repo, &["rev-parse", branch]), diff.commit);
     let subject = git(repo, &["log", "-1", "--format=%s", branch]);
-    assert_eq!(subject, "wisp: Rewrite the README");
+    assert_eq!(subject, "parallax: Rewrite the README");
     assert_eq!(
         git(repo, &["show", &format!("{branch}:README.md")]),
         "# App\nBuilt by an agent."
@@ -374,7 +453,7 @@ fn assert_committed(repo: &Path, branch: &str, worktree: &Path, diff: &DiffSumma
 /// run's own events.
 async fn assert_replays(
     host: &Host,
-    project: ProjectId,
+    project: ScopeId,
     run_id: RunId,
     events: &[EventsEventParams],
 ) {
@@ -382,7 +461,7 @@ async fn assert_replays(
     let mut replay = host.client().await;
     subscribe(&mut replay, project, 0).await;
     let replayed = until(&mut replay, |event| event.seq == last).await;
-    let pairs = |events: &[EventsEventParams]| -> Vec<(u64, WispEvent)> {
+    let pairs = |events: &[EventsEventParams]| -> Vec<(u64, ParallaxEvent)> {
         events
             .iter()
             .map(|event| (event.seq, event.event.clone()))
@@ -392,6 +471,7 @@ async fn assert_replays(
 
     let page = replay
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: 0,
             limit: Some(3),
@@ -402,6 +482,7 @@ async fn assert_replays(
     assert_eq!(page.events.len(), 3);
     let rest = replay
         .call::<AgentEvents>(AgentEventsParams {
+            before: None,
             run_id,
             after: page.events[2].seq,
             limit: None,
@@ -415,9 +496,10 @@ async fn assert_replays(
         .chain(&rest.events)
         .map(|event| event.seq)
         .collect();
+    // The run's own events, which carry its id: not the orchestrator's context or inbox events.
     let run_events: Vec<u64> = events
         .iter()
-        .filter(|event| !matches!(event.event, WispEvent::ContextChanged { .. }))
+        .filter(|event| serde_json::to_value(&event.event).unwrap()["runId"] == run_id.to_string())
         .map(|event| event.seq)
         .collect();
     assert_eq!(paged, run_events);
@@ -430,15 +512,15 @@ async fn assert_replays(
 #[tokio::test]
 async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays() {
     let dir = temp_dir();
-    let project_params = project_params(dir.path());
+    let orchestrator_params = orchestrator_params(dir.path());
     let note = dir
         .path()
         .join("context")
-        .join(project_params.id.to_string())
+        .join(orchestrator_params.id.to_string())
         .join("notes.md");
     let host = Host::start(dir, fake(editing_script(&note)));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params).await;
+    let project = create(&mut client, orchestrator_params).await;
     subscribe(&mut client, project.id, 0).await;
 
     let params = start_params(project.id, "Rewrite the README");
@@ -450,24 +532,20 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
     assert_eq!(started.status, AgentStatus::Running);
     let branch = started.branch.clone().expect("a branch");
     let worktree = PathBuf::from(started.worktree_path.clone().expect("a worktree"));
-    assert!(branch.starts_with("wisp/"), "{branch}");
+    assert!(branch.starts_with("parallax/"), "{branch}");
 
-    let mut context_changed = false;
+    let (mut context_changed, mut checkpoint) = (false, false);
     let mut is_done = updated_to(AgentStatus::Completed);
-    let events = until(&mut client, |event| {
+    let mut events = until(&mut client, |event| {
         context_changed |=
-            matches!(&event.event, WispEvent::ContextChanged { file } if file.path == "notes.md");
+            matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == "notes.md");
+        checkpoint |= matches!(event.event, ParallaxEvent::ThreadCheckpoint { .. });
         is_done(event)
     })
     .await;
     let kinds = kinds(&events);
     assert_eq!(kinds[0], "agent.started", "{kinds:?}");
-    for expected in [
-        "agent.updated",
-        "agent.output",
-        "agent.finished",
-        "agent.diffReady",
-    ] {
+    for expected in ["agent.updated", "agent.output", "agent.finished"] {
         assert!(
             kinds.iter().any(|kind| kind == expected),
             "{expected} in {kinds:?}"
@@ -491,389 +569,38 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
             result: Some("Done.".to_owned())
         }]
     );
-    let diff = events
-        .iter()
-        .find_map(|event| match &event.event {
-            WispEvent::AgentDiffReady { diff, .. } => Some(diff.clone()),
-            _ => None,
-        })
-        .expect("diffReady");
-    assert_eq!((diff.files, diff.insertions, diff.deletions), (1, 2, 1));
-    let WispEvent::AgentUpdated { state: done, .. } = &events.last().unwrap().event else {
+    let ParallaxEvent::AgentUpdated { state: done, .. } = &events.last().unwrap().event else {
         unreachable!()
     };
-    assert_eq!(done.diff.as_ref(), Some(&diff));
+    let diff = done.diff.as_ref().expect("a diff");
+    assert_eq!((diff.files, diff.insertions, diff.deletions), (1, 2, 1));
     assert_eq!(done.session_id.as_deref(), Some("session-1"));
     for event in &events {
-        if let WispEvent::AgentUpdated { .. } = event.event {
+        if let ParallaxEvent::AgentUpdated { .. } = event.event {
             let json = serde_json::to_string(&event.event).unwrap();
             assert!(!json.contains("Rewrite the README"), "no prompt: {json}");
         }
     }
 
-    assert_committed(Path::new(&project.repo_path), &branch, &worktree, &diff);
+    assert_committed(Path::new(&project.repo_path), &branch, &worktree, diff);
     assert_eq!(
         std::fs::read_to_string(&note).unwrap(),
         "Build with cargo.\n"
     );
-    if !context_changed {
-        until(&mut client, |event| {
-            matches!(&event.event, WispEvent::ContextChanged { file } if file.path == "notes.md")
-        })
-        .await;
+    // The turn's checkpoint is a run event that can follow its end (0062), so the replay waits
+    // for it too.
+    if !(context_changed && checkpoint) {
+        events.extend(
+            until(&mut client, |event| {
+                context_changed |= matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == "notes.md");
+                checkpoint |= matches!(event.event, ParallaxEvent::ThreadCheckpoint { .. });
+                context_changed && checkpoint
+            })
+            .await,
+        );
     }
 
     assert_replays(&host, project.id, params.run_id, &events).await;
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session() {
-    let dir = temp_dir();
-    let host = Host::start(
-        dir,
-        fake(vec![
-            init("chat-1"),
-            text("First answer."),
-            end_turn("First answer."),
-            Step::AwaitFollowUp,
-            end_turn("Second answer."),
-        ]),
-    );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Answer twice");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(
-        &mut client,
-        has_item(AgentOutputItem::TurnFinished {
-            turn_id: None,
-            result: Some("First answer.".to_owned()),
-        }),
-    )
-    .await;
-
-    let first = TurnId::generate();
-    let sent = client
-        .call::<AgentSend>(send_params(run_id, first, "and the tests"))
-        .await
-        .unwrap();
-    assert_eq!(sent.run.status, AgentStatus::Running);
-    let again = client
-        .call::<AgentSend>(send_params(run_id, first, "and the tests"))
-        .await
-        .unwrap();
-    assert_eq!(again.run.id, run_id, "a retry is answered, not sent twice");
-    let conflict = client
-        .call::<AgentSend>(send_params(run_id, first, "something else"))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
-
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let transcript = items(&events);
-    assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(first),
-        text: Some("and the tests".to_owned()),
-        wake: false,
-        images: Vec::new(),
-    }));
-    assert!(transcript.contains(&AgentOutputItem::Text {
-        message_id: None,
-        text: "and the tests".to_owned(),
-    }));
-    assert!(transcript.contains(&AgentOutputItem::TurnFinished {
-        turn_id: Some(first),
-        result: Some("Second answer.".to_owned()),
-    }));
-    assert!(
-        !kinds(&events).contains(&"agent.diffReady".to_owned()),
-        "nothing changed, so nothing was committed"
-    );
-
-    // The CLI has exited: a message now resumes the same session in a new process.
-    let second = TurnId::generate();
-    let resumed = client
-        .call::<AgentSend>(send_params(run_id, second, "one more thing"))
-        .await
-        .unwrap();
-    assert_eq!(resumed.run.status, AgentStatus::Running);
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnFinished {
-            turn_id: Some(second),
-            result: Some("First answer.".to_owned()),
-        }),
-    )
-    .await;
-    let transcript = items(&events);
-    assert!(
-        transcript.contains(&AgentOutputItem::SessionStarted {
-            session_id: "chat-1".to_owned(),
-            model: None,
-        }),
-        "the resumed process continues the session: {transcript:?}"
-    );
-    assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(second),
-        text: Some("one more thing".to_owned()),
-        wake: false,
-        images: Vec::new(),
-    }));
-    let third = TurnId::generate();
-    client
-        .call::<AgentSend>(send_params(run_id, third, "done"))
-        .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-    host.server.stop().await;
-}
-
-/// The ids of the images a transcript's `turnStarted` for `turn` lists (RYA-191).
-fn turn_images(transcript: &[AgentOutputItem], turn: Option<TurnId>) -> Vec<ImageId> {
-    transcript
-        .iter()
-        .find_map(|item| match item {
-            AgentOutputItem::TurnStarted {
-                turn_id, images, ..
-            } if *turn_id == turn => Some(images.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("no turnStarted for {turn:?} in {transcript:?}"))
-}
-
-#[tokio::test]
-async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_and_served() {
-    let dir = temp_dir();
-    let host = Host::start(
-        dir,
-        fake(vec![
-            init("images-1"),
-            end_turn("First answer."),
-            Step::AwaitFollowUp,
-            end_turn("Second answer."),
-        ]),
-    );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let png = PromptImage {
-        media_type: ImageMediaType::Png,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-    };
-    let gif = PromptImage {
-        media_type: ImageMediaType::Gif,
-        data: "R0lGODlhAQABAAAAACw=".to_owned(),
-    };
-    let params = AgentStartParams {
-        images: vec![png.clone()],
-        ..start_params(project.id, "What is in this picture?")
-    };
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnFinished {
-            turn_id: None,
-            result: Some("First answer.".to_owned()),
-        }),
-    )
-    .await;
-    let [prompt_image] = turn_images(&items(&events), None)[..] else {
-        panic!("the prompt's turn lists its one image");
-    };
-
-    let too_many = AgentSendParams {
-        images: vec![gif.clone(); 11],
-        ..send_params(run_id, TurnId::generate(), "all of these")
-    };
-    let error = client.call::<AgentSend>(too_many).await.unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ImageTooLarge);
-    let blank = send_params(run_id, TurnId::generate(), " ");
-    let error = client.call::<AgentSend>(blank).await.unwrap_err();
-    assert_eq!(
-        error.code, INVALID_PARAMS,
-        "no text and no images: {error:?}"
-    );
-
-    let turn = TurnId::generate();
-    let follow_up = AgentSendParams {
-        images: vec![gif.clone(), png.clone()],
-        // Images alone, with no text (RYA-193).
-        ..send_params(run_id, turn, "")
-    };
-    client.call::<AgentSend>(follow_up).await.unwrap();
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let follow_up_images = turn_images(&items(&events), Some(turn));
-
-    let image = |image_id| AgentImageParams { run_id, image_id };
-    let mut served = Vec::new();
-    for id in [prompt_image].iter().chain(&follow_up_images) {
-        served.push(client.call::<AgentImage>(image(*id)).await.unwrap());
-    }
-    assert_eq!(served, [png.clone(), gif, png]);
-    let missing = client
-        .call::<AgentImage>(image(ImageId::generate()))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&missing), ErrorKind::ImageNotFound);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn an_image_sent_alone_after_the_cli_exits_resumes_the_run() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(vec![init("images-2"), end_turn("Done.")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Tidy the README");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    // The CLI has exited, so this starts a new process on the same session (RYA-202).
-    let png = PromptImage {
-        media_type: ImageMediaType::Png,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-    };
-    let turn = TurnId::generate();
-    let resumed = client
-        .call::<AgentSend>(AgentSendParams {
-            images: vec![png.clone()],
-            ..send_params(run_id, turn, "")
-        })
-        .await
-        .unwrap();
-    assert_eq!(resumed.run.status, AgentStatus::Running);
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let [image_id] = turn_images(&items(&events), Some(turn))[..] else {
-        panic!("the resumed turn lists its one image");
-    };
-    let served = client
-        .call::<AgentImage>(AgentImageParams { run_id, image_id })
-        .await
-        .unwrap();
-    assert_eq!(served, png);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn cancel_stops_a_running_worker() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(hang()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Work forever");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(
-        &mut client,
-        has_item(AgentOutputItem::Text {
-            message_id: None,
-            text: "Working".to_owned(),
-        }),
-    )
-    .await;
-    let health = client
-        .call::<HostHealth>(HostHealthParams {})
-        .await
-        .unwrap();
-    assert_eq!(health.running_agents, 1);
-
-    let cancelling = client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
-        .await
-        .unwrap();
-    assert_eq!(cancelling.run.id, run_id);
-    let events = until(&mut client, updated_to(AgentStatus::Cancelled)).await;
-    assert_eq!(outcomes(&events), [AgentOutcome::Cancelled]);
-    let health = client
-        .call::<HostHealth>(HostHealthParams {})
-        .await
-        .unwrap();
-    assert_eq!(health.running_agents, 0);
-    let again = client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
-        .await
-        .unwrap();
-    assert_eq!(again.run.status, AgentStatus::Cancelled, "a no-op");
-
-    let unknown = client
-        .call::<AgentCancel>(AgentCancelParams {
-            run_id: RunId::generate(),
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
-    let unknown = client
-        .call::<AgentEvents>(AgentEventsParams {
-            run_id: RunId::generate(),
-            after: 0,
-            limit: None,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn agent_start_is_idempotent_on_its_run_id() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Do it once");
-    let first = client.call::<AgentStart>(params.clone()).await.unwrap().run;
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    let retried = client.call::<AgentStart>(params.clone()).await.unwrap().run;
-    assert_eq!(retried.id, first.id);
-    assert_eq!(retried.worktree_path, first.worktree_path);
-    assert_eq!(retried.status, AgentStatus::Completed);
-    client.stays_quiet(Duration::from_millis(300)).await;
-
-    let conflict = client
-        .call::<AgentStart>(AgentStartParams {
-            prompt: "Do something else".to_owned(),
-            ..params.clone()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
-    let tagged = client
-        .call::<AgentStart>(AgentStartParams {
-            coordinator_thread: Some(CoordinatorThreadId::generate()),
-            ..params.clone()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&tagged), ErrorKind::IdConflict);
-    assert_eq!(list(&mut client).await.len(), 1);
-    assert_eq!(
-        worktree_count(host.dir.path()),
-        1,
-        "one worktree for one run"
-    );
-
-    let missing = client
-        .call::<AgentStart>(start_params(ProjectId::generate(), "Nowhere"))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&missing), ErrorKind::ProjectNotFound);
-    let no_account = client
-        .call::<AgentStart>(AgentStartParams {
-            account: None,
-            ..start_params(project.id, "Whose account?")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&no_account), ErrorKind::NoDefaultAccount);
     host.server.stop().await;
 }
 
@@ -883,9 +610,9 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     let host = Host::start(dir, fake(hang()));
     let mut client = Conn::connect(&host.server.socket).await;
     let first_log = client.initialize().await.log_id;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Work until wispd stops");
+    let params = start_params(project.id, "Work until plxd stops");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
     let before = until(
@@ -903,7 +630,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     let host = host.restart(fake(hang())).await;
     let mut client = Conn::connect(&host.server.socket).await;
     let init = client.initialize().await;
-    assert_eq!(init.log_id, first_log, "the event log outlived wispd");
+    assert_eq!(init.log_id, first_log, "the event log outlived plxd");
     let runs = list(&mut client).await;
     assert_eq!(runs[0].status, AgentStatus::Interrupted);
     assert_eq!(runs[0].session_id.as_deref(), Some("hang-1"));
@@ -918,13 +645,16 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         .unwrap();
     assert_eq!(resumed.run.status, AgentStatus::Running);
     // The resumed CLI reports its session after the turn has started, so the two can land in
-    // separate 50 ms `agent.output` batches (RYA-132): wait for both.
+    // separate 50 ms `agent.output` batches (PLX-132): wait for both.
     let mut wanted = vec![
         AgentOutputItem::TurnStarted {
             turn_id: Some(turn),
             text: Some("carry on".to_owned()),
             wake: false,
+            hidden: false,
+            from: None,
             images: Vec::new(),
+            threads: Vec::new(),
         },
         AgentOutputItem::SessionStarted {
             session_id: "hang-1".to_owned(),
@@ -932,7 +662,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
         },
     ];
     until(&mut client, |event| {
-        if let WispEvent::AgentOutput { items, .. } = &event.event {
+        if let ParallaxEvent::AgentOutput { items, .. } = &event.event {
             wanted.retain(|item| !items.contains(item));
         }
         wanted.is_empty()
@@ -940,291 +670,257 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     .await;
     drop(client);
 
-    // A crash: the store still says `running` when wispd starts.
+    // A crash: the store still says `running` when plxd starts, and the turn that never ended
+    // left its replies unindexed (PLX-487).
     let Host { dir, server } = host;
     server.stop().await;
+    let replies = |dir: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(dir.join("plxd.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM thread_text WHERE text LIKE '%Working%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
     {
-        let db = rusqlite::Connection::open(dir.path().join("wispd.sqlite3")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
         db.execute("UPDATE runs SET status = 'running'", [])
             .unwrap();
+        db.execute("DELETE FROM thread_text WHERE seq > 0", [])
+            .unwrap();
     }
+    assert_eq!(replies(dir.path()), 0);
     let host = Host::start(dir, fake(hang()));
     let mut client = host.client().await;
     let runs = list(&mut client).await;
     assert_eq!(runs[0].status, AgentStatus::Interrupted);
     assert_eq!(runs[0].session_id.as_deref(), Some("hang-1"));
     host.server.stop().await;
+    assert_eq!(replies(host.dir.path()), 1, "indexed at startup");
 }
 
-/// #190 N5: a fresh actor after a restart has no in-memory record of a turn it (or a wispd
-/// before it) already sent, so `agent/send`'s idempotency has to come from the store instead.
-#[tokio::test]
-async fn a_sent_turn_stays_idempotent_across_a_restart() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(hang()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Work until cancelled");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(
-        &mut client,
-        has_item(AgentOutputItem::Text {
-            message_id: None,
-            text: "Working".to_owned(),
-        }),
-    )
-    .await;
+/// A stand-in for the Claude Agent SDK sidecar (0061) that records each query's `open` line and
+/// what plxd sends its CLI's stdin in `out/claude.open` and `out/claude.stdin` beside its folder,
+/// and ends a query that plxd interrupts or kills.
+#[cfg(target_os = "macos")]
+const CLAUDE_SDK: &str = r#"#!/bin/sh
+out="$(dirname "$0")/../out"
+while IFS= read -r line; do
+  case $line in
+    *'"type":"open"'*) printf '%s\n' "$line" > "$out/claude.open" ;;
+    *'"stdin":'*) printf '%s\n' "$line" >> "$out/claude.stdin" ;;
+    *'"type":"interrupt"'* | *'"type":"kill"'*)
+      id=$(printf '%s' "$line" | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+      printf '%s exit {"code":null,"signal":2}\n' "$id" ;;
+  esac
+done
+"#;
 
-    client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
-        .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Cancelled)).await;
-
-    // The CLI has exited: sending resumes the session in a new process, and the turn is recorded
-    // with the run, not only kept in the actor's own memory.
-    let turn = TurnId::generate();
-    let sent = client
-        .call::<AgentSend>(send_params(run_id, turn, "carry on"))
-        .await
-        .unwrap();
-    assert_eq!(sent.run.status, AgentStatus::Running);
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnStarted {
-            turn_id: Some(turn),
-            text: Some("carry on".to_owned()),
-            wake: false,
-            images: Vec::new(),
-        }),
-    )
-    .await;
-    let seq_before = events.last().unwrap().seq;
-    drop(client);
-
-    let host = host.restart(fake(hang())).await;
-    let mut client = host.client().await;
-    subscribe(&mut client, project.id, seq_before).await;
-    until(&mut client, updated_to(AgentStatus::Interrupted)).await;
-
-    // A retry with the same text is answered from the stored turn, not sent to the CLI again.
-    let retried = client
-        .call::<AgentSend>(send_params(run_id, turn, "carry on"))
-        .await
-        .unwrap();
-    assert_eq!(retried.run.id, run_id);
-    client.stays_quiet(Duration::from_millis(300)).await;
-
-    // A retry with different text still conflicts, exactly as it would without a restart.
-    let conflict = client
-        .call::<AgentSend>(send_params(run_id, turn, "something else"))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn a_worker_learns_its_limits_and_a_fallback_moves_its_usage_to_the_new_account() {
-    let dir = temp_dir();
-    let project_params = project_params(dir.path());
-    let context = dir
-        .path()
-        .join("context")
-        .join(project_params.id.to_string());
-    let host = Host::start(
-        dir,
-        fake(vec![
-            Step::Emit(Event::AccountFallback {
-                from_account: "fake".to_owned(),
-                to_account: "key-1".to_owned(),
-                reason: FailureKind::RateLimited,
-            }),
-            init("s-1"),
-            Step::EchoPrompt,
-            Step::Emit(Event::Usage(ModelUsage {
-                model: None,
-                usage: Usage {
-                    input_tokens: 7,
-                    output_tokens: 3,
-                    ..Usage::default()
-                },
-            })),
-            end_turn("ok"),
-        ]),
-    );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params).await;
-    subscribe(&mut client, project.id, 0).await;
-    client
-        .call::<AgentStart>(start_params(project.id, "Tidy the build"))
-        .await
-        .unwrap();
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    let fallback = events.iter().find_map(|event| match &event.event {
-        WispEvent::AgentAccountFallback {
-            from_account,
-            to_account,
-            reason,
-            ..
-        } => Some((from_account.clone(), to_account.clone(), *reason)),
-        _ => None,
-    });
-    assert_eq!(
-        fallback,
-        Some((
-            "fake".to_owned(),
-            "key-1".to_owned(),
-            AgentFailureKind::RateLimited
-        ))
-    );
-    let WispEvent::AgentUpdated { state: run, .. } = &events.last().unwrap().event else {
-        unreachable!()
-    };
-    assert_eq!(run.account_id, "key-1");
-    let usage = client.call::<UsageGet>(UsageGetParams {}).await.unwrap();
-    let charged: Vec<(&str, u64)> = usage
-        .accounts
-        .iter()
-        .map(|account| (account.account_id.as_str(), account.today.input_tokens))
-        .collect();
-    assert_eq!(
-        charged,
-        [("key-1", 7)],
-        "charged to the account it fell back to"
-    );
-
-    let prompt = items(&events)
-        .into_iter()
-        .find_map(|item| match item {
-            AgentOutputItem::Text { text, .. } => Some(text),
-            _ => None,
-        })
-        .expect("the fake echoed its prompt");
-    let context = context.canonicalize().unwrap();
-    assert!(
-        prompt.contains(&context.display().to_string()),
-        "names the shared context folder: {prompt}"
-    );
-    assert!(prompt.contains("Don't commit"), "{prompt}");
-    assert!(prompt.contains("localhost"), "{prompt}");
-    assert!(prompt.ends_with("Your task:\nTidy the build"), "{prompt}");
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn workers_are_refused_where_wispd_cannot_sandbox_them() {
-    let dir = temp_dir();
-    // A `claude` older than the sandbox needs, found where agents' CLIs are looked up.
-    let bin = dir.path().join("bin");
+/// An in-process plxd whose Claude Code, Codex, and Cursor backends are plxd's real ones,
+/// running `scripts`, stand-ins for `claude`, `codex`, and the Cursor SDK sidecar (`cursor-sdk`,
+/// through `PLXD_CURSOR_SDK`), from a folder in `dir` that is the agents' whole `PATH` besides the
+/// system's. Claude runs through [`CLAUDE_SDK`] (`PLXD_CLAUDE_SDK`).
+#[cfg(target_os = "macos")]
+fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
+    let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\n\
-         if [ \"$1\" = --version ]; then echo '2.1.100 (Claude Code)'; exit 0; fi\n\
-         printf '%s' '{\"loggedIn\":true}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let scripts = scripts
+        .into_iter()
+        .chain([("claude-sdk", CLAUDE_SDK.to_owned())]);
+    for (program, script) in scripts {
+        let path = bin.join(program);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let mut environment = Environment::empty();
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
-
-    let mut config = InProcess::config(dir.path());
+    environment.set("PLXD_CURSOR_SDK", bin.join("cursor-sdk"));
+    environment.set("PLXD_CLAUDE_SDK", bin.join("claude-sdk"));
+    let mut config = InProcess::config(dir);
     config.agent_environment = Some(environment.clone());
     let mut backends = BackendRegistry::new();
-    let launcher = Launcher::new(DataDir::new(dir.path()).unwrap(), environment);
+    let launcher = Launcher::new(DataDir::new(dir).unwrap(), environment);
     backends.register(
         Provider::Anthropic,
-        Arc::new(wispd::backend::claude::ClaudeBackend::new(launcher.clone())),
+        Arc::new(plxd::backend::claude::ClaudeBackend::new(launcher.clone())),
     );
     backends.register(
         Provider::Openai,
-        Arc::new(wispd::backend::codex::CodexBackend::new(launcher)),
+        Arc::new(plxd::backend::codex::CodexBackend::new(launcher.clone())),
+    );
+    backends.register(
+        Provider::Cursor,
+        Arc::new(plxd::providers::cursor_backend(launcher)),
     );
     config.backends = Some(backends);
-    let server = InProcess::start(config);
+    InProcess::start(config)
+}
+
+/// What the stand-in for `program` recorded in `out`'s `file`, once it holds `wanted`.
+#[cfg(target_os = "macos")]
+async fn recorded(out: &Path, program: &str, file: &str, wanted: &str) -> String {
+    let path = out.join(format!("{program}.{file}"));
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if text.contains(wanted) {
+            return text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{program} never wrote {wanted:?}: {text}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// PLX-396 (0042): an orchestrator's child starts on each built-in kind as a thread the user starts
+/// would, through plxd's real backends: Claude Code as full Claude Code with plxd's thread tools,
+/// Codex on `codex app-server`, and Cursor on its SDK sidecar (0053), each in the orchestrator's
+/// mode and asking through the inbox. Auto is where a worker would have kept the sandbox's flags.
+/// Each stand-in CLI records its arguments and what plxd writes it.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one case per built-in kind")]
+async fn an_orchestrators_child_starts_as_a_thread_on_each_built_in_kind() {
+    use parallax_protocol::{AgentPermission, OrchestratorPermission};
+
+    let dir = temp_dir();
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let out = out.canonicalize().unwrap();
+    let script = |program: &'static str, version: &str| {
+        let out = out.display();
+        let script = format!(
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+             --version) echo '{version}'; exit 0 ;;\n\
+             auth|login|status) printf '%s' '{{\"loggedIn\":true}}'; exit 0 ;;\n\
+             esac\n\
+             printf '%s\\n' \"$@\" > '{out}/{program}.argv'\n\
+             while IFS= read -r line; do printf '%s\\n' \"$line\" >> '{out}/{program}.stdin'; done\n"
+        );
+        (program, script)
+    };
+    let server = built_in_kinds(
+        dir.path(),
+        [
+            script("claude", "2.1.300 (Claude Code)"),
+            script("codex", "codex-cli 0.160.0"),
+            script("cursor-sdk", "1.0.35"),
+        ],
+    );
     let mut client = Conn::ready(&server.socket).await;
-    let project = create(&mut client, project_params(dir.path())).await;
+    let mut projects = Vec::new();
+    for permission in [OrchestratorPermission::Auto, OrchestratorPermission::Bypass] {
+        let repo = temp_dir();
+        let params = OrchestratorCreateParams {
+            permission: Some(permission),
+            ..orchestrator_params(repo.path())
+        };
+        projects.push((create(&mut client, params).await, repo));
+    }
+    let (auto, bypass) = (&projects[0].0, &projects[1].0);
 
-    let old = client
-        .call::<AgentStart>(AgentStartParams {
-            account: Some(AccountChoice::Subscription {
-                backend: "claude".to_owned(),
-            }),
-            ..start_params(project.id, "Fix it")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&old), ErrorKind::WorkerUnavailable);
-    assert!(old.message.contains("2.1.100"), "{}", old.message);
-    assert!(old.message.contains("2.1.248"), "{}", old.message);
+    let (auto_mode, bypass_mode) = (AgentPermission::Auto, AgentPermission::Bypass);
+    for (project, mode, backend, program) in [
+        (auto, auto_mode, "claude", "claude"),
+        (auto, auto_mode, "codex", "codex"),
+        (auto, auto_mode, "cursor", "cursor-sdk"),
+        (bypass, bypass_mode, "claude", "claude"),
+        (bypass, bypass_mode, "codex", "codex"),
+        (bypass, bypass_mode, "cursor", "cursor-sdk"),
+    ] {
+        // Both Codex children share the first one's app-server (0060), so it starts once.
+        if program != "codex" || project.id == auto.id {
+            for file in ["argv", "stdin", "open"] {
+                let _ = std::fs::remove_file(out.join(format!("{program}.{file}")));
+            }
+        }
+        let run = client
+            .call::<AgentStart>(AgentStartParams {
+                account: Some(AccountChoice::Subscription {
+                    backend: backend.to_owned(),
+                }),
+                ..start_params(project.id, "Tidy the build")
+            })
+            .await
+            .unwrap()
+            .run;
+        assert!(run.approvals, "{backend} asks through the inbox");
+        assert_eq!(run.permission, Some(mode), "{backend}");
+        assert!(run.branch.is_some(), "{backend} works in its own worktree");
 
-    // Codex workers are off until RYA-145 isolates their temp folder (RYA-153).
-    let codex = client
-        .call::<AgentStart>(AgentStartParams {
-            account: Some(AccountChoice::Subscription {
-                backend: "codex".to_owned(),
-            }),
-            ..start_params(project.id, "Fix it")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&codex), ErrorKind::WorkerUnavailable);
-    assert!(codex.message.contains("RYA-145"), "{}", codex.message);
-
+        // Claude's arguments go to the Agent SDK sidecar, in its query's `open` line.
+        let argv = if backend == "claude" {
+            let open = recorded(&out, program, "open", "\n").await;
+            let open: serde_json::Value = serde_json::from_str(&open).unwrap();
+            let args: Vec<&str> = open["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|arg| arg.as_str().unwrap())
+                .collect();
+            args.join("\n")
+        } else {
+            recorded(&out, program, "argv", "\n").await
+        };
+        let argv: Vec<&str> = argv.lines().collect();
+        match backend {
+            "claude" => {
+                for worker in ["--restricted", "--tools", "--strict-mcp-config"] {
+                    assert!(!argv.contains(&worker), "{mode:?}: {argv:?}");
+                }
+                let flag = argv.iter().position(|arg| *arg == "--permission-mode");
+                let expected = if mode == auto_mode {
+                    "auto"
+                } else {
+                    "bypassPermissions"
+                };
+                assert_eq!(flag.map(|at| argv[at + 1]), Some(expected));
+                assert!(argv.contains(&"--mcp-config"), "the thread tools: {argv:?}");
+                let stdin = recorded(&out, program, "stdin", "Tidy the build").await;
+                assert!(
+                    stdin.contains(
+                        "You are working on a task in the Parallax Orchestrator \\\"app\\\".\\n\
+                         Your Parallax tools are on the plxd MCP server: thread_list,"
+                    ),
+                    "{stdin}"
+                );
+                assert!(
+                    stdin.contains("\\n\\nYour task:\\nTidy the build"),
+                    "{stdin}"
+                );
+            }
+            "codex" => {
+                assert_eq!(argv, ["app-server"]);
+                // The threads' app-server, not a login check's, initializes once.
+                let stdin = recorded(&out, program, "stdin", "\"title\":\"Parallax\"").await;
+                assert_eq!(
+                    stdin.matches("\"title\":\"Parallax\"").count(),
+                    1,
+                    "{stdin}"
+                );
+            }
+            _ => {
+                assert_eq!(argv.first(), Some(&"run"), "{argv:?}");
+                let permission = if mode == auto_mode { "auto" } else { "bypass" };
+                recorded(
+                    &out,
+                    program,
+                    "stdin",
+                    &format!("\"permission\":\"{permission}\""),
+                )
+                .await;
+            }
+        }
+    }
     server.stop().await;
 }
 
-/// #257: neither an untracked file nor an uncommitted tracked change blocks `agent/start`. Both
-/// start the worktree from `HEAD`; only the tracked change is flagged so the editor can tell the
-/// user those edits aren't in the run.
-#[tokio::test]
-async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-
-    // Untracked only: #257's original report (an untracked AGENTS.md blocked New Chat).
-    std::fs::write(Path::new(&project.repo_path).join("AGENTS.md"), "notes\n").unwrap();
-    let untracked = client
-        .call::<AgentStart>(start_params(project.id, "Fix it"))
-        .await
-        .unwrap()
-        .run;
-    assert!(!untracked.base_dirty, "an untracked file needs no notice");
-    assert!(untracked.branch.is_some(), "a worktree was made");
-
-    // A tracked, uncommitted change: still starts the worktree from HEAD, but is flagged.
-    std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
-    let dirty = client
-        .call::<AgentStart>(start_params(project.id, "Fix it too"))
-        .await
-        .unwrap()
-        .run;
-    assert!(
-        dirty.base_dirty,
-        "a tracked, uncommitted change is flagged so the editor can tell the user"
-    );
-    assert!(
-        dirty.branch.is_some(),
-        "a worktree was made despite the dirty repo"
-    );
-
-    assert_eq!(list(&mut client).await.len(), 2, "both runs were recorded");
-    assert_eq!(
-        worktree_count(host.dir.path()),
-        2,
-        "and both worktrees were made"
-    );
-    host.server.stop().await;
-}
-
-fn decode_base64(text: &str) -> Vec<u8> {
+pub(crate) fn decode_base64(text: &str) -> Vec<u8> {
     let value = |c: u8| -> u32 {
         match c {
             b'A'..=b'Z' => u32::from(c - b'A'),
@@ -1260,6 +956,8 @@ async fn read_file(
             path: path.to_owned(),
             side,
             size_only: None,
+            offset: None,
+            length: None,
         })
         .await
 }
@@ -1320,6 +1018,8 @@ async fn assert_reviewable(
             path: "README.md".to_owned(),
             side: AgentFileSide::Head,
             size_only: Some(true),
+            offset: None,
+            length: None,
         })
         .await
         .unwrap();
@@ -1357,6 +1057,8 @@ async fn assert_paths_are_checked(client: &mut Conn, run_id: RunId) {
             path: "README.md".to_owned(),
             side: AgentFileSide::Head,
             size_only: None,
+            offset: None,
+            length: None,
         })
         .await
         .unwrap_err();
@@ -1404,15 +1106,15 @@ async fn assert_closed_after_accept(
 #[tokio::test]
 async fn a_finished_run_is_reviewed_accepted_into_the_branch_and_then_closed() {
     let dir = temp_dir();
-    let project_params = project_params(dir.path());
+    let orchestrator_params = orchestrator_params(dir.path());
     let note = dir
         .path()
         .join("context")
-        .join(project_params.id.to_string())
+        .join(orchestrator_params.id.to_string())
         .join("notes.md");
     let host = Host::start(dir, fake(editing_script(&note)));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params).await;
+    let project = create(&mut client, orchestrator_params).await;
     let repo = PathBuf::from(&project.repo_path);
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Rewrite the README");
@@ -1421,7 +1123,7 @@ async fn a_finished_run_is_reviewed_accepted_into_the_branch_and_then_closed() {
     let branch = started.branch.clone().unwrap();
     let worktree = PathBuf::from(started.worktree_path.clone().unwrap());
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let WispEvent::AgentUpdated { state, .. } = &events.last().unwrap().event else {
+    let ParallaxEvent::AgentUpdated { state, .. } = &events.last().unwrap().event else {
         unreachable!()
     };
     let commit = state.diff.as_ref().expect("a commit").commit.clone();
@@ -1471,7 +1173,7 @@ async fn a_finished_run_is_reviewed_accepted_into_the_branch_and_then_closed() {
     let events = until(&mut client, updated_to(AgentStatus::Accepted)).await;
     assert!(events.iter().any(|event| matches!(
         &event.event,
-        WispEvent::AgentAccepted { run_id: id, merge } if *id == run_id && *merge == accepted.merge
+        ParallaxEvent::AgentAccepted { run_id: id, merge } if *id == run_id && *merge == accepted.merge
     )));
 
     assert_closed_after_accept(&mut client, &accept, &accepted).await;
@@ -1504,13 +1206,13 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
         dir,
         fake(vec![
             init("review-1"),
+            Step::EndTurn { result: None },
             Step::AwaitFollowUp,
-            end_turn("Noted."),
             Step::Hang,
         ]),
     );
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
     let repo = PathBuf::from(&project.repo_path);
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Link a secret");
@@ -1536,7 +1238,7 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
     )
     .await;
 
-    // The worker writes into its worktree while it runs: nothing is reviewable until wispd
+    // The worker writes into its worktree while it runs: nothing is reviewable until plxd
     // commits, and accept waits for the run to stop.
     let secret_dir = tempfile::tempdir().unwrap();
     let secret = secret_dir.path().join("secret.txt");
@@ -1561,7 +1263,7 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
     assert!(busy.message.contains("running"), "{}", busy.message);
 
     client
-        .call::<AgentCancel>(AgentCancelParams { run_id })
+        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Cancelled)).await;

@@ -1,17 +1,17 @@
 //! The macOS login Keychain, through `security-framework` (#117).
 
+use parallax_protocol::AccountId;
 use security_framework::base::Error as SecurityError;
 use security_framework::passwords::{
     PasswordOptions, delete_generic_password, generic_password, set_generic_password_options,
 };
-use wisp_protocol::AccountId;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{KeyStore, KeyStoreError, SERVICE};
 
 /// The label shown for an item in Keychain Access, so a real one is recognizable among a user's
 /// other saved passwords.
-const ITEM_LABEL: &str = "wisp API key";
+const ITEM_LABEL: &str = "Parallax secret";
 
 /// `security_framework_sys::base::errSecItemNotFound`, kept as a local constant so this module
 /// does not need `security-framework-sys` as a direct dependency for one status code.
@@ -43,9 +43,9 @@ impl From<SecurityError> for KeyStoreError {
 ///
 /// `security-framework`'s `kSecUseDataProtectionKeychain` and `kSecAttrAccessible*` only affect
 /// the newer, per-app data-protection keychain, which requires a signed binary with a Keychain
-/// Sharing entitlement to use meaningfully. wisp is unsigned until it has an Apple Developer ID,
+/// Sharing entitlement to use meaningfully. Parallax is unsigned until it has an Apple Developer ID,
 /// so this deliberately targets the older, file-based login keychain instead, which locks and
-/// unlocks as a whole and needs neither. Revisit this once wisp is signed.
+/// unlocks as a whole and needs neither. Revisit this once Parallax is signed.
 ///
 /// [`kSecAttrSynchronizable`](https://developer.apple.com/documentation/security/ksecattrsynchronizable)
 /// is left unset on purpose: an API key must never sync to iCloud Keychain and reach another of
@@ -56,7 +56,7 @@ pub struct KeychainStore {
 }
 
 impl KeychainStore {
-    /// The real wisp Keychain service, [`SERVICE`].
+    /// The real Parallax Keychain service, [`SERVICE`].
     #[must_use]
     pub const fn new() -> Self {
         Self { service: SERVICE }
@@ -80,10 +80,7 @@ impl KeyStore for KeychainStore {
         let account = account.to_string();
         let mut options = PasswordOptions::new_generic_password(self.service, &account);
         options.set_label(ITEM_LABEL);
-        let mut owned = key.to_owned();
-        let result = set_generic_password_options(owned.as_bytes(), options);
-        owned.zeroize();
-        Ok(result?)
+        Ok(set_generic_password_options(key.as_bytes(), options)?)
     }
 
     fn get(&self, account: AccountId) -> Result<Option<Zeroizing<String>>, KeyStoreError> {
@@ -103,9 +100,8 @@ impl KeyStore for KeychainStore {
     fn delete(&self, account: AccountId) -> Result<(), KeyStoreError> {
         let account = account.to_string();
         match delete_generic_password(self.service, &account) {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-            Err(error) => Err(error.into()),
+            Err(error) if error.code() != ERR_SEC_ITEM_NOT_FOUND => Err(error.into()),
+            _ => Ok(()),
         }
     }
 }

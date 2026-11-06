@@ -10,16 +10,63 @@
 //! [`check_host`] probes that same helper, inside the namespaces Claude's sandbox uses.
 //!
 //! [`check_host`] also refuses a Claude Code that runs with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on,
-//! which widens every command's writes on Linux (RYA-112).
+//! which widens every command's writes on Linux (PLX-112).
+//!
+//! A release plxd carries static builds of `bwrap` and `socat` ([`BUNDLED`], PLX-895), so a host
+//! needs neither installed. [`check_host`] writes them to [`bundled_dir`], which every process
+//! plxd starts has last on its `PATH`, so a host's own copies still win, and which a worker's
+//! commands may read, since its `socat` relays run inside the sandbox.
 
+use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use super::{WORKER_MIN_VERSION, scrubbed};
 use crate::backend::process::{Launcher, ProcessSpec};
 use crate::detect::{PROBE_TIMEOUT, Ran, resolve, run, run_spec};
+
+/// The static `bwrap` and `socat` this plxd carries, by name. `scripts/ci/build-sandbox-tools`
+/// builds them, and `scripts/ci/package-app` embeds them with the `sandbox-tools` feature and
+/// `PLX_SANDBOX_TOOLS` naming their folder. Other builds carry none and use the host's.
+pub const BUNDLED: &[(&str, &[u8])] = &[
+    #[cfg(feature = "sandbox-tools")]
+    (
+        "bwrap",
+        include_bytes!(concat!(env!("PLX_SANDBOX_TOOLS"), "/bwrap")),
+    ),
+    #[cfg(feature = "sandbox-tools")]
+    (
+        "socat",
+        include_bytes!(concat!(env!("PLX_SANDBOX_TOOLS"), "/socat")),
+    ),
+];
+
+/// Where [`BUNDLED`] goes in the data folder `data_dir`, if this plxd carries any.
+#[must_use]
+pub fn bundled_dir(data_dir: &Path) -> Option<PathBuf> {
+    (!BUNDLED.is_empty()).then(|| data_dir.join(crate::paths::SANDBOX_TOOLS_DIR))
+}
+
+/// Writes each of `tools` into `dir` as an executable, unless the file there already holds it.
+/// Each goes through a temp file and a rename, so a worker already running the old copy keeps it.
+fn install(dir: &Path, tools: &[(&str, &[u8])]) -> io::Result<()> {
+    for &(name, bytes) in tools {
+        let path = dir.join(name);
+        if std::fs::read(&path).is_ok_and(|current| current == bytes) {
+            continue;
+        }
+        std::fs::create_dir_all(dir)?;
+        let mut file = tempfile::NamedTempFile::new_in(dir)?;
+        file.write_all(bytes)?;
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o755))?;
+        file.persist(&path)?;
+    }
+    Ok(())
+}
 
 /// The namespaces Claude Code's sandbox puts each command in (sandbox-runtime's bubblewrap
 /// arguments): a new session, user, and PID namespace with no capabilities, and a fresh `/proc`.
@@ -48,11 +95,11 @@ const REFUSED: i32 = 97;
 /// on from 24.04.
 const APPARMOR_USERNS: &str = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 
-/// What wispd runs to read Claude Code's sandbox posture: one JSON line. `--restricted` makes it
+/// What plxd runs to read Claude Code's sandbox posture: one JSON line. `--restricted` makes it
 /// load the settings a worker loads, and no others.
 const STATUS_ARGS: &[&str] = &["--restricted", "sandbox", "status"];
 
-/// The only `statusVersion` wispd knows how to read.
+/// The only `statusVersion` plxd knows how to read.
 const STATUS_VERSION: u64 = 3;
 
 /// The `sandbox status` field that is `"unsupported"` on Linux exactly when
@@ -62,8 +109,8 @@ const SCRUB_FIELD: &str = "autoAllowBashIfSandboxedSource";
 /// Every other value 2.1.283 gives [`SCRUB_FIELD`]: where the auto-allow setting comes from.
 const SCRUB_OFF: &[&str] = &["default", "settings", "policy"];
 
-/// The end of every refusal for a status wispd can't read.
-const CANT_TELL: &str = "so wispd can't tell whether CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which \
+/// The end of every refusal for a status plxd can't read.
+const CANT_TELL: &str = "so plxd can't tell whether CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on, which \
                          would widen a worker's sandbox";
 
 /// The first Claude Code whose `sandbox status` is [`STATUS_VERSION`], with [`SCRUB_FIELD`].
@@ -72,9 +119,10 @@ const STATUS_MIN_VERSION: &str = "2.1.275";
 /// Checks that Claude Code's sandbox works here with its seccomp filter, for workers that run
 /// `claude` through `launcher`:
 ///
-/// 1. `bwrap` and `socat` resolve on the launcher's `PATH`, where Claude Code looks for them.
+/// 1. `bwrap` and `socat` resolve on the launcher's `PATH`, where Claude Code looks for them,
+///    after [`BUNDLED`] is written to [`bundled_dir`].
 /// 2. `claude` doesn't run with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on ([`check_scrub_flag`]).
-/// 3. Inside bwrap alone, `socat` connects to a Unix socket wispd listens on. If it can't, bwrap
+/// 3. Inside bwrap alone, `socat` connects to a Unix socket plxd listens on. If it can't, bwrap
 ///    can't sandbox here, as on Ubuntu 24.04 and later without a profile for it.
 /// 4. Inside bwrap and `claude`'s own filter, the same connect is refused.
 ///
@@ -82,14 +130,27 @@ const STATUS_MIN_VERSION: &str = "2.1.275";
 ///
 /// What is missing or broken, and the fix, as a message for `workerUnavailable`.
 pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String> {
-    let bwrap = resolve(launcher, "bwrap").ok_or(
-        "bubblewrap (bwrap) isn't installed, and Claude Code's worker sandbox needs it on Linux; \
-         install the bubblewrap package",
-    )?;
-    let socat = resolve(launcher, "socat").ok_or(
-        "socat isn't installed, and Claude Code's worker sandbox needs it on Linux; install the \
-         socat package",
-    )?;
+    if let Some(dir) = bundled_dir(launcher.data_dir().root()) {
+        install(&dir, BUNDLED).map_err(|error| {
+            format!(
+                "could not write plxd's bubblewrap and socat to {}: {error}",
+                dir.display()
+            )
+        })?;
+    }
+    let (bwrap, socat) = match (resolve(launcher, "bwrap"), resolve(launcher, "socat")) {
+        (Some(bwrap), Some(socat)) => (bwrap, socat),
+        (bwrap, socat) => {
+            let missing: Vec<&str> = [("bubblewrap", bwrap.is_none()), ("socat", socat.is_none())]
+                .into_iter()
+                .filter_map(|(package, missing)| missing.then_some(package))
+                .collect();
+            let os_release = std::fs::read_to_string("/etc/os-release")
+                .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+                .unwrap_or_default();
+            return Err(missing_packages(&missing, &os_release));
+        }
+    };
     check_scrub_flag(launcher, text(claude)?).await?;
     let dir = tempfile::tempdir()
         .map_err(|error| format!("could not make a folder to check the worker sandbox: {error}"))?;
@@ -106,11 +167,15 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
         Some(REFUSED) => {
             return Err(
                 "socat can't connect to a Unix socket even outside Claude Code's seccomp filter, \
-                 so wispd can't check the filter"
+                 so plxd can't check the filter"
                     .into(),
             );
         }
-        _ => return Err(bwrap_problem(&alone)),
+        _ => {
+            let ours = bundled_dir(launcher.data_dir().root())
+                .is_some_and(|dir| Path::new(bwrap).starts_with(dir));
+            return Err(bwrap_problem(&alone, ours));
+        }
     }
 
     let helper = [&[claude][..], &connect].concat();
@@ -128,25 +193,57 @@ pub async fn check_host(launcher: &Launcher, claude: &Path) -> Result<(), String
              would open the D-Bus session bus and docker.sock to workers; update Claude Code to \
              {WORKER_MIN_VERSION} or later"
         )),
-        _ => Err(format!(
-            "Claude Code's seccomp filter (its apply-seccomp helper) could not run: {}; Claude \
-             Code {WORKER_MIN_VERSION} or later has it built in on x86_64 and arm64",
-            first_line(&filtered)
+        _ => Err(helper_problem(
+            &first_line(&filtered),
+            rustix::process::geteuid().is_root(),
         )),
     }
 }
 
+/// Why Claude Code's seccomp helper couldn't run, from the first line it printed and whether
+/// plxd runs as `root`. A failed write to `/proc/self/uid_map`, `gid_map`, or `setgroups` means
+/// the helper is there and bubblewrap works (the probe before it passed), but the kernel refused
+/// the user namespace the helper nests inside bubblewrap's. As root that is expected: since Linux
+/// 5.12, mapping uid 0 needs `CAP_SETFCAP`, which bubblewrap's `--cap-drop ALL` removed (PLX-802).
+/// Claude Code's own sandbox fails the same way, so a newer Claude Code doesn't help.
+fn helper_problem(line: &str, root: bool) -> String {
+    let nested = [
+        "/proc/self/uid_map",
+        "/proc/self/gid_map",
+        "/proc/self/setgroups",
+    ];
+    let failed =
+        format!("Claude Code's seccomp filter (its apply-seccomp helper) could not run: {line}");
+    if !nested.iter().any(|file| line.contains(file)) {
+        return format!(
+            "{failed}; Claude Code {WORKER_MIN_VERSION} or later has it built in on x86_64 and arm64"
+        );
+    }
+    if root {
+        return format!(
+            "{failed}. plxd runs as root, and Claude Code's sandbox can't nest its user namespace \
+             for root, whatever its version; run plxd as a regular user, such as by connecting \
+             to this host as one"
+        );
+    }
+    format!(
+        "{failed}. bubblewrap works on this host, but the kernel won't let the helper set up the \
+         user namespace it nests inside bubblewrap's. This comes from the host's configuration \
+         (its kernel, or a container plxd runs in), not Claude Code's version"
+    )
+}
+
 /// Refuses a `claude` that runs with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` on. On Linux the flag
 /// merges Claude Code's CI profile into every command's sandbox, which lets commands write all of
-/// `/home`, `/tmp`, `/var`, `/opt`, `/run`, `/mnt`, and `/root` (0013). wispd never sets it for a
+/// `/home`, `/tmp`, `/var`, `/opt`, `/run`, `/mnt`, and `/root` (0013). plxd never sets it for a
 /// worker and drops it from what a worker inherits, but managed settings can set it, and their
-/// `env` beats both the worker's environment and its `--settings`. So wispd asks Claude Code
+/// `env` beats both the worker's environment and its `--settings`. So plxd asks Claude Code
 /// itself, with the environment a worker gets. That was tested with the flag in
 /// `managed-settings.json` and in a `managed-settings.d` drop-in. Server-managed settings, a
 /// `policyHelper`, and WSL's inherited settings join the same managed tier inside Claude Code,
 /// but weren't tried. This runs in its own process, which can still see other settings than the
 /// worker does, so a worker whose `system/init` shows the permission mode the flag forces fails
-/// too (RYA-118).
+/// too (PLX-118).
 ///
 /// Fails closed: anything but a successful run that prints [`STATUS_VERSION`] with one of
 /// [`SCRUB_OFF`] is refused.
@@ -164,7 +261,7 @@ fn status_spec(launcher: &Launcher, claude: &str) -> ProcessSpec {
 
 /// Runs `spec`, a [`status_spec`], and reads its output as [`check_scrub_flag`] describes.
 async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), String> {
-    let ran = run_spec(launcher, spec, PROBE_TIMEOUT)
+    let ran = run_spec(launcher, spec, b"", PROBE_TIMEOUT)
         .await
         .map_err(|error| format!("`claude sandbox status` failed ({error}), {CANT_TELL}"))?;
     if ran.exit_code != Some(0) {
@@ -174,7 +271,7 @@ async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), Stri
         ));
     }
     let status: Value = serde_json::from_str(ran.stdout.trim()).map_err(|error| {
-        format!("`claude sandbox status` printed something wispd can't read ({error}), {CANT_TELL}")
+        format!("`claude sandbox status` printed something plxd can't read ({error}), {CANT_TELL}")
     })?;
     match status["statusVersion"].as_u64() {
         Some(STATUS_VERSION) => {}
@@ -186,7 +283,7 @@ async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), Stri
         }
         _ => {
             return Err(format!(
-                "`claude sandbox status` has statusVersion {}, and wispd reads only version \
+                "`claude sandbox status` has statusVersion {}, and plxd reads only version \
                  {STATUS_VERSION}, {CANT_TELL}",
                 status["statusVersion"]
             ));
@@ -196,14 +293,14 @@ async fn read_status(launcher: &Launcher, spec: &ProcessSpec) -> Result<(), Stri
         Some(source) if SCRUB_OFF.contains(&source) => Ok(()),
         Some("unsupported") => Err(
             "Claude Code runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB on, which on Linux lets a \
-             worker's commands write all of /home, /tmp, /var, /opt, /run, /mnt, and /root. wispd \
+             worker's commands write all of /home, /tmp, /var, /opt, /run, /mnt, and /root. plxd \
              doesn't pass it on, so something Claude Code loads sets it, most likely the env block \
              of its managed settings (such as /etc/claude-code/managed-settings.json); turn it off \
              there"
                 .into(),
         ),
         _ => Err(format!(
-            "`claude sandbox status` reports {SCRUB_FIELD} as {}, which wispd doesn't know, \
+            "`claude sandbox status` reports {SCRUB_FIELD} as {}, which plxd doesn't know, \
              {CANT_TELL}",
             status[SCRUB_FIELD]
         )),
@@ -223,18 +320,67 @@ async fn sandboxed(
         .map_err(|error| format!("checking Claude Code's worker sandbox failed: {error}"))
 }
 
-/// Why bwrap couldn't run a command, from how it failed.
-fn bwrap_problem(ran: &Ran) -> String {
+/// Why bwrap couldn't run a command, from how it failed, and whether it was plxd's own copy. The
+/// profile that lets bwrap past `AppArmor` names its path, and Claude Code's docs give one for the
+/// distro's `/usr/bin/bwrap`, so for plxd's copy the fix is the distro's package.
+fn bwrap_problem(ran: &Ran, ours: bool) -> String {
     let apparmor = std::fs::read_to_string(APPARMOR_USERNS).is_ok_and(|value| value.trim() == "1");
     if apparmor {
-        return "AppArmor keeps bubblewrap from creating the user namespaces Claude Code's worker \
-                sandbox needs (kernel.apparmor_restrict_unprivileged_userns is 1); add an AppArmor \
-                profile for bwrap, as Claude Code's sandboxing docs describe"
-            .into();
+        let fix = if ours {
+            "install bubblewrap with the package manager and add an AppArmor profile for \
+             /usr/bin/bwrap"
+        } else {
+            "add an AppArmor profile for bwrap"
+        };
+        return format!(
+            "AppArmor keeps bubblewrap from creating the user namespaces Claude Code's worker \
+             sandbox needs (kernel.apparmor_restrict_unprivileged_userns is 1); {fix}, as Claude \
+             Code's sandboxing docs describe"
+        );
     }
     format!(
         "bubblewrap can't create Claude Code's worker sandbox here: {}",
         first_line(ran)
+    )
+}
+
+/// The error for sandbox `packages` this host lacks, with how to install them on the distro its
+/// `os-release` names: a NixOS configuration line, or the package manager's command.
+fn missing_packages(packages: &[&str], os_release: &str) -> String {
+    let list = packages.join(" ");
+    let (names, verb, them, noun) = match packages {
+        [one] => ((*one).to_owned(), "isn't", "it", "package"),
+        _ => (packages.join(" and "), "aren't", "them", "packages"),
+    };
+    let field = |name: &str| {
+        os_release
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+            .map(|value| value.trim_matches(['"', '\'']).to_owned())
+            .unwrap_or_default()
+    };
+    let ids = format!("{} {}", field("ID"), field("ID_LIKE"));
+    let is = |id: &str| ids.split_whitespace().any(|each| each == id);
+    let fix = if is("nixos") {
+        format!(
+            "add {list} to environment.systemPackages in configuration.nix, then run `sudo \
+             nixos-rebuild switch`"
+        )
+    } else if is("debian") || is("ubuntu") {
+        format!("run `sudo apt install {list}`")
+    } else if is("fedora") || is("rhel") {
+        format!("run `sudo dnf install {list}`")
+    } else if is("arch") {
+        format!("run `sudo pacman -S {list}`")
+    } else if is("suse") || is("opensuse") {
+        format!("run `sudo zypper install {list}`")
+    } else if is("alpine") {
+        format!("run `sudo apk add {list}`")
+    } else {
+        format!("install the {names} {noun}")
+    };
+    format!(
+        "{names} {verb} installed, and Claude Code's worker sandbox needs {them} on Linux; {fix}"
     )
 }
 
@@ -264,7 +410,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    use super::{check_host, read_status, status_spec};
+    use super::{check_host, install, read_status, status_spec};
     use crate::backend::claude::ClaudeBackend;
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
@@ -290,23 +436,27 @@ mod tests {
         path
     }
 
-    #[tokio::test]
-    async fn a_missing_bwrap_or_socat_is_named() {
+    #[test]
+    fn bundled_tools_are_written_executable_and_rewritten_when_they_differ() {
         let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
-        fs::create_dir(&bin).unwrap();
-        let claude = script(&bin, "claude", "exit 0");
-        let only = launcher(dir.path(), &[("PATH", bin.to_str().unwrap())]);
-
-        let error = check_host(&only, &claude).await.unwrap_err();
-        assert!(
-            error.contains("bubblewrap (bwrap) isn't installed"),
-            "{error}"
+        let tools = dir.path().join("tools/sandbox");
+        install(&tools, &[("bwrap", b"one"), ("socat", b"two")]).unwrap();
+        let bwrap = tools.join("bwrap");
+        assert_eq!(fs::read(&bwrap).unwrap(), b"one");
+        assert_eq!(
+            fs::metadata(&bwrap).unwrap().permissions().mode() & 0o777,
+            0o755
         );
+        assert_eq!(fs::read(tools.join("socat")).unwrap(), b"two");
 
-        script(&bin, "bwrap", "exit 0");
-        let error = check_host(&only, &claude).await.unwrap_err();
-        assert!(error.contains("socat isn't installed"), "{error}");
+        fs::write(&bwrap, "tampered").unwrap();
+        install(&tools, &[("bwrap", b"one")]).unwrap();
+        assert_eq!(fs::read(&bwrap).unwrap(), b"one");
+        assert_eq!(
+            fs::read_dir(&tools).unwrap().count(),
+            2,
+            "no temp file left"
+        );
     }
 
     /// A folder holding a `bwrap` and a `socat` that do nothing, and a launcher that finds them.
@@ -336,11 +486,11 @@ mod tests {
             ),
             (
                 r#"echo '{"statusVersion":4,"autoAllowBashIfSandboxedSource":"default"}'"#,
-                "wispd reads only version 3",
+                "plxd reads only version 3",
             ),
             (
                 r#"echo '{"autoAllowBashIfSandboxedSource":"default"}'"#,
-                "wispd reads only version 3",
+                "plxd reads only version 3",
             ),
             (
                 r#"echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"forced"}'"#,
@@ -354,7 +504,7 @@ mod tests {
                 r#"echo "error: unknown command 'sandbox'" >&2; exit 1"#,
                 "failed (error: unknown command 'sandbox')",
             ),
-            ("echo 'not json'", "printed something wispd can't read"),
+            ("echo 'not json'", "printed something plxd can't read"),
         ];
         for (index, (body, expected)) in cases.into_iter().enumerate() {
             let claude = script(&bin, &format!("claude-{index}"), body);
@@ -391,9 +541,9 @@ echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"default"}'"#,
     }
 
     /// The real bwrap and socat, which CI installs along with the Claude Code it names in
-    /// `WISP_SANDBOX_CLAUDE` (0013).
+    /// `PLX_SANDBOX_CLAUDE` (0013).
     fn installed() -> Option<(tempfile::TempDir, Launcher, PathBuf)> {
-        let claude = PathBuf::from(std::env::var_os("WISP_SANDBOX_CLAUDE")?);
+        let claude = PathBuf::from(std::env::var_os("PLX_SANDBOX_CLAUDE")?);
         let dir = tempfile::tempdir().unwrap();
         let launcher = launcher(dir.path(), &[("PATH", INSTALLED_PATH)]);
         Some((dir, launcher, claude))
@@ -405,14 +555,6 @@ echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"default"}'"#,
     const STATUS_OK: &str = r#"if [ "$1" = --restricted ]; then
     echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"default"}'; exit 0
 fi"#;
-
-    #[tokio::test]
-    async fn claude_code_s_own_filter_passes_the_check() {
-        let Some((_dir, launcher, claude)) = installed() else {
-            return;
-        };
-        check_host(&launcher, &claude).await.unwrap();
-    }
 
     #[tokio::test]
     async fn a_claude_without_the_filter_is_refused() {
@@ -438,7 +580,7 @@ fi"#;
         let Some((dir, _, claude)) = installed() else {
             return;
         };
-        // In wispd's own environment the flag is dropped, as it is for a worker.
+        // In plxd's own environment the flag is dropped, as it is for a worker.
         let inherited = launcher(
             dir.path(),
             &[
@@ -462,7 +604,7 @@ fi"#;
     }
 
     /// How a worker run through the real `claude`, via `wrapper`, ends: cancelled once its init
-    /// passed wispd's checks, or failed. The wrapper points it at a closed port, so nothing
+    /// passed plxd's checks, or failed. The wrapper points it at a closed port, so nothing
     /// reaches Anthropic.
     async fn worker_outcome(root: &Path, wrapper: &Path) -> Outcome {
         let data = root.join("data");
@@ -471,7 +613,22 @@ fi"#;
         for folder in [&worktree, &context, &git_dir] {
             fs::create_dir_all(folder).unwrap();
         }
-        let base = launcher(root, &[("PATH", INSTALLED_PATH)]);
+        // The SDK sidecar runs the CLI through `plxd sdk-process`. This test binary isn't plxd, so
+        // point it at the plxd cargo built beside it (`target/<profile>/deps/..`).
+        let exe = std::env::current_exe().unwrap();
+        let plxd = exe.parent().and_then(Path::parent).unwrap().join("plxd");
+        assert!(
+            plxd.is_file(),
+            "build plxd first: {} is missing",
+            plxd.display()
+        );
+        let base = launcher(
+            root,
+            &[
+                ("PATH", INSTALLED_PATH),
+                ("PLXD_CLAUDE_PROCESS", plxd.to_str().unwrap()),
+            ],
+        );
         let temp = run_temp::create(base.data_dir()).unwrap();
         let backend = ClaudeBackend::new(base).with_program(wrapper);
         let request = RunRequest {
@@ -491,13 +648,21 @@ fi"#;
             )),
             account: AccountRef {
                 id: "test".into(),
-                credential: Credential::ApiKey(ApiKey::new("sk-ant-wisp-test-not-a-key".into())),
+                credential: Credential::ApiKey(ApiKey::new(
+                    "sk-ant-parallax-test-not-a-key".into(),
+                )),
             },
             resume: None,
             model: None,
             effort: None,
             permission: None,
-            coordinator_tools: None,
+            context_window: None,
+            fast: None,
+            orchestrator_tools: None,
+            thread_tools: None,
+            approvals: false,
+            thread: false,
+            instructions: None,
         };
         let mut started = backend.start(request).unwrap();
         loop {

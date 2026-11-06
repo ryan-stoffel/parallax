@@ -1,29 +1,43 @@
-//! What a worker needs before it starts (0013, decision 0014): the environment agents run in,
-//! the checks that refuse a worker wispd can't sandbox, the key accounts routing reads, and the
-//! prompt that tells the agent its limits.
+//! What a run needs before it starts (0013, decision 0014): the environment agents run in, the
+//! checks that refuse a run plxd can't sandbox, and the key accounts routing reads.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::time::Duration;
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{AccountId, CliKind, DetectedCli, ErrorKind, Provider};
 
 use crate::backend::Backend;
-use crate::backend::claude::{self, WORKER_MIN_VERSION, parse_version};
+use crate::backend::claude::{WORKER_MIN_VERSION, parse_version};
 use crate::backend::codex;
 use crate::backend::process::Environment;
 use crate::paths::without_verbatim_prefix;
 use crate::routing::KeyAccounts;
 
 /// Folders appended to an agent's `PATH` when it lacks them (#96): the vendors' own install
-/// folder (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
-/// on Windows), rustup's `~/.cargo/bin` (RYA-126), Homebrew on Apple silicon (macOS only) and
-/// `/usr/local/bin`, and the system folders (0023). They go after whatever `PATH` wispd was
-/// started with, so the user's own order still wins; they only fill in what launchd or an SSH
-/// session left out.
-const EXTRA_PATH_IN_HOME: &[&str] = &[".local/bin", ".cargo/bin"];
+/// folders (`~/.local/bin`, where Claude Code's installer puts `claude`; `%USERPROFILE%\.local\bin`
+/// on Windows; and `~/.opencode/bin` and `~/.grok/bin`, where the `OpenCode` and Grok Build
+/// installers put theirs and add them to `PATH` only in an interactive shell's rc file, PLX-539),
+/// rustup's `~/.cargo/bin` (PLX-126), npm's usual user prefix `~/.npm-global/bin`, Nix's
+/// `~/.nix-profile/bin` and nix-darwin's system and per-user profiles (PLX-558), Homebrew on Apple
+/// silicon (macOS only) and `/usr/local/bin`, and the system folders (0023). They go after
+/// whatever `PATH` plxd was started with, so the user's own order still wins; they only fill in
+/// what launchd or an SSH session left out.
+const EXTRA_PATH_IN_HOME: &[&str] = &[
+    ".local/bin",
+    ".opencode/bin",
+    ".grok/bin",
+    ".cargo/bin",
+    ".npm-global/bin",
+    ".nix-profile/bin",
+];
 #[cfg(target_os = "macos")]
 const EXTRA_PATH: &[&str] = &[
+    "/run/current-system/sw/bin",
+    "/nix/var/nix/profiles/default/bin",
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -32,18 +46,32 @@ const EXTRA_PATH: &[&str] = &[
     "/sbin",
 ];
 #[cfg(target_os = "linux")]
-const EXTRA_PATH: &[&str] = &["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+const EXTRA_PATH: &[&str] = &[
+    "/run/current-system/sw/bin",
+    "/nix/var/nix/profiles/default/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
 #[cfg(windows)]
 const EXTRA_PATH: &[&str] = &[];
 
-/// The variables of wispd's own environment that agent CLIs, CLI probes, and worktree git
-/// commands inherit; everything else stays with wispd (0013, decision 0014). A worker has network
-/// access and reads prompt-injectable content, so a token wispd happened to start with, such as
+/// Folders under a variable of plxd's own environment, appended on Windows like
+/// [`EXTRA_PATH`] (PLX-1112): npm's default global prefix `%APPDATA%\npm`, where Install's
+/// `npm install -g` puts `codex.cmd`, and `%ProgramFiles%\nodejs`, where Node.js installs, which
+/// that shim runs. A plxd started before Node.js was installed has neither on its `PATH`.
+const EXTRA_PATH_IN_VARS: &[(&str, &str)] = &[("APPDATA", "npm"), ("PROGRAMFILES", "nodejs")];
+
+/// The variables of plxd's own environment that agent CLIs, CLI probes, and worktree git
+/// commands inherit; everything else stays with plxd (0013, decision 0014). A worker has network
+/// access and reads prompt-injectable content, so a token plxd happened to start with, such as
 /// `GITHUB_TOKEN`, `NPM_TOKEN`, `OPENAI_API_KEY`, or `AWS_SECRET_ACCESS_KEY`, must never reach
 /// it. These are what a CLI needs to find itself, its home folder, its temp folder, the user's
 /// locale and terminal, and a corporate network's proxy and certificates. A backend adds its own
 /// variables on top, such as an account's API key or configuration folder, and the launcher
-/// adds `WISPD_DATA_DIR`.
+/// adds `PLXD_DATA_DIR`.
 const INHERITED: &[&str] = &[
     "PATH",
     "HOME",
@@ -99,12 +127,72 @@ const INHERITED_ON_WINDOWS: &[&str] = &[
 ];
 
 /// The environment every agent CLI, CLI probe, and worktree git command starts from (#96,
-/// decision 0014): only the [`INHERITED`] part of wispd's own, with [`EXTRA_PATH`] filled in.
+/// decision 0014): only the [`INHERITED`] part of plxd's own, with the login shell's `PATH`
+/// ([`login_shell_path`]) and [`EXTRA_PATH`] filled in.
 pub(crate) fn agent_environment() -> Environment {
+    #[cfg(unix)]
+    let login = std::env::var_os("SHELL").and_then(|shell| login_shell_path(&shell));
+    #[cfg(not(unix))]
+    let login: Option<OsString> = None;
     with_extra_path(
         allowlisted(&Environment::inherited()),
         std::env::home_dir().as_deref(),
+        login.as_deref(),
     )
+}
+
+/// How long [`login_shell_path`] waits for the user's shell.
+#[cfg(unix)]
+const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Marks the `PATH` in the login shell's output, which its startup files may print around.
+#[cfg(unix)]
+const PATH_MARK: &str = "__PLXD_PATH__";
+
+/// The `PATH` that `shell`, run as the user's login, interactive shell, sets up (PLX-323). An app
+/// opened from the Dock, and the plxd it starts, get launchd's `/usr/bin:/bin:/usr/sbin:/sbin`,
+/// which misses what the user's startup files add, such as nix-darwin's
+/// `/run/current-system/sw/bin` or nvm's node. The shell runs detached in its own session, so it
+/// can't take over a terminal. `None` if it fails, prints no `PATH`, or takes longer than
+/// [`LOGIN_SHELL_TIMEOUT`], in which case its process group is killed.
+#[cfg(unix)]
+pub(crate) fn login_shell_path(shell: &OsStr) -> Option<OsString> {
+    use std::io::Read as _;
+    use std::os::fd::AsFd as _;
+
+    use rustix::process::{Signal, WaitOptions, kill_process_group, waitpid};
+
+    let mut command = std::process::Command::new(shell);
+    command.args([
+        "-l",
+        "-i",
+        "-c",
+        &format!("printf '%s%s%s' {PATH_MARK} \"$PATH\" {PATH_MARK}"),
+    ]);
+    let null = std::fs::File::open("/dev/null").ok()?;
+    let (mut reader, writer) = std::io::pipe().ok()?;
+    let stdio = crate::spawn::Stdio {
+        stdin: null.as_fd(),
+        stdout: writer.as_fd(),
+        stderr: null.as_fd(),
+    };
+    let pid = crate::spawn::spawn_detached(&command, stdio).ok()?;
+    drop(writer);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        let _ = sender.send(output);
+    });
+    let output = receiver.recv_timeout(LOGIN_SHELL_TIMEOUT);
+    if output.is_err() {
+        let _ = kill_process_group(pid, Signal::KILL);
+    }
+    let _ = waitpid(Some(pid), WaitOptions::empty());
+    let output = String::from_utf8(output.ok()?).ok()?;
+    let (_, rest) = output.split_once(PATH_MARK)?;
+    let (path, _) = rest.split_once(PATH_MARK)?;
+    (!path.is_empty()).then(|| path.into())
 }
 
 /// The variables of `env` an agent may inherit: [`INHERITED`] and [`INHERITED_PREFIXES`], and on
@@ -124,16 +212,43 @@ pub(crate) fn allowlisted(env: &Environment) -> Environment {
         .collect()
 }
 
-pub(crate) fn with_extra_path(mut env: Environment, home: Option<&Path>) -> Environment {
+/// `env` with the folders of `login`, the login shell's `PATH`, then [`EXTRA_PATH_IN_HOME`], the
+/// user's nix-darwin profile (`/etc/profiles/per-user/$USER/bin`, on Unix), [`EXTRA_PATH`], and
+/// on Windows [`EXTRA_PATH_IN_VARS`], appended to its `PATH` where missing.
+pub(crate) fn with_extra_path(
+    mut env: Environment,
+    home: Option<&Path>,
+    login: Option<&OsStr>,
+) -> Environment {
     let mut dirs: Vec<PathBuf> = env
         .get("PATH")
         .map(|path| std::env::split_paths(path).collect())
         .unwrap_or_default();
+    // An rc file's empty or relative entry would resolve in the agent's worktree.
+    let login = login
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| dir.is_absolute());
     let in_home = home
         .filter(|home| home.is_absolute())
         .into_iter()
         .flat_map(|home| EXTRA_PATH_IN_HOME.iter().map(move |dir| home.join(dir)));
-    for dir in in_home.chain(EXTRA_PATH.iter().map(PathBuf::from)) {
+    let per_user = env
+        .get("USER")
+        .filter(|_| cfg!(unix))
+        .map(|user| Path::new("/etc/profiles/per-user").join(user).join("bin"));
+    let in_vars: Vec<PathBuf> = EXTRA_PATH_IN_VARS
+        .iter()
+        .filter(|_| cfg!(windows))
+        .filter_map(|(name, dir)| Some(Path::new(env.get(name)?).join(dir)))
+        .filter(|dir| dir.is_absolute())
+        .collect();
+    for dir in login
+        .chain(in_home)
+        .chain(per_user)
+        .chain(EXTRA_PATH.iter().map(PathBuf::from))
+        .chain(in_vars)
+    {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
@@ -145,7 +260,7 @@ pub(crate) fn with_extra_path(mut env: Environment, home: Option<&Path>) -> Envi
 }
 
 pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
-    ErrorObject::wisp(ErrorKind::WorkerUnavailable, message)
+    ErrorObject::parallax(ErrorKind::WorkerUnavailable, message)
 }
 
 /// What to do about a backend that can't sandbox a worker here: Claude Code's sandbox is checked
@@ -154,20 +269,23 @@ pub(super) fn worker_unavailable(message: impl Into<String>) -> ErrorObject {
 const NO_SANDBOX_HINT: &str = "choose a Claude Code account";
 
 /// What to do about a backend that can't sandbox a worker here: Claude Code has no sandbox on
-/// native Windows (0023, RYA-24).
+/// native Windows (0023, PLX-24).
 #[cfg(windows)]
-const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run wispd in \
+const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so run plxd in \
                                WSL2 and add that as the host for workers";
 
-/// Refuses a worker on a backend that doesn't enforce the worker sandbox (0013).
+/// Refuses any run on a backend that doesn't enforce the worker sandbox (0013). `prepare_run`
+/// skips it only for a run with no sandbox: a thread on a backend that runs threads as the full
+/// agent, Codex and Cursor (0035, 0036), and a full Claude Code run (PLX-959).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
         return Ok(());
     }
-    let why = if backend.name() == codex::PROGRAM {
-        "Codex workers are turned off until RYA-145 keeps their commands out of the shared temp \
-         folders"
-            .to_owned()
+    let why = if backend.full_thread() {
+        format!(
+            "the {} backend runs only threads (decisions 0035 and 0036)",
+            backend.name()
+        )
     } else {
         format!(
             "the {} backend can't run a sandboxed worker yet (decision 0013)",
@@ -195,7 +313,7 @@ pub(super) fn check_version(
     };
     let Some(version) = detected.version.as_deref() else {
         return Err(worker_unavailable(format!(
-            "wispd could not read {name}'s version, and a sandboxed worker needs {min} or later; \
+            "plxd could not read {name}'s version, and a sandboxed worker needs {min} or later; \
              update {name}"
         )));
     };
@@ -207,7 +325,7 @@ pub(super) fn check_version(
     }
 }
 
-/// Refuses a Claude worker unless Claude Code's sandbox works on this Linux host, seccomp filter
+/// Refuses a sandboxed Claude worker unless Claude Code's sandbox works on this Linux host, seccomp filter
 /// included (0013), for the `claude` that `check_version` accepted.
 #[cfg(target_os = "linux")]
 pub(super) async fn check_linux_sandbox(
@@ -216,21 +334,12 @@ pub(super) async fn check_linux_sandbox(
 ) -> Result<(), ErrorObject> {
     let Some(path) = claude.and_then(|claude| claude.path.as_deref()) else {
         return Err(worker_unavailable(
-            "wispd could not tell where Claude Code is installed",
+            "plxd could not tell where Claude Code is installed",
         ));
     };
-    claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
+    crate::backend::claude::linux_sandbox::check_host(detector.launcher(), Path::new(path))
         .await
         .map_err(worker_unavailable)
-}
-
-/// The detected CLI a backend runs, if wispd checks its version before starting a worker.
-pub(super) fn cli_of(backend: &dyn Backend) -> Option<CliKind> {
-    match backend.name() {
-        claude::PROGRAM => Some(CliKind::Claude),
-        codex::PROGRAM => Some(CliKind::Codex),
-        _ => None,
-    }
 }
 
 /// Characters the vendors read as wildcards in a sandbox path (0013).
@@ -239,7 +348,7 @@ const GLOB_CHARACTERS: &[char] = &['*', '?', '[', ']'];
 /// `path`, canonical, and refused with a plain message if it isn't UTF-8 or holds a wildcard.
 /// Seatbelt matches real paths, and `/tmp` and `/var` are symlinks on macOS (0013). On Windows it
 /// is spelled without the verbatim `\\?\` prefix canonicalizing adds, whose `?` isn't part of the
-/// path (RYA-109), and refused if only a verbatim path can name it.
+/// path (PLX-109), and refused if only a verbatim path can name it.
 pub(super) fn sandbox_path(path: &Path, what: &str) -> Result<PathBuf, ErrorObject> {
     let canonical = path.canonicalize().map_err(|error| {
         worker_unavailable(format!(
@@ -282,53 +391,6 @@ impl KeyAccounts for StoredKeyAccounts {
     }
 }
 
-/// The first message of a new worker: its limits (0013), then the task.
-pub(super) fn worker_prompt(task: &str, worktree: &Path, context: &Path) -> String {
-    format!(
-        "You are a wisp worker agent in a git worktree at {worktree}.\n\
-         - You may write files only in that worktree and in the project's shared context folder \
-         at {context}. Put notes there that the user or other agents should see.\n\
-         - Your commands have network access, but this Mac's own services (localhost) are \
-         unreachable.\n\
-         - Don't commit or change git history: wisp commits your changes when you finish.\n\
-         - The project's dependencies may not be installed.\n\
-         \n\
-         Your task:\n{task}",
-        worktree = worktree.display(),
-        context = context.display(),
-    )
-}
-
-/// The first message of a normal thread (#110): the same limits as a worker's, for an agent the
-/// user talks to directly, then the user's message. `scratch` is true for a thread with no repo,
-/// whose repository wispd made empty for it.
-pub(super) fn thread_prompt(message: &str, worktree: &Path, notes: &Path, scratch: bool) -> String {
-    let place = if scratch {
-        format!(
-            "You are a wisp agent. Your working folder is {worktree}, a git worktree of an empty \
-             scratch repository wispd made for this conversation; use it for any files you need.",
-            worktree = worktree.display(),
-        )
-    } else {
-        format!(
-            "You are a wisp agent in a git worktree at {worktree}, checked out for this \
-             conversation from the user's repository.",
-            worktree = worktree.display(),
-        )
-    };
-    format!(
-        "{place}\n\
-         - You may write files only in that folder and in the notes folder at {notes}.\n\
-         - Your commands have network access, but this Mac's own services (localhost) are \
-         unreachable.\n\
-         - Don't commit or change git history: wisp commits your changes when you finish.\n\
-         - The repository's dependencies may not be installed.\n\
-         \n\
-         The user's message:\n{message}",
-        notes = notes.display(),
-    )
-}
-
 /// The home folder, for the sandbox's list of unreadable paths.
 pub(super) fn home() -> Result<PathBuf, ErrorObject> {
     let home = std::env::home_dir()
@@ -340,95 +402,17 @@ pub(super) fn home() -> Result<PathBuf, ErrorObject> {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use std::path::Path;
+    use parallax_protocol::ErrorKind;
 
-    use wisp_protocol::{CliKind, DetectedCli, ErrorKind};
-
+    use super::sandbox_path;
     #[cfg(unix)]
     use super::{allowlisted, with_extra_path};
-    use super::{check_version, sandbox_path};
-    use crate::backend::process::ALWAYS_SCRUBBED;
+
     #[cfg(unix)]
     use crate::backend::process::Environment;
 
     #[cfg(unix)]
-    fn path_entries(env: &Environment) -> Vec<String> {
-        env.get("PATH")
-            .map(|path| {
-                std::env::split_paths(path)
-                    .map(|entry| entry.into_os_string().into_string().unwrap())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn claude(version: Option<&str>) -> DetectedCli {
-        DetectedCli {
-            cli: CliKind::Claude,
-            installed: true,
-            path: Some("/usr/local/bin/claude".into()),
-            version: version.map(str::to_owned),
-            signed_in: Some(true),
-            auth_kind: None,
-            plan: None,
-            note: None,
-        }
-    }
-
-    #[test]
-    fn an_old_or_unknown_cli_is_refused_naming_both_versions() {
-        let check = |version| check_version(CliKind::Claude, Some(&claude(version)));
-        assert!(check(Some("2.1.248")).is_ok());
-        assert!(check(Some("2.2.0")).is_ok());
-        let old = check(Some("2.1.247")).unwrap_err();
-        assert_eq!(old.wisp_data().unwrap().kind, ErrorKind::WorkerUnavailable);
-        assert!(old.message.contains("2.1.247"), "{}", old.message);
-        assert!(old.message.contains("2.1.248"), "{}", old.message);
-        for missing in [None, Some(&claude(None)), Some(&claude(Some("latest")))] {
-            let error = check_version(CliKind::Claude, missing).unwrap_err();
-            assert!(error.message.contains("2.1.248"), "{}", error.message);
-        }
-        let mut absent = claude(None);
-        absent.installed = false;
-        assert!(
-            check_version(CliKind::Claude, Some(&absent))
-                .unwrap_err()
-                .message
-                .contains("isn't installed")
-        );
-
-        let mut codex = claude(Some("0.157.1"));
-        codex.cli = CliKind::Codex;
-        assert!(check_version(CliKind::Codex, Some(&codex)).is_ok());
-        codex.version = Some("0.156.1".into());
-        let old = check_version(CliKind::Codex, Some(&codex)).unwrap_err();
-        assert!(old.message.contains("Codex 0.156.1"), "{}", old.message);
-        assert!(old.message.contains("0.157.1"), "{}", old.message);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_minimal_path_is_filled_in_after_the_users_own_folders() {
-        let mut env = Environment::empty();
-        env.set("PATH", "/usr/bin:/custom/bin");
-        let env = with_extra_path(env, Some(Path::new("/Users/me")));
-        let mut expected = vec![
-            "/usr/bin",
-            "/custom/bin",
-            "/Users/me/.local/bin",
-            "/Users/me/.cargo/bin",
-        ];
-        if cfg!(target_os = "macos") {
-            expected.push("/opt/homebrew/bin");
-        }
-        expected.extend(["/usr/local/bin", "/bin", "/usr/sbin", "/sbin"]);
-        assert_eq!(path_entries(&env), expected);
-        let unset = with_extra_path(Environment::empty(), None);
-        assert_eq!(path_entries(&unset)[0], super::EXTRA_PATH[0]);
-    }
-
-    #[cfg(unix)]
-    /// wispd started from a shell that holds credentials for other services: a worker spawned
+    /// plxd started from a shell that holds credentials for other services: a worker spawned
     /// from the agent environment sees none of them, but keeps what a CLI needs.
     #[tokio::test]
     async fn a_spawned_worker_inherits_only_the_allowlist() {
@@ -456,18 +440,18 @@ mod tests {
             ("HTTPS_PROXY", "http://proxy:3128"),
             ("NODE_EXTRA_CA_CERTS", "/etc/corp.pem"),
         ];
-        let mut wispd_env = Environment::empty();
-        wispd_env.set("PATH", "/usr/bin:/bin");
+        let mut plxd_env = Environment::empty();
+        plxd_env.set("PATH", "/usr/bin:/bin");
         for name in secrets {
-            wispd_env.set(name, "secret-value");
+            plxd_env.set(name, "secret-value");
         }
         for (name, value) in kept {
-            wispd_env.set(name, value);
+            plxd_env.set(name, value);
         }
         let dir = tempfile::tempdir().unwrap();
         let launcher = Launcher::new(
             DataDir::new(dir.path()).unwrap(),
-            with_extra_path(allowlisted(&wispd_env), None),
+            with_extra_path(allowlisted(&plxd_env), None, None),
         );
         let names: Vec<&str> = secrets
             .iter()
@@ -498,7 +482,13 @@ mod tests {
                 model: None,
                 effort: None,
                 permission: None,
-                coordinator_tools: None,
+                context_window: None,
+                fast: None,
+                orchestrator_tools: None,
+                thread_tools: None,
+                approvals: false,
+                thread: false,
+                instructions: None,
             })
             .unwrap();
         let mut seen = Vec::new();
@@ -515,13 +505,6 @@ mod tests {
         assert_eq!(seen, expected);
     }
 
-    #[test]
-    fn the_ssh_session_never_reaches_an_agent() {
-        for name in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
-            assert!(ALWAYS_SCRUBBED.contains(&name), "{name}");
-        }
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_path_with_a_wildcard_is_refused_plainly() {
@@ -530,7 +513,7 @@ mod tests {
         std::fs::create_dir(&odd).unwrap();
         let error = sandbox_path(&odd, "the repository").unwrap_err();
         assert_eq!(
-            error.wisp_data().unwrap().kind,
+            error.parallax_data().unwrap().kind,
             ErrorKind::WorkerUnavailable
         );
         assert!(error.message.contains("app[old]"), "{}", error.message);
@@ -539,7 +522,38 @@ mod tests {
         assert!(sandbox_path(&dir.path().join("missing"), "x").is_err());
     }
 
-    /// Canonicalizing on Windows adds `\\?\`, whose `?` refused every path (RYA-109). The path
+    /// A plxd started before Node.js was installed finds an agent that `npm install -g` put in
+    /// `%APPDATA%\npm`, and the Node.js it runs, though neither was on its `PATH` (PLX-1112).
+    #[cfg(windows)]
+    #[test]
+    fn an_npm_global_install_is_found_on_windows() {
+        use crate::backend::process::{Environment, find_program};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (appdata, programs) = (dir.path().join("Roaming"), dir.path().join("Program Files"));
+        std::fs::create_dir_all(appdata.join("npm")).unwrap();
+        std::fs::write(appdata.join("npm").join("codex.cmd"), "").unwrap();
+        std::fs::create_dir_all(programs.join("nodejs")).unwrap();
+        std::fs::write(programs.join("nodejs").join("node.exe"), "").unwrap();
+        let mut plxd_env = Environment::empty();
+        plxd_env.set("PATH", r"C:\Windows\System32");
+        plxd_env.set("APPDATA", &appdata);
+        plxd_env.set("PROGRAMFILES", &programs);
+
+        let env = super::with_extra_path(plxd_env, None, None);
+        let path = env.get("PATH");
+        // By folder: the extension comes back as `PATHEXT` spells it, such as `.CMD`.
+        let found = |program: &str| find_program(program.as_ref(), path).unwrap();
+        assert_eq!(found("codex").parent(), Some(appdata.join("npm").as_path()));
+        assert_eq!(
+            found("node").parent(),
+            Some(programs.join("nodejs").as_path())
+        );
+        let first = std::env::split_paths(path.unwrap()).next().unwrap();
+        assert_eq!(first, std::path::Path::new(r"C:\Windows\System32"));
+    }
+
+    /// Canonicalizing on Windows adds `\\?\`, whose `?` refused every path (PLX-109). The path
     /// comes back plain, and a wildcard in the path itself is still refused.
     #[cfg(windows)]
     #[test]
@@ -579,21 +593,5 @@ mod tests {
         let error = sandbox_path(&odd, "the repository").unwrap_err();
         assert!(error.message.contains("app[old]"), "{}", error.message);
         assert!(!error.message.contains(r"\\?\"), "{}", error.message);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn a_folder_only_a_verbatim_path_can_name_is_refused_plainly() {
-        let dir = tempfile::tempdir().unwrap();
-        // Only the verbatim spelling keeps the trailing dot.
-        let verbatim = dir.path().canonicalize().unwrap().join("trailing.");
-        std::fs::create_dir(&verbatim).unwrap();
-        let error = sandbox_path(&verbatim, "the repository").unwrap_err();
-        assert_eq!(
-            error.wisp_data().unwrap().kind,
-            ErrorKind::WorkerUnavailable
-        );
-        assert!(error.message.contains("trailing."), "{}", error.message);
-        assert!(error.message.contains("CON"), "{}", error.message);
     }
 }

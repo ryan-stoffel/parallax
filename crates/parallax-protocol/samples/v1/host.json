@@ -1,0 +1,54 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "host/health",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "uptimeSeconds": 3600,
+      "store": "ok",
+      "runningAgents": 0,
+      "queues": {
+        "store": {
+          "queued": 2,
+          "jobs": 1840,
+          "maxWaitMicros": 41200,
+          "totalWaitMicros": 905000,
+          "maxRunMicros": 38900,
+          "totalRunMicros": 612000
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "host/version",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "plxd": "0.1.0",
+      "protocol": { "min": 1, "max": 1 },
+      "os": "macOS 27.0",
+      "arch": "aarch64"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "host/health",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": { "uptimeSeconds": 3630, "store": "unavailable", "runningAgents": 0 }
+  }
+]

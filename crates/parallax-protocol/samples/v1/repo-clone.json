@@ -1,0 +1,76 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "repo/remote",
+    "params": { "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "url": "git@github.com:ryan-stoffel/parallax.git" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "repo/clone",
+    "params": {
+      "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e09",
+      "url": "git@github.com:ryan-stoffel/parallax.git",
+      "path": "~/Developer/parallax"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "repo/cloneProgress",
+    "params": { "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e09" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": { "progress": "Receiving objects:  42% (4321/10288), 12.40 MiB | 6.20 MiB/s" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "repo": {
+        "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e09",
+        "name": "parallax",
+        "path": "/Users/me/Developer/parallax",
+        "createdAt": "2026-10-21T19:30:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "repo/cloneProgress",
+    "params": { "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e09" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "repo/clone",
+    "params": {
+      "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e0a",
+      "url": "https://github.com/ryan-stoffel/missing.git",
+      "path": "/Users/me/Developer/missing"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32000,
+      "message": "repository 'https://github.com/ryan-stoffel/missing.git/' not found",
+      "data": { "kind": "cloneFailed" }
+    }
+  }
+]

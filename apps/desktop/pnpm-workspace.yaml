@@ -3,22 +3,26 @@
 #
 # Electron 44 has no install script. It downloads its binary the first time
 # `electron` is required (scripts/dev.mjs does that).
-#
-# node-pty's scripts only check for a prebuilt binary, or compile one with
-# node-gyp when there is none. Its N-API prebuilds cover every target in 0023,
-# and work in Electron without a rebuild, so its scripts never run.
 allowBuilds:
-  node-pty: false
-  # Its script builds llama.cpp from source when no prebuilt binary (the
-  # @node-llama-cpp/<platform> packages) fits: slow, and needs a toolchain.
-  node-llama-cpp: false
   # Squirrel.Windows, which electron-builder only uses for a target we don't build.
   electron-winstaller: false
+  # Enriched Markdown's native assets (tree-sitter grammars, RaTeX), which only the phone builds.
+  react-native-enriched-markdown: false
 
 # Vite+ asks for these so every tool shares its Vite and Vitest.
 overrides:
-  vite: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1
-  vitest: 5.0.1
+  # Enriched Markdown's web build needs only Platform and processColor from React Native
+  # (shims/react-native), so no copy of React Native itself comes with it.
+  react-native: link:./shims/react-native
+  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
+  vitest: 5.0.5
+
+# Enriched Markdown's web renderer parses only after a render, so a message's first frame was empty
+# and a virtualized transcript measured it at that height. The patch parses in the render once the
+# parser has loaded (MarkdownText, AgentChat.tsx). It also adds `renderLinkContent`, which draws
+# an icon before a link's text. Both worth offering upstream.
+patchedDependencies:
+  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee: patches/react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee.patch
 
 # Vite+ core is Vite 8 under its own version number, so Vite plugins'
 # `vite@^8` peer ranges don't match it.

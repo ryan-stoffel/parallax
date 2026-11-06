@@ -1,24 +1,71 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import type { SshHost } from "../preload/bridge";
+import type { ConnectState, DeviceHost, DeviceIcon, SavedHost } from "../preload/bridge";
 
-/** A host as the sidebar lists it. Only SSH hosts have a destination. */
-export type Host = { id: string; name: string; destination?: string };
+/**
+ * A host as the sidebar lists it. Only SSH hosts have a destination, and only LAN computers
+ * routes (PLX-641). `icon` is this computer's or a Parallax Connect device's (0056).
+ */
+export type Host = {
+  id: string;
+  name: string;
+  destination?: string;
+  routes?: string[];
+  icon?: DeviceIcon;
+};
 
 /** This computer's host id, which is always there. */
 export const localId = "local";
 
-/** Every host, kept current: this computer first, then the saved SSH hosts, oldest first. */
+/** Parallax Connect here, kept current; undefined until main answers. */
+export function useConnect(): ConnectState | undefined {
+  const [state, setState] = useState<ConnectState>();
+  useEffect(() => window.parallax.onConnect(setState), []);
+  return state;
+}
+
+/**
+ * Every host, kept current: this computer first, named as Settings > Connections names it, then
+ * the saved SSH hosts, oldest first, then the LAN computers, then the account computers and
+ * Connect devices turned on here, by name.
+ */
 export function useHosts(): Host[] {
-  const [saved, setSaved] = useState<SshHost[]>([]);
+  const [saved, setSaved] = useState<SavedHost[]>([]);
+  const [devices, setDevices] = useState<DeviceHost[]>([]);
+  const [localName, setLocalName] = useState("This computer");
+  const connect = useConnect();
   useEffect(() => {
-    const stop = window.wisp.onHosts(setSaved);
-    void window.wisp.hosts().then(setSaved);
+    const stop = window.parallax.onHosts(setSaved);
+    void window.parallax.hosts().then(setSaved);
     return stop;
   }, []);
-  const local = {
-    id: localId,
-    name: window.wisp.platform === "darwin" ? "This Mac" : "This computer",
-  };
-  return [local, ...saved];
+  useEffect(() => window.parallax.onLocalName(setLocalName), []);
+  // Each look for devices sends them again, so an unchanged list keeps the old array.
+  useEffect(
+    () =>
+      window.parallax.onDevices((next) =>
+        setDevices((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next)),
+      ),
+    [],
+  );
+  const icon = connect?.icon;
+  // The same array until the hosts change, so lists built from it can be kept.
+  return useMemo(
+    () => [
+      { id: localId, name: localName, ...(icon && { icon }) },
+      ...saved,
+      // A device turned off in Settings has no connection here, so it's left out, as is a new
+      // account computer until its code is allowed or typed (0091).
+      ...devices
+        .filter(
+          (d) =>
+            d.enabled &&
+            d.access?.step !== "needsCode" &&
+            d.access?.step !== "compare" &&
+            d.access?.step !== "confirm",
+        )
+        .map(({ id, name, icon }) => ({ id, name, icon })),
+    ],
+    [saved, devices, localName, icon],
+  );
 }

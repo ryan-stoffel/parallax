@@ -1,0 +1,58 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f300-3c4d-7e5f-8a61-7b8c9d0e1f03",
+      "seq": 80,
+      "time": "2026-10-04T08:00:00Z",
+      "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+      "event": {
+        "kind": "agent.output",
+        "runId": "01a0f300-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "items": [
+          {
+            "kind": "toolCall",
+            "callId": "toolu_01Apple",
+            "name": "Agent",
+            "input": {
+              "description": "Run echo apple",
+              "subagent_type": "general-purpose",
+              "model": "haiku",
+              "prompt": "Run `echo apple` and reply with its output."
+            }
+          },
+          {
+            "kind": "subagent",
+            "callId": "toolu_01Apple",
+            "agentType": "general-purpose",
+            "model": "claude-haiku-4-5-20251001",
+            "item": {
+              "kind": "toolCall",
+              "callId": "toolu_01Echo",
+              "name": "Bash",
+              "input": { "command": "echo apple" }
+            }
+          },
+          {
+            "kind": "subagent",
+            "callId": "toolu_01Apple",
+            "agentType": "general-purpose",
+            "item": {
+              "kind": "toolResult",
+              "callId": "toolu_01Echo",
+              "status": "ok",
+              "output": "apple"
+            }
+          },
+          {
+            "kind": "subagentFinished",
+            "callId": "toolu_01Apple",
+            "status": "completed",
+            "summary": "apple"
+          }
+        ]
+      }
+    }
+  }
+]

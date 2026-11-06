@@ -1,0 +1,101 @@
+//! An orchestrator's inbox (PLX-401, decision 0043), behind the `inbox` capability: what its
+//! children did while the user was away, built from the events plxd handles. `inbox/list` lists it,
+//! `inbox/seen` marks items read, and each new item appends `inbox.added` to the orchestrator's
+//! events.
+
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::id::uuid_v7_id;
+use crate::{RunId, ScopeId};
+
+uuid_v7_id! {
+    /// Identifies one inbox item. plxd generates it.
+    InboxItemId
+}
+
+/// What an inbox item says, by 0043's kinds.
+///
+/// A newer plxd may send a kind this version does not know; treat it as unknown, and don't end
+/// a `switch` over this type in an exhaustiveness assertion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum InboxKind {
+    /// Something waits on the user: a child's permission request, or paused wake-ups.
+    NeedsYou,
+    /// A child finished.
+    Done,
+    /// A child failed.
+    Failed,
+    /// The orchestrator answered a question for the user.
+    Decided,
+    /// The orchestrator's memory changed.
+    Learned,
+    /// A kind this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// One item of an orchestrator's inbox.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxItem {
+    /// The item's id.
+    pub id: InboxItemId,
+    /// What it says.
+    pub kind: InboxKind,
+    /// The run it is about: a child, or the orchestrator when its wake-ups paused.
+    pub run: RunId,
+    /// One line for people, such as the child's task and its diff stats.
+    pub text: String,
+    /// When plxd added it, in RFC 3339 UTC.
+    pub created_at: Timestamp,
+    /// When a client first marked it seen with `inbox/seen` (0033's read model). Absent if never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub seen_at: Option<Timestamp>,
+}
+
+/// Params of `inbox/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxListParams {
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
+}
+
+/// Result of `inbox/list`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxListResult {
+    /// Every item, oldest first.
+    pub items: Vec<InboxItem>,
+    /// The event log's `seq` from before the list was read. Subscribe to the orchestrator's events
+    /// with `after` set to it for the items added since. The list may already reflect some events
+    /// after it, and replaying them is harmless.
+    pub seq: u64,
+}
+
+/// Params of `inbox/seen`: marks items seen at plxd's clock now. An item already seen keeps its
+/// first `seenAt`, and ids not in the orchestrator's inbox are skipped. Fails with
+/// `orchestratorNotFound` for an unknown orchestrator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxSeenParams {
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
+    /// The items to mark.
+    pub items: Vec<InboxItemId>,
+}
+
+/// Result of `inbox/seen`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxSeenResult {
+    /// The marked items as they stand, oldest first.
+    pub items: Vec<InboxItem>,
+}

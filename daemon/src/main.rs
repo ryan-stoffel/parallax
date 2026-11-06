@@ -1,23 +1,28 @@
 use std::io::{self, Write as _};
-use std::path::PathBuf;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use clap::{Args, Parser, Subcommand};
-use tracing::{error, info, warn};
-use wisp_protocol::{CoordinatorThreadId, ProjectId};
-use wispd::attach::{
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use parallax_protocol::{CONNECT_PORT, ClientInfo, RunId};
+use plxd::attach::{
     self, DEFAULT_CONNECT_TIMEOUT, EXIT_UNAVAILABLE, MAX_CONNECT_TIMEOUT, Options, report,
 };
-use wispd::launch_agent::LaunchAgent;
-use wispd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
-use wispd::paths::{DATA_DIR_ENV, DataDir};
-use wispd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use wispd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
+use plxd::launch_agent::LaunchAgent;
+use plxd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
+use plxd::paths::{DATA_DIR_ENV, DataDir};
+use plxd::remote;
+use plxd::self_update::Handover;
+use plxd::server::{
+    self, Config, EXIT_ALREADY_RUNNING, EXIT_WITH_ENV, Server, Shutdown, StartError,
+};
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+use plxd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Parser)]
-#[command(name = "wispd", version = wispd::version(), about = "The wisp host daemon.")]
+#[command(name = "plxd", version = plxd::version(), about = "The Parallax host daemon.")]
 #[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
@@ -29,55 +34,194 @@ enum Command {
     /// Serve the editor on this user's socket or pipe until SIGTERM or SIGINT (Ctrl-C or
     /// Ctrl-Break on Windows).
     Serve(ServeArgs),
-    /// Connect stdin and stdout to wispd's socket or pipe, starting wispd if it isn't running.
+    /// Connect stdin and stdout to plxd's socket or pipe, starting plxd if it isn't running.
     Attach(AttachArgs),
-    /// Manage the per-user service that keeps wispd running: a `LaunchAgent` on macOS, a systemd
-    /// user unit on Linux.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// Connect stdin and stdout to another device's plxd over Tailscale, for Parallax Connect, or
+    /// to a computer paired over HTTPS with `--remote`; pair with one with `--pair`, or find
+    /// them with `--discover`.
+    Dial(DialArgs),
+    /// Turn Parallax Connect on or off. A running plxd follows within 10 seconds.
+    Connect(ConnectArgs),
+    /// Use Parallax in this terminal: the same threads, Projects, and Orchestrators as the app, live.
+    /// Starts plxd if it isn't running.
+    Tui(TuiArgs),
+    /// Manage the per-user service that keeps plxd running: a `LaunchAgent` on macOS, a systemd
+    /// user unit on Linux, a scheduled task that starts at logon on Windows.
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     Service(ServiceArgs),
-    /// Serve a coordinator's wisp tools over MCP on stdin and stdout. wispd starts it.
+    /// Serve a thread's Parallax tools over MCP on stdin and stdout. plxd
+    /// starts it.
     #[command(hide = true)]
     Mcp(McpArgs),
+    /// Sign in to an ACP agent with one of its own sign-in methods. The app's sign-in terminal
+    /// runs it.
+    #[command(hide = true)]
+    AcpLogin(AcpLoginArgs),
+    /// Supervise an SDK's CLI using plxd's process-group / Job Object cleanup.
+    #[command(hide = true)]
+    SdkProcess(SdkProcessArgs),
+}
+
+#[derive(Debug, Args)]
+struct SdkProcessArgs {
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    command: Vec<std::ffi::OsString>,
+}
+
+#[derive(Debug, Args)]
+struct AcpLoginArgs {
+    /// The agent's sign-in method, from its `initialize` answer
+    #[arg(long, value_name = "ID")]
+    method: String,
+
+    /// The agent's command and its arguments
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    command: Vec<std::ffi::OsString>,
 }
 
 #[derive(Debug, Args)]
 struct McpArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// The only project the tools reach
-    #[arg(long, value_name = "ID")]
-    project: ProjectId,
-
-    /// The coordinator thread that spawned runs are tagged with
-    #[arg(long, value_name = "ID")]
-    coordinator_thread: CoordinatorThreadId,
+    /// The thread whose Parallax tools to serve, an orchestrator included: the caller of
+    /// every tool (0041)
+    #[arg(long, value_name = "RUN_ID")]
+    thread: RunId,
 }
 
 #[derive(Debug, Args)]
 struct ServeArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// off, error, warn, info, debug, or trace, or a list such as wispd=debug,warn
+    /// off, error, warn, info, debug, or trace, or a list such as plxd=debug,warn
     #[arg(long, value_name = "LEVEL", env = LOG_LEVEL_ENV, default_value = DEFAULT_LOG_LEVEL)]
     log_level: LogFilter,
 }
 
 #[derive(Debug, Args)]
 struct AttachArgs {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
-    /// How long to wait for wispd to accept a connection, including starting it [default: 10]
+    /// How long to wait for plxd to accept a connection, including starting it [default: 10]
     #[arg(long, value_name = "SECONDS", value_parser = parse_seconds)]
     connect_timeout: Option<Duration>,
+}
+
+#[derive(Debug, Args)]
+struct TuiArgs {
+    /// The data folder [default: ~/.parallax]
+    #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
+    data_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "dial's mode flags, as clap reads them"
+)]
+struct DialArgs {
+    /// The device's Tailscale IP, with port 7340 unless one is given, such as `100.87.92.42` or
+    /// `[fd7a:115c:a1e0::1]:7340`. With `--remote`, the paired computer's routes, tried in order,
+    /// each an IP or host name with port 7341 unless one is given
+    #[arg(value_name = "ADDR", required_unless_present_any = ["discover", "device_key", "new_device_key"])]
+    addresses: Vec<String>,
+
+    /// Reach a computer paired over HTTPS, whose certificate fingerprint this is (PLX-641)
+    #[arg(long, value_name = "FINGERPRINT", conflicts_with_all = ["pair", "discover"])]
+    remote: Option<String>,
+
+    /// Reach a computer of this account, whose relay id this is, over HTTPS to a certificate whose
+    /// key has that JWK thumbprint (0091). With `--pair`, the code read is its setup code
+    #[arg(long, value_name = "HOST_ID", conflicts_with_all = ["remote", "discover"])]
+    account: Option<String>,
+
+    /// With `--account`, sign in with the Clerk token on the first line of stdin, print where the
+    /// sign-in stands as JSON, and while a request waits for approval, print it once approved, and
+    /// exit
+    #[arg(long, requires = "account", conflicts_with = "pair")]
+    sign_in: bool,
+
+    /// With `--sign-in`, for a new computer whose code the user compares: after printing the
+    /// request, read stdin's next line, where `allow` allows it and anything else denies it
+    #[arg(long, requires = "sign_in")]
+    compare: bool,
+
+    /// Print this computer's `DPoP` key thumbprint, which `plx connect --device` names, and exit
+    #[arg(long, conflicts_with_all = ["account", "remote", "discover", "pair"])]
+    device_key: bool,
+
+    /// Replace this computer's `DPoP` key with a new one, delete the sessions and waiting requests
+    /// the old one held, print the new key's thumbprint, and exit. Nothing approves the new key
+    #[arg(long, conflicts_with_all = ["account", "remote", "discover", "pair", "device_key"])]
+    new_device_key: bool,
+
+    /// Pair with the computer at the first ADDR that answers, with the code it shows, read from
+    /// the first line of stdin so no other user sees it; print its fingerprint, name, and routes
+    /// as JSON, and exit
+    #[arg(long, conflicts_with = "discover")]
+    pair: bool,
+
+    /// List the computers on this network waiting for a pairing, by name, as JSON, and exit
+    #[arg(long, conflicts_with = "addresses")]
+    discover: bool,
+
+    /// With `--remote` or `--account`, send no credential: print the first ADDR that presents
+    /// the pinned certificate, raced as a dial races them, as JSON `{"route": ...}`, and exit, 4
+    /// when none did. For the app's re-checks of direct routes while it's on the relay (0091)
+    #[arg(long, conflicts_with_all = ["pair", "sign_in", "discover"])]
+    probe: bool,
+
+    /// With `--account`, try the ADDRs in the user's order: each starts 200 ms after the one
+    /// before it, or as soon as those before it failed, instead of the direct ones together and
+    /// the relay 200 ms later (0091)
+    #[arg(long, requires = "account", conflicts_with_all = ["pair", "sign_in", "discover"])]
+    in_order: bool,
+
+    /// This computer's name, sent with `--pair`
+    #[arg(long, value_name = "NAME")]
+    name: Option<String>,
+
+    /// The data folder, which holds this computer's credentials for paired computers
+    /// [default: ~/.parallax]
+    #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
+    data_dir: Option<PathBuf>,
+}
+
+/// `dial`'s address: an IP and port, or an IP, in brackets or not, with [`CONNECT_PORT`].
+fn parse_dial_address(text: &str) -> Result<SocketAddr, String> {
+    if let Ok(address) = text.parse::<SocketAddr>() {
+        return Ok(address);
+    }
+    let bare = text
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(text);
+    bare.parse::<IpAddr>()
+        .map(|ip| SocketAddr::new(ip, CONNECT_PORT))
+        .map_err(|_| format!("{text:?} is not an IP address, or an IP address and port"))
+}
+
+#[derive(Debug, Args)]
+struct ConnectArgs {
+    /// Whether plxd listens for this user's other devices on its Tailscale address
+    #[arg(value_enum)]
+    state: OnOff,
+
+    /// The data folder [default: ~/.parallax]
+    #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
+    data_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
 }
 
 fn parse_seconds(text: &str) -> Result<Duration, String> {
@@ -94,29 +238,28 @@ fn parse_seconds(text: &str) -> Result<Duration, String> {
         })
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug, Args)]
 struct ServiceArgs {
     #[command(subcommand)]
     command: ServiceCommand,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
     /// Install or update the service, then start or restart it.
-    Install(ServiceOptions),
+    Install(InstallOptions),
     /// Stop the service if it is running, and remove it.
     Uninstall(ServiceOptions),
     /// Report whether the service is installed, loaded, and running.
     Status(ServiceOptions),
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[derive(Debug, Args)]
 struct ServiceOptions {
-    /// The data folder [default: ~/Library/Application Support/wisp on macOS, ~/.local/share/wisp
-    /// on Linux, %LOCALAPPDATA%\wisp on Windows]
+    /// The data folder [default: ~/.parallax]
     #[arg(long, value_name = "DIR", env = DATA_DIR_ENV)]
     data_dir: Option<PathBuf>,
 
@@ -125,52 +268,89 @@ struct ServiceOptions {
     label: String,
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+#[derive(Debug, Args)]
+struct InstallOptions {
+    #[command(flatten)]
+    service: ServiceOptions,
+
+    /// Stop a plxd already serving the data folder outside the service, and hand it over to the
+    /// service, instead of refusing.
+    #[arg(long)]
+    replace: bool,
+}
+
 fn main() -> ExitCode {
+    // Run as the `gh` shim on an agent's `PATH` (PLX-1023), before anything slower.
+    let mut args = std::env::args_os();
+    if plxd::gh_shim::invoked(args.next().as_deref()) {
+        plxd::gh_shim::main(&args.collect::<Vec<_>>());
+    }
     // Before anything else, so the version is the one this process started as (see `version`).
-    wispd::version();
-    let cli = Cli::parse();
+    plxd::version();
+    let invoked_as = std::env::var_os(INVOKED_AS_ENV);
+    let cli = Cli::parse_from(as_parallax(std::env::args_os().collect(), invoked_as));
     match cli.command {
         Command::Serve(args) => serve(&args),
         Command::Attach(args) => attach(&args),
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        Command::Dial(args) => dial(&args),
+        Command::Connect(args) => connect(&args),
+        Command::Tui(args) => tui(&args),
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         Command::Service(args) => service_command(args.command),
         Command::Mcp(args) => mcp(&args),
+        Command::SdkProcess(args) => sdk_process(&args),
+        Command::AcpLogin(args) => {
+            let (program, rest) = args.command.split_first().expect("clap requires a command");
+            match plxd::backend::acp::authenticate(program, rest, &args.method) {
+                Ok(()) => {
+                    println!("Signed in.");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("plxd acp-login: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
+}
+
+fn sdk_process(args: &SdkProcessArgs) -> ! {
+    let runtime = current_thread_runtime().expect("SDK process runtime");
+    let (program, rest) = args.command.split_first().expect("clap requires a command");
+    let result = runtime.block_on(plxd::backend::process::sdk_process(program, rest));
+    if let Err(error) = result {
+        eprintln!("plxd sdk-process: {error}");
+        std::process::exit(1);
+    }
+    // The stdin reader may still be blocked, as in attach.
+    std::process::exit(0)
 }
 
 /// Runs `mcp` and exits with `std::process::exit`, for the same reason as [`attach`].
 fn mcp(args: &McpArgs) -> ! {
-    let report = |message: &dyn std::fmt::Display| {
-        let _ = writeln!(io::stderr(), "wispd mcp: {message}");
-    };
-    let socket = match DataDir::resolve(args.data_dir.as_deref()).and_then(|dir| dir.socket_path())
-    {
-        Ok(socket) => socket.path,
+    let report = reporter("mcp");
+    let dir = DataDir::resolve(args.data_dir.as_deref());
+    let (socket, data_dir) = match dir.and_then(|dir| Ok((dir.socket_path()?, dir))) {
+        Ok((socket, dir)) => (socket.path, dir),
         Err(error) => {
-            report(&format!("could not find wispd's socket: {error}"));
+            report(&format!("could not find plxd's socket: {error}"));
             std::process::exit(EXIT_UNAVAILABLE.into());
         }
     };
-    let binding = wispd::mcp::Binding {
-        socket,
-        project: args.project,
-        thread: args.coordinator_thread,
+    let runtime = current_thread_runtime().unwrap_or_else(|error| {
+        report(&format!("could not start the runtime: {error}"));
+        std::process::exit(1)
+    });
+    let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
+    let binding = plxd::mcp::thread::Binding {
+        plxd: plxd::peer::Plxd::local(socket),
+        run: args.thread,
+        temp: data_dir.temp_dir(),
+        data_dir,
     };
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            report(&format!("could not start the runtime: {error}"));
-            std::process::exit(1);
-        }
-    };
-    let served = runtime.block_on(wispd::mcp::run(
-        &binding,
-        tokio::io::stdin(),
-        tokio::io::stdout(),
-    ));
+    let served = runtime.block_on(plxd::mcp::thread::run(&binding, stdin, stdout));
     if let Err(error) = served {
         report(&error);
         std::process::exit(1);
@@ -178,32 +358,97 @@ fn mcp(args: &McpArgs) -> ! {
     std::process::exit(0)
 }
 
+/// Runs `tui` and exits with `std::process::exit`, since the thread reading keys never returns.
+/// It starts plxd as `attach` does, then its client opens connections of its own.
+fn tui(args: &TuiArgs) -> ! {
+    let report = reporter("tui");
+    let exit = |message: &dyn std::fmt::Display, code: u8| -> ! {
+        report(message);
+        std::process::exit(code.into())
+    };
+    let data_dir = DataDir::resolve(args.data_dir.as_deref()).unwrap_or_else(|error| {
+        exit(
+            &format!("could not find the data folder: {error}"),
+            EXIT_UNAVAILABLE,
+        )
+    });
+    let socket = data_dir.socket_path().unwrap_or_else(|error| {
+        exit(
+            &format!("could not find plxd's socket: {error}"),
+            EXIT_UNAVAILABLE,
+        )
+    });
+    let program = plxd::executable().unwrap_or_else(|error| {
+        exit(
+            &format!("could not find plxd's own executable: {error}"),
+            EXIT_UNAVAILABLE,
+        )
+    });
+    let options = Options {
+        program,
+        connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+        launch_agent: LaunchAgent::installed_for(&data_dir),
+    };
+    let runtime = current_thread_runtime()
+        .unwrap_or_else(|error| exit(&format!("could not start the runtime: {error}"), 1));
+    // Windows' pipe client connects inside the runtime, as in `attach`.
+    let entered = runtime.enter();
+    let first =
+        attach::connect(&data_dir, &options).unwrap_or_else(|error| exit(&error, EXIT_UNAVAILABLE));
+    // The client's first connection is that one; later ones, after a drop, are new.
+    let first = std::sync::Mutex::new(Some(first));
+    let plxd = plxd::peer::Plxd::new(move || {
+        let first = first.lock().ok().and_then(|mut first| first.take());
+        let socket = socket.path.clone();
+        async move {
+            let stream = match first {
+                #[cfg(unix)]
+                Some(stream) => stream
+                    .set_nonblocking(true)
+                    .and_then(|()| tokio::net::UnixStream::from_std(stream)),
+                #[cfg(windows)]
+                Some(stream) => Ok(stream),
+                None => plxd::transport::connect(&socket).await,
+            }
+            .map_err(|error| format!("could not reach plxd at {}: {error}", socket.display()))?;
+            let client = ClientInfo {
+                name: "plxd tui".to_owned(),
+                version: plxd::version().to_owned(),
+                machine_id: None,
+            };
+            Ok((stream, client))
+        }
+    });
+    drop(entered);
+    match runtime.block_on(plxd::tui::run(plxd)) {
+        Ok(()) => std::process::exit(0),
+        Err(error) => exit(&error, 1),
+    }
+}
+
 /// Runs `attach` and exits, with `std::process::exit`: the thread that reads stdin blocks until
 /// input arrives, and would keep the runtime from shutting down (0007).
 fn attach(args: &AttachArgs) -> ! {
     #[cfg(windows)]
-    wispd::windows::stop_inheriting_handles();
+    plxd::windows::stop_inheriting_handles();
     let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
         Ok(data_dir) => data_dir,
         Err(error) => unavailable(&format!("could not find the data folder: {error}")),
     };
-    let program = match std::env::current_exe() {
+    let program = match plxd::executable() {
         Ok(program) => program,
-        Err(error) => unavailable(&format!("could not find wispd's own executable: {error}")),
+        Err(error) => unavailable(&format!("could not find plxd's own executable: {error}")),
     };
     let options = Options {
         program,
         connect_timeout: args.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
         launch_agent: LaunchAgent::installed_for(&data_dir),
     };
-    let runtime = || match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => failed(&format!("could not start the runtime: {error}")),
+    let runtime = || {
+        current_thread_runtime()
+            .unwrap_or_else(|error| failed(&format!("could not start the runtime: {error}")))
     };
-    // On Unix, starting wispd happens here, before the runtime exists (0023). Windows' pipe
+    // On Unix, starting plxd happens here, before the runtime exists (0023). Windows' pipe
     // client needs the runtime to connect.
     #[cfg(windows)]
     let runtime = runtime();
@@ -257,6 +502,305 @@ fn attach(args: &AttachArgs) -> ! {
     std::process::exit(code)
 }
 
+/// How long `dial --discover` listens for mDNS advertisements.
+const DISCOVER_WAIT: Duration = Duration::from_secs(3);
+
+/// How long `dial` waits for the device to accept the connection.
+const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runs `dial` and exits with `std::process::exit`, for the same reason as [`attach`].
+fn dial(args: &DialArgs) -> ! {
+    let report = reporter("dial");
+    let runtime = current_thread_runtime().unwrap_or_else(|error| {
+        report(&format!("could not start the runtime: {error}"));
+        std::process::exit(1)
+    });
+    if args.remote.is_some()
+        || args.account.is_some()
+        || args.pair
+        || args.discover
+        || args.device_key
+        || args.new_device_key
+    {
+        std::process::exit(runtime.block_on(dial_remote(args, &report)));
+    }
+    let parsed = match args.addresses.as_slice() {
+        [one] => parse_dial_address(one),
+        _ => Err("takes one address without --remote".to_owned()),
+    };
+    let address = parsed.unwrap_or_else(|error| {
+        report(&error);
+        std::process::exit(2)
+    });
+    let code = runtime.block_on(async {
+        let connecting = tokio::net::TcpStream::connect(address);
+        let stream = match tokio::time::timeout(DIAL_TIMEOUT, connecting).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
+                report(&format!("could not connect to {address}: {error}"));
+                return EXIT_UNAVAILABLE.into();
+            }
+            Err(_) => {
+                report(&format!(
+                    "nothing accepted a connection at {address} within {DIAL_TIMEOUT:?}"
+                ));
+                return EXIT_UNAVAILABLE.into();
+            }
+        };
+        let _ = stream.set_nodelay(true);
+        match attach::bridge_socket(tokio::io::stdin(), tokio::io::stdout(), stream).await {
+            Ok(()) => 0,
+            Err(error) => {
+                report(&format!("the connection failed: {error}"));
+                1
+            }
+        }
+    });
+    std::process::exit(code)
+}
+
+/// `dial --discover`, `dial --pair`, and `dial --remote` (PLX-641), and `dial --account` (0091).
+/// Exits 4 when no route answered, and [`remote::EXIT_REFUSED`] when the computer refused this one.
+async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
+        Ok(dir) => dir,
+        Err(error) => {
+            report(&format!("could not find the data folder: {error}"));
+            return 1;
+        }
+    };
+    // A `relay:` route signs in to the relay with the app's Clerk session (PLX-652).
+    if let Ok(token) = std::env::var("PLXD_RELAY_TOKEN") {
+        plxd::relay::sign_in(plxd::relay::url(), token);
+    }
+    let exit = |error: &remote::Error| match error {
+        remote::Error::Refused => remote::EXIT_REFUSED,
+        remote::Error::Removed => remote::EXIT_REMOVED,
+        _ => EXIT_UNAVAILABLE.into(),
+    };
+    if args.discover {
+        let found = tokio::task::spawn_blocking(|| remote::discover(DISCOVER_WAIT))
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|found| found.map_err(|error| error.to_string()));
+        return match found {
+            Ok(found) => {
+                print_json(&found);
+                0
+            }
+            Err(error) => {
+                report(&format!("could not look for computers: {error}"));
+                1
+            }
+        };
+    }
+    if args.device_key || args.new_device_key {
+        return print_key(args.new_device_key, data_dir.root(), report);
+    }
+    let name = args.name.as_deref().unwrap_or_default();
+    if let (Some(host_id), true) = (&args.account, args.sign_in) {
+        let routes = &args.addresses;
+        return match dial_sign_in(routes, host_id, name, args.compare, data_dir.root()).await {
+            Ok(()) => 0,
+            Err(Some(error)) => {
+                report(&format!("could not sign in: {error}"));
+                exit(&error)
+            }
+            Err(None) => {
+                report(&"--sign-in reads the token from stdin");
+                2
+            }
+        };
+    }
+    if args.pair {
+        let mut code = String::new();
+        if io::stdin().read_line(&mut code).is_err() || code.trim().is_empty() {
+            report(&"--pair reads the code from stdin");
+            return 2;
+        }
+        let paired = match &args.account {
+            Some(host_id) => {
+                remote::pair_account(&args.addresses, host_id, code.trim(), name, data_dir.root())
+                    .await
+            }
+            None => remote::pair(&args.addresses, code.trim(), name, data_dir.root()).await,
+        };
+        return match paired {
+            Ok(paired) => {
+                print_json(&paired);
+                0
+            }
+            Err(error) => {
+                report(&format!("could not pair: {error}"));
+                exit(&error)
+            }
+        };
+    }
+    if args.probe {
+        return dial_probe(args, report).await;
+    }
+    let dialed = if let Some(host_id) = &args.account {
+        remote::dial_account(&args.addresses, args.in_order, host_id, data_dir.root()).await
+    } else {
+        let fingerprint = args.remote.as_deref().unwrap_or_default();
+        remote::dial(&args.addresses, fingerprint, data_dir.root()).await
+    };
+    let dialed = match dialed {
+        Ok(dialed) => dialed,
+        Err(error) => {
+            report(&format!("could not reach the paired computer: {error}"));
+            return exit(&error);
+        }
+    };
+    bridge_dialed(dialed, report).await
+}
+
+/// Bridges stdio to a dialed connection until it ends, and reports its route and how it ended.
+async fn bridge_dialed(dialed: remote::Dialed, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    // The app reads this line to know when it's on the relay, and so re-checks direct routes.
+    report(&format!("connected over {}", dialed.route));
+    let bridged = remote::bridge(dialed.socket, tokio::io::stdin(), tokio::io::stdout()).await;
+    // The app logs this with the disconnect (connection.ts).
+    if dialed.route.starts_with(remote::RELAY_ROUTE)
+        && let Some(end) = plxd::relay::client_stream_end()
+    {
+        report(&format!("relay stream ended {end}"));
+    }
+    match bridged {
+        Ok(()) => 0,
+        Err(error) => {
+            report(&format!("the connection failed: {error}"));
+            1
+        }
+    }
+}
+
+/// `dial --device-key` and `--new-device-key` (0091): this computer's key, as `plx connect --device`
+/// names it.
+fn print_key(new: bool, data_dir: &Path, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    let key = if new {
+        remote::new_device_key(data_dir)
+    } else {
+        remote::device_key(data_dir)
+    };
+    match key {
+        Ok(key) => {
+            print_json(&serde_json::json!({ "thumbprint": key.thumbprint() }));
+            0
+        }
+        Err(error) => {
+            report(&format!("could not read this computer's key: {error}"));
+            1
+        }
+    }
+}
+
+/// `dial --probe` (0091): the first route that presents the pinned certificate, with nothing sent.
+async fn dial_probe(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    let pin = match (&args.account, &args.remote) {
+        (Some(host_id), _) => remote::Pin::HostId(host_id.clone()),
+        (None, Some(fingerprint)) => remote::Pin::Fingerprint(fingerprint.clone()),
+        (None, None) => {
+            report(&"--probe needs --remote or --account");
+            return 2;
+        }
+    };
+    match remote::probe(&args.addresses, args.in_order, &pin).await {
+        Ok(route) => {
+            print_json(&serde_json::json!({ "route": route }));
+            0
+        }
+        Err(error) => {
+            report(&format!("no route answered: {error}"));
+            EXIT_UNAVAILABLE.into()
+        }
+    }
+}
+
+/// `dial --account --sign-in` (0091): signs in to the `account:` host `host_id` with the Clerk token
+/// on stdin's first line and prints where it stands, then, while a request waits, waits for its
+/// approval and prints that. With `compare`, it first waits for the user's answer on stdin. Only
+/// `allow` tells the host, and anything else, the end of input included, withdraws the request,
+/// as it does while the host then waits to confirm. `Err(None)` when stdin has no token.
+async fn dial_sign_in(
+    routes: &[String],
+    host_id: &str,
+    name: &str,
+    compare: bool,
+    data_dir: &Path,
+) -> Result<(), Option<remote::Error>> {
+    let mut token = String::new();
+    if io::stdin().read_line(&mut token).is_err() || token.trim().is_empty() {
+        return Err(None);
+    }
+    let (route, signed_in) =
+        remote::sign_in(routes, host_id, token.trim(), name, compare, data_dir).await?;
+    print_json(&signed_in);
+    if let remote::SignIn::Pending { request, .. } = &signed_in {
+        if !compare {
+            let approved = remote::await_approval(&route, host_id, request, data_dir).await?;
+            print_json(&approved);
+            return Ok(());
+        }
+        if next_line().await.as_deref().map(str::trim) != Some("allow") {
+            remote::withdraw(&route, host_id, request, data_dir).await;
+            return Err(Some(remote::Error::Refused));
+        }
+        let allowed = remote::allow(&route, host_id, request, data_dir).await?;
+        print_json(&allowed);
+        if allowed != remote::SignIn::Confirm {
+            return Ok(());
+        }
+        tokio::select! {
+            approved = remote::await_approval(&route, host_id, request, data_dir) => {
+                print_json(&approved?);
+            }
+            _ = next_line() => {
+                remote::withdraw(&route, host_id, request, data_dir).await;
+                return Err(Some(remote::Error::Refused));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Stdin's next line, or `None` at its end. On a thread of its own, since a blocking task would
+/// hold up this process's exit until stdin closed.
+async fn next_line() -> Option<String> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let read = io::stdin().read_line(&mut line);
+        let _ = send.send(read.ok().filter(|read| *read > 0).map(|_| line));
+    });
+    receive.await.ok().flatten()
+}
+
+/// Prints `value` as one line of JSON on stdout.
+fn print_json(value: &impl serde::Serialize) {
+    let json = serde_json::to_string(value).expect("plain JSON");
+    let _ = writeln!(io::stdout(), "{json}");
+}
+
+/// Stores the `connect` setting in the data folder's store, for an install script (0056).
+fn connect(args: &ConnectArgs) -> ExitCode {
+    let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
+        Ok(data_dir) => data_dir,
+        Err(error) => return fail(&format!("could not find the data folder: {error}")),
+    };
+    if let Err(error) = server::prepare_data_dir(data_dir.root()) {
+        return fail(&error.to_string());
+    }
+    let on = args.state == OnOff::On;
+    let stored =
+        parallax_store::Store::open(data_dir.store_file()).and_then(|store| store.set_connect(on));
+    if let Err(error) = stored {
+        return fail(&format!("could not change the setting: {error}"));
+    }
+    println!("Parallax Connect is {}.", if on { "on" } else { "off" });
+    ExitCode::SUCCESS
+}
+
 fn unavailable(message: &dyn std::fmt::Display) -> ! {
     report(message);
     std::process::exit(EXIT_UNAVAILABLE.into())
@@ -270,7 +814,7 @@ fn failed(message: &str) -> ! {
 fn serve(args: &ServeArgs) -> ExitCode {
     // So agent CLIs don't inherit the log, or whatever else started `serve` (0023).
     #[cfg(windows)]
-    wispd::windows::stop_inheriting_handles();
+    plxd::windows::stop_inheriting_handles();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -289,6 +833,10 @@ fn serve(args: &ServeArgs) -> ExitCode {
             Ok(data_dir) => data_dir,
             Err(error) => return fail(&format!("could not find the data folder: {error}")),
         };
+        #[cfg(unix)]
+        let (older, moved) = (data_dir.clone(), plxd::paths::move_to_default(&data_dir));
+        #[cfg(unix)]
+        let data_dir = moved.as_ref().map_or(data_dir, Clone::clone);
         if let Err(error) = server::prepare_data_dir(data_dir.root()) {
             return fail(&error.to_string());
         }
@@ -299,16 +847,27 @@ fn serve(args: &ServeArgs) -> ExitCode {
             ));
         }
         info!(log_level = %args.log_level, "starting");
-        // Every path wispd uses is absolute by now. Leaving the directory it was started in
-        // keeps a folder, or the volume it is on, from staying busy for as long as wispd runs.
+        #[cfg(unix)]
+        match &moved {
+            Ok(to) if *to != older => info!(
+                from = %older.root().display(),
+                to = %to.root().display(),
+                "the data folder moved"
+            ),
+            Ok(_) => {}
+            Err(error) => warn!(%error, "couldn't move the older data folder, so it stays in use"),
+        }
+        stop_with_app(shutdown.clone());
+        // Every path plxd uses is absolute by now. Leaving the directory it was started in
+        // keeps a folder, or the volume it is on, from staying busy for as long as plxd runs.
         if let Err(error) = std::env::set_current_dir("/") {
             warn!(%error, "could not change to the root folder");
         }
-        let server = match Server::start(Config::new(data_dir)) {
+        let server = match Server::start(Config::new(data_dir.clone())) {
             Ok(server) => server,
             Err(error @ StartError::AlreadyRunning { .. }) => {
                 warn!(%error, "not starting");
-                eprintln!("wispd: {error}");
+                eprintln!("plxd: {error}");
                 return ExitCode::from(EXIT_ALREADY_RUNNING);
             }
             Err(error) => {
@@ -316,8 +875,13 @@ fn serve(args: &ServeArgs) -> ExitCode {
                 return fail(&error.to_string());
             }
         };
+        // The plxd a Windows update replaced, renamed aside while it ran (PLX-825).
+        #[cfg(windows)]
+        if let Ok(exe) = plxd::executable() {
+            tokio::spawn(plxd::self_update::remove_aside(exe));
+        }
         match server.run(shutdown).await {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(()) => hand_over(&data_dir),
             Err(error) => {
                 error!(%error, "stopped with an error");
                 fail(&error.to_string())
@@ -326,7 +890,27 @@ fn serve(args: &ServeArgs) -> ExitCode {
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+/// What `serve` exits with once its server stopped cleanly. `host/update` may have shut it down
+/// to hand over to the plxd it installed (PLX-700).
+fn hand_over(data_dir: &DataDir) -> ExitCode {
+    match plxd::self_update::take_handover() {
+        Some(Handover::Spawn(program)) => {
+            match plxd::self_update::start_serve(&program, data_dir) {
+                Ok(()) => info!(program = %program.display(), "started the updated plxd"),
+                Err(error) => error!(%error, "could not start the updated plxd"),
+            }
+            ExitCode::SUCCESS
+        }
+        // The service manager restarts it, from the path the update replaced.
+        Some(Handover::Exit) => {
+            info!("exiting for the service manager to start the updated plxd");
+            ExitCode::from(plxd::self_update::EXIT_RESTART)
+        }
+        None => ExitCode::SUCCESS,
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_command(command: ServiceCommand) -> ExitCode {
     match command {
         ServiceCommand::Install(options) => service_install(&options),
@@ -335,13 +919,17 @@ fn service_command(command: ServiceCommand) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn service_install(options: &ServiceOptions) -> ExitCode {
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+fn service_install(options: &InstallOptions) -> ExitCode {
+    let InstallOptions {
+        service: options,
+        replace,
+    } = options;
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
         Err(code) => return code,
     };
-    match service::install(&options.label, &data_dir) {
+    match service::install(&options.label, &data_dir, *replace) {
         Ok(service::InstallOutcome::Installed) => {
             println!("installed and started {}", options.label);
             ExitCode::SUCCESS
@@ -354,7 +942,7 @@ fn service_install(options: &ServiceOptions) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     match service::uninstall(&options.label) {
         Ok(service::UninstallOutcome::Removed) => {
@@ -369,7 +957,7 @@ fn service_uninstall(options: &ServiceOptions) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn service_status(options: &ServiceOptions) -> ExitCode {
     let data_dir = match resolve_data_dir(options) {
         Ok(data_dir) => data_dir,
@@ -379,6 +967,13 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
         Ok(status) => {
             println!("label: {}", status.label);
             println!("file: {}", status.path.display());
+            println!(
+                "program: {}",
+                status
+                    .program
+                    .as_ref()
+                    .map_or_else(|| "-".to_owned(), |program| program.display().to_string())
+            );
             println!("installed: {}", status.installed);
             println!("loaded: {}", status.state.loaded());
             println!("running: {}", status.state.running());
@@ -396,7 +991,7 @@ fn service_status(options: &ServiceOptions) -> ExitCode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn resolve_data_dir(options: &ServiceOptions) -> Result<DataDir, ExitCode> {
     DataDir::resolve(options.data_dir.as_deref())
         .map_err(|error| fail(&format!("could not find the data folder: {error}")))
@@ -448,176 +1043,123 @@ fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
     Ok(())
 }
 
+/// Under [`EXIT_WITH_ENV`], stops `serve` as SIGTERM does once that process is gone, killed or
+/// not. Shutting down cancels every run, which kills its process group. A plain thread, not a
+/// blocking task, so a `serve` stopped another way never waits on it.
+fn stop_with_app(shutdown: Shutdown) {
+    let Ok(value) = std::env::var(EXIT_WITH_ENV) else {
+        return;
+    };
+    if value.is_empty() {
+        return;
+    }
+    let Ok(pid) = value.parse::<u32>() else {
+        warn!(%value, "{EXIT_WITH_ENV} is not a pid; not watching it");
+        return;
+    };
+    info!(pid, "will stop when the app that started plxd exits");
+    std::thread::spawn(move || {
+        wait_for_exit(pid);
+        info!(pid, "the app that started plxd exited");
+        shutdown.trigger();
+    });
+}
+
+/// Returns once process `pid` is gone, or right away if it can't be watched.
+// ponytail: polls once a second, so a pid reused within that second is missed; a kqueue or pidfd
+// watch would close it.
+#[cfg(unix)]
+fn wait_for_exit(pid: u32) {
+    use rustix::io::Errno;
+    use rustix::process::{Pid, test_kill_process};
+
+    let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
+        return;
+    };
+    while test_kill_process(pid) != Err(Errno::SRCH) {
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_exit(pid: u32) {
+    if let Err(error) = plxd::windows::wait_for_exit(pid) {
+        warn!(pid, %error, "could not watch the app that started plxd; taking it as exited");
+    }
+}
+
 fn fail(message: &str) -> ExitCode {
-    eprintln!("wispd: {message}");
+    eprintln!("plxd: {message}");
     ExitCode::FAILURE
+}
+
+/// A runtime on this thread, for a command that serves one connection.
+fn current_thread_runtime() -> io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
+/// Writes `plxd <command>: <message>` to stderr, as [`report`] does for `attach`.
+fn reporter(command: &'static str) -> impl Fn(&dyn std::fmt::Display) {
+    move |message| {
+        let _ = writeln!(io::stderr(), "plxd {command}: {message}");
+    }
+}
+
+/// Names the command plxd runs as, for a launcher that can't name the program itself: the
+/// app's `parallax.cmd` on Windows (PLX-750) sets it to `parallax`.
+const INVOKED_AS_ENV: &str = "PLXD_INVOKED_AS";
+
+/// `args` with `tui` put first when plxd runs as `parallax` with no subcommand, so `parallax`
+/// opens Parallax in the terminal, as `claude` and `codex` open theirs. That's plxd linked or
+/// copied under that name, or with [`INVOKED_AS_ENV`] set to it. Under that name, plxd is still
+/// every other command: `parallax attach` is `plxd attach`.
+fn as_parallax(
+    mut args: Vec<std::ffi::OsString>,
+    invoked_as: Option<std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    let parallax = invoked_as.is_some_and(|name| name == "parallax")
+        || args
+            .first()
+            .and_then(|program| std::path::Path::new(program).file_stem())
+            .is_some_and(|name| name == "parallax");
+    // A subcommand, or plxd's own help and version, which `tui` doesn't take.
+    let own = args.get(1).is_some_and(|arg| {
+        let arg = arg.to_string_lossy();
+        !arg.starts_with('-') || ["-h", "--help", "-V", "--version"].contains(&arg.as_ref())
+    });
+    if parallax && !own {
+        args.insert(1, "tui".into());
+    }
+    args
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use clap::{CommandFactory, Parser};
-
-    use super::{AttachArgs, Cli, Command};
-
     #[test]
-    fn the_command_line_definition_is_valid() {
-        Cli::command().debug_assert();
-    }
-
-    #[test]
-    fn version_is_wired_to_wispds_own_version() {
-        // daemon/tests/cli.rs checks what `wispd --version` actually prints; this just checks
-        // the command is wired to `wispd::version` (0006, #44), not a hardcoded string.
-        assert_eq!(Cli::command().get_version(), Some(wispd::version()));
-    }
-
-    #[test]
-    fn serve_takes_a_data_folder_and_a_log_level() {
-        let cli = Cli::try_parse_from([
-            "wispd",
-            "serve",
-            "--data-dir",
-            "/tmp/d",
-            "--log-level",
-            "wispd=debug,warn",
-        ])
-        .unwrap();
-        let Command::Serve(args) = cli.command else {
-            panic!("expected serve, got {:?}", cli.command);
+    fn waits_for_the_app_to_exit() {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/c", "ping", "-n", "30", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("30");
+            command
         };
-        assert_eq!(
-            args.data_dir.as_deref(),
-            Some(std::path::Path::new("/tmp/d"))
-        );
-        assert_eq!(args.log_level.to_string(), "wispd=debug,warn");
-    }
-
-    #[test]
-    fn unknown_levels_and_arguments_are_rejected() {
-        assert!(Cli::try_parse_from(["wispd", "serve", "--log-level", "loud"]).is_err());
-        assert!(Cli::try_parse_from(["wispd", "--bogus"]).is_err());
-        assert!(Cli::try_parse_from(["wispd", "serve", "extra"]).is_err());
-    }
-
-    fn attach_args(args: &[&str]) -> Result<AttachArgs, clap::Error> {
-        let cli = Cli::try_parse_from(["wispd", "attach"].iter().chain(args))?;
-        let Command::Attach(args) = cli.command else {
-            panic!("expected attach, got {:?}", cli.command);
-        };
-        Ok(args)
-    }
-
-    #[test]
-    fn attach_takes_a_data_folder_and_a_timeout_in_seconds() {
-        let args = attach_args(&["--data-dir", "/tmp/d", "--connect-timeout", "2.5"]).unwrap();
-        assert_eq!(
-            args.data_dir.as_deref(),
-            Some(std::path::Path::new("/tmp/d"))
-        );
-        assert_eq!(args.connect_timeout, Some(Duration::from_millis(2500)));
-        assert_eq!(attach_args(&[]).unwrap().connect_timeout, None);
-        let longest = attach_args(&["--connect-timeout", "86400"]).unwrap();
-        assert_eq!(longest.connect_timeout, Some(Duration::from_hours(24)));
-    }
-
-    #[test]
-    fn attach_refuses_a_timeout_that_is_not_positive_and_extra_arguments() {
-        for bad in ["0", "-1", "soon", "NaN", "inf", "1e19", "86401"] {
-            assert!(attach_args(&["--connect-timeout", bad]).is_err(), "{bad}");
-        }
-        assert!(attach_args(&["extra"]).is_err());
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn service_install_takes_a_data_folder_and_a_label() {
-        let cli = Cli::try_parse_from([
-            "wispd",
-            "service",
-            "install",
-            "--data-dir",
-            "/tmp/d",
-            "--label",
-            "io.example.test",
-        ])
-        .unwrap();
-        let Command::Service(service) = cli.command else {
-            panic!("expected service, got {:?}", cli.command);
-        };
-        let super::ServiceCommand::Install(options) = service.command else {
-            panic!("expected install, got {:?}", service.command);
-        };
-        assert_eq!(
-            options.data_dir.as_deref(),
-            Some(std::path::Path::new("/tmp/d"))
-        );
-        assert_eq!(options.label, "io.example.test");
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn service_status_defaults_to_the_wisp_label_with_no_data_dir_override() {
-        let cli = Cli::try_parse_from(["wispd", "service", "status"]).unwrap();
-        let Command::Service(service) = cli.command else {
-            panic!("expected service, got {:?}", cli.command);
-        };
-        let super::ServiceCommand::Status(options) = service.command else {
-            panic!("expected status, got {:?}", service.command);
-        };
-        assert_eq!(options.label, super::DEFAULT_LABEL);
-        assert_eq!(options.data_dir, None);
-    }
-
-    #[test]
-    fn mcp_needs_a_project_and_a_coordinator_thread_as_uuidv7s() {
-        let project = "01a0d349-6e00-7c9e-80e2-0426486a8cae";
-        let thread = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
-        let cli = Cli::try_parse_from([
-            "wispd",
-            "mcp",
-            "--project",
-            project,
-            "--coordinator-thread",
-            thread,
-        ])
-        .unwrap();
-        let Command::Mcp(args) = cli.command else {
-            panic!("expected mcp, got {:?}", cli.command);
-        };
-        assert_eq!(args.project.to_string(), project);
-        assert_eq!(args.coordinator_thread.to_string(), thread);
-        assert!(Cli::try_parse_from(["wispd", "mcp", "--project", project]).is_err());
-        assert!(
-            Cli::try_parse_from([
-                "wispd",
-                "mcp",
-                "--project",
-                "not-an-id",
-                "--coordinator-thread",
-                thread,
-            ])
-            .is_err()
-        );
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn service_uninstall_parses_with_no_options() {
-        let cli = Cli::try_parse_from(["wispd", "service", "uninstall"]).unwrap();
-        let Command::Service(service) = cli.command else {
-            panic!("expected service, got {:?}", cli.command);
-        };
-        assert!(matches!(
-            service.command,
-            super::ServiceCommand::Uninstall(_)
-        ));
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn service_without_a_subcommand_is_a_usage_error() {
-        assert!(Cli::try_parse_from(["wispd", "service"]).is_err());
+        let mut app = command.stdout(std::process::Stdio::null()).spawn().unwrap();
+        let pid = app.id();
+        let (exited, waited) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            super::wait_for_exit(pid);
+            exited.send(()).unwrap();
+        });
+        assert!(waited.recv_timeout(Duration::from_millis(300)).is_err());
+        app.kill().unwrap();
+        app.wait().unwrap();
+        waited.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 }

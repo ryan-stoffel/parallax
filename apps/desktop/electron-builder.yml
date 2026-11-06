@@ -1,10 +1,10 @@
-# The installer for the current OS and arch (0029). scripts/ci/package-app builds wispd and the
+# The installer for the current OS and arch (0029). scripts/ci/package-app builds plxd and the
 # app's dist/ first, and passes the arch and version on the command line.
-appId: dev.wisp.desktop
-productName: Wisp
+appId: dev.parallax.desktop
+productName: Parallax
 directories:
   output: release
-# Where the app's updater (electron-updater, RYA-68) looks: the app ships this as app-update.yml
+# Where the app's updater (electron-updater, PLX-68) looks: the app ships this as app-update.yml
 # in its resources folder, and the build writes the channel's update metadata next to the
 # installers (0030). `${channel}` is the version's first prerelease identifier, or `latest`:
 # nightly builds write nightly*.yml, standard builds latest*.yml. The owner and repo are explicit
@@ -14,54 +14,77 @@ directories:
 publish:
   provider: github
   owner: ryan-stoffel
-  repo: wisp
+  repo: parallax
   channel: ${channel}
-# node-pty and node-llama-cpp ship prebuilt binaries for every target, so nothing needs compiling.
-# @electron/rebuild would fetch Electron's headers and run node-gyp anyway on some runners.
+# The app-local Fn monitor uses stable Node-API and is built by voice-assets.mjs.
+# @electron/rebuild would fetch unnecessary Electron headers on some runners.
 npmRebuild: false
-# dist/ is the whole app: vite.config.ts bundles every dependency except the ones below. Only
-# `dependencies` are packaged, and package.json keeps just those there.
-# node-llama-cpp's CUDA and Vulkan binaries (Linux and Windows x64 only) add 200 to 300 MB and need
-# the vendor's GPU runtime installed; without them it runs on the CPU, which is enough for the
-# thread namer's small model.
+# Only Chromium's en-US locale ships: the rest are about 50 MiB of the installed app. The UI is
+# English only, and the renderer formats dates, numbers, and sort order in the OS's locale itself
+# (src/renderer/locale.ts), since Chromium's default locale is then en-US on every system (PLX-613).
+electronLanguages: [en-US]
+# dist/ is the whole app: vite.config.ts bundles every dependency, and package.json has no
+# `dependencies` to package. Sourcemaps stay out: nothing enables them at run time.
 files:
   - dist/**
   - package.json
-  - "!node_modules/@node-llama-cpp/*-cuda*/**"
-  - "!node_modules/@node-llama-cpp/*-vulkan/**"
-# Native code can't load from inside app.asar. node-pty's prebuilds and spawn-helper, and
-# node-llama-cpp with the @node-llama-cpp/<platform> package holding its llama.cpp binary.
+  - "!**/*.map"
+# The renderer build sits beside app.asar, unpacked, so plxd, next to it in the resources folder,
+# can serve it as the web client (PLX-651) without a copy of its own. The app reads it through
+# app.asar as before.
 asarUnpack:
-  - node_modules/node-pty/**
-  - node_modules/node-llama-cpp/**
-  - node_modules/@node-llama-cpp/**
-# wispd, built for this target, and wispd.version, the version it reports (0030), go in the
-# resources folder, where findWispd looks. package-app puts both in target/package-resources.
+  - dist/renderer/**
+# plxd, built for this target, and plxd.version, the version it reports (0030), go in the
+# resources folder, where findPlxd looks. package-app puts both in target/package-resources.
 extraResources:
   - from: ../../target/package-resources
     to: .
-artifactName: wisp-${version}-${os}-${arch}.${ext}
+  - from: native/VOICE-NOTICES.txt
+    to: VOICE-NOTICES.txt
+artifactName: parallax-${version}-${os}-${arch}.${ext}
 # The updater installs from the zip; the dmg is for first installs. Signing happens only when
-# CSC_KEYCHAIN (or CSC_LINK) is set (release.yml's macOS build): everything in the bundle, wispd
+# CSC_KEYCHAIN (or CSC_LINK) is set (release.yml's macOS build): everything in the bundle, plxd
 # included, gets the hardened runtime and a secure timestamp. electron-builder notarizes only when
 # the APPLE_API_* variables are set too, which release.yml doesn't do: it notarizes the dmg after
 # publishing (0030).
 mac:
   target: [dmg, zip]
+  # The full-bleed dark tile from the icon kit (design/icon/README.md).
+  icon: ../../design/icon/icns/Parallax-dark.icns
   category: public.app-category.developer-tools
+  extraResources:
+    - from: native/fn-key.node
+      to: fn-key.node
+  extendInfo:
+    NSMicrophoneUsageDescription: Parallax uses your microphone to transcribe voice into your message. Audio stays on this device.
   entitlements: entitlements.mac.plist
   entitlementsInherit: entitlements.mac.plist
-  # Chromium's 223 .pak files (locales and resources) aren't code, so they aren't signed one by one (each a codesign
-  # run and a trip to Apple's timestamp server, about two minutes in all): Electron Framework's own
-  # signature seals them as resources, like every other data file (RYA-211).
-  signIgnore: ['\.pak$']
+  # Chromium's .pak files (its locale and resources) aren't code, so they aren't signed one by one
+  # (each a codesign run and a trip to Apple's timestamp server): Electron Framework's own
+  # signature seals them as resources, like every other data file (PLX-211).
+  # The renderer build unpacked for plxd's web client (PLX-651) is fonts, scripts, and styles, so
+  # it isn't signed file by file either.
+  signIgnore: ['\.pak$', 'app\.asar\.unpacked/dist/renderer/']
 # Signed with the app's identity when there is one. The updater reads the zip, so the dmg stays out
 # of the update metadata.
 dmg:
   sign: true
   writeUpdateInfo: false
+# The exe's company, Apps & features' publisher, and the copyright are package.json's `author`,
+# without which the exe keeps Electron's own "GitHub, Inc.".
 win:
   target: nsis
+  # The full-bleed dark tile with rounded corners (design/icon/ico/make-ico.py), for the exe, the
+  # installer, and the shortcuts. scripts/ci/package-app swaps in the nightly's.
+  icon: ../../design/icon/ico/Parallax.ico
+# Apps & features lists the app by name, as other apps do, and shows the version in its own column.
+nsis:
+  uninstallDisplayName: ${productName}
+  include: installer.nsh
+# The static type2 runtime: the legacy one (toolset 0.0.0) dlopens libfuse.so.2, which Arch,
+# Omarchy, and newer Fedora and Ubuntu don't install, so the AppImage didn't start there (PLX-808).
+toolsets:
+  appimage: "1.0.3"
 linux:
   target: AppImage
   category: Development

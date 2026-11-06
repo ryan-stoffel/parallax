@@ -1,0 +1,9 @@
+{
+  "name": "react-native",
+  "version": "0.0.0",
+  "private": true,
+  "description": "What Enriched Markdown's web build imports from React Native (Platform and processColor). The desktop has no React Native.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts"
+}

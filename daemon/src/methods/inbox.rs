@@ -1,0 +1,154 @@
+//! An orchestrator's inbox (PLX-401, decision 0043): `inbox/list` and `inbox/seen`, behind the
+//! `inbox` capability, and [`add`], which every source of an item calls.
+
+use std::sync::Arc;
+
+use jiff::Timestamp;
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    ErrorKind, InboxItem, InboxItemId, InboxKind, InboxListParams, InboxListResult,
+    InboxSeenParams, InboxSeenResult, ParallaxEvent, RunId, ScopeId, WakeReason,
+};
+use parallax_store::Store;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
+
+use super::Context;
+use crate::server::Daemon;
+use crate::store::Tx;
+use crate::store::store_error;
+
+/// `orchestrator`'s inbox, oldest first, with the event log's `seq` from before the read, to
+/// subscribe after.
+pub(crate) async fn list(
+    context: &Context,
+    params: InboxListParams,
+) -> Result<InboxListResult, ErrorObject> {
+    let (items, seq) = context
+        .daemon
+        .reader
+        .snapshot(&context.cancel, move |store| {
+            found(store, params.orchestrator)?;
+            store
+                .inbox(params.orchestrator.into())
+                .map_err(|error| store_error(&error))?
+                .into_iter()
+                .map(item)
+                .collect::<Result<_, _>>()
+        })
+        .await?;
+    Ok(InboxListResult { items, seq })
+}
+
+/// Marks items of `orchestrator`'s inbox seen now, and returns them as they stand.
+pub(crate) async fn seen(
+    context: &Context,
+    params: InboxSeenParams,
+) -> Result<InboxSeenResult, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |store| {
+            found(store, params.orchestrator)?;
+            let ids: Vec<_> = params.items.into_iter().map(Into::into).collect();
+            let rows = store
+                .mark_inbox_seen(params.orchestrator.into(), &ids, Timestamp::now())
+                .map_err(|error| store_error(&error))?;
+            let items = rows.into_iter().map(item).collect::<Result<_, _>>()?;
+            Ok(InboxSeenResult { items })
+        })
+        .await
+}
+
+/// Adds an item about `run` to `orchestrator`'s inbox and stages `inbox.added` in the row's
+/// transaction (0052), so a subscriber after `inbox/list`'s `seq` never misses it. Never fails
+/// its caller: a store error is logged.
+pub(crate) async fn add(
+    daemon: &Arc<Daemon>,
+    orchestrator: ScopeId,
+    run: RunId,
+    kind: InboxKind,
+    text: String,
+) {
+    let added = daemon
+        .store
+        .run(&CancellationToken::new(), move |store| {
+            record(store, orchestrator, run, kind, text)
+        })
+        .await;
+    if let Err(error) = added {
+        warn!(%orchestrator, %run, error = %error.message, "could not add an inbox item");
+    }
+}
+
+/// [`add`]'s work, for a caller already in a store job.
+pub(crate) fn record(
+    store: &mut Tx,
+    orchestrator: ScopeId,
+    run: RunId,
+    kind: InboxKind,
+    text: String,
+) -> Result<(), ErrorObject> {
+    let row = parallax_store::InboxItem {
+        id: InboxItemId::generate().into(),
+        orchestrator_id: orchestrator.into(),
+        run_id: run.into(),
+        kind: kind_name(kind),
+        text,
+        created_at: Timestamp::now(),
+        seen_at: None,
+    };
+    store
+        .add_inbox_item(&row)
+        .map_err(|error| store_error(&error))?;
+    let item = item(row)?;
+    let seq = store.stage(
+        item.created_at,
+        Some(orchestrator),
+        ParallaxEvent::InboxAdded { item },
+    );
+    info!(%orchestrator, %run, seq, "added an inbox item");
+    // A child's end, or something that waits on the user, wakes the orchestrator thread (0093).
+    let reason = match kind {
+        InboxKind::Done | InboxKind::Failed => Some(WakeReason::ChildFinished { child: run }),
+        InboxKind::NeedsYou => Some(WakeReason::NeedsYou { run }),
+        InboxKind::Decided | InboxKind::Learned | InboxKind::Unknown => None,
+    };
+    if let Some(reason) = reason {
+        crate::threads::wake_orchestrator(store, orchestrator.into(), &reason)?;
+    }
+    Ok(())
+}
+
+/// `orchestratorNotFound` unless `orchestrator` exists.
+fn found(store: &Store, orchestrator: ScopeId) -> Result<(), ErrorObject> {
+    match store.get_orchestrator(orchestrator.into()) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(ErrorObject::parallax(
+            ErrorKind::OrchestratorNotFound,
+            format!("no orchestrator has id {orchestrator}"),
+        )),
+        Err(error) => Err(store_error(&error)),
+    }
+}
+
+fn item(row: parallax_store::InboxItem) -> Result<InboxItem, ErrorObject> {
+    let invalid =
+        |_| ErrorObject::internal_error(format!("inbox item {} has an invalid id", row.id));
+    Ok(InboxItem {
+        id: InboxItemId::try_from(row.id).map_err(invalid)?,
+        run: RunId::try_from(row.run_id).map_err(invalid)?,
+        kind: serde_json::from_value(row.kind.into()).unwrap_or(InboxKind::Unknown),
+        text: row.text,
+        created_at: row.created_at,
+        seen_at: row.seen_at,
+    })
+}
+
+/// `kind`'s name on the wire, which the store keeps.
+fn kind_name(kind: InboxKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}

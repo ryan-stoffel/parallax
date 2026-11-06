@@ -1,4 +1,4 @@
-# Every descriptor wispd opens must have close-on-exec, or a process it spawns on Linux can inherit
+# Every descriptor plxd opens must have close-on-exec, or a process it spawns on Linux can inherit
 # one opened after spawn's /proc/self/fd scan (0023). std, tokio, and SQLite set it; these don't.
 # nix's pipe2 and dup* would belong here too, but need nix's `fs` feature, which is off, and
 # rustix has no fanotify. `allow-invalid` marks the Linux-only ones. Tests that need a leaked

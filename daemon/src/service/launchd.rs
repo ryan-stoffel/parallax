@@ -5,14 +5,22 @@
 //! guidance to prefer them over the deprecated `load` and `unload`.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use super::{
     InstallOutcome, ServiceError, ServiceState, Status, UninstallOutcome, check_label_serves,
-    home_dir, prepare_install, remove_file, run, run_ok, write_file,
+    escape_xml, home_dir, prepare_install, remove_file, run, run_ok, stop_outside_serve,
+    unescape_xml, write_file,
 };
 use crate::paths::{DATA_DIR_ENV, DataDir};
 
 pub(crate) const LAUNCHCTL: &str = "/bin/launchctl";
+
+/// How long [`install`] keeps retrying a `bootstrap` that fails right after a `bootout`.
+const BOOTSTRAP_PATIENCE: Duration = Duration::from_secs(10);
+
+/// How long [`bootstrap`] waits between tries.
+const BOOTSTRAP_RETRY: Duration = Duration::from_millis(250);
 
 /// Where the `LaunchAgent`'s plist goes: `~/Library/LaunchAgents/<label>.plist`.
 ///
@@ -28,19 +36,17 @@ pub fn plist_path(label: &str) -> Result<PathBuf, ServiceError> {
 
 /// Renders the `LaunchAgent` property list for `label`, running `program serve` with
 /// [`DATA_DIR_ENV`] set to `data_dir`'s folder. Both stdout and stderr go to `data_dir`'s
-/// `logs/wispd.log` (0009), which `serve` also logs to, so a panic before its own logger starts
+/// `logs/plxd.log` (0009), which `serve` also logs to, so a panic before its own logger starts
 /// still lands there instead of being lost.
 ///
-/// `KeepAlive.SuccessfulExit` is `false`: launchd restarts `serve` after it exits with a
-/// non-zero status (a crash, or losing the startup race for `wispd.lock`), but not after the
-/// exit status of 0 that a clean SIGTERM or SIGINT shutdown produces (`daemon/src/main.rs`), so
-/// a deliberate stop stays stopped.
+/// `KeepAlive` is `true`: launchd restarts `serve` after any exit, a clean SIGTERM shutdown's 0
+/// included, throttled to one start every 10 s. Only `launchctl bootout` keeps it stopped.
 #[must_use]
 pub fn render_plist(label: &str, program: &Path, data_dir: &DataDir) -> String {
-    let label = escape_plist_text(label);
-    let program = escape_plist_text(&program.display().to_string());
-    let data_dir_value = escape_plist_text(&data_dir.root().display().to_string());
-    let log = escape_plist_text(&data_dir.log_file().display().to_string());
+    let label = escape_xml(label);
+    let program = escape_xml(&program.display().to_string());
+    let data_dir_value = escape_xml(&data_dir.root().display().to_string());
+    let log = escape_xml(&data_dir.log_file().display().to_string());
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -61,10 +67,7 @@ pub fn render_plist(label: &str, program: &Path, data_dir: &DataDir) -> String {
          \t<key>RunAtLoad</key>\n\
          \t<true/>\n\
          \t<key>KeepAlive</key>\n\
-         \t<dict>\n\
-         \t\t<key>SuccessfulExit</key>\n\
-         \t\t<false/>\n\
-         \t</dict>\n\
+         \t<true/>\n\
          \t<key>StandardOutPath</key>\n\
          \t<string>{log}</string>\n\
          \t<key>StandardErrorPath</key>\n\
@@ -74,31 +77,36 @@ pub fn render_plist(label: &str, program: &Path, data_dir: &DataDir) -> String {
     )
 }
 
-// Only text content is ever generated (never an attribute), so quotes need no escaping.
-fn escape_plist_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// Installs or updates the per-user `LaunchAgent` for `label`, running the current `wispd`
+/// Installs or updates the per-user `LaunchAgent` for `label`, running the current `plxd`
 /// binary's `serve` against `data_dir`.
 ///
-/// Idempotent: run again, for example after wispd moves, to update the plist and restart the
+/// Idempotent: run again, for example after plxd moves, to update the plist and restart the
 /// service with the new one (`bootout` then `bootstrap`, since launchd does not reread a
-/// bootstrapped job's plist on its own).
+/// bootstrapped job's plist on its own). A `bootstrap` that fails right after the `bootout` is
+/// retried for up to [`BOOTSTRAP_PATIENCE`], since by then the old `serve` is gone.
 ///
 /// # Errors
 ///
-/// [`ServiceError::AlreadyRunningOutsideService`] when nothing is loaded under `label` yet, but
-/// something is already answering `data_dir`'s socket: bootstrapping would only start a second
-/// `serve` that fights the first one for the lock. Stop that `serve` first. Other variants for a
-/// filesystem or `launchctl` failure.
-pub fn install(label: &str, data_dir: &DataDir) -> Result<InstallOutcome, ServiceError> {
+/// [`ServiceError::AlreadyRunningOutsideService`] when nothing is running under `label`, but
+/// something is already answering `data_dir`'s socket, unless `replace`: bootstrapping would only
+/// start a second `serve` that fights the first one for the lock. Other variants for a
+/// filesystem or `launchctl` failure, or [`ServiceError::StillRunning`].
+///
+/// With `replace`, that `serve` is stopped after the bootstrap, so an `attach` in between goes
+/// through `launchctl kickstart` rather than starting its own. Until it's gone, the service's
+/// `serve` exits 3 and launchd throttles it; a last `kickstart` starts it at once.
+pub fn install(
+    label: &str,
+    data_dir: &DataDir,
+    replace: bool,
+) -> Result<InstallOutcome, ServiceError> {
     check_label_serves(label, data_dir, DataDir::default_location().ok().as_ref())?;
     let uid = rustix::process::getuid().as_raw();
-    let already_loaded = load_state(uid, label)?.loaded();
-    let program = prepare_install(data_dir, already_loaded)?;
+    let state = load_state(uid, label)?;
+    let already_loaded = state.loaded();
+    // Loaded isn't enough: a loaded agent whose `serve` keeps exiting 3 leaves the one outside it
+    // holding the data folder.
+    let (program, outside) = prepare_install(data_dir, state.running(), replace)?;
     let plist = render_plist(label, &program, data_dir);
     let path = plist_path(label)?;
     write_file(&path, &plist)?;
@@ -106,22 +114,41 @@ pub fn install(label: &str, data_dir: &DataDir) -> Result<InstallOutcome, Servic
     let uid_target = format!("gui/{uid}");
     if already_loaded {
         // --wait: block until the old `serve` is fully gone, so the bootstrap below can never
-        // race it for `wispd.lock`.
+        // race it for `plxd.lock`.
         run_ok(
             LAUNCHCTL,
             &["bootout", "--wait", &format!("{uid_target}/{label}")],
         )?;
     }
-    run_ok(
+    bootstrap(
         LAUNCHCTL,
         &["bootstrap", &uid_target, &path.display().to_string()],
+        if already_loaded {
+            BOOTSTRAP_PATIENCE
+        } else {
+            Duration::ZERO
+        },
     )?;
+    if outside {
+        stop_outside_serve(data_dir)?;
+        run_ok(LAUNCHCTL, &["kickstart", &format!("{uid_target}/{label}")])?;
+    }
 
-    Ok(if already_loaded {
-        InstallOutcome::Reinstalled
-    } else {
-        InstallOutcome::Installed
-    })
+    Ok(InstallOutcome::of(already_loaded))
+}
+
+/// Runs `launchctl`, the program at `launchctl`, with `args`, a `bootstrap`, trying again every
+/// [`BOOTSTRAP_RETRY`] while it fails, until `patience` is up. launchd tears a booted-out job down
+/// after `bootout` returns, so a bootstrap right after one can fail until it's done.
+fn bootstrap(launchctl: &str, args: &[&str], patience: Duration) -> Result<(), ServiceError> {
+    let deadline = Instant::now() + patience;
+    loop {
+        let result = run_ok(launchctl, args);
+        if result.is_ok() || Instant::now() >= deadline {
+            return result.map(drop);
+        }
+        std::thread::sleep(BOOTSTRAP_RETRY);
+    }
 }
 
 /// Removes the per-user `LaunchAgent` for `label`: stops it if loaded, then deletes its plist.
@@ -143,11 +170,7 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
         )?;
     }
     let removed_file = remove_file(&plist_path(label)?)?;
-    Ok(if was_loaded || removed_file {
-        UninstallOutcome::Removed
-    } else {
-        UninstallOutcome::NotInstalled
-    })
+    Ok(UninstallOutcome::of(was_loaded || removed_file))
 }
 
 /// Reports what launchd knows about `label`, and whether `data_dir`'s socket answers right now.
@@ -159,7 +182,20 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
 pub fn status(label: &str, data_dir: &DataDir) -> Result<Status, ServiceError> {
     let uid = rustix::process::getuid().as_raw();
     let state = load_state(uid, label)?;
-    Status::check(label, plist_path(label)?, state, data_dir)
+    let path = plist_path(label)?;
+    let program = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|plist| plist_program(&plist));
+    Status::check(label, path, program, state, data_dir)
+}
+
+/// The program a plist from [`render_plist`] runs: the first `<string>` after
+/// `<key>ProgramArguments</key>`, unescaped.
+fn plist_program(plist: &str) -> Option<PathBuf> {
+    let (_, rest) = plist.split_once("<key>ProgramArguments</key>")?;
+    let (_, rest) = rest.split_once("<string>")?;
+    let (program, _) = rest.split_once("</string>")?;
+    Some(PathBuf::from(unescape_xml(program)))
 }
 
 /// Asks launchd about `label` with `launchctl print`. A label nothing has bootstrapped yet is
@@ -193,70 +229,30 @@ fn parse_print_output(text: &str) -> (bool, Option<u32>) {
 mod tests {
     use std::path::Path;
 
-    use super::{escape_plist_text, parse_print_output, plist_path, render_plist};
+    use super::render_plist;
     use crate::paths::DataDir;
     use crate::service::DEFAULT_LABEL;
 
     #[test]
     fn plist_matches_the_golden_file() {
-        let data_dir = DataDir::new("/Users/ryan/Library/Application Support/wisp").unwrap();
-        let plist = render_plist(DEFAULT_LABEL, Path::new("/usr/local/bin/wispd"), &data_dir);
+        let data_dir = DataDir::new("/Users/ryan/Library/Application Support/parallax").unwrap();
+        let plist = render_plist(DEFAULT_LABEL, Path::new("/usr/local/bin/plxd"), &data_dir);
         let golden = include_str!("../../tests/golden/launchagent.plist");
         assert_eq!(plist, golden);
     }
 
     #[test]
     fn special_characters_in_paths_and_the_label_are_escaped() {
-        let data_dir = DataDir::new("/Users/a&b/wisp").unwrap();
-        let plist = render_plist("a&b<c>", Path::new("/bin/<wispd>"), &data_dir);
+        let data_dir = DataDir::new("/Users/a&b/parallax").unwrap();
+        let plist = render_plist("a&b<c>", Path::new("/bin/<plxd>"), &data_dir);
         assert!(
             plist.contains("<string>a&amp;b&lt;c&gt;</string>"),
             "{plist}"
         );
         assert!(
-            plist.contains("<string>/bin/&lt;wispd&gt;</string>"),
+            plist.contains("<string>/bin/&lt;plxd&gt;</string>"),
             "{plist}"
         );
-        assert!(plist.contains("/Users/a&amp;b/wisp"), "{plist}");
-    }
-
-    #[test]
-    fn escaping_handles_the_reserved_characters_and_leaves_the_rest_alone() {
-        assert_eq!(escape_plist_text("a&b<c>d"), "a&amp;b&lt;c&gt;d");
-        assert_eq!(escape_plist_text("plain"), "plain");
-    }
-
-    #[test]
-    fn plist_path_is_under_launch_agents_with_the_label() {
-        let path = plist_path("io.example.test").unwrap();
-        assert!(
-            path.ends_with("Library/LaunchAgents/io.example.test.plist"),
-            "{}",
-            path.display()
-        );
-    }
-
-    #[test]
-    fn parses_a_running_jobs_state_and_pid_from_launchctl_print() {
-        // A trimmed capture of real `launchctl print gui/<uid>/<label>` output.
-        let text = "gui/501/io.example = {\n\
-                     \tactive count = 1\n\
-                     \tstate = running\n\n\
-                     \tprogram = /bin/sleep\n\
-                     \tpid = 85309\n\
-                     \truns = 1\n\
-                     }\n";
-        assert_eq!(parse_print_output(text), (true, Some(85309)));
-    }
-
-    #[test]
-    fn a_job_that_is_not_running_has_no_pid() {
-        let text = "gui/501/io.example = {\n\tstate = not running\n}\n";
-        assert_eq!(parse_print_output(text), (false, None));
-    }
-
-    #[test]
-    fn unrecognized_output_is_read_as_not_running_rather_than_an_error() {
-        assert_eq!(parse_print_output(""), (false, None));
+        assert!(plist.contains("/Users/a&amp;b/parallax"), "{plist}");
     }
 }

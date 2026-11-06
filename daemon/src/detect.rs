@@ -1,36 +1,38 @@
-//! Detecting installed vendor CLIs and their sign-in state (#114, decision record 0004).
+//! Detecting installed vendor CLIs and their sign-in state (#114, decision record 0004), and the
+//! GitHub CLI's (PLX-336).
 //!
-//! wispd never reads a CLI's credential files and never starts a sign-in. It only:
+//! plxd never reads a CLI's credential files, and detection never starts a sign-in (`gh`'s, which
+//! plxd may start since 0050, is in [`crate::github`]). It only:
 //!
 //! - Resolves the binary on the `PATH` it itself uses ([`find_program`], #96), which runs
 //!   nothing.
 //! - Runs the read-only status commands 0004 lists, through the same [`Launcher`] and
 //!   environment scrubbing the agent backends use, with a timeout.
 //!
-//! The exact shape of `claude auth status` and `agent status --format json` is undocumented, so
+//! The exact shape of `claude auth status` is undocumented, so
 //! [`apply_json_status`] reads the fields these sources show and tolerates everything else,
-//! mirroring 0007's forward-compatible parsing rule. A field wispd could not read is left `None`
+//! mirroring 0007's forward-compatible parsing rule. A field plxd could not read is left `None`
 //! rather than guessed, and [`DetectedCli::note`] says why when that happens.
 //!
 //! Plan/tier is available for Codex only through its `app-server`'s `account/read`, a JSON-RPC
 //! server on stdio rather than a one-shot command. [`probe_codex_plan`] does the smallest useful
-//! thing: one request, one response, then the process is killed. A real Codex backend (#122)
-//! will want a proper client with its own handshake; this is not it.
+//! thing: the `initialize` handshake, one request, one response, then the process is killed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use parallax_protocol::{AuthKind, CliKind, DetectedCli, GithubStatus};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
-use wisp_protocol::{AuthKind, CliKind, DetectedCli};
 
 use crate::backend::process::{Launcher, Output, ProcessSpec, StdinMode, find_program};
 
-/// How long a status command may run before wispd gives up on it.
+/// How long a status command may run before plxd gives up on it.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long an `accounts/list` answer may be served from the cache before a fresh probe runs.
@@ -40,7 +42,7 @@ pub const CACHE_TTL: Duration = Duration::from_secs(30);
 /// `AccountsListResult`/`AccountsRefreshResult`'s shape.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Probe {
-    /// Every CLI wispd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
+    /// Every CLI plxd knows how to detect, in a stable order (`claude`, `codex`, `cursor`).
     pub clis: Vec<DetectedCli>,
     /// When this probe ran.
     pub checked_at: Timestamp,
@@ -54,6 +56,9 @@ pub struct CliDetector {
     cache: Mutex<Option<(Instant, Probe)>>,
     /// CLIs probed alone by [`Self::get`], while the full `cache` is empty or stale.
     single: Mutex<HashMap<CliKind, (Instant, DetectedCli)>>,
+    /// One lock per CLI, held while [`Self::get`] probes it, so many runs starting at once with a
+    /// stale cache wait on one probe instead of each running their own.
+    probing: Mutex<HashMap<CliKind, Arc<Mutex<()>>>>,
 }
 
 impl CliDetector {
@@ -66,6 +71,7 @@ impl CliDetector {
             timeout,
             cache: Mutex::new(None),
             single: Mutex::new(HashMap::new()),
+            probing: Mutex::new(HashMap::new()),
         }
     }
 
@@ -86,18 +92,32 @@ impl CliDetector {
     /// that starts on `cli`: [`Self::list`] would also wait on the other two, and Cursor's status
     /// command takes seconds.
     pub async fn get(&self, cli: CliKind) -> DetectedCli {
+        if let Some(found) = self.cached(cli).await {
+            return found;
+        }
+        let probing = Arc::clone(self.probing.lock().await.entry(cli).or_default());
+        let _probing = probing.lock().await;
+        // Another run may have probed it while this one waited.
+        if let Some(found) = self.cached(cli).await {
+            return found;
+        }
+        self.refresh_one(cli).await
+    }
+
+    /// `cli`'s status from either cache, while it's fresh.
+    pub async fn cached(&self, cli: CliKind) -> Option<DetectedCli> {
         if let Some((checked, probe)) = &*self.cache.lock().await
             && checked.elapsed() < CACHE_TTL
             && let Some(found) = probe.clis.iter().find(|found| found.cli == cli)
         {
-            return found.clone();
+            return Some(found.clone());
         }
         if let Some((checked, found)) = self.single.lock().await.get(&cli)
             && checked.elapsed() < CACHE_TTL
         {
-            return found.clone();
+            return Some(found.clone());
         }
-        self.refresh_one(cli).await
+        None
     }
 
     /// A fresh probe of `cli` alone. Updates what [`Self::get`] and [`Self::list`] serve for it.
@@ -135,8 +155,12 @@ impl CliDetector {
         probe
     }
 
+    /// A fresh probe of the GitHub CLI, for `github/status`. Not cached.
+    pub async fn github(&self) -> GithubStatus {
+        probe_github(&self.launcher, self.timeout).await
+    }
+
     /// The launcher probes run through, whose environment agents' CLIs start from.
-    #[cfg(target_os = "linux")]
     pub(crate) fn launcher(&self) -> &Launcher {
         &self.launcher
     }
@@ -171,27 +195,22 @@ fn not_installed(cli: CliKind) -> DetectedCli {
 
 fn installed(cli: CliKind, path: &Path) -> DetectedCli {
     DetectedCli {
-        cli,
         installed: true,
         path: Some(path.display().to_string()),
-        version: None,
-        signed_in: None,
-        auth_kind: None,
-        plan: None,
-        note: None,
+        ..not_installed(cli)
     }
 }
 
 /// A spec for probing `program` in the user's home, which is absolute on every OS, unlike `/` on
-/// Windows (RYA-144), and which only they can write to. `/` if the home folder is unknown or
+/// Windows (PLX-144), and which only they can write to. `/` if the home folder is unknown or
 /// missing.
-fn probe_spec(program: &str) -> ProcessSpec {
+pub(crate) fn probe_spec(program: &str) -> ProcessSpec {
     let home = std::env::home_dir().filter(|home| home.is_absolute() && home.is_dir());
     ProcessSpec::new(program, home.unwrap_or_else(|| PathBuf::from("/")))
 }
 
 /// Runs `program args` in [`probe_spec`]'s folder, with `launcher`'s scrubbing, stdin closed, and
-/// no output beyond wispd's usual limits. Waits at most `timeout`; on a timeout, the process's
+/// no output beyond plxd's usual limits. Waits at most `timeout`; on a timeout, the process's
 /// group is killed (dropping it does that) and `Err` explains why.
 pub(crate) async fn run(
     launcher: &Launcher,
@@ -201,14 +220,16 @@ pub(crate) async fn run(
 ) -> Result<Ran, String> {
     let mut spec = probe_spec(program);
     spec.args = args.iter().map(|arg| (*arg).into()).collect();
-    run_spec(launcher, &spec, timeout).await
+    run_spec(launcher, &spec, b"", timeout).await
 }
 
 /// [`run`] for a caller that builds its own `spec`, such as one that scrubs more of the
-/// environment.
+/// environment. When `spec` pipes stdin, `input` is written to it and it's closed, within the
+/// timeout: the way to hand a process a secret, which `ps` would show in its arguments.
 pub(crate) async fn run_spec(
     launcher: &Launcher,
     spec: &ProcessSpec,
+    input: &[u8],
     timeout: Duration,
 ) -> Result<Ran, String> {
     let mut process = match launcher.spawn(spec) {
@@ -221,7 +242,12 @@ pub(crate) async fn run_spec(
     let mut stdout = String::new();
     let mut exit_code = None;
     let mut stderr_tail = String::new();
+    let stdin = process.take_stdin();
     let collected = tokio::time::timeout(timeout, async {
+        if let Some(mut stdin) = stdin {
+            // A process that exits without reading it all is still answered below.
+            let _ = stdin.write_all(input).await;
+        }
         while let Some(output) = process.next().await {
             match output {
                 Output::Line(bytes) => {
@@ -260,7 +286,7 @@ fn apply_json_status(detected: &mut DetectedCli, ran: &Ran) {
         fallback_from_exit_code(
             detected,
             ran.exit_code,
-            "output wispd could not parse as JSON",
+            "output plxd could not parse as JSON",
         );
         return;
     };
@@ -274,13 +300,13 @@ fn apply_json_status(detected: &mut DetectedCli, ran: &Ran) {
         .and_then(Value::as_str)
         .map(str::to_owned);
     if detected.signed_in == Some(true) {
-        detected.auth_kind = ["authType", "authKind", "loginType"]
-            .iter()
-            .find_map(|key| map.get(*key))
-            .and_then(Value::as_str)
-            .map_or(Some(AuthKind::Unknown), |value| {
-                Some(parse_auth_kind(value))
-            });
+        detected.auth_kind = Some(
+            ["authType", "authKind", "loginType"]
+                .iter()
+                .find_map(|key| map.get(*key))
+                .and_then(Value::as_str)
+                .map_or(AuthKind::Unknown, parse_auth_kind),
+        );
         detected.plan = ["subscriptionType", "plan", "tier"]
             .iter()
             .find_map(|key| map.get(*key))
@@ -390,8 +416,9 @@ async fn probe_codex(launcher: &Launcher, timeout: Duration) -> DetectedCli {
 }
 
 /// Asks a running `codex app-server` for the signed-in account's plan, over one NDJSON
-/// request/response on stdio. Best-effort: any failure, including a malformed reply, is `None`
-/// rather than an error, since a subscription's plan is metadata, not a fact wispd depends on.
+/// request/response on stdio after its `initialize` handshake, without which it answers "Not
+/// initialized" (checked with 0.160.0). Best-effort: any failure, including a malformed reply, is `None`
+/// rather than an error, since a subscription's plan is metadata, not a fact plxd depends on.
 /// The process is killed once this returns, whether or not it answered in time.
 async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<String> {
     let mut spec = probe_spec("codex");
@@ -401,10 +428,16 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
     let plan = tokio::time::timeout(timeout, async {
         let mut stdin = process.take_stdin()?;
         stdin
-            .write_all(br#"{"id":1,"method":"account/read","params":{}}"#)
+            .write_all(concat!(
+                r#"{"id":0,"method":"initialize","params":{"clientInfo":{"name":"plxd","version":"0"}}}"#,
+                "\n",
+                r#"{"method":"initialized"}"#,
+                "\n",
+                r#"{"id":1,"method":"account/read","params":{}}"#,
+                "\n",
+            ).as_bytes())
             .await
             .ok()?;
-        stdin.write_all(b"\n").await.ok()?;
         while let Some(output) = process.next().await {
             let Output::Line(bytes) = output else {
                 continue;
@@ -416,7 +449,7 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
                 continue;
             }
             return value
-                .pointer("/result/planType")
+                .pointer("/result/account/planType")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
         }
@@ -429,28 +462,104 @@ async fn probe_codex_plan(launcher: &Launcher, timeout: Duration) -> Option<Stri
     plan
 }
 
+/// Cursor's account, from the SDK sidecar (0053), not from `agent status`. The SDK reports an
+/// email and no subscription tier.
 async fn probe_cursor(launcher: &Launcher, timeout: Duration) -> DetectedCli {
-    let Some(path) = resolve(launcher, "agent") else {
-        return not_installed(CliKind::Cursor);
-    };
-    let mut detected = installed(CliKind::Cursor, &path);
-    match run(launcher, "agent", &["status", "--format", "json"], timeout).await {
-        Ok(ran) => apply_json_status(&mut detected, &ran),
-        Err(note) => detected.note = Some(note),
+    let report = crate::backend::cursor_sdk::inspect(launcher, "cursor", &[], timeout).await;
+    DetectedCli {
+        cli: CliKind::Cursor,
+        installed: report.installed,
+        path: report.path,
+        version: report.version,
+        signed_in: report.signed_in,
+        auth_kind: (report.signed_in == Some(true)).then_some(AuthKind::Subscription),
+        plan: None,
+        note: report.note,
     }
-    if detected.signed_in == Some(true)
-        && let Ok(ran) = run(launcher, "agent", &["about"], timeout).await
-    {
-        detected.plan = extract_subscription_tier(&ran.stdout).or(detected.plan);
-    }
-    detected
 }
 
-/// Reads a `Subscription Tier: <value>` line from `agent about`'s plain text (0004, undocumented).
-fn extract_subscription_tier(text: &str) -> Option<String> {
+/// Runs `gh --version` and `gh auth status --hostname github.com`, never with `--show-token`, so
+/// no token is printed, and with prompts off. `gh auth status` exits 0 when signed in and 1 when
+/// not. A `gh` in plxd's tools folder is `managed`. What [`crate::github`] is doing is left for it
+/// to fill in.
+async fn probe_github(launcher: &Launcher, timeout: Duration) -> GithubStatus {
+    let path = resolve(launcher, "gh");
+    let mut status = GithubStatus {
+        installed: path.is_some(),
+        version: None,
+        signed_in: None,
+        account: None,
+        note: None,
+        managed: path.is_some_and(|path| path.starts_with(launcher.data_dir().tools_dir())),
+        installing: false,
+        signing_in: None,
+        setup_note: None,
+        checked_at: Timestamp::now(),
+    };
+    if !status.installed {
+        return status;
+    }
+    let gh = |args: &[&str]| {
+        let mut spec = probe_spec("gh");
+        spec.args = args.iter().map(|arg| (*arg).into()).collect();
+        spec.inject.set("GH_PROMPT_DISABLED", "1");
+        spec
+    };
+    match run_spec(launcher, &gh(&["--version"]), b"", timeout).await {
+        Ok(ran) => status.version = gh_version(&ran.stdout),
+        Err(note) => status.note = Some(note),
+    }
+    // `--active` (gh 2.57.0 and later) checks only the active account, so a stale second one
+    // doesn't read as signed out. Older gh refuses the flag.
+    let parse = crate::backend::claude::parse_version;
+    let active = status
+        .version
+        .as_deref()
+        .is_some_and(|v| parse(v) >= parse("2.57.0"));
+    let mut args = vec!["auth", "status", "--hostname", "github.com"];
+    if active {
+        args.push("--active");
+    }
+    match run_spec(launcher, &gh(&args), b"", timeout).await {
+        Ok(ran) => {
+            status.signed_in = exit_code_signed_in(ran.exit_code);
+            if status.signed_in == Some(true) {
+                // Older gh prints the status to stderr.
+                status.account = gh_account(&ran.stdout).or_else(|| gh_account(&ran.stderr_tail));
+            } else if status.signed_in.is_none() {
+                status.note = Some(match ran.exit_code {
+                    Some(code) => format!("`gh auth status` exited with code {code}"),
+                    None => "`gh auth status` exited from a signal".to_owned(),
+                });
+            }
+        }
+        Err(note) => status.note = Some(note),
+    }
+    status
+}
+
+/// The version in `gh --version`'s first line, such as `2.100.0` in `gh version 2.100.0
+/// (2026-09-01)`.
+fn gh_version(stdout: &str) -> Option<String> {
+    let word = stdout
+        .lines()
+        .next()?
+        .strip_prefix("gh version ")?
+        .split_whitespace()
+        .next()?;
+    crate::backend::claude::parse_version(word).map(|_| word.to_owned())
+}
+
+/// The active account's login in `gh auth status`, which lists it first: `Logged in to github.com
+/// account octocat (keyring)`, or `Logged in to github.com as octocat (oauth_token)` before gh
+/// 2.40.
+fn gh_account(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
-        let tier = line.trim().strip_prefix("Subscription Tier:")?.trim();
-        (!tier.is_empty()).then(|| tier.to_owned())
+        let (_, rest) = line.split_once("Logged in to github.com ")?;
+        let rest = rest
+            .strip_prefix("account ")
+            .or_else(|| rest.strip_prefix("as "))?;
+        rest.split_whitespace().next().map(str::to_owned)
     })
 }
 
@@ -461,13 +570,13 @@ mod tests;
 mod windows_tests {
     use std::time::Duration;
 
-    use wisp_protocol::CliKind;
+    use parallax_protocol::CliKind;
 
     use super::CliDetector;
     use crate::backend::process::{Environment, Launcher};
     use crate::paths::DataDir;
 
-    /// A probe starts on Windows, where `/` isn't absolute (RYA-144): a fake `codex.cmd` that
+    /// A probe starts on Windows, where `/` isn't absolute (PLX-144): a fake `codex.cmd` that
     /// exits 0 to `codex login status` reads as signed in.
     #[tokio::test]
     async fn a_cmd_cli_is_probed() {

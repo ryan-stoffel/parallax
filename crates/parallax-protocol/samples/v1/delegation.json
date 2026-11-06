@@ -1,0 +1,95 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "task/delegate",
+    "params": {
+      "runId": "01a0f700-2b3c-7d4e-9f50-6a7b8c9d0e02",
+      "owner": "01a0f700-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "prompt": "Review the parser change.",
+      "title": "Parser review",
+      "account": { "kind": "subscription", "backend": "codex" },
+      "model": "gpt-5.5",
+      "effort": "high",
+      "permission": "edit",
+      "completionWake": "always"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "thread": {
+        "id": "01a0f700-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "parent": "01a0f700-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "title": "Parser review",
+        "createdAt": "2026-10-09T12:00:01Z"
+      },
+      "run": {
+        "id": "01a0f700-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "prompt": "Review the parser change.",
+        "policy": "workspaceWrite",
+        "status": "starting",
+        "backend": "codex",
+        "accountId": "codex",
+        "model": "gpt-5.5",
+        "effort": "high",
+        "permission": "edit",
+        "approvals": true,
+        "checkout": true,
+        "createdAt": "2026-10-09T12:00:01Z",
+        "updatedAt": "2026-10-09T12:00:01Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "task/status",
+    "params": {
+      "parent": "01a0f700-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "taskId": "01a0f700-2b3c-7d4e-9f50-6a7b8c9d0e02",
+      "acknowledge": true,
+      "completionWake": "settled_only",
+      "dispose": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "taskId": "01a0f700-2b3c-7d4e-9f50-6a7b8c9d0e02",
+      "parent": "01a0f700-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "completionWake": "settled_only",
+      "delivery": "disposed",
+      "run": {
+        "id": "01a0f700-2b3c-7d4e-9f50-6a7b8c9d0e02",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "prompt": "Review the parser change.",
+        "policy": "workspaceWrite",
+        "status": "completed",
+        "backend": "codex",
+        "accountId": "codex",
+        "checkout": true,
+        "createdAt": "2026-10-09T12:00:01Z",
+        "updatedAt": "2026-10-09T12:05:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "thread/mergeBack",
+    "params": {
+      "source": "01a0f700-2b3c-7d4e-9f50-6a7b8c9d0e02",
+      "target": "01a0f700-1a2b-7c3d-8e4f-5a6b7c8d9e01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": { "transferId": "01a0f700-3c4d-7e5f-8a61-7b8c9d0e1f03" }
+  }
+]

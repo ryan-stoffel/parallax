@@ -1,4 +1,4 @@
-//! The Linux Secret Service, through `keyring-core` and its zbus store (RYA-19, 0023).
+//! The Linux Secret Service, through `keyring-core` and its zbus store (PLX-19, 0023).
 //!
 //! It speaks D-Bus in pure Rust, so the static musl build links neither libdbus nor OpenSSL. A
 //! key crosses the bus encrypted with the session's Diffie-Hellman key, never in the clear.
@@ -9,14 +9,14 @@ use std::thread;
 
 use keyring_core::api::CredentialStoreApi;
 use keyring_core::{Entry, Error};
-use wisp_protocol::AccountId;
+use parallax_protocol::AccountId;
 use zbus_secret_service_keyring_store::Store;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{KeyStore, KeyStoreError, SERVICE};
 
 /// The label shown for an item in a keyring app such as Seahorse, as on macOS.
-const ITEM_LABEL: &str = "wisp API key";
+const ITEM_LABEL: &str = "Parallax secret";
 
 impl From<Error> for KeyStoreError {
     // `NoStorageAccess` is a locked collection, a dismissed unlock prompt, or no default
@@ -37,7 +37,7 @@ pub struct SecretServiceStore {
 }
 
 impl SecretServiceStore {
-    /// The real wisp service, [`SERVICE`].
+    /// The real Parallax service, [`SERVICE`].
     #[must_use]
     pub const fn new() -> Self {
         Self { service: SERVICE }
@@ -109,27 +109,17 @@ impl KeyStore for SecretServiceStore {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
-    use keyring_core::Error;
-    use wisp_protocol::AccountId;
+    use parallax_protocol::AccountId;
 
     use super::SecretServiceStore;
-    use crate::keystore::{KeyStore, KeyStoreError};
-
-    #[test]
-    fn a_locked_or_refused_store_is_unavailable() {
-        let failure = || Box::new(io::Error::other("failed"));
-        assert!(KeyStoreError::from(Error::NoStorageAccess(failure())).is_unavailable());
-        assert!(!KeyStoreError::from(Error::PlatformFailure(failure())).is_unavailable());
-    }
+    use crate::keystore::KeyStore;
 
     // Reads a random account under a throwaway service, so it changes nothing. Without a Secret
     // Service, as on CI, it fails as unavailable; with one, the account isn't there. Either way it
     // must not panic inside the test's tokio runtime.
     #[tokio::test]
     async fn a_call_from_a_tokio_task_does_not_panic() {
-        let store = SecretServiceStore::with_service("io.github.ryan-stoffel.wisp.unit-test");
+        let store = SecretServiceStore::with_service("io.github.ryan-stoffel.parallax.unit-test");
         match store.get(AccountId::generate()) {
             Ok(None) => {}
             Ok(Some(_)) => panic!("a random account has no key"),

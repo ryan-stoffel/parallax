@@ -1,0 +1,30 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "repo/grep",
+    "params": { "query": "todo", "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5ed" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "matches": [
+        { "path": "src/main.rs", "line": 12, "text": "// TODO: read the config once" },
+        { "path": "notes/todo.md", "line": 1, "text": "# Todo" }
+      ],
+      "truncated": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "repo/grep",
+    "params": { "query": "fn main", "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5ec" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": { "matches": [], "truncated": false }
+  }
+]

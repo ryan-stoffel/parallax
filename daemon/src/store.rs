@@ -1,47 +1,389 @@
 //! The project store, on a thread of its own, and the mapping between its rows and the
 //! protocol's types.
 //!
-//! SQLite calls block, so one thread owns [`wisp_store::Store`] and runs the jobs that requests
-//! send it, one at a time. Running them in order is also what keeps a snapshot consistent:
-//! `project/create` appends its event in the job that writes the row, and `project/list` reads the
-//! head `seq` in the job that reads the rows.
+//! SQLite calls block, so one thread owns [`parallax_store::Store`]'s write connection and runs
+//! the jobs that requests send it, one at a time. It is the only writer, of rows and events alike
+//! (0052). Each job runs in one `BEGIN IMMEDIATE` … `COMMIT` and gets a [`Tx`], which reads and
+//! writes rows and stages events: [`Tx::stage`] gives an event the next `seq` and inserts its row.
+//! After `COMMIT`, the thread publishes the staged events to the event log's in-memory window, in
+//! `seq` order, and then replies. A job that returns an error, fails to stage, or panics rolls
+//! back: nothing is published, and the `seq` counter goes back to where it was. So a row and its
+//! event are stored together or not at all, and subscribers never see an event that didn't commit.
+//!
+//! Lists and search run on a second handle, the daemon's `reader` (PLX-457): its own thread and a
+//! `query_only` connection, which WAL lets read while the writer writes, so a slow search never
+//! holds up a write. A list that clients subscribe after reads the event log's head before its
+//! rows ([`StoreHandle::snapshot`]). A write's event is published only after its rows commit, so a
+//! write the read misses has an event after that head, which `events/subscribe` replays. A write
+//! the read already saw can be replayed too; the app's reducers are upserts, so that's harmless.
 //!
 //! A job whose request is cancelled is skipped if it hasn't started. Once it has started, it runs
 //! to the end and the request gets its real result, so -32800 always means nothing was done.
 
+use std::collections::HashSet;
+use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AccountChoice, AccountId, ChosenIcon, ErrorKind, ImageMediaType, KeyAccount, Orchestrator,
+    OrchestratorAutonomy, OrchestratorCreateParams, OrchestratorPermission,
+    OrchestratorUpdateParams, ParallaxEvent, PromptImage, Provider, QueueStats, Role, RunId,
+    ScopeId, StoreState,
+};
+use parallax_store::{
+    AccountFields, OrchestratorEdit, OrchestratorFields, RoleDefault, Store, StoreError,
+    StoredEvent, StoredImage,
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
-    AccountChoice, AccountId, ErrorKind, KeyAccount, Project, ProjectCreateParams, ProjectIcon,
-    ProjectId, ProjectUpdateParams, Provider, Role, RunId, StoreState,
-};
-use wisp_store::{AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError};
 
+use crate::agents::convert::{option_name, option_value};
+use crate::event_log::{Entry, EventLog, kind_of, run_of};
 use crate::repo;
+
+/// How often, at most, the checkpointer syncs the writer's WAL into the database file.
+const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 
 const QUEUED: u8 = 0;
 const STARTED: u8 = 1;
 const CANCELLED: u8 = 2;
 
-type Job = Box<dyn FnOnce(&mut Store) + Send>;
+type Job = Box<dyn FnOnce(&mut Tx) + Send>;
+
+/// How long a test holds [`StoreHandle::vacuum`]'s job on the store's thread before it runs, so
+/// a write can arrive while it does.
+#[cfg(test)]
+pub(crate) static VACUUM_HOLD_MS: AtomicU64 = AtomicU64::new(0);
 
 enum Message {
-    Job(Job),
+    /// A job and when it was sent.
+    Job(Instant, Job),
     Stop,
+}
+
+/// Counts and times the jobs of a queue that one thread works through in order, for `host/health`
+/// (PLX-445). The store and its reader each keep one.
+#[derive(Default)]
+pub(crate) struct QueueCounters {
+    queued: AtomicU64,
+    jobs: AtomicU64,
+    max_wait: AtomicU64,
+    total_wait: AtomicU64,
+    max_run: AtomicU64,
+    total_run: AtomicU64,
+}
+
+impl QueueCounters {
+    /// Call before sending a job, so the thread can't start it before it is counted.
+    pub fn sending(&self) {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Call when sending a job failed, so it never runs.
+    pub fn unsent(&self) {
+        self.queued.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Runs a job the thread took off the queue, sent at `sent`, and records its wait and run time.
+    pub fn run<T>(&self, sent: Instant, job: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let wait = micros(started - sent);
+        self.queued.fetch_sub(1, Ordering::Relaxed);
+        self.jobs.fetch_add(1, Ordering::Relaxed);
+        self.max_wait.fetch_max(wait, Ordering::Relaxed);
+        self.total_wait.fetch_add(wait, Ordering::Relaxed);
+        let result = job();
+        let run = micros(started.elapsed());
+        self.max_run.fetch_max(run, Ordering::Relaxed);
+        self.total_run.fetch_add(run, Ordering::Relaxed);
+        result
+    }
+
+    /// The figures now. Each is read on its own, so they can be a job apart.
+    pub fn stats(&self) -> QueueStats {
+        QueueStats {
+            queued: self.queued.load(Ordering::Relaxed),
+            jobs: self.jobs.load(Ordering::Relaxed),
+            max_wait_micros: self.max_wait.load(Ordering::Relaxed),
+            total_wait_micros: self.total_wait.load(Ordering::Relaxed),
+            max_run_micros: self.max_run.load(Ordering::Relaxed),
+            total_run_micros: self.total_run.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
+/// What a store job works with: the connection, through `Deref`, and [`Tx::stage`] for events.
+/// Owned by the store's thread, which keeps it between jobs.
+pub(crate) struct Tx {
+    store: Store,
+    /// The event log, on the writer. `None` on the reader, which never stages or opens a
+    /// transaction.
+    log: Option<Arc<EventLog>>,
+    /// The newest `seq` staged, committed or not. Only this thread changes it.
+    seq: u64,
+    /// The `seq` before the open transaction, to go back to on rollback; `None` when none is open.
+    begun: Option<u64>,
+    staged: Vec<Entry>,
+    /// Whether staging failed, which rolls the job back however it ends.
+    failed: bool,
+    /// The dispatcher command this job commits, which tags the events it stages (0059).
+    pub command_id: Option<String>,
+    /// The threads whose stored events are in the graph ([`crate::graph::import`]), so a
+    /// staged event's fold checks memory rather than the table.
+    imported: HashSet<Uuid>,
+    /// Those this job imported, forgotten if it rolls back.
+    importing: Vec<Uuid>,
+    /// Set by a job that copies a fork's transcript: the runs it ends get no checkpoint (0062),
+    /// since the fork's worktree never held them. Cleared when the job ends.
+    pub copying: bool,
+    /// The writer's checkpointer, if it has one.
+    checkpoints: Option<Checkpointer>,
+    /// Whether this job has enqueued an effect, for the job to tell its caller, who wakes the
+    /// effect worker once it commits, as `agents::store` does. Cleared as each job starts.
+    pub effects: bool,
+}
+
+impl Deref for Tx {
+    type Target = Store;
+
+    fn deref(&self) -> &Store {
+        &self.store
+    }
+}
+
+impl DerefMut for Tx {
+    fn deref_mut(&mut self) -> &mut Store {
+        &mut self.store
+    }
+}
+
+impl Tx {
+    fn new(store: Store, log: Option<Arc<EventLog>>) -> Self {
+        let seq = log.as_ref().map_or(0, |log| log.head());
+        Self {
+            store,
+            log,
+            seq,
+            begun: None,
+            staged: Vec::new(),
+            failed: false,
+            command_id: None,
+            imported: HashSet::new(),
+            importing: Vec::new(),
+            copying: false,
+            checkpoints: None,
+            effects: false,
+        }
+    }
+
+    /// Stores `event` in this job's transaction with the next `seq`, and returns it. The event is
+    /// published once the job commits. If it can't be stored, the job rolls back and fails. It is
+    /// serialized once, here: the row, the in-memory window, and every subscriber's frame use
+    /// that JSON (0059).
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "callers build the event to stage it, and only its JSON is kept"
+    )]
+    pub fn stage(
+        &mut self,
+        time: Timestamp,
+        project: Option<ScopeId>,
+        event: ParallaxEvent,
+    ) -> u64 {
+        let Some(host_retention) = self.log.as_ref().map(|log| log.host_retention()) else {
+            error!("a job on the store's reader tried to stage an event");
+            self.failed = true;
+            return 0;
+        };
+        self.seq += 1;
+        let seq = self.seq;
+        let run_id = run_of(&event);
+        // The thread graph's fold, in this transaction (0059): an error rolls the job back.
+        let turn = match run_id {
+            Some(thread) => match self.fold(thread.into(), seq, time, project, &event) {
+                Ok(turn) => turn,
+                Err(error) => {
+                    error!(seq, %error, "could not fold an event into the thread graph; its job rolls back");
+                    self.failed = true;
+                    None
+                }
+            },
+            None => None,
+        };
+        let json = match serde_json::value::to_raw_value(&event) {
+            Ok(json) => json,
+            Err(error) => {
+                error!(seq, %error, "could not serialize an event; its job rolls back");
+                self.failed = true;
+                return seq;
+            }
+        };
+        let stored = StoredEvent {
+            seq,
+            time,
+            project_id: project.map(Uuid::from),
+            thread_id: run_id.map(Uuid::from),
+            kind: kind_of(json.get()).to_owned(),
+            payload: json.get().to_owned(),
+            command_id: self.command_id.clone(),
+            run_id: turn,
+        };
+        match self.store.append_event(&stored) {
+            Err(error) => {
+                error!(seq, %error, "could not store an event; its job rolls back");
+                self.failed = true;
+            }
+            // Only a host or project event can grow past the retention this way (#187). Pruning
+            // is housekeeping, so its failure doesn't fail the write.
+            Ok(()) if run_id.is_none() => {
+                if let Err(error) = self.store.prune_host_events(host_retention) {
+                    warn!(%error, "could not prune host and project events");
+                }
+            }
+            Ok(()) => {}
+        }
+        self.staged
+            .push(Entry::with_json(seq, time, project, &event, json));
+        seq
+    }
+
+    /// Folds `event`, thread `thread`'s, into the thread graph, importing the thread's stored
+    /// events first if they aren't yet, and enqueues a checkpoint capture for each run it ends
+    /// (0062). Returns the run it belongs to.
+    fn fold(
+        &mut self,
+        thread: Uuid,
+        seq: u64,
+        time: Timestamp,
+        project: Option<ScopeId>,
+        event: &ParallaxEvent,
+    ) -> Result<Option<Uuid>, StoreError> {
+        self.import_thread_rows(thread)?;
+        let folded = crate::graph::apply(&self.store, thread, seq, time, project, event)?;
+        if !self.copying {
+            for run in &folded.ended {
+                if let Some(ordinal) = run.ordinal {
+                    let effect = crate::dispatcher::capture_effect(thread, run.id, ordinal);
+                    self.store.enqueue_effect(&effect)?;
+                    self.effects = true;
+                }
+            }
+        }
+        Ok(folded.run)
+    }
+
+    /// Imports thread `thread`'s stored events into the graph, unless they are already.
+    fn import_thread_rows(&mut self, thread: Uuid) -> Result<(), StoreError> {
+        if self.imported.contains(&thread) {
+            return Ok(());
+        }
+        if !self.store.graph_imported(thread)? {
+            crate::graph::import(&self.store, thread)?;
+            self.store.mark_graph_imported(thread)?;
+        }
+        self.imported.insert(thread);
+        self.importing.push(thread);
+        Ok(())
+    }
+
+    /// [`Tx::import_thread_rows`] as a job of its own, for the background import and for a
+    /// subscription that reads the thread's graph next.
+    pub fn import_thread(&mut self, thread: Uuid) -> Result<(), ErrorObject> {
+        self.import_thread_rows(thread)
+            .map_err(|error| store_error(&error))
+    }
+
+    /// The newest `seq` this job staged, if it staged any.
+    pub fn last_staged(&self) -> Option<u64> {
+        self.staged.last().map(|entry| entry.seq)
+    }
+
+    /// Runs `job` in one transaction on the writer, and publishes what it staged once that
+    /// commits. On the reader it just runs `job`.
+    fn write<T>(
+        &mut self,
+        job: impl FnOnce(&mut Self) -> Result<T, ErrorObject>,
+    ) -> Result<T, ErrorObject> {
+        if self.log.is_none() {
+            return job(self);
+        }
+        if let Err(error) = self.store.begin() {
+            return Err(failed(&error));
+        }
+        self.begun = Some(self.seq);
+        self.effects = false;
+        let job = job(self);
+        self.copying = false;
+        let result = match job {
+            Ok(_) if self.failed => Err(ErrorObject::internal_error(
+                "the project store could not store an event",
+            )),
+            Ok(value) => match self.store.commit() {
+                Ok(()) => {
+                    if let Some(checkpoints) = &self.checkpoints {
+                        let _ = checkpoints.wake.try_send(());
+                    }
+                    self.begun = None;
+                    self.command_id = None;
+                    self.importing.clear();
+                    let staged = std::mem::take(&mut self.staged);
+                    if let Some(log) = &self.log {
+                        log.publish(staged);
+                    }
+                    return Ok(value);
+                }
+                Err(error) => Err(failed(&error)),
+            },
+            Err(error) => Err(error),
+        };
+        self.roll_back();
+        result
+    }
+
+    /// Rolls back a transaction a job left open, by an error or a panic: drops what it staged and
+    /// puts the `seq` counter back.
+    fn roll_back(&mut self) {
+        if let Some(seq) = self.begun.take() {
+            self.seq = seq;
+        }
+        self.staged.clear();
+        self.failed = false;
+        self.command_id = None;
+        self.effects = false;
+        for thread in self.importing.drain(..) {
+            self.imported.remove(&thread);
+        }
+        if let Err(error) = self.store.rollback() {
+            error!(%error, "could not roll back a store job");
+        }
+    }
+}
+
+fn failed(error: &StoreError) -> ErrorObject {
+    error!(%error, "the project store failed");
+    ErrorObject::internal_error(format!("the project store failed: {error}"))
 }
 
 pub(crate) struct StoreHandle {
     state: State,
+    counters: Arc<QueueCounters>,
+    /// The event log the writer stages into, which lives in memory only when the store is
+    /// unavailable.
+    log: Arc<EventLog>,
 }
 
 enum State {
@@ -53,41 +395,104 @@ enum State {
 }
 
 impl StoreHandle {
-    /// Opens the store at `path` and starts its thread. If it can't be opened, wispd keeps
-    /// running without it: `host/health` says so, and project methods fail.
-    pub fn open(path: &Path) -> Self {
-        let store = match Store::open(path) {
-            Ok(store) => store,
-            Err(error) => {
-                error!(path = %path.display(), %error, "could not open the project store");
-                return Self::unavailable();
+    /// Opens the store at `path`, loads its event log (see [`EventLog::load`] for the bounds), and
+    /// starts its thread. If it can't be opened, plxd keeps running without it: `host/health` says
+    /// so, project methods fail, and the event log runs in memory only, with a new `logId`.
+    pub fn open(path: &Path, retention: usize, max_bytes: usize, host_retention: usize) -> Self {
+        // Opening applies pending migrations first, which can take seconds on a large store:
+        // migration 36 indexes every message logged so far (PLX-487).
+        info!(path = %path.display(), "opening the project store and applying any migrations");
+        let started = Instant::now();
+        let store = Store::open(path);
+        info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "applied the project store's migrations"
+        );
+        let opened = store.and_then(|store| {
+            let log = EventLog::load(&store, path, retention, max_bytes, host_retention)?;
+            Ok((store, Arc::new(log)))
+        });
+        let memory = || Arc::new(EventLog::new_bounded(retention, max_bytes));
+        match opened {
+            Ok((store, log)) => {
+                let mut tx = Tx::new(store, Some(Arc::clone(&log)));
+                tx.checkpoints = checkpointer(path, &tx.store);
+                Self::start(path, tx, "plxd-store", log)
+                    .unwrap_or_else(|| Self::unavailable(memory()))
             }
-        };
-        let (jobs, queue) = mpsc::channel();
-        let spawned = thread::Builder::new()
-            .name("wispd-store".to_owned())
-            .spawn(move || run(store, &queue));
-        match spawned {
-            Ok(thread) => {
-                info!(path = %path.display(), "opened the project store");
-                Self {
-                    state: State::Open {
-                        jobs,
-                        thread: Mutex::new(Some(thread)),
-                    },
-                }
-            }
             Err(error) => {
-                error!(%error, "could not start the project store's thread");
-                Self::unavailable()
+                error!(path = %path.display(), %error, "could not open the project store; keeping events in memory only");
+                Self::unavailable(memory())
             }
         }
     }
 
-    fn unavailable() -> Self {
+    /// Opens a read-only connection to this store's file at `path`, on a thread of its own: the
+    /// daemon's `reader`, for lists, search, and other pure reads. Unavailable when this store is, so a database this
+    /// build can't migrate (a newer schema, say) is never read either.
+    // ponytail: one read thread, so reads queue behind each other; a pool if that shows up.
+    pub fn open_reader(&self, path: &Path) -> Self {
+        let log = Arc::clone(&self.log);
+        if self.state() != StoreState::Ok {
+            return Self::unavailable(log);
+        }
+        match Store::open_read_only(path) {
+            Ok(store) => Self::start(
+                path,
+                Tx::new(store, None),
+                "plxd-store-read",
+                Arc::clone(&log),
+            )
+            .unwrap_or_else(|| Self::unavailable(log)),
+            Err(error) => {
+                error!(path = %path.display(), %error, "could not open the project store's reader");
+                Self::unavailable(log)
+            }
+        }
+    }
+
+    fn start(path: &Path, tx: Tx, name: &str, log: Arc<EventLog>) -> Option<Self> {
+        let (jobs, queue) = mpsc::channel();
+        let counters = Arc::new(QueueCounters::default());
+        let thread_counters = Arc::clone(&counters);
+        let spawned = thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || run(tx, &queue, &thread_counters));
+        match spawned {
+            Ok(thread) => {
+                info!(path = %path.display(), name, "opened the project store");
+                Some(Self {
+                    state: State::Open {
+                        jobs,
+                        thread: Mutex::new(Some(thread)),
+                    },
+                    counters,
+                    log,
+                })
+            }
+            Err(error) => {
+                error!(%error, name, "could not start the project store's thread");
+                None
+            }
+        }
+    }
+
+    fn unavailable(log: Arc<EventLog>) -> Self {
         Self {
             state: State::Unavailable,
+            counters: Arc::default(),
+            log,
         }
+    }
+
+    /// The event log this store writes.
+    pub fn log(&self) -> Arc<EventLog> {
+        Arc::clone(&self.log)
+    }
+
+    /// The job queue's figures for `host/health`, all zero for a store that is unavailable.
+    pub fn queue_stats(&self) -> QueueStats {
+        self.counters.stats()
     }
 
     pub fn state(&self) -> StoreState {
@@ -106,23 +511,20 @@ impl StoreHandle {
         }
     }
 
-    /// Runs `job` on the store's thread and returns its result, or an error for a request that
-    /// was cancelled before the job started, or a store that is unavailable.
+    /// Runs `job` on the store's thread, in one transaction, and returns its result, or an error
+    /// for a request that was cancelled before the job started, or a store that is unavailable.
     pub async fn run<T: Send + 'static>(
         &self,
         cancel: &CancellationToken,
-        job: impl FnOnce(&mut Store) -> Result<T, ErrorObject> + Send + 'static,
+        job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
     ) -> Result<T, ErrorObject> {
-        let State::Open { jobs, .. } = &self.state else {
-            return Err(unavailable());
-        };
         let status = Arc::new(AtomicU8::new(QUEUED));
         let (reply, mut result) = oneshot::channel();
         let job_status = Arc::clone(&status);
         let job_cancel = cancel.clone();
         // The job checks the token itself too, so it is skipped even when the request's task
         // was aborted and nobody is waiting for it.
-        let job: Job = Box::new(move |store| {
+        let job: Job = Box::new(move |tx| {
             if job_cancel.is_cancelled() {
                 job_status.store(CANCELLED, Ordering::Release);
                 return;
@@ -131,10 +533,10 @@ impl StoreHandle {
                 .compare_exchange(QUEUED, STARTED, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
-                let _ = reply.send(job(store));
+                let _ = reply.send(tx.write(job));
             }
         });
-        jobs.send(Message::Job(job)).map_err(|_| unavailable())?;
+        self.send(job)?;
         let finished = tokio::select! {
             biased;
             finished = &mut result => finished,
@@ -154,6 +556,118 @@ impl StoreHandle {
         })
     }
 
+    /// Runs [`Store::vacuum`] on the store's thread, outside a transaction as `VACUUM` needs, so
+    /// writes queue behind it rather than fail on its lock.
+    pub async fn vacuum(&self) -> Result<bool, ErrorObject> {
+        let (reply, result) = oneshot::channel();
+        let job: Job = Box::new(move |tx| {
+            #[cfg(test)]
+            std::thread::sleep(Duration::from_millis(
+                VACUUM_HOLD_MS.load(Ordering::Relaxed),
+            ));
+            // A checkpoint in progress would make the vacuum's own fail at once, leaving the WAL.
+            let _paused = tx.checkpoints.as_ref().map(|checkpoints| {
+                checkpoints
+                    .running
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+            });
+            let _ = reply.send(tx.store.vacuum().map_err(|error| failed(&error)));
+        });
+        self.send(job)?;
+        result.await.unwrap_or_else(|_| Err(unavailable()))
+    }
+
+    /// Queues `job` on the store's thread, counted, or fails as unavailable.
+    fn send(&self, job: Job) -> Result<(), ErrorObject> {
+        let State::Open { jobs, .. } = &self.state else {
+            return Err(unavailable());
+        };
+        self.counters.sending();
+        if jobs.send(Message::Job(Instant::now(), job)).is_err() {
+            self.counters.unsent();
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
+    /// Stores and publishes one event in a job of its own, and returns its `seq`. With the store
+    /// unavailable, the event goes to the in-memory log. An event that can't be stored is logged
+    /// and dropped, and the head is returned. For tests: plxd's own events go in their rows' jobs.
+    #[cfg(test)]
+    pub async fn append(
+        &self,
+        time: Timestamp,
+        project: Option<ScopeId>,
+        event: ParallaxEvent,
+    ) -> u64 {
+        if matches!(self.state, State::Unavailable) {
+            return self.log.append_in_memory(time, project, event);
+        }
+        let appended = self
+            .run(&CancellationToken::new(), move |tx| {
+                Ok(tx.stage(time, project, event))
+            })
+            .await;
+        appended.unwrap_or_else(|error| {
+            warn!(error = %error.message, "could not append an event; it was dropped");
+            self.log.head()
+        })
+    }
+
+    /// Stores and publishes one event that has no row, in a job of its own, and returns its `seq`,
+    /// for a caller with no tokio runtime context: the shared-context `notify` watcher's callback
+    /// thread, and `context/write`'s blocking task. Blocks the calling thread until the job
+    /// finishes. With the store unavailable, the event goes to the in-memory log. An event that
+    /// can't be stored is logged and dropped, and the head is returned.
+    pub fn append_blocking(
+        &self,
+        time: Timestamp,
+        project: Option<ScopeId>,
+        event: ParallaxEvent,
+    ) -> u64 {
+        if matches!(self.state, State::Unavailable) {
+            return self.log.append_in_memory(time, project, event);
+        }
+        self.run_blocking(move |tx| Ok(tx.stage(time, project, event)))
+            .unwrap_or_else(|error| {
+                warn!(error = %error.message, "could not append an event; it was dropped");
+                self.log.head()
+            })
+    }
+
+    /// [`StoreHandle::run`] for a caller with no tokio runtime context, such as a blocking task.
+    /// Blocks the calling thread until the job finishes. It can't be cancelled.
+    pub fn run_blocking<T: Send + 'static>(
+        &self,
+        job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
+    ) -> Result<T, ErrorObject> {
+        let (reply, result) = oneshot::channel();
+        let job: Job = Box::new(move |tx| {
+            let _ = reply.send(tx.write(job));
+        });
+        self.send(job)?;
+        result
+            .blocking_recv()
+            .unwrap_or_else(|_| Err(unavailable()))
+    }
+
+    /// [`StoreHandle::run`] for a list that clients subscribe after: returns `job`'s rows with the
+    /// event log's head, read before the rows. A write that lands during the read then has its
+    /// event after that `seq`, so a subscriber replays it.
+    pub async fn snapshot<T: Send + 'static>(
+        &self,
+        cancel: &CancellationToken,
+        job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
+    ) -> Result<(T, u64), ErrorObject> {
+        let log = Arc::clone(&self.log);
+        self.run(cancel, move |store| {
+            let seq = log.head();
+            Ok((job(store)?, seq))
+        })
+        .await
+    }
+
     /// Stops the thread after the job it is running, and closes the database.
     pub async fn stop(&self) {
         let State::Open { jobs, thread } = &self.state else {
@@ -167,11 +681,59 @@ impl StoreHandle {
     }
 }
 
-fn run(mut store: Store, queue: &mpsc::Receiver<Message>) {
-    while let Ok(Message::Job(job)) = queue.recv() {
-        // A panicking job drops its reply, which fails only its own request.
-        if catch_unwind(AssertUnwindSafe(|| job(&mut store))).is_err() {
-            error!("a project store job panicked");
+fn run(mut tx: Tx, queue: &mpsc::Receiver<Message>, counters: &QueueCounters) {
+    while let Ok(Message::Job(sent, job)) = queue.recv() {
+        // A panicking job drops its reply, which fails only its own request, and rolls back.
+        let ran = counters.run(sent, || catch_unwind(AssertUnwindSafe(|| job(&mut tx))));
+        if ran.is_err() {
+            error!("a project store job panicked; rolling it back");
+            if tx.log.is_some() {
+                tx.roll_back();
+            }
+        }
+    }
+}
+
+/// What the writer keeps of its checkpointer thread.
+struct Checkpointer {
+    /// Wakes the thread after a commit.
+    wake: mpsc::SyncSender<()>,
+    /// Held while a checkpoint runs, so the vacuum can wait it out.
+    running: Arc<Mutex<()>>,
+}
+
+/// Starts the thread that checkpoints the writer's WAL on a connection of its own, and turns off
+/// the writer's own checkpoints. SQLite's automatic one runs inside the COMMIT that takes the WAL
+/// past 1000 pages and syncs the database file there, which held every queued write, and so every
+/// event's delivery, for up to 450 ms on CI's Linux runners (PLX-683). Returns `None`, leaving the
+/// writer's checkpoints on, if it can't start.
+fn checkpointer(path: &Path, writer: &Store) -> Option<Checkpointer> {
+    let store = Store::open_read_only(path)
+        .inspect_err(|error| warn!(%error, "could not open the project store's checkpointer"))
+        .ok()?;
+    let (wake, woken) = mpsc::sync_channel(1);
+    let running = Arc::new(Mutex::new(()));
+    let held = Arc::clone(&running);
+    thread::Builder::new()
+        .name("plxd-store-checkpoint".to_owned())
+        .spawn(move || checkpoints(&store, &woken, &held))
+        .inspect_err(|error| warn!(%error, "could not start the project store's checkpointer"))
+        .ok()?;
+    writer
+        .stop_auto_checkpoints()
+        .inspect_err(|error| warn!(%error, "could not move the project store's checkpoints"))
+        .ok()?;
+    Some(Checkpointer { wake, running })
+}
+
+/// Checkpoints [`CHECKPOINT_INTERVAL`] after a commit wakes it, so the commits in between share
+/// one sync. Ends when the writer's thread does.
+fn checkpoints(store: &Store, woken: &mpsc::Receiver<()>, running: &Mutex<()>) {
+    while woken.recv().is_ok() {
+        thread::sleep(CHECKPOINT_INTERVAL);
+        let _running = running.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(error) = store.checkpoint() {
+            warn!(%error, "could not checkpoint the project store's WAL");
         }
     }
 }
@@ -183,74 +745,134 @@ fn unavailable() -> ErrorObject {
 /// The protocol error for a store error.
 pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
     match error {
-        StoreError::IdConflict { id } => ErrorObject::wisp(
+        StoreError::IdConflict { id } => ErrorObject::parallax(
             ErrorKind::IdConflict,
-            format!("project {id} exists with a different name, repository, or icon"),
+            format!("orchestrator {id} exists with a different name, repository, or icon"),
         ),
-        StoreError::NotFound { id } => ErrorObject::wisp(
-            ErrorKind::ProjectNotFound,
-            format!("no project has id {id}"),
+        StoreError::NotFound { id } => ErrorObject::parallax(
+            ErrorKind::OrchestratorNotFound,
+            format!("no orchestrator has id {id}"),
         ),
-        other => {
-            error!(error = %other, "the project store failed");
-            ErrorObject::internal_error(format!("the project store failed: {other}"))
-        }
+        other => failed(other),
     }
 }
 
-/// The store's id and fields for a `project/create`.
-pub(crate) fn fields(params: ProjectCreateParams) -> (Uuid, ProjectFields) {
+/// The store's id and fields for a `orchestrator/create`.
+pub(crate) fn fields(params: OrchestratorCreateParams) -> (Uuid, OrchestratorFields) {
     (
         params.id.into(),
-        ProjectFields {
+        OrchestratorFields {
             name: params.name,
-            repo_path: params.repo_path,
+            // Empty is no repo, as absent is (0093).
+            repo_path: params.repo_path.filter(|path| !path.is_empty()),
             icon: params.icon.map(stored_icon),
+            permission: stored_permission(
+                params.permission.unwrap_or(OrchestratorPermission::Auto),
+            ),
+            autonomy: option_name(params.autonomy.unwrap_or(OrchestratorAutonomy::Routine))
+                .unwrap_or_default(),
+            base_branch: params.base_branch,
         },
     )
 }
 
-/// The store's id and edit for a `project/update` (RYA-227).
-pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
+/// The store's id and edit for a `orchestrator/update` (PLX-227).
+pub(crate) fn edit(params: OrchestratorUpdateParams) -> (Uuid, OrchestratorEdit) {
     (
-        params.project.into(),
-        ProjectEdit {
+        params.orchestrator.into(),
+        OrchestratorEdit {
             name: params.name,
             icon: params.icon.map(stored_icon),
+            permission: params.permission.map(stored_permission),
+            autonomy: params.autonomy.and_then(option_name),
+            base_branch: params.base_branch,
+            auto_land: params.auto_land,
+            max_children: params.max_children,
+            allow_api_keys: params.allow_api_keys,
+            checks: params.checks,
+            proposed_checks: params.proposed_checks,
+            computer: params.computer,
         },
     )
 }
 
-fn stored_icon(icon: ProjectIcon) -> wisp_store::ProjectIcon {
-    wisp_store::ProjectIcon {
+/// A project's permission mode as the `projects.permission` column keeps it (0042).
+fn stored_permission(permission: OrchestratorPermission) -> String {
+    option_name(permission).unwrap_or_default()
+}
+
+/// A stored permission mode as the protocol's, [`OrchestratorPermission::Unknown`] for one this
+/// build doesn't know.
+pub(crate) fn orchestrator_permission(stored: &str) -> OrchestratorPermission {
+    option_value(stored).unwrap_or(OrchestratorPermission::Unknown)
+}
+
+/// A stored autonomy level as the protocol's, [`OrchestratorAutonomy::Unknown`] for one this build
+/// doesn't know (0043).
+pub(crate) fn orchestrator_autonomy(stored: &str) -> OrchestratorAutonomy {
+    option_value(stored).unwrap_or(OrchestratorAutonomy::Unknown)
+}
+
+/// A protocol icon as the store keeps it, a project's or a repo entry's alike.
+pub(crate) fn stored_icon(icon: ChosenIcon) -> parallax_store::ChosenIcon {
+    parallax_store::ChosenIcon {
         name: icon.name,
         color: icon.color,
+        image: icon.image.map(|image| StoredImage {
+            media_type: option_name(image.media_type).unwrap_or_default(),
+            data: image.data,
+        }),
+    }
+}
+
+/// A stored icon as the protocol's, a project's or a repo entry's alike.
+pub(crate) fn protocol_icon(icon: parallax_store::ChosenIcon) -> ChosenIcon {
+    ChosenIcon {
+        name: icon.name,
+        color: icon.color,
+        image: icon.image.map(|image| PromptImage {
+            media_type: option_value(&image.media_type).unwrap_or(ImageMediaType::Unknown),
+            data: image.data,
+        }),
     }
 }
 
 /// A store row as the protocol's project, with the branch its repository has checked out now and
-/// its coordinator run, if it has one (0024).
+/// its orchestrator run, if it has one (0024).
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
-pub(crate) fn project(
-    row: wisp_store::Project,
-    coordinator: Option<RunId>,
-) -> Result<Project, ErrorObject> {
-    let id = ProjectId::try_from(row.id).map_err(|_| {
-        error!(id = %row.id, "a stored project's id is not a UUIDv7");
-        ErrorObject::internal_error(format!("the stored project {} has an invalid id", row.id))
+pub(crate) fn orchestrator(
+    row: parallax_store::Orchestrator,
+    orchestrator: Option<RunId>,
+) -> Result<Orchestrator, ErrorObject> {
+    let id = ScopeId::try_from(row.id).map_err(|_| {
+        error!(id = %row.id, "a stored orchestrator's id is not a UUIDv7");
+        ErrorObject::internal_error(format!(
+            "the stored orchestrator {} has an invalid id",
+            row.id
+        ))
     })?;
-    Ok(Project {
+    Ok(Orchestrator {
         id,
         name: row.name,
-        icon: row.icon.map(|icon| ProjectIcon {
-            name: icon.name,
-            color: icon.color,
-        }),
-        branch: repo::branch(Path::new(&row.repo_path)),
-        repo_path: row.repo_path,
-        coordinator,
+        icon: row.icon.map(protocol_icon),
+        permission: Some(orchestrator_permission(&row.permission)),
+        autonomy: Some(orchestrator_autonomy(&row.autonomy)),
+        branch: row
+            .repo_path
+            .as_deref()
+            .and_then(|path| repo::branch(Path::new(path))),
+        repo_path: row.repo_path.unwrap_or_default(),
+        run: orchestrator,
+        base_branch: row.base_branch,
+        integration_branch: row.integration_branch,
+        auto_land: row.auto_land,
+        max_children: Some(row.max_children),
+        allow_api_keys: Some(row.allow_api_keys),
+        checks: row.checks,
+        proposed_checks: row.proposed_checks,
+        computer: row.computer,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -258,22 +880,19 @@ pub(crate) fn project(
 
 /// The protocol error for an accounts-table store error.
 ///
-/// Unlike [`store_error`], a missing row is `accountNotFound`, not `projectNotFound`: the two
+/// Unlike [`store_error`], a missing row is `accountNotFound`, not `orchestratorNotFound`: the two
 /// tables share [`StoreError`], but not its meaning.
 pub(crate) fn account_store_error(error: &StoreError) -> ErrorObject {
     match error {
-        StoreError::IdConflict { id } => ErrorObject::wisp(
+        StoreError::IdConflict { id } => ErrorObject::parallax(
             ErrorKind::IdConflict,
             format!("key account {id} exists with a different provider, label, or key"),
         ),
-        StoreError::NotFound { id } => ErrorObject::wisp(
+        StoreError::NotFound { id } => ErrorObject::parallax(
             ErrorKind::AccountNotFound,
             format!("no key account has id {id}"),
         ),
-        other => {
-            error!(error = %other, "the project store failed");
-            ErrorObject::internal_error(format!("the project store failed: {other}"))
-        }
+        other => failed(other),
     }
 }
 
@@ -315,14 +934,14 @@ pub(crate) fn account_fields(
 /// `role`'s text for the `role_defaults.role` column.
 pub(crate) fn role_text(role: Role) -> &'static str {
     match role {
-        Role::Coordinator => "coordinator",
+        Role::Orchestrator => "orchestrator",
         Role::Worker => "worker",
     }
 }
 
 /// A stored [`RoleDefault`] as the protocol's [`AccountChoice`].
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
 pub(crate) fn account_choice(default: RoleDefault) -> Result<AccountChoice, ErrorObject> {
     match default {
@@ -339,9 +958,9 @@ pub(crate) fn account_choice(default: RoleDefault) -> Result<AccountChoice, Erro
     }
 }
 
-/// Vendor CLIs wispd ships or plans an adapter for (0004), ahead of #170's real detection of which
+/// Vendor CLIs plxd ships or plans an adapter for (0004), ahead of #170's real detection of which
 /// are actually installed and signed in (#114). `role_default` checks a `Subscription` choice's
-/// backend name against this fixed list; #170 replaces it with something wispd has actually
+/// backend name against this fixed list; #170 replaces it with something plxd has actually
 /// probed.
 const KNOWN_BACKENDS: &[&str] = &["claude", "codex", "cursor"];
 
@@ -355,12 +974,12 @@ const KNOWN_BACKENDS: &[&str] = &["claude", "codex", "cursor"];
 /// `invalidParams`, naming the missing account or backend, or an internal error if the check
 /// itself fails.
 pub(crate) fn role_default(
-    db_store: &wisp_store::Store,
+    db_store: &parallax_store::Store,
     choice: &AccountChoice,
 ) -> Result<RoleDefault, ErrorObject> {
     match choice {
         AccountChoice::Subscription { backend } => {
-            // The app's end-to-end tests make the fake backend the default (RYA-16).
+            // The app's end-to-end tests make the fake backend the default (PLX-16).
             let fake = cfg!(feature = "fake-backend") && backend == "fake";
             if fake || KNOWN_BACKENDS.contains(&backend.as_str()) {
                 Ok(RoleDefault::Subscription {
@@ -368,7 +987,7 @@ pub(crate) fn role_default(
                 })
             } else {
                 Err(ErrorObject::invalid_params(format!(
-                    "{backend:?} is not a backend wispd knows"
+                    "{backend:?} is not a backend plxd knows"
                 )))
             }
         }
@@ -397,9 +1016,9 @@ pub(crate) fn role_default(
 
 /// A store row as the protocol's key account.
 ///
-/// wispd writes only version 7 ids, so a row with another kind of id was written by something
+/// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
-pub(crate) fn key_account(row: wisp_store::Account) -> Result<KeyAccount, ErrorObject> {
+pub(crate) fn key_account(row: parallax_store::Account) -> Result<KeyAccount, ErrorObject> {
     let id = AccountId::try_from(row.id).map_err(|_| {
         error!(id = %row.id, "a stored key account's id is not a UUIDv7");
         ErrorObject::internal_error(format!(
@@ -418,209 +1037,174 @@ pub(crate) fn key_account(row: wisp_store::Account) -> Result<KeyAccount, ErrorO
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use parallax_protocol::jsonrpc::ErrorObject;
+
+    use jiff::Timestamp;
+    use parallax_protocol::jsonrpc::INTERNAL_ERROR;
+    use parallax_protocol::{OrchestratorCreateParams, ParallaxEvent, ScopeId, StoreState};
 
     use tokio_util::sync::CancellationToken;
-    use uuid::Uuid;
-    use wisp_protocol::jsonrpc::{INTERNAL_ERROR, REQUEST_CANCELLED, WISP_ERROR};
-    use wisp_protocol::{
-        AccountId, ErrorKind, ProjectCreateParams, ProjectIcon, ProjectId, ProjectUpdateParams,
-        Provider, StoreState,
-    };
-    use wisp_store::StoreError;
 
-    use super::{
-        StoreHandle, account_fields, account_store_error, edit, fields, key_account, project,
-        store_error,
-    };
+    use super::{StoreHandle, fields, store_error};
 
-    fn row(id: Uuid) -> wisp_store::Project {
-        wisp_store::Project {
-            id,
-            name: "wisp".to_owned(),
-            repo_path: "/src/wisp".to_owned(),
-            icon: Some(wisp_store::ProjectIcon {
-                name: "rocket".to_owned(),
-                color: Some("green".to_owned()),
-            }),
-            created_at: "2026-09-24T12:00:00.5Z".parse().unwrap(),
-            updated_at: "2026-09-24T12:00:01Z".parse().unwrap(),
-        }
+    fn open(path: &std::path::Path) -> StoreHandle {
+        StoreHandle::open(path, 10, usize::MAX, usize::MAX)
     }
 
-    #[test]
-    fn rows_map_to_protocol_projects_field_for_field() {
-        let id = ProjectId::generate();
-        let mapped = project(row(id.into()), None).unwrap();
-        assert_eq!(mapped.id, id);
-        assert_eq!(mapped.name, "wisp");
-        assert_eq!(mapped.repo_path, "/src/wisp");
-        assert_eq!(
-            mapped.icon,
-            Some(ProjectIcon {
-                name: "rocket".to_owned(),
-                color: Some("green".to_owned()),
-            })
-        );
-        assert_eq!(mapped.created_at, row(id.into()).created_at);
-        assert_eq!(mapped.updated_at, row(id.into()).updated_at);
-
-        let icon = ProjectIcon {
-            name: "star".to_owned(),
-            color: None,
-        };
-        let params = ProjectCreateParams {
-            id,
+    fn new_orchestrator() -> OrchestratorCreateParams {
+        OrchestratorCreateParams {
+            id: ScopeId::generate(),
             name: "n".to_owned(),
-            repo_path: "/r".to_owned(),
-            icon: Some(icon.clone()),
-        };
-        let (uuid, fields) = fields(params);
-        assert_eq!(uuid, Uuid::from(id));
-        assert_eq!(
-            (fields.name.as_str(), fields.repo_path.as_str()),
-            ("n", "/r")
-        );
-        let stored = wisp_store::ProjectIcon {
-            name: "star".to_owned(),
-            color: None,
-        };
-        assert_eq!(fields.icon.as_ref(), Some(&stored));
-
-        let (uuid, edit) = edit(ProjectUpdateParams {
-            project: id,
-            name: None,
-            icon: Some(icon),
-        });
-        assert_eq!(uuid, Uuid::from(id));
-        assert_eq!(edit.name, None);
-        assert_eq!(edit.icon, Some(stored));
-    }
-
-    #[test]
-    fn a_row_whose_id_is_not_v7_is_an_internal_error() {
-        let error = project(row(Uuid::nil()), None).unwrap_err();
-        assert_eq!(error.code, INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn conflicts_and_missing_projects_are_wisp_errors() {
-        let id = Uuid::now_v7();
-        let conflict = store_error(&StoreError::IdConflict { id });
-        assert_eq!(conflict.code, WISP_ERROR);
-        assert_eq!(conflict.wisp_data().unwrap().kind, ErrorKind::IdConflict);
-        let missing = store_error(&StoreError::NotFound { id });
-        assert_eq!(
-            missing.wisp_data().unwrap().kind,
-            ErrorKind::ProjectNotFound
-        );
-        let other = store_error(&StoreError::JournalMode("delete".to_owned()));
-        assert_eq!(other.code, INTERNAL_ERROR);
-    }
-
-    fn account_row(id: Uuid) -> wisp_store::Account {
-        wisp_store::Account {
-            id,
-            provider: "anthropic".to_owned(),
-            label: "Personal".to_owned(),
-            masked_key: "sk-ant-...abcd".to_owned(),
-            created_at: "2026-09-24T12:00:00.5Z".parse().unwrap(),
+            repo_path: Some("/r".to_owned()),
+            icon: None,
+            permission: None,
+            autonomy: None,
+            base_branch: None,
         }
     }
 
-    #[test]
-    fn account_rows_map_to_protocol_key_accounts_field_for_field() {
-        let id = AccountId::generate();
-        let mapped = key_account(account_row(id.into())).unwrap();
-        assert_eq!(mapped.id, id);
-        assert_eq!(mapped.provider, Provider::Anthropic);
-        assert_eq!(mapped.label, "Personal");
-        assert_eq!(mapped.masked_key, "sk-ant-...abcd");
-        assert_eq!(mapped.created_at, account_row(id.into()).created_at);
-
-        let fields = account_fields(
-            Provider::Openai,
-            "Work".to_owned(),
-            "sk-proj-...wxyz".to_owned(),
-        );
-        assert_eq!(fields.provider, "openai");
-        assert_eq!(fields.label, "Work");
-        assert_eq!(fields.masked_key, "sk-proj-...wxyz");
+    /// How many projects the database has, and its events' `seq`s, read on a connection of their
+    /// own.
+    fn stored(path: &std::path::Path) -> (i64, Vec<i64>) {
+        let raw = rusqlite::Connection::open(path).unwrap();
+        let projects = raw
+            .query_row("SELECT COUNT(*) FROM orchestrators", [], |row| row.get(0))
+            .unwrap();
+        let seqs = raw
+            .prepare("SELECT seq FROM events ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        (projects, seqs)
     }
 
-    #[test]
-    fn an_account_row_whose_id_is_not_v7_is_an_internal_error() {
-        let error = key_account(account_row(Uuid::nil())).unwrap_err();
-        assert_eq!(error.code, INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn an_unrecognized_stored_provider_decodes_as_unknown() {
-        let mut row = account_row(Uuid::now_v7());
-        row.provider = "gemini".to_owned();
-        let mapped = key_account(row).unwrap();
-        assert_eq!(mapped.provider, Provider::Unknown);
-    }
-
-    #[test]
-    fn missing_accounts_are_account_not_found_not_project_not_found() {
-        let id = Uuid::now_v7();
-        let conflict = account_store_error(&StoreError::IdConflict { id });
-        assert_eq!(conflict.wisp_data().unwrap().kind, ErrorKind::IdConflict);
-        let missing = account_store_error(&StoreError::NotFound { id });
-        assert_eq!(
-            missing.wisp_data().unwrap().kind,
-            ErrorKind::AccountNotFound
-        );
-    }
-
+    /// A job writes a row and stages its event in one transaction (0052): one that fails after
+    /// staging, or panics between the row and the event, as a crash would cut it, leaves neither
+    /// row nor event, publishes nothing, and gives the next event the `seq` it would have had.
     #[tokio::test]
-    async fn a_store_that_cannot_open_is_unavailable() {
+    async fn a_job_that_fails_or_panics_leaves_neither_its_row_nor_its_event() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("file");
-        std::fs::write(&file, "").unwrap();
-        let store = StoreHandle::open(&file.join("nested.sqlite3"));
+        let path = dir.path().join("plxd.sqlite3");
+        let store = open(&path);
+        let log = store.log();
+        let cancel = CancellationToken::new();
+        let watch = log.watch();
+
+        let failed = store
+            .run(&cancel, |db| {
+                let (id, fields) = fields(new_orchestrator());
+                db.create_orchestrator(id, &fields)
+                    .map_err(|error| store_error(&error))?;
+                db.stage(Timestamp::now(), None, ParallaxEvent::Unknown);
+                Err::<(), _>(ErrorObject::internal_error("injected"))
+            })
+            .await;
+        assert_eq!(failed.unwrap_err().message, "Internal error: injected");
+        let panicked = store
+            .run(&cancel, |db| {
+                let (id, fields) = fields(new_orchestrator());
+                db.create_orchestrator(id, &fields)
+                    .map_err(|error| store_error(&error))?;
+                assert!(id.is_nil(), "injected between the row and its event");
+                Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
+            })
+            .await;
+        assert_eq!(panicked.unwrap_err().code, INTERNAL_ERROR);
+        assert_eq!(stored(&path), (0, vec![]), "neither the rows nor the event");
+        assert_eq!(log.head(), 0, "nothing was published");
+        assert!(!watch.has_changed().unwrap());
+
+        let seq = store
+            .run(&cancel, |db| {
+                let (id, fields) = fields(new_orchestrator());
+                db.create_orchestrator(id, &fields)
+                    .map_err(|error| store_error(&error))?;
+                Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
+            })
+            .await
+            .unwrap();
+        assert_eq!(seq, 1, "the rolled-back event gave its seq back");
+        assert_eq!(stored(&path), (1, vec![1]));
+        assert_eq!(log.head(), 1);
+        assert!(watch.has_changed().unwrap());
+        store.stop().await;
+    }
+
+    /// A project written while a snapshot on the reader is reading: the snapshot's `seq` is from
+    /// before the write's event, so a subscriber after it replays the event, even though the rows
+    /// already have the project (PLX-457).
+    #[tokio::test]
+    async fn a_write_during_a_snapshot_has_its_event_after_the_snapshots_seq() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let store = open(&path);
+        let reader = store.open_reader(&path);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let cancel = CancellationToken::new();
+        let snapshot = reader.snapshot(&cancel, move |db| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            db.list_orchestrators().map_err(|error| store_error(&error))
+        });
+        let write = async {
+            tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+                .await
+                .unwrap();
+            let seq = store
+                .run(&cancel, move |db| {
+                    let (id, fields) = fields(new_orchestrator());
+                    db.create_orchestrator(id, &fields)
+                        .map_err(|error| store_error(&error))?;
+                    Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
+                })
+                .await
+                .unwrap();
+            release_tx.send(()).unwrap();
+            seq
+        };
+        let (snapshot, written) = tokio::join!(snapshot, write);
+        let (projects, seq) = snapshot.unwrap();
+        assert_eq!(projects.len(), 1, "the read sees the committed row");
+        assert!(
+            written > seq,
+            "event {written} replays after snapshot {seq}"
+        );
+        store.stop().await;
+        reader.stop().await;
+    }
+
+    /// A database from a newer build: the writer won't open it, so the reader doesn't either and
+    /// lists fail as unavailable instead of reading a schema this build doesn't know.
+    #[tokio::test]
+    async fn the_reader_is_unavailable_when_the_writer_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let first = open(&path);
+        first.stop().await;
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (1000000, 'now')",
+                [],
+            )
+            .unwrap();
+
+        let store = open(&path);
+        let reader = store.open_reader(&path);
         assert_eq!(store.state(), StoreState::Unavailable);
-        let error = store
-            .run(&CancellationToken::new(), |_| Ok(()))
+        assert_eq!(reader.state(), StoreState::Unavailable);
+        let error = reader
+            .run(&CancellationToken::new(), |db| {
+                db.list_orchestrators().map_err(|error| store_error(&error))
+            })
             .await
             .unwrap_err();
-        assert_eq!(error.code, INTERNAL_ERROR);
         assert_eq!(
             error.message,
             "Internal error: the project store is unavailable"
         );
-    }
-
-    #[tokio::test]
-    async fn a_queued_job_is_skipped_when_cancelled_and_a_started_one_finishes() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = StoreHandle::open(&dir.path().join("wispd.sqlite3"));
-        assert_eq!(store.state(), StoreState::Ok);
-
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let first_cancel = CancellationToken::new();
-        let second_cancel = CancellationToken::new();
-        let first = store.run(&first_cancel, move |_| {
-            started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            Ok("first")
-        });
-        let second = store.run(&second_cancel, |_| Ok("second"));
-        let driver = async {
-            tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
-                .await
-                .unwrap();
-            first_cancel.cancel();
-            second_cancel.cancel();
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            release_tx.send(()).unwrap();
-        };
-        let (first, second, ()) = tokio::join!(first, second, driver);
-        assert_eq!(first, Ok("first"), "a started job returns its result");
-        assert_eq!(second.unwrap_err().code, REQUEST_CANCELLED);
-        store.stop().await;
-        assert_eq!(store.state(), StoreState::Unavailable);
     }
 }

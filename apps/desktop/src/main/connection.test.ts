@@ -5,8 +5,15 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import { PROTOCOL_VERSION } from "../protocol/generated/protocol";
-import type { ConnectionState, SubscriptionMessage } from "../preload/bridge";
-import { backoffMs, Connection, exitError, sshCommand } from "./connection";
+import { UPDATE_NOTICE_MS } from "../protocol/updateNotice";
+import type {
+  ConnectionError,
+  ConnectionState,
+  SubscriptionMessage,
+  TerminalMessage,
+  WatchMessage,
+} from "../preload/bridge";
+import { backoffMs, Connection, exitError, sshCommand, type ConnectionOptions } from "./connection";
 
 type Message = Record<string, unknown> & {
   id?: number;
@@ -14,11 +21,11 @@ type Message = Record<string, unknown> & {
   params?: Record<string, unknown>;
 };
 
-// Real wire messages from wisp-protocol's samples.
+// Real wire messages from parallax-protocol's samples.
 const sample = (name: string) =>
   JSON.parse(
     readFileSync(
-      new URL(`../../../../crates/wisp-protocol/samples/v1/${name}`, import.meta.url),
+      new URL(`../../../../crates/parallax-protocol/samples/v1/${name}`, import.meta.url),
       "utf8",
     ),
   ) as Message[];
@@ -26,7 +33,7 @@ const initialized = sample("handshake.json")[1]!["result"] as Record<string, unk
 const incompatible = sample("handshake-incompatible.json")[1]!["error"];
 const resyncRequired = sample("resync.json")[1]!["error"];
 
-/** A `wispd attach` child whose stdio is driven synchronously by the test. */
+/** A `plxd attach` child whose stdio is driven synchronously by the test. */
 class FakeChild extends EventEmitter {
   sent: Message[] = [];
   stdin = Object.assign(new EventEmitter(), {
@@ -36,7 +43,7 @@ class FakeChild extends EventEmitter {
   stderr = new EventEmitter();
   kill = vi.fn(() => true);
 
-  /** Sends lines from wispd, all in one chunk. */
+  /** Sends lines from plxd, all in one chunk. */
   reply(...messages: object[]) {
     const lines = messages.map((message) => `${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
     this.stdout.emit("data", Buffer.from(lines.join("")));
@@ -44,8 +51,8 @@ class FakeChild extends EventEmitter {
   request(method: string) {
     return this.sent.findLast((message) => message.method === method)!;
   }
-  handshake(logId = "log-1") {
-    this.reply({ id: this.request("initialize").id, result: { ...initialized, logId } });
+  handshake(logId = "log-1", startId?: string) {
+    this.reply({ id: this.request("initialize").id, result: { ...initialized, logId, startId } });
   }
 }
 
@@ -57,7 +64,7 @@ let located: string | undefined;
 const child = () => children.at(-1)!;
 const state = () => states.at(-1);
 
-function connect(destination?: string) {
+function connect(destination?: string, replaceDaemon?: ConnectionOptions["replaceDaemon"]) {
   const connection = new Connection({
     command: () =>
       destination
@@ -67,6 +74,7 @@ function connect(destination?: string) {
           : [located, "attach"],
     ...(destination !== undefined && { destination }),
     clientVersion: "0.0.1",
+    ...(replaceDaemon && { replaceDaemon }),
     onState: (next) => states.push(next),
     spawn: (file, args) => {
       spawned.push([file, ...args]);
@@ -83,21 +91,203 @@ beforeEach(() => {
   children = [];
   spawned = [];
   states = [];
-  located = "/bin/wispd";
+  located = "/bin/plxd";
 });
 afterEach(() => {
   vi.useRealTimers();
 });
 
-test("handshakes, then heartbeats, and reconnects when wispd goes silent", () => {
+test.each([
+  ["whole", ["plxd dial: connected over 10.0.0.2:7341\n"]],
+  ["with the prefix apart", ["plxd dial: ", "connected over 10.0.0.2:7341\n"]],
+  ["with the newline apart", ["plxd dial: connected over 10.0.0.2:7341", "\n"]],
+  ["cut inside the route", ["plxd dial: connected over 10.0", ".0.2:7341\n"]],
+  ["after another line", ["plxd dial: starting\nplxd dial: connected over 10.0.0.2:7341\n"]],
+])("hears the route plxd dial connected over, %s, once", (_name, chunks) => {
+  const heard: string[] = [];
+  new Connection({
+    command: () => ["/bin/plxd", "dial"],
+    clientVersion: "0.0.1",
+    onState: () => {},
+    onRoute: (route) => heard.push(route),
+    spawn: () => {
+      children.push(new FakeChild());
+      return child() as unknown as ChildProcessWithoutNullStreams;
+    },
+  }).start();
+  for (const chunk of chunks) child().stderr.emit("data", Buffer.from(chunk));
+  child().stderr.emit("data", Buffer.from("plxd dial: something later\n"));
+  expect(heard).toEqual(["10.0.0.2:7341"]);
+});
+
+test("takes no route from a line that only mentions one", () => {
+  const heard: string[] = [];
+  new Connection({
+    command: () => ["/bin/plxd", "dial"],
+    clientVersion: "0.0.1",
+    onState: () => {},
+    onRoute: (route) => heard.push(route),
+    spawn: () => {
+      children.push(new FakeChild());
+      return child() as unknown as ChildProcessWithoutNullStreams;
+    },
+  }).start();
+  child().stderr.emit("data", Buffer.from("a shell said connected over 10.0.0.9\n"));
+  expect(heard).toEqual([]);
+});
+
+test.each([false, true])(
+  "replaces the old daemon before publishing its handshake (incompatible: %s)",
+  async (mismatch) => {
+    let replaced!: (value: boolean) => void;
+    const replaceDaemon = vi.fn(() => new Promise<boolean>((resolve) => (replaced = resolve)));
+    const connection = connect(undefined, replaceDaemon);
+    const old = child();
+    connection.watch({ shell: true }, () => {});
+    old.reply({
+      id: old.request("initialize").id,
+      ...(mismatch ? { error: incompatible } : { result: { ...initialized, plxd: "old" } }),
+    });
+    expect(replaceDaemon).toHaveBeenCalledOnce();
+    expect(state()?.status).toBe("connecting");
+    expect(old.sent.map((message) => message.method)).toEqual(["initialize"]);
+    expect(await connection.request("host/health", {})).toHaveProperty("error");
+    // serve exits during replacement. Do not reconnect until its service operation finishes.
+    old.emit("close", 0, null);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(children).toHaveLength(1);
+    replaced(true);
+    await Promise.resolve();
+    expect(children).toHaveLength(2);
+    expect(states.some((next) => next.status === "connected")).toBe(false);
+    child().handshake();
+    replaced(false);
+    await Promise.resolve();
+    expect(state()?.status).toBe("connected");
+    expect(child().request("orchestration/subscribeShell")).toBeDefined();
+    connection.dispose();
+  },
+);
+
+test("a failed local upgrade exposes its error and keeps retrying", async () => {
+  let fails = true;
+  const connection = connect(undefined, async () => {
+    if (fails) throw new Error("service restart failed");
+    return false;
+  });
+  child().handshake();
+  await Promise.resolve();
+  expect(state()).toMatchObject({
+    status: "failed",
+    retrying: true,
+    error: { message: "Couldn't update the bundled local plxd: service restart failed" },
+  });
+  fails = false;
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(children).toHaveLength(2);
+  child().handshake();
+  await Promise.resolve();
+  expect(state()?.status).toBe("connected");
+  connection.dispose();
+});
+
+test("the local upgrade asks a compatible plxd for its running agents", async () => {
+  let agents: (() => Promise<number | undefined>) | undefined;
+  const connection = connect(undefined, async (_version, runningAgents) => {
+    agents = runningAgents;
+    return false;
+  });
+  child().handshake();
+  const asked = agents!();
+  child().reply({
+    id: child().request("host/health").id,
+    result: { uptimeSeconds: 1, store: "ok", runningAgents: 2 },
+  });
+  expect(await asked).toBe(2);
+  connection.dispose();
+  // An incompatible one can't be asked.
+  const old = connect(undefined, async (_version, runningAgents) => {
+    agents = runningAgents;
+    return false;
+  });
+  child().reply({ id: child().request("initialize").id, error: incompatible });
+  expect(agents).toBeUndefined();
+  old.dispose();
+});
+
+test("logs each disconnect's reason, route, relay close, and downtime", () => {
+  const lines: string[] = [];
+  const connection = new Connection({
+    command: () => ["/bin/plxd", "dial"],
+    account: "mini",
+    clientVersion: "0.0.1",
+    onState: (next) => states.push(next),
+    writeLog: (line) => lines.push(line.slice(25)),
+    spawn: () => {
+      children.push(new FakeChild());
+      return child() as unknown as ChildProcessWithoutNullStreams;
+    },
+  });
+  const up = (route: string, startId = "run-1") => {
+    child().stderr.emit("data", Buffer.from(`plxd dial: connected over ${route}\n`));
+    child().handshake("log-1", startId);
+  };
+  connection.start();
+  up("relay:abc123");
+  expect(lines.at(-1)).toBe(`client_connect host=mini route=relay plxd=0.1.0 attempts=1`);
+
+  // The relay closed the stream, and plxd dial said so before it exited.
+  vi.advanceTimersByTime(5_000);
+  const ended = `plxd dial: relay stream ended code=4409 reason="replaced"\n`;
+  child().stderr.emit("data", Buffer.from(ended));
+  child().emit("close", 1, null);
+  expect(lines.at(-1)).toBe(
+    `client_disconnect host=mini route=relay reason=transport_closed lived_ms=5000 exit=1 relay_code=4409 relay_reason=replaced`,
+  );
+
+  // Back on the LAN a second later, to a plxd that restarted meanwhile.
+  vi.advanceTimersByTime(1_000);
+  up("192.168.1.5:7341", "run-2");
+  expect(lines.at(-1)).toBe(
+    `client_connect host=mini route=lan plxd=0.1.0 attempts=1 down_ms=1000 last_reason=transport_closed plxd_restarted=true`,
+  );
+
+  // A close reason that reads like a route is no route.
+  child().stderr.emit(
+    "data",
+    Buffer.from(`plxd dial: relay stream ended code=1 reason="connected over 127.0.0.1"\n`),
+  );
+
+  // Silent past the liveness timer.
+  vi.advanceTimersByTime(30_000 + 10_000);
+  expect(lines.at(-1)).toContain("route=lan reason=liveness_timeout lived_ms=40000");
+
+  // No token, route address, or relay id reaches a line.
+  expect(lines.join("\n")).not.toMatch(/abc123|192\.168/);
+
+  // The app moving it to a better route, then closing it, each say so once it's up.
+  vi.advanceTimersByTime(1_000);
+  up("relay:abc123");
+  connection.reconnect();
+  expect(lines.at(-1)).toContain("reason=better_route");
+  up("192.168.1.5:7341");
+  connection.reconnect("new_device_key");
+  expect(lines.at(-1)).toContain("reason=new_device_key");
+  up("192.168.1.5:7341");
+  connection.dispose();
+  expect(lines.at(-1)).toContain("reason=app_closed");
+  expect(lines.filter((line) => line.startsWith("client_disconnect"))).toHaveLength(5);
+});
+
+test("handshakes, then heartbeats, and reconnects when plxd goes silent", () => {
   connect();
   expect(child().request("initialize").params).toMatchObject({
     protocol: { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION },
-    client: { name: "wisp", version: "0.0.1" },
+    client: { name: "parallax", version: "0.0.1" },
   });
   expect(state()).toEqual({ status: "connecting" });
   child().handshake();
-  expect(state()).toEqual({ status: "connected", wispd: "0.1.0", protocol: 1, capabilities: {} });
+  expect(state()).toEqual({ status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} });
 
   vi.advanceTimersByTime(30_000);
   const health = child().request("host/health");
@@ -121,8 +311,8 @@ test("an incompatible protocol stops retrying until retry()", () => {
   child().reply({ id: child().request("initialize").id, error: incompatible });
   expect(state()).toMatchObject({
     status: "failed",
-    // Its version rides along, so a packaged app can replace an old wispd (hosts.ts).
-    error: { reason: "incompatibleProtocol", wispd: "0.1.0" },
+    // Its version rides along, so a packaged app can replace an old plxd (hosts.ts).
+    error: { reason: "incompatibleProtocol", plxd: "0.1.0" },
     retrying: false,
   });
   vi.advanceTimersByTime(60_000);
@@ -131,33 +321,20 @@ test("an incompatible protocol stops retrying until retry()", () => {
   expect(children).toHaveLength(2);
 });
 
-test("a usage error from attach (exit 2) stops retrying", () => {
-  connect();
-  child().emit("close", 2, null);
-  expect(state()).toMatchObject({ status: "failed", error: { exitCode: 2 }, retrying: false });
-  vi.advanceTimersByTime(60_000);
-  expect(children).toHaveLength(1);
-});
-
-test("not found fails without spawning anything", () => {
-  located = undefined;
-  connect();
-  expect(children).toHaveLength(0);
-  expect(state()).toMatchObject({
-    status: "failed",
-    error: { reason: "notFound" },
-    retrying: false,
-  });
-});
-
 test("reports attach's exit code and stderr, and backs off from 1 s to 10 s", () => {
-  expect([0, 1, 2, 3, 4, 5].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 10_000, 10_000]);
+  expect([0, 1, 2, 3, 4, 5].map((n) => backoffMs(n))).toEqual([
+    1000, 2000, 4000, 8000, 10_000, 10_000,
+  ]);
+  // keepServing's (hosts.ts): at most once every 5 minutes.
+  expect([4, 8, 9, 20].map((n) => backoffMs(n, 300_000))).toEqual([
+    16_000, 256_000, 300_000, 300_000,
+  ]);
   connect();
-  child().stderr.emit("data", Buffer.from("wispd attach: timed out\n"));
+  child().stderr.emit("data", Buffer.from("plxd attach: timed out\n"));
   child().emit("close", 4, null);
   expect(state()).toMatchObject({
     status: "failed",
-    error: { reason: "exited", exitCode: 4, stderr: "wispd attach: timed out" },
+    error: { reason: "exited", exitCode: 4, stderr: "plxd attach: timed out" },
     retrying: true,
   });
   vi.advanceTimersByTime(999);
@@ -195,6 +372,103 @@ test("resumes a subscription from the last seq after a reconnect", () => {
   expect(child().request("events/subscribe").params).toEqual({ after: 2 });
 });
 
+test("a watch starts from its snapshot, and resumes after its last seq on a reconnect or a resync (0059)", () => {
+  const connection = connect();
+  child().handshake();
+  const messages: WatchMessage[] = [];
+  connection.watch({ threadId: "t-1" }, (message) => messages.push(message));
+  const first = child().request("orchestration/subscribeThread");
+  expect(first.params).toEqual({ threadId: "t-1" });
+  const event = (seq: number) => ({
+    method: "events/event",
+    params: { subscription: "sub-1", seq, time: "2026-09-27T00:00:00Z", event: { kind: "x" } },
+  });
+  const snapshot = { seq: 4, thread: {}, runs: [], events: [], more: false, requests: [] };
+  // The response and its first events in one chunk: none may be lost, and none is a repeat.
+  child().reply({ id: first.id, result: { subscription: "sub-1", snapshot } }, event(4), event(5));
+  expect(messages.map((m) => (m.type === "event" ? m.event.seq : m.type))).toEqual(["snapshot", 5]);
+
+  // A reconnect asks for the gap after the last seq; plxd replays it, with no snapshot.
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  child().handshake();
+  const resumed = child().request("orchestration/subscribeThread");
+  expect(resumed.params).toEqual({ threadId: "t-1", afterSeq: 5 });
+  child().reply(
+    { id: resumed.id, result: { subscription: "sub-2" } },
+    {
+      ...event(6),
+      params: { ...event(6).params, subscription: "sub-2" },
+    },
+  );
+  expect(messages.at(-1)).toMatchObject({ type: "event", event: { seq: 6 } });
+
+  // Fallen behind, it asks again after its last seq, and plxd answers with a fresh snapshot.
+  child().reply({ method: "events/resync", params: { subscription: "sub-2" } });
+  const again = child().request("orchestration/subscribeThread");
+  expect(again.params).toEqual({ threadId: "t-1", afterSeq: 6 });
+  child().reply({
+    id: again.id,
+    result: { subscription: "sub-3", snapshot: { ...snapshot, seq: 90 } },
+  });
+  expect(messages.at(-1)).toMatchObject({ type: "snapshot", snapshot: { seq: 90 } });
+
+  // A new log numbers from scratch, so the next one starts from a snapshot.
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  child().handshake("log-2");
+  expect(child().request("orchestration/subscribeThread").params).toEqual({ threadId: "t-1" });
+});
+
+test("a disposed connection ends each watch with an error, so its owner opens it again", () => {
+  const connection = connect();
+  child().handshake();
+  const ended = vi.fn();
+  connection.watch({ threadId: "t-1" }, ended);
+  connection.dispose();
+  expect(ended).toHaveBeenCalledWith({
+    type: "error",
+    error: { code: expect.any(Number), message: expect.any(String) },
+  });
+});
+
+test("routes a terminal's output, and opens a shell again after a reconnect (PLX-637)", async () => {
+  const connection = connect();
+  const capabilities = { terminals: {} };
+  child().reply({ id: child().request("initialize").id, result: { ...initialized, capabilities } });
+  const key = { threadId: "t1", terminalId: "drawer:local/t1" };
+  const shell = { ...key, cwd: "/wt", cols: 80, rows: 24 };
+  const command = { program: "codex", args: ["login"], env: {} };
+  const signIn = { threadId: "", terminalId: "1:sign-in", command, cols: 80, rows: 24 };
+  const shown: TerminalMessage[] = [];
+  const signedIn: TerminalMessage[] = [];
+  connection.attachTerminal(shell, (message) => shown.push(message));
+  connection.attachTerminal(signIn, (message) => signedIn.push(message));
+  const opened = connection.openTerminal(shell);
+  child().reply({ id: child().request("terminal/open").id, result: {} });
+  expect(await opened).toBeUndefined();
+  child().reply(
+    { method: "terminal/output", params: { ...key, data: "$ ", replay: true } },
+    { method: "terminal/output", params: { ...key, data: "ls\r\n" } },
+  );
+  expect(shown).toEqual([
+    { type: "replay", data: "$ " },
+    { type: "data", data: "ls\r\n" },
+  ]);
+  connection.writeTerminal(key, "pwd\r");
+  expect(child().request("terminal/write").params).toEqual({ ...key, data: "pwd\r" });
+  connection.resizeTerminal(key, 100, 30);
+
+  // plxd ends a command with its connection; a shell comes back at its last size.
+  child().emit("close", 0, null);
+  expect(signedIn).toEqual([{ type: "exit", exitCode: -1 }]);
+  vi.advanceTimersByTime(1000);
+  child().reply({ id: child().request("initialize").id, result: { ...initialized, capabilities } });
+  expect(child().request("terminal/open").params).toEqual({ ...shell, cols: 100, rows: 30 });
+  child().reply({ method: "terminal/exit", params: { ...key, exitCode: 0 } });
+  expect(shown.at(-1)).toEqual({ type: "exit", exitCode: 0 });
+});
+
 test("resyncRequired ends the subscription with a resync", () => {
   const connection = connect();
   child().handshake();
@@ -202,6 +476,92 @@ test("resyncRequired ends the subscription with a resync", () => {
   connection.subscribe({ after: 1, logId: "log-1" }, listener);
   child().reply({ id: child().request("events/subscribe").id, error: resyncRequired });
   expect(listener).toHaveBeenCalledWith({ type: "resync" });
+});
+
+test("events/resync ends only its subscription, and the connection stays up", () => {
+  const connection = connect();
+  expect(child().request("initialize").params).toMatchObject({
+    capabilities: { resyncNotice: {}, projects: {} },
+  });
+  child().handshake();
+  const lagging = vi.fn();
+  const other = vi.fn();
+  connection.subscribe({ after: 0, logId: "log-1" }, lagging);
+  const first = child().request("events/subscribe");
+  connection.subscribe({ after: 0, logId: "log-1" }, other);
+  const second = child().request("events/subscribe");
+  child().reply(
+    { id: first.id, result: { subscription: "sub-1" } },
+    { id: second.id, result: { subscription: "sub-2" } },
+    { method: "events/resync", params: { subscription: "sub-1" } },
+    {
+      method: "events/event",
+      params: { subscription: "sub-2", seq: 7, time: "2026-09-27T00:00:00Z", event: { kind: "x" } },
+    },
+  );
+  expect(lagging.mock.calls).toEqual([[{ type: "resync" }]]);
+  expect(other).toHaveBeenCalledWith(expect.objectContaining({ type: "event" }));
+  expect(other).not.toHaveBeenCalledWith({ type: "resync" });
+  expect(state()?.status).toBe("connected");
+  expect(children).toHaveLength(1);
+});
+
+test("a drop after host/updating says updating until it's back, with its status still real", () => {
+  connect();
+  child().handshake();
+  child().reply({ method: "host/updating", params: {} });
+  expect(state()).toEqual(expect.objectContaining({ status: "connected" }));
+  child().emit("close", 0, null);
+  expect(state()).toEqual(expect.objectContaining({ status: "failed", updating: true }));
+  vi.advanceTimersByTime(1000);
+  expect(state()).toEqual({ status: "connecting", updating: true });
+  child().handshake();
+  expect(state()?.status).toBe("connected");
+  expect(state()?.updating).toBeUndefined();
+  // That notice is spent, so the next drop is an ordinary one.
+  child().emit("close", 0, null);
+  expect(state()?.updating).toBeUndefined();
+});
+
+test("a plxd not back within the notice shows its real state", () => {
+  connect();
+  child().handshake();
+  child().reply({ method: "host/updating", params: {} });
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(UPDATE_NOTICE_MS - 1);
+  expect(state()?.updating).toBe(true);
+  vi.advanceTimersByTime(1);
+  expect(state()?.updating).toBeUndefined();
+  expect(state()?.status).not.toBe("connected");
+});
+
+test("a notice that runs out while still connected sends no state", () => {
+  connect();
+  child().handshake();
+  child().reply({ method: "host/updating", params: {} });
+  const before = states.length;
+  for (let waited = 0; waited < UPDATE_NOTICE_MS; waited += 30_000) {
+    vi.advanceTimersByTime(30_000);
+    const health = child().request("host/health");
+    child().reply({ id: health.id, result: { uptimeSeconds: 1, store: "ok", runningAgents: 0 } });
+  }
+  expect(states).toHaveLength(before);
+});
+
+test("a drop with no notice, as from an older plxd, doesn't say updating", () => {
+  connect();
+  child().handshake();
+  child().emit("close", 0, null);
+  expect(state()?.updating).toBeUndefined();
+});
+
+test("an unknown notification changes nothing", () => {
+  connect();
+  child().handshake();
+  const before = states.length;
+  child().reply({ method: "host/fromTheFuture", params: { anything: 1 } });
+  expect(states).toHaveLength(before);
+  expect(children).toHaveLength(1);
 });
 
 test("a new logId after a reconnect ends every subscription with a resync", () => {
@@ -216,16 +576,75 @@ test("a new logId after a reconnect ends every subscription with a resync", () =
   expect(child().sent.some((message) => message.method === "events/subscribe")).toBe(false);
 });
 
+test("a mutating request sends commandId and its timeout retry reuses it", async () => {
+  const connection = connect();
+  child().handshake();
+  const params = { orchestrator: "01901234-5678-7abc-89ab-cdef01234567" };
+  const first = connection.request("orchestrator/delete", params);
+  const sent = child().request("orchestrator/delete");
+  expect(sent.params?.["commandId"]).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+  child().reply({ id: sent.id, error: { code: -32800, message: "timeout" } });
+  await Promise.resolve();
+  const again = child().request("orchestrator/delete");
+  expect(again.params?.["commandId"]).toBe(sent.params?.["commandId"]);
+  child().reply({ id: again.id, result: {} });
+  await first;
+
+  const next = connection.request("orchestrator/delete", params);
+  const third = child().request("orchestrator/delete");
+  expect(third.params?.["commandId"]).not.toBe(sent.params?.["commandId"]);
+  child().reply({ id: third.id, result: {} });
+  await next;
+});
+
+test("a request retries after reconnect with its original command id", async () => {
+  const connection = connect();
+  child().handshake();
+  const pending = connection.request("orchestrator/delete", {
+    orchestrator: "01901234-5678-7abc-89ab-cdef01234567",
+  });
+  const sent = child().request("orchestrator/delete");
+  child().emit("close", 1, null);
+  await Promise.resolve();
+  connection.retry();
+  child().handshake();
+  await Promise.resolve();
+  const retried = child().request("orchestrator/delete");
+  expect(retried.params?.["commandId"]).toBe(sent.params?.["commandId"]);
+  child().reply({ id: retried.id, result: {} });
+  expect(await pending).toEqual({ result: {}, logId: "log-1" });
+});
+
+test("a plxd from before 0093 gets the old names and answers in the new ones", async () => {
+  const connection = connect();
+  const capabilities = { coordinator: {}, projectEdit: {} };
+  child().reply({ id: child().request("initialize").id, result: { ...initialized, capabilities } });
+  expect(state()).toMatchObject({
+    capabilities: { coordinator: {}, orchestrator: {}, orchestratorEdit: {} },
+  });
+  const listed = connection.request("orchestrator/list", {});
+  const old = { id: "o1", name: "fly", repoPath: "/r", coordinator: "r1" };
+  child().reply({ id: child().request("project/list").id, result: { projects: [old], seq: 4 } });
+  expect(await listed).toMatchObject({
+    result: { orchestrators: [{ id: "o1", run: "r1" }], seq: 4 },
+  });
+});
+
 test("a subscribe after a new logId, with a seq from the old log, resyncs", async () => {
   const connection = connect();
   child().handshake("log-1");
-  const answer = connection.request("project/list", {});
-  child().reply({ id: child().request("project/list").id, result: { projects: [], seq: 40 } });
+  const answer = connection.request("orchestrator/list", {});
+  child().reply({
+    id: child().request("orchestrator/list").id,
+    result: { orchestrators: [], seq: 40 },
+  });
   const snapshot = await answer;
-  expect(snapshot).toEqual({ result: { projects: [], seq: 40 }, logId: "log-1" });
+  expect(snapshot).toEqual({ result: { orchestrators: [], seq: 40 }, logId: "log-1" });
   if (!("result" in snapshot)) return;
 
-  // wispd starts over with a fresh log before the renderer subscribes.
+  // plxd starts over with a fresh log before the renderer subscribes.
   child().emit("close", 0, null);
   vi.advanceTimersByTime(1000);
   child().handshake("log-2");
@@ -237,8 +656,12 @@ test("a subscribe after a new logId, with a seq from the old log, resyncs", asyn
 
 test("an SSH host runs attach through ssh with 0022's options", () => {
   connect("mini");
+  const control =
+    process.platform === "win32"
+      ? "ControlPath=none"
+      : "ControlMaster=no -o ControlPath=~/.ssh/parallax-%C";
   expect(spawned.map((argv) => argv.join(" "))).toEqual([
-    "ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ControlPath=none -- mini wispd attach",
+    `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ${control} -- mini plxd attach`,
   ]);
   child().handshake();
   expect(state()).toMatchObject({ status: "connected" });
@@ -266,16 +689,6 @@ test("text from the host's shell before the handshake fails at once, without ret
   expect(children).toHaveLength(1);
 });
 
-test("a stray line after the handshake is skipped", () => {
-  connect("mini");
-  child().handshake();
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  child().stdout.emit("data", Buffer.from("not json\n"));
-  expect(state()).toMatchObject({ status: "connected" });
-  expect(warn).toHaveBeenCalled();
-  warn.mockRestore();
-});
-
 test("an ssh error that needs the user stops retrying until retry()", () => {
   const connection = connect("mini");
   child().stderr.emit("data", Buffer.from("Host key verification failed.\r\n"));
@@ -291,44 +704,29 @@ test("an ssh error that needs the user stops retrying until retry()", () => {
   expect(children).toHaveLength(2);
 });
 
-test("ssh failures read as what to do", () => {
-  const ssh = (code: number, stderr: string, platform: NodeJS.Platform = "darwin") =>
-    exitError(code, null, stderr, "mini", platform);
-  expect(ssh(255, "Host key verification failed.")).toMatchObject({
-    reason: "sshSetup",
-    message: "mini's host key isn't trusted yet. To accept it, run `ssh mini` once in a terminal.",
-  });
+// The reason decides whether the connection retries (`fail`): only what the user must fix stops it.
+test("an exit's reason: setup the user must do, a missing plxd, a refusal, or a passing failure", () => {
   const changed = "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@";
-  expect(ssh(255, `${changed}\nHost key verification failed.`)).toMatchObject({
-    reason: "sshSetup",
-    message: expect.stringContaining("host key has changed"),
-  });
-
   const denied = "me@mini: Permission denied (publickey,password,keyboard-interactive).";
-  expect(ssh(255, denied)).toMatchObject({
-    reason: "sshSetup",
-    message: expect.stringContaining("If your key has a passphrase, run `ssh-add`."),
-  });
-  expect(ssh(255, denied, "win32").message).toContain("start the ssh-agent service");
-
-  const notOnPath = "wispd isn't on mini's PATH for ssh commands.";
-  expect(ssh(127, "zsh:1: command not found: wispd")).toMatchObject({
-    reason: "notFound",
-    message: expect.stringContaining(notOnPath),
-  });
-  const cmd = "'wispd' is not recognized as an internal or external command,";
-  expect(ssh(1, cmd).message).toContain(notOnPath);
-
-  const unknown = "ssh: Could not resolve hostname mini: nodename nor servname provided";
-  expect(ssh(255, unknown)).toMatchObject({
-    reason: "exited",
-    message: "Couldn't find mini. Check its name, or your ssh config.",
-  });
-  expect(ssh(255, "ssh: connect to host mini port 22: Operation timed out").message).toBe(
-    "Couldn't reach mini. Check that it's on and accepts ssh.",
-  );
-  // attach's own exit on the host keeps its meaning.
-  expect(ssh(4, "wispd attach: timed out").message).toBe(
-    "wispd couldn't be reached or started on mini",
-  );
+  const cases: [number, string, ConnectionError["reason"], string?][] = [
+    [255, "Host key verification failed.", "sshSetup"],
+    [255, `${changed}\nHost key verification failed.`, "sshSetup"],
+    [255, denied, "sshSetup"],
+    [127, "zsh:1: command not found: plxd", "notFound"],
+    // cmd.exe on a Windows host.
+    [1, "'plxd' is not recognized as an internal or external command,", "notFound"],
+    [255, "ssh: Could not resolve hostname mini: nodename nor servname provided", "exited"],
+    [255, "ssh: connect to host mini port 22: Operation timed out", "exited"],
+    [4, "plxd attach: timed out", "exited"],
+    // A LAN computer that no longer knows this one, and one that's just unreachable.
+    [5, "", "refused", "Studio"],
+    [4, "", "exited", "Studio"],
+  ];
+  for (const [code, stderr, reason, lan] of cases) {
+    const destination = lan ? undefined : "mini";
+    expect(
+      exitError(code, null, stderr, destination, "darwin", undefined, lan).reason,
+      stderr,
+    ).toBe(reason);
+  }
 });

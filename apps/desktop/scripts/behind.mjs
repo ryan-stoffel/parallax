@@ -1,16 +1,15 @@
 /**
  * Why Update must leave this checkout where it is, for people ("this checkout is on x"), or
  * undefined when it may move to another channel's branch (scripts/channels.mjs). A named branch
- * other than develop is someone's work. A detached HEAD or develop may move, if a remote branch
- * contains HEAD, so that moving loses no local commit. That also lets nightly move back to
- * release, whose branch is behind. Never changes the checkout.
+ * other than main is someone's work. A detached HEAD or main may move, if a remote branch
+ * contains HEAD, so that moving loses no local commit. Never changes the checkout.
  *
  * @param {Git} git
  * @returns {Promise<string | undefined>}
  */
 export async function whyNotMove(git) {
   const branch = (await git(["branch", "--show-current"])).out;
-  if (branch && branch !== "develop") return `this checkout is on ${branch}`;
+  if (branch && branch !== "main") return `this checkout is on ${branch}`;
   const containing = await git(["branch", "--remotes", "--contains", "HEAD"]);
   if (containing.code !== 0 || !containing.out)
     return "this checkout has commits that no remote branch contains";

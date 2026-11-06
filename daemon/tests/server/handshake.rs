@@ -1,37 +1,125 @@
 //! `initialize` and the host methods.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use serde_json::json;
-use wisp_protocol::framing::MAX_FRAME_BYTES;
-use wisp_protocol::jsonrpc::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
-use wisp_protocol::methods::{HostHealth, HostVersion, Initialize, ProjectList, RequestMethod};
-use wisp_protocol::{
-    Capabilities, ErrorKind, HostHealthParams, HostVersionParams, IncompatibleProtocolDetail,
-    ProjectListParams, ProtocolRange, StoreState,
+use parallax_protocol::framing::MAX_FRAME_BYTES;
+use parallax_protocol::jsonrpc::INVALID_PARAMS;
+use parallax_protocol::jsonrpc::Message;
+use parallax_protocol::methods::{
+    HostAnnounceUpdate, HostHealth, HostSettingsGet, HostSettingsSet, HostUpdate, HostUpdating,
+    HostVersion, NotificationMethod, OrchestratorList,
 };
+use parallax_protocol::{
+    Capabilities, ErrorKind, HostAnnounceUpdateParams, HostHealthParams, HostSettingsGetParams,
+    HostSettingsSetParams, HostUpdateParams, HostUpdateRestart, HostVersionParams,
+    IncompatibleProtocolDetail, OrchestratorListParams, ProtocolRange, StoreState,
+};
+use serde_json::json;
 
-use crate::support::{Client, Wispd, kind, temp_dir};
+use crate::support::{Client, Plxd, kind, temp_dir};
 
 #[tokio::test]
+#[expect(clippy::too_many_lines, reason = "every capability, one per line")]
 async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
     let init = client.initialize().await.unwrap();
     assert_eq!(init.protocol, 1);
-    assert_eq!(init.wispd, wispd::version());
+    assert_eq!(init.plxd, plxd::version());
+    let mut capabilities = init.capabilities.clone();
+    // Computer use is macOS's alone (PLX-897).
     assert_eq!(
-        init.capabilities,
+        capabilities.0.remove("computerUse").is_some(),
+        cfg!(target_os = "macos")
+    );
+    assert_eq!(
+        capabilities,
         Capabilities(BTreeMap::from([
+            ("accountAccess".to_owned(), serde_json::Map::new()),
+            ("accountHomes".to_owned(), serde_json::Map::new()),
             ("accounts".to_owned(), serde_json::Map::new()),
             ("agentClis".to_owned(), serde_json::Map::new()),
             ("agentReview".to_owned(), serde_json::Map::new()),
+            ("agentWait".to_owned(), serde_json::Map::new()),
             ("agents".to_owned(), serde_json::Map::new()),
-            ("coordinator".to_owned(), serde_json::Map::new()),
+            ("approvals".to_owned(), serde_json::Map::new()),
+            ("autoResume".to_owned(), serde_json::Map::new()),
+            ("board".to_owned(), serde_json::Map::new()),
+            ("branchPrefix".to_owned(), serde_json::Map::new()),
+            ("chatImport".to_owned(), serde_json::Map::new()),
+            ("checkpoints".to_owned(), serde_json::Map::new()),
+            ("checks".to_owned(), serde_json::Map::new()),
+            ("checkout".to_owned(), serde_json::Map::new()),
+            ("claudeRemoteControl".to_owned(), serde_json::Map::new()),
+            ("claudeRemoteControlMove".to_owned(), serde_json::Map::new()),
+            ("commandIds".to_owned(), serde_json::Map::new()),
+            ("composerMenus".to_owned(), serde_json::Map::new()),
+            ("connect".to_owned(), serde_json::Map::new()),
+            ("contextAndFast".to_owned(), serde_json::Map::new()),
+            ("orchestrator".to_owned(), serde_json::Map::new()),
+            ("orchestratorEpochs".to_owned(), serde_json::Map::new()),
+            ("orchestratorThreads".to_owned(), serde_json::Map::new()),
+            ("delegation".to_owned(), serde_json::Map::new()),
+            ("readOnlyDevices".to_owned(), serde_json::Map::new()),
+            ("devices".to_owned(), serde_json::Map::new()),
+            ("eventFilters".to_owned(), serde_json::Map::new()),
+            ("eventsBefore".to_owned(), serde_json::Map::new()),
+            (
+                "fileChunks".to_owned(),
+                serde_json::from_value(
+                    json!({"chunkBytes": 1024 * 1024, "maxBytes": 1024 * 1024 * 1024})
+                )
+                .unwrap()
+            ),
+            ("fileEdit".to_owned(), serde_json::Map::new()),
+            (
+                "fileUploads".to_owned(),
+                serde_json::from_value(json!({"maxBytes": 6 * 1024 * 1024})).unwrap()
+            ),
+            ("files".to_owned(), serde_json::Map::new()),
+            ("git".to_owned(), serde_json::Map::new()),
+            (
+                "iconImages".to_owned(),
+                serde_json::from_value(json!({"maxBytes": 64 * 1024})).unwrap()
+            ),
+            ("githubSetup".to_owned(), serde_json::Map::new()),
+            ("githubStatus".to_owned(), serde_json::Map::new()),
+            ("hostFolders".to_owned(), serde_json::Map::new()),
+            ("hostUpdate".to_owned(), serde_json::Map::new()),
+            ("hubAccounts".to_owned(), serde_json::Map::new()),
+            ("hubs".to_owned(), serde_json::Map::new()),
+            ("inbox".to_owned(), serde_json::Map::new()),
+            ("integrationBranch".to_owned(), serde_json::Map::new()),
+            ("landing".to_owned(), serde_json::Map::new()),
+            ("memory".to_owned(), serde_json::Map::new()),
             ("openPr".to_owned(), serde_json::Map::new()),
+            ("orchestration".to_owned(), serde_json::Map::new()),
+            ("peerGit".to_owned(), serde_json::Map::new()),
+            ("pins".to_owned(), serde_json::Map::new()),
+            ("orchestratorArtifacts".to_owned(), serde_json::Map::new()),
+            ("orchestratorAutonomy".to_owned(), serde_json::Map::new()),
+            ("orchestratorDelete".to_owned(), serde_json::Map::new()),
+            ("orchestratorEdit".to_owned(), serde_json::Map::new()),
+            ("orchestratorFromThreads".to_owned(), serde_json::Map::new()),
+            ("orchestratorPermission".to_owned(), serde_json::Map::new()),
+            ("orchestratorPlacement".to_owned(), serde_json::Map::new()),
+            ("orchestratorTasks".to_owned(), serde_json::Map::new()),
+            // 0093's old name, for one release.
+            ("coordinator".to_owned(), serde_json::Map::new()),
+            ("coordinatorEpochs".to_owned(), serde_json::Map::new()),
+            ("projectArtifacts".to_owned(), serde_json::Map::new()),
+            ("projectAutonomy".to_owned(), serde_json::Map::new()),
+            ("projectDelete".to_owned(), serde_json::Map::new()),
             ("projectEdit".to_owned(), serde_json::Map::new()),
+            ("projectFromThreads".to_owned(), serde_json::Map::new()),
+            ("projectPermission".to_owned(), serde_json::Map::new()),
+            ("projectPlacement".to_owned(), serde_json::Map::new()),
+            ("projectTasks".to_owned(), serde_json::Map::new()),
+            ("providerUpdates".to_owned(), serde_json::Map::new()),
+            ("providers".to_owned(), serde_json::Map::new()),
             (
                 "promptImages".to_owned(),
                 serde_json::from_value(json!({
@@ -41,10 +129,52 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
                 }))
                 .unwrap()
             ),
+            ("prActions".to_owned(), serde_json::Map::new()),
+            ("prDiff".to_owned(), serde_json::Map::new()),
+            ("prGuide".to_owned(), serde_json::Map::new()),
+            ("prWatch".to_owned(), serde_json::Map::new()),
+            ("pullRequests".to_owned(), serde_json::Map::new()),
+            ("queue".to_owned(), serde_json::Map::new()),
+            ("questions".to_owned(), serde_json::Map::new()),
+            ("remote".to_owned(), serde_json::Map::new()),
+            ("remoteWeb".to_owned(), serde_json::Map::new()),
+            ("relay".to_owned(), serde_json::Map::new()),
+            ("relayPushKey".to_owned(), serde_json::Map::new()),
+            ("repoClone".to_owned(), serde_json::Map::new()),
+            ("repoRefs".to_owned(), serde_json::Map::new()),
+            ("repoGitStatus".to_owned(), serde_json::Map::new()),
+            ("repoGrep".to_owned(), serde_json::Map::new()),
+            ("repoLogo".to_owned(), serde_json::Map::new()),
             ("runOptions".to_owned(), serde_json::Map::new()),
+            ("schedules".to_owned(), serde_json::Map::new()),
+            ("secrets".to_owned(), serde_json::Map::new()),
+            ("sendAccount".to_owned(), serde_json::Map::new()),
             ("sendModel".to_owned(), serde_json::Map::new()),
             ("sendOptions".to_owned(), serde_json::Map::new()),
+            ("setupScripts".to_owned(), serde_json::Map::new()),
+            ("projectContext".to_owned(), serde_json::Map::new()),
+            ("projectThreads".to_owned(), serde_json::Map::new()),
+            ("projects".to_owned(), serde_json::Map::new()),
+            // 0093 step 2's old names, for one release.
+            ("spaceContext".to_owned(), serde_json::Map::new()),
+            ("spaceThreads".to_owned(), serde_json::Map::new()),
+            ("spaces".to_owned(), serde_json::Map::new()),
+            ("terminals".to_owned(), serde_json::Map::new()),
+            ("threadAttention".to_owned(), serde_json::Map::new()),
+            (
+                "threadContext".to_owned(),
+                serde_json::from_value(json!({"maxThreads": 8, "maxSummaryBytes": 32 * 1024}))
+                    .unwrap()
+            ),
+            ("threadFork".to_owned(), serde_json::Map::new()),
+            ("threadImport".to_owned(), serde_json::Map::new()),
+            ("threadImportRemote".to_owned(), serde_json::Map::new()),
+            ("threadLineage".to_owned(), serde_json::Map::new()),
+            ("threadNaming".to_owned(), serde_json::Map::new()),
+            ("threadTools".to_owned(), serde_json::Map::new()),
             ("threads".to_owned(), serde_json::Map::new()),
+            ("worktreeCleanup".to_owned(), serde_json::Map::new()),
+            ("youSync".to_owned(), serde_json::Map::new()),
         ]))
     );
     assert_eq!(init.max_frame_bytes, MAX_FRAME_BYTES as u64);
@@ -61,7 +191,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
         .call::<HostVersion>(HostVersionParams {})
         .await
         .unwrap();
-    assert_eq!(version.wispd, wispd::version());
+    assert_eq!(version.plxd, plxd::version());
     assert_eq!(version.protocol, ProtocolRange::SUPPORTED);
     assert_eq!(version.arch, std::env::consts::ARCH);
     #[cfg(target_os = "macos")]
@@ -70,37 +200,130 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
     assert_eq!(version.os, "linux");
 }
 
+/// PLX-1249: `branchPrefix` starts as `parallax/`, takes what git can start a branch name with,
+/// and refuses the rest.
 #[tokio::test]
-async fn requests_before_initialize_get_not_initialized() {
+async fn the_branch_prefix_is_saved_and_a_bad_one_is_refused() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
-
-    let error = client
-        .call::<ProjectList>(ProjectListParams {})
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::NotInitialized);
-    assert_eq!(error.message, "initialize must be the first request");
-
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
     client.initialize().await.unwrap();
-    client
-        .call::<ProjectList>(ProjectListParams {})
+    let settings = client
+        .call::<HostSettingsGet>(HostSettingsGetParams::default())
         .await
         .unwrap();
+    assert_eq!(settings.branch_prefix.as_deref(), Some("parallax/"));
+
+    let mut set = async |prefix: &str| {
+        client
+            .call::<HostSettingsSet>(HostSettingsSetParams {
+                branch_prefix: Some(prefix.to_owned()),
+                ..HostSettingsSetParams::default()
+            })
+            .await
+    };
+    let saved = set("ryan/").await.unwrap();
+    assert_eq!(saved.branch_prefix.as_deref(), Some("ryan/"));
+    let refused = set("has space/").await.unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+    let cleared = set("").await.unwrap();
+    assert_eq!(cleared.branch_prefix.as_deref(), Some(""));
+}
+
+/// `host/updating` follows the answer to `initialize`, since `service install`'s probe reads that
+/// answer as the first line, and comes once per connection (PLX-1418).
+#[tokio::test]
+async fn an_update_announcement_reaches_each_connection_once_after_its_handshake() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut listening = Client::ready(&plxd.socket).await;
+    let mut before_handshake = Client::connect(&plxd.socket).await;
+    let mut announcing = Client::ready(&plxd.socket).await;
+
+    let updating = |message: Option<Message>| match message {
+        Some(Message::Notification(notification)) => {
+            assert_eq!(notification.method, HostUpdating::NAME);
+        }
+        other => panic!("expected host/updating, got {other:?}"),
+    };
+    announcing
+        .send::<HostAnnounceUpdate>(HostAnnounceUpdateParams {})
+        .await;
+    updating(listening.next().await);
+    listening.stays_quiet(Duration::from_millis(200)).await;
+    before_handshake
+        .stays_quiet(Duration::from_millis(200))
+        .await;
+
+    before_handshake.initialize().await.unwrap();
+    updating(before_handshake.next().await);
+
+    // The one who asked hears it too, and a second announcement says nothing new.
+    let mut heard = [announcing.next().await, announcing.next().await];
+    heard.sort_by_key(|message| matches!(message, Some(Message::Response(_))));
+    let [notice, answer] = heard;
+    updating(notice);
+    assert!(matches!(answer, Some(Message::Response(_))), "{answer:?}");
+    announcing
+        .call::<HostAnnounceUpdate>(HostAnnounceUpdateParams {})
+        .await
+        .unwrap();
+    listening.stays_quiet(Duration::from_millis(200)).await;
+}
+
+#[tokio::test]
+async fn host_update_refuses_what_it_cant_install_and_stays_up() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
+    client.initialize().await.unwrap();
+    let mut update = async |version: &str| {
+        client
+            .call::<HostUpdate>(HostUpdateParams {
+                version: version.to_owned(),
+                now: false,
+            })
+            .await
+    };
+
+    // This test's plxd is a cargo build.
+    let newer = update("9912.13123.15959").await.unwrap_err();
+    assert_eq!(kind(&newer), ErrorKind::HostUpdateFailed);
+    assert!(
+        newer.message.contains("development build"),
+        "{}",
+        newer.message
+    );
+
+    let older = update("0.0.1").await.unwrap_err();
+    assert!(
+        older.message.contains("never downgrades"),
+        "{}",
+        older.message
+    );
+    let same = update(plxd::version()).await.unwrap();
+    assert_eq!(same.restart, HostUpdateRestart::UpToDate);
+    let invalid = update("latest").await.unwrap_err();
+    assert_eq!(kind(&invalid), ErrorKind::HostUpdateFailed);
+
+    let health = client
+        .call::<HostHealth>(HostHealthParams {})
+        .await
+        .unwrap();
+    assert_eq!(health.store, StoreState::Ok);
 }
 
 #[tokio::test]
 async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_usable() {
     let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::connect(&plxd.socket).await;
 
     let error = client
         .initialize_with(ProtocolRange { min: 2, max: 3 })
         .await
         .unwrap_err();
-    let data = error.wisp_data().expect("a wisp error");
+    let data = error.parallax_data().expect("a Parallax error");
     assert_eq!(data.kind, ErrorKind::IncompatibleProtocol);
     let detail: IncompatibleProtocolDetail =
         serde_json::from_value(data.detail.expect("the frozen detail")).unwrap();
@@ -109,86 +332,14 @@ async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_
         IncompatibleProtocolDetail {
             requested: ProtocolRange { min: 2, max: 3 },
             supported: ProtocolRange::SUPPORTED,
-            wispd: wispd::version().to_owned(),
+            plxd: plxd::version().to_owned(),
         }
     );
 
     let still_uninitialized = client
-        .call::<ProjectList>(ProjectListParams {})
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap_err();
     assert_eq!(kind(&still_uninitialized), ErrorKind::NotInitialized);
     assert_eq!(client.initialize().await.unwrap().protocol, 1);
-}
-
-#[tokio::test]
-async fn a_newer_client_is_answered_at_the_highest_common_version() {
-    let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
-
-    // A future client: a wider range, and fields and capabilities this version doesn't know.
-    client
-        .send_message(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocol": {"min": 1, "max": 4},
-                "client": {"name": "wisp", "version": "9.0.0", "locale": "en"},
-                "capabilities": {"agents": {}, "someday": {"level": 3}},
-                "trace": "off"
-            }
-        }))
-        .await;
-    let response = client.response().await;
-    let init: wisp_protocol::InitializeResult = response.into_result().unwrap();
-    assert_eq!(init.protocol, 1);
-}
-
-#[tokio::test]
-async fn a_second_initialize_is_an_invalid_request() {
-    let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
-
-    let error = client.initialize().await.unwrap_err();
-    assert_eq!(error.code, INVALID_REQUEST);
-}
-
-#[tokio::test]
-async fn bad_initialize_params_are_invalid_params() {
-    let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::connect(&wispd.socket).await;
-
-    client
-        .send_message(&Request {
-            id: 42.into(),
-            method: Initialize::NAME.to_owned(),
-            params: Some(json!({"protocol": "one"})),
-        })
-        .await;
-    let response = client.response().await;
-    assert_eq!(response.id, Some(42.into()));
-    assert_eq!(response.result.unwrap_err().code, INVALID_PARAMS);
-    client.initialize().await.unwrap();
-}
-
-#[tokio::test]
-async fn unknown_methods_are_not_found() {
-    let dir = temp_dir();
-    let wispd = Wispd::start(dir.path()).await;
-    let mut client = Client::ready(&wispd.socket).await;
-
-    client
-        .send_message(&Request {
-            id: 41.into(),
-            method: "example/missing".to_owned(),
-            params: Some(json!({})),
-        })
-        .await;
-    let response = client.response().await;
-    assert_eq!(response.id, Some(41.into()));
-    assert_eq!(response.result.unwrap_err().code, METHOD_NOT_FOUND);
 }

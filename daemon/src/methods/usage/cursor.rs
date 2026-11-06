@@ -1,0 +1,299 @@
+//! Cursor's usage for `usage/daily` (0039), from the usage API behind cursor.com's dashboard, with
+//! Cursor desktop's own sign-in. Cursor keeps no local log of tokens.
+//!
+//! The access token comes from Cursor's `state.vscdb`, opened read-only. It goes to `curl` on
+//! stdin, never in arguments, and is never logged. The API is private and can change; a change
+//! shows up as a problem, not a failed answer. `curl` rather than an HTTP crate: cursor.com's bot
+//! protection turns away rustls's TLS fingerprint.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use futures_util::{StreamExt, TryStreamExt, stream};
+use jiff::Timestamp;
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
+use parallax_protocol::{CliKind, UsageDay};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, types::ValueRef};
+use serde::Deserialize;
+use zeroize::Zeroizing;
+
+use crate::backend::claude::usd_micros;
+use crate::backend::process::{Launcher, ProcessSpec, StdinMode};
+use crate::detect::run_spec;
+
+const URL: &str = "https://cursor.com/api/dashboard/get-filtered-usage-events";
+/// The most the API gives a page: it answers 2,000 with no events.
+const PAGE_SIZE: usize = 1000;
+/// 100,000 events, far more than 180 days of one person's use.
+const MAX_PAGES: u32 = 100;
+/// Pages asked for at once. Each takes about a second (PLX-875).
+const CONCURRENT_PAGES: usize = 8;
+const PAGE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Cursor's usage since local midnight of `since` in `zone`, by local day and model. No Cursor,
+/// or Cursor signed out, is no usage. `Err` is why, for people.
+pub(super) async fn daily(
+    launcher: &Launcher,
+    since: Date,
+    zone: &TimeZone,
+) -> Result<Vec<UsageDay>, String> {
+    let Some(path) = state_db().filter(|path| path.is_file()) else {
+        return Ok(Vec::new());
+    };
+    let token = tokio::task::spawn_blocking(move || access_token(&path))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("Couldn't read Cursor's sign-in: {error}."))?;
+    let Some(token) = token else {
+        return Ok(Vec::new());
+    };
+    let user = user_id(&token).ok_or("Couldn't read Cursor's sign-in on this host.")?;
+    let cookie = Zeroizing::new(format!("WorkosCursorSessionToken={user}%3A%3A{}", *token));
+
+    let start = since
+        .to_zoned(zone.clone())
+        .map_err(|error| error.to_string())?
+        .timestamp()
+        .as_millisecond();
+    let end = Timestamp::now().as_millisecond();
+    let first = fetch(launcher, &cookie, start, end, 1).await?;
+    let mut events = first.usage_events_display;
+    if let Some(total) = first.total_usage_events_count {
+        // The total says how many pages there are, so the rest can come at once.
+        let rest: Vec<Page> = stream::iter(2..=page_count(events.len(), total))
+            .map(|page| fetch(launcher, &cookie, start, end, page))
+            .buffered(CONCURRENT_PAGES)
+            .try_collect()
+            .await?;
+        events.extend(rest.into_iter().flat_map(|page| page.usage_events_display));
+    } else if !events.is_empty() {
+        // Without one, page until an empty page.
+        for page in 2..=MAX_PAGES {
+            let answer = fetch(launcher, &cookie, start, end, page).await?;
+            if answer.usage_events_display.is_empty() {
+                break;
+            }
+            events.extend(answer.usage_events_display);
+        }
+    }
+    Ok(rows(events, zone))
+}
+
+/// How many pages hold `total` events when the first held `first`, at most `MAX_PAGES`. The first
+/// page's length is the page size: the API may cap it below what plxd asked for.
+fn page_count(first: usize, total: u64) -> u32 {
+    if first == 0 {
+        return 1;
+    }
+    u32::try_from(total.div_ceil(first as u64)).map_or(MAX_PAGES, |pages| pages.clamp(1, MAX_PAGES))
+}
+
+/// Cursor desktop's state database, where it keeps its sign-in.
+fn state_db() -> Option<PathBuf> {
+    Some(crate::paths::app_config_dir()?.join("Cursor/User/globalStorage/state.vscdb"))
+}
+
+/// Cursor's access token, or `None` when it's signed out. Read-only: the database is Cursor's,
+/// and live.
+fn access_token(path: &Path) -> rusqlite::Result<Option<Zeroizing<String>>> {
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    db.query_row(
+        "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'",
+        [],
+        |row| {
+            Ok(match row.get_ref(0)? {
+                ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
+                    String::from_utf8(bytes.to_vec()).ok()
+                }
+                _ => None,
+            })
+        },
+    )
+    .optional()
+    .map(|token| {
+        token
+            .flatten()
+            .filter(|token| !token.is_empty())
+            .map(Zeroizing::new)
+    })
+}
+
+/// The user id in an access token's `sub`, such as `user_01ABC` from `auth0|user_01ABC`.
+fn user_id(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    // base64url without padding, as standard base64.
+    let mut base64: String = payload
+        .chars()
+        .map(|c| match c {
+            '-' => '+',
+            '_' => '/',
+            c => c,
+        })
+        .collect();
+    while !base64.len().is_multiple_of(4) {
+        base64.push('=');
+    }
+    let claims: serde_json::Value =
+        serde_json::from_slice(&crate::images::decode(&base64)?).ok()?;
+    let sub = claims.get("sub")?.as_str()?;
+    let id: String = sub[sub.find("user_")?..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    Some(id)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Page {
+    total_usage_events_count: Option<u64>,
+    #[serde(default)]
+    usage_events_display: Vec<Event>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Event {
+    /// Milliseconds since 1970, as a string.
+    timestamp: String,
+    #[serde(default)]
+    model: String,
+    token_usage: Option<TokenUsage>,
+    charged_cents: Option<f64>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_tokens: u64,
+    #[serde(default)]
+    cache_write_tokens: u64,
+    total_cents: Option<f64>,
+}
+
+/// One page of usage events from `start` to `end` (milliseconds), through `curl` with the cookie
+/// on stdin.
+async fn fetch(
+    launcher: &Launcher,
+    cookie: &str,
+    start: i64,
+    end: i64,
+    page: u32,
+) -> Result<Page, String> {
+    let body = format!(
+        r#"{{"teamId":0,"startDate":"{start}","endDate":"{end}","page":{page},"pageSize":{PAGE_SIZE}}}"#
+    );
+    // curl's config syntax: a quoted value takes backslash escapes.
+    let quoted = |value: &str| format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
+    let config = Zeroizing::new(format!(
+        "url = {}\nrequest = \"POST\"\nheader = \"Content-Type: application/json\"\n\
+         header = \"Origin: https://cursor.com\"\nheader = {}\ndata = {}\nsilent\nshow-error\n\
+         write-out = \"\\n%{{http_code}}\"\n",
+        quoted(URL),
+        quoted(&format!("Cookie: {cookie}")),
+        quoted(&body),
+    ));
+    let home = std::env::home_dir().filter(|home| home.is_absolute() && home.is_dir());
+    let mut spec = ProcessSpec::new("curl", home.unwrap_or_else(|| PathBuf::from("/")));
+    // `-q` first, so no `.curlrc` applies: one with `trace-ascii` would write the cookie to disk.
+    spec.args = vec!["-q".into(), "-K".into(), "-".into()];
+    spec.stdin = StdinMode::Piped;
+    let ran = run_spec(launcher, &spec, config.as_bytes(), PAGE_TIMEOUT)
+        .await
+        .map_err(|error| format!("Couldn't ask Cursor for its usage: {error}."))?;
+    if ran.exit_code != Some(0) {
+        let why = ran
+            .stderr_tail
+            .trim()
+            .lines()
+            .last()
+            .unwrap_or("curl failed");
+        return Err(format!("Couldn't reach cursor.com: {why}"));
+    }
+    let (json, status) = ran
+        .stdout
+        .trim_end()
+        .rsplit_once('\n')
+        .unwrap_or(("", ran.stdout.trim()));
+    match status {
+        "200" => serde_json::from_str(json)
+            .map_err(|_| "Cursor's usage API answered in a way plxd can't read.".to_owned()),
+        "401" | "403" => Err(
+            "Cursor's sign-in on this host has expired. Open Cursor to sign in again.".to_owned(),
+        ),
+        status => Err(format!("Cursor's usage API answered HTTP {status}.")),
+    }
+}
+
+/// Events summed by local day in `zone` and model, leaving out those that used and cost nothing.
+/// Cost is the event's token cost, else what was charged for it.
+fn rows(events: Vec<Event>, zone: &TimeZone) -> Vec<UsageDay> {
+    let mut days: BTreeMap<(Date, String), UsageDay> = BTreeMap::new();
+    for event in events {
+        let Some(at) = event
+            .timestamp
+            .parse()
+            .ok()
+            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        else {
+            continue;
+        };
+        let tokens = event.token_usage.unwrap_or_default();
+        let cents = tokens.total_cents.or(event.charged_cents);
+        let counted = tokens.input_tokens
+            + tokens.output_tokens
+            + tokens.cache_read_tokens
+            + tokens.cache_write_tokens;
+        // Such as a request that errored.
+        if counted == 0 && cents.unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        let date = at.to_zoned(zone.clone()).date();
+        let day = days
+            .entry((date, event.model.clone()))
+            .or_insert_with(|| UsageDay {
+                date,
+                agent: CliKind::Cursor,
+                model: event.model,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                cost_usd_micros: None,
+            });
+        day.input_tokens += tokens.input_tokens;
+        day.output_tokens += tokens.output_tokens;
+        day.cache_read_tokens += tokens.cache_read_tokens;
+        day.cache_write_tokens += tokens.cache_write_tokens;
+        if let Some(micros) = cents.and_then(|cents| usd_micros(cents / 100.0)) {
+            day.cost_usd_micros = Some(day.cost_usd_micros.unwrap_or(0) + micros);
+        }
+    }
+    days.into_values().collect()
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::{MAX_PAGES, page_count};
+
+    #[test]
+    fn the_page_count_follows_the_first_pages_length_up_to_the_cap() {
+        assert_eq!(page_count(1000, 11_317), 12);
+        // The API capped the page below what plxd asked for.
+        assert_eq!(page_count(500, 11_317), 23);
+        assert_eq!(page_count(40, 40), 1);
+        assert_eq!(page_count(0, 0), 1);
+        assert_eq!(page_count(1, u64::MAX), MAX_PAGES);
+    }
+}

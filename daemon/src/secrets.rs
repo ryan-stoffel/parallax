@@ -1,0 +1,713 @@
+//! `request_secret` (0063, PLX-648), as T3 Code's `SecretRequests`: an agent asks the user for a
+//! secret, the user answers in the app, and the agent gets a one-time `secret-ref:<id>` that a
+//! tool such as `schedule/save` uses up. The value goes from `secret/answer` straight to the
+//! host's keystore under the ref's id, so it never reaches the transcript, the event log, the
+//! store, the logs, or a prompt. Only the ref, the thread that asked, and when it expires are
+//! stored (`secret_refs`).
+//!
+//! With `delivery: file` (0098), as T3's, the value goes to an owner-only file for the agent's own
+//! shell commands instead, `<data>/secrets/<run>/<id>`, and the agent gets its path. That thread's
+//! sandbox can read that folder and no other's. Commands can read the value, so its card says so.
+//! [`run`] deletes each file 24 hours after it was written, going by the file's own age, so no
+//! record is needed and a restart loses none.
+//!
+//! `input` (0099) says what the user gives, which picks the card's view: one value, an env file, or
+//! a file they already have. `env` and `file` always deliver a file. A picked file arrives as
+//! base64, so binary ones survive.
+//!
+//! A request lives in memory while its turn runs, as T3's runtime requests do: `secret/request`
+//! records it with a `secretRequested` transcript item, which the app shows as a private card,
+//! and waits for its answer. A turn that ends first cancels it. A ref works once, only for the
+//! thread that asked, within 24 hours. [`run`] removes expired refs and their values, with one
+//! timer for the next to expire and none while there are none. A host with no keystore (Windows,
+//! PLX-23) refuses requests of either kind.
+
+use std::collections::HashMap;
+use std::fs;
+use std::io::{self, Write as _};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
+
+use data_encoding::BASE64;
+use jiff::{SignedDuration, Timestamp};
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AccountId, AgentOutputItem, AgentStatus, ErrorKind, ParallaxEvent, RunId, ScopeId,
+    SecretAnswerParams, SecretAnswerResult, SecretChoice, SecretDelivery, SecretInput,
+    SecretRequestParams, SecretRequestResult, SecretStatus,
+};
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
+use crate::server::Daemon;
+use crate::store::store_error;
+
+/// How long a ref works, as T3's.
+const REF_LIFETIME: SignedDuration = SignedDuration::from_hours(24);
+
+/// How long a secret file stays, as a ref does.
+const FILE_LIFETIME: Duration = Duration::from_hours(24);
+
+/// What a ref starts with.
+const REF_PREFIX: &str = "secret-ref:";
+
+/// The longest one `secret/request` waits, under a connection's idle timeout.
+const MAX_WAIT: Duration = Duration::from_secs(50);
+
+/// How often a waiting `secret/request` checks that its turn still runs.
+const RUN_CHECK: Duration = Duration::from_secs(1);
+
+/// How long a request is remembered after it is made, so a retry finds its answer.
+const REMEMBERED: Duration = Duration::from_hours(2);
+
+/// The longest label, reason, placeholder, and secret, in bytes.
+const MAX_TEXT_BYTES: usize = 2 * 1024;
+const MAX_SECRET_BYTES: usize = 64 * 1024;
+
+/// The most extensions a request's `accept` lists, and the longest one, in bytes.
+const MAX_ACCEPT: usize = 16;
+const MAX_EXTENSION_BYTES: usize = 32;
+
+/// The requests made since plxd started, and the expiry timer's wake-up.
+#[derive(Default)]
+pub(crate) struct Secrets {
+    requests: Mutex<HashMap<Uuid, Request>>,
+    changed: Notify,
+    refs: Notify,
+}
+
+struct Request {
+    run: RunId,
+    status: SecretStatus,
+    delivery: SecretDelivery,
+    /// With `saved`: the ref, or the file's path.
+    saved: Option<String>,
+    at: Instant,
+}
+
+impl Secrets {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, Request>> {
+        self.requests.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Request `id`'s result, if plxd has it.
+    fn stands(&self, id: Uuid) -> Option<SecretRequestResult> {
+        self.lock().get(&id).map(|request| {
+            let saved = request.saved.clone();
+            let (secret_ref, file) = match request.delivery {
+                SecretDelivery::File => (None, saved),
+                _ => (saved, None),
+            };
+            SecretRequestResult {
+                status: request.status,
+                secret_ref,
+                file,
+            }
+        })
+    }
+}
+
+/// `secret/request`: see the module documentation.
+pub(crate) async fn request(
+    daemon: &Daemon,
+    params: SecretRequestParams,
+) -> Result<SecretRequestResult, ErrorObject> {
+    let SecretRequestParams {
+        run_id,
+        request_id,
+        label,
+        reason,
+        placeholder,
+        delivery,
+        input,
+        accept,
+        wait_ms,
+    } = params;
+    if cfg!(not(any(target_os = "macos", target_os = "linux"))) {
+        return Err(ErrorObject::parallax(
+            ErrorKind::KeychainUnavailable,
+            crate::keystore::UNAVAILABLE_MESSAGE,
+        ));
+    }
+    if delivery == Some(SecretDelivery::Unknown) {
+        return Err(ErrorObject::invalid_params(
+            "delivery must be secretRef or file",
+        ));
+    }
+    if input == Some(SecretInput::Unknown) {
+        return Err(ErrorObject::invalid_params(
+            "input must be value, env, or file",
+        ));
+    }
+    let to_file = matches!(input, Some(SecretInput::Env | SecretInput::File));
+    if to_file && delivery == Some(SecretDelivery::SecretRef) {
+        return Err(ErrorObject::invalid_params(
+            "input env or file delivers a file, so it can't use delivery secretRef",
+        ));
+    }
+    let delivery = if to_file {
+        Some(SecretDelivery::File)
+    } else {
+        delivery
+    };
+    if let Some(accept) = &accept {
+        check_accept(accept)?;
+    }
+    let id = request_id_of(&request_id)?;
+    for (name, text) in [("label", &label), ("reason", &reason)] {
+        check_text(name, text)?;
+    }
+    if let Some(placeholder) = &placeholder {
+        check_text("placeholder", placeholder)?;
+    }
+    let secrets = &daemon.secrets;
+    let known = secrets.lock().get(&id).map(|request| request.run);
+    match known {
+        Some(run) if run != run_id => {
+            return Err(ErrorObject::parallax(
+                ErrorKind::IdConflict,
+                format!("request {request_id} belongs to another thread"),
+            ));
+        }
+        Some(_) => {}
+        None => {
+            let item = AgentOutputItem::SecretRequested {
+                request_id: id.hyphenated().to_string(),
+                label,
+                reason,
+                placeholder,
+                delivery,
+                input,
+                accept,
+            };
+            let delivery = delivery.unwrap_or(SecretDelivery::SecretRef);
+            begin(daemon, run_id, id, delivery, item).await?;
+        }
+    }
+    let deadline = Instant::now() + Duration::from_millis(wait_ms.into()).min(MAX_WAIT);
+    loop {
+        let changed = secrets.changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        let stands = secrets.stands(id).unwrap_or(SecretRequestResult {
+            status: SecretStatus::Cancelled,
+            secret_ref: None,
+            file: None,
+        });
+        if stands.status != SecretStatus::Pending || Instant::now() >= deadline {
+            return Ok(stands);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        tokio::select! {
+            () = changed => {}
+            () = tokio::time::sleep(left.min(RUN_CHECK)) => {
+                if running(daemon, run_id).await?.is_none() {
+                    end(daemon, run_id, id, SecretStatus::Cancelled, None).await;
+                }
+            }
+        }
+    }
+}
+
+/// Records request `id` of `run`, which must be running a turn, and logs its `item`.
+async fn begin(
+    daemon: &Daemon,
+    run: RunId,
+    id: Uuid,
+    delivery: SecretDelivery,
+    item: AgentOutputItem,
+) -> Result<(), ErrorObject> {
+    let project = running(daemon, run).await?.ok_or_else(|| {
+        ErrorObject::invalid_params(format!(
+            "thread {run} isn't running a turn: a secret is asked for from inside one"
+        ))
+    })?;
+    {
+        let mut requests = daemon.secrets.lock();
+        requests.retain(|_, request| request.at.elapsed() < REMEMBERED);
+        requests.insert(
+            id,
+            Request {
+                run,
+                status: SecretStatus::Pending,
+                delivery,
+                saved: None,
+                at: Instant::now(),
+            },
+        );
+    }
+    log(daemon, run, project, item).await;
+    Ok(())
+}
+
+/// `secret/answer`: see the module documentation. Answers to one request run one at a time, and
+/// only the first counts.
+pub(crate) async fn answer(
+    daemon: &Daemon,
+    params: SecretAnswerParams,
+) -> Result<SecretAnswerResult, ErrorObject> {
+    let SecretAnswerParams {
+        run_id,
+        request_id,
+        answer,
+    } = params;
+    let id = request_id_of(&request_id)?;
+    let _lane = daemon.dispatcher.lane(id).await;
+    let delivery = match daemon.secrets.lock().get(&id) {
+        Some(request) if request.run == run_id && request.status == SecretStatus::Pending => {
+            request.delivery
+        }
+        Some(request) if request.run == run_id => {
+            return Err(ErrorObject::invalid_params(
+                "this secret request was already answered",
+            ));
+        }
+        _ => {
+            return Err(ErrorObject::invalid_params(
+                "this secret request no longer exists",
+            ));
+        }
+    };
+    match answer {
+        SecretChoice::Save { secret } => {
+            let secret = Zeroizing::new(secret);
+            if secret.trim().is_empty() || secret.len() > MAX_SECRET_BYTES {
+                return Err(ErrorObject::invalid_params(format!(
+                    "the secret must be 1 to {MAX_SECRET_BYTES} bytes"
+                )));
+            }
+            refuse_stopped(daemon, run_id, id).await?;
+            let saved = match delivery {
+                SecretDelivery::File => {
+                    save_file(daemon, run_id, Zeroizing::new(secret.as_bytes().to_vec())).await?
+                }
+                _ => save(daemon, run_id, secret).await?,
+            };
+            end(daemon, run_id, id, SecretStatus::Saved, Some(saved)).await;
+            daemon.secrets.refs.notify_one();
+        }
+        SecretChoice::SaveBytes { base64 } => {
+            let base64 = Zeroizing::new(base64);
+            if delivery != SecretDelivery::File {
+                return Err(ErrorObject::invalid_params(
+                    "a picked file needs a request with delivery file",
+                ));
+            }
+            let bytes = BASE64
+                .decode(base64.as_bytes())
+                .map(Zeroizing::new)
+                .map_err(|_| ErrorObject::invalid_params("the file isn't valid base64"))?;
+            if bytes.is_empty() || bytes.len() > MAX_SECRET_BYTES {
+                return Err(ErrorObject::invalid_params(format!(
+                    "the file must be 1 to {MAX_SECRET_BYTES} bytes"
+                )));
+            }
+            refuse_stopped(daemon, run_id, id).await?;
+            let saved = save_file(daemon, run_id, bytes).await?;
+            end(daemon, run_id, id, SecretStatus::Saved, Some(saved)).await;
+            daemon.secrets.refs.notify_one();
+        }
+        SecretChoice::Decline => end(daemon, run_id, id, SecretStatus::Declined, None).await,
+        SecretChoice::Cancel => end(daemon, run_id, id, SecretStatus::Cancelled, None).await,
+        SecretChoice::Unknown => {
+            return Err(ErrorObject::invalid_params(
+                "answer must be save, decline, or cancel",
+            ));
+        }
+    }
+    Ok(SecretAnswerResult {})
+}
+
+/// Closes request `id` and refuses its answer if `run`'s turn has ended. The agent waits inside the
+/// turn that asked, so no one would get the result.
+async fn refuse_stopped(daemon: &Daemon, run: RunId, id: Uuid) -> Result<(), ErrorObject> {
+    if running(daemon, run).await?.is_some() {
+        return Ok(());
+    }
+    end(daemon, run, id, SecretStatus::Cancelled, None).await;
+    Err(ErrorObject::invalid_params(
+        "the agent that asked has stopped, so this secret can't be used",
+    ))
+}
+
+/// Keeps `secret` in the keystore under a new ref for `run`, and records the ref.
+async fn save(
+    daemon: &Daemon,
+    run: RunId,
+    secret: Zeroizing<String>,
+) -> Result<String, ErrorObject> {
+    let key = AccountId::generate();
+    let keys = Arc::clone(&daemon.keys);
+    tokio::task::spawn_blocking(move || keys.set(key, &secret))
+        .await
+        .map_err(|error| ErrorObject::internal_error(error.to_string()))?
+        .map_err(|error| crate::methods::keychain_error(&error))?;
+    let expires = Timestamp::now() + REF_LIFETIME;
+    let recorded = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            db.add_secret_ref(key.into(), run.into(), expires)
+                .map_err(|e| store_error(&e))
+        })
+        .await;
+    if let Err(error) = recorded {
+        forget(daemon, vec![key]).await;
+        return Err(error);
+    }
+    Ok(format!("{REF_PREFIX}{key}"))
+}
+
+/// Writes `secret` to a new file for `run`'s commands: the file's path.
+async fn save_file(
+    daemon: &Daemon,
+    run: RunId,
+    secret: Zeroizing<Vec<u8>>,
+) -> Result<String, ErrorObject> {
+    let folder = crate::paths::secret_files_dir(daemon.data_dir.root(), run);
+    let written = tokio::task::spawn_blocking(move || write_file(&folder, &secret))
+        .await
+        .map_err(|error| ErrorObject::internal_error(error.to_string()))?
+        .map_err(|error| {
+            ErrorObject::internal_error(format!("could not write the secret's file: {error}"))
+        })?;
+    written.into_os_string().into_string().map_err(|_| {
+        ErrorObject::internal_error("the secret's file has a path that isn't valid UTF-8")
+    })
+}
+
+/// Writes `secret`, exactly, to a new owner-only file in `folder`: its path. The file appears only
+/// once it is complete. `create_new` never follows or replaces an existing path.
+fn write_file(folder: &Path, secret: &[u8]) -> io::Result<PathBuf> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        builder.mode(0o700);
+        options.mode(0o600);
+    }
+    builder.create(folder)?;
+    let name = Uuid::new_v4().simple().to_string();
+    let file = folder.join(&name);
+    let partial = folder.join(format!("{name}.partial"));
+    let written = options
+        .open(&partial)
+        .and_then(|mut opened| opened.write_all(secret))
+        .and_then(|()| fs::rename(&partial, &file));
+    if written.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    written.map(|()| file)
+}
+
+/// Deletes the secret files in the run folders of `root` that are at least [`FILE_LIFETIME`] old
+/// at `now`, and the folders that leaves empty: when the next one is due. A file or folder that
+/// can't be read or removed is logged, and tried again at the next sweep.
+fn sweep_files(root: &Path, now: SystemTime) -> Option<SystemTime> {
+    let mut next: Option<SystemTime> = None;
+    let Ok(folders) = fs::read_dir(root) else {
+        return None;
+    };
+    for folder in folders.flatten().map(|entry| entry.path()) {
+        let Ok(files) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let due = file
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .map(|written| written + FILE_LIFETIME);
+            match due {
+                Ok(due) if due > now => next = Some(next.map_or(due, |next| next.min(due))),
+                _ => {
+                    if let Err(error) = fs::remove_file(file.path()) {
+                        warn!(%error, "could not remove an expired secret file");
+                    }
+                }
+            }
+        }
+        // Fails while the folder holds a file, which is what keeps it.
+        let _ = fs::remove_dir(&folder);
+    }
+    next
+}
+
+/// Ends request `id` of `run` with `status`, unless it ended already, and logs how.
+async fn end(daemon: &Daemon, run: RunId, id: Uuid, status: SecretStatus, saved: Option<String>) {
+    {
+        let mut requests = daemon.secrets.lock();
+        let Some(request) = requests
+            .get_mut(&id)
+            .filter(|request| request.status == SecretStatus::Pending)
+        else {
+            return;
+        };
+        request.status = status;
+        request.saved = saved;
+    }
+    daemon.secrets.changed.notify_waiters();
+    let project = run_row(daemon, run)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| ScopeId::try_from(row.fields.project_id).ok());
+    let Some(project) = project else {
+        return;
+    };
+    let item = AgentOutputItem::SecretResolved {
+        request_id: id.hyphenated().to_string(),
+        status,
+    };
+    log(daemon, run, project, item).await;
+}
+
+/// Logs `item` in `run`'s transcript.
+async fn log(daemon: &Daemon, run: RunId, project: ScopeId, item: AgentOutputItem) {
+    let event = ParallaxEvent::AgentOutput {
+        run_id: run,
+        items: vec![item],
+        compacted: None,
+    };
+    let logged = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            db.stage(Timestamp::now(), Some(project), event);
+            Ok(())
+        })
+        .await;
+    if let Err(error) = logged {
+        warn!(%run, error = %error.message, "could not log a secret request");
+    }
+}
+
+/// `run`'s row, if it exists.
+async fn run_row(daemon: &Daemon, run: RunId) -> Result<Option<parallax_store::Run>, ErrorObject> {
+    daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| {
+            db.get_run(run.into()).map_err(|e| store_error(&e))
+        })
+        .await
+}
+
+/// `run`'s scope while it is running a turn, else `None`.
+async fn running(daemon: &Daemon, run: RunId) -> Result<Option<ScopeId>, ErrorObject> {
+    let row = run_row(daemon, run)
+        .await?
+        .ok_or_else(|| crate::agents::run_not_found(run))?;
+    let status = crate::agents::snapshot(&row, None)?.status;
+    if !matches!(status, AgentStatus::Starting | AgentStatus::Running) {
+        return Ok(None);
+    }
+    Ok(ScopeId::try_from(row.fields.project_id).ok())
+}
+
+/// Uses up `secret_ref` for thread `from`: its value, which leaves the keystore. A ref another
+/// thread asked for is refused and kept.
+pub(crate) async fn consume(
+    daemon: &Daemon,
+    secret_ref: &str,
+    from: Option<RunId>,
+) -> Result<Zeroizing<String>, ErrorObject> {
+    let refused = |why: &str| ErrorObject::invalid_params(format!("secretRef: {why}"));
+    let key = secret_ref
+        .strip_prefix(REF_PREFIX)
+        .and_then(|id| Uuid::try_parse(id).ok())
+        .and_then(|id| AccountId::try_from(id).ok())
+        .ok_or_else(|| refused("that is not a secretRef"))?;
+    let from = from.ok_or_else(|| refused("only the thread that asked for it can use it"))?;
+    let taken = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let error = |error| store_error(&error);
+            let taken = db.take_secret_ref(key.into()).map_err(error)?;
+            if let Some((thread, expires)) = taken
+                && thread != Uuid::from(from)
+            {
+                db.add_secret_ref(key.into(), thread, expires)
+                    .map_err(error)?;
+                return Ok(Err("only the thread that asked for it can use it"));
+            }
+            Ok(Ok(taken))
+        })
+        .await?
+        .map_err(refused)?;
+    let Some((thread, expires)) = taken else {
+        return Err(refused(
+            "it was used already or doesn't exist; ask again with request_secret",
+        ));
+    };
+    // The value leaves the keystore only once it is read: a keystore that can't be read now
+    // keeps it, and the ref, for another try.
+    let keys = Arc::clone(&daemon.keys);
+    let read = tokio::task::spawn_blocking(move || {
+        let value = keys.get(key)?;
+        if value.is_some() {
+            let _ = keys.delete(key);
+        }
+        Ok(value)
+    })
+    .await
+    .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
+    let value = match read {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = daemon
+                .store
+                .run(&CancellationToken::new(), move |db| {
+                    db.add_secret_ref(key.into(), thread, expires)
+                        .map_err(|e| store_error(&e))
+                })
+                .await;
+            return Err(crate::methods::keychain_error(&error));
+        }
+    };
+    if expires <= Timestamp::now() {
+        return Err(refused("it expired; ask again with request_secret"));
+    }
+    value.ok_or_else(|| refused("its value is gone; ask again with request_secret"))
+}
+
+/// Removes the keystore values `keys`, logging a failure, since the value is still there.
+async fn forget(daemon: &Daemon, keys: Vec<AccountId>) {
+    let store = Arc::clone(&daemon.keys);
+    let removed = tokio::task::spawn_blocking(move || {
+        keys.into_iter()
+            .filter(|key| store.delete(*key).is_err())
+            .count()
+    })
+    .await
+    .unwrap_or(1);
+    if removed > 0 {
+        warn!(
+            failed = removed,
+            "could not remove expired secrets from the keystore"
+        );
+    }
+}
+
+/// The expiry timer: see the module documentation. Returns when `stop` is cancelled.
+pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
+    loop {
+        let swept = daemon
+            .store
+            .run(&CancellationToken::new(), |db| {
+                let error = |error| store_error(&error);
+                let (expired, next) = db.secret_ref_expiry(Timestamp::now()).map_err(error)?;
+                for id in &expired {
+                    db.take_secret_ref(*id).map_err(error)?;
+                }
+                Ok((expired, next))
+            })
+            .await;
+        let next = match swept {
+            Ok((expired, next)) => {
+                let keys = expired
+                    .into_iter()
+                    .filter_map(|id| AccountId::try_from(id).ok())
+                    .collect::<Vec<_>>();
+                if !keys.is_empty() {
+                    forget(&daemon, keys).await;
+                }
+                next
+            }
+            Err(error) => {
+                warn!(error = %error.message, "could not remove expired secret refs");
+                None
+            }
+        };
+        let root = crate::paths::secrets_root(daemon.data_dir.root());
+        let next_file = tokio::task::spawn_blocking(move || sweep_files(&root, SystemTime::now()))
+            .await
+            .unwrap_or_else(|error| {
+                warn!(%error, "could not remove expired secret files");
+                None
+            });
+        let wait = next
+            .map(|at| Duration::try_from(at.duration_since(Timestamp::now())).unwrap_or_default());
+        let wait_file =
+            next_file.map(|at| at.duration_since(SystemTime::now()).unwrap_or_default());
+        let wait = wait.into_iter().chain(wait_file).min();
+        tokio::select! {
+            () = stop.cancelled() => return,
+            () = daemon.secrets.refs.notified() => {}
+            () = tokio::time::sleep(wait.unwrap_or_default()), if wait.is_some() => {}
+        }
+    }
+}
+
+fn request_id_of(id: &str) -> Result<Uuid, ErrorObject> {
+    Uuid::try_parse(id)
+        .map_err(|_| ErrorObject::invalid_params(format!("{id:?} is not a request id")))
+}
+
+fn check_text(name: &str, text: &str) -> Result<(), ErrorObject> {
+    if text.trim().is_empty() || text.len() > MAX_TEXT_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "{name} must be 1 to {MAX_TEXT_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+/// Refuses an `accept` that isn't a short list of extensions, each with its leading dot, which the
+/// app's file dialog couldn't filter by.
+fn check_accept(accept: &[String]) -> Result<(), ErrorObject> {
+    let extension = |text: &String| {
+        text.len() <= MAX_EXTENSION_BYTES
+            && text.strip_prefix('.').is_some_and(|rest| {
+                !rest.is_empty()
+                    && rest
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            })
+    };
+    if accept.len() > MAX_ACCEPT || !accept.iter().all(extension) {
+        return Err(ErrorObject::invalid_params(format!(
+            "accept must be at most {MAX_ACCEPT} extensions, each with its leading dot, such as .p8"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    use super::{FILE_LIFETIME, sweep_files, write_file};
+
+    /// A value reaches its file exactly, for its owner only, and goes once it is 24 hours old,
+    /// with its folder once that is empty. A newer file keeps the folder and sets the next sweep.
+    #[test]
+    fn a_secret_file_is_private_exact_and_deleted_after_its_lifetime() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, folder) = (dir.path(), dir.path().join("run"));
+        let value = "A=1\nB=2 \n";
+        let file = write_file(&folder, value.as_bytes()).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), value);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = |path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&file), 0o600);
+            assert_eq!(mode(&folder), 0o700);
+        }
+        let written = std::fs::metadata(&file).unwrap().modified().unwrap();
+        let later = written + Duration::from_hours(1);
+
+        let due = sweep_files(root, later);
+        assert_eq!(due, Some(written + FILE_LIFETIME));
+        assert!(file.exists());
+
+        assert_eq!(sweep_files(root, written + FILE_LIFETIME), None);
+        assert!(!folder.exists(), "the empty folder goes with it");
+        assert_eq!(sweep_files(&root.join("none"), SystemTime::now()), None);
+    }
+}

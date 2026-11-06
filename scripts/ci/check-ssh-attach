@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 'use strict';
-// #95's own check: `wispd attach` through a real `ssh localhost`, once scripts/ci/ssh-localhost has
+// #95's own check: `plxd attach` through a real `ssh localhost`, once scripts/ci/ssh-localhost has
 // set it up. Mirrors daemon/README.md's own "Testing attach over ssh on your machine" recipe, but
 // checked instead of eyeballed: exactly one line on stdout, a JSON-RPC response with id 1, no
-// error, and result.protocol === 1; that ssh exits 0 once wispd has answered; and that `serve`
+// error, and result.protocol === 1; that ssh exits 0 once plxd has answered; and that `serve`
 // keeps running after the ssh session ends, then stops it.
 //
 // On Windows (0023), the host's shell is cmd.exe, so the data folder goes in `--data-dir`. The
 // lock can't be read while `serve` holds it, so `serve`'s pid comes from its log instead, and
-// WISP_E2E_SSH names the ssh client to use (Windows' own).
+// PLX_E2E_SSH names the ssh client to use (Windows' own).
 //
-// Skips (exit 0) wherever scripts/ci/ssh-localhost was skipped, unless WISP_E2E_REQUIRE_SSH=1
+// Skips (exit 0) wherever scripts/ci/ssh-localhost was skipped, unless PLX_E2E_REQUIRE_SSH=1
 // (ci.yml's rust job sets it), in which case "not ready" is a failure instead, so a broken ssh
 // setup fails the build rather than silently dropping this coverage.
 
@@ -52,7 +52,7 @@ function readStatus(path) {
   return entries;
 }
 
-/** On Windows, what might hold an ssh session open: every wispd process, and the end of the log. */
+/** On Windows, what might hold an ssh session open: every plxd process, and the end of the log. */
 function diagnose(dataDir) {
   if (!windows) {
     return '';
@@ -64,7 +64,7 @@ function diagnose(dataDir) {
       [
         '-NoProfile',
         '-Command',
-        "Get-CimInstance Win32_Process -Filter \"Name='wispd.exe'\" | Format-Table ProcessId,ParentProcessId,CommandLine -AutoSize | Out-String -Width 400",
+        "Get-CimInstance Win32_Process -Filter \"Name='plxd.exe'\" | Format-Table ProcessId,ParentProcessId,CommandLine -AutoSize | Out-String -Width 400",
       ],
       { encoding: 'utf8', timeout: 30_000 },
     );
@@ -73,34 +73,34 @@ function diagnose(dataDir) {
   }
   let log;
   try {
-    log = readFileSync(join(dataDir, 'logs', 'wispd.log'), 'utf8').split('\n').slice(-20).join('\n');
+    log = readFileSync(join(dataDir, 'logs', 'plxd.log'), 'utf8').split('\n').slice(-20).join('\n');
   } catch (error) {
     log = `(no log: ${error.message})`;
   }
-  return `\nwispd processes:\n${processes}\nend of wispd.log:\n${log}`;
+  return `\nplxd processes:\n${processes}\nend of plxd.log:\n${log}`;
 }
 
 async function main() {
-  const [, , statusFile, wispd] = process.argv;
-  if (!statusFile || !wispd) {
-    fail('usage: check-ssh-attach <status-file> <wispd-binary>');
+  const [, , statusFile, plxd] = process.argv;
+  if (!statusFile || !plxd) {
+    fail('usage: check-ssh-attach <status-file> <plxd-binary>');
   }
 
   const status = readStatus(statusFile);
-  const requireSsh = process.env.WISP_E2E_REQUIRE_SSH === '1';
-  if (status.WISP_E2E_SSH_READY !== 'true') {
-    const reason = status.WISP_E2E_SSH_REASON || 'ssh to localhost is not ready (see #95)';
+  const requireSsh = process.env.PLX_E2E_REQUIRE_SSH === '1';
+  if (status.PLX_E2E_SSH_READY !== 'true') {
+    const reason = status.PLX_E2E_SSH_REASON || 'ssh to localhost is not ready (see #95)';
     if (requireSsh) {
-      fail(`WISP_E2E_REQUIRE_SSH=1 but ${reason}`);
+      fail(`PLX_E2E_REQUIRE_SSH=1 but ${reason}`);
     }
     skip(reason);
   }
 
-  if (!existsSync(wispd)) {
-    fail(`${wispd} is not an executable file`);
+  if (!existsSync(plxd)) {
+    fail(`${plxd} is not an executable file`);
   }
 
-  const dataDir = mkdtempSync(join(tmpdir(), 'wisp-e2e-ssh-attach-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'parallax-e2e-ssh-attach-'));
   try {
     const request = `${JSON.stringify({
       jsonrpc: '2.0',
@@ -110,12 +110,12 @@ async function main() {
     })}\n`;
 
     const remote = windows
-      ? `"${wispd}" attach --data-dir "${dataDir}"`
-      : `WISPD_DATA_DIR='${dataDir}' '${wispd}' attach`;
+      ? `"${plxd}" attach --data-dir "${dataDir}"`
+      : `PLXD_DATA_DIR='${dataDir}' '${plxd}' attach`;
     let stdout;
     try {
       stdout = execFileSync(
-        process.env.WISP_E2E_SSH || 'ssh',
+        process.env.PLX_E2E_SSH || 'ssh',
         ['-T', '-o', 'BatchMode=yes', '-o', 'ControlPath=none', '--', 'localhost', remote],
         { input: request, timeout: 60_000, encoding: 'utf8' },
       );
@@ -141,11 +141,11 @@ async function main() {
       fail(`expected a successful initialize response with protocol 1, got: ${line}`);
     }
 
-    const lockFile = join(dataDir, 'wispd.lock');
+    const lockFile = join(dataDir, 'plxd.lock');
     if (!existsSync(lockFile)) {
-      fail(`no ${lockFile}; wispd never started serve`);
+      fail(`no ${lockFile}; plxd never started serve`);
     }
-    const pidSource = windows ? join(dataDir, 'logs', 'wispd.log') : lockFile;
+    const pidSource = windows ? join(dataDir, 'logs', 'plxd.log') : lockFile;
     const pidText = readFileSync(pidSource, 'utf8');
     const pid = windows
       ? Number.parseInt(/listening.* pid=(\d+)/.exec(pidText)?.[1] ?? '', 10)

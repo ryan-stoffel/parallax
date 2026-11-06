@@ -1,27 +1,40 @@
-//! The Claude Code backend: runs the user's own signed-in `claude` CLI headless (0004, #116).
+//! The Claude Code backend: runs the user's own signed-in `claude` CLI headless (0004, #116),
+//! through the Claude Agent SDK in plxd's Node sidecar ([`sdk`], 0061).
 //!
 //! # The command
 //!
-//! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json` in
-//! the run's cwd, plus the policy's flags, `--model`, `--effort`, and `--resume <session id>`
-//! (0004 [10]):
+//! Every run is `claude -p --output-format stream-json --verbose --input-format stream-json
+//! --thinking adaptive --thinking-display summarized --include-partial-messages` in the run's cwd,
+//! plus the policy's flags, `--model`, `--effort`, and `--resume <session id>` (0004 [10]), with
+//! `--fork-session` for a fork's first run (0050) and `--resume-session-at` for a rewind (0062).
+//! The run's one `--settings` holds `showThinkingSummaries`, which with the thinking flags gets
+//! T3 Code's thinking summaries, and fast mode as `fastMode`. A 200k context window is
+//! [`DISABLE_1M_ENV`]. The sidecar gives these to the SDK as its options, and the SDK runs the
+//! CLI with them:
 //!
 //! - **No-write** is 0004's: [`NO_WRITE_ARGS`], then [`no_write_settings`] as `--settings`, which
-//!   also keeps the file tools out of Claude Code's shared temp folder (RYA-176). As a second
+//!   also keeps the file tools out of Claude Code's shared temp folder (PLX-176). As a second
 //!   check, a no-write run whose `system/init` lists any tool outside [`NO_WRITE_TOOLS`] fails with
 //!   [`FailureKind::PolicyViolation`].
-//! - **A coordinator**, a no-write run with wispd's own MCP tools attached (0019), is full Claude
-//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with the `wispd mcp`
-//!   server, which joins the user's, the repository's, and plugins' servers, and `--allowedTools`
-//!   with [`crate::mcp::ALLOWED_TOOLS`], so wispd's tools work in every mode. Its user and
-//!   project settings, hooks, skills, plugins, and subagents all load, as in a terminal. As a
-//!   second check, a coordinator whose `system/init` reports another permission mode fails with
-//!   [`FailureKind::PolicyViolation`].
+//! - **An orchestrator**, a no-write run with plxd's own MCP tools attached (0019), is full Claude
+//!   Code instead (0027): the run's [`permission_mode`], then `--mcp-config` with its
+//!   `plxd mcp --thread` server (PLX-380), which joins the user's, the repository's, and plugins'
+//!   servers, and `--allowedTools` with [`crate::mcp::thread::ALLOWED_TOOLS`], so plxd's tools
+//!   work in every mode, and [`TODO_TOOLS`],
+//!   so it keeps a plan on every model (PLX-249), then `--settings` with only [`settings_env`].
+//!   Its user and project settings, hooks, skills, plugins, and subagents all load, as in a
+//!   terminal. As a second check, an orchestrator whose `system/init` reports another permission
+//!   mode fails with [`FailureKind::PolicyViolation`].
 //! - **Workspace-write** is 0013's worker sandbox: [`WORKSPACE_WRITE_ARGS`], then the run's
-//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for
-//!   each writable folder. In [`AgentPermission::Bypass`] a worker is full Claude Code instead,
-//!   as on the user's own machine (0027): only its permission mode and `--add-dir`, with no
-//!   sandbox, and its `system/init` may list any tool. Otherwise:
+//!   [`permission_mode`], then [`worker_settings`] as `--settings`, then `--add-dir` for each
+//!   writable folder. A normal thread in any mode whose client answers permission requests (0034),
+//!   and a worker in [`AgentPermission::Bypass`] (0027), are full Claude Code instead, as on the
+//!   user's own machine ([`unsandboxed`]): only the permission mode, for a thread `--mcp-config`
+//!   with its `plxd mcp --thread` server (0041), `--allowedTools` with that server's
+//!   [`crate::mcp::thread::ALLOWED_TOOLS`] and [`TODO_TOOLS`], `--add-dir`, and `--settings`
+//!   with only [`settings_env`], with no sandbox, so
+//!   the user's settings, `CLAUDE.md` files, skills, plugins, hooks, subagents, and MCP servers all
+//!   load, and its `system/init` may list any tool. Otherwise:
 //!   - `--restricted` loads no user, project, or local settings files, so a repository's
 //!     `.claude/settings.json` can't add allow rules, hooks, or an `env` block (#134), and it
 //!     confines the file tools to the working directories.
@@ -31,57 +44,66 @@
 //!     paths, and no writes to git metadata. `failIfUnavailable` and
 //!     `allowUnsandboxedCommands: false` keep a command from ever running outside it. Commands,
 //!     `WebFetch`, and `WebSearch` reach any host but [`WORKER_DENIED_HOSTS`] (Ryan, #137), so
-//!     the unreadable paths are what keep secrets in.
+//!     the unreadable paths are what keep secrets in. A worker in Plan that asks plxd also gets
+//!     `ExitPlanMode`, to hand its plan over ([`hands_over_plans`]).
 //!   - `--strict-mcp-config` connects no MCP servers, including the repository's `.mcp.json`.
 //!
-//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`],
-//!   reports a Claude Code older than [`WORKER_MIN_VERSION`], or reports a permission mode
-//!   other than the one it asked for ([`permission_mode`]), fails with
-//!   [`FailureKind::PolicyViolation`].
+//!   As a second check, a worker whose `system/init` lists a tool outside [`WORKER_TOOLS`]
+//!   (and `ExitPlanMode` for one that hands over plans), reports a Claude Code older than
+//!   [`WORKER_MIN_VERSION`], or reports a permission mode other than the one it asked for
+//!   ([`permission_mode`]), fails with [`FailureKind::PolicyViolation`].
 //!
-//!   Only macOS and Linux run workers, with the same settings. On Linux,
+//!   Only macOS and Linux run sandboxed workers, with the same settings. On Linux,
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
 //!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). It also
 //!   refuses a worker when Claude Code runs with [`SCRUB_ENV`] on, which managed settings can
-//!   set (RYA-112). That check runs in a separate process, so the permission mode check, which
-//!   the flag fails, backs it up from inside the worker's own (RYA-118). Elsewhere the backend
-//!   reports no `worker_sandbox` and refuses a workspace-write run.
+//!   set (PLX-112). That check runs in a separate process, so the permission mode check, which
+//!   the flag fails, backs it up from inside the worker's own (PLX-118). Elsewhere the backend
+//!   reports no `worker_sandbox` and refuses a sandboxed run. Full Claude Code needs no sandbox,
+//!   so it runs the same on macOS, Linux, and Windows, with no sandbox check (PLX-959).
 //!
 //! # A worker's temp folder
 //!
 //! Claude Code keeps its temp files in `$CLAUDE_CODE_TMPDIR/claude-<uid>`, `/tmp/claude-<uid>` by
 //! default, which every Claude Code session of the user shares, and its sandbox lets commands
 //! write there. So a worker's CLI gets [`TEMP_ENV`] set to the run's own folder,
-//! [`WorkerSandbox::temp`] (RYA-130), and its commands get `<temp>/claude-<uid>` as their
+//! [`WorkerSandbox::temp`] (PLX-130), and its commands get `<temp>/claude-<uid>` as their
 //! `TMPDIR`. Claude Code does that only while the path fits in [`MAX_COMMAND_TEMP_BYTES`], and
 //! falls back to the shared folder otherwise, so a longer one refuses the worker
 //! ([`worker_temp`]). The rest of the run's folder stays hidden from commands, and the settings
 //! take back the paths the sandbox always lets them write ([`WORKER_DENIED_WRITES`]).
 //!
-//! The CLI's own `TMPDIR` stays wispd's. Claude Code keeps its sandbox's Linux proxy bridges
+//! The CLI's own `TMPDIR` stays plxd's. Claude Code keeps its sandbox's Linux proxy bridges
 //! there, which commands must reach, and Node's compile cache, which they must not write. In the
-//! run's folder the first would be hidden and cut commands off the network (RYA-107).
+//! run's folder the first would be hidden and cut commands off the network (PLX-107).
 //!
 //! # A worker's `PATH`
 //!
 //! Claude Code runs each Bash command through the user's `$SHELL`, and zsh reads `/etc/zshenv`
 //! and `~/.zshenv` for every command, so startup files that set `PATH` outright replace the
-//! `PATH` wispd gave the CLI. Claude Code's shell snapshot would put it back, but the snapshot
-//! sits in the configuration folder, which a worker's commands can't read (RYA-126). So a worker
+//! `PATH` plxd gave the CLI. Claude Code's shell snapshot would put it back, but the snapshot
+//! sits in the configuration folder, which a worker's commands can't read (PLX-126). So a worker
 //! also gets [`ENV_FILE_ENV`]: [`write_env_file`] writes a script into the data folder's `tmp/`
 //! that puts the CLI's `PATH` back in front, which the CLI reads itself and runs before each
 //! command. The run's driver deletes it once the CLI has exited.
 //!
-//! # Messages go on stdin
+//! # Messages go into the query's prompt
 //!
-//! With `--input-format stream-json`, the prompt and every follow-up are user messages on stdin,
-//! one JSON object per line, as the Agent SDK sends them, with a message's images as base64 image
-//! blocks before its text (RYA-191). The prompt never goes in argv, where
-//! `ps` would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id,
-//! which the CLI echoes in `result.user_message_uuids`: several messages sent close together can
-//! run as one turn, and those ids say which turns a result ended. Once no turn is outstanding,
-//! stdin closes and the CLI exits after its last result, which ends the run; a follow-up sent
-//! after that fails with [`SendError::Finished`](super::SendError::Finished).
+//! The prompt and every follow-up are SDK user messages, one JSON object each, which the sidecar
+//! puts in the query's prompt and the SDK writes on the CLI's stdin, with a message's images as
+//! base64 image blocks before its text (PLX-191). The prompt never goes in argv, where `ps`
+//! would show it and `ARG_MAX` would limit it. Each message carries a `uuid`, the turn id, which
+//! the CLI echoes in `result.user_message_uuids`: several messages sent close together can run as
+//! one turn, and those ids say which turns a result ended. A turn the CLI starts itself, for a
+//! task notification or a background task's end, ends none of them; while none is outstanding,
+//! it is reported as a turn with no id (PLX-724). A steer carries `priority: "now"`, as
+//! T3 Code steers, and joins the running turn; plxd holds a queued message until the turn has
+//! ended (PLX-370). Once no turn is outstanding and plxd holds no message for the CLI
+//! ([`Run::hold`](super::Run::hold)), the prompt ends and the CLI exits after its last result,
+//! which ends the run; a follow-up sent after that fails with
+//! [`SendError::Finished`](super::SendError::Finished). Each turn's last transcript entry is
+//! reported as its [`Event::TurnCursor`]. A revert leaves the session as it is, and the next run
+//! resumes at the kept turn's cursor ([`Backend::rewind`], 0062).
 //!
 //! # Credentials
 //!
@@ -89,67 +111,110 @@
 //! credentials, provider, or endpoint: names starting with one of [`SCRUBBED_PREFIXES`], plus
 //! [`SCRUBBED_VARS`]. Those include the three that outrank the login (0004), the cloud provider
 //! switches, `ANTHROPIC_BASE_URL`, which would send the login's token elsewhere, and the profile
-//! and federation variables. `CLAUDE_CONFIG_DIR` is dropped too, and set only to the account's
-//! own configuration folder. [`apply_credential`] then injects only what the account needs: the
+//! and federation variables. `CLAUDE_CONFIG_DIR` is dropped too, and set only to the account's own
+//! configuration folder. [`apply_credential`] then injects only what the account needs: the
 //! account's configuration folder for a subscription, or, for an API key account (#118), only
-//! [`API_KEY_ENV`] with the key [`key_account::resolve`](super::key_account::resolve) read from
-//! the Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it wispd
-//! makes along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s
-//! entries, and the buffers `spawn_session` builds from them) is zeroized once it is done with
-//! it. No run inherits [`SCRUB_ENV`]; a no-write run other than a coordinator sets it, so the
-//! CLI's own subprocesses don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its sandboxed
-//! commands only: the helpers Claude Code runs outside the sandbox, such as `git` and `rg`, still
-//! inherit it.
+//! [`API_KEY_ENV`] with the key [`key_account::resolve`](super::key_account::resolve) read from the
+//! Keychain. The key is never in `args`, so `ps` can't show it, and every copy of it plxd makes
+//! along the way ([`super::ApiKey`]'s own buffer, [`super::process::Environment`]'s entries, and
+//! the buffers `spawn_session` builds from them) is zeroized once it is done with it. No run
+//! inherits [`SCRUB_ENV`]; a no-write run other than an orchestrator sets it, so the CLI's own
+//! subprocesses don't get the key. A worker's sandbox withholds [`WORKER_WITHHELD_VARS`] from its
+//! sandboxed commands only: the helpers Claude Code runs outside the sandbox, such as `git` and
+//! `rg`, still inherit it.
 //!
-//! A project's `env` block can still set variables for a worker, and a coordinator or a bypass
+//! A project's `env` block can still set variables for a worker, and an orchestrator or a bypass
 //! worker loads the repository's settings (0004, #134, 0027), so the output is
 //! checked as well. A `system/init` whose `apiKeySource` isn't the account's, or is missing, and
 //! a `result` whose `modelUsage` names a provider other than `firstParty`, kill the CLI's process
 //! group at once and fail the run with [`FailureKind::UnexpectedApiKey`].
 //!
+//! # The task list
+//!
+//! Claude Code's task tools keep a session's list under its session id, unless [`TASK_LIST_ENV`]
+//! names a list that other sessions share (PLX-251). No run inherits it ([`SCRUBBED_VARS`]), but
+//! the CLI also copies settings `env` blocks into its own process: its global config's, which
+//! even `--restricted` reads, and those of the user, project, and local settings that a
+//! orchestrator and a bypass worker load. So every run's `--settings`, which the CLI applies after
+//! them, sets it empty ([`settings_env`]). Managed settings are applied last, so their `env`
+//! still picks the list for every run (0013).
+//!
+//! # Permission requests
+//!
+//! In Manual, Auto, and Plan, a worker's, a thread's, or an orchestrator's CLI, and a thread's in
+//! Accept Edits too, gets [`PROMPT_TOOL_ARGS`], as the Agent SDK passes them for its `canUseTool`
+//! (PLX-222, 0031), when its client answers permission requests ([`RunRequest::approvals`]).
+//! Instead of denying a tool call nobody approved, the CLI writes a `can_use_tool` control request
+//! on stdout and waits. The sidecar passes it on, the driver reports it as
+//! [`Event::ApprovalRequested`], and the answer that [`Run::answer`](super::Run::answer) gives goes
+//! back as a `control_response`, which answers the SDK's `canUseTool`; the prompt stays open while
+//! a request waits. A `control_cancel_request` withdraws one, as the CLI's exit withdraws every one
+//! left. The SDK answers any other control request itself, and a test's fake that passes one on
+//! gets an error response. A sandboxed worker in Accept Edits and every run in Bypass Permissions
+//! never ask, a plain no-write run denies what isn't allowed (`dontAsk`), and a run without
+//! `approvals` denies what would prompt, so their CLIs run as before. In Plan, the plan itself is a
+//! request: `ExitPlanMode`'s, which an orchestrator and a thread always have with the channel and a
+//! worker gets with it (PLX-243).
+//!
 //! # Cancel
 //!
-//! `SIGINT` ends Claude's turn, while `SIGTERM` leaves it unfinished (0004 [11]), so cancel sends
-//! `SIGINT`, closes stdin so the CLI exits after the interrupted turn, and kills the process
-//! group if it is still running after the grace period.
+//! Cancel is the SDK's `interrupt()`, which ends Claude's turn as `SIGINT` did (0004 [11]), then
+//! the end of the prompt, so the CLI exits after the interrupted turn, and the sidecar kills its
+//! process group if it is still running after the grace period.
+//!
+//! # Claude Remote Control
+//!
+//! A run that resumes a `claude.ai` session, whose id starts with `session_`, runs nowhere here:
+//! [`remote`] sends its messages to the session `claude remote-control` serves on another
+//! computer and follows its transcript (PLX-1140).
 
+pub(crate) mod control;
 #[cfg(target_os = "linux")]
 pub mod linux_sandbox;
+pub(crate) mod remote;
+pub(crate) mod sdk;
 mod stream;
 #[cfg(all(test, unix))]
 mod tests;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempPath;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::mpsc;
 
+use self::sdk::{Input, Query};
+pub(crate) use self::stream::micros as usd_micros;
 pub(crate) use self::stream::version as parse_version;
-use self::stream::{Step, Translator, TurnDone};
-use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
+use self::stream::{Ask, Step, Translator, TurnDone};
+use super::commands::{self, CommandsProbe};
+use super::event::{Event, Failure, FailureKind, Outcome, WarningKind, exit_outcome};
+use super::limits::{self, LimitsProbe};
+use super::namer::{self, NameProbe};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, Signal,
-    SpawnError, StdinMode, StdinPipe,
+    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec,
+    SpawnError, StdinMode,
 };
 use super::sandbox::worker_sandbox;
 use super::{
-    AgentEffort, AgentPermission, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER,
-    EventSink, FollowUp, PromptImage, Run, RunHandle, RunId, RunRequest, SendError, StartError,
-    Started, ToolPolicy, TurnId, WorkerSandbox, check_argument, prepend_path_line,
+    AgentEffort, AgentPermission, Answer, ApprovalId, Backend, CancelSwitch, Capabilities,
+    Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, Held, Overrides, PromptImage,
+    RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId, WorkerSandbox, check_argument,
+    prepend_path_line,
 };
 use crate::mcp;
 
 /// The CLI's program name, looked up on the launcher's `PATH`.
 pub const PROGRAM: &str = "claude";
 
-/// The arguments every run starts with.
+/// The arguments every run starts with. Thinking is T3 Code's: adaptive, with its summaries in
+/// the `thinking` blocks, which otherwise come empty (PLX-713). Partial messages stream the
+/// reply's text as T3 Code's do (PLX-714).
 pub const BASE_ARGS: &[&str] = &[
     "-p",
     "--output-format",
@@ -157,9 +222,14 @@ pub const BASE_ARGS: &[&str] = &[
     "--verbose",
     "--input-format",
     "stream-json",
+    "--thinking",
+    "adaptive",
+    "--thinking-display",
+    "summarized",
+    "--include-partial-messages",
 ];
 
-/// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't a coordinator, as 0004 has
+/// [`ToolPolicy::NoWrite`]'s fixed arguments for a run that isn't an orchestrator, as 0004 has
 /// them: read-only built-in tools, only the user's settings (so no project `env` block or hooks),
 /// no MCP servers, and every call that would prompt denied. [`arguments`] adds
 /// [`no_write_settings`] after them.
@@ -173,31 +243,54 @@ pub const NO_WRITE_ARGS: &[&str] = &[
     "dontAsk",
 ];
 
-/// The `--settings` a no-write run other than a coordinator gets: hooks off (0004), and no `Read`
+/// The `--settings` a no-write run other than an orchestrator gets: hooks off (0004), and no `Read`
 /// under Claude Code's shared temp folder, `/tmp/claude-<uid>` in both spellings
 /// ([`commands_temp`]), which holds every session's files and which Claude Code otherwise lets it
-/// read outside its cwd (RYA-176). 0013 hides the same folder from workers. A `Read` rule covers
+/// read outside its cwd (PLX-176). 0013 hides the same folder from workers. A `Read` rule covers
 /// `Glob` and `Grep` too. The folder is always in `/tmp`, because no no-write run gets
-/// [`TEMP_ENV`]: every agent CLI starts from wispd's allowlisted environment
+/// [`TEMP_ENV`]: every agent CLI starts from plxd's allowlisted environment
 /// (`agents::worker::agent_environment`, 0014), which drops an inherited one, and only a worker
-/// has one injected.
+/// has one injected. Like every run's, it holds [`settings_env`].
 #[must_use]
 pub fn no_write_settings() -> Value {
     let deny: Vec<String> = ["/tmp", "/private/tmp"]
         .into_iter()
         .map(|temp| format!("Read(/{}/**)", commands_temp(Path::new(temp)).display()))
         .collect();
-    serde_json::json!({"disableAllHooks": true, "permissions": {"deny": deny}})
+    serde_json::json!({
+        "disableAllHooks": true,
+        "permissions": {"deny": deny},
+        "env": settings_env(),
+    })
+}
+
+/// The `env` in every run's `--settings` (PLX-251): [`TASK_LIST_ENV`] empty, which Claude Code
+/// 2.1.283 treats as unset, so the run keeps its session's own task list. The CLI copies into its
+/// own process the `env` of its global config (`.claude.json` in the configuration folder, which
+/// even `--restricted` reads), then of the user's, the project's, and the local settings it loads,
+/// then of `--settings`, then of managed settings. So this beats every one but managed settings,
+/// whose `env` still picks the list for every run (0013). The CLI keeps only the last
+/// `--settings`, so each run gets one, with this in it.
+#[must_use]
+pub fn settings_env() -> Value {
+    serde_json::json!({ TASK_LIST_ENV: "" })
 }
 
 /// The only built-in tools a no-write run's `system/init` may list. `EndConversation` stays
-/// whatever `--tools` says (the CLI reference), and only ends the session. A coordinator run
-/// may also list exactly [`mcp::ALLOWED_TOOLS`], wispd's own MCP tools (0019).
+/// whatever `--tools` says (the CLI reference), and only ends the session. An orchestrator's
+/// `system/init` may list any tool: it is full Claude Code (0027).
 pub const NO_WRITE_TOOLS: &[&str] = &["Read", "Glob", "Grep", "EndConversation"];
 
 /// The built-in tools a worker gets (0013): the file tools, `Bash`, which Claude Code's sandbox
-/// confines, the web tools (Ryan, #137), and `TodoWrite`. No subagents, skills, or MCP tools.
-/// `EndConversation` may appear in `system/init` as well, as for a no-write run.
+/// confines, the web tools (Ryan, #137), and the todo tools. No subagents, skills, or MCP tools.
+/// `EndConversation` may appear in `system/init` as well, as for a no-write run. A worker that
+/// [`hands_over_plans`] gets `ExitPlanMode` too ([`PLAN_WORKER_TOOL_LIST`]).
+///
+/// The todo tools are `TodoWrite` and the four task tools that replace it in Claude Code 2.1.283,
+/// which offers one set or the other, never both: the task tools unless `CLAUDE_CODE_ENABLE_TASKS`
+/// is `false` (PLX-248). Naming either set in `--tools` also turns them on for models Claude Code
+/// would otherwise give none. The task tools keep the session's list in the CLI's configuration
+/// folder, which the CLI writes itself and the worker's commands can't read (0013).
 pub const WORKER_TOOLS: &[&str] = &[
     "Read",
     "Edit",
@@ -209,11 +302,34 @@ pub const WORKER_TOOLS: &[&str] = &[
     "WebFetch",
     "WebSearch",
     "TodoWrite",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
+];
+
+/// The todo tools, the end of [`WORKER_TOOLS`]: `TodoWrite` and Claude Code's four task tools. A
+/// orchestrator and a worker in [`AgentPermission::Bypass`] have no `--tools`, so they name these
+/// in `--allowedTools` instead, which turns them on in the same way (PLX-249). Whichever set
+/// `CLAUDE_CODE_ENABLE_TASKS` picks is then on, so a user who turned the task tools off in their
+/// settings' `env` gets `TodoWrite` back, as in their terminal. An allow rule also pre-approves a
+/// tool, which changes nothing for these: Claude Code 2.1.283 runs them without asking in every
+/// mode. A deny rule in the user's settings still wins (0027).
+pub const TODO_TOOLS: &[&str] = &[
+    "TodoWrite",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
 ];
 
 /// [`WORKER_TOOLS`] as `--tools` takes them.
-pub const WORKER_TOOL_LIST: &str =
-    "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,TodoWrite";
+pub const WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,WebSearch,\
+     TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate";
+
+/// [`WORKER_TOOL_LIST`] and `ExitPlanMode`, for a worker that [`hands_over_plans`] (PLX-243).
+pub const PLAN_WORKER_TOOL_LIST: &str = "Read,Edit,Write,Glob,Grep,NotebookEdit,Bash,WebFetch,\
+     WebSearch,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate,ExitPlanMode";
 
 /// The names for this Mac that no worker command or `WebFetch` may reach, even with network
 /// access: this Mac's own services wait on #168. The sandbox's proxy canonicalizes other
@@ -222,15 +338,28 @@ pub const WORKER_TOOL_LIST: &str =
 /// interface addresses aren't: 0013 records that gap.
 pub const WORKER_DENIED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "[::]"];
 
-/// The permission mode a worker or a coordinator asks for by default ([`permission_mode`]). It
-/// must then report the mode it asked for in `system/init`. Claude Code forces `default` instead when
-/// [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub mode,
-/// whatever `linux_sandbox::check_host` saw (RYA-118).
+/// The permission mode a worker or an orchestrator asks for by default ([`permission_mode`]). It
+/// must then report the mode it asked for in `system/init`. Claude Code forces `default` instead
+/// when [`SCRUB_ENV`] is on, so another mode there means the worker's own process runs in scrub
+/// mode, whatever `linux_sandbox::check_host` saw (PLX-118).
 pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
 
 /// [`AgentPermission::Bypass`]'s mode. Claude Code refuses it under `--restricted`, so a worker
 /// in it runs without the worker sandbox (0027).
 pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
+
+/// The arguments, after `--permission-mode`, that make a run's CLI ask plxd over stdio before a
+/// tool call that would prompt, instead of denying it (PLX-222, 0031). Only runs that
+/// [`prompts`] get them.
+pub const PROMPT_TOOL_ARGS: &[&str] = &["--permission-prompt-tool", "stdio"];
+
+/// The argument, after [`PROMPT_TOOL_ARGS`], that lets a thread's mode change to Bypass
+/// Permissions while it runs ([`Run::set_permission`](super::Run::set_permission)): Claude Code refuses the switch in a
+/// session not launched with it. It doesn't change the mode the session starts in.
+pub const LIVE_MODE_ARGS: &[&str] = &["--allow-dangerously-skip-permissions"];
+
+/// The tool whose approval takes Claude Code out of plan mode.
+const EXIT_PLAN_MODE: &str = "ExitPlanMode";
 
 /// [`ToolPolicy::WorkspaceWrite`]'s fixed arguments (0013), in every mode but
 /// [`AgentPermission::Bypass`]. [`arguments`] adds the run's `--permission-mode`
@@ -242,8 +371,17 @@ pub const WORKSPACE_WRITE_ARGS: &[&str] = &[
     "--strict-mcp-config",
 ];
 
+/// [`WORKSPACE_WRITE_ARGS`] with [`PLAN_WORKER_TOOL_LIST`] as `--tools`, for a worker that
+/// [`hands_over_plans`] (PLX-243). Nothing else differs.
+pub const PLAN_WORKSPACE_WRITE_ARGS: &[&str] = &[
+    "--restricted",
+    "--tools",
+    PLAN_WORKER_TOOL_LIST,
+    "--strict-mcp-config",
+];
+
 /// Every [`AgentEffort`] but the fallback: `--effort` takes them all. Claude Code downgrades
-/// `xhigh` on models that lack it, and only warns about a level it doesn't know, so wispd sends
+/// `xhigh` on models that lack it, and only warns about a level it doesn't know, so plxd sends
 /// only these.
 const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Low,
@@ -253,11 +391,19 @@ const EFFORTS: &[AgentEffort] = &[
     AgentEffort::Max,
 ];
 
-/// Claude Code's permission modes, in the order its own picker lists them (0027).
+/// The context windows a run may ask for, in tokens. Claude Code 2.1.295 runs most models with 1M
+/// by default, which [`DISABLE_1M_ENV`] caps at 200k; Opus 4.6, Opus 4.5, Sonnet 4.6, and Haiku
+/// 4.5 have only 200k. So 1M passes nothing.
+const CONTEXT_WINDOWS: &[u32] = &[200_000, 1_000_000];
+
+/// Set to `1` for a run that asks for a 200k context window.
+const DISABLE_1M_ENV: &str = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
+
+/// Claude Code's permission modes (0027), in the picker's order, most supervised first (0054).
 const PERMISSIONS: &[AgentPermission] = &[
-    AgentPermission::Auto,
     AgentPermission::Manual,
     AgentPermission::Edit,
+    AgentPermission::Auto,
     AgentPermission::Plan,
     AgentPermission::Bypass,
 ];
@@ -266,7 +412,7 @@ const PERMISSIONS: &[AgentPermission] = &[
 /// arrived in 2.1.248, the last of them (0013). An older CLI rejects the unknown flag, and a
 /// worker whose `system/init` reports an older version fails, but #156 also checks the detected
 /// version before it starts one, for a clearer error. Linux workers need 2.1.275 or later:
-/// `linux_sandbox::check_host` reads a `sandbox status` field that arrived then (RYA-112).
+/// `linux_sandbox::check_host` reads a `sandbox status` field that arrived then (PLX-112).
 pub const WORKER_MIN_VERSION: &str = "2.1.248";
 
 /// Prefixes of inherited variables no run gets: Anthropic credentials, endpoints, profiles, and
@@ -276,10 +422,23 @@ pub const WORKER_MIN_VERSION: &str = "2.1.248";
 pub const SCRUBBED_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_OAUTH_"];
 
 /// Inherited variables no run gets, besides [`SCRUBBED_PREFIXES`]: Bedrock's API key; the
-/// configuration folder, which [`apply_credential`] sets only to the account's own; and
-/// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or a coordinator must not
-/// get (RYA-112, 0027).
-pub const SCRUBBED_VARS: &[&str] = &["AWS_BEARER_TOKEN_BEDROCK", CONFIG_DIR_ENV, SCRUB_ENV];
+/// configuration folder, which [`apply_credential`] sets only to the account's own;
+/// [`SCRUB_ENV`], which a plain no-write run sets itself and a worker or an orchestrator must not
+/// get (PLX-112, 0027); and [`TASK_LIST_ENV`], which would share one task list (PLX-251).
+pub const SCRUBBED_VARS: &[&str] = &[
+    "AWS_BEARER_TOKEN_BEDROCK",
+    CONFIG_DIR_ENV,
+    SCRUB_ENV,
+    TASK_LIST_ENV,
+];
+
+/// The variable that picks Claude Code's task list (PLX-251). 2.1.283 keeps a session's list in
+/// `tasks/<session id>` in the configuration folder, unless this is set and not empty: then every
+/// session with the same value shares one list, other threads and the user's own Claude Code
+/// sessions included, and a run with the task tools could read, change, or delete their tasks.
+/// No run inherits it ([`SCRUBBED_VARS`]), and every run's `--settings` sets it empty
+/// ([`settings_env`]).
+pub const TASK_LIST_ENV: &str = "CLAUDE_CODE_TASK_LIST_ID";
 
 /// The variable that picks a second account's configuration folder.
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
@@ -294,21 +453,30 @@ pub const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 /// string as [`API_KEY_ENV`] (0004's table), but the two names are checked independently.
 pub const API_KEY_SOURCE: &str = "ANTHROPIC_API_KEY";
 
+/// The variables that pick the model behind each of Claude Code's aliases, background tasks, and
+/// subagents, which a run on a model service sets to its own model.
+const GATEWAY_MODEL_ENV: &[&str] = &[
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+];
+
 /// Variables every run gets: report a startup failure as a `result` instead of on stderr alone.
 const ALWAYS_SET: &[(&str, &str)] = &[("CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "1")];
 
 /// Set to `1` for a no-write run, to keep credentials out of the CLI's own subprocesses, such as
-/// wispd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
+/// plxd's MCP server (0004 Consequences). A worker doesn't get it: on Linux it swaps in Claude
 /// Code's CI sandbox profile, which lets commands write all of `/home`, `/tmp`, `/var`, `/opt`,
-/// `/run`, `/mnt`, and `/root` (RYA-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
+/// `/run`, `/mnt`, and `/root` (PLX-20). [`worker_settings`] withholds [`WORKER_WITHHELD_VARS`]
 /// from a worker's commands instead, and [`SCRUBBED_VARS`] keeps an inherited one out. Managed
-/// settings can still set it, and their `env` beats wispd's, so on Linux
-/// `linux_sandbox::check_host` refuses a worker when Claude Code runs with it on (RYA-112), and
-/// on every OS a worker whose `system/init` shows the permission mode it forces fails
-/// (RYA-118). A coordinator doesn't get it either: it would force `default`, where headless Claude
-/// Code denies every tool nobody approved, so a coordinator that reports another mode than it
-/// asked for fails the same way (0027). It forces a plain no-write run's mode to `default` as
-/// well, so those aren't checked.
+/// settings can still set it, and their `env` beats plxd's, so on Linux `linux_sandbox::check_host`
+/// refuses a worker when Claude Code runs with it on (PLX-112), and on every OS a worker whose
+/// `system/init` shows the permission mode it forces fails (PLX-118). An orchestrator doesn't get
+/// it either: it would force `default`, where headless Claude Code denies every tool nobody
+/// approved, so an orchestrator that reports another mode than it asked for fails the same way
+/// (0027). It forces a plain no-write run's mode to `default` as well, so those aren't checked.
 const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
 /// Variables a worker's commands never see (0013): an API key account's key, and the token for
@@ -317,7 +485,7 @@ const SCRUB_ENV: &str = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 pub const WORKER_WITHHELD_VARS: &[&str] = &[API_KEY_ENV, "CLAUDE_CODE_MESSAGING_TOKEN"];
 
 /// Paths Claude Code 2.1.283's sandbox lets every command write whatever the settings say, which
-/// a worker's `denyWrite` takes back (RYA-130): `/tmp/claude` in both spellings, npm's log folder,
+/// a worker's `denyWrite` takes back (PLX-130): `/tmp/claude` in both spellings, npm's log folder,
 /// and Claude Code's debug logs. `~/` is the CLI's `HOME`. A `denyWrite` rule beats them.
 pub const WORKER_DENIED_WRITES: &[&str] = &[
     "/tmp/claude",
@@ -334,7 +502,7 @@ pub const TEMP_ENV: &str = "CLAUDE_CODE_TMPDIR";
 /// `TMPDIR`. A longer one gets the shared `/tmp/claude-<uid>` instead, which a worker can't use.
 pub const MAX_COMMAND_TEMP_BYTES: usize = 44;
 
-/// The folder a worker's CLI gets as [`TEMP_ENV`]: `temp`, the run's own (RYA-130), spelled as
+/// The folder a worker's CLI gets as [`TEMP_ENV`]: `temp`, the run's own (PLX-130), spelled as
 /// short as it can be. On macOS, `/private/tmp/...` becomes `/tmp/...`, where `/tmp`
 /// links, which saves 8 of the [`MAX_COMMAND_TEMP_BYTES`].
 ///
@@ -374,21 +542,56 @@ pub fn commands_temp(temp: &Path) -> PathBuf {
 pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
 
 /// Writes a worker's [`ENV_FILE_ENV`] script into `dir`, which no worker may read or write
-/// (wispd's data folder's `tmp/`), and returns its path, which deletes the file when dropped. The
+/// (plxd's data folder's `tmp/`), and returns its path, which deletes the file when dropped. The
 /// script puts `path`, the `PATH` the CLI started with, in front of whatever `PATH` the shell's
-/// startup files left (RYA-126). The file is new, has a random name, and only its owner may read
+/// startup files left (PLX-126). The file is new, has a random name, and only its owner may read
 /// or write it.
 ///
 /// # Errors
 ///
 /// If `dir` can't be created or the file can't be written.
 pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
+    write_temp_file(dir, "claude-env-", ".sh", &prepend_path_line(path))
+}
+
+/// What a run adds to Claude Code's system prompt: the math format for a full thread (PLX-730)
+/// and an orchestrator's instructions (0078), joined, since the CLI keeps one addition.
+#[must_use]
+pub fn appended_prompt(request: &RunRequest) -> Option<String> {
+    let parts: Vec<&str> = unsandboxed(request)
+        .then_some(super::MATH_FORMAT)
+        .into_iter()
+        .chain(request.instructions.as_deref())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// Writes [`appended_prompt`]'s `text` into `dir`, plxd's data folder's `tmp/`, for
+/// `--append-system-prompt-file`, and returns its path, which deletes the file when dropped. A
+/// file, not `--append-system-prompt`, because Rust refuses a newline in an argument to a `.cmd`
+/// shim, as npm installs Claude Code on Windows.
+///
+/// # Errors
+///
+/// If `dir` can't be created or the file can't be written.
+pub fn write_prompt_file(dir: &Path, text: &str) -> io::Result<TempPath> {
+    write_temp_file(dir, "claude-prompt-", ".md", text.as_bytes())
+}
+
+/// Writes `contents` into a new owner-only file in `dir`, which it makes if missing, with a random
+/// name between `prefix` and `suffix`, and returns its path, which deletes the file when dropped.
+fn write_temp_file(
+    dir: &Path,
+    prefix: &str,
+    suffix: &str,
+    contents: &[u8],
+) -> io::Result<TempPath> {
     std::fs::create_dir_all(dir)?;
     let mut file = tempfile::Builder::new()
-        .prefix("claude-env-")
-        .suffix(".sh")
+        .prefix(prefix)
+        .suffix(suffix)
         .tempfile_in(dir)?;
-    file.write_all(&prepend_path_line(path))?;
+    file.write_all(contents)?;
     Ok(file.into_temp_path())
 }
 
@@ -397,8 +600,11 @@ pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
 pub struct ClaudeBackend {
     launcher: Launcher,
     program: OsString,
-    cancel: CancelPolicy,
+    /// How long a cancelled run's CLI has to exit before it is killed.
+    grace: Duration,
     limits: OutputLimits,
+    overrides: Overrides,
+    orchestrator_permissions: &'static [AgentPermission],
 }
 
 impl ClaudeBackend {
@@ -408,9 +614,31 @@ impl ClaudeBackend {
         Self {
             launcher,
             program: PROGRAM.into(),
-            cancel: CancelPolicy::default(),
+            grace: CancelPolicy::default().grace,
             limits: OutputLimits::default(),
+            overrides: Overrides::default(),
+            orchestrator_permissions: PERMISSIONS,
         }
+    }
+
+    /// Runs an orchestrator's agents only in Bypass, for a model service whose endpoint Auto's
+    /// classifier isn't tested against (0042). Its threads keep every mode.
+    #[must_use]
+    pub fn bypass_only_in_orchestrators(mut self) -> Self {
+        self.orchestrator_permissions = &[AgentPermission::Bypass];
+        self
+    }
+
+    /// Runs as a provider instance (0040): its name, program, folder, arguments, and variables,
+    /// such as a model service's `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, which Claude
+    /// Code reports as `apiKeySource` `none`, as it does a login.
+    #[must_use]
+    pub fn with_overrides(mut self, overrides: Overrides) -> Self {
+        if let Some(program) = &overrides.program {
+            self.program.clone_from(program);
+        }
+        self.overrides = overrides;
+        self
     }
 
     /// Runs `program`, a name on `PATH` or an absolute path, instead of `claude`.
@@ -420,18 +648,150 @@ impl ClaudeBackend {
         self
     }
 
-    /// Cancels with `policy` instead of `SIGINT` and a 10 s grace period.
+    /// For an instance that points Claude Code at another endpoint (a model service, 0040):
+    /// every model alias, background tasks', and subagents' model become the run's `model`,
+    /// which the endpoint serves, unless the instance set them; and the user's settings can't
+    /// route it elsewhere.
+    fn pin_gateway_model(&self, spec: &mut ProcessSpec, model: Option<&str>) {
+        let set = |name: &str| self.overrides.env.iter().any(|(var, _)| var == name);
+        if !set("ANTHROPIC_BASE_URL") {
+            return;
+        }
+        spec.inject.set("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+        let Some(model) = model else {
+            return;
+        };
+        for name in GATEWAY_MODEL_ENV {
+            if !set(name) {
+                spec.inject.set(name, model);
+            }
+        }
+    }
+
+    /// Kills a cancelled run's CLI after `grace` instead of 10 s.
     #[must_use]
-    pub fn with_cancel_policy(mut self, policy: CancelPolicy) -> Self {
-        self.cancel = policy;
+    pub fn with_grace(mut self, grace: Duration) -> Self {
+        self.grace = grace;
         self
     }
 
-    /// Reads output with `limits` instead of the defaults.
-    #[must_use]
-    pub fn with_limits(mut self, limits: OutputLimits) -> Self {
-        self.limits = limits;
-        self
+    /// Sets the variables `request`'s CLI gets beyond every run's: a worker's [`TEMP_ENV`], a plain
+    /// no-write run's [`SCRUB_ENV`], a 200k context window's [`DISABLE_1M_ENV`], and a worker's
+    /// [`ENV_FILE_ENV`], whose file it returns for the run to keep until it ends.
+    fn run_env(
+        &self,
+        request: &RunRequest,
+        spec: &mut ProcessSpec,
+    ) -> Result<Option<TempPath>, StartError> {
+        if let Some(sandbox) = worker_sandbox(request)? {
+            // Only sandboxed commands can't use the shared folder Claude Code falls back to, so
+            // full Claude Code keeps a longer path, as every one on Windows is (PLX-959).
+            let temp = match worker_temp(&sandbox.temp) {
+                Err(_) if unsandboxed(request) => sandbox.temp.clone(),
+                temp => temp?,
+            };
+            spec.inject.set(TEMP_ENV, temp);
+        }
+        if request.policy == ToolPolicy::NoWrite && request.orchestrator_tools.is_none() {
+            spec.inject.set(SCRUB_ENV, "1");
+        }
+        match request.context_window {
+            None | Some(1_000_000) => {}
+            Some(200_000) => {
+                spec.inject.set(DISABLE_1M_ENV, "1");
+            }
+            Some(tokens) => {
+                return Err(StartError::Unsupported(format!(
+                    "Claude Code has no {tokens}-token context window"
+                )));
+            }
+        }
+        match self.launcher.base().get("PATH") {
+            Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {
+                let dir = self.launcher.data_dir().temp_dir();
+                let file = write_env_file(&dir, path).map_err(SpawnError::Io)?;
+                spec.inject.set(ENV_FILE_ENV, file.as_os_str());
+                Ok(Some(file))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Writes `request`'s [`appended_prompt`], if any, with [`write_prompt_file`] and passes it
+    /// to `spec` as `--append-system-prompt-file`. The run keeps the file until it ends.
+    fn prompt_file(
+        &self,
+        request: &RunRequest,
+        spec: &mut ProcessSpec,
+    ) -> Result<Option<TempPath>, StartError> {
+        let Some(text) = appended_prompt(request) else {
+            return Ok(None);
+        };
+        let dir = self.launcher.data_dir().temp_dir();
+        let file = write_prompt_file(&dir, &text).map_err(SpawnError::Io)?;
+        spec.args.extend([
+            "--append-system-prompt-file".into(),
+            file.as_os_str().into(),
+        ]);
+        Ok(Some(file))
+    }
+
+    /// What every run and the command list start from: the program in `cwd`, inherited
+    /// credentials [`scrubbed`] and `credential`'s injected ([`apply_credential`], whose
+    /// `apiKeySource` it returns), [`ALWAYS_SET`], stdin piped, and the backend's output limits.
+    fn spec(
+        &self,
+        cwd: &Path,
+        credential: &Credential,
+    ) -> Result<(ProcessSpec, &'static str), StartError> {
+        let mut spec = ProcessSpec::new(self.program.clone(), cwd);
+        spec.scrub = scrubbed(self.launcher.base());
+        let credential = match credential {
+            Credential::Subscription { .. } => Credential::Subscription {
+                config_home: self.overrides.config_home(credential),
+            },
+            Credential::ApiKey(_) => credential.clone(),
+        };
+        let key_source = apply_credential(&credential, &mut spec)?;
+        for (name, value) in ALWAYS_SET {
+            spec.inject.set(name, value);
+        }
+        for (name, value) in &self.overrides.env {
+            spec.inject.set(name, value);
+        }
+        spec.stdin = StdinMode::Piped;
+        spec.limits = self.limits;
+        spec.record = Some("claude");
+        spec.agent = true;
+        Ok((spec, key_source))
+    }
+
+    /// [`Backend::control`]'s `claude -p` in `cwd` on `credential`'s login: stream-json, with
+    /// hooks and MCP servers off.
+    fn control_process(&self, cwd: &Path, credential: &Credential) -> Result<Process, StartError> {
+        let (mut spec, _) = self.spec(cwd, credential)?;
+        spec.args = BASE_ARGS.iter().map(OsString::from).collect();
+        spec.args.extend(
+            [
+                "--strict-mcp-config",
+                "--settings",
+                r#"{"disableAllHooks":true}"#,
+            ]
+            .map(OsString::from),
+        );
+        spec.args.extend(self.overrides.args.iter().cloned());
+        // A page of a long session's transcript can pass the usual line limit.
+        spec.limits.max_line_bytes = 64 * 1024 * 1024;
+        Ok(self.launcher.spawn(&spec)?)
+    }
+
+    /// [`Self::spec`] for one of the CLI's probes on the backend's own login: `args`, then the
+    /// instance's.
+    fn probe_spec(&self, cwd: &Path, args: Vec<OsString>) -> Result<ProcessSpec, StartError> {
+        let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
+        spec.args = args;
+        spec.args.extend(self.overrides.args.iter().cloned());
+        Ok(spec)
     }
 }
 
@@ -440,56 +800,87 @@ impl ClaudeBackend {
 /// # Errors
 ///
 /// [`StartError::Invalid`] if the model or the resume id could be read as an option, if a
-/// worker has no usable [`WorkerSandbox`], or if a no-write run other than a coordinator asks for
+/// worker has no usable [`WorkerSandbox`], or if a no-write run other than an orchestrator asks for
 /// a permission.
 /// [`StartError::Unsupported`] for an effort or permission this version doesn't know.
 pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
-    let coordinator = request.coordinator_tools.is_some();
-    if coordinator && request.policy != ToolPolicy::NoWrite {
+    let orchestrator = request.orchestrator_tools.is_some();
+    if orchestrator && request.policy != ToolPolicy::NoWrite {
         return Err(StartError::Invalid(
-            "wispd's coordinator tools are only for a no-write run".into(),
+            "plxd's orchestrator tools are only for a no-write run".into(),
         ));
     }
-    let bypass = request.policy == ToolPolicy::WorkspaceWrite
-        && request.permission == Some(AgentPermission::Bypass);
+    let unsandboxed = unsandboxed(request);
     let policy: &[&str] = match request.policy {
-        ToolPolicy::NoWrite if coordinator => &[],
+        ToolPolicy::NoWrite if orchestrator => &[],
         ToolPolicy::NoWrite => NO_WRITE_ARGS,
-        ToolPolicy::WorkspaceWrite if bypass => &[],
+        ToolPolicy::WorkspaceWrite if unsandboxed => &[],
+        ToolPolicy::WorkspaceWrite if hands_over_plans(request) => PLAN_WORKSPACE_WRITE_ARGS,
         ToolPolicy::WorkspaceWrite => WORKSPACE_WRITE_ARGS,
     };
     let mut args: Vec<OsString> = BASE_ARGS.iter().chain(policy).map(Into::into).collect();
-    if request.policy == ToolPolicy::NoWrite && !coordinator {
+    // Headless Claude Code turns fast mode on, and shows thinking summaries, only when the flag
+    // settings opt in.
+    let settings = |mut settings: Value| -> OsString {
+        settings["showThinkingSummaries"] = true.into();
+        if let Some(fast) = request.fast {
+            settings["fastMode"] = fast.into();
+        }
+        settings.to_string().into()
+    };
+    if request.policy == ToolPolicy::NoWrite && !orchestrator {
         if request.permission.is_some() {
             return Err(StartError::Invalid(
                 "a no-write run takes no permission; its mode is fixed (0004)".into(),
             ));
         }
-        args.extend(["--settings".into(), no_write_settings().to_string().into()]);
+        args.extend(["--settings".into(), settings(no_write_settings())]);
     } else {
         let mode = permission_mode(request.permission)?;
         args.extend(["--permission-mode".into(), mode.into()]);
+        if prompts(request) {
+            args.extend(PROMPT_TOOL_ARGS.iter().map(Into::into));
+        }
+        if full_thread(request) {
+            args.extend(LIVE_MODE_ARGS.iter().map(Into::into));
+        }
     }
-    if let Some(tools) = &request.coordinator_tools {
-        args.extend([
-            "--mcp-config".into(),
-            tools.mcp_config()?.to_string().into(),
-            "--allowedTools".into(),
-            mcp::ALLOWED_TOOLS.join(",").into(),
-        ]);
+    if orchestrator || unsandboxed {
+        // An orchestrator's or a thread's host-wide tools join the user's own MCP servers (0041),
+        // and the allowlist lets them run in every mode.
+        let tools = request
+            .orchestrator_tools
+            .as_ref()
+            .or(request.thread_tools.as_ref());
+        let mut allowed: Vec<&str> = Vec::new();
+        if let Some(tools) = tools {
+            args.extend([
+                "--mcp-config".into(),
+                tools.mcp_config()?.to_string().into(),
+            ]);
+            allowed.extend(mcp::thread::ALLOWED_TOOLS);
+        }
+        allowed.extend(TODO_TOOLS);
+        args.extend(["--allowedTools".into(), allowed.join(",").into()]);
     }
     if let Some(sandbox) = worker_sandbox(request)? {
-        if !bypass {
+        if !unsandboxed {
             let config_home = match &request.account.credential {
                 Credential::Subscription { config_home } => config_home.as_deref(),
                 Credential::ApiKey(_) => None,
             };
-            let settings = worker_settings(sandbox, &request.cwd, config_home);
-            args.extend(["--settings".into(), settings.to_string().into()]);
+            let worker = worker_settings(sandbox, &request.cwd, config_home);
+            args.extend(["--settings".into(), settings(worker)]);
         }
         for dir in &sandbox.writable {
             args.extend(["--add-dir".into(), dir.into()]);
         }
+    }
+    if orchestrator || unsandboxed {
+        // Full Claude Code loads the user's and the project's settings, whose `env` could share
+        // its task list, so it gets `--settings` only for this (PLX-251).
+        let env = serde_json::json!({"env": settings_env()});
+        args.extend(["--settings".into(), settings(env)]);
     }
     if let Some(model) = &request.model {
         check_argument("model", model)?;
@@ -501,6 +892,13 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     if let Some(resume) = &request.resume {
         check_argument("resume id", &resume.session_id)?;
         args.extend(["--resume".into(), resume.session_id.clone().into()]);
+        if resume.fork {
+            args.push("--fork-session".into());
+        }
+        if let Some(at) = &resume.at {
+            check_argument("rewind cursor", at)?;
+            args.extend(["--resume-session-at".into(), at.into()]);
+        }
     }
     Ok(args)
 }
@@ -512,13 +910,13 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
 /// matches every host. The denied hosts are `WebFetch` deny rules as well as `deniedDomains`,
 /// because the sandbox's list binds only commands, and a deny rule beats the `*` allow for the
 /// tool. Bash is an allow rule as well, not only `autoAllowBashIfSandboxed`, so it stays allowed
-/// if managed settings force permission mode `default` (RYA-112). `cwd`, the writable folders,
+/// if managed settings force permission mode `default` (PLX-112). `cwd`, the writable folders,
 /// the read-only git paths, and the commands' `TMPDIR` in the run's temp folder
 /// ([`commands_temp`], which Claude Code lets them write) stay readable inside an unreadable
-/// path, such as wispd's data folder, which holds the worktree, the context folder, and a normal
+/// path, such as plxd's data folder, which holds the worktree, the context folder, and a normal
 /// thread's scratch repository (#110). The rest of the temp folder stays hidden: the CLI's own
 /// unsandboxed processes keep files there. A second account's `config_home` is unreadable too.
-/// [`WORKER_DENIED_WRITES`] aren't writable.
+/// [`WORKER_DENIED_WRITES`] aren't writable. Like every run's, it holds [`settings_env`].
 #[must_use]
 pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<&Path>) -> Value {
     let unreadable = strings(
@@ -568,6 +966,7 @@ pub fn worker_settings(sandbox: &WorkerSandbox, cwd: &Path, config_home: Option<
             },
             "credentials": {"envVars": withheld},
         },
+        "env": settings_env(),
     })
 }
 
@@ -578,8 +977,77 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
         .collect()
 }
 
-/// A worker's or a coordinator's `--permission-mode` for `permission`: Claude Code's own mode of
-/// the same name (RYA-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
+/// Whether `request` runs as full Claude Code with no worker sandbox, though it may write: a
+/// normal thread in any mode whose client answers permission requests ([`full_thread`], 0034),
+/// or a worker in [`AgentPermission::Bypass`] (0027). Its tools, settings, and MCP servers are
+/// whatever the user's configuration loads.
+#[must_use]
+pub fn unsandboxed(request: &RunRequest) -> bool {
+    request.policy == ToolPolicy::WorkspaceWrite
+        && runs_unsandboxed(request.thread, request.approvals, request.permission)
+}
+
+/// [`unsandboxed`] for a workspace-write run, from its parts, for a caller that has no
+/// [`RunRequest`] yet: plxd checks no worker sandbox before such a run, on any OS (PLX-959).
+#[must_use]
+pub fn runs_unsandboxed(
+    thread: bool,
+    approvals: bool,
+    permission: Option<AgentPermission>,
+) -> bool {
+    (thread && approvals) || permission == Some(AgentPermission::Bypass)
+}
+
+/// Whether `request` is a normal thread that runs as full Claude Code (0034): one whose client
+/// answers permission requests. Without `approvals`, such as a thread started before the app
+/// showed them, its commands would be denied wherever they'd prompt, so it keeps the worker
+/// sandbox, where they run without asking, as before.
+#[must_use]
+pub fn full_thread(request: &RunRequest) -> bool {
+    request.thread && request.approvals
+}
+
+/// Whether `request`'s CLI asks plxd before a tool call that would prompt (PLX-222, 0031): a
+/// worker or an orchestrator in Manual, Auto, or Plan, and a thread in every mode, whose client
+/// answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands without
+/// asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034), and its mode can
+/// change while it runs ([`LIVE_MODE_ARGS`]), so in Bypass Permissions it keeps the channel for a
+/// later mode that asks. A sandboxed worker's Accept Edits calls don't prompt, and a worker in
+/// Bypass Permissions asks about nothing. A plain no-write run denies
+/// anything not allowed (`dontAsk`), and a run without `approvals` denies what would prompt, as
+/// headless Claude Code does.
+#[must_use]
+pub fn prompts(request: &RunRequest) -> bool {
+    let plain_no_write =
+        request.policy == ToolPolicy::NoWrite && request.orchestrator_tools.is_none();
+    request.approvals
+        && !plain_no_write
+        && (full_thread(request)
+            || matches!(
+                request.permission,
+                Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
+            ))
+}
+
+/// Whether `request`'s worker also gets `ExitPlanMode` ([`PLAN_WORKSPACE_WRITE_ARGS`], PLX-243):
+/// a sandboxed worker in Plan whose CLI asks plxd ([`prompts`]). A thread has no `--tools`, so
+/// it has the tool as an orchestrator does (0034). Headless Claude Code offers
+/// the tool only to a run that asks a host, and asking with it is how the plan reaches the user
+/// (0031). The tool runs nothing and writes nothing in the worktree. Allowing it only moves the
+/// CLI to `default` (Manual), a mode a worker can start in, under the same `--restricted`,
+/// `--tools`, and `--settings`, which no mode change drops. After it, the `system/init` check
+/// accepts only `default` and `acceptEdits` besides `plan`. Every other worker keeps
+/// [`WORKSPACE_WRITE_ARGS`].
+#[must_use]
+pub fn hands_over_plans(request: &RunRequest) -> bool {
+    request.policy == ToolPolicy::WorkspaceWrite
+        && !full_thread(request)
+        && request.permission == Some(AgentPermission::Plan)
+        && prompts(request)
+}
+
+/// A worker's or an orchestrator's `--permission-mode` for `permission`: Claude Code's own mode of
+/// the same name (PLX-97, 0027), [`DEFAULT_PERMISSION_MODE`] by default.
 ///
 /// # Errors
 ///
@@ -597,35 +1065,58 @@ pub fn permission_mode(permission: Option<AgentPermission>) -> Result<&'static s
     }
 }
 
+/// The CLI's arguments for naming a thread with `model` at `effort` (0058): no tools, slash
+/// commands, MCP servers, or hooks, and no session or memory folder saved, which would keep the
+/// user's message, or an empty folder per thread, in the config folder's `projects/` for good.
+///
+/// # Errors
+///
+/// [`StartError::Invalid`] for a model that could be read as an option, and
+/// [`StartError::Unsupported`] for an effort this version doesn't know.
+fn namer_arguments(
+    model: &str,
+    effort: Option<AgentEffort>,
+    schema: Option<&str>,
+) -> Result<Vec<OsString>, StartError> {
+    check_argument("model", model)?;
+    let mut args: Vec<OsString> = [
+        "-p",
+        "--output-format",
+        "json",
+        "--model",
+        model,
+        "--tools",
+        "",
+        "--disable-slash-commands",
+        "--strict-mcp-config",
+        "--settings",
+        r#"{"disableAllHooks":true,"autoMemoryEnabled":false}"#,
+        "--permission-mode",
+        "dontAsk",
+        "--no-session-persistence",
+    ]
+    .map(OsString::from)
+    .into();
+    if let Some(schema) = schema {
+        args.extend(["--json-schema".into(), schema.into()]);
+    }
+    if let Some(effort) = effort {
+        args.extend(["--effort".into(), effort_level(effort)?.into()]);
+    }
+    Ok(args)
+}
+
 /// `--effort`'s value for `effort`.
 fn effort_level(effort: AgentEffort) -> Result<&'static str, StartError> {
-    Ok(match effort {
-        AgentEffort::Low => "low",
-        AgentEffort::Medium => "medium",
-        AgentEffort::High => "high",
-        AgentEffort::Xhigh => "xhigh",
-        AgentEffort::Max => "max",
-        AgentEffort::Unknown => {
-            return Err(StartError::Unsupported(
-                "Claude Code has no such effort level".into(),
-            ));
-        }
-    })
+    super::effort_level(effort, "Claude Code has no such effort level")
 }
 
 /// The variables of `base` that no run gets: [`SCRUBBED_PREFIXES`] and [`SCRUBBED_VARS`].
 #[must_use]
 pub fn scrubbed(base: &Environment) -> Vec<OsString> {
-    base.names()
-        .filter(|name| {
-            let bytes = name.as_encoded_bytes();
-            SCRUBBED_PREFIXES
-                .iter()
-                .any(|prefix| bytes.starts_with(prefix.as_bytes()))
-                || SCRUBBED_VARS.iter().any(|var| var.as_bytes() == bytes)
-        })
-        .map(OsStr::to_owned)
-        .collect()
+    let mut names = base.starting_with(SCRUBBED_PREFIXES);
+    names.extend(SCRUBBED_VARS.iter().map(OsString::from));
+    names
 }
 
 /// Injects what `credential` needs into `spec`, after [`scrubbed`] removed every inherited
@@ -654,120 +1145,223 @@ pub fn apply_credential(
 }
 
 impl Backend for ClaudeBackend {
-    fn name(&self) -> &'static str {
-        "claude"
+    fn name(&self) -> &str {
+        self.overrides.name.as_deref().unwrap_or(PROGRAM)
+    }
+
+    fn cli(&self) -> Option<parallax_protocol::CliKind> {
+        Some(parallax_protocol::CliKind::Claude)
     }
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            follow_ups: true,
-            resume: true,
-            coordinator: true,
-            reports_cost: true,
-            rate_limits: true,
             worker_sandbox: cfg!(any(target_os = "macos", target_os = "linux")),
+            fork: true,
+            rewind: true,
+            resume_at: true,
+            switch_in_session: false,
         }
+    }
+
+    /// Keeps the session as it is, as T3 Code's Claude adapter does: the next run resumes it at
+    /// the kept turn's cursor with `resumeSessionAt` ([`super::Resume::at`]), or starts a new
+    /// one when the revert kept no turn. A fork would give every message a new id, so the
+    /// cursors plxd keeps for the turns before it would no longer match. A Claude Remote Control
+    /// session ([`remote`]) can't go back, as it runs on another computer.
+    fn rewind(
+        &self,
+        rewind: super::Rewind,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        Box::pin(std::future::ready(
+            if remote::is_session(&rewind.session_id) {
+                Err("a Claude Remote Control session can't go back to an earlier turn".to_owned())
+            } else {
+                Ok(rewind.session_id)
+            },
+        ))
     }
 
     fn efforts(&self) -> &'static [AgentEffort] {
         EFFORTS
     }
 
-    fn permissions(&self) -> &'static [AgentPermission] {
+    fn permissions(&self) -> &[AgentPermission] {
         PERMISSIONS
     }
 
+    fn orchestrator_permissions(&self) -> &[AgentPermission] {
+        self.orchestrator_permissions
+    }
+
+    fn context_windows(&self) -> &'static [u32] {
+        CONTEXT_WINDOWS
+    }
+
+    fn fast_mode(&self) -> bool {
+        true
+    }
+
+    /// `claude -p` in stream-json on the user's login, asked to `initialize`
+    /// ([`commands::claude`]).
+    fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
+        let spec = self.probe_spec(cwd, BASE_ARGS.iter().map(OsString::from).collect())?;
+        Ok(Some(CommandsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![json!({
+                "type": "control_request",
+                "request_id": "commands",
+                "request": {"subtype": "initialize"},
+            })],
+            parse: commands::claude,
+        }))
+    }
+
+    /// `claude -p` in stream-json on this backend's login, with hooks and MCP servers off,
+    /// asked for `get_usage` ([`limits::claude`]).
+    fn limits(&self, cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
+        let mut spec = self.probe_spec(cwd, BASE_ARGS.iter().map(OsString::from).collect())?;
+        spec.args.extend(
+            [
+                "--strict-mcp-config",
+                "--settings",
+                r#"{"disableAllHooks":true}"#,
+            ]
+            .map(OsString::from),
+        );
+        Ok(Some(LimitsProbe {
+            process: self.launcher.spawn(&spec)?,
+            input: vec![
+                json!({
+                    "type": "control_request",
+                    "request_id": "initialize",
+                    "request": {"subtype": "initialize"},
+                }),
+                json!({
+                    "type": "control_request",
+                    "request_id": limits::CLAUDE_REQUEST_ID,
+                    "request": {"subtype": "get_usage", "skip_behaviors": true},
+                }),
+            ],
+            parse: limits::claude,
+        }))
+    }
+
+    /// `claude -p` in stream-json on this backend's login, with hooks and MCP servers off, as for
+    /// `get_usage`.
+    fn control(&self, cwd: &Path) -> Result<Option<Process>, StartError> {
+        let login = Credential::Subscription { config_home: None };
+        Ok(Some(self.control_process(cwd, &login)?))
+    }
+
+    /// `claude -p` on the user's login ([`namer_arguments`]), answering in the shape of the
+    /// schema in `dir` ([`namer::claude`]).
+    fn namer(
+        &self,
+        dir: &Path,
+        model: &str,
+        effort: Option<AgentEffort>,
+    ) -> Result<Option<NameProbe>, StartError> {
+        let schema = std::fs::read_to_string(dir.join(namer::SCHEMA_FILE)).ok();
+        let parse = if schema.is_some() {
+            namer::claude
+        } else {
+            namer::claude_text
+        };
+        let mut spec = self.probe_spec(dir, namer_arguments(model, effort, schema.as_deref())?)?;
+        self.pin_gateway_model(&mut spec, Some(model));
+        Ok(Some(NameProbe {
+            process: self.launcher.spawn(&spec)?,
+            parse,
+        }))
+    }
+
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        // Images alone are a message too (RYA-202), as a resumed run's may be.
+        if request
+            .resume
+            .as_ref()
+            .is_some_and(|resume| remote::is_session(&resume.session_id))
+        {
+            return remote::start(self, request);
+        }
+        // Images alone are a message too (PLX-202), as a resumed run's may be.
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
-        if request.policy != ToolPolicy::NoWrite && !self.capabilities().worker_sandbox {
+        if request.policy != ToolPolicy::NoWrite
+            && !unsandboxed(&request)
+            && !self.capabilities().worker_sandbox
+        {
             return Err(StartError::Unsupported(
-                "wispd can't check Claude Code's worker sandbox on this OS yet (decision 0023)"
+                "plxd can't check Claude Code's worker sandbox on this OS yet (decision 0023)"
                     .into(),
             ));
         }
-        let mut spec = ProcessSpec::new(self.program.clone(), &request.cwd);
+        let (mut spec, expected_key_source) =
+            self.spec(&request.cwd, &request.account.credential)?;
         spec.args = arguments(&request)?;
-        if let Some(sandbox) = worker_sandbox(&request)? {
-            spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
-        }
-        spec.scrub = scrubbed(self.launcher.base());
-        let expected_key_source = apply_credential(&request.account.credential, &mut spec)?;
-        for (name, value) in ALWAYS_SET {
-            spec.inject.set(name, value);
-        }
-        if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
-            spec.inject.set(SCRUB_ENV, "1");
-        }
-        let env_file = match self.launcher.base().get("PATH") {
-            Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {
-                let dir = self.launcher.data_dir().temp_dir();
-                let file = write_env_file(&dir, path).map_err(SpawnError::Io)?;
-                spec.inject.set(ENV_FILE_ENV, file.as_os_str());
-                Some(file)
-            }
-            _ => None,
-        };
-        spec.stdin = StdinMode::Piped;
-        spec.limits = self.limits;
+        spec.args.extend(self.overrides.args.iter().cloned());
+        self.pin_gateway_model(&mut spec, request.model.as_deref());
+        let asks = prompts(&request);
+        let plan_exit = hands_over_plans(&request);
+        let full = full_thread(&request);
+        let env_file = self.run_env(&request, &mut spec)?;
+        let prompt_file = self.prompt_file(&request, &mut spec)?;
 
-        let process = self.launcher.spawn(&spec)?;
+        let query = Query::open(&self.launcher, &spec, request.run_id)?;
         let switch = CancelSwitch::new();
-        switch.arm(process.signals().clone(), self.cancel);
         let (handle, control) = RunHandle::new(request.run_id, true, switch.clone());
-        let stop = Arc::new(Notify::new());
+        let (handle, answers) = handle.with_answers();
+        let (handle, task_stops) = handle.with_task_stops();
+        // Only a thread switches its mode live: it launched with [`LIVE_MODE_ARGS`] and always
+        // asks plxd, whatever its mode ([`prompts`]).
+        let (handle, permissions) = if full {
+            handle.with_permissions()
+        } else {
+            (handle, mpsc::unbounded_channel().1)
+        };
+        let held = handle.held();
+        let resumed = request.resume.is_some();
         let baseline = request
             .resume
             .map(|resume| resume.usage_totals)
             .unwrap_or_default();
         let (sink, events) = EventSink::channel(EVENT_BUFFER, baseline);
         let driver = Driver {
-            process,
+            input: query.input(),
+            query,
+            grace: self.grace,
             control,
+            answers,
+            task_stops,
+            permissions,
+            held,
             sink,
             switch,
-            stop: Arc::clone(&stop),
             translator: Translator::new(request.policy, expected_key_source)
-                .with_coordinator_tools(request.coordinator_tools.is_some())
-                .with_permission_mode(permission_mode(request.permission)?),
+                .with_orchestrator_tools(request.orchestrator_tools.is_some())
+                .with_thread(full)
+                .with_permission_mode(permission_mode(request.permission)?)
+                .with_prompts(asks)
+                .with_plan_exit(plan_exit)
+                .with_resumed(resumed),
             turns: VecDeque::new(),
+            unreported: HashSet::new(),
+            woke: false,
+            asks: HashMap::new(),
             violation: None,
             env_file,
+            prompt_file,
         };
         let prompt = Message::new(request.turn_id, &request.prompt, &request.images, false);
         tokio::spawn(driver.run(prompt));
         Ok(Started {
-            run: Arc::new(ClaudeRun { handle, stop }),
+            run: Arc::new(handle),
             events,
         })
     }
 }
 
-/// The run's handle: [`RunHandle`], plus closing stdin on cancel so the CLI exits after the
-/// interrupted turn instead of waiting for more input until the grace period ends.
-struct ClaudeRun {
-    handle: RunHandle,
-    stop: Arc<Notify>,
-}
-
-impl Run for ClaudeRun {
-    fn id(&self) -> RunId {
-        self.handle.id()
-    }
-
-    fn send(&self, message: FollowUp) -> Result<(), SendError> {
-        self.handle.send(message)
-    }
-
-    fn cancel(&self) {
-        self.handle.cancel();
-        self.stop.notify_one();
-    }
-}
-
-/// A user message for the CLI's stdin.
+/// A line for the CLI's stdin, through the query: a user message or a `control_response`.
 #[derive(Debug)]
 struct Message {
     turn_id: Option<TurnId>,
@@ -778,10 +1372,28 @@ struct Message {
 
 impl Message {
     /// The message's content is `text` alone, or with images, the Messages API's base64 image
-    /// blocks and then `text` as a text block (RYA-191). A message of images alone has no text
-    /// block, since the API refuses a blank one (RYA-193).
+    /// blocks and then `text` as a text block (PLX-191). A message of images alone has no text
+    /// block, since the API refuses a blank one (PLX-193). A `/compact` ([`super::is_compact`])
+    /// goes as Claude Code's own command, which compacts the session (PLX-638).
     fn new(turn_id: Option<TurnId>, text: &str, images: &[PromptImage], follow_up: bool) -> Self {
+        Self::with_priority(turn_id, text, images, follow_up, false)
+    }
+
+    /// A message that, with `steer`, goes into the turn running now as the SDK's `priority:
+    /// "now"`, as T3 Code steers (0061).
+    fn with_priority(
+        turn_id: Option<TurnId>,
+        text: &str,
+        images: &[PromptImage],
+        follow_up: bool,
+        steer: bool,
+    ) -> Self {
         let uuid = turn_id.unwrap_or_else(TurnId::generate).to_string();
+        let text = if super::is_compact(text, images) {
+            "/compact"
+        } else {
+            text
+        };
         let content = if images.is_empty() {
             Value::from(text)
         } else {
@@ -800,8 +1412,11 @@ impl Message {
             "message": {"role": "user", "content": content},
             "parent_tool_use_id": null,
             "uuid": uuid,
-        })
-        .to_string();
+        });
+        if steer {
+            line["priority"] = "now".into();
+        }
+        let mut line = line.to_string();
         line.push('\n');
         Self {
             turn_id,
@@ -810,24 +1425,63 @@ impl Message {
             follow_up,
         }
     }
+
+    /// A `control_response` to one of the CLI's control requests (PLX-222).
+    fn control(response: &Value) -> Self {
+        let mut line =
+            serde_json::json!({"type": "control_response", "response": response}).to_string();
+        line.push('\n');
+        Self {
+            turn_id: None,
+            uuid: String::new(),
+            line,
+            follow_up: false,
+        }
+    }
 }
 
-/// The result of writing one message to stdin.
+/// The `control_response` payload that answers `ask` with `decision`, as the Agent SDK writes it.
+/// An allow always carries `updatedInput`, which older CLIs require.
+fn answer_response(ask: &Ask, decision: Decision) -> Value {
+    let mut response = match decision {
+        Decision::Allow { input, always } => {
+            let input = input.unwrap_or_else(|| ask.input.clone());
+            let mut allow = serde_json::json!({"behavior": "allow", "updatedInput": input});
+            if always && !ask.updates.is_empty() {
+                allow["updatedPermissions"] = Value::from(ask.updates.clone());
+            }
+            allow
+        }
+        Decision::Deny { message, interrupt } => {
+            serde_json::json!({"behavior": "deny", "message": message, "interrupt": interrupt})
+        }
+    };
+    if let Some(id) = &ask.tool_use_id {
+        response["toolUseID"] = Value::from(id.as_str());
+    }
+    serde_json::json!({"subtype": "success", "request_id": ask.request_id, "response": response})
+}
+
+/// The result of handing one message to the query.
 enum Delivery {
     Written(Message),
     Failed(Message),
 }
 
-/// Writes messages to stdin in order, off the driver's loop, so a CLI that stops reading stdin
-/// can't keep the driver from reading its stdout.
+/// Hands messages to the query in order, off the driver's loop, then ends its prompt once the
+/// queue closes, as closing the CLI's stdin did.
 async fn write_messages(
-    mut stdin: StdinPipe,
+    input: Input,
     mut queue: mpsc::UnboundedReceiver<Message>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {
     let mut broken = false;
     while let Some(message) = queue.recv().await {
-        broken = broken || stdin.write_all(message.line.as_bytes()).await.is_err();
+        broken = broken || !input.stdin(&message.line);
+        #[cfg(test)]
+        if message.follow_up {
+            super::report_stall().await;
+        }
         let result = if broken {
             Delivery::Failed(message)
         } else {
@@ -835,9 +1489,10 @@ async fn write_messages(
         };
         let _ = results.send(result);
     }
+    input.end();
 }
 
-/// The CLI's stdin: a queue into [`write_messages`], and its results.
+/// The CLI's input: a queue into [`write_messages`], and its results.
 struct Stdin {
     queue: Option<mpsc::UnboundedSender<Message>>,
     results: mpsc::UnboundedReceiver<Delivery>,
@@ -847,21 +1502,13 @@ struct Stdin {
 }
 
 impl Stdin {
-    fn start(process: &mut Process) -> Self {
+    fn start(input: Input) -> Self {
         let (results_tx, results) = mpsc::unbounded_channel();
-        let Some(pipe) = process.take_stdin() else {
-            return Self {
-                queue: None,
-                results,
-                writer: None,
-                pending: 0,
-            };
-        };
         let (queue, queue_rx) = mpsc::unbounded_channel();
         Self {
             queue: Some(queue),
             results,
-            writer: Some(tokio::spawn(write_messages(pipe, queue_rx, results_tx))),
+            writer: Some(tokio::spawn(write_messages(input, queue_rx, results_tx))),
             pending: 0,
         }
     }
@@ -887,24 +1534,44 @@ impl Stdin {
 }
 
 /// One run: forwards the CLI's events, delivers follow-ups, and decides the outcome when the CLI
-/// exits. Cancelling doesn't wait for it: the handle signals the process through the switch.
+/// exits. Cancelling flips the switch, which the driver answers with the SDK's `interrupt()`,
+/// the end of the prompt, and a kill once the grace period has passed.
 struct Driver {
-    process: Process,
+    query: Query,
+    input: Input,
+    /// How long a cancelled CLI has to exit before it is killed.
+    grace: Duration,
     control: mpsc::UnboundedReceiver<FollowUp>,
+    answers: mpsc::UnboundedReceiver<Answer>,
+    /// [`Run::stop_task`]'s task ids (PLX-777).
+    task_stops: mpsc::UnboundedReceiver<String>,
+    /// [`Run::set_permission`]'s modes, for a thread. Closed for any other run.
+    permissions: mpsc::UnboundedReceiver<AgentPermission>,
+    /// While held, plxd has a message waiting for the CLI, so stdin stays open (PLX-370).
+    held: Held,
     sink: EventSink,
     switch: CancelSwitch,
-    stop: Arc<Notify>,
     translator: Translator,
     /// Turns the CLI has been sent but hasn't finished, oldest first: their ids and `uuid`s.
     turns: VecDeque<(Option<TurnId>, String)>,
+    /// The `uuid`s of follow-ups in `turns` with no `TurnStarted` yet: the writer hasn't reported
+    /// them written, and the CLI hasn't answered them (PLX-523).
+    unreported: HashSet<String>,
+    /// Whether the CLI started a turn itself while none of plxd's was outstanding, until its
+    /// result (PLX-724).
+    woke: bool,
+    /// Permission requests the CLI waits on (PLX-222).
+    asks: HashMap<ApprovalId, Ask>,
     violation: Option<Failure>,
     /// A worker's [`ENV_FILE_ENV`] script, deleted once the CLI has exited.
     env_file: Option<TempPath>,
+    /// [`write_prompt_file`]'s file, deleted with [`Self::env_file`].
+    prompt_file: Option<TempPath>,
 }
 
 impl Driver {
     async fn run(mut self, prompt: Message) {
-        let mut stdin = Stdin::start(&mut self.process);
+        let mut stdin = Stdin::start(self.input.clone());
         self.turns.push_back((prompt.turn_id, prompt.uuid.clone()));
         let first = Event::TurnStarted {
             turn_id: prompt.turn_id,
@@ -916,29 +1583,15 @@ impl Driver {
             self.control.close();
         }
         let mut control_open = true;
+        let mut answers_open = true;
+        let mut interrupted = false;
 
         let exit = loop {
             tokio::select! {
                 // Deliveries first, so a follow-up's TurnStarted comes before what the CLI answers.
                 biased;
-                Some(delivery) = stdin.results.recv() => {
-                    stdin.pending = stdin.pending.saturating_sub(1);
-                    match delivery {
-                        Delivery::Written(message) if message.follow_up => {
-                            self.turns.push_back((message.turn_id, message.uuid));
-                            let started = Event::TurnStarted { turn_id: message.turn_id };
-                            self.emit(started).await;
-                        }
-                        Delivery::Written(_) => {}
-                        Delivery::Failed(message) => {
-                            // stdin is gone, so no later message can arrive either.
-                            stdin.close();
-                            self.control.close();
-                            self.dropped(&message).await;
-                        }
-                    }
-                }
-                output = self.process.next() => match output {
+                Some(delivery) = stdin.results.recv() => self.delivered(delivery, &mut stdin).await,
+                output = self.query.next() => match output {
                     Some(Output::Line(line)) => {
                         if self.violation.is_none() {
                             let steps = self.translator.line(&line);
@@ -955,41 +1608,134 @@ impl Driver {
                     Some(Output::Exited(exit)) => break Some(exit),
                     None => break None,
                 },
-                follow_up = self.control.recv(), if control_open => match follow_up {
-                    Some(follow_up) => {
-                        let message = Message::new(
-                            Some(follow_up.turn_id),
-                            &follow_up.text,
-                            &follow_up.images,
-                            true,
-                        );
-                        if let Err(message) = stdin.send(message) {
-                            self.dropped(&message).await;
-                        }
+                // Answers before follow-ups: the CLI is waiting on them.
+                answer = self.answers.recv(), if answers_open => match answer {
+                    Some(answer) => self.answer(answer, &mut stdin),
+                    None => answers_open = false,
+                },
+                Some(task_id) = self.task_stops.recv() => self.input.stop_task(&task_id),
+                Some(permission) = self.permissions.recv() => {
+                    // Only modes in `PERMISSIONS` reach here; the translator follows the switch
+                    // once the CLI reports it.
+                    if let Ok(mode) = permission_mode(Some(permission)) {
+                        self.input.set_permission_mode(mode);
                     }
+                }
+                follow_up = self.control.recv(), if control_open => match follow_up {
+                    Some(follow_up) => self.follow_up(follow_up, &mut stdin).await,
                     None => control_open = false,
                 },
-                () = self.stop.notified(), if stdin.is_open() => {
-                    stdin.close();
-                    self.control.close();
+                () = self.switch.cancelled(), if !interrupted => {
+                    interrupted = true;
+                    self.interrupt(&mut stdin);
                 }
                 () = self.sink.closed(), if !self.switch.is_cancelled() => {
                     self.switch.cancel();
-                    stdin.close();
-                    self.control.close();
                 }
+                () = self.held.changed() => {}
             }
             self.close_when_idle(&mut stdin);
         };
 
         self.drop_undelivered(stdin).await;
+        self.withdraw_left().await;
         self.env_file = None;
+        self.prompt_file = None;
         let outcome = self.outcome(exit);
         let _ = self.sink.finish(outcome).await;
     }
 
+    /// Takes the writer's report on one message.
+    async fn delivered(&mut self, delivery: Delivery, stdin: &mut Stdin) {
+        stdin.pending = stdin.pending.saturating_sub(1);
+        match delivery {
+            Delivery::Written(message) => {
+                if self.unreported.remove(&message.uuid) {
+                    let started = Event::TurnStarted {
+                        turn_id: message.turn_id,
+                    };
+                    self.emit(started).await;
+                }
+            }
+            Delivery::Failed(message) => {
+                self.unreported.remove(&message.uuid);
+                self.turns.retain(|(_, uuid)| *uuid != message.uuid);
+                // stdin is gone, so no later message can arrive either.
+                stdin.close();
+                self.control.close();
+                self.dropped(&message).await;
+            }
+        }
+    }
+
+    /// Queues a follow-up for the CLI. It is a turn already: the CLI can answer it before the
+    /// writer reports writing it (PLX-523).
+    async fn follow_up(&mut self, follow_up: FollowUp, stdin: &mut Stdin) {
+        let message = Message::with_priority(
+            Some(follow_up.turn_id),
+            &follow_up.text,
+            &follow_up.images,
+            true,
+            follow_up.steer,
+        );
+        let (turn_id, uuid) = (message.turn_id, message.uuid.clone());
+        match stdin.send(message) {
+            Ok(()) => {
+                self.turns.push_back((turn_id, uuid.clone()));
+                self.unreported.insert(uuid);
+            }
+            Err(message) => self.dropped(&message).await,
+        }
+    }
+
+    /// Cancels the run: the SDK's `interrupt()` ends the CLI's turn as `SIGINT` did (0004 [11]),
+    /// the prompt ends so the CLI exits after it, and the CLI is killed if it hasn't once the
+    /// grace period has passed.
+    fn interrupt(&mut self, stdin: &mut Stdin) {
+        self.input.interrupt();
+        stdin.close();
+        self.control.close();
+        let (input, grace) = (self.input.clone(), self.grace);
+        tokio::spawn(async move {
+            tokio::time::sleep(grace).await;
+            input.kill();
+        });
+    }
+
+    /// Withdraws every request the CLI still waited on when it exited, so each one ends in this
+    /// attempt's own events, whatever an account fallback (#119) does with its `Finished`.
+    async fn withdraw_left(&mut self) {
+        for approval_id in std::mem::take(&mut self.asks).into_keys() {
+            self.emit(Event::ApprovalWithdrawn { approval_id }).await;
+        }
+    }
+
     async fn apply(&mut self, steps: Vec<Step>, stdin: &mut Stdin) {
         for step in steps {
+            // Turns finish in order, so a turn's content while the oldest outstanding turn is an
+            // unreported follow-up is that follow-up's: its TurnStarted goes first (PLX-523).
+            // Events outside a turn, such as a warning or a rate limit, don't start it. Content
+            // with no turn outstanding is a turn the CLI started itself, such as for a background
+            // task's end, which shows the thread running until its result (PLX-724).
+            if matches!(
+                step,
+                Step::Emit(
+                    Event::TextDelta { .. }
+                        | Event::Text { .. }
+                        | Event::Reasoning { .. }
+                        | Event::ToolCall { .. }
+                        | Event::ToolResult { .. }
+                ) | Step::Ask(..)
+            ) {
+                if let Some((turn_id, uuid)) = self.turns.front().cloned()
+                    && self.unreported.remove(&uuid)
+                {
+                    self.emit(Event::TurnStarted { turn_id }).await;
+                } else if self.turns.is_empty() && !self.woke {
+                    self.woke = true;
+                    self.emit(Event::TurnStarted { turn_id: None }).await;
+                }
+            }
             match step {
                 Step::Emit(event) => self.emit(event).await,
                 Step::Total(total) => {
@@ -1002,32 +1748,89 @@ impl Driver {
                     }
                 }
                 Step::TurnDone(done) => {
-                    for turn_id in self.finish_turns(&done) {
+                    let woke = std::mem::take(&mut self.woke);
+                    let mut finished = self.finish_turns(&done);
+                    // A message sent during the CLI's own turn is outstanding still, and its
+                    // result ends the thread's run instead.
+                    if woke && finished.is_empty() && self.turns.is_empty() {
+                        finished.push((None, String::new()));
+                    }
+                    for (turn_id, uuid) in finished {
+                        // Answered before the writer reported writing it.
+                        if self.unreported.remove(&uuid) {
+                            self.emit(Event::TurnStarted { turn_id }).await;
+                        }
+                        if let Some(cursor) = done.cursor.clone() {
+                            self.emit(Event::TurnCursor { turn_id, cursor }).await;
+                        }
                         let result = done.result.clone();
-                        self.emit(Event::TurnFinished { turn_id, result }).await;
+                        let failed = self.translator.last_failure.is_some();
+                        self.emit(Event::TurnFinished {
+                            turn_id,
+                            result,
+                            failed,
+                        })
+                        .await;
                     }
                 }
                 Step::Violation(failure) => {
-                    // Kill at once, not SIGINT: every moment it runs may bill the wrong account.
-                    let _ = self.process.signals().signal_group(Signal::KILL);
+                    // Kill at once, not interrupt: every moment it runs may bill the wrong account.
+                    self.input.kill();
                     self.violation = Some(failure);
                     stdin.close();
                     self.control.close();
                     return;
                 }
+                Step::Ask(request, ask) => {
+                    self.asks.insert(request.approval_id, ask);
+                    self.emit(Event::ApprovalRequested(request)).await;
+                }
+                Step::Withdraw(request_id) => {
+                    let withdrawn = self
+                        .asks
+                        .iter()
+                        .find(|(_, ask)| ask.request_id == request_id)
+                        .map(|(&approval_id, _)| approval_id);
+                    if let Some(approval_id) = withdrawn {
+                        self.asks.remove(&approval_id);
+                        self.emit(Event::ApprovalWithdrawn { approval_id }).await;
+                    }
+                }
+                Step::Refuse { request_id, error } => {
+                    let response = serde_json::json!({
+                        "subtype": "error",
+                        "request_id": request_id,
+                        "error": error,
+                    });
+                    let _ = stdin.send(Message::control(&response));
+                }
             }
         }
     }
 
-    /// The turns a `result` ended, oldest first. Turns finish in the order they started, so a
-    /// result ends every outstanding turn up to the newest one it names.
-    fn finish_turns(&mut self, done: &TurnDone) -> Vec<Option<TurnId>> {
+    /// Writes `answer` to the CLI, if it still waits on the request.
+    fn answer(&mut self, answer: Answer, stdin: &mut Stdin) {
+        let Some(ask) = self.asks.remove(&answer.approval_id) else {
+            return;
+        };
+        if ask.tool_name == EXIT_PLAN_MODE && matches!(answer.decision, Decision::Allow { .. }) {
+            self.translator.left_plan_mode();
+        }
+        let response = answer_response(&ask, answer.decision);
+        let _ = stdin.send(Message::control(&response));
+    }
+
+    /// The turns a `result` ended, oldest first, with their `uuid`s. Turns finish in the order
+    /// they started, so a result ends every outstanding turn up to the newest one it names. A
+    /// turn the CLI started itself that names none ends none (PLX-724).
+    fn finish_turns(&mut self, done: &TurnDone) -> Vec<(Option<TurnId>, String)> {
         let named = self
             .turns
             .iter()
             .rposition(|(_, uuid)| done.uuids.contains(uuid));
         let count = match (named, done.queued) {
             (Some(index), _) => index + 1,
+            (None, _) if done.foreign => 0,
             // With no ids to go by and nothing queued, or no count either, every turn sent so far
             // is taken as done. At worst a folded follow-up finishes early; ending only one turn
             // could leave stdin open and the run waiting forever.
@@ -1035,15 +1838,20 @@ impl Driver {
             (None, _) => 1,
         };
         let count = count.min(self.turns.len());
-        self.turns
-            .drain(..count)
-            .map(|(turn_id, _)| turn_id)
-            .collect()
+        self.turns.drain(..count).collect()
     }
 
-    /// Closes stdin once no turn is outstanding, so the CLI exits after its last result.
+    /// Closes stdin once no turn is outstanding, no permission request waits, and plxd holds no
+    /// message for the CLI, so the CLI exits after its last result. Claude Code fails a request
+    /// whose stdin has closed.
     fn close_when_idle(&mut self, stdin: &mut Stdin) {
-        if stdin.is_open() && self.turns.is_empty() && stdin.pending == 0 {
+        if stdin.is_open()
+            && self.turns.is_empty()
+            && self.asks.is_empty()
+            && stdin.pending == 0
+            && self.control.is_empty()
+            && !self.held.now()
+        {
             stdin.close();
             self.control.close();
         }
@@ -1067,19 +1875,19 @@ impl Driver {
     /// turn as dropped.
     async fn drop_undelivered(&mut self, mut stdin: Stdin) {
         self.control.close();
-        let mut late = Vec::new();
         while let Ok(follow_up) = self.control.try_recv() {
-            late.push(follow_up);
-        }
-        for follow_up in late {
             let message = Message::new(
                 Some(follow_up.turn_id),
                 &follow_up.text,
                 &follow_up.images,
                 true,
             );
-            if let Err(message) = stdin.send(message) {
-                self.dropped(&message).await;
+            let uuid = message.uuid.clone();
+            match stdin.send(message) {
+                Ok(()) => {
+                    self.unreported.insert(uuid);
+                }
+                Err(message) => self.dropped(&message).await,
             }
         }
         stdin.close();
@@ -1090,25 +1898,26 @@ impl Driver {
         }
         while let Ok(delivery) = stdin.results.try_recv() {
             let (Delivery::Written(message) | Delivery::Failed(message)) = delivery;
-            self.dropped(&message).await;
+            // A follow-up the CLI answered before the writer reported it wasn't dropped.
+            if self.unreported.remove(&message.uuid) {
+                self.dropped(&message).await;
+            }
         }
     }
 
     fn outcome(&mut self, exit: Option<Exit>) -> Outcome {
         if let Some(violation) = self.violation.take() {
-            return failed(violation, exit.as_ref());
+            return violation.ended(exit.as_ref());
         }
         if self.switch.is_cancelled() {
             return Outcome::Cancelled;
         }
         if let Some(failure) = self.translator.last_failure.take() {
-            return failed(failure, exit.as_ref());
+            return failure.ended(exit.as_ref());
         }
         let Some(exit) = exit else {
-            return failed(
-                failure(FailureKind::Internal, "lost track of the process".into()),
-                None,
-            );
+            return Failure::new(FailureKind::Internal, "lost track of the process".into())
+                .ended(None);
         };
         if exit.info.success() && self.translator.results > 0 {
             return Outcome::Completed {
@@ -1116,42 +1925,7 @@ impl Driver {
             };
         }
         let lower = exit.stderr_tail.to_ascii_lowercase();
-        let failure = if lower.contains("not logged in") || lower.contains("/login") {
-            failure(
-                FailureKind::NotSignedIn,
-                "Claude Code is not signed in".into(),
-            )
-        } else if exit.info.success() {
-            failure(
-                FailureKind::VendorError,
-                "Claude Code exited without finishing its turn".into(),
-            )
-        } else {
-            let message = match (exit.info.code, exit.info.signal) {
-                (_, Some(signal)) => format!("Claude Code was killed by signal {signal}"),
-                (Some(code), None) => format!("Claude Code exited with code {code}"),
-                (None, None) => "Claude Code ended in an unknown way".to_owned(),
-            };
-            failure(FailureKind::Crashed, message)
-        };
-        failed(failure, Some(&exit))
+        let signed_out = lower.contains("not logged in") || lower.contains("/login");
+        exit_outcome("Claude Code", signed_out, &exit)
     }
-}
-
-fn failure(failure: FailureKind, message: String) -> Failure {
-    Failure {
-        failure,
-        message,
-        exit: None,
-        stderr_tail: None,
-    }
-}
-
-/// A failed outcome, with how the process ended when it did.
-fn failed(mut failure: Failure, exit: Option<&Exit>) -> Outcome {
-    if let Some(exit) = exit {
-        failure.exit = Some(exit.info);
-        failure.stderr_tail = (!exit.stderr_tail.is_empty()).then(|| exit.stderr_tail.clone());
-    }
-    Outcome::Failed(failure)
 }

@@ -1,0 +1,26 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "providers/updates",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "updates": [{ "cli": "codex", "version": "0.162.0", "latest": "0.163.0" }]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "providers/upgrade",
+    "params": { "cli": "codex" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": { "version": "0.163.0" }
+  }
+]

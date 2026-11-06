@@ -1,25 +1,135 @@
 @import "tailwindcss";
+@import "@fontsource-variable/sora";
+/* Fonts Settings > Appearance offers on every computer (appearance.ts's bundledFonts). Each loads
+   only when something uses it. */
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/fira-code";
+@import "@fontsource-variable/source-code-pro";
 
-/* Wisp Light and Wisp Dark. The `dark` class on <html> switches them
-   (theme.ts). Components use only these tokens, never raw colors. Every
-   *-foreground keeps at least 4.5:1 contrast on the background and sidebar.
+/*! JetBrains Mono Nerd Font is JetBrains Mono (SIL Open Font License 1.1) with Nerd Fonts' icons
+   (v3.5.1, https://www.nerdfonts.com). Its icon sets keep their own licenses, listed at
+   https://github.com/ryanoasis/nerd-fonts/blob/master/license-audit.md. Nerd Fonts is under the
+   MIT License:
 
-   --accent is the one color a setting will change: the send button, focus
-   rings (--ring), selected states, highlights, links, and the working loaders
-   (--working) all derive from it. Text and icons on it are black or white,
-   whichever reads better, so they keep at least 4.5:1 on any accent. */
-:root {
+   The MIT License (MIT)
+
+   Copyright (c) 2014 Ryan L McIntyre
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE. */
+
+/* Bold, Italic, and BoldItalic hold only the text glyphs. Their icons are Regular's, so each style
+   takes the icon ranges from the Regular file. They were cut from the full faces added in 7d0551a4,
+   from apps/desktop/src/renderer/fonts:
+   for s in Bold Italic BoldItalic; do f=JetBrainsMonoNerdFont-$s.woff2
+     git show 7d0551a4:apps/desktop/src/renderer/fonts/$f > /tmp/$f
+     uv run --with fonttools==4.60.1 --with brotli==1.2.0 pyftsubset /tmp/$f \
+       --unicodes=U+0000-DFFF,U+F900-EFFFF --layout-features='*' --name-IDs='*' --notdef-outline \
+       --flavor=woff2 --output-file=$f; done */
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Italic.woff2") format("woff2");
+  unicode-range: U+0000-DFFF, U+F900-EFFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Bold.woff2") format("woff2");
+  unicode-range: U+0000-DFFF, U+F900-EFFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-BoldItalic.woff2") format("woff2");
+  unicode-range: U+0000-DFFF, U+F900-EFFFF;
+}
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+  src: url("./fonts/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
+}
+
+/* Parallax Light and Parallax Dark. The `dark` class on <html> switches them
+   (theme.ts), and a `theme-*` class swaps in an added VS Code theme's tokens for either
+   (vscodeThemes.ts, whose CSS goes after this file).
+   Components use only these tokens, never raw colors. Every *-foreground keeps
+   at least 4.5:1 contrast on the background and sidebar, in every theme
+   (theme.test.ts, and vscodeThemes.test.ts for added themes).
+   .scheme-light and .scheme-dark paint one mode inside any other, for
+   Settings' previews.
+
+   --accent: the send button, focus rings (--ring), selected states, highlights,
+   and links all derive from it. Text and icons on it are black or white,
+   whichever reads better, so they keep at least 4.5:1 on any accent. --mark-blue and --mark-coral are the logo's two circles.
+
+   Classes on <html> from the same settings: .contrast-more strengthens text and
+   borders, .reduce-motion stops animations (it's also set when the OS asks),
+   and .diff-blue-orange swaps red and green for blue and orange. */
+:root,
+.scheme-light {
   color-scheme: light;
   --background: #ffffff;
-  --sidebar: #ffffff;
+  --sidebar: #f6f6f9;
   --surface: #ffffff;
-  --foreground: #181818;
-  --muted-foreground: #4f4f4f;
-  --faint-foreground: #636363;
-  --border: rgb(0 0 0 / 9%);
-  --hover: rgb(0 0 0 / 4.5%);
-  --selected: rgb(0 0 0 / 7%);
-  --accent: #2563eb;
+  --foreground: #1e1b4b;
+  --muted-foreground: #4a4868;
+  --faint-foreground: #64627e;
+  --border: rgb(30 27 75 / 10%);
+  --hover: rgb(30 27 75 / 4.5%);
+  --selected: rgb(30 27 75 / 7%);
+  /* The logo's blue; its indigo overlap is the text, and its coral, darkened to read, is
+     --danger. */
+  --accent: #2b5cff;
   /* Black or white, whichever reads better on a fill, as a channel of
      color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
      r, g, and b, clipped as the screen clips them) is under 0.1791, where the two tie at 4.58:1. */
@@ -36,12 +146,65 @@
   --send-foreground: color(
     from var(--send) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
   );
-  --primary: #181818;
+  --primary: #1e1b4b;
   --primary-foreground: #ffffff;
   --ring: var(--accent);
-  --danger: #c42b2b;
+  --danger: #d4330f;
+  /* Text on a danger fill (a danger Button), black or white as on the accent. */
+  --danger-foreground: color(
+    from var(--danger) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
+  );
   /* The semantic amber, for marks and icons beside a label (--danger is the red). */
-  --warning: #d97706;
+  --warning: #b45309;
+  /* Done work, and what a theme calls added. A diff's lines have their own colors below. */
+  --added: #15803d;
+  /* A diff's added and removed lines: their sign and edge, and their background mixed by
+     --diff-tint (Settings > Accessibility). The text on them stays --foreground. */
+  --diff-added: var(--diff-added-custom, #1a7f37);
+  --diff-removed: var(--diff-removed-custom, #cf222e);
+  --diff-tint: 16%;
+  /* The PR view's merge button, by the pull request's state (mergeTone), dark enough for white
+     text but running's yellow, which takes black. Each foreground picks black or white. */
+  --merge-ready: #1a7f37;
+  --merge-running: #bf8700;
+  --merge-blocked: #cf222e;
+  --merge-merged: #8250df;
+  --merge-neutral: #656d76;
+  /* A merge GitHub won't take: the whole button on a 12% tint of these, with them as its text,
+     as a Badge is. Darker than the fills in light, so the text reads (at least 5.3:1). */
+  --merge-ready-soft: #116329;
+  --merge-running-soft: #92400e;
+  --merge-blocked-soft: #b42318;
+  --merge-merged-soft: #6d28d9;
+  --merge-neutral-soft: #4a4868;
+  --merge-ready-foreground: color(
+    from var(--merge-ready) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-running-foreground: color(
+    from var(--merge-running) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-blocked-foreground: color(
+    from var(--merge-blocked) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-merged-foreground: color(
+    from var(--merge-merged) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  --merge-neutral-foreground: color(
+    from var(--merge-neutral) srgb-linear var(--black-or-white) var(--black-or-white)
+      var(--black-or-white)
+  );
+  /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
+  --code: #f6f6f9;
+  --syntax-keyword: #2b5cff;
+  --syntax-string: #c2410c;
+  --syntax-number: #7c3aed;
+  --syntax-title: #4338ca;
+  --syntax-type: #be185d;
+  --syntax-comment: #6e6c88;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
      each mixed into the surface so they stay opaque. Both modes compute from their own surface,
@@ -49,34 +212,457 @@
   --chart-1: var(--accent);
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
   --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
-  --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 22%);
+  --shadow-composer: 0 10px 30px -16px rgb(30 27 75 / 22%);
+  /* An orchestrator icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
+     on the sidebar, the dialogs, and a selected row, in both themes. */
+  --project-red: #dc2626;
+  --project-orange: #ea580c;
+  --project-yellow: #a16207;
+  --project-green: #15803d;
+  --project-teal: #0d9488;
+  --project-sky: #0284c7;
+  --project-violet: #7c3aed;
+  --project-pink: #db2777;
+  --project-gray: #71717a;
+  /* The app's two-circle mark (logos.tsx): the brand blue and coral, and their overlap. */
+  --mark-blue: #2b5cff;
+  --mark-coral: #ff4a1f;
+  --mark-overlap: #1e1b4b;
 }
 
-:root.dark {
+:root.dark,
+.scheme-dark {
   color-scheme: dark;
-  --background: #0d0d0d;
+  /* True black with no tint, as T3 Code's dark mode is: the thread and sidebar black, a border
+     between them, and raised surfaces (the composer, cards, menus) a step above. Text is a little
+     under white, so it doesn't glare on the black. */
+  --background: #000000;
   --sidebar: #000000;
-  --surface: #171717;
-  --foreground: #ececec;
-  --muted-foreground: #a8a8a8;
-  --faint-foreground: #868686;
-  --border: rgb(255 255 255 / 8%);
-  --hover: rgb(255 255 255 / 4.5%);
-  --selected: rgb(255 255 255 / 8%);
-  --accent: #3b82f6;
-  /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
-  --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
-  --primary: #ececec;
-  --primary-foreground: #0d0d0d;
-  --danger: #ff8f8a;
+  --surface: #0e0e0e;
+  --foreground: #e8e8e8;
+  --muted-foreground: #a3a3a3;
+  --faint-foreground: #8a8a8a;
+  --border: rgb(255 255 255 / 10%);
+  --hover: rgb(255 255 255 / 6%);
+  --selected: rgb(255 255 255 / 10%);
+  /* The logo's blue, lifted to read on the dark, as --danger lifts its coral. */
+  --accent: #5b80ff;
+  /* The accent, darkened a little: mixed toward a black with no chroma or hue, so it keeps the
+     accent's, and dark enough for white text. */
+  --send: color-mix(in oklch, var(--accent) 84%, oklch(0 none none));
+  --primary: #e8e8e8;
+  --primary-foreground: #000000;
+  --danger: #ff6b4a;
   --warning: #f59e0b;
+  --added: #4ade80;
+  --diff-added: var(--diff-added-custom, #3fb950);
+  --diff-removed: var(--diff-removed-custom, #f85149);
+  --merge-ready: #238636;
+  --merge-running: #d29922;
+  --merge-blocked: #da3633;
+  --merge-merged: #8957e5;
+  --merge-neutral: #3d444d;
+  --merge-ready-soft: #4ade80;
+  --merge-running-soft: #f59e0b;
+  --merge-blocked-soft: #ff6b4a;
+  --merge-merged-soft: #a78bfa;
+  --merge-neutral-soft: #a3a3a3;
+  --code: #0a0a0a;
+  --syntax-keyword: #7b9bff;
+  --syntax-string: #ff8a65;
+  --syntax-number: #c4b5fd;
+  --syntax-title: #a5b4fc;
+  --syntax-type: #f9a8d4;
+  --syntax-comment: #8a8a8a;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
+  --project-red: #f87171;
+  --project-orange: #fb923c;
+  --project-yellow: #facc15;
+  --project-green: #4ade80;
+  --project-teal: #2dd4bf;
+  --project-sky: #38bdf8;
+  --project-violet: #a78bfa;
+  --project-pink: #f472b6;
+  --project-gray: #a1a1aa;
+  --mark-overlap: #e4e4e7;
+}
+
+/* More contrast: muted text nearer the foreground, and borders and fills that show. */
+:root.contrast-more {
+  --muted-foreground: #333333;
+  --faint-foreground: #474747;
+  --border: rgb(0 0 0 / 24%);
+  --hover: rgb(0 0 0 / 7%);
+  --selected: rgb(0 0 0 / 12%);
+}
+:root.dark.contrast-more {
+  --muted-foreground: #d4d4d4;
+  --faint-foreground: #b8b8b8;
+  --border: rgb(255 255 255 / 24%);
+  --hover: rgb(255 255 255 / 8%);
+  --selected: rgb(255 255 255 / 14%);
+}
+/* Blue for added and done, orange for removed and failed, as GitHub's color-blind themes do. */
+:root.diff-blue-orange {
+  --added: #0969da;
+  --danger: #bc4c00;
+  --diff-added: #0969da;
+  --diff-removed: #bc4c00;
+}
+:root.dark.diff-blue-orange {
+  --added: #58a6ff;
+  --danger: #f0883e;
+  --diff-added: #58a6ff;
+  --diff-removed: #f0883e;
+}
+/* Teal and pink, apart for red-green and blue-yellow color blindness alike. Diffs only. */
+:root.diff-teal-pink {
+  --diff-added: #0f766e;
+  --diff-removed: #be185d;
+}
+:root.dark.diff-teal-pink {
+  --diff-added: #2dd4bf;
+  --diff-removed: #f472b6;
+}
+
+/* A diff's changed lines (diffLook), and the words that changed in them. */
+.diff-row-added {
+  background: color-mix(in srgb, var(--diff-added) var(--diff-tint), transparent);
+  box-shadow: inset 2px 0 0 var(--diff-added);
+}
+.diff-row-removed {
+  background: color-mix(in srgb, var(--diff-removed) var(--diff-tint), transparent);
+  box-shadow: inset 2px 0 0 var(--diff-removed);
+}
+.diff-word-added {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--diff-added) calc(var(--diff-tint) * 2.2), transparent);
+}
+.diff-word-removed {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--diff-removed) calc(var(--diff-tint) * 2.2), transparent);
+}
+
+/* Settings > Accessibility. */
+.focus-strong :focus-visible {
+  outline: 3px solid var(--ring) !important;
+  outline-offset: 2px;
+}
+.underline-links a[href] {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* A nightly build (main.tsx sets .nightly): a sky at the top of the sidebar, with stars and
+   cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons.
+
+   The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
+   it fades into each theme's sidebar behind the Search row. Both themes share the dark sky,
+   white header text, stars, and indigo clouds. */
+
+:root.nightly .night-sky-host {
+  background:
+    linear-gradient(in oklab, #070923, #17184f 20%, #2a2470 34%, transparent) top / 100% 104px
+      no-repeat,
+    var(--pane-sidebar);
+}
+/* The Search field sits on the sidebar's own color over the sky, so its text keeps the contrast
+   the theme gives it there, whatever the theme and mode. */
+:root.nightly .night-sky-host .sky-search {
+  background-color: var(--sidebar);
+}
+:root.nightly .night-sky-host .sky-search:is(:hover, :focus-within) {
+  background-color: color-mix(in oklab, var(--sidebar), var(--foreground) 4.5%);
+}
+/* The stars, the glow behind them, and the clouds' bodies and lit tops, far to near. */
+:root.nightly .night-sky {
+  --star: #ffffff;
+  --sky-glow: #7c3aed;
+  --cloud-far: #2c2a6e;
+  --cloud-far-lit: #3c3a8c;
+  --cloud-mid: #43409a;
+  --cloud-mid-lit: #5753b4;
+  --cloud-near: #6e6ac8;
+  --cloud-near-lit: #8a86e4;
+}
+.night-sky {
+  display: none;
+}
+:root.nightly .night-sky {
+  display: block;
+  position: absolute;
+  inset: 0 0 auto;
+  height: 56px;
+  overflow: hidden;
+  pointer-events: none;
+}
+:root.nightly .night-sky svg {
+  width: 100%;
+  height: 56px;
+}
+:root.nightly .night-sky-text {
+  --foreground: #ffffff;
+  --muted-foreground: rgb(255 255 255 / 75%);
+  --hover: rgb(255 255 255 / 12%);
+  /* Keep the logo's overlap visible on the sky. */
+  --mark-overlap: #e4e4e7;
+}
+:root.nightly .send-sky {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Cg fill='%236e6ac8'%3E%3Ccircle cx='8' cy='33' r='6'/%3E%3Ccircle cx='17' cy='29' r='7.5'/%3E%3Ccircle cx='28' cy='32' r='6.5'/%3E%3C/g%3E%3Cg fill='%23a5a1ef'%3E%3Ccircle cx='12' cy='37' r='5'/%3E%3Ccircle cx='22' cy='36' r='6'/%3E%3C/g%3E%3C/svg%3E")
+      bottom / 100% no-repeat,
+    radial-gradient(0.8px 0.8px at 28% 26%, #fff 50%, transparent),
+    radial-gradient(0.6px 0.6px at 66% 20%, rgb(255 255 255 / 80%) 50%, transparent),
+    radial-gradient(0.7px 0.7px at 78% 46%, rgb(255 255 255 / 70%) 50%, transparent),
+    radial-gradient(0.5px 0.5px at 40% 50%, rgb(255 255 255 / 60%) 50%, transparent),
+    radial-gradient(circle at 70% 10%, rgb(124 58 237 / 45%), transparent 60%),
+    linear-gradient(#070923, #17184f 60%, #2a2470);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 25%),
+    inset 0 0 0 1px rgb(165 180 252 / 25%),
+    0 4px 14px -4px rgb(79 70 229 / 70%);
+  transition: filter 150ms;
+}
+:root.nightly .send-sky:enabled:hover {
+  filter: brightness(1.15);
+}
+/* A send button with nothing to send keeps its sky, grayed out and without the glow. */
+:root.nightly .send-sky:disabled {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 25%),
+    inset 0 0 0 1px rgb(165 180 252 / 25%);
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+:root.nightly:not(.reduce-motion) .night-sky .twinkle {
+  animation: twinkle 4s ease-in-out infinite;
+}
+:root.nightly:not(.reduce-motion) .night-sky .drift {
+  animation: drift 30s ease-in-out infinite alternate;
+}
+@keyframes twinkle {
+  50% {
+    opacity: 0.2;
+  }
+}
+@keyframes drift {
+  to {
+    transform: translateX(16px);
+  }
+}
+
+/* A theme's orb, its icon in Settings > Appearance where its extension has none: its own
+   background and sidebar, glowing with its accent and, smaller, its string color, under a sheen.
+   A .scheme-* and .theme-* class beside it set the tokens. */
+.theme-orb {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(160deg, var(--background) 30%, var(--sidebar));
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.theme-orb::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(circle at 68% 70%, var(--accent), transparent 40%),
+    radial-gradient(circle at 34% 64%, var(--syntax-string), transparent 24%);
+  filter: blur(6px);
+}
+.theme-orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 32% 22%, rgb(255 255 255 / 30%), transparent 38%);
+  box-shadow: inset 0 -8px 14px rgb(0 0 0 / 22%);
+}
+
+/* Tailwind's motion-safe and motion-reduce follow .reduce-motion, which also covers the OS's
+   setting (appearance.ts). */
+@custom-variant motion-safe (&:where(:root:not(.reduce-motion) *));
+@custom-variant motion-reduce (&:where(:root.reduce-motion *));
+
+/* Long lines in code blocks, diffs, and file previews (.code-lines) wrap under .word-wrap, from
+   Settings > Appearance, or else run on and their box (.code-scroll) scrolls. Unlayered, so they
+   win over the elements' own whitespace utilities. */
+:root.word-wrap .code-lines {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+:root:not(.word-wrap) .code-lines {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+:root:not(.word-wrap) .code-scroll {
+  overflow-x: auto;
+}
+:root:not(.word-wrap) .code-scroll > * {
+  width: max-content;
+  min-width: 100%;
+}
+/* The monospace size from Appearance, as a zoom on the outermost code, so each keeps its size
+   relative to the rest. The terminal takes the size itself (Terminal.tsx). */
+:is(.font-mono, pre):not(:is(.font-mono, pre, .xterm) *) {
+  zoom: var(--code-zoom, 1);
+}
+
+/* Every lucide icon draws 1.5px lines at every size (0085), where lucide's own 2-in-24 stroke
+   thins and thickens with the icon. An icon given its own `strokeWidth` keeps it. */
+svg.lucide[stroke-width="2"] {
+  stroke-width: 1.5px;
+}
+svg.lucide[stroke-width="2"] * {
+  vector-effect: non-scaling-stroke;
+}
+
+/* The type scale (docs/decisions/0085-ui-style-guide.md): every font size is one of these. Each
+   sets only the size, so text keeps the line height around it. */
+@theme {
+  --text-*: initial;
+  --text-micro: 10px;
+  --text-caption: 11px;
+  --text-meta: 12px;
+  --text-body: 13px;
+  --text-reading: 14px;
+  --text-heading: 18px;
+  --text-display: 24px;
+  --text-hero: 40px;
+  /* The radius scale: marks, controls, rows and menus, surfaces (panels, dialogs, and the bars
+     tucked over and under a prompt box), and prompt boxes. */
+  --radius-*: initial;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  /* 16px since PLX-1089 found 24px too round (0092). The workspace layer's corner, too. */
+  --radius-prompt: 16px;
+}
+
+/* Motion and stacking (docs/decisions/0092-shared-ui-and-motion.md). Static, so plain CSS can use
+   them as variables too; motion.ts repeats the motion ones for JS.
+   Durations: fast for small things (menus, tooltips, hovers, every exit), base for dialogs and
+   panels, slow for what travels (toasts, drawers). Easings: out for what arrives, in for what
+   leaves, in-out for what moves, spring for a small overshoot. A transition without its own
+   duration or easing takes fast and out. */
+@theme static {
+  --transition-duration-fast: 120ms;
+  --transition-duration-base: 180ms;
+  --transition-duration-slow: 240ms;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --default-transition-duration: var(--transition-duration-fast);
+  --default-transition-timing-function: var(--ease-out);
+  --animate-fade-in: fade-in var(--transition-duration-fast) var(--ease-out);
+  /* The z-index scale: raised over its neighbours (sticky headings), an overlay inside a pane
+     (the find bar, a hover card), a divider over overlays, a popover over the window, and the
+     tooltip over everything. Menus and dialogs are in the top layer and need none. */
+  --z-index-raised: 10;
+  --z-index-overlay: 20;
+  --z-index-divider: 30;
+  --z-index-popover: 50;
+  --z-index-tooltip: 1000;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+}
+
+/* A dialog fades and scales in from a little smaller, and fades out faster, with its backdrop.
+   Every <dialog> gets it; in the base layer, so a dialog's own classes still win. */
+@layer base {
+  dialog,
+  dialog::backdrop {
+    transition-property: opacity, scale, overlay, display;
+    transition-behavior: allow-discrete;
+    transition-duration: var(--transition-duration-fast);
+    transition-timing-function: var(--ease-in);
+    opacity: 0;
+  }
+  /* Closing, it fades out without taking clicks meant for what's under it. */
+  dialog:not([open]) {
+    pointer-events: none;
+  }
+  dialog {
+    scale: 0.97;
+  }
+  dialog[open],
+  dialog[open]::backdrop {
+    transition-duration: var(--transition-duration-base);
+    transition-timing-function: var(--ease-out);
+    opacity: 1;
+  }
+  dialog[open] {
+    scale: 1;
+  }
+  @starting-style {
+    dialog[open],
+    dialog[open]::backdrop {
+      opacity: 0;
+    }
+    dialog[open] {
+      scale: 0.97;
+    }
+  }
+}
+
+/* A menu (ui.tsx's menuPanel) fades and grows in from its trigger, and fades out. */
+@layer components {
+  .menu-motion {
+    transition-property: opacity, scale, overlay, display;
+    transition-behavior: allow-discrete;
+    transition-duration: var(--transition-duration-fast);
+    transition-timing-function: var(--ease-out);
+  }
+  .menu-motion:not(:popover-open) {
+    transition-timing-function: var(--ease-in);
+    opacity: 0;
+    scale: 0.97;
+    pointer-events: none;
+  }
+  @starting-style {
+    .menu-motion:popover-open {
+      opacity: 0;
+      scale: 0.97;
+    }
+  }
+}
+
+/* Reduced motion (Settings > Appearance, or the OS) stops every CSS animation and transition at
+   its end state, except the sidebar's scroll-driven row fade, which follows the user's scrolling.
+   Animations started from JS go through motion.ts's `animate`, which skips them. */
+:root.reduce-motion *,
+:root.reduce-motion *::before,
+:root.reduce-motion *::after,
+:root.reduce-motion ::backdrop {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
 }
 
 @theme inline {
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* A font the user picked in Appearance comes first, else Inter, the same on every OS
+     (0085). */
+  --font-sans:
+    var(--ui-font, "Inter Variable"), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
+  --font-mono:
+    var(--code-font, "JetBrains Mono Nerd Font"), "JetBrainsMono Nerd Font", ui-monospace,
+    SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* The app's name in the sidebar. */
+  --font-brand: "Sora Variable", var(--font-sans);
   --color-background: var(--background);
   --color-sidebar: var(--sidebar);
+  --color-pane: var(--pane);
+  --color-pane-sidebar: var(--pane-sidebar);
   --color-surface: var(--surface);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted-foreground);
@@ -92,11 +678,43 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-ring: var(--ring);
   --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
   --color-warning: var(--warning);
+  --color-added: var(--added);
+  --color-diff-added: var(--diff-added);
+  --color-diff-removed: var(--diff-removed);
+  --color-code: var(--code);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-working: var(--working);
+  --color-project-red: var(--project-red);
+  --color-project-orange: var(--project-orange);
+  --color-project-yellow: var(--project-yellow);
+  --color-project-green: var(--project-green);
+  --color-project-teal: var(--project-teal);
+  --color-project-sky: var(--project-sky);
+  --color-project-violet: var(--project-violet);
+  --color-merge-ready: var(--merge-ready);
+  --color-merge-ready-foreground: var(--merge-ready-foreground);
+  --color-merge-ready-soft: var(--merge-ready-soft);
+  --color-merge-running: var(--merge-running);
+  --color-merge-running-foreground: var(--merge-running-foreground);
+  --color-merge-running-soft: var(--merge-running-soft);
+  --color-merge-blocked: var(--merge-blocked);
+  --color-merge-blocked-foreground: var(--merge-blocked-foreground);
+  --color-merge-blocked-soft: var(--merge-blocked-soft);
+  --color-merge-merged: var(--merge-merged);
+  --color-merge-merged-foreground: var(--merge-merged-foreground);
+  --color-merge-merged-soft: var(--merge-merged-soft);
+  --color-merge-neutral: var(--merge-neutral);
+  --color-merge-neutral-foreground: var(--merge-neutral-foreground);
+  --color-merge-neutral-soft: var(--merge-neutral-soft);
+  --color-project-pink: var(--project-pink);
+  --color-project-gray: var(--project-gray);
+  --color-mark-blue: var(--mark-blue);
+  --color-mark-coral: var(--mark-coral);
+  --color-mark-overlap: var(--mark-overlap);
   --shadow-composer: var(--shadow-composer);
 }
 
@@ -104,6 +722,16 @@ html,
 body,
 #root {
   height: 100%;
+}
+
+/* The window never scrolls; panes scroll inside it. An absolute element with no
+   positioned ancestor, like an sr-only input, would otherwise sit outside every
+   pane, stretch the page past the window, and scroll the whole window up when
+   focused, with nothing to scroll it back (PLX-441). `clip`, unlike `hidden`,
+   can't be scrolled even by focus. */
+#root {
+  position: relative;
+  overflow: clip;
 }
 
 body {
@@ -115,7 +743,311 @@ body {
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   user-select: none;
-  cursor: default;
+}
+
+/* The window's panes, the main pane, side panel, and sidebar, paint these, and Settings' cards
+   --pane-card. Opaque, they're the theme's colors. */
+:root {
+  --pane: var(--background);
+  --pane-sidebar: var(--sidebar);
+  --pane-card: var(--surface);
+}
+
+/* Slide the sidebar as one piece, keeping its rows stable while the workspace follows it. */
+#sidebar {
+  width: var(--sidebar-width);
+  margin-left: 0;
+  transition:
+    margin-left 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    display 240ms allow-discrete;
+}
+#sidebar[hidden] {
+  margin-left: calc(-1 * var(--sidebar-width));
+  pointer-events: none;
+}
+@starting-style {
+  #sidebar:not([hidden]) {
+    margin-left: calc(-1 * var(--sidebar-width));
+  }
+}
+
+/* With Settings › Beta's Tabs off (App.tsx), the workspace is one surface beside the sidebar,
+   including an expanded side panel. */
+.workspace-shell[data-sidebar-open="true"] {
+  border-radius: 16px 0 0 16px;
+  box-shadow: -6px 0 18px -8px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 30%));
+}
+.workspace-shell[data-sidebar-open="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: inherit;
+}
+/* Underlap the rounded edge by a pixel so its antialiasing never exposes a seam. */
+:root:not(.tabs-beta) #sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0 -24px 0 auto;
+  width: 24px;
+  pointer-events: none;
+  background: inherit;
+  mask:
+    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top left / 17px 17px no-repeat,
+    radial-gradient(circle at 16px 1px, transparent 15px, #000 16px) bottom left / 17px 17px
+      no-repeat;
+}
+:root.nightly:not(.tabs-beta) #sidebar > .night-sky {
+  right: -24px;
+  mask:
+    linear-gradient(#000 0 0) left / calc(100% - 24px) 100% no-repeat,
+    radial-gradient(circle at 16px 16px, transparent 15px, #000 16px) top right 7px / 17px 17px
+      no-repeat;
+}
+
+/* A pane's card and its shown tab (ThreadTabs.tsx) are one outline, which shows on a window the
+   same color as the card, as dark mode's true black is. It's a solid color, so overlapping strokes
+   don't brighten where they meet. The tab's foot covers the card's top edge. Its top and sides
+   (.tab-cap) stop where a rounded border at each side curves out to that edge, so a tab of a
+   fractional width has no side left to show past the curve. The curve's shadow, clipped to its box,
+   covers the card's edge beyond it. A flush tab (ThreadTabs.tsx) starts at the card's left edge, so
+   its left side runs straight down into that edge. The focused pane among several has a brighter
+   outline. */
+.pane-edge {
+  --edge: color-mix(in srgb, var(--foreground) 14%, var(--background));
+}
+.pane-edge[data-marked] {
+  --edge: color-mix(in srgb, var(--foreground) 32%, var(--background));
+}
+/* On glass, a solid outline can match what's behind the window, so it's a tint of the text instead. */
+:root.translucent .pane-edge {
+  --edge: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+:root.translucent .pane-edge[data-marked] {
+  --edge: color-mix(in srgb, var(--foreground) 45%, transparent);
+}
+.pane-card {
+  border: 1px solid var(--edge);
+}
+.tab-cap {
+  position: absolute;
+  inset: 0 0 12px;
+  pointer-events: none;
+  border: 1px solid var(--edge);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+}
+.tab-shown::before,
+.tab-shown::after {
+  content: "";
+  position: absolute;
+  bottom: 1px;
+  width: 11px;
+  height: 11px;
+  pointer-events: none;
+  border-bottom: 1px solid var(--edge);
+  box-shadow: 0 0 0 11px var(--pane);
+  clip-path: inset(0);
+}
+.tab-shown::before {
+  left: -10px;
+  border-right: 1px solid var(--edge);
+  border-bottom-right-radius: 11px;
+}
+.tab-shown::after {
+  right: -10px;
+  border-left: 1px solid var(--edge);
+  border-bottom-left-radius: 11px;
+}
+.tab-shown[data-flush] .tab-cap {
+  border-top-left-radius: var(--radius-prompt);
+}
+.tab-shown[data-flush]::before {
+  left: 0;
+  bottom: 0;
+  height: 12px;
+  border: 0;
+  border-left: 1px solid var(--edge);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* On glass nothing can cover what's beyond a curve, so the tab sits on the card's line instead. */
+:root.translucent .tab-shown::before,
+:root.translucent .tab-shown::after {
+  display: none;
+}
+:root.translucent .tab-cap {
+  bottom: 1px;
+}
+
+/* Linux's panes are square, like the windows of the tiling desktops it mostly runs on (Omarchy's
+   Hyprland). What's inside them keeps its corners. The shown tab joins its pane square, without
+   its curves, as on glass. */
+/* :root matches the flush tab's .tab-shown[data-flush] .tab-cap, so this wins by coming after it. */
+:root[data-platform="linux"] :is(.pane-card, .tab-shown, .tab-cap) {
+  border-radius: 0;
+}
+[data-platform="linux"] .tab-shown::before,
+[data-platform="linux"] .tab-shown::after {
+  display: none;
+}
+[data-platform="linux"] .tab-cap {
+  bottom: 1px;
+}
+/* With Tabs off, the workspace is square too and meets the window's edges, which the desktop
+   outlines, so its only line is the one by the sidebar. */
+:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"] {
+  border-radius: 0;
+}
+:root[data-platform="linux"] .workspace-shell[data-sidebar-open="true"]::after {
+  border-block: 0;
+}
+/* No round corners for the sidebar to fill behind, which would show through a see-through window. */
+:root[data-platform="linux"]:not(.tabs-beta) #sidebar::before {
+  content: none;
+}
+:root.nightly[data-platform="linux"]:not(.tabs-beta) #sidebar > .night-sky {
+  right: 0;
+  mask: none;
+}
+
+/* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
+   background-opacity is: the theme's background is painted once, on <body>, letting the desktop
+   through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
+   than an opaque block, so nothing reads as a patch. Text keeps its color, solid. The sidebar is
+   a denser pane of the same glass, as a macOS sidebar is, and what's raised over the glass (the
+   composer, menus, dialogs, cards) is a lighter frosted layer with a lit top edge rather than a
+   dark slab. Unlayered, so these win over Tailwind's utilities. */
+:root.translucent {
+  --pane: transparent;
+  --pane-sidebar: color-mix(in srgb, var(--sidebar) 40%, transparent);
+  --pane-card: color-mix(in srgb, var(--surface) 45%, transparent);
+  --glass: blur(28px) saturate(1.6);
+  --raised: light-dark(var(--surface), color-mix(in oklab, var(--foreground) 9%, var(--surface)));
+  /* Code's fill: in dark a faint tint of the text's color, rather than a black hole in the glass.
+     Code fills read it, falling back to --code where the window is opaque. */
+  --code-fill: light-dark(
+    color-mix(in srgb, var(--code) 55%, transparent),
+    color-mix(in srgb, var(--foreground) 6%, transparent)
+  );
+  --glass-edge: inset 0 1px 0 light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 9%));
+}
+:root.translucent body {
+  background: color-mix(in srgb, var(--background) var(--tint), transparent);
+}
+/* An element with a hover color of its own (hover:bg-*) keeps it while hovered. */
+:root.translucent .bg-background:not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--background) 45%, transparent);
+}
+:root.translucent .bg-surface:not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+:root.translucent .bg-code:not(:where([class*="hover:bg-"]:hover)) {
+  background-color: var(--code-fill);
+}
+:root.translucent .bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
+  backdrop-filter: var(--glass);
+}
+/* The thread list's sticky headings sit on the sidebar's own glass with nothing of their own: a
+   fill or backdrop-filter there reads as a black box (PLX-1230). Rows dissolve as they reach the
+   heading instead, so their text never overlaps it. The 28px is the shorter heading's height.
+   Important, since this follows the user's own scrolling and Reduce motion must keep it: without
+   it, rows there would overlap the heading. */
+:root.translucent .sticky.bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
+  background-color: transparent;
+  backdrop-filter: none;
+}
+:root.translucent .sticky.bg-sidebar + * ul > li:not(.row-flash) {
+  animation: under-heading linear both !important;
+  animation-timeline: view(block 28px 0) !important;
+  animation-range: exit 0 exit 12px !important;
+}
+/* Keyboard stepping stops below the heading, the taller one's 32px, not on a row that has faded. */
+:root.translucent .sticky.bg-sidebar + * [data-row] {
+  scroll-margin-top: 32px;
+}
+@keyframes under-heading {
+  to {
+    opacity: 0;
+  }
+}
+/* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
+   shadow (tooltips, the find bar, suggestions, hover cards). */
+:root.translucent
+  :is([popover], dialog, .shadow-composer):is(.bg-background, .bg-surface):not(
+    :where([class*="hover:bg-"]:hover)
+  ) {
+  background-color: color-mix(in srgb, var(--raised) 78%, transparent);
+  backdrop-filter: var(--glass);
+  box-shadow: var(--glass-edge), var(--shadow-composer);
+}
+/* Menus and dialogs hold rows of text over whatever is under them, so they're denser. */
+:root.translucent
+  :is([popover], dialog):is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--raised) 92%, transparent);
+}
+/* macOS shows black behind a full screen window, so the page paints a copy of the wallpaper under
+   the glass (main.tsx). The root's own fill keeps body's tint on body, above the copy, rather than
+   on the canvas below it. */
+:root.translucent[style*="--wallpaper"] {
+  background-color: #000;
+}
+:root.translucent[style*="--wallpaper"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--wallpaper) center / cover;
+}
+/* Past the window's edges, so the blur doesn't fade out at them. */
+:root.blurred[style*="--wallpaper"]::before {
+  inset: -80px;
+  filter: blur(40px) saturate(1.6);
+}
+/* Over a see-through window, a modal's backdrop-filter leaves the app's text legible through the
+   modal and around it, so the app itself blurs. Modals and menus are in the top layer, which an
+   ancestor's filter doesn't reach. */
+:root.translucent:has(dialog:modal) #root {
+  filter: blur(28px);
+}
+/* Settings is a pane of the glass, as large as the window, rather than a slab over it. */
+:root.translucent
+  dialog.settings-dialog:is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--background) 70%, transparent);
+  backdrop-filter: none;
+}
+/* xterm.js paints its viewport black under the rows, which are clear over glass (Terminal.tsx). */
+:root.translucent .xterm .xterm-viewport {
+  background-color: transparent;
+}
+/* A modal's backdrop tints the glass lightly rather than blacking the window out. */
+:root.translucent dialog::backdrop {
+  background-color: color-mix(in srgb, var(--background) 25%, transparent);
+}
+/* A tray tucked 1rem under a prompt box (.tucked, -mt-4) would show its top through the box's
+   glass: its side borders and a second layer of fill. Through glass it starts where the box ends,
+   by a clip, as with .composer-tabs. */
+:root.translucent .tucked {
+  clip-path: inset(1rem 0 0);
+}
+:root.nightly.translucent .night-sky-host .sky-search {
+  background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
+}
+/* Settings' theme previews show their theme as it is, and .solid keeps an element opaque, as
+   over the side panel's browser. */
+:root.translucent .solid,
+:root.translucent
+  :is(.scheme-light, .scheme-dark):is(.bg-background, .bg-surface, .bg-sidebar, .bg-code),
+:root.translucent
+  :is(.scheme-light, .scheme-dark)
+  :is(.bg-background, .bg-surface, .bg-sidebar, .bg-code) {
+  background-color: revert-layer;
+  backdrop-filter: none;
 }
 
 /* Keyboard focus is always visible; mouse focus never draws a ring. In the
@@ -130,23 +1062,97 @@ body {
   }
 }
 
+/* A modal dialog blurs the app behind it. In the base layer, so a dialog's own
+   backdrop:backdrop-blur-* still wins. */
+@layer base {
+  dialog::backdrop {
+    backdrop-filter: blur(8px);
+  }
+}
+
+/* Cursors, the same on every OS. The body leaves Chromium's `cursor: auto`, which shows the I-beam
+   over fields and over text that can be selected (select-text) and the arrow over the rest. What
+   can be clicked shows the hand, unless it's disabled. In the base layer, so cursor-* utilities
+   still win. Rendered Markdown and code can always be selected, wherever they show. */
+@layer base {
+  :where(.markdown, .code-lines) {
+    user-select: text;
+  }
+  :where(
+    a[href],
+    button,
+    select,
+    summary,
+    label:has(input:is([type="checkbox"], [type="radio"]):not(:disabled)),
+    input:is([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+    input:is([type="button"], [type="submit"], [type="reset"]),
+    [role="button"],
+    [role="link"],
+    [role="tab"],
+    [role="option"],
+    [role="switch"],
+    [role="checkbox"],
+    [role="radio"],
+    [role^="menuitem"]
+  ) {
+    cursor: pointer;
+  }
+  :where(:disabled, [aria-disabled="true"]) {
+    cursor: default;
+  }
+}
+
+/* No scrollbars anywhere. Panes still scroll by wheel, trackpad, and keys. The
+   terminal draws its own scrollbar as an element, so that's hidden too. */
+* {
+  scrollbar-width: none;
+}
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
 /* The top row doubles as the title bar on macOS and Windows (frame.ts hides
-   theirs). Linux keeps a native frame, so nothing there drags. */
+   theirs). Linux keeps a native frame, so nothing there drags. A menu opened
+   from it inherits the drag, and the window then treats every click outside
+   the menu's buttons as a drag, so none reaches the page to close it. */
 :is([data-platform="darwin"], [data-platform="win32"]) .titlebar {
   -webkit-app-region: drag;
 }
 :is([data-platform="darwin"], [data-platform="win32"])
   .titlebar
-  :is(button, a, input, select, textarea, fieldset, [role="tab"]) {
+  :is(
+    button,
+    a,
+    input,
+    select,
+    textarea,
+    fieldset,
+    [role="tab"],
+    [role="listbox"],
+    .tab-strip,
+    [popover],
+    browser-action-list
+  ) {
   -webkit-app-region: no-drag;
 }
-/* Room for the traffic lights, where a row starts at the window's left edge. */
-[data-platform="darwin"] .traffic-light-inset {
+/* Settings floats over the top row, so it doesn't drag, and on Windows starts under the window
+   buttons, which draw over the page. */
+.settings-dialog {
+  -webkit-app-region: no-drag;
+}
+[data-platform="win32"]:not([data-full-screen]) .settings-dialog {
+  margin-top: 3.5rem;
+  height: calc(100vh - 6.5rem);
+}
+/* Room for the traffic lights, where a row starts at the window's left edge. Full screen hides
+   them. */
+[data-platform="darwin"]:not([data-full-screen]) .traffic-light-inset {
   padding-left: 80px;
 }
 /* Room for Windows' window buttons, where a row ends at the window's right
-   edge: whatever the title bar area leaves free on the right. */
-[data-platform="win32"] .window-controls-inset {
+   edge: whatever the title bar area leaves free on the right. Full screen
+   hides the buttons, though the title bar area still reports them. */
+[data-platform="win32"]:not([data-full-screen]) .window-controls-inset {
   padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
@@ -160,16 +1166,23 @@ body {
 .markdown > * + * {
   margin-top: 0.75em;
 }
+/* Bold at the scale's heaviest weight (0085), not the browser's 700. */
+.markdown :is(strong, b) {
+  font-weight: 600;
+}
 .markdown :is(h1, h2, h3, h4) {
   font-weight: 600;
   line-height: 1.3;
-  margin-top: 1.25em;
+  letter-spacing: -0.01em;
+  margin-top: 1.4em;
 }
-.markdown h1 {
-  font-size: 1.3em;
+.markdown > :is(h1, h2, h3, h4):first-child {
+  margin-top: 0;
 }
-.markdown h2 {
-  font-size: 1.15em;
+/* Headings on the type scale (0085): h1 and h2 at --text-heading, h3 and h4 at the text's own
+   size, set apart by weight. */
+.markdown :is(h1, h2) {
+  font-size: 18px;
 }
 .markdown :is(h3, h4) {
   font-size: 1em;
@@ -184,55 +1197,542 @@ body {
   list-style: decimal;
 }
 .markdown li + li {
-  margin-top: 0.25em;
+  margin-top: 0.3em;
+}
+.markdown li::marker {
+  color: var(--faint-foreground);
+}
+/* GitHub's task lists: the checkbox in the bullet's place. */
+.markdown .contains-task-list {
+  list-style: none;
+  padding-left: 0.1em;
+}
+.markdown .task-list-item input {
+  margin: 0 0.55em 0 0;
+  vertical-align: -0.1em;
+  accent-color: var(--accent);
 }
 .markdown a {
   color: var(--accent);
-  text-decoration: underline;
   text-underline-offset: 2px;
 }
+.markdown a:hover {
+  text-decoration: underline;
+}
 .markdown blockquote {
-  border-left: 2px solid var(--border);
+  border-left: 3px solid color-mix(in oklab, var(--foreground) 18%, transparent);
   padding-left: 0.9em;
   color: var(--muted-foreground);
 }
 .markdown :not(pre) > code {
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--selected);
+  background: var(--code-fill, var(--code));
   padding: 0.1em 0.35em;
-  font-size: 0.88em;
+  font-family: var(--font-mono);
+  /* --text-body, wherever it sits. */
+  font-size: 13px;
 }
+/* A table scrolls on its own, in a rounded box, with its header on a fill. */
 .markdown table {
   display: block;
+  width: max-content;
+  max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
 }
 .markdown :is(th, td) {
-  border: 1px solid var(--border);
-  padding: 0.3em 0.7em;
+  padding: 0.4em 0.8em;
   text-align: left;
+}
+.markdown th {
+  background: var(--hover);
+  font-weight: 600;
+}
+.markdown tr:not(:last-child) > td,
+.markdown th {
+  border-bottom: 1px solid var(--border);
+}
+.markdown :is(th, td) + :is(th, td) {
+  border-left: 1px solid var(--border);
 }
 .markdown hr {
   border-color: var(--border);
+  margin-block: 1.5em;
+}
+
+/* Markdown drawn by Enriched Markdown (MarkdownText, AgentChat.tsx), whose inline styles set its
+   type and colors from the theme: its code blocks and runs a paragraph apart, math a little over
+   the text's size, and a web link's site mark before its text, as the phone's link pills draw it:
+   GitHub's, Linear's, or a globe, in the text's color. */
+.enriched {
+  overflow-wrap: anywhere;
+  /* Enriched Markdown paints ::selection with this, and transparent while it's unset. */
+  --enrm-selection-bg: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* Agent text being cited keeps its highlight while the comment box has focus (Cite.tsx). */
+::highlight(cite) {
+  background-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.enriched > * + * {
+  margin-top: 10px;
+}
+/* A table's cells wrap only between words, so a column is never narrower than its longest word
+   and a table too wide for its container scrolls in the renderer's wrapper instead. Each cell
+   starts at its row's top. */
+.enriched table {
+  overflow-wrap: normal;
+}
+.enriched :is(th, td) {
+  vertical-align: top;
+}
+.enriched .katex {
+  font-size: 1.1em;
+}
+/* Math still arriving is incomplete LaTeX: it appears once it typesets, or when the message ends. */
+.enriched.streaming .katex-error {
+  display: none;
+}
+/* A pull request's GitHub images, the only remote ones Markdown loads, open in the Lightbox. */
+.enriched img[src^="https://"] {
+  cursor: zoom-in;
+}
+.enriched a:hover {
+  text-decoration: underline !important;
+}
+
+/* Code highlighted by rehype-highlight (AgentChat.tsx), in GitHub's colors for each theme. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-meta .hljs-keyword,
+.hljs-doctag {
+  color: var(--syntax-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string {
+  color: var(--syntax-string);
+}
+.hljs-number,
+.hljs-literal,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-meta,
+.hljs-operator {
+  color: var(--syntax-number);
+}
+.hljs-title,
+.hljs-section {
+  color: var(--syntax-title);
+}
+.hljs-type,
+.hljs-built_in,
+.hljs-symbol,
+.hljs-name,
+.hljs-tag {
+  color: var(--syntax-type);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+/* Threads tiled side by side (App.tsx): no scrollbar between them. The prompt rail shows where a
+   transcript is. */
+[data-pane] [role="log"] {
+  scrollbar-width: none;
+}
+
+/* The composer (Composer.tsx) is one surface: the text, then a row of its controls. The bar under
+   it (.composer-bar) and the tabs over it (.composer-tabs) are the same color. */
+.composer-shell,
+.composer-bar,
+.composer-tabs {
+  background-color: var(--surface);
+}
+/* The agent's questions open from the tabs, as wide as their line (Question.tsx). Scoped, since a
+   split shows several composers. */
+.composer-tabs {
+  anchor-name: --composer-tabs;
+  anchor-scope: --composer-tabs;
+}
+.question-popover {
+  position-anchor: --composer-tabs;
+}
+.composer-shell {
+  anchor-name: --composer;
+  anchor-scope: --composer;
+  interpolate-size: allow-keywords;
+  transition:
+    border-color var(--transition-duration-base) var(--ease-out),
+    box-shadow var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-base) var(--ease-out);
+}
+/* The model picker opens off the box rather than its button, so it covers neither the text nor
+   the box's row: above it, lined up with its right edge, and as tall as there's room for. */
+.composer-shell .model-menu {
+  position-anchor: --composer;
+  position-area: top span-left;
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline;
+  height: min(26rem, 100% - 1rem);
+  min-height: 10rem;
+  max-width: calc(100vw - 1rem);
+  margin: 0 0 0.5rem;
+  transform-origin: bottom right;
+  container: model-menu / inline-size;
+}
+/* In a narrow window, the models keep their names: the Reasoning column and Access give way. */
+@container model-menu (width < 30rem) {
+  .model-menu-reasoning {
+    width: 8.5rem;
+  }
+  .model-menu-for,
+  .composer-access > span {
+    display: none;
+  }
+}
+/* The heavy box at the end of the controls' row, holding voice and send or stop as wide tiles whose
+   corners follow its own (Composer.tsx). With nothing to send, Send is only its arrow, except
+   in a nightly, which keeps its sky. */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid
+    light-dark(color-mix(in oklab, var(--foreground) 12%, transparent), rgb(255 255 255 / 16%));
+  border-radius: 12px;
+  background-color: light-dark(color-mix(in oklab, var(--foreground) 7%, var(--surface)), #050505);
+  box-shadow: 0 1px 2px
+    light-dark(color-mix(in oklab, var(--foreground) 10%, transparent), rgb(0 0 0 / 70%));
+}
+.composer-action {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2rem;
+  border-radius: 9px;
+  transition:
+    background-color var(--transition-duration-fast) var(--ease-out),
+    scale var(--transition-duration-fast) var(--ease-out);
+}
+:root:not(.nightly) .composer-shell .composer-actions .composer-send.send-sky:disabled {
+  background: transparent;
+  color: var(--faint-foreground);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+  scale: 1;
+}
+/* The text's height follows the editor's (Composer.tsx), so the box eases as lines wrap. */
+.composer-text {
+  /* Clipped, not hidden: a hidden box still scrolls to the caret, cutting off the first line. */
+  overflow: clip;
+  transition: height var(--transition-duration-fast) var(--ease-out);
+}
+/* Send pops up when there's something to send, and Stop when it takes Send's place. Doubled up to
+   win over a nightly's .send-sky transition. */
+.composer-shell .composer-send.send-sky {
+  transition:
+    scale var(--transition-duration-base) var(--ease-spring),
+    opacity var(--transition-duration-fast),
+    box-shadow var(--transition-duration-fast),
+    filter var(--transition-duration-fast);
+}
+/* With nothing to send, a nightly's sky stays, dimmed and without its glow. It pops up with text. */
+:root.nightly .composer-shell .composer-send.send-sky:disabled {
+  filter: none;
+  opacity: 0.75;
+}
+.composer-shell .composer-send.send-sky:enabled {
+  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
+}
+.composer-pop {
+  animation: composer-pop var(--transition-duration-base) var(--ease-spring);
+}
+@keyframes composer-pop {
+  from {
+    scale: 0.7;
+    opacity: 0;
+  }
+}
+/* The box fades out from under the voice pill (VoicePill.tsx), which grows out of it. */
+.composer-shell[data-voice],
+.composer-bar[data-voice],
+.composer-top[data-voice] > .composer-tabs {
+  opacity: 0;
+}
+/* The controls' row, under the text. While the box steps back, the model, voice, and send or stop
+   rise level with the text, which is empty then, and the rest goes. */
+.composer-controls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0 6px 6px;
+  pointer-events: none;
+  transition:
+    margin-top var(--transition-duration-base) var(--ease-out),
+    padding-bottom var(--transition-duration-base) var(--ease-out);
+  > * {
+    pointer-events: auto;
+    transition:
+      opacity var(--transition-duration-fast) var(--ease-out),
+      visibility var(--transition-duration-fast);
+  }
+}
+.composer-controls > button,
+.composer-actions {
+  flex-shrink: 0;
+}
+/* Quiet until the box is hovered or holds focus. */
+.composer-shell:not(:focus-within, :hover) > .composer-controls > :not(.composer-actions) {
+  opacity: 0.75;
+}
+.composer-shell:hover:not(:focus-within, .border-ring) {
+  border-color: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+/* A press gives a little, and what joins the box opens its room as it arrives. */
+.composer-controls > button:active,
+.composer-controls button[aria-haspopup]:not([popover] *):active,
+.composer-action:enabled:active {
+  scale: 0.94;
+}
+.composer-controls button:not([popover] *) {
+  transition:
+    background-color var(--transition-duration-fast) var(--ease-out),
+    color var(--transition-duration-fast) var(--ease-out),
+    scale var(--transition-duration-fast) var(--ease-out);
+}
+.composer-attachments,
+.composer-tabs {
+  transition:
+    height var(--transition-duration-base) var(--ease-out),
+    padding-block var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-base) var(--ease-out);
+}
+/* Clipped as its room opens, past the corners of the remove buttons. */
+.composer-attachments {
+  overflow: clip;
+  overflow-clip-margin: 0.5rem;
+}
+.composer-attachments > * {
+  transition:
+    scale var(--transition-duration-base) var(--ease-spring),
+    opacity var(--transition-duration-base) var(--ease-out);
+}
+/* Only once the box is up (Composer.tsx), so reopening a thread with a draft doesn't replay it. */
+@starting-style {
+  [data-settled] .composer-attachments,
+  .composer-top:has(+ [data-settled]) .composer-tabs {
+    height: 0;
+    padding-block: 0;
+    opacity: 0;
+  }
+  [data-settled] .composer-attachments > * {
+    scale: 0.7;
+    opacity: 0;
+  }
+}
+[data-back] > .composer-controls {
+  margin-top: -2.625rem;
+  padding-bottom: 4px;
+  > button {
+    opacity: 0;
+    visibility: hidden;
+  }
+  > .composer-run > :not(fieldset) {
+    display: none;
+  }
+}
+/* Beside the text, the model keeps its whole name, and the placeholder gives way to it. A name
+   longer than this, such as a raw id, is cut. --beside is what's left of the box's width after
+   voice and send or stop. */
+[data-back] {
+  --beside: min(14rem, 100cqw - 7rem);
+}
+[data-back] .composer-run {
+  max-width: var(--beside);
+  overflow: clip;
+}
+[data-back] .composer-placeholder {
+  right: calc(var(--beside) + 6rem);
+}
+/* With no model, its standalone menus are only their icons in a narrow box. */
+@container composer (width < 28rem) {
+  [data-back] :is(.composer-effort, .composer-access > span) {
+    display: none;
+  }
+}
+/* Over glass, the box, its bars, and the voice pill are one thin pane that lets the wallpaper's color
+   through, rather than the denser fill of what holds rows of text. Clear is denser than Blurred,
+   since a page's backdrop-filter can't reach the desktop: what's behind the window stays sharp. */
+:root.translucent {
+  --composer-glass: color-mix(in srgb, var(--raised) 50%, transparent);
+  --composer-blur: blur(28px) saturate(1.6) brightness(1.25);
+  /* The theme's border, a little stronger in dark, where it would be lost against the wallpaper. */
+  --composer-edge: light-dark(
+    var(--border),
+    color-mix(in srgb, var(--border) 70%, rgb(255 255 255 / 30%))
+  );
+}
+/* What's behind eases toward the text's opposite, so a bright or dark wallpaper doesn't wash it out.
+   Only the page's own pixels change: its copy of the wallpaper in full screen (main.tsx). */
+:root.dark.translucent {
+  --composer-blur: blur(28px) saturate(1.6) brightness(0.5);
+}
+:root.translucent:not(.blurred) {
+  --composer-glass: color-mix(in srgb, var(--raised) 64%, transparent);
+}
+:root.translucent :is(.composer-shell, .composer-pill).bg-surface,
+:root.translucent .composer-bar,
+:root.translucent .composer-tabs {
+  background-color: var(--composer-glass);
+  backdrop-filter: var(--composer-blur);
+}
+:root.translucent .composer-shell:not(:focus-within, :hover, .border-ring),
+:root.translucent .composer-pill,
+:root.translucent .composer-bar,
+:root.translucent .composer-tabs {
+  border-color: var(--composer-edge);
+}
+/* The box's own menu is solid: inside the box's backdrop-filter, its own can't reach the page, so
+   the transcript would stay sharp through it. */
+:root.translucent .composer-shell > .shadow-composer.bg-surface {
+  background-color: var(--raised);
+  backdrop-filter: none;
+}
+/* The heavy box stays heavy, as a dark pane of the glass rather than a black hole in it. */
+:root.translucent .composer-actions {
+  border-color: light-dark(
+    color-mix(in oklab, var(--foreground) 12%, transparent),
+    rgb(255 255 255 / 12%)
+  );
+  background-color: light-dark(
+    color-mix(in oklab, var(--foreground) 7%, transparent),
+    rgb(0 0 0 / 50%)
+  );
+}
+/* The tabs, on a bar tucked behind the box's top edge, the mirror of the bar under it. */
+.composer-tabs {
+  interpolate-size: allow-keywords;
+  margin: 0 0.75rem -1rem;
+  padding: 2px 0.25rem calc(1rem + 2px);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+}
+/* Over glass, it ends where the box starts. A clip, since a mask over a backdrop-filter leaves a
+   band of the fill under the box. */
+:root.translucent .composer-tabs {
+  clip-path: inset(0 0 1rem);
+}
+/* Where it runs, on a bar of its own tucked behind the box's bottom edge, inset from its sides,
+   its corners following the box's. */
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+  /* Always this tall, whatever it holds, for the slide behind the box below. */
+  height: 3.0625rem;
+  margin: -1rem 0.75rem 0;
+  padding: calc(1rem + 2px) 0.25rem 2px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+  transition:
+    margin-top var(--transition-duration-base) var(--ease-out),
+    opacity var(--transition-duration-base) var(--ease-out),
+    visibility var(--transition-duration-base);
+}
+/* It slides up behind the box while the box steps back, unless one of its menus is open. */
+.composer-bar[data-back]:not(:has(:popover-open)) {
+  margin-top: -3.0625rem;
+  opacity: 0;
+  visibility: hidden;
+}
+/* The pickers around the box are plain labels: hovering one shows it's a menu, so they read as
+   calm text, without a chevron after each. */
+:is(.composer-controls, .composer-bar) button[aria-haspopup]:not([popover] *) {
+  height: 1.75rem;
+  padding-block: 0;
+  padding-right: 0.5rem;
+  white-space: nowrap;
+  > svg.lucide-chevron-down {
+    display: none;
+  }
+}
+/* Labels give way to their icons as the box narrows, least needed first. Each keeps its title. */
+@container composer (width < 36rem) {
+  .composer-detail {
+    display: none;
+  }
+}
+/* Rather than cut a computer's name to a letter, it's only its icon. */
+@container composer (width < 28rem) {
+  .composer-host {
+    display: none;
+  }
+}
+@container composer (width < 22rem) {
+  .composer-effort {
+    display: none;
+  }
+}
+/* The model button's reasoning level goes only when the name beside it runs out of room. */
+@container composer (width < 16.25rem) {
+  .composer-model-effort {
+    display: none;
+  }
 }
 
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
    paragraphs) with no gap, and code blocks drawn as the transcript's CodeBlock draws them. */
 .composer-input.markdown {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.625;
 }
 .composer-input > :first-child,
 .composer-input p + p {
   margin-top: 0;
 }
+/* A task list as the transcript draws GitHub's: the checkbox in the bullet's place. */
+.composer-input ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.1em;
+}
+.composer-input ul[data-type="taskList"] > li {
+  display: flex;
+  gap: 0.55em;
+}
+.composer-input ul[data-type="taskList"] > li > label input {
+  accent-color: var(--accent);
+}
+.composer-input ul[data-type="taskList"] > li > div {
+  flex: 1;
+}
 .composer-input pre {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--sidebar);
+  border-radius: 12px;
+  background: var(--code-fill, var(--code));
   padding: 0.75rem;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 /* The reasoning slider (EffortMenu.tsx). An invisible range takes input; the track, fill, and
@@ -256,49 +1756,42 @@ body {
   outline: none;
 }
 
-/* Stripes drift through the fill, faster the harder it thinks (--effort-speed). */
+/* The fill is the accent, flat, and a soft sheen sweeps through it, faster the harder it thinks
+   (--effort-speed). */
+.effort-fill {
+  background-color: var(--accent);
+}
 .effort-fill::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: repeating-linear-gradient(-45deg, rgb(255 255 255 / 13%) 0 8px, transparent 8px 16px);
-  background-size: 22.627px 100%;
-  animation: effort-stripes var(--effort-speed) linear infinite;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 22%), transparent) no-repeat;
+  background-size: 50% 100%;
+  animation: effort-sheen calc(var(--effort-speed) * 2.5) ease-in-out infinite;
 }
-@keyframes effort-stripes {
+@keyframes effort-sheen {
+  from {
+    background-position: -100% 0;
+  }
   to {
-    background-position: 22.627px 0;
-  }
-}
-
-/* The level's icon pops in whenever the level changes. */
-.effort-icon {
-  animation: effort-icon-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-@keyframes effort-icon-in {
-  from {
-    transform: scale(0.4) rotate(-20deg);
-    opacity: 0;
-  }
-}
-
-/* At Max: the thumb pops once, the fill shimmers, the track glows, and the bolt buzzes. */
-@keyframes effort-shimmer {
-  from {
     background-position: 200% 0;
   }
-  to {
-    background-position: -200% 0;
-  }
 }
+
+/* At Max (.effort-full) the track breathes, a soft accent ring swelling and fading around it, and
+   the thumb pops once. */
 @keyframes effort-glow {
   0%,
   100% {
-    box-shadow: 0 0 6px 0 color-mix(in srgb, var(--accent) 40%, transparent);
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
   }
   50% {
-    box-shadow: 0 0 22px 5px color-mix(in srgb, var(--accent) 70%, transparent);
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent);
   }
 }
 @keyframes effort-pop {
@@ -306,77 +1799,131 @@ body {
     transform: scale(1.2);
   }
 }
-@keyframes effort-buzz {
-  0%,
-  100% {
-    transform: rotate(0);
-  }
-  25% {
-    transform: rotate(-14deg) scale(1.15);
-  }
-  75% {
-    transform: rotate(10deg) scale(1.1);
-  }
-}
-.effort-full .effort-fill {
-  background-image: linear-gradient(
-    90deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 45%, white),
-    var(--accent)
-  );
-  background-size: 200% 100%;
-  animation: effort-shimmer 1.8s linear infinite;
-}
 .effort-full .effort-track {
-  animation: effort-glow 1.8s ease-in-out infinite;
+  animation: effort-glow 2.4s ease-in-out infinite;
 }
 .effort-full .effort-thumb {
   animation: effort-pop 0.45s ease-out;
 }
-.effort-full .effort-icon svg {
-  animation: effort-buzz 0.9s ease-in-out infinite;
+/* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
+   --needle. Turned up to Max (.effort-lit), once the needle has swung over, it rattles against the
+   end of the arc; then it's still. */
+.effort-needle {
+  transform-box: view-box;
+  transform-origin: 12px 14px;
+  rotate: var(--needle);
 }
-@media (prefers-reduced-motion: reduce) {
-  .effort-fill::after,
-  .effort-icon,
-  .effort-full .effort-fill,
+@keyframes effort-rattle {
+  0%,
+  100% {
+    rotate: var(--needle);
+  }
+  40% {
+    rotate: calc(var(--needle) - 5deg);
+  }
+}
+.effort-lit .effort-needle {
+  animation: effort-rattle 0.1s linear 0.3s 3;
+}
+:root.reduce-motion {
   .effort-full .effort-track,
   .effort-full .effort-thumb,
-  .effort-full .effort-icon svg {
+  .effort-lit .effort-needle {
     animation: none;
+  }
+  .effort-needle {
+    transition: none;
+  }
+  /* Stopped, the sheen would sit as a band over the fill. */
+  .effort-fill::after {
+    display: none;
   }
 }
 
-/* The Context view (ContextPanel.tsx). Its files draw a task's checkbox as a circle, so a task
-   has no bullet, and a top-level task list sits flush; plain items and nested lists keep theirs.
-   A Recents card previews the top of a file in small type. */
-:is(.context-doc, .context-preview) .task-list-item {
+/* A context file (ContextPanel.tsx) draws a task's checkbox as a circle, so a task has no
+   bullet, and a top-level task list sits flush; plain items and nested lists keep theirs. */
+.context-doc .task-list-item {
   list-style: none;
 }
-:is(.context-doc, .context-preview) .markdown > .contains-task-list {
+.context-doc .markdown > .contains-task-list {
   padding-left: 0;
 }
-.context-preview .markdown {
-  font-size: 12px;
-  line-height: 1.5;
+/* The status board on the orchestrator tab (ContextBody), set like an orchestrator page: small headings, and
+   each item a bold lead and its detail, a little apart. */
+.context-board {
+  padding-top: 1.25rem;
+}
+.context-board .markdown {
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--muted-foreground);
 }
-.context-preview .markdown > * {
-  margin-top: 0.3em;
+.context-board .markdown .board-title {
+  font-size: 14px;
+  color: var(--foreground);
+}
+.context-board .markdown .board-section {
+  margin: 1.6em 0.25em 0.6em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint-foreground);
+}
+.context-board .markdown li + li {
+  margin-top: 0.6em;
+}
+.context-board .markdown strong {
+  font-weight: 600;
+  color: var(--foreground);
 }
 
 /* The Usage page (UsagePage.tsx): bars rise from the baseline, --delay apart, and meters fill
    from the left, as they appear. Under reduced motion they are simply there. */
+/* A bar springs up from the baseline, a little past its height and back. */
 .usage-rise {
-  animation: usage-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) var(--delay, 0s) both;
+  transform-origin: bottom;
+  animation: usage-rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) var(--delay, 0s) both;
 }
 @keyframes usage-rise {
+  0% {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  60% {
+    transform: scaleY(1.06);
+  }
+  82% {
+    transform: scaleY(0.985);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+/* The axis's lines draw across before the bars rise; the average follows them. */
+.usage-grid {
+  transform-origin: left;
+  animation: usage-grid 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes usage-grid {
   from {
-    clip-path: inset(100% 0 0 0);
+    transform: scaleX(0);
+  }
+}
+.usage-average {
+  animation: usage-average 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.7s both;
+}
+@keyframes usage-average {
+  from {
+    clip-path: inset(-12px 100% -12px 0);
+    opacity: 0;
   }
   to {
-    clip-path: inset(0);
+    clip-path: inset(-12px 0 -12px 0);
+    opacity: 1;
   }
 }
 .usage-fill {
@@ -388,12 +1935,6 @@ body {
   }
   to {
     clip-path: inset(0);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .usage-rise,
-  .usage-fill {
-    animation: none;
   }
 }
 
@@ -447,432 +1988,203 @@ body {
 .proposed-plan > .markdown > :first-child {
   margin-top: 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .plan-bar {
-    transition: none;
+/* A permission request's card (Approval.tsx) rises into place over the composer. */
+.approval-in {
+  animation: approval-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes approval-in {
+  from {
+    opacity: 0;
+    translate: 0 8px;
   }
-  .plan-check-draw :is(circle, path),
-  .plan-strip {
-    animation: none;
+}
+/* A notification (notifications.tsx) slides in from the window's right edge, and out to it. */
+.toast-in {
+  animation: toast-in var(--transition-duration-slow) var(--ease-out) both;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    translate: 16px 0;
   }
 }
-
-/*! The loaders (Loader.tsx) are ported from Dani Asyrofi's loading indicators,
-   https://loading.daniasyrofi.com, under the MIT License:
-
-   Copyright (c) 2026 Dani Asyrofi (https://daniasyrofi.com)
-
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in all
-   copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE. */
-
-/* Each is drawn on a 24px stage scaled to the loader's size, in currentColor. A
-   part's --i is its place; Loader.tsx sets its duration and delay. */
-.loader {
-  position: relative;
-  display: block;
-  flex: none;
-  width: calc(24px * var(--loader-scale));
-  height: calc(24px * var(--loader-scale));
+/* The sidebar's areas (PLX-789): a thread that just finished flashes green once, and the undo
+   toasts, the bulk bar, and the area editor rise or pop in. */
+.row-flash {
+  animation: row-flash 1.8s ease-out;
 }
-.loader-stage {
-  --ink: currentColor;
-  --line-strong: color-mix(in srgb, currentColor 20%, transparent);
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 24px;
-  height: 24px;
-  margin: -12px;
-  scale: var(--loader-scale);
-}
-.loader-stage span {
-  display: block;
-}
-.loader-part {
-  background: var(--ink);
-  animation-iteration-count: infinite;
-  animation-timing-function: cubic-bezier(0.45, 0, 0.25, 1);
-}
-
-/* Orbit: eight dots on a ring. */
-[data-loader="orbit"] > span {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 3.5px;
-  height: 3.5px;
-  margin: -1.75px 0 0 -1.75px;
-  transform: rotate(calc(var(--i) * 45deg)) translateY(-9px);
-  transform-origin: 1.75px 1.75px;
-}
-[data-loader="orbit"] .loader-part {
-  width: 3.5px;
-  height: 3.5px;
-  border-radius: 999px;
-  opacity: 0.18;
-  scale: 0.72;
-  animation-name: loader-orbit;
-  animation-timing-function: ease-in-out;
-}
-@keyframes loader-orbit {
+@keyframes row-flash {
   0%,
-  100% {
-    opacity: 0.18;
-    scale: 0.72;
-  }
-  20% {
-    opacity: 1;
-    scale: 1.2;
-  }
-  42% {
-    opacity: 0.7;
-    scale: 1;
-  }
-  65% {
-    opacity: 0.18;
-    scale: 0.72;
+  35% {
+    background: color-mix(in srgb, var(--added) 20%, transparent);
   }
 }
-
-/* Beacon: five bars, 11, 9, 7, 9, and 11px tall. */
-[data-loader="beacon"] {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-}
-[data-loader="beacon"] .loader-part {
-  width: 2px;
-  height: calc(7px + max(2 - var(--i), var(--i) - 2) * 2px);
-  border-radius: 1px;
-  opacity: 0.22;
-  scale: 1 0.56;
-}
-[data-loader="beacon"][data-variant="rise"] .loader-part {
-  animation-name: loader-beacon-rise;
-}
-[data-loader="beacon"][data-variant="balance"] .loader-part {
-  animation-name: loader-beacon-balance;
-}
-@keyframes loader-beacon-rise {
-  0%,
-  100% {
-    opacity: 0.22;
-    scale: 1 0.56;
-  }
-  28% {
-    opacity: 0.52;
-    scale: 1 0.82;
-  }
-  48% {
-    opacity: 1;
-    scale: 1 1;
-  }
-  72% {
-    opacity: 0.34;
-    scale: 1 0.68;
+@keyframes sidebar-rise {
+  from {
+    opacity: 0;
+    translate: 0 6px;
   }
 }
-@keyframes loader-beacon-balance {
-  0%,
-  100% {
-    opacity: 0.24;
-    scale: 1 0.62;
-  }
-  50% {
-    opacity: 0.94;
-    scale: 1 1;
-  }
+:root.reduce-motion .row-flash {
+  animation: none;
 }
-
-/* Matrix: a 3x3 grid of dots. */
-[data-loader="matrix"] {
-  display: grid;
-  grid-template-columns: repeat(3, 3px);
-  grid-auto-rows: 3px;
-  place-content: center;
-  gap: 3px;
+/* The sidebar's menus (0075): a popover grows in from where it opens, and fades on its way out. */
+.pop-in {
+  transition:
+    opacity 140ms ease-out,
+    scale 140ms ease-out,
+    translate 140ms ease-out,
+    overlay 140ms allow-discrete,
+    display 140ms allow-discrete;
+  transform-origin: var(--pop-origin, top left);
 }
-[data-loader="matrix"] .loader-part {
-  width: 3px;
-  height: 3px;
-  border-radius: 999px;
-  opacity: 0.2;
-  scale: 0.68;
+.pop-in:not(:popover-open) {
+  opacity: 0;
+  scale: 0.97;
 }
-[data-loader="matrix"][data-variant="ripple"] .loader-part {
-  animation-name: loader-matrix-ripple;
-}
-[data-loader="matrix"][data-variant="scan"] .loader-part {
-  border-radius: 1px;
-  animation-name: loader-matrix-scan;
-}
-@keyframes loader-matrix-ripple {
-  0%,
-  100% {
-    opacity: 0.18;
-    scale: 0.64;
-  }
-  42% {
-    opacity: 0.94;
-    scale: 1.12;
-  }
-  68% {
-    opacity: 0.36;
-    scale: 0.78;
-  }
-}
-@keyframes loader-matrix-scan {
-  0%,
-  100% {
-    opacity: 0.18;
-    scale: 0.72;
-  }
-  34%,
-  56% {
-    opacity: 1;
-    scale: 1;
-  }
-  76% {
-    opacity: 0.32;
-    scale: 0.76;
-  }
-}
-
-/* Cells: a 2x2 grid that draws together, or apart. */
-[data-loader="cells"] {
-  display: grid;
-  grid-template-columns: repeat(2, 6px);
-  grid-auto-rows: 6px;
-  place-content: center;
-  gap: 3px;
-}
-[data-loader="cells"] .loader-part {
-  width: 6px;
-  height: 6px;
-  border-radius: 1.5px;
-  opacity: 0.2;
-  scale: 0.7;
-}
-[data-loader="cells"] .loader-part:nth-child(1) {
-  --x: 2px;
-  --y: 2px;
-}
-[data-loader="cells"] .loader-part:nth-child(2) {
-  --x: -2px;
-  --y: 2px;
-}
-[data-loader="cells"] .loader-part:nth-child(3) {
-  --x: 2px;
-  --y: -2px;
-}
-[data-loader="cells"] .loader-part:nth-child(4) {
-  --x: -2px;
-  --y: -2px;
-}
-[data-loader="cells"][data-variant="merge"] .loader-part {
-  animation-name: loader-cells-merge;
-}
-[data-loader="cells"][data-variant="spread"] .loader-part {
-  animation-name: loader-cells-spread;
-}
-@keyframes loader-cells-merge {
-  0%,
-  100% {
-    opacity: 0.2;
-    scale: 0.7;
-    translate: 0 0;
-  }
-  44%,
-  62% {
-    opacity: 1;
-    scale: 1;
-    translate: var(--x) var(--y);
-  }
-  78% {
-    opacity: 0.36;
-    scale: 0.78;
-    translate: 0 0;
-  }
-}
-@keyframes loader-cells-spread {
-  0%,
-  100% {
-    opacity: 0.24;
-    scale: 0.76;
-    translate: var(--x) var(--y);
-  }
-  46%,
-  64% {
-    opacity: 1;
-    scale: 1;
-    translate: 0 0;
-  }
-  80% {
-    opacity: 0.4;
-    scale: 0.82;
-    translate: var(--x) var(--y);
-  }
-}
-
-/* Register: six bits, alternately high and low. */
-[data-loader="register"] {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-}
-[data-loader="register"] .loader-part {
-  width: 2px;
-  height: 9px;
-  border-radius: 1px;
-  opacity: 0.2;
-  scale: 1 0.42;
-  translate: 0 3px;
-  animation-name: loader-register-shift;
-}
-[data-loader="register"] .loader-part:nth-child(odd) {
-  translate: 0 -3px;
-}
-@keyframes loader-register-shift {
-  0%,
-  100% {
-    opacity: 0.2;
-    scale: 1 0.42;
-  }
-  32% {
-    opacity: 0.5;
-    scale: 1 0.72;
-  }
-  50% {
-    opacity: 1;
-    scale: 1 1;
-  }
-  74% {
-    opacity: 0.32;
-    scale: 1 0.52;
-  }
-}
-
-/* Bands: three rails, each with a segment running along it. */
-[data-loader="bands"] {
-  display: grid;
-  align-content: center;
-  gap: 4px;
-}
-[data-loader="bands"] > span {
-  position: relative;
-  width: 20px;
-  height: 2px;
-  margin-inline: auto;
-  overflow: hidden;
-  border-radius: 1px;
-  background: var(--line-strong);
-}
-[data-loader="bands"] .loader-part {
-  position: absolute;
-  inset: 0;
-  width: 7px;
-  border-radius: 1px;
-  opacity: 0.26;
-  translate: -8px 0;
-  animation-name: loader-bands-descend;
-}
-@keyframes loader-bands-descend {
-  0%,
-  100% {
-    opacity: 0.2;
-    translate: -8px 0;
-  }
-  42% {
-    opacity: 1;
-    translate: 7px 0;
-  }
-  70% {
-    opacity: 0.36;
-    translate: 14px 0;
-  }
-}
-
-/* Lift: four widening levels on a shaft. */
-[data-loader="lift"]::before {
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: 11.5px;
-  width: 1px;
-  background: var(--line-strong);
-  content: "";
-}
-[data-loader="lift"] .loader-part {
-  position: absolute;
-  bottom: calc(3px + var(--i) * 5px);
-  left: calc(9px - var(--i) * 0.65px);
-  width: calc(6px + var(--i) * 1.3px);
-  height: 3px;
-  border-radius: 1.5px;
-  opacity: 0.18;
-  animation-timing-function: cubic-bezier(0.34, 1.4, 0.55, 1);
-}
-[data-loader="lift"][data-variant="rise"] .loader-part {
-  animation-name: loader-lift-rise;
-}
-[data-loader="lift"][data-variant="breathe"] .loader-part {
-  animation-name: loader-lift-breathe;
-}
-@keyframes loader-lift-rise {
-  0%,
-  100% {
-    opacity: 0.16;
-    translate: 0 2px;
-    scale: 0.72;
-  }
-  32% {
-    opacity: 0.5;
-    translate: 0 0;
-    scale: 0.9;
-  }
-  50% {
-    opacity: 1;
-    translate: 0 -2px;
-    scale: 1.08;
-  }
-  74% {
-    opacity: 0.3;
+@starting-style {
+  .pop-in:popover-open {
+    opacity: 0;
+    scale: 0.97;
     translate: 0 -3px;
-    scale: 0.82;
   }
 }
-@keyframes loader-lift-breathe {
-  0%,
-  100% {
-    opacity: 0.22;
-    scale: 0.72 1;
+/* A line showing where a dragged row or square lands draws in from its ring. */
+.drop-line {
+  animation: drop-line 120ms ease-out;
+  transform-origin: left center;
+}
+@keyframes drop-line {
+  from {
+    opacity: 0;
+    scale: 0.6 1;
   }
-  50% {
-    opacity: 0.92;
-    scale: 1 1;
+}
+/* A segmented control's thumb: raised off its track, white in light and a step lighter in dark,
+   sliding to the chosen option. */
+.seg-thumb {
+  background: light-dark(var(--surface), color-mix(in srgb, var(--foreground) 13%, var(--surface)));
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 8%),
+    0 0 0 0.5px var(--border);
+  transition: transform 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+/* The model picker (ModelMenu.tsx): a panel lifted off the canvas, with a long soft shadow in
+   light and, since no shadow shows on true black, a faint top highlight in dark. Its rail sits a
+   step below the panel, its logos gray until hovered, and the pressed one is raised as a
+   segmented control's thumb is. */
+.model-menu {
+  box-shadow:
+    0 18px 44px -18px light-dark(rgb(30 27 75 / 26%), rgb(0 0 0 / 90%)),
+    0 3px 10px -4px light-dark(rgb(30 27 75 / 8%), rgb(0 0 0 / 60%)),
+    inset 0 1px 0 light-dark(transparent, rgb(255 255 255 / 5%));
+}
+.model-menu-rail {
+  background: light-dark(
+    color-mix(in oklab, var(--foreground) 2.5%, var(--surface)),
+    color-mix(in oklab, var(--background) 55%, var(--surface))
+  );
+}
+.model-menu-rail button > * {
+  opacity: 0.6;
+  filter: grayscale(1);
+  transition:
+    opacity 150ms ease-out,
+    filter 150ms ease-out;
+}
+.model-menu-rail button:is(:hover, :focus-visible, [aria-pressed="true"]) > * {
+  opacity: 1;
+  filter: none;
+}
+/* The search field's clear button, drawn as a lucide X at 1.5px in the faint color. */
+.model-menu input[type="search"]::-webkit-search-cancel-button {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--faint-foreground);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.57' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  cursor: pointer;
+}
+.model-menu input[type="search"]::-webkit-search-cancel-button:hover {
+  background: var(--foreground);
+}
+.model-menu-rail button[aria-pressed="true"] {
+  background: light-dark(var(--surface), color-mix(in srgb, var(--foreground) 12%, var(--surface)));
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 10%),
+    0 0 0 0.5px var(--border);
+}
+/* What arrives in the sidebar once its first load has settled (data-settled, Sidebar.tsx): a count
+   rolls up into place, a status dot pops, and a square or button grows in. */
+.tick {
+  display: inline-block;
+  transition:
+    translate 240ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 240ms ease-out;
+}
+.dot-in {
+  transition:
+    scale 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 160ms ease-out;
+}
+.grow-in {
+  transition:
+    scale 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 180ms ease-out;
+}
+@starting-style {
+  [data-settled] .tick {
+    translate: 0 0.45em;
+    opacity: 0;
   }
+  [data-settled] .dot-in {
+    scale: 0.3;
+    opacity: 0;
+  }
+  [data-settled] .grow-in {
+    scale: 0.92;
+    opacity: 0;
+  }
+}
+/* A status that changed (AttentionMark.tsx, PinList.tsx), and a drawer's rows as it opens, rise
+   into place; the thread card beside a row fades in from it. */
+.rise-in {
+  animation: rise-in 240ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+}
+.card-in {
+  animation: card-in 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes card-in {
+  from {
+    opacity: 0;
+    translate: -4px 0;
+  }
+}
+:root.reduce-motion :is(.pop-in, .drop-line, .seg-thumb, .tick, .dot-in, .grow-in) {
+  transition: none;
+  animation: none;
+}
+:root.reduce-motion :is(.rise-in, .card-in) {
+  animation: none;
+}
+/* Under Reduce motion nothing in the sidebar slides, turns, or grows: folders, headings, drawers,
+   and the favorites change at once. */
+:root.reduce-motion #sidebar *,
+:root.reduce-motion #sidebar *::before,
+:root.reduce-motion #sidebar *::after {
+  transition: none;
+  animation: none;
 }
 
-/* The working line (AgentChat.tsx): its words shimmer, and a new one fades in
-   as the last fades out. AgentChat.tsx sets the shimmer's duration and delay. */
-.working-shimmer {
+/* A running Trace line's title (Trace.tsx) shimmers. */
+[data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
   background: linear-gradient(
       90deg,
       var(--muted-foreground) 40%,
@@ -882,7 +2194,21 @@ body {
     0 0 / 300% 100%;
   background-clip: text;
   color: transparent;
-  animation: working-shimmer linear infinite;
+  animation: working-shimmer 2s linear infinite;
+}
+/* Text for something still loading shimmers the same way: the import list's row while claude.ai
+   is checked (ImportSessions.tsx). */
+.shimmer-text {
+  background: linear-gradient(
+      90deg,
+      var(--muted-foreground) 40%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 60%
+    )
+    0 0 / 300% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: working-shimmer 2s linear infinite;
 }
 @keyframes working-shimmer {
   from {
@@ -892,41 +2218,336 @@ body {
     background-position: 0 0;
   }
 }
-.working-in {
-  animation: working-in 0.2s ease-out both;
-}
-.working-out {
-  animation: working-out 0.2s ease-in both;
-}
-@keyframes working-in {
-  from {
-    opacity: 0;
-  }
-}
-@keyframes working-out {
-  to {
-    opacity: 0;
-  }
-}
 
-/* Under reduced motion, loaders stand still and words just change. */
-@media (prefers-reduced-motion: reduce) {
-  .loader-part {
-    animation: none !important;
-    opacity: 0.65 !important;
-    scale: 1 !important;
-    translate: none !important;
-  }
-  .working-shimmer {
-    animation: none;
+/* Under reduced motion, titles don't shimmer: stopped, the gradient would sit over the text. */
+:root.reduce-motion {
+  [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"],
+  .shimmer-text {
     background: none;
     color: inherit;
   }
-  .working-in {
+}
+
+/* The sidebar's attention marks (AttentionMark.tsx, 0033); Done's animation forms from the logo's
+   two circles. Only transform and opacity move. will-change gives each Working mark a layer of
+   its own, so its turning stays on the GPU. */
+.mark-blue,
+.mark-coral {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0.85;
+}
+.mark-blue {
+  fill: var(--mark-blue);
+}
+.mark-coral {
+  fill: var(--mark-coral);
+}
+/* The working mark's ring of dots turns clockwise, its solid dot leading. */
+.mark-working {
+  fill: var(--mark-blue);
+  will-change: transform;
+  animation: mark-turn 1.2s linear infinite;
+}
+@keyframes mark-turn {
+  to {
+    rotate: 360deg;
+  }
+}
+.mark-done .mark-disc {
+  fill: var(--added);
+}
+.mark-done .mark-check {
+  fill: none;
+  stroke: var(--background);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mark-done :is(.mark-disc, .mark-check) {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+/* Once: the circles meet in the middle and fade as the disc swells out of them, then the check. */
+.mark-done-animate .mark-blue {
+  animation: mark-meet-blue 0.42s cubic-bezier(0.55, 0, 0.45, 1) both;
+}
+.mark-done-animate .mark-coral {
+  animation: mark-meet-coral 0.42s cubic-bezier(0.55, 0, 0.45, 1) both;
+}
+.mark-done-animate .mark-disc {
+  animation: mark-disc-in 0.36s 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.mark-done-animate .mark-check {
+  animation: mark-check-in 0.3s 0.52s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes mark-meet-blue {
+  to {
+    transform: translate(2.5px, 2.5px) scale(0.5);
+    opacity: 0;
+  }
+}
+@keyframes mark-meet-coral {
+  to {
+    transform: translate(-2.5px, -2.5px) scale(0.5);
+    opacity: 0;
+  }
+}
+@keyframes mark-disc-in {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+}
+@keyframes mark-check-in {
+  from {
+    transform: scale(0.4) rotate(-20deg);
+    opacity: 0;
+  }
+}
+:root.reduce-motion {
+  .mark-working,
+  .mark-done-animate :is(.mark-disc, .mark-check) {
     animation: none;
   }
-  .working-out {
-    animation: none;
-    visibility: hidden;
+  .mark-done-animate :is(.mark-blue, .mark-coral) {
+    display: none;
   }
+}
+
+/* A faint line on hover or focus, so the divider reads as draggable without shouting. */
+.panel-divider::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  inset-block: 0;
+  width: 2px;
+  background: color-mix(in srgb, var(--muted-foreground) 25%, transparent);
+  opacity: 0;
+  transition: opacity 120ms;
+  transform: translateX(-50%);
+}
+.panel-divider:hover::before,
+.panel-divider:focus-visible::before {
+  opacity: 1;
+}
+
+/* Find in thread's matches (Find.tsx): all of them, and the one stepped to. */
+::highlight(find) {
+  background-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  color: inherit;
+}
+::highlight(find-current) {
+  background-color: var(--warning);
+  color: #000;
+}
+
+/* First-launch onboarding (Onboarding.tsx). Steps and rows rise in, the logo's circles glide
+   together, and the tour's scenes play: bars fill, lines draw, chips pop, dots travel. Each
+   .onboard-layer shifts by its --depth with the pointer, from --px and --py on the dialog, each
+   -0.5 to 0.5. */
+.onboard-step,
+.onboard-rise {
+  animation: onboard-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes onboard-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+.onboard-layer {
+  translate: calc(var(--px, 0) * 2 * var(--depth, 0px)) calc(var(--py, 0) * 2 * var(--depth, 0px));
+  transition: translate 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.onboard-dots {
+  inset: -24px;
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.onboard-mark .blue {
+  animation: onboard-meet-blue 1.1s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+}
+.onboard-mark .coral {
+  animation: onboard-meet-coral 1.1s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+}
+@keyframes onboard-meet-blue {
+  from {
+    opacity: 0;
+    translate: -6px -6px;
+  }
+}
+@keyframes onboard-meet-coral {
+  from {
+    opacity: 0;
+    translate: 6px 6px;
+  }
+}
+.onboard-glow {
+  animation: onboard-glow 6s ease-in-out infinite alternate;
+}
+@keyframes onboard-glow {
+  to {
+    opacity: 0.5;
+    scale: 1.25;
+  }
+}
+.onboard-bar {
+  transform-origin: left;
+  animation: onboard-bar 3s cubic-bezier(0.65, 0, 0.35, 1) infinite both;
+}
+@keyframes onboard-bar {
+  from {
+    transform: scaleX(0);
+  }
+  55%,
+  85% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+.onboard-draw {
+  stroke-dasharray: 1;
+  animation: onboard-draw 0.8s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+@keyframes onboard-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.onboard-pop {
+  animation: onboard-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes onboard-pop {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+}
+.onboard-travel {
+  animation: onboard-travel 2.2s linear infinite both;
+}
+@keyframes onboard-travel {
+  from {
+    left: 0%;
+    opacity: 0;
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+  to {
+    left: 100%;
+    opacity: 0;
+  }
+}
+.onboard-scan {
+  background: linear-gradient(90deg, transparent, var(--selected), transparent) 0 0 / 200% 100%;
+  animation: onboard-scan 1.4s linear infinite;
+}
+@keyframes onboard-scan {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+:root.reduce-motion {
+  .onboard-step,
+  .onboard-rise,
+  .onboard-mark *,
+  .onboard-glow,
+  .onboard-bar,
+  .onboard-draw,
+  .onboard-pop,
+  .onboard-scan {
+    animation: none;
+  }
+  .onboard-layer {
+    translate: none;
+    transition: none;
+  }
+  .onboard-travel {
+    display: none;
+  }
+}
+
+/* The browser's pinned extension buttons (Extensions.tsx), electron-chrome-extensions'
+   `<button is="browser-action">`, drawn like the toolbar's buttons (an md IconButton). The
+   library styles them only inside its own list. */
+.browser-action {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+}
+.browser-action:hover {
+  background-color: var(--hover);
+}
+.browser-action.no-icon::after {
+  content: attr(data-letter);
+  position: absolute;
+  inset: 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--selected);
+  color: var(--foreground);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.browser-action .badge {
+  position: absolute;
+  right: 1px;
+  bottom: 2px;
+  max-width: 100%;
+  height: 13px;
+  padding: 0 3px;
+  overflow: hidden;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 13px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px var(--browser-toolbar, var(--background));
+}
+
+/* A device settling into the Device view (PLX-886). */
+@keyframes device-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* A guide's diagrams (PLX-1188): Pele's colors and fonts from the theme, so they follow light and
+   dark without drawing again. */
+.pele {
+  --pele-bg: var(--background);
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--surface);
+  --pele-surface-alt: var(--hover);
+  --pele-border: var(--border);
+  --pele-accent: var(--accent);
+  --pele-critical: var(--danger);
+  --pele-error: var(--danger);
+  --pele-font: var(--font-sans);
+  --pele-font-mono: var(--font-mono);
+  --pele-radius: 6px;
+  max-width: 100%;
+  height: auto;
 }

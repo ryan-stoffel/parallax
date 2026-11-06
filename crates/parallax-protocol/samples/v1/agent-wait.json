@@ -1,0 +1,79 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 60,
+    "method": "agent/wait",
+    "params": {
+      "runIds": [
+        "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02"
+      ],
+      "until": "any",
+      "timeoutMs": 60000
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 60,
+    "result": {
+      "runs": [
+        {
+          "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+          "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+          "prompt": "Add a README that explains how to build the app.",
+          "policy": "workspaceWrite",
+          "status": "completed",
+          "backend": "claude",
+          "accountId": "claude",
+          "sessionId": "session-7f3a",
+          "createdAt": "2026-10-03T12:00:00Z",
+          "updatedAt": "2026-10-03T12:04:00Z"
+        },
+        {
+          "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+          "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+          "prompt": "Fix the flaky login test.",
+          "policy": "workspaceWrite",
+          "status": "running",
+          "backend": "claude",
+          "accountId": "claude",
+          "sessionId": "session-8b1c",
+          "createdAt": "2026-10-03T12:00:05Z",
+          "updatedAt": "2026-10-03T12:00:09Z"
+        }
+      ],
+      "timedOut": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 61,
+    "method": "agent/wait",
+    "params": {
+      "runIds": ["01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02"],
+      "until": "all",
+      "timeoutMs": 1000
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 61,
+    "result": {
+      "runs": [
+        {
+          "id": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+          "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+          "prompt": "Fix the flaky login test.",
+          "policy": "workspaceWrite",
+          "status": "running",
+          "backend": "claude",
+          "accountId": "claude",
+          "sessionId": "session-8b1c",
+          "createdAt": "2026-10-03T12:00:05Z",
+          "updatedAt": "2026-10-03T12:00:09Z"
+        }
+      ],
+      "timedOut": true
+    }
+  }
+]

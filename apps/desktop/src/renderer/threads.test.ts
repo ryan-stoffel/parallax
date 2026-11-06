@@ -1,69 +1,87 @@
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
 
-import samples from "../../../../crates/wisp-protocol/samples/v1/threads.json";
+import samples from "../../../../crates/parallax-protocol/samples/v1/threads.json";
 import type {
+  AgentBackgroundTask,
+  AgentRun,
   EventsEventParams,
   ThreadStartResult,
-  WispEvent,
+  ParallaxEvent,
 } from "../protocol/generated/protocol";
-import { emptyThreads, groupThreads, noRepo, threadsReducer, type ThreadsState } from "./threads";
+import {
+  addToProject,
+  asksOf,
+  emptyThreads,
+  holdQuiet,
+  orchestratorRuns,
+  threadOrchestrators,
+  threadsReducer,
+  type ThreadsState,
+  type ThreadsView,
+} from "./threads";
 
 const messages = samples as { id?: number; method?: string; params?: unknown; result?: unknown }[];
 const events = messages
   .filter((m) => m.method === "events/event")
   .map((m) => (m.params as EventsEventParams).event);
-const [wispAdded, threadStarted, scratchAdded, threadArchived, threadDeleted] = events as [
-  WispEvent,
-  WispEvent,
-  WispEvent,
-  WispEvent,
-  WispEvent,
+const [parallaxAdded, threadStarted, , threadArchived, threadDeleted] = events as [
+  ParallaxEvent,
+  ParallaxEvent,
+  ParallaxEvent,
+  ParallaxEvent,
+  ParallaxEvent,
 ];
 const started = messages.find((m) => m.id === 4 && m.result)!.result as ThreadStartResult;
-const quickChat = messages.find((m) => m.id === 5 && m.result)!.result as ThreadStartResult;
 
-const apply = (state: ThreadsState, ...list: WispEvent[]) =>
+const apply = (state: ThreadsState, ...list: ParallaxEvent[]) =>
   list.reduce((s, event) => threadsReducer(s, { type: "event", event }), state);
 
-test("repo.added, thread.started, and project.created add entries, and repeating one changes nothing", () => {
-  const project = {
+test("repo.added, thread.started, and orchestrator.created add entries, and repeating one changes nothing", () => {
+  const orchestrator = {
     id: "p-1",
-    name: "wisp",
-    repoPath: "/src/wisp",
+    name: "parallax",
+    repoPath: "/src/parallax",
     createdAt: "2026-09-26T12:00:00Z",
     updatedAt: "2026-09-26T12:00:00Z",
   };
-  const created: WispEvent = { kind: "project.created", project };
-  const state = apply(emptyThreads, wispAdded, threadStarted, created);
-  expect(apply(state, wispAdded, threadStarted, created)).toEqual(state);
-  expect(state.repos.map((r) => r.name)).toEqual(["wisp"]);
+  const created: ParallaxEvent = { kind: "orchestrator.created", orchestrator };
+  const state = apply(emptyThreads, parallaxAdded, threadStarted, created);
+  expect(apply(state, parallaxAdded, threadStarted, created)).toEqual(state);
+  expect(state.repos.map((r) => r.name)).toEqual(["parallax"]);
   expect(state.threads.map((t) => t.id)).toEqual([started.thread.id]);
-  expect(state.projects).toEqual([project]);
+  expect(state.orchestrators).toEqual([orchestrator]);
+});
+
+test("orchestrator.deleted drops the orchestrator and its runs, and keeps the rest", () => {
+  const orchestrator = (id: string) => ({
+    id,
+    name: id,
+    repoPath: "/src/parallax",
+    createdAt: "2026-09-26T12:00:00Z",
+    updatedAt: "2026-09-26T12:00:00Z",
+  });
+  const run = (id: string, inOrchestrator: string) => ({ id, project: inOrchestrator }) as AgentRun;
+  const state: ThreadsState = {
+    ...emptyThreads,
+    orchestrators: [orchestrator("p-1"), orchestrator("p-2")],
+    runs: { a: run("a", "p-1"), b: run("b", "p-1"), c: run("c", "p-2"), t: run("t", "r-1") },
+  };
+  const after = apply(state, { kind: "orchestrator.deleted", orchestrator: "p-1" });
+  expect(after.orchestrators.map((p) => p.id)).toEqual(["p-2"]);
+  expect(Object.keys(after.runs)).toEqual(["c", "t"]);
 });
 
 test("thread.updated replaces the thread, and thread.deleted removes it", () => {
-  const archived = apply(emptyThreads, wispAdded, threadStarted, threadArchived);
+  const archived = apply(emptyThreads, parallaxAdded, threadStarted, threadArchived);
   expect(archived.threads).toEqual([{ ...started.thread, archived: true }]);
   expect(apply(archived, threadDeleted).threads).toEqual([]);
-});
-
-test("a thread's title is the first line of its run's prompt", () => {
-  const run = { ...started.run, prompt: "  Fix the flaky attach test.\nIt fails on CI.  " };
-  const state = threadsReducer(emptyThreads, {
-    type: "snapshot",
-    projects: [],
-    repos: [],
-    threads: [started.thread],
-    runs: [run],
-  });
-  expect(state.titles).toEqual({ [run.id]: "Fix the flaky attach test." });
 });
 
 test("runs are kept by id: a later list replaces the runs it has, and keeps the rest", () => {
   const other = { ...started.run, id: "other" };
   let state = threadsReducer(emptyThreads, {
     type: "snapshot",
-    projects: [],
+    orchestrators: [],
     repos: [],
     threads: [started.thread],
     runs: [started.run, other],
@@ -73,25 +91,290 @@ test("runs are kept by id: a later list replaces the runs it has, and keeps the 
   expect(state.runs["other"]).toEqual(other);
 });
 
-test("groups: repositories, then No Repo, newest first, archived apart", () => {
-  // The quick chat's result arrives before the scratch entry's repo.added (seq 50).
-  let state = apply(emptyThreads, wispAdded, threadStarted);
-  state = apply(state, { kind: "thread.started", thread: quickChat.thread });
-  const newer = { ...started.thread, id: "newer", createdAt: "2026-09-26T13:00:00Z" };
-  state = apply(state, { kind: "thread.started", thread: newer });
+test("a scope's events keep a run current, stamp when it changed, and track what it asks", () => {
+  const run = { id: "r-1", prompt: "Go", status: "running", updatedAt: "2026-10-01T10:00:00Z" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    orchestrators: [],
+    repos: [],
+    threads: [],
+    runs: [run as never],
+  });
+  const asked = {
+    seq: 5,
+    time: "2026-10-01T10:01:00Z",
+    event: {
+      kind: "agent.output",
+      runId: "r-1",
+      items: [{ kind: "approvalRequested", requestId: "q-1", toolName: "Bash", input: {} }],
+    },
+  };
+  const finished = {
+    seq: 6,
+    time: "2026-10-01T10:02:00Z",
+    event: { kind: "agent.updated", runId: "r-1", state: { status: "completed", accountId: "a" } },
+  };
+  state = threadsReducer(state, { type: "scope", events: [asked as never] });
+  expect(asksOf(state, "r-1")).toBe(1);
+  state = threadsReducer(state, { type: "scope", events: [finished as never] });
+  expect(state.runs["r-1"]).toMatchObject({
+    status: "completed",
+    updatedAt: "2026-10-01T10:02:00Z",
+  });
+});
 
-  const byGroup = () =>
-    groupThreads(state).groups.map((g) => [g.id, g.name, g.threads.map((t) => t.id)]);
-  const wisp = started.thread.repo;
-  expect(byGroup()).toEqual([
-    [wisp, "wisp", ["newer", started.thread.id]],
-    [noRepo, "No Repo", [quickChat.thread.id]],
+test("an older log read for its requests never undoes a run's newer status", () => {
+  const done = { id: "r-1", prompt: "Go", status: "completed", updatedAt: "2026-10-01T10:05:00Z" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    orchestrators: [],
+    repos: [],
+    threads: [],
+    runs: [done as never],
+  });
+  const old = {
+    seq: 2,
+    time: "2026-10-01T10:00:00Z",
+    event: { kind: "agent.updated", runId: "r-1", state: { status: "running", accountId: "a" } },
+  };
+  state = threadsReducer(state, { type: "approvals", events: [old as never] });
+  expect(state.runs["r-1"]).toEqual(done);
+});
+
+test("a thread is in an orchestrator when its run or an ancestor's is one of the orchestrator's", () => {
+  const run = (id: string, orchestrator: string) => ({ id, project: orchestrator }) as AgentRun;
+  const thread = (id: string, parent?: string) => ({ id, repo: "r", createdAt: "", parent });
+  const state: ThreadsState = {
+    ...emptyThreads,
+    orchestrators: [{ id: "p", name: "p", repoPath: "/p", createdAt: "", updatedAt: "" }],
+    runs: {
+      coord: run("coord", "p"),
+      child: run("child", "r"),
+      grandchild: run("grandchild", "r"),
+      plain: run("plain", "r"),
+      own: run("own", "p"),
+    },
+    threads: [
+      thread("child", "coord"),
+      thread("grandchild", "child"),
+      // Its own run is the orchestrator's, as a child plxd starts in it may be.
+      thread("own"),
+      thread("plain"),
+      thread("orphan", "gone"),
+      thread("loop", "loop"),
+    ],
+  };
+  const inOrchestrator = threadOrchestrators(state);
+  expect([...inOrchestrator]).toEqual([
+    ["child", "p"],
+    ["grandchild", "p"],
+    ["own", "p"],
   ]);
-  // Once the scratch entry is known, it is still the one No Repo group, not a repository.
-  state = apply(state, scratchAdded, threadArchived);
-  expect(byGroup()).toEqual([
-    [wisp, "wisp", ["newer"]],
-    [noRepo, "No Repo", [quickChat.thread.id]],
+  expect(orchestratorRuns(state, "p", inOrchestrator).map((r) => r.id)).toEqual([
+    "coord",
+    "child",
+    "grandchild",
+    "own",
   ]);
-  expect(groupThreads(state).archived.map((t) => t.id)).toEqual([started.thread.id]);
+});
+
+test("holdQuiet holds the end of a run's background work until the agent has had time to wake (PLX-1015)", () => {
+  vi.useFakeTimers();
+  const applied: ParallaxEvent[] = [];
+  const quiet = holdQuiet((e) => applied.push(e), 1000);
+  const task = { taskId: "b1", kind: "command", description: "build" } as AgentBackgroundTask;
+  const ended: ParallaxEvent = { kind: "agent.background", runId: "r", tasks: [] };
+  const other: ParallaxEvent = { kind: "orchestrator.deleted", orchestrator: "p1" };
+
+  quiet.pass(other);
+  quiet.pass(ended);
+  expect(applied).toEqual([other]);
+  // New work before the hold ends replaces it.
+  const more: ParallaxEvent = { kind: "agent.background", runId: "r", tasks: [task] };
+  quiet.pass(more);
+  vi.advanceTimersByTime(1000);
+  expect(applied).toEqual([other, more]);
+  // With nothing new, it applies once the hold ends.
+  quiet.pass(ended);
+  vi.advanceTimersByTime(999);
+  expect(applied).toHaveLength(2);
+  vi.advanceTimersByTime(1);
+  expect(applied).toEqual([other, more, ended]);
+  // The agent waking for it applies it at once.
+  quiet.pass(ended);
+  const woke = { kind: "agent.updated", runId: "r", state: { status: "running" } } as ParallaxEvent;
+  quiet.pass(woke);
+  expect(applied).toEqual([other, more, ended, woke, ended]);
+  vi.advanceTimersByTime(1000);
+  expect(applied).toHaveLength(5);
+  // So does its stopping, since it can't wake now.
+  quiet.pass(ended);
+  const stopped = {
+    kind: "agent.updated",
+    runId: "r",
+    state: { status: "cancelled" },
+  } as ParallaxEvent;
+  quiet.pass(stopped);
+  expect(applied.slice(5)).toEqual([stopped, ended]);
+  vi.useRealTimers();
+});
+
+test("a run's stop time is when it stopped, and a change after that, as a linked pull request, keeps it", () => {
+  const running = { id: "r-1", prompt: "Go", status: "running", updatedAt: "2026-10-01T10:00:00Z" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    orchestrators: [],
+    repos: [],
+    threads: [],
+    runs: [running as never],
+  });
+  expect(state.stoppedAt).toEqual({});
+  const updated = (time: string, change: object) => ({
+    seq: 1,
+    time,
+    event: { kind: "agent.updated", runId: "r-1", state: { accountId: "a", ...change } },
+  });
+  state = threadsReducer(state, {
+    type: "scope",
+    events: [updated("2026-10-01T10:05:00Z", { status: "completed" }) as never],
+  });
+  expect(state.stoppedAt).toEqual({ "r-1": "2026-10-01T10:05:00Z" });
+  state = threadsReducer(state, {
+    type: "scope",
+    events: [
+      updated("2026-10-01T11:00:00Z", {
+        status: "completed",
+        pullRequests: ["https://x/1"],
+      }) as never,
+    ],
+  });
+  expect(state.runs["r-1"]!.updatedAt).toBe("2026-10-01T11:00:00Z");
+  expect(state.stoppedAt).toEqual({ "r-1": "2026-10-01T10:05:00Z" });
+});
+
+test("addToProject takes back a made Project whose instructions fail, so a retry copies them", async () => {
+  const removeProject = vi.fn(async () => undefined);
+  const setProject = vi.fn(async () => undefined);
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const view = {
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => ({ ...source, id: "s-here" }),
+    updateRepo: async () => "too long",
+    removeProject,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = { id: "t-1", repo: "r-1", createdAt: source.createdAt };
+
+  expect(await addToProject(view, [thread], source)).toBe("too long");
+  expect(removeProject).toHaveBeenCalledWith("s-here");
+  expect(setProject).not.toHaveBeenCalled();
+});
+
+test("addToProject makes one Project for threads added while it's being made", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const createProject = vi.fn(async () => ({ ...source, id: "s-here" }));
+  const setProject = vi.fn(async () => undefined);
+  const view = {
+    hostId: "mini",
+    state: emptyThreads,
+    capabilities: {},
+    createProject,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = (id: string) => ({ id, repo: "r-1", createdAt: source.createdAt });
+
+  await Promise.all([
+    addToProject(view, [thread("t-1")], source),
+    addToProject(view, [thread("t-2")], source),
+  ]);
+  expect(createProject).toHaveBeenCalledTimes(1);
+  expect(setProject).toHaveBeenCalledWith(["t-1"], "s-here");
+  expect(setProject).toHaveBeenCalledWith(["t-2"], "s-here");
+});
+
+test("addToProject says so when a made Project can't be taken back, or an archived thread stays", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const thread = { id: "t-1", repo: "r-1", createdAt: source.createdAt, archived: true };
+  const setProject = vi.fn(async () => undefined);
+  const stuck = {
+    hostId: "mini",
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => ({ ...source, id: "s-here" }),
+    updateRepo: async () => "offline",
+    removeProject: async () => "offline",
+    setProject,
+  } as unknown as ThreadsView;
+  expect(await addToProject(stuck, [thread], source)).toBe(
+    "Essays is there now, but without its instructions: offline",
+  );
+
+  const archived = {
+    hostId: "mini",
+    state: { ...emptyThreads, repos: [source] },
+    capabilities: {},
+    archive: async () => "offline",
+    setProject,
+  } as unknown as ThreadsView;
+  expect(await addToProject(archived, [thread], source)).toBe("offline");
+  expect(setProject).not.toHaveBeenCalled();
+});
+
+test("addToProject waits for a copy already listed but still setting its instructions", async () => {
+  const source = {
+    id: "s-there",
+    name: "Essays",
+    path: "/there",
+    project: true,
+    instructions: "Write plainly.",
+    createdAt: "2026-10-01T09:00:00Z",
+  };
+  const made = { ...source, id: "s-here" };
+  let failInstructions: ((error: string) => void) | undefined;
+  const setProject = vi.fn(async () => undefined);
+  const first = {
+    hostId: "slow-mini",
+    state: emptyThreads,
+    capabilities: { projectContext: {} },
+    createProject: async () => made,
+    updateRepo: () => new Promise<string>((resolve) => (failInstructions = resolve)),
+    removeProject: async () => undefined,
+    setProject,
+  } as unknown as ThreadsView;
+  const thread = (id: string) => ({ id, repo: "r-1", createdAt: source.createdAt });
+
+  const adding = addToProject(first, [thread("t-1")], source);
+  await vi.waitFor(() => expect(failInstructions).toBeDefined());
+  // A later view lists the new entry, which goes if its instructions fail, and a sidebar row can
+  // offer that entry itself.
+  const later = { ...first, state: { ...emptyThreads, repos: [made] } } as ThreadsView;
+  const byName = addToProject(later, [thread("t-2")], source);
+  const byId = addToProject(later, [thread("t-3")], made);
+  failInstructions!("too long");
+
+  expect(await adding).toBe("too long");
+  expect(await byName).toBe("too long");
+  expect(await byId).toBe("too long");
+  expect(setProject).not.toHaveBeenCalled();
 });

@@ -12,27 +12,28 @@
 //! any file, ignored ones included, sits where the result adds one. Only then does it move the
 //! branch and working tree, with `git merge --ff-only --no-overwrite-ignore <result>`, whose
 //! two-way checkout keeps every other uncommitted change. If that checkout stops part way (one of
-//! the user's own filters failed, or the branch couldn't move), wispd puts back only the files
+//! the user's own filters failed, or the branch couldn't move), plxd puts back only the files
 //! that still hold exactly what git wrote, and names any that changed meanwhile; after a lock
 //! failure or a timeout it puts back nothing (see `WorktreeManager::roll_back`). It never pushes.
 //!
 //! Those calls use the user's own configuration, since the checkout is theirs: global config,
 //! filters such as Git LFS's, merge drivers, and identity. Hooks are the exception: like every git
-//! call wispd makes, they run with `core.hooksPath=/dev/null` (see `WorktreeManager::run_git`).
+//! call plxd makes, they run with `core.hooksPath=/dev/null` (see `WorktreeManager::run_git`).
 //! The merge commit is not signed, because signing can wait on a prompt.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use tokio::io::AsyncWriteExt as _;
 use tokio::time::timeout;
 use tracing::warn;
 
 use super::{
-    ChangeStatus, ChangedFile, DiffStat, NO_DIFF_DRIVERS, WorktreeError, WorktreeManager,
-    changed_file, collect, describe_failure, owned_args,
+    ChangeStatus, ChangedFile, DEFAULT_TIMEOUT, DiffStat, NO_DIFF_DRIVERS, NO_TRANSPORT,
+    WorktreeError, WorktreeManager, changed_file, collect, describe_failure, git_failed, timed_out,
 };
-use crate::backend::process::Output;
+use crate::backend::process::{Output, StdinMode};
 use crate::json::escaped_len as json_len;
 
 /// The largest file [`WorktreeManager::read_blob`] returns: 4 MiB, which base64 turns into about
@@ -144,7 +145,7 @@ pub struct Blob {
 pub enum MergeHow {
     /// The branch moved forward to the commit.
     FastForward,
-    /// wispd made a merge commit.
+    /// plxd made a merge commit.
     Merge,
     /// The branch already contained the commit.
     UpToDate,
@@ -207,7 +208,7 @@ const IN_PROGRESS: &[(&str, &str)] = &[
 impl WorktreeManager {
     /// The files that differ between commits `base` and `head`, with stats and size-capped
     /// unified diffs, read through the worktree's pinned git folder like
-    /// [`WorktreeManager::diff`] (#166). It reads only commits, never the worktree's files.
+    /// [`WorktreeManager::diff_stat`] (#166). It reads only commits, never the worktree's files.
     ///
     /// # Errors
     ///
@@ -349,29 +350,17 @@ impl WorktreeManager {
                     }
                     Some(Output::Exited(exit)) => {
                         close(&mut current, &mut sections, &mut total);
-                        return Ok((sections, exit));
+                        return (sections, exit);
                     }
                     None => unreachable!("Output::Exited always comes last"),
                 }
             }
         };
-        let (sections, exit) = match timeout(self.timeout, read).await {
-            Ok(Ok(read)) => read,
-            Ok(Err(error)) => return Err(error),
-            Err(_) => {
-                return Err(WorktreeError::Timeout {
-                    cwd: worktree_path.to_owned(),
-                    args: owned_args(args),
-                    timeout: self.timeout,
-                });
-            }
-        };
+        let (sections, exit) = timeout(DEFAULT_TIMEOUT, read)
+            .await
+            .map_err(|_| timed_out(worktree_path, args, DEFAULT_TIMEOUT))?;
         if !exit.info.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(args),
-                detail: exit.stderr_tail,
-            });
+            return Err(git_failed(worktree_path, args, exit.stderr_tail));
         }
         if sections.len() != expected {
             warn!(
@@ -439,22 +428,11 @@ impl WorktreeManager {
         }
         let args = ["cat-file", "blob", object.as_str()];
         let spec = self.worktree_spec(worktree_path, git_dir, &args).await?;
-        let process = self.launcher.spawn(&spec)?;
-        let Ok(collected) = timeout(self.timeout, collect(process, worktree_path, &args)).await
-        else {
-            return Err(WorktreeError::Timeout {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(&args),
-                timeout: self.timeout,
-            });
-        };
-        let (mut bytes, exit) = collected?;
+        let (mut bytes, exit) = self
+            .exec(&spec, worktree_path, &args, DEFAULT_TIMEOUT)
+            .await?;
         if !exit.info.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(&args),
-                detail: exit.stderr_tail,
-            });
+            return Err(git_failed(worktree_path, &args, exit.stderr_tail));
         }
         // `collect` ends every line with `\n`, including a last line that had none.
         let size_bytes = usize::try_from(size).unwrap_or(usize::MAX);
@@ -462,16 +440,77 @@ impl WorktreeManager {
             bytes.pop();
         }
         if bytes.len() != size_bytes {
-            return Err(WorktreeError::GitFailed {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(&args),
-                detail: format!("read {} bytes of a {size}-byte file", bytes.len()),
-            });
+            let detail = format!("read {} bytes of a {size}-byte file", bytes.len());
+            return Err(git_failed(worktree_path, &args, detail));
         }
         Ok(Some(Blob {
             size,
             content: Some(bytes),
         }))
+    }
+
+    /// Which of `paths`, relative to `work_tree`, git ignores (`git check-ignore`), for
+    /// `agent/files` (PLX-296). A tracked path is never ignored. With `git_dir`, a worker's
+    /// worktree, git runs pinned and hardened like every call there (#166); without, `work_tree`
+    /// is the user's own checkout, read with their own config. The paths go in on stdin, so a
+    /// long folder never meets a command-line limit.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], [`WorktreeError::Spawn`], or
+    /// [`WorktreeError::Io`].
+    pub async fn ignored(
+        &self,
+        work_tree: &Path,
+        git_dir: Option<&Path>,
+        paths: &[String],
+    ) -> Result<HashSet<String>, WorktreeError> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let args = [
+            NO_TRANSPORT[0],
+            NO_TRANSPORT[1],
+            NO_TRANSPORT[2],
+            NO_TRANSPORT[3],
+            "check-ignore",
+            "-z",
+            "--stdin",
+        ];
+        let mut spec = match git_dir {
+            Some(git_dir) => self.worktree_spec(work_tree, git_dir, &args).await?,
+            None => self.git_spec(work_tree, &args),
+        };
+        spec.stdin = StdinMode::Piped;
+        spec.limits.max_line_bytes = self.max_git_line_bytes;
+        let mut process = self.launcher.spawn(&spec)?;
+        // `./` keeps a name such as `:!x` from reading as pathspec magic, which check-ignore
+        // refuses.
+        let input: Vec<u8> = paths
+            .iter()
+            .flat_map(|path| [b"./", path.as_bytes(), b"\0"].concat())
+            .collect();
+        let run = async {
+            if let Some(mut stdin) = process.take_stdin() {
+                // A write error means git exited early; its exit status says why.
+                let _ = stdin.write_all(&input).await;
+            }
+            collect(process, work_tree, &args).await
+        };
+        let (stdout, exit) = timeout(DEFAULT_TIMEOUT, run)
+            .await
+            .map_err(|_| timed_out(work_tree, &args, DEFAULT_TIMEOUT))??;
+        // 0: some are ignored, 1: none are.
+        if !matches!(exit.info.code, Some(0 | 1)) {
+            return Err(git_failed(work_tree, &args, exit.stderr_tail));
+        }
+        // `collect` ends the one NUL-separated line with `\n`.
+        let stdout = String::from_utf8_lossy(stdout.strip_suffix(b"\n").unwrap_or(&stdout));
+        Ok(stdout
+            .split('\0')
+            .filter_map(|path| path.strip_prefix("./"))
+            .map(str::to_owned)
+            .collect())
     }
 
     /// Merges `commit` into the current branch of `repo_path`'s checkout: see the module
@@ -492,7 +531,7 @@ impl WorktreeManager {
         let repo = repo_root.display().to_string();
 
         let head_ref = self
-            .run_checkout_git(&repo_root, &["symbolic-ref", "--quiet", "HEAD"])
+            .run_git(&repo_root, &["symbolic-ref", "--quiet", "HEAD"])
             .await?;
         let into = match head_ref.stdout.trim().strip_prefix("refs/heads/") {
             Some(branch) if head_ref.success() => branch.to_owned(),
@@ -524,7 +563,7 @@ impl WorktreeManager {
         };
 
         let changes = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 &repo_root,
                 &[
                     "diff",
@@ -600,7 +639,7 @@ impl WorktreeManager {
                     let paths: Vec<&str> = changes.iter().map(|(_, path)| path.as_str()).collect();
                     return Err(AcceptError::Refused(format!(
                         "git did not finish updating {into} in {repo} within {}s, and was \
-                         stopped. It left {} behind, so wispd put nothing back: these files may \
+                         stopped. It left {} behind, so plxd put nothing back: these files may \
                          be partly updated: {}. If no other git is running there, remove the \
                          lock, then check git status",
                         self.merge_timeout.as_secs(),
@@ -636,7 +675,7 @@ impl WorktreeManager {
     ) -> Result<(), AcceptError> {
         let paths: HashSet<&str> = changes.iter().map(|(_, path)| path.as_str()).collect();
         let status = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 repo_root,
                 &[
                     "status",
@@ -700,7 +739,7 @@ impl WorktreeManager {
             Ok(states) => states,
             Err(error) => {
                 return AcceptError::Refused(format!(
-                    "git could not update {into} in {repo} ({failure}), and wispd could not tell \
+                    "git could not update {into} in {repo} ({failure}), and plxd could not tell \
                      which files it had written ({error}), so it put nothing back; check git \
                      status for {}",
                     list_paths(&paths)
@@ -726,10 +765,9 @@ impl WorktreeManager {
         let left = self.put_back(repo_root, head, &mut restore, &remove).await;
         let mut message = format!("git could not update {into} in {repo} ({failure}). ");
         if left.is_empty() && foreign.is_empty() {
-            message
-                .push_str("wispd put back the files it had started to write, so nothing changed");
+            message.push_str("plxd put back the files it had started to write, so nothing changed");
         } else {
-            message.push_str("wispd put back the files only git had written");
+            message.push_str("plxd put back the files only git had written");
             if !foreign.is_empty() {
                 let _ = write!(
                     message,
@@ -826,7 +864,7 @@ impl WorktreeManager {
                 "--",
             ];
             args.extend_from_slice(chunk);
-            let listing = self.run_checkout_git_ok(repo_root, &args).await?;
+            let listing = self.run_git_ok(repo_root, &args).await?;
             for entry in z_tokens(&listing) {
                 let Some((meta, name)) = entry.split_once('\t') else {
                     continue;
@@ -881,7 +919,7 @@ impl WorktreeManager {
         for chunk in files.chunks(200) {
             let mut args = vec!["hash-object", "--"];
             args.extend(chunk.iter().map(|(path, _)| *path));
-            let hashes = self.run_checkout_git_ok(repo_root, &args).await?;
+            let hashes = self.run_git_ok(repo_root, &args).await?;
             for ((path, mode), object) in chunk.iter().zip(hashes.lines()) {
                 ids.insert((*path).to_owned(), format!("{mode} {}", object.trim()));
             }
@@ -892,7 +930,7 @@ impl WorktreeManager {
     /// `git rev-parse --git-path <name>` as an absolute path.
     async fn git_path(&self, repo_root: &Path, name: &str) -> Result<PathBuf, WorktreeError> {
         let path = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 repo_root,
                 &["rev-parse", "--path-format=absolute", "--git-path", name],
             )
@@ -905,7 +943,7 @@ impl WorktreeManager {
         for (name, _) in IN_PROGRESS {
             args.extend_from_slice(&["--git-path", name]);
         }
-        let paths = self.run_checkout_git_ok(repo_root, &args).await?;
+        let paths = self.run_git_ok(repo_root, &args).await?;
         for ((_, what), path) in IN_PROGRESS.iter().zip(paths.lines()) {
             if tokio::fs::symlink_metadata(path).await.is_ok() {
                 return Err(AcceptError::Refused(format!(
@@ -916,26 +954,18 @@ impl WorktreeManager {
         Ok(())
     }
 
-    async fn is_ancestor(
+    pub(super) async fn is_ancestor(
         &self,
         repo_root: &Path,
         ancestor: &str,
         descendant: &str,
     ) -> Result<bool, WorktreeError> {
-        let output = self
-            .run_checkout_git(
-                repo_root,
-                &["merge-base", "--is-ancestor", ancestor, descendant],
-            )
-            .await?;
+        let args = ["merge-base", "--is-ancestor", ancestor, descendant];
+        let output = self.run_git(repo_root, &args).await?;
         match output.exit.info.code {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => Err(WorktreeError::GitFailed {
-                cwd: repo_root.to_owned(),
-                args: owned_args(&["merge-base", "--is-ancestor", ancestor, descendant]),
-                detail: describe_failure(&output),
-            }),
+            _ => Err(output.failure(repo_root, &args)),
         }
     }
 
@@ -950,7 +980,7 @@ impl WorktreeManager {
         message: &str,
     ) -> Result<String, AcceptError> {
         let tree = self
-            .run_checkout_git(
+            .run_git(
                 repo_root,
                 &[
                     "merge-tree",
@@ -975,11 +1005,9 @@ impl WorktreeManager {
                 });
             }
             _ => {
-                return Err(AcceptError::Git(WorktreeError::GitFailed {
-                    cwd: repo_root.to_owned(),
-                    args: owned_args(&["merge-tree", "--write-tree", head, target]),
-                    detail: describe_failure(&tree),
-                }));
+                return Err(AcceptError::Git(
+                    tree.failure(repo_root, &["merge-tree", "--write-tree", head, target]),
+                ));
             }
         }
         let tree = z_tokens(&tree.stdout)
@@ -995,7 +1023,7 @@ impl WorktreeManager {
             )));
         }
         let commit = self
-            .run_checkout_git_ok(
+            .run_git_ok(
                 repo_root,
                 &[
                     "commit-tree",
@@ -1011,32 +1039,6 @@ impl WorktreeManager {
             )
             .await?;
         Ok(commit.trim().to_owned())
-    }
-
-    /// `git args` in the user's own checkout, with its own configuration. Like every call through
-    /// [`WorktreeManager::run_git`], it runs no hooks.
-    async fn run_checkout_git(
-        &self,
-        repo_root: &Path,
-        args: &[&str],
-    ) -> Result<super::GitOutput, WorktreeError> {
-        self.run_git(repo_root, args).await
-    }
-
-    async fn run_checkout_git_ok(
-        &self,
-        repo_root: &Path,
-        args: &[&str],
-    ) -> Result<String, WorktreeError> {
-        let output = self.run_checkout_git(repo_root, args).await?;
-        if !output.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: repo_root.to_owned(),
-                args: owned_args(args),
-                detail: describe_failure(&output),
-            });
-        }
-        Ok(output.stdout)
     }
 }
 
@@ -1092,7 +1094,7 @@ fn is_attributes(path: &str) -> bool {
 
 /// The NUL-terminated tokens of a `-z` output. The output collector ends the last line with a
 /// newline git never wrote, which is dropped here.
-fn z_tokens(output: &str) -> impl Iterator<Item = &str> {
+pub(super) fn z_tokens(output: &str) -> impl Iterator<Item = &str> {
     let output = output.strip_suffix('\n').unwrap_or(output);
     output.split('\0').filter(|token| !token.is_empty())
 }
@@ -1124,8 +1126,7 @@ fn parse_numstat_z(output: &str) -> Vec<(u64, u64, bool)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_name_status_z, parse_numstat_z, validate_repo_path};
-    use crate::worktree::ChangeStatus;
+    use super::validate_repo_path;
 
     #[test]
     fn only_plain_relative_paths_outside_git_are_valid() {
@@ -1156,22 +1157,5 @@ mod tests {
             assert!(validate_repo_path(bad).is_err(), "{bad:?}");
         }
         assert!(validate_repo_path(&"a".repeat(4097)).is_err());
-    }
-
-    #[test]
-    fn z_outputs_parse_renames_and_binaries_in_order() {
-        let names = "M\0src/a.rs\0R087\0old name.rs\0new\tname.rs\0A\0img.png\0\n";
-        let files = parse_name_status_z(names);
-        assert_eq!(files.len(), 3);
-        assert_eq!(files[0].status, ChangeStatus::Modified);
-        assert_eq!(files[1].status, ChangeStatus::Renamed);
-        assert_eq!(files[1].path, "new\tname.rs");
-        assert_eq!(files[1].old_path.as_deref(), Some("old name.rs"));
-        assert_eq!(files[2].path, "img.png");
-        let numstat = "3\t1\tsrc/a.rs\x002\t2\t\0old name.rs\0new\tname.rs\0-\t-\timg.png\0\n";
-        assert_eq!(
-            parse_numstat_z(numstat),
-            [(3, 1, false), (2, 2, false), (0, 0, true)]
-        );
     }
 }

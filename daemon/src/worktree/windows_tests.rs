@@ -18,7 +18,7 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 #[tokio::test]
-async fn wispds_git_runs_no_hook_where_plain_git_does() {
+async fn plxds_git_runs_no_hook_where_plain_git_does() {
     let repo = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     git(repo.path(), &["init", "-q"]);
@@ -34,11 +34,11 @@ async fn wispds_git_runs_no_hook_where_plain_git_does() {
     manager
         .run_git_ok(
             repo.path(),
-            &["commit", "-q", "--allow-empty", "-m", "wispd"],
+            &["commit", "-q", "--allow-empty", "-m", "plxd"],
         )
         .await
         .unwrap();
-    assert!(!sentinel.exists(), "wispd's git ran the post-commit hook");
+    assert!(!sentinel.exists(), "plxd's git ran the post-commit hook");
 
     git(
         repo.path(),

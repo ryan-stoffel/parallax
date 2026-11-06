@@ -1,13 +1,18 @@
-//! The server behind `wispd serve` (decision record 0007).
+//! The server behind `plxd serve` (decision record 0007).
 //!
 //! [`Server::start`] runs the startup checks in order: the data folder, the instance lock, the old
 //! socket, the new socket, and the store. [`Server::run`] then accepts connections until
-//! [`Shutdown::trigger`] is called, and shuts down gracefully.
+//! [`Shutdown::trigger`] is called, and shuts down gracefully. While the host's `connect` setting
+//! is on, it also accepts this user's other devices over Tailscale ([`tailnet`], 0056), and while
+//! `remote` is on, clients paired with it over HTTPS ([`remote`], PLX-641).
 
 mod connection;
+pub(crate) mod remote;
 pub(crate) mod setup;
+pub(crate) mod tailnet;
 
 use std::io;
+use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
@@ -27,6 +32,8 @@ use setup::InstanceLock;
 use setup::Pipe;
 #[cfg(unix)]
 use setup::Socket;
+#[cfg(unix)]
+pub(crate) use setup::lock_for_move;
 pub use setup::prepare_data_dir;
 
 use crate::agents::{self, Agents};
@@ -39,17 +46,26 @@ use crate::backend::run_temp;
 use crate::context::ContextIndex;
 use crate::detect::CliDetector;
 use crate::event_log::EventLog;
+use crate::github::{self, Github};
 use crate::keystore::{self, KeyStore};
 use crate::methods;
 use crate::paths::DataDir;
+use crate::providers::Providers;
 use crate::routing::BackendRegistry;
 use crate::store::StoreHandle;
+use crate::tailnet::{Tailnet, TailscaleCli};
 use crate::worktree::WorktreeManager;
 
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
-/// `serve` exits with this when another `wispd serve` already runs for the data folder (0009).
+/// `serve` exits with this when another `plxd serve` already runs for the data folder (0009).
 pub const EXIT_ALREADY_RUNNING: u8 = 3;
+
+/// The pid of the dev or test app whose `plxd attach` started this `serve` (PLX-990), which stops
+/// when that process does. The installed app sets it empty, so its `serve` outlives it. Agents and
+/// terminal shells don't inherit it, so an app started from one never watches a pid that isn't its
+/// own. Worktree checks, setup scripts, and device helpers still do.
+pub const EXIT_WITH_ENV: &str = "PLXD_EXIT_WITH";
 
 /// How a server runs. [`Config::new`] has the defaults from 0007.
 #[derive(Clone, Debug)]
@@ -76,7 +92,7 @@ pub struct Config {
     /// after a restart reloads the table too.
     pub event_retention_bytes: usize,
     /// How many of the newest host and project events (not tied to a run, such as
-    /// `project.created` and `context.changed`) the stored event log keeps; older ones are
+    /// `orchestrator.created` and `context.changed`) the stored event log keeps; older ones are
     /// pruned (#187). An agent run's events are never pruned this way: they stay as long as the
     /// run's own row does, and nothing removes a run's row yet. 10,000 by default, the same
     /// figure as `event_retention`.
@@ -93,12 +109,62 @@ pub struct Config {
     /// Replies one connection may have waiting to be written. 32 by default.
     pub outbound_queue: usize,
     /// The backends workers run on (#156). `None`, the default, registers Claude Code for
-    /// Anthropic accounts, or the fake backend when `WISPD_FAKE_BACKEND` names a script
+    /// Anthropic accounts, or the fake backend when `PLXD_FAKE_BACKEND` names a script
     /// ([`FakeBackend::from_env`]), and Codex for `OpenAI` accounts; tests register a fake.
     pub backends: Option<BackendRegistry>,
     /// The environment agent CLIs, CLI probes, and worktree git commands start from. `None`, the
-    /// default, is wispd's own with the usual install folders on `PATH` (#96, decision 0014).
+    /// default, is plxd's own with the login shell's `PATH` and the usual install folders filled in
+    /// (#96, decision 0014, PLX-323).
     pub agent_environment: Option<Environment>,
+    /// The most a run a usage limit stopped resumes past its reset, at random (PLX-371, decision
+    /// 0049). 60 seconds by default.
+    pub resume_jitter: Duration,
+    /// How long such a run first waits when no reset time is known, doubling with each resume
+    /// in a row that finds the limit still on, up to 16 times this. 15 minutes by default.
+    pub resume_backoff: Duration,
+    /// Parallax Connect's tailnet (0056). `None`, the default, runs the `tailscale` CLI; tests
+    /// use a fake.
+    pub tailnet: Option<Arc<dyn Tailnet>>,
+    /// The address the Connect listener binds instead of this node's Tailscale IPv4. `None` by
+    /// default; tests bind loopback.
+    pub connect_address: Option<IpAddr>,
+    /// The Connect listener's port. 7340 by default.
+    pub connect_port: u16,
+    /// How often plxd checks the `connect` setting and Tailscale, to bind or drop the Connect
+    /// listener. 10 s by default.
+    pub connect_check_interval: Duration,
+    /// The address the remote listener binds instead of every IPv4 address. `PLXD_REMOTE_ADDRESS`
+    /// when set, for tests that run a whole plxd, else `None`; tests bind loopback.
+    pub remote_address: Option<IpAddr>,
+    /// The remote listener's port. `PLXD_REMOTE_PORT` when set, for tests that run a whole plxd,
+    /// else 7341.
+    pub remote_port: u16,
+    /// How long a pairing code works. 5 minutes by default; tests shorten it.
+    pub remote_code_lifetime: Duration,
+    /// The web client's files (PLX-651). By default `PLXD_WEB_DIR`, else the app's renderer build
+    /// beside this plxd in the app's resources folder, unpacked from app.asar.
+    pub remote_web_dir: Option<PathBuf>,
+    /// Where API keys and secrets live. `None`, the default, is this OS's keystore
+    /// ([`keystore::system_store`]); tests use one in memory.
+    pub keys: Option<Arc<dyn KeyStore>>,
+    /// Parallax Relay's URL (PLX-652). `PLXD_RELAY_URL` when set, else relay.parallax.codes.
+    pub relay_url: String,
+    /// The Clerk instance whose tokens account sign-in takes (0091). From `PLXD_CLERK_*` when set,
+    /// else the desktop app's.
+    pub clerk: crate::clerk::Config,
+    /// Whether `orchestrator/update` takes `computer` and plxd advertises `orchestratorComputer`
+    /// (0057). Off until an orchestrator's child can start, be followed, and land on another
+    /// computer; tests turn it on.
+    pub orchestrator_computer: bool,
+    /// The largest bundle `bundle/prepare` and `bundle/begin` take (0057). 64 MiB by default;
+    /// tests shrink it.
+    pub max_bundle_bytes: u64,
+    /// How often plxd pulls You memory from the user's other Connect devices (0082). 60 s by
+    /// default.
+    pub you_sync_interval: Duration,
+    /// The port of the other devices' Connect listeners, for that pull. `None`, the default, is
+    /// `connect_port`; tests run two plxds on one loopback.
+    pub you_sync_port: Option<u16>,
 }
 
 impl Config {
@@ -117,6 +183,34 @@ impl Config {
             outbound_queue: 32,
             backends: None,
             agent_environment: None,
+            resume_jitter: agents::ResumeTiming::default().jitter,
+            resume_backoff: agents::ResumeTiming::default().backoff,
+            tailnet: None,
+            connect_address: None,
+            connect_port: parallax_protocol::CONNECT_PORT,
+            connect_check_interval: Duration::from_secs(10),
+            remote_address: std::env::var("PLXD_REMOTE_ADDRESS")
+                .ok()
+                .and_then(|address| address.parse().ok()),
+            remote_port: std::env::var("PLXD_REMOTE_PORT")
+                .ok()
+                .and_then(|port| port.parse().ok())
+                .unwrap_or(crate::remote::PORT),
+            remote_code_lifetime: remote::CODE_LIFETIME,
+            remote_web_dir: std::env::var_os("PLXD_WEB_DIR")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    let exe = crate::executable().ok()?;
+                    let resources = exe.parent()?.join("app.asar.unpacked");
+                    Some(resources.join("dist").join("renderer"))
+                }),
+            keys: None,
+            relay_url: crate::relay::url(),
+            clerk: crate::clerk::Config::from_env(),
+            orchestrator_computer: false,
+            max_bundle_bytes: crate::methods::bundle::MAX_BYTES,
+            you_sync_interval: Duration::from_secs(60),
+            you_sync_port: None,
         }
     }
 }
@@ -125,7 +219,7 @@ impl Config {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StartError {
-    /// Another `wispd serve` holds the lock on this data folder.
+    /// Another `plxd serve` holds the lock on this data folder.
     #[error(
         "already running for {}{}",
         .data_dir.display(),
@@ -145,9 +239,9 @@ pub enum StartError {
         /// What is wrong with it.
         reason: String,
     },
-    /// Something that is not a socket is where the socket goes, so wispd won't remove it. Unix
+    /// Something that is not a socket is where the socket goes, so plxd won't remove it. Unix
     /// only.
-    #[error("{} is not a socket, so wispd won't remove it", .path.display())]
+    #[error("{} is not a socket, so plxd won't remove it", .path.display())]
     NotASocket {
         /// The socket path.
         path: PathBuf,
@@ -155,7 +249,7 @@ pub enum StartError {
     /// A file operation failed.
     #[error("{context}: {source}")]
     Io {
-        /// What wispd was doing.
+        /// What plxd was doing.
         context: String,
         /// The error.
         #[source]
@@ -201,22 +295,74 @@ impl Shutdown {
 /// What every connection shares.
 pub(crate) struct Daemon {
     pub started: Instant,
+    /// Identifies this run of plxd to clients, in `initialize`'s `startId`.
+    pub start_id: String,
     pub log: Arc<EventLog>,
     pub store: StoreHandle,
+    /// A read-only connection to the same store on a thread of its own, for lists, search, and
+    /// other pure reads (PLX-457), so they never queue behind a write.
+    pub reader: StoreHandle,
     /// The operating system and version, for `host/version`.
     pub os: String,
     pub limits: Limits,
-    /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114).
+    /// Detects the vendor CLIs for `accounts/list` and `accounts/refresh` (#114), and `gh` for
+    /// `github/status` (PLX-336).
     pub cli_detector: CliDetector,
+    /// Installing `gh` and signing it in (PLX-423).
+    pub github: Github,
     /// Where key accounts' API keys live (#117): the OS's real store, except in tests.
     pub keys: Arc<dyn KeyStore>,
-    /// wispd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
+    /// plxd's data folder, so `context/*` (#155) and the runner (#156) can find a project's
     /// shared context folder.
     pub data_dir: DataDir,
     /// In-memory bookkeeping for shared context writes (#155): idempotency and `lastWriter`.
     pub context: ContextIndex,
     /// Agent runs (#156).
     pub agents: Agents,
+    /// Provider instances (0040), whose backends are in `agents`' registry.
+    pub providers: Providers,
+    /// Detached listed-method tasks and in-memory command-id waiters (0052).
+    pub commands: crate::commands::Commands,
+    /// Thread lanes and the effect worker's wake-up (0059).
+    pub dispatcher: crate::dispatcher::Dispatcher,
+    /// Cursor account login through the SDK sidecar (0053).
+    pub cursor: crate::backend::cursor_sdk::CursorAuth,
+    /// Parallax Connect's tailnet and listener state (0056).
+    pub connect: tailnet::Connect,
+    /// The terminals plxd runs for its clients (PLX-637).
+    pub terminals: crate::terminals::Terminals,
+    /// The runs a blocking setup script holds (PLX-650).
+    pub(crate) setup_holds: crate::setup_scripts::Holds,
+    /// The remote listener's pairing code, tickets, and sessions (PLX-641).
+    pub remote: remote::Remote,
+    /// The connection to Parallax Relay (PLX-652).
+    pub relay: crate::relay::Relay,
+    /// Checks the account tokens of clients that sign in (0091).
+    pub clerk: crate::clerk::Clerk,
+    /// Agents' browser tabs (PLX-639).
+    pub previews: crate::preview::Previews,
+    /// The Device panel's simulators, emulators, and device hub (PLX-886).
+    pub devices: crate::devices::Devices,
+    /// The scheduled tasks' timer and webhook rate limits (0063).
+    pub schedules: crate::schedules::Schedules,
+    /// The pull request watches' sweep (0063).
+    pub pr_watches: crate::pr_watch::Watches,
+    /// Pull request guides being written, and failed tries (0095).
+    pub(crate) pr_guides: crate::pr_guide::Guides,
+    /// Wakes the merge sweep when plxd merges a pull request itself (PLX-839).
+    pub(crate) merged: tokio::sync::Notify,
+    /// `host/update`'s install and handover (PLX-700).
+    pub self_update: crate::self_update::SelfUpdate,
+    /// `request_secret`'s requests and its refs' expiry timer (0063).
+    pub secrets: crate::secrets::Secrets,
+    /// [`Config::orchestrator_computer`].
+    pub orchestrator_computer: bool,
+    /// The bundle files `bundle/*` holds (0057).
+    pub bundles: crate::methods::bundle::Bundles,
+    /// Held while plxd records or applies You memory's versions (0082).
+    pub(crate) you_sync: tokio::sync::Mutex<()>,
+    /// The Claude Remote Control sessions plxd last listed and follows (PLX-1140).
+    pub(crate) remote_control: crate::remote_control::RemoteControl,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -273,11 +419,15 @@ impl Server {
     ///
     /// [`StartError::AlreadyRunning`] when another server holds the lock, and the other
     /// variants when a startup check fails.
+    #[expect(clippy::too_many_lines, reason = "builds every part of the daemon")]
     pub fn start(config: Config) -> Result<Self, StartError> {
         let data_dir = &config.data_dir;
         prepare_data_dir(data_dir.root())?;
         let lock = InstanceLock::acquire(&data_dir.lock_file(), data_dir.root())?;
         run_temp::sweep(data_dir);
+        if let Err(error) = crate::gh_shim::install(data_dir) {
+            warn!(%error, "couldn't install the gh shim for agents");
+        }
         let socket_path = data_dir
             .socket_path()
             .map_err(|error| StartError::io("finding the socket path", error))?;
@@ -291,11 +441,19 @@ impl Server {
         let (socket, listener) = Socket::bind(&socket_path.path)?;
         #[cfg(windows)]
         let socket = Pipe::create(&socket_path.path)?;
-        let environment = config
-            .agent_environment
-            .clone()
-            .unwrap_or_else(agents::worker::agent_environment);
-        let launcher = Launcher::new(data_dir.clone(), environment);
+        // The login shell's `PATH` takes 0.1 to 5 s to read, so it's read on its own thread
+        // while the server starts answering; the first process to start waits for it.
+        let given = config.agent_environment.clone();
+        let probe = given
+            .is_none()
+            .then(|| std::thread::spawn(agents::worker::agent_environment));
+        let dir = data_dir.clone();
+        let launcher = Launcher::lazy(data_dir.clone(), move || {
+            let environment = given
+                .or_else(|| probe?.join().ok())
+                .unwrap_or_else(|| agents::worker::allowlisted(&Environment::inherited()));
+            github::with_tools_on_path(environment, &dir)
+        });
         let fake = FakeBackend::from_env(&launcher)
             .map_err(|error| StartError::io("setting up the fake backend", error))?;
         let backends = config.backends.clone().unwrap_or_else(|| {
@@ -304,35 +462,82 @@ impl Server {
                 None => Arc::new(ClaudeBackend::new(launcher.clone())),
             };
             let mut backends = BackendRegistry::new();
-            backends.register(wisp_protocol::Provider::Anthropic, backend);
+            backends.register(parallax_protocol::Provider::Anthropic, backend);
             backends.register(
-                wisp_protocol::Provider::Openai,
+                parallax_protocol::Provider::Openai,
                 Arc::new(CodexBackend::new(launcher.clone())),
+            );
+            backends.register(
+                parallax_protocol::Provider::Cursor,
+                Arc::new(crate::providers::cursor_backend(launcher.clone())),
             );
             backends
         });
         let worktrees = WorktreeManager::new(launcher.clone(), data_dir.root());
-        let store = StoreHandle::open(&data_dir.store_file());
+        let store = StoreHandle::open(
+            &data_dir.store_file(),
+            config.event_retention,
+            config.event_retention_bytes,
+            config.host_event_retention,
+        );
+        let reader = store.open_reader(&data_dir.store_file());
+        let keys = config.keys.clone().unwrap_or_else(keystore::system_store);
+        let providers = Providers::load(data_dir.root(), keys.clone(), &launcher, &backends);
+        let tailnet = config
+            .tailnet
+            .clone()
+            .unwrap_or_else(|| Arc::new(TailscaleCli::new(launcher.clone())));
         let daemon = Arc::new(Daemon {
             started: Instant::now(),
-            log: Arc::new(EventLog::open(
-                &data_dir.store_file(),
-                config.event_retention,
-                config.event_retention_bytes,
-                config.host_event_retention,
-            )),
+            start_id: uuid::Uuid::new_v4().to_string(),
+            log: store.log(),
             store,
+            reader,
             os: methods::os_version(),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            github: Github::new(launcher.clone(), github::RELEASE_URL),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout: config.idle_timeout,
                 max_requests_in_flight: config.max_requests_in_flight.max(1),
                 outbound_queue: config.outbound_queue.max(1),
             },
-            keys: keystore::system_store(),
+            keys,
             data_dir: data_dir.clone(),
             context: ContextIndex::default(),
-            agents: Agents::new(backends, worktrees),
+            agents: Agents::new(backends, worktrees).with_resume_timing(agents::ResumeTiming {
+                jitter: config.resume_jitter,
+                backoff: config.resume_backoff,
+            }),
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
+            previews: crate::preview::Previews::new(launcher.clone()),
+            devices: crate::devices::Devices::new(launcher.clone()),
+            providers,
+            commands: crate::commands::Commands::new(),
+            dispatcher: crate::dispatcher::Dispatcher::default(),
+            connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
+            terminals: crate::terminals::Terminals::default(),
+            setup_holds: crate::setup_scripts::Holds::default(),
+            remote: remote::Remote::new(
+                config.remote_port,
+                config.remote_address,
+                config.remote_web_dir.clone(),
+                config.remote_code_lifetime,
+            ),
+            relay: crate::relay::Relay::new(config.relay_url.clone()),
+            clerk: crate::clerk::Clerk::new(config.clerk.clone()),
+            schedules: crate::schedules::Schedules::default(),
+            pr_watches: crate::pr_watch::Watches::default(),
+            pr_guides: crate::pr_guide::Guides::default(),
+            merged: tokio::sync::Notify::new(),
+            self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
+            secrets: crate::secrets::Secrets::default(),
+            orchestrator_computer: config.orchestrator_computer,
+            bundles: crate::methods::bundle::Bundles::new(
+                data_dir.temp_dir().join("bundles"),
+                config.max_bundle_bytes,
+            ),
+            you_sync: tokio::sync::Mutex::new(()),
+            remote_control: crate::remote_control::RemoteControl::default(),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -381,6 +586,7 @@ impl Server {
     /// # Errors
     ///
     /// If the socket can't be registered with the runtime.
+    #[expect(clippy::too_many_lines, reason = "server startup and shutdown cleanup")]
     pub async fn run(self, shutdown: Shutdown) -> io::Result<()> {
         let Self {
             config,
@@ -396,6 +602,17 @@ impl Server {
         } = self;
         // Kept alive to the end of `run`, so the watch lasts exactly as long as the server does.
         let _context_watcher = context_watcher;
+        // New threads' branches start with the saved prefix. Unreadable, the default stands.
+        if let Ok(Some(prefix)) = daemon
+            .reader
+            .run(&CancellationToken::new(), |db| {
+                db.branch_prefix()
+                    .map_err(|e| crate::agents::store_error(&e))
+            })
+            .await
+        {
+            daemon.agents.set_branch_prefix(&prefix);
+        }
         #[cfg(windows)]
         let mut listener = socket;
         #[cfg(unix)]
@@ -403,14 +620,91 @@ impl Server {
             Ok(listener) => listener,
             Err(error) => {
                 socket.remove();
-                daemon.store.stop().await;
-                lock.release();
+                release(&daemon, lock).await;
                 return Err(error);
             }
         };
-        agents::recover(&daemon).await;
+        // An unavailable store has no claims or effects to recover, and still serves read-only
+        // host state.
+        if daemon.store.state() != parallax_protocol::StoreState::Unavailable
+            && let Err(error) = async {
+                crate::commands::purge_incomplete(&daemon).await?;
+                crate::dispatcher::recover(&daemon).await
+            }
+            .await
+        {
+            #[cfg(unix)]
+            socket.remove();
+            release(&daemon, lock).await;
+            return Err(io::Error::other(error.message));
+        }
+        if daemon.store.state() != parallax_protocol::StoreState::Unavailable {
+            crate::board::migrate(&daemon).await;
+        }
+        let cut = agents::recover(&daemon).await;
+        crate::setup_scripts::recover(&daemon).await;
+        remote::access::restore(&daemon).await;
+        let stop = &shutdown.graceful;
+        // Before what waits is sent: a turn waits for its thread's checkpoint captures (0062).
+        let mut background = vec![tokio::spawn(crate::dispatcher::work(
+            Arc::clone(&daemon),
+            stop.clone(),
+        ))];
+        agents::deliver_queued(&daemon, cut).await;
+        crate::methods::land::resume(&daemon).await;
+        // A `host/update` handover shuts the server down as a signal would (PLX-700).
+        let handover = {
+            let restart = daemon.self_update.restart.clone();
+            let shutdown = shutdown.clone();
+            async move {
+                tokio::select! {
+                    () = restart.cancelled() => shutdown.trigger(),
+                    () = shutdown.graceful.cancelled() => {}
+                }
+            }
+        };
+        background.extend([
+            tokio::spawn(crate::agents::compact::run(
+                Arc::clone(&daemon),
+                stop.clone(),
+            )),
+            tokio::spawn(crate::agents::cleanup::run(
+                Arc::clone(&daemon),
+                stop.clone(),
+            )),
+            tokio::spawn(crate::board::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::graph::sweep(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::schedules::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::pr_watch::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::relay::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(remote::access::persist(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(handover),
+            tokio::spawn(crate::context::you_sync::run(
+                Arc::clone(&daemon),
+                config.you_sync_interval,
+                config.you_sync_port.unwrap_or(config.connect_port),
+                stop.clone(),
+            )),
+            tokio::spawn(crate::secrets::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::remote_control::run(
+                Arc::clone(&daemon),
+                stop.clone(),
+            )),
+        ]);
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
+        let serving = tailnet::Serving {
+            daemon: Arc::clone(&daemon),
+            connections: connections.clone(),
+            stop_reading: stop.clone(),
+            abort: abort.clone(),
+        };
+        let tailnet = tokio::spawn(tailnet::run(
+            serving.clone(),
+            config.connect_check_interval,
+            stop.clone(),
+        ));
+        let remote = tokio::spawn(remote::run(serving, stop.clone()));
         let period = config.socket_check_interval;
         let mut check = time::interval_at(time::Instant::now() + period, period);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -449,10 +743,17 @@ impl Server {
         drop(listener);
         #[cfg(unix)]
         socket.remove();
+        // Their listeners go with it, before `connections` closes to new ones.
+        let _ = tailnet.await;
+        let _ = remote.await;
         info!("shutting down");
         connections.close();
+        daemon.commands.close();
         let finished = tokio::select! {
-            () = connections.wait() => true,
+            () = async {
+                connections.wait().await;
+                daemon.commands.wait().await;
+            } => true,
             () = time::sleep(config.shutdown_grace) => {
                 warn!(grace = ?config.shutdown_grace, "requests are still running; cancelling them");
                 false
@@ -467,11 +768,21 @@ impl Server {
             connections.wait().await;
         }
         daemon.agents.shutdown().await;
-        daemon.store.stop().await;
-        lock.release();
+        for task in background {
+            let _ = task.await;
+        }
+        release(&daemon, lock).await;
         info!("stopped");
         Ok(())
     }
+}
+
+/// Stops the store and its reader, then lets go of the instance lock: the last step of a
+/// shutdown, or of a `run` that couldn't start.
+async fn release(daemon: &Daemon, lock: InstanceLock) {
+    daemon.store.stop().await;
+    daemon.reader.stop().await;
+    lock.release();
 }
 
 struct Accepted<'a> {
@@ -505,7 +816,9 @@ impl Peer {
     }
 
     /// With the client's process's user SID. The pipe's DACL already keeps other users out;
-    /// this checks again (0023).
+    /// this checks again (0023). A `serve` that isn't elevated can't read an elevated client's
+    /// token, as over SSH to an administrator's account, where every session is elevated. Only
+    /// this user could have connected, so being denied means this user, elevated (PLX-1302).
     #[cfg(windows)]
     fn of(pipe: &tokio::net::windows::named_pipe::NamedPipeServer) -> Self {
         let pid = match crate::windows::pipe_client_pid(pipe) {
@@ -515,6 +828,7 @@ impl Peer {
         match crate::windows::runs_as_this_user(pid) {
             Ok(true) => Self::ThisUser,
             Ok(false) => Self::Other(format!("pid {pid}")),
+            Err(error) if crate::windows::is_access_denied(&error) => Self::ThisUser,
             Err(error) => Self::Unknown(error),
         }
     }
@@ -534,8 +848,13 @@ impl Accepted<'_> {
                     Arc::clone(self.daemon),
                     self.stop_reading.clone(),
                     self.abort.child_token(),
+                    false,
+                    false,
+                    false,
                 );
-                self.connections.spawn(serve.instrument(span));
+                self.connections.spawn(
+                    async move { serve.await.log(connection::Route::Local) }.instrument(span),
+                );
             }
             Peer::Other(peer) => {
                 warn!(parent: &span, %peer, "refused a connection from another user");
@@ -554,7 +873,7 @@ fn rebind(socket: &mut Socket, listener: &mut UnixListener) {
         Ok(Some(bound)) => match UnixListener::from_std(bound) {
             Ok(bound) => {
                 *listener = bound;
-                info!(path = %socket.path().display(), "the socket was gone, so wispd bound it again");
+                info!(path = %socket.path().display(), "the socket was gone, so plxd bound it again");
             }
             Err(error) => warn!(%error, "could not listen on the socket it bound again"),
         },
@@ -580,27 +899,63 @@ impl Daemon {
             Environment::empty(),
         );
         let worktrees = WorktreeManager::new(launcher.clone(), dir);
-        let store = StoreHandle::open(&dir.join("wispd.sqlite3"));
+        let store = StoreHandle::open(
+            &dir.join("plxd.sqlite3"),
+            event_retention,
+            usize::MAX,
+            usize::MAX,
+        );
+        let reader = store.open_reader(&dir.join("plxd.sqlite3"));
+        let keys: Arc<dyn KeyStore> = Arc::new(crate::keystore::MemoryKeyStore::new());
+        let backends = BackendRegistry::new();
+        let providers = Providers::load(dir, Arc::clone(&keys), &launcher, &backends);
         Arc::new(Self {
             started: Instant::now(),
-            log: Arc::new(EventLog::open(
-                &dir.join("wispd.sqlite3"),
-                event_retention,
-                usize::MAX,
-                usize::MAX,
-            )),
+            start_id: uuid::Uuid::new_v4().to_string(),
+            log: store.log(),
             store,
+            reader,
             os: "test".to_owned(),
-            cli_detector: CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT),
+            github: Github::new(launcher.clone(), github::RELEASE_URL),
+            cli_detector: CliDetector::new(launcher.clone(), crate::detect::PROBE_TIMEOUT),
             limits: Limits {
                 idle_timeout,
                 max_requests_in_flight: 32,
                 outbound_queue: 32,
             },
-            keys: Arc::new(crate::keystore::MemoryKeyStore::new()),
+            keys,
             data_dir: DataDir::new(dir).unwrap(),
             context: ContextIndex::default(),
-            agents: Agents::new(BackendRegistry::new(), worktrees),
+            agents: Agents::new(backends, worktrees),
+            providers,
+            commands: crate::commands::Commands::new(),
+            dispatcher: crate::dispatcher::Dispatcher::default(),
+            previews: crate::preview::Previews::new(launcher.clone()),
+            devices: crate::devices::Devices::new(launcher.clone()),
+            cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
+            connect: tailnet::Connect::new(
+                Arc::new(crate::tailnet::Absent),
+                parallax_protocol::CONNECT_PORT,
+                None,
+            ),
+            terminals: crate::terminals::Terminals::default(),
+            setup_holds: crate::setup_scripts::Holds::default(),
+            remote: remote::Remote::new(crate::remote::PORT, None, None, remote::CODE_LIFETIME),
+            relay: crate::relay::Relay::new(crate::relay::DEFAULT_URL.to_owned()),
+            clerk: crate::clerk::Clerk::new(crate::clerk::Config::from_env()),
+            schedules: crate::schedules::Schedules::default(),
+            pr_watches: crate::pr_watch::Watches::default(),
+            pr_guides: crate::pr_guide::Guides::default(),
+            merged: tokio::sync::Notify::new(),
+            self_update: crate::self_update::SelfUpdate::new(launcher),
+            secrets: crate::secrets::Secrets::default(),
+            orchestrator_computer: false,
+            bundles: crate::methods::bundle::Bundles::new(
+                DataDir::new(dir).unwrap().temp_dir().join("bundles"),
+                crate::methods::bundle::MAX_BYTES,
+            ),
+            you_sync: tokio::sync::Mutex::new(()),
+            remote_control: crate::remote_control::RemoteControl::default(),
         })
     }
 }

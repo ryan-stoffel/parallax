@@ -1,30 +1,39 @@
 //! `agent/start`, `agent/send`, `agent/cancel`, `agent/list`, and `agent/events` (#156), behind
 //! the `agents` capability; the review methods (#157) behind `agentReview`; `agent/openPr`
-//! (RYA-168) behind `openPr`; and `agent/image` (RYA-191) behind `promptImages`. The runner itself
-//! is [`crate::agents`].
+//! (PLX-168) behind `openPr`; `agent/image` (PLX-191) behind `promptImages`; `agent/approve`
+//! (PLX-222) behind `approvals`; `agent/gitStatus`, `agent/commit`, and `agent/push` (PLX-298)
+//! behind `git`; and `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete` (PLX-590)
+//! behind `fileEdit`. The runner itself is [`crate::agents`].
 
 use std::sync::Arc;
 
-use wisp_protocol::jsonrpc::ErrorObject;
-use wisp_protocol::{
-    AgentAcceptParams, AgentAcceptResult, AgentCancelParams, AgentDiffParams, AgentDiffResult,
-    AgentEventsParams, AgentEventsResult, AgentFileParams, AgentFileResult, AgentImageParams,
-    AgentListParams, AgentListResult, AgentOpenPrParams, AgentOpenPrResult, AgentPolicy,
-    AgentRequestChangesParams, AgentRunResult, AgentSendParams, AgentStartParams, ErrorKind,
-    LoggedEvent, PromptImage,
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    AgentAcceptParams, AgentAcceptResult, AgentApprovalAnswer, AgentApproveParams,
+    AgentApproveResult, AgentAutoResumeParams, AgentCancelParams, AgentCommitParams,
+    AgentEventsParams, AgentEventsResult, AgentListParams, AgentListResult, AgentOpenPrParams,
+    AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams, AgentResumeNowParams,
+    AgentRunResult, AgentSendParams, AgentSetPermissionParams, AgentStartParams,
+    AgentStopTaskParams, AgentStopTaskResult, ErrorKind, GitStatus, LoggedEvent, PromptImage,
+    RunId, TurnId,
 };
 
 use super::Context;
+use crate::agents::GitAction;
+use crate::event_log::Entry;
 use crate::{agents, images};
 
-/// The longest prompt or message wispd takes, in bytes. It goes on the CLI's stdin, never in
+/// The longest prompt or message plxd takes, in bytes. It goes on the CLI's stdin, never in
 /// argv, and into the event log.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
+
+/// The longest message a denial tells the agent, in bytes (PLX-222).
+const MAX_DENIAL_BYTES: usize = 64 * 1024;
 
 /// The longest pull request title GitHub takes, in characters.
 const MAX_PR_TITLE_CHARS: usize = 256;
 
-/// The longest pull request body wispd passes on, in bytes: GitHub's limit is 65,536 characters.
+/// The longest pull request body plxd passes on, in bytes: GitHub's limit is 65,536 characters.
 const MAX_PR_BODY_BYTES: usize = 64 * 1024;
 
 const DEFAULT_EVENTS_LIMIT: u32 = 500;
@@ -34,9 +43,9 @@ const MAX_EVENTS_LIMIT: u32 = 1000;
 /// leaves room for the envelope. A page holds at least one event whatever its size.
 pub(crate) const MAX_EVENTS_PAGE_BYTES: usize = 4 * 1024 * 1024;
 
-/// Checks a prompt or message: its text, which may be empty only when it has images (RYA-193),
+/// Checks a prompt or message: its text, which may be empty only when it has images (PLX-193),
 /// and its images (`images::check`).
-pub(super) fn check_message(
+pub(crate) fn check_message(
     name: &str,
     text: &str,
     images: &[PromptImage],
@@ -59,7 +68,7 @@ pub(super) fn check_message(
 
 pub(crate) async fn start(
     context: &Context,
-    params: AgentStartParams,
+    mut params: AgentStartParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     if params.policy != AgentPolicy::WorkspaceWrite {
         return Err(ErrorObject::invalid_params(
@@ -67,64 +76,176 @@ pub(crate) async fn start(
         ));
     }
     check_message("prompt", &params.prompt, &params.images)?;
-    let daemon = Arc::clone(&context.daemon);
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let run = context
-        .daemon
-        .agents
-        .detached(agents::start(daemon, params))
+        .detached(|daemon| agents::start(daemon, params))
         .await?;
     Ok(AgentRunResult { run })
 }
 
 pub(crate) async fn send(
     context: &Context,
-    params: AgentSendParams,
+    mut params: AgentSendParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     check_message("text", &params.text, &params.images)?;
-    let daemon = Arc::clone(&context.daemon);
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     let run = context
-        .daemon
-        .agents
-        .detached(agents::send(daemon, params))
+        .detached(|daemon| agents::send(daemon, params))
         .await?;
     Ok(AgentRunResult { run })
+}
+
+/// `agent/send`'s params for a plain message: `text` alone, with none of a message's options.
+pub(super) fn plain_message(
+    run_id: RunId,
+    turn_id: TurnId,
+    text: String,
+    from: Option<RunId>,
+) -> AgentSendParams {
+    AgentSendParams {
+        run_id,
+        turn_id,
+        text,
+        model: None,
+        effort: None,
+        permission: None,
+        context_window: None,
+        fast: None,
+        account: None,
+        images: Vec::new(),
+        threads: Vec::new(),
+        from,
+        delivery: None,
+    }
 }
 
 pub(crate) async fn cancel(
     context: &Context,
     params: AgentCancelParams,
 ) -> Result<AgentRunResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     let run = context
-        .daemon
-        .agents
-        .detached(agents::cancel(daemon, params.run_id))
+        .detached(|daemon| agents::cancel(daemon, params.run_id, params.from))
         .await?;
     Ok(AgentRunResult { run })
+}
+
+/// `agent/resumeNow` (PLX-371): through the run's actor, detached as `agent/cancel` is.
+pub(crate) async fn resume_now(
+    context: &Context,
+    params: AgentResumeNowParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let run = context
+        .detached(|daemon| agents::resume_now(daemon, params.run_id))
+        .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/setPermission`: through the run's actor, to its live CLI.
+pub(crate) async fn set_permission(
+    context: &Context,
+    params: AgentSetPermissionParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let run = agents::set_permission(&context.daemon, params.run_id, params.permission).await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/stopTask` (PLX-777): through the run's actor, to its live CLI.
+pub(crate) async fn stop_task(
+    context: &Context,
+    params: AgentStopTaskParams,
+) -> Result<AgentStopTaskResult, ErrorObject> {
+    agents::stop_task(&context.daemon, params.run_id, params.task_id).await?;
+    Ok(AgentStopTaskResult {})
+}
+
+/// `agent/autoResume` (PLX-371): through the run's actor.
+pub(crate) async fn auto_resume(
+    context: &Context,
+    params: AgentAutoResumeParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let AgentAutoResumeParams {
+        run_id,
+        auto_resume,
+    } = params;
+    let run = context
+        .detached(|daemon| agents::set_auto_resume(daemon, run_id, auto_resume))
+        .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/approve` (PLX-222): an edited input and `always` go only with `allow`, a message only
+/// with `deny`; the run's actor does the rest.
+pub(crate) async fn approve(
+    context: &Context,
+    params: AgentApproveParams,
+) -> Result<AgentApproveResult, ErrorObject> {
+    match params.decision {
+        AgentApprovalAnswer::Allow => {
+            if params.message.is_some() {
+                return Err(ErrorObject::invalid_params(
+                    "message goes only with decision deny",
+                ));
+            }
+            if let Some(input) = &params.input {
+                if !input.is_object() {
+                    return Err(ErrorObject::invalid_params("input must be a JSON object"));
+                }
+                if json_len(input) > MAX_TEXT_BYTES {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "input must be at most {MAX_TEXT_BYTES} bytes of JSON"
+                    )));
+                }
+            }
+            let answered: usize = params.answers.iter().flatten().map(String::len).sum();
+            if answered > MAX_DENIAL_BYTES {
+                return Err(ErrorObject::invalid_params(format!(
+                    "answers must be at most {MAX_DENIAL_BYTES} bytes"
+                )));
+            }
+        }
+        AgentApprovalAnswer::Deny => {
+            if params.input.is_some() || params.always || params.answers.is_some() {
+                return Err(ErrorObject::invalid_params(
+                    "input, always, and answers go only with decision allow",
+                ));
+            }
+            if params
+                .message
+                .as_ref()
+                .is_some_and(|message| message.len() > MAX_DENIAL_BYTES)
+            {
+                return Err(ErrorObject::invalid_params(format!(
+                    "message must be at most {MAX_DENIAL_BYTES} bytes"
+                )));
+            }
+        }
+        AgentApprovalAnswer::Unknown => {
+            return Err(ErrorObject::invalid_params(
+                "decision must be allow or deny",
+            ));
+        }
+    }
+    context
+        .detached(|daemon| agents::approve(daemon, params))
+        .await
+}
+
+/// The size of `value` as JSON.
+fn json_len(value: &serde_json::Value) -> usize {
+    serde_json::to_string(value).map_or(usize::MAX, |json| json.len())
 }
 
 pub(crate) async fn list(
     context: &Context,
     params: AgentListParams,
 ) -> Result<AgentListResult, ErrorObject> {
-    let log = Arc::clone(&context.daemon.log);
     let project = params.project.map(uuid::Uuid::from);
     let (runs, seq) = context
         .daemon
-        .store
-        .run(&context.cancel, move |db| {
-            let rows = db
-                .list_runs(project)
-                .map_err(|error| crate::agents::store_error(&error))?;
-            let seq = log.head();
-            let mut runs = Vec::with_capacity(rows.len());
-            for row in rows {
-                let worktree = db
-                    .get_worktree(row.id)
-                    .map_err(|error| crate::agents::store_error(&error))?;
-                runs.push((row, worktree));
-            }
-            Ok((runs, seq))
+        .reader
+        .snapshot(&context.cancel, move |db| {
+            db.list_runs_with_worktrees(project)
+                .map_err(|error| crate::agents::store_error(&error))
         })
         .await?;
     let runs = runs
@@ -134,29 +255,12 @@ pub(crate) async fn list(
     Ok(AgentListResult { runs, seq })
 }
 
-pub(crate) async fn diff(
-    context: &Context,
-    params: AgentDiffParams,
-) -> Result<AgentDiffResult, ErrorObject> {
-    agents::review::diff(&context.daemon, params.run_id).await
-}
-
-pub(crate) async fn file(
-    context: &Context,
-    params: AgentFileParams,
-) -> Result<AgentFileResult, ErrorObject> {
-    agents::review::file(&context.daemon, params).await
-}
-
 pub(crate) async fn accept(
     context: &Context,
     params: AgentAcceptParams,
 ) -> Result<AgentAcceptResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(agents::accept(daemon, params))
+        .detached(|daemon| agents::accept(daemon, params))
         .await
 }
 
@@ -181,11 +285,37 @@ pub(crate) async fn open_pr(
             "body must be at most {MAX_PR_BODY_BYTES} bytes"
         )));
     }
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(agents::open_pr(daemon, run_id, title, body))
+        .detached(|daemon| agents::open_pr(daemon, run_id, title, body))
+        .await
+}
+
+/// `agent/commit`: the message checked here, then the commit through the run's actor, as
+/// `agent/gitStatus` and `agent/push` go (PLX-298).
+pub(crate) async fn commit(
+    context: &Context,
+    params: AgentCommitParams,
+) -> Result<GitStatus, ErrorObject> {
+    let AgentCommitParams { run_id, message } = params;
+    if message.trim().is_empty() {
+        return Err(ErrorObject::invalid_params("message must not be empty"));
+    }
+    if message.len() > MAX_PR_BODY_BYTES {
+        return Err(ErrorObject::invalid_params(format!(
+            "message must be at most {MAX_PR_BODY_BYTES} bytes"
+        )));
+    }
+    git(context, run_id, GitAction::Commit(message)).await
+}
+
+/// `agent/gitStatus`, `agent/commit`, or `agent/push`'s action, through the run's actor.
+pub(super) async fn git(
+    context: &Context,
+    run_id: RunId,
+    action: GitAction,
+) -> Result<GitStatus, ErrorObject> {
+    context
+        .detached(|daemon| agents::git(daemon, run_id, action))
         .await
 }
 
@@ -199,26 +329,7 @@ pub(crate) async fn request_changes(
         turn_id,
         text,
     } = params;
-    send(
-        context,
-        AgentSendParams {
-            run_id,
-            turn_id,
-            text,
-            model: None,
-            effort: None,
-            permission: None,
-            images: Vec::new(),
-        },
-    )
-    .await
-}
-
-pub(crate) async fn image(
-    context: &Context,
-    params: AgentImageParams,
-) -> Result<PromptImage, ErrorObject> {
-    agents::image(&context.daemon, params).await
+    send(context, plain_message(run_id, turn_id, text, None)).await
 }
 
 pub(crate) async fn events(
@@ -228,14 +339,18 @@ pub(crate) async fn events(
     let AgentEventsParams {
         run_id,
         after,
+        before,
         limit,
     } = params;
     let limit = limit
         .unwrap_or(DEFAULT_EVENTS_LIMIT)
         .clamp(1, MAX_EVENTS_LIMIT) as usize;
+    if let Some(before) = before {
+        return events_before(context, run_id, before, limit).await;
+    }
     let exists = context
         .daemon
-        .store
+        .reader
         .run(&context.cancel, move |db| {
             db.get_run(run_id.into())
                 .map(|row| row.is_some())
@@ -243,7 +358,7 @@ pub(crate) async fn events(
         })
         .await?;
     if !exists {
-        return Err(ErrorObject::wisp(
+        return Err(ErrorObject::parallax(
             ErrorKind::RunNotFound,
             format!("no agent run has id {run_id}"),
         ));
@@ -255,16 +370,59 @@ pub(crate) async fn events(
     .await
     .map_err(ErrorObject::internal_error)?
     .map_err(|error| crate::agents::store_error(&error))?;
-    let events = entries
-        .iter()
-        .map(|entry| LoggedEvent {
-            seq: entry.seq,
-            time: entry.time,
-            project: entry.project,
-            event: entry.event.clone(),
+    Ok(AgentEventsResult {
+        events: entries.iter().map(|entry| logged(entry)).collect(),
+        more,
+        run: None,
+        seq: None,
+    })
+}
+
+/// `agent/events` with `before` (PLX-490): the page of `run_id`'s events before it, oldest first,
+/// with the log's head from before the page and the run read after it, so the run reflects every
+/// event in the page (the actor stores a run's row before its `agent.updated`).
+async fn events_before(
+    context: &Context,
+    run_id: RunId,
+    before: u64,
+    limit: usize,
+) -> Result<AgentEventsResult, ErrorObject> {
+    let log = Arc::clone(&context.daemon.log);
+    let (seq, (entries, more)) = tokio::task::spawn_blocking(move || {
+        let seq = log.head();
+        log.run_events_before(run_id, before, limit, MAX_EVENTS_PAGE_BYTES)
+            .map(|page| (seq, page))
+    })
+    .await
+    .map_err(ErrorObject::internal_error)?
+    .map_err(|error| crate::agents::store_error(&error))?;
+    let run = context
+        .daemon
+        .reader
+        .run(&context.cancel, move |db| {
+            let store_error = |error| crate::agents::store_error(&error);
+            let Some(row) = db.get_run(run_id.into()).map_err(store_error)? else {
+                return Err(agents::run_not_found(run_id));
+            };
+            let worktree = db.get_worktree(row.id).map_err(store_error)?;
+            agents::snapshot(&row, worktree.as_ref())
         })
-        .collect();
-    Ok(AgentEventsResult { events, more })
+        .await?;
+    Ok(AgentEventsResult {
+        events: entries.iter().rev().map(|entry| logged(entry)).collect(),
+        more,
+        run: Some(run),
+        seq: Some(seq),
+    })
+}
+
+pub(super) fn logged(entry: &Entry) -> LoggedEvent {
+    LoggedEvent {
+        seq: entry.seq,
+        time: entry.time,
+        project: entry.project,
+        event: entry.event().into_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -272,24 +430,30 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use parallax_protocol::framing::MAX_FRAME_BYTES;
+    use parallax_protocol::jsonrpc::Response;
+    use parallax_protocol::{AgentEventsParams, AgentOutputItem, ParallaxEvent, RunId, ScopeId};
+    use parallax_store::{RunFields, RunState};
     use tokio_util::sync::CancellationToken;
-    use wisp_protocol::framing::MAX_FRAME_BYTES;
-    use wisp_protocol::jsonrpc::Response;
-    use wisp_protocol::{AgentEventsParams, AgentOutputItem, ProjectId, RunId, WispEvent};
-    use wisp_store::{RunFields, RunState};
 
     use super::{Context, MAX_EVENTS_PAGE_BYTES, events};
     use crate::server::Daemon;
 
-    #[tokio::test]
-    async fn pages_of_large_output_fit_in_a_frame_and_page_through_everything() {
+    /// A daemon with one run, `running`, and a context to call methods with.
+    async fn daemon_with_run() -> (tempfile::TempDir, Arc<Daemon>, Context, RunId, ScopeId) {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10_000, Duration::from_secs(90));
         let context = Context {
             daemon: Arc::clone(&daemon),
             cancel: CancellationToken::new(),
+            stopped_reading: CancellationToken::new(),
+            command_id: None,
+            replies: tokio::sync::mpsc::channel(1).0,
+            over_connect: false,
+            read_only: false,
+            over_relay: false,
         };
-        let (run_id, project) = (RunId::generate(), ProjectId::generate());
+        let (run_id, project) = (RunId::generate(), ScopeId::generate());
         daemon
             .store
             .run(&CancellationToken::new(), move |db| {
@@ -299,10 +463,17 @@ mod tests {
                     requested_account: None,
                     policy: "workspaceWrite".to_owned(),
                     backend: "fake".to_owned(),
-                    coordinator_thread: None,
+                    orchestrator_thread: None,
+                    parent: None,
+                    notify_parent: false,
                     model: None,
                     effort: None,
                     permission: None,
+                    context_window: None,
+                    fast: None,
+                    approvals: false,
+                    checkout: false,
+                    explore: false,
                 };
                 let state = RunState {
                     status: "running".to_owned(),
@@ -314,22 +485,33 @@ mod tests {
             })
             .await
             .unwrap();
+        (dir, daemon, context, run_id, project)
+    }
+
+    fn text(run_id: RunId, text: String) -> ParallaxEvent {
+        ParallaxEvent::AgentOutput {
+            run_id,
+            items: vec![AgentOutputItem::Text {
+                message_id: None,
+                text,
+            }],
+            compacted: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn pages_of_large_output_fit_in_a_frame_and_page_through_everything() {
+        let (_dir, daemon, context, run_id, project) = daemon_with_run().await;
         // 60 batches of about 250 KiB, as a tool-heavy run's `agent.output` events can be: 15
         // MiB in all, which a page counted by events alone would put in one oversized frame.
-        let text = "x".repeat(250 * 1024);
+        let big = "x".repeat(250 * 1024);
         for _ in 0..60 {
             daemon
-                .log
+                .store
                 .append(
                     jiff::Timestamp::now(),
                     Some(project),
-                    WispEvent::AgentOutput {
-                        run_id,
-                        items: vec![AgentOutputItem::Text {
-                            message_id: None,
-                            text: text.clone(),
-                        }],
-                    },
+                    text(run_id, big.clone()),
                 )
                 .await;
         }
@@ -343,6 +525,7 @@ mod tests {
                 AgentEventsParams {
                     run_id,
                     after,
+                    before: None,
                     limit: None,
                 },
             )

@@ -1,0 +1,66 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "access/setReadOnly",
+    "params": { "id": "4c1d2f0e-8a3b-4b6e-9a51-2f7c0d9e6b13" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "sessions": [
+        {
+          "id": "4c1d2f0e-8a3b-4b6e-9a51-2f7c0d9e6b13",
+          "name": "Ryan's phone",
+          "createdAt": "2026-11-04T04:11:02Z",
+          "readOnly": true
+        },
+        {
+          "id": "7a2e5b1c-3d4f-4a6b-8c9d-0e1f2a3b4c5d",
+          "name": "Ryan's MacBook Air",
+          "createdAt": "2026-10-09T04:11:02Z"
+        }
+      ],
+      "listening": true,
+      "pairing": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "access/merge",
+    "params": {
+      "approvedClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"],
+      "removedClients": [],
+      "approvedHosts": [],
+      "readOnlyClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "version": 12,
+      "approvedClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"],
+      "removedClients": [],
+      "approvedHosts": [],
+      "readOnlyClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "remote/pair",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "This device is read-only on this computer. It can read threads but not change anything.",
+      "data": { "kind": "readOnly" }
+    }
+  }
+]

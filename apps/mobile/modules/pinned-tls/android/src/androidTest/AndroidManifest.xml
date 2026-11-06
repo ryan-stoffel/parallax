@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- The tests' relay and `wrangler dev` speak plain ws:// on the test machine. -->
+  <application android:usesCleartextTraffic="true" />
+</manifest>

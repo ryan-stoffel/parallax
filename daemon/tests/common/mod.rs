@@ -1,23 +1,64 @@
-//! What the real-CLI worker tests share: a fake Messages API on 127.0.0.1 that asks for one Bash
-//! call, a way to run Claude Code as wispd runs a worker against it, and the Bash call's output.
+//! What the real-CLI tests share: a fake Messages API on 127.0.0.1 that asks for tool calls, a way
+//! to run Claude Code as plxd runs a worker against it, and the Bash call's output.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
+use plxd::backend::claude::{TEMP_ENV, arguments, worker_temp};
+use plxd::backend::run_temp::{self, RunTemp};
+use plxd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
+use plxd::paths::DataDir;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use wispd::backend::claude::{TEMP_ENV, arguments, worker_temp};
-use wispd::backend::run_temp::{self, RunTemp};
-use wispd::backend::{AccountRef, Credential, RunId, RunRequest, ToolPolicy, WorkerSandbox};
-use wispd::paths::DataDir;
 
-/// A worker's request as wispd builds it (0013): a worktree at `worktree` in wispd's data folder
+/// The Claude Code CLI under test, which `PLX_SANDBOX_CLAUDE` names. A test without one is
+/// skipped, and says so.
+pub fn claude_under_test() -> Option<OsString> {
+    let claude = std::env::var_os("PLX_SANDBOX_CLAUDE");
+    if claude.is_none() {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    }
+    claude
+}
+
+/// A worker's worktree as plxd lays one out.
+pub struct Worktree {
+    /// `data/worktrees/run`, whose `.git` file points into [`Worktree::git_dir`].
+    pub path: PathBuf,
+    /// The repository's git folder, `root/repo/.git`.
+    pub git_dir: PathBuf,
+    /// The orchestrator's context, `data/context/p`.
+    pub context: PathBuf,
+}
+
+/// Makes a [`Worktree`] in plxd's data folder `data`, for a repository under `root`.
+pub fn worktree(root: &Path, data: &Path) -> Worktree {
+    let path = data.join("worktrees/run");
+    let context = data.join("context/p");
+    let git_dir = root.join("repo/.git");
+    for folder in [&path, &context, &git_dir] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    std::fs::write(
+        path.join(".git"),
+        format!("gitdir: {}/worktrees/run\n", git_dir.display()),
+    )
+    .unwrap();
+    Worktree {
+        path,
+        git_dir,
+        context,
+    }
+}
+
+/// A worker's request as plxd builds it (0013): a worktree at `worktree` in plxd's data folder
 /// `data`, whose repository's git folder is `git_dir`, with `context` writable, and a temp
-/// folder made as wispd makes one (RYA-130). It runs the probe that [`run_worker`]'s fake API
+/// folder made as plxd makes one (PLX-130). It runs the probe that [`run_worker`]'s fake API
 /// asks for. Keep the [`RunTemp`] until the run is over.
 pub fn worker_request(
     home: &Path,
@@ -46,17 +87,23 @@ pub fn worker_request(
         model: Some("claude-sonnet-4-6".into()),
         effort: None,
         permission: None,
-        coordinator_tools: None,
+        context_window: None,
+        fast: None,
+        orchestrator_tools: None,
+        thread_tools: None,
+        approvals: false,
+        thread: false,
+        instructions: None,
     };
     (request, temp)
 }
 
-/// Runs `claude` with the arguments wispd gives `request`, against a fake Messages API whose one
+/// Runs `claude` with the arguments plxd gives `request`, against a fake Messages API whose one
 /// Bash call runs `sh probe.sh` in the worktree. Returns stdout, and stdout with stderr for
 /// failure messages. `env` adds the test's own variables, such as its API key, to the worker's
-/// environment. Like wispd, it gives the CLI the run's temp folder as `CLAUDE_CODE_TMPDIR`, and
+/// environment. Like plxd, it gives the CLI the run's temp folder as `CLAUDE_CODE_TMPDIR`, and
 /// leaves `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` unset for a worker: on Linux it widens the sandbox's
-/// writes (RYA-20).
+/// writes (PLX-20).
 pub async fn run_worker(
     claude: &OsStr,
     request: &RunRequest,
@@ -64,11 +111,9 @@ pub async fn run_worker(
     home: &Path,
     env: &[(&str, &str)],
 ) -> (String, String) {
-    let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", api.local_addr().unwrap());
-    tokio::spawn(serve(api, "sh probe.sh".to_owned()));
+    let base_url = fake_api(vec![ToolCall::bash("sh probe.sh")]).await;
     let temp = worker_temp(&request.sandbox.as_ref().unwrap().temp).unwrap();
-    // The CLI's own `TMPDIR`, wispd's in a real run.
+    // The CLI's own `TMPDIR`, plxd's in a real run.
     std::fs::create_dir_all(root.join("tmp")).unwrap();
 
     let mut child = tokio::process::Command::new(claude)
@@ -126,15 +171,43 @@ pub fn tool_result(stdout: &str) -> Option<String> {
         })
 }
 
-/// A fake Messages API: the first turn asks for a Bash call running `command`, and the turn that
-/// carries its result ends the conversation. Everything else is a 404.
-async fn serve(listener: TcpListener, command: String) {
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(answer(stream, command.clone()));
+/// A tool call the fake Messages API asks for.
+#[derive(Clone, Debug)]
+pub struct ToolCall {
+    /// The tool, such as `Bash`.
+    pub name: &'static str,
+    /// Its input.
+    pub input: Value,
+}
+
+impl ToolCall {
+    /// A Bash call that runs `command`.
+    pub fn bash(command: &str) -> Self {
+        Self {
+            name: "Bash",
+            input: json!({"command": command, "description": "Probe the sandbox"}),
+        }
     }
 }
 
-async fn answer(mut stream: TcpStream, command: String) -> std::io::Result<()> {
+/// Starts a fake Messages API on 127.0.0.1 and returns its base URL. Each turn asks for the next
+/// of `calls`, in order, and the turn that carries the last one's result ends the conversation.
+/// The first call's id is `toolu_01ParallaxProbe`, the next `toolu_01ParallaxProbe1`, and so on.
+pub async fn fake_api(calls: Vec<ToolCall>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(serve(listener, calls.into()));
+    base_url
+}
+
+/// Answers `POST /v1/messages` with the next of `calls`. Everything else is a 404.
+async fn serve(listener: TcpListener, calls: Arc<[ToolCall]>) {
+    while let Ok((stream, _)) = listener.accept().await {
+        tokio::spawn(answer(stream, Arc::clone(&calls)));
+    }
+}
+
+async fn answer(mut stream: TcpStream, calls: Arc<[ToolCall]>) -> std::io::Result<()> {
     let mut request = Vec::new();
     let mut chunk = [0; 16 * 1024];
     let body_start = loop {
@@ -164,7 +237,7 @@ async fn answer(mut stream: TcpStream, command: String) -> std::io::Result<()> {
     let messages_api = target == "/v1/messages" || target.starts_with("/v1/messages?");
     let response = if head.starts_with("post ") && messages_api {
         let body: Value = serde_json::from_slice(&request[body_start..body_start + length])?;
-        let events = messages(&body, &command);
+        let events = messages(&body, &calls);
         format!(
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\
              connection: close\r\n\r\n{events}",
@@ -177,30 +250,38 @@ async fn answer(mut stream: TcpStream, command: String) -> std::io::Result<()> {
     stream.shutdown().await
 }
 
-/// The streamed reply to a Messages request, as server-sent events.
-fn messages(request: &Value, command: &str) -> String {
+/// The streamed reply to a Messages request, as server-sent events: the call after the ones the
+/// conversation already has results for, or the end.
+fn messages(request: &Value, calls: &[ToolCall]) -> String {
     let answered = request["messages"]
         .as_array()
-        .and_then(|messages| messages.last())
-        .and_then(|last| last["content"].as_array())
-        .is_some_and(|content| content.iter().any(|block| block["type"] == "tool_result"));
-    let (block, delta, stop) = if answered {
-        (
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "tool_result")
+        .count();
+    let (block, delta, stop) = match calls.get(answered) {
+        Some(call) => {
+            let id = match answered {
+                0 => "toolu_01ParallaxProbe".to_owned(),
+                n => format!("toolu_01ParallaxProbe{n}"),
+            };
+            (
+                json!({"type": "tool_use", "id": id, "name": call.name, "input": {}}),
+                json!({"type": "input_json_delta", "partial_json": call.input.to_string()}),
+                "tool_use",
+            )
+        }
+        None => (
             json!({"type": "text", "text": ""}),
             json!({"type": "text_delta", "text": "done"}),
             "end_turn",
-        )
-    } else {
-        let input = json!({"command": command, "description": "Probe the sandbox"});
-        (
-            json!({"type": "tool_use", "id": "toolu_01WispProbe", "name": "Bash", "input": {}}),
-            json!({"type": "input_json_delta", "partial_json": input.to_string()}),
-            "tool_use",
-        )
+        ),
     };
     let usage = json!({"input_tokens": 1, "output_tokens": 1});
     let message = json!({
-        "id": "msg_01WispProbe", "type": "message", "role": "assistant",
+        "id": "msg_01ParallaxProbe", "type": "message", "role": "assistant",
         "model": request["model"], "content": [], "stop_reason": null, "stop_sequence": null,
         "usage": usage,
     });

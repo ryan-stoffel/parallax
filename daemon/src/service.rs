@@ -1,44 +1,67 @@
-//! `wispd service`: installs, removes, and reports on the per-user service that keeps
-//! `wispd serve` running: a `LaunchAgent` on macOS ([`launchd`], #61) and a systemd user unit on
-//! Linux ([`systemd`], RYA-18), both named after [`DEFAULT_LABEL`] (0010, 0023).
+//! `plxd service`: installs, removes, and reports on the per-user service that keeps
+//! `plxd serve` running: a `LaunchAgent` on macOS ([`launchd`], #61), a systemd user unit on
+//! Linux ([`systemd`], PLX-18), and a scheduled task with a logon trigger on Windows
+//! ([`task_scheduler`], PLX-576), all named after [`DEFAULT_LABEL`] (0010, 0023).
 //!
 //! Each OS module renders its file with a pure function, covered by a golden-file test, and drives
-//! its service manager. Both compile on every Unix, so their tests run everywhere; the running
-//! OS's `install`, `uninstall`, and `status` are re-exported here. What they share lives here: the
-//! label rule, the `initialize` probe, and preparing the data folder.
+//! its service manager. `launchd` and `systemd` compile on every Unix, and `task_scheduler`'s
+//! rendering on every OS, so their tests run everywhere; the running OS's `install`,
+//! `uninstall`, and `status` are re-exported here. What they share lives here: the label rule, the
+//! `initialize` probe, and preparing the data folder.
 
+#[cfg(unix)]
 pub mod launchd;
+#[cfg(unix)]
 pub mod systemd;
+pub mod task_scheduler;
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
-use wisp_protocol::jsonrpc::{Message, Request};
-use wisp_protocol::methods::Initialize;
-use wisp_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
+#[cfg(unix)]
+use parallax_protocol::jsonrpc::{Message, Request};
+#[cfg(unix)]
+use parallax_protocol::methods::Initialize;
+use parallax_protocol::methods::{HostAnnounceUpdate, HostVersion};
+#[cfg(unix)]
+use parallax_protocol::{ClientInfo, InitializeParams, ProtocolRange};
+use parallax_protocol::{HostAnnounceUpdateParams, HostVersionParams};
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process};
 
 #[cfg(target_os = "macos")]
 pub use launchd::{install, status, uninstall};
 #[cfg(target_os = "linux")]
 pub use systemd::{install, status, uninstall};
+#[cfg(windows)]
+pub use task_scheduler::{install, status, uninstall};
 
 use crate::paths::DataDir;
 
-/// wispd's service label: wisp's bundle id (`io.github.ryan-stoffel.wisp`, 0006) plus `.wispd`.
-/// It is the `LaunchAgent`'s label on macOS, and the systemd unit's name, before `.service`, on
-/// Linux.
-pub const DEFAULT_LABEL: &str = "io.github.ryan-stoffel.wisp.wispd";
+/// plxd's service label: Parallax's bundle id (`io.github.ryan-stoffel.parallax`, 0006) plus `.plxd`.
+/// It is the `LaunchAgent`'s label on macOS, the systemd unit's name, before `.service`, on Linux,
+/// and the scheduled task's name on Windows.
+pub const DEFAULT_LABEL: &str = "io.github.ryan-stoffel.parallax.plxd";
 
 /// The environment variable that overrides the label when `--label` is not given. Only tests
 /// should set it, so a test run never touches a real install.
-pub const SERVICE_LABEL_ENV: &str = "WISPD_SERVICE_LABEL";
+pub const SERVICE_LABEL_ENV: &str = "PLXD_SERVICE_LABEL";
 
 /// How long [`status`] and the conflict check in [`install`] wait for an `initialize` answer.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long [`stop_outside_serve`] waits for the `serve` it stopped to exit.
+const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Why installing, removing, or checking on the service failed.
 #[derive(Debug, thiserror::Error)]
@@ -46,18 +69,18 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub enum ServiceError {
     /// A `serve` is already answering this data folder's socket, and it is not the one the service
     /// manager runs under this label. Starting the service anyway would start a second `serve`
-    /// that loses the race for `wispd.lock` (0009's exit code 3) and gets restarted into the same
+    /// that loses the race for `plxd.lock` (0009's exit code 3) and gets restarted into the same
     /// failure, fighting the first `serve` for the lock.
     #[error(
-        "wispd is already serving {} outside its service; stop it, then run \
-         `wispd service install` again",
+        "plxd is already serving {} outside its service; stop it, then run \
+         `plxd service install` again, or hand it over with `plxd service install --replace`",
         .data_dir.display()
     )]
     AlreadyRunningOutsideService {
         /// The data folder it is serving.
         data_dir: PathBuf,
     },
-    /// The default label serves only the default data folder, because a plain `wispd attach`
+    /// The default label serves only the default data folder, because a plain `plxd attach`
     /// starts the service under that label for that folder (0010). Another folder needs its own
     /// label.
     #[error(
@@ -69,23 +92,41 @@ pub enum ServiceError {
         /// The data folder that was asked for.
         data_dir: PathBuf,
     },
+    /// The `serve` that `install --replace` stopped hadn't exited after [`STOP_TIMEOUT`].
+    #[error("plxd (pid {pid}) was still running 30 s after it was asked to stop")]
+    StillRunning {
+        /// Its pid.
+        pid: u32,
+    },
+    /// On Windows, something held the data folder's lock for [`STOP_TIMEOUT`] without answering
+    /// on its pipe, which is how plxd finds the `serve` to stop.
+    #[error(
+        "something held {}'s plxd.lock for 30 s without answering on its pipe, so it couldn't be \
+         stopped",
+        .data_dir.display()
+    )]
+    LockHeldWithoutAnswering {
+        /// The data folder.
+        data_dir: PathBuf,
+    },
     /// The home folder is unknown, so the service's file can't be placed.
     #[error("the home folder is unknown")]
     NoHomeDir,
-    /// The running `wispd`'s own path could not be read.
-    #[error("could not find the running wispd's path: {0}")]
+    /// The running `plxd`'s own path could not be read.
+    #[error("could not find the running plxd's path: {0}")]
     CurrentExe(io::Error),
     /// The data folder could not be prepared. See [`crate::server::prepare_data_dir`].
     #[error(transparent)]
     DataDir(#[from] crate::server::StartError),
-    /// A path can't be written into a systemd unit, because it isn't UTF-8 or has a control
-    /// character such as a line break.
-    #[error("{} can't be written into a systemd unit", .path.display())]
+    /// A path can't be written into the service's file: a systemd unit, because it isn't UTF-8 or
+    /// has a control character such as a line break, or a scheduled task, because it isn't
+    /// Unicode.
+    #[error("{} can't be written into the service's file", .path.display())]
     UnitPath {
         /// The path.
         path: PathBuf,
     },
-    /// `launchctl` or `systemctl` exited with an error.
+    /// `launchctl`, `systemctl`, `schtasks`, or `taskkill` exited with an error.
     #[error("`{command}` failed: {stderr}")]
     Failed {
         /// The command line that failed.
@@ -96,7 +137,7 @@ pub enum ServiceError {
     /// A file operation failed.
     #[error("{context}: {source}")]
     Io {
-        /// What wispd was doing.
+        /// What plxd was doing.
         context: String,
         /// The error.
         #[source]
@@ -131,6 +172,28 @@ pub enum UninstallOutcome {
     NotInstalled,
 }
 
+impl InstallOutcome {
+    /// The outcome of an install, by whether the label was loaded before it.
+    fn of(was_loaded: bool) -> Self {
+        if was_loaded {
+            Self::Reinstalled
+        } else {
+            Self::Installed
+        }
+    }
+}
+
+impl UninstallOutcome {
+    /// The outcome of an uninstall, by whether it stopped or removed anything.
+    fn of(removed: bool) -> Self {
+        if removed {
+            Self::Removed
+        } else {
+            Self::NotInstalled
+        }
+    }
+}
+
 /// What the service manager reports about a label.
 ///
 /// Loaded and running are kept as one enum rather than two bools, so a report can't be misread
@@ -146,8 +209,8 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
-    /// The manager has the label loaded: launchd in the per-user GUI domain, or the systemd user
-    /// manager.
+    /// The manager has the label loaded: launchd in the per-user GUI domain, the systemd user
+    /// manager, or Task Scheduler.
     #[must_use]
     pub fn loaded(self) -> bool {
         !matches!(self, Self::NotLoaded)
@@ -169,15 +232,18 @@ impl ServiceState {
     }
 }
 
-/// What `wispd service status` reports.
+/// What `plxd service status` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
     /// The label checked.
     pub label: String,
-    /// Where its plist or unit file would be.
+    /// Where its plist, unit file, or task XML would be.
     pub path: PathBuf,
     /// That file exists.
     pub installed: bool,
+    /// The `plxd` that file runs, read back from it. `None` when there's no file, or it isn't
+    /// one plxd wrote.
+    pub program: Option<PathBuf>,
     /// What the service manager reports for `label`.
     pub state: ServiceState,
     /// The data folder's socket answered an `initialize` request just now.
@@ -188,6 +254,7 @@ impl Status {
     fn check(
         label: &str,
         path: PathBuf,
+        program: Option<PathBuf>,
         state: ServiceState,
         data_dir: &DataDir,
     ) -> Result<Self, ServiceError> {
@@ -198,6 +265,7 @@ impl Status {
             label: label.to_owned(),
             path,
             installed,
+            program,
             state,
             answers_initialize: probe_initialize(data_dir),
         })
@@ -227,23 +295,96 @@ fn check_label_serves(
     Ok(())
 }
 
-/// What every install does before writing its file: refuses when something other than the
+/// What every install does before writing its file: checks whether something other than the
 /// service already answers `data_dir` (`ours` says whether the service is what could be
-/// answering), prepares the data folder and its `logs/`, and returns the running `wispd`'s path.
-fn prepare_install(data_dir: &DataDir, ours: bool) -> Result<PathBuf, ServiceError> {
-    if !ours && probe_initialize(data_dir) {
+/// answering), and refuses then unless `replace`. Then prepares the data folder and its `logs/`.
+/// Returns the running `plxd`'s path, and whether a `serve` outside the service must be stopped:
+/// with `stop_outside_serve` on Unix, and `task_scheduler`'s own stop on Windows.
+fn prepare_install(
+    data_dir: &DataDir,
+    ours: bool,
+    replace: bool,
+) -> Result<(PathBuf, bool), ServiceError> {
+    let outside = !ours && probe_initialize(data_dir);
+    if outside && !replace {
         return Err(ServiceError::AlreadyRunningOutsideService {
             data_dir: data_dir.root().to_owned(),
         });
     }
+    if replace {
+        announce_update(data_dir);
+    }
     crate::server::prepare_data_dir(data_dir.root())?;
     prepare_log_dir(data_dir)?;
-    current_exe()
+    Ok((current_exe()?, outside))
+}
+
+/// Tells the plxd on `data_dir`, which `install --replace` is about to stop, when that's an update:
+/// its version isn't this one's. Best effort: a plxd from before `host/announceUpdate` refuses it,
+/// and there may be no plxd at all, and neither should keep the service from being replaced.
+fn announce_update(data_dir: &DataDir) {
+    let (Ok(socket), Ok(runtime)) = (
+        data_dir.socket_path(),
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build(),
+    ) else {
+        return;
+    };
+    let plxd = crate::peer::Plxd::local(socket.path);
+    let announced = async {
+        let running = plxd.call::<HostVersion>(HostVersionParams {}).await?;
+        if running.plxd != crate::version() {
+            plxd.call::<HostAnnounceUpdate>(HostAnnounceUpdateParams {})
+                .await?;
+        }
+        Ok::<_, String>(())
+    };
+    // The timeout is made inside the runtime, which its timer needs.
+    let _ = runtime.block_on(async { tokio::time::timeout(PROBE_TIMEOUT, announced).await });
+}
+
+/// Stops the `serve` holding `data_dir`'s lock, which `install --replace` hands over to the
+/// service: SIGTERM to the pid in its lock file, then waits up to [`STOP_TIMEOUT`] for it to
+/// remove the file or let go of the lock. Not for its pid to go: an exited process its parent
+/// hasn't reaped still has one. Nothing holding the lock is not an error.
+///
+/// # Errors
+///
+/// [`ServiceError::StillRunning`] when it hasn't exited in time, and [`ServiceError::Io`] when
+/// the signal can't be sent.
+#[cfg(unix)]
+pub fn stop_outside_serve(data_dir: &DataDir) -> Result<(), ServiceError> {
+    let lock = data_dir.lock_file();
+    // Checking for the file first keeps the lookup from creating one once `serve` removed it.
+    let holder = || {
+        lock.exists()
+            .then(|| crate::server::setup::lock_holder(&lock, data_dir.root()))
+            .flatten()
+    };
+    let Some(pid) = holder() else {
+        return Ok(());
+    };
+    let process = i32::try_from(pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or(ServiceError::StillRunning { pid })?;
+    kill_process(process, Signal::TERM)
+        .map_err(|error| ServiceError::io(format!("stopping plxd (pid {pid})"), error.into()))?;
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    while holder() == Some(pid) {
+        if Instant::now() >= deadline {
+            return Err(ServiceError::StillRunning { pid });
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
 }
 
 /// Connects to `data_dir`'s socket and sends `initialize`, to see whether something answers it
 /// right now. `false` covers every way that can fail to happen: no socket, nothing listening, a
 /// connection that doesn't answer in time, or an answer that isn't a well-formed response.
+#[cfg(unix)]
 fn probe_initialize(data_dir: &DataDir) -> bool {
     let Ok(socket) = data_dir.socket_path() else {
         return false;
@@ -261,11 +402,11 @@ fn probe_initialize(data_dir: &DataDir) -> bool {
         InitializeParams {
             protocol: ProtocolRange::SUPPORTED,
             client: ClientInfo {
-                name: "wispd-service".to_owned(),
+                name: "plxd-service".to_owned(),
                 version: crate::version().to_owned(),
                 machine_id: None,
             },
-            capabilities: Capabilities::default(),
+            capabilities: parallax_protocol::legacy::client_capabilities(),
         },
     );
     let Ok(mut line) = serde_json::to_string(&request) else {
@@ -287,6 +428,27 @@ fn probe_initialize(data_dir: &DataDir) -> bool {
     )
 }
 
+/// The same probe over the data folder's pipe, through [`crate::peer::Plxd`], which sends
+/// `initialize` when it connects and checks that the pipe's server runs as this user. Its pipe
+/// client needs a tokio runtime.
+#[cfg(windows)]
+fn probe_initialize(data_dir: &DataDir) -> bool {
+    let (Ok(socket), Ok(runtime)) = (
+        data_dir.socket_path(),
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build(),
+    ) else {
+        return false;
+    };
+    let plxd = crate::peer::Plxd::local(socket.path);
+    // Any call connects first; this one asks nothing more than `initialize`. The timeout is made
+    // inside the runtime, which its timer needs.
+    runtime
+        .block_on(async { tokio::time::timeout(PROBE_TIMEOUT, plxd.agent_wait()).await })
+        .is_ok_and(|answer| answer.is_ok())
+}
+
 /// Creates `logs/` under the data folder, if it is not there yet, so the service manager has
 /// somewhere to send `serve`'s stdout and stderr before `serve` itself creates the folder.
 fn prepare_log_dir(data_dir: &DataDir) -> Result<(), ServiceError> {
@@ -294,16 +456,18 @@ fn prepare_log_dir(data_dir: &DataDir) -> Result<(), ServiceError> {
     let Some(dir) = log_file.parent() else {
         return Ok(());
     };
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder
         .create(dir)
         .map_err(|error| ServiceError::io(format!("creating {}", dir.display()), error))
 }
 
-/// The absolute path of the running `wispd` binary, as `std::env::current_exe` reports it.
+/// The absolute path of the running `plxd` binary, as `std::env::current_exe` reports it.
 ///
-/// This is not resolved through symlinks: a package manager that upgrades wispd by relinking a
+/// This is not resolved through symlinks: a package manager that upgrades plxd by relinking a
 /// stable path should keep the service pointing at that stable path. Re-running `install` after
 /// moving the binary picks up its new location either way.
 fn current_exe() -> Result<PathBuf, ServiceError> {
@@ -311,7 +475,7 @@ fn current_exe() -> Result<PathBuf, ServiceError> {
 }
 
 /// Writes the service's file, creating its folder first.
-fn write_file(path: &Path, contents: &str) -> Result<(), ServiceError> {
+fn write_file(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), ServiceError> {
     if let Some(dir) = path.parent() {
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -335,10 +499,9 @@ fn remove_file(path: &Path) -> Result<bool, ServiceError> {
 }
 
 fn run(program: &str, args: &[&str]) -> Result<Output, ServiceError> {
-    Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|error| ServiceError::io(format!("running {program} {}", args.join(" ")), error))
+    Command::new(program).args(args).output().map_err(|error| {
+        ServiceError::io(format!("running {}", command_line(program, args)), error)
+    })
 }
 
 /// Runs `program` and turns a non-zero exit into [`ServiceError::Failed`].
@@ -348,10 +511,29 @@ fn run_ok(program: &str, args: &[&str]) -> Result<Output, ServiceError> {
         Ok(output)
     } else {
         Err(ServiceError::Failed {
-            command: format!("{program} {}", args.join(" ")),
+            command: command_line(program, args),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         })
     }
+}
+
+fn command_line(program: &str, args: &[&str]) -> String {
+    format!("{program} {}", args.join(" "))
+}
+
+/// `text` as the text of an element in a plist or a task's XML. Only text content is ever
+/// generated (never an attribute), so quotes need no escaping.
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Undoes [`escape_xml`], to read a path back from a file plxd wrote.
+fn unescape_xml(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -361,7 +543,7 @@ mod tests {
 
     #[test]
     fn the_default_label_serves_only_the_default_data_folder() {
-        let default = DataDir::new("/Users/me/Library/Application Support/wisp").unwrap();
+        let default = DataDir::new("/Users/me/Library/Application Support/parallax").unwrap();
         let other = DataDir::new("/tmp/elsewhere").unwrap();
 
         check_label_serves(DEFAULT_LABEL, &default, Some(&default)).unwrap();

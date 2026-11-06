@@ -2,19 +2,20 @@
 //!
 //! [`resolve`] picks the account: the one a task names, or its role's stored default
 //! (`accounts/defaults/get` and `accounts/defaults/set`, `methods::defaults`), and forces the
-//! coordinator's no-write policy regardless of what was asked for (0004). [`start`] then starts
+//! orchestrator's no-write policy regardless of what was asked for (0004). [`start`] then starts
 //! the run, and retries once on a key-account fallback if it fails signed out or rate limited
-//! (0004's fallback).
+//! (0004's fallback), and once as a new session if the session it resumes is gone and it has a
+//! [`Resume::fallback`](crate::backend::Resume::fallback) (PLX-937).
 //!
 //! # What owns calling this, and how
 //!
 //! #156's runner (`crate::agents`) calls `resolve` and `start` for workers, and for a project's
-//! coordinator (RYA-41, 0024). Who owns what (see #119's decision record, 0012):
+//! Orchestrator (PLX-41, 0024). Who owns what (see #119's decision record, 0012):
 //!
 //! - #156 (the M3 runner, workers only) calls `resolve` and `start` for a worker's
 //!   `workspace-write` run, maps [`Event::AccountFallback`] to an `agent/*` notification, and
 //!   charges usage after it to `to_account`, not the account the run started on.
-//! - The same runner runs a project's coordinator (0024): `resolve` and `start` the same way.
+//! - The same runner runs an orchestrator (0024): `resolve` and `start` the same way.
 //! - [`start`]'s returned [`Started::run`] already forwards to whichever attempt is actually
 //!   running, including after a fallback (see [`FallbackRun`]), so a caller never needs to track
 //!   that itself.
@@ -23,32 +24,32 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use wisp_protocol::{AccountChoice, AccountId, Provider, Role};
+use parallax_protocol::{AccountChoice, AccountId, Provider, Role};
 
 use crate::backend::key_account::{self, KeyAccountError};
 use crate::backend::{
-    AccountRef, Backend, Credential, EVENT_BUFFER, Event, EventSink, EventStream, Failure,
-    FailureKind, FollowUp, ModelUsage, Outcome, Run, RunId, RunRequest, SendError, StartError,
-    Started, ToolPolicy,
+    AccountRef, Answer, AnswerError, Backend, Credential, EVENT_BUFFER, Event, EventSink,
+    EventStream, Failure, FailureKind, FollowUp, ModelUsage, Outcome, Run, RunId, RunRequest,
+    SendError, StartError, Started, ToolPolicy,
 };
 use crate::keystore::KeyStore;
 
-/// Every backend wispd can route to, by the provider whose credentials it takes (0004: a backend
-/// takes both a subscription login and a key account for the same provider).
+/// Every backend plxd can route to: by name, which a subscription `AccountChoice` names, and by
+/// the provider whose key accounts it takes (0004: a backend takes both a subscription login and
+/// a key account for the same provider). Provider instances (0040) add, replace, and remove named
+/// backends while plxd runs, so clones share one table; key accounts keep the backends registered
+/// at startup, whatever an instance of the same name sets or turns off.
 #[derive(Clone, Default)]
 pub struct BackendRegistry {
+    /// The backend that takes each provider's key accounts.
     by_provider: HashMap<Provider, Arc<dyn Backend>>,
+    by_name: Arc<std::sync::RwLock<HashMap<String, Arc<dyn Backend>>>>,
 }
 
 impl std::fmt::Debug for BackendRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_map()
-            .entries(
-                self.by_provider
-                    .iter()
-                    .map(|(provider, backend)| (provider, backend.name())),
-            )
-            .finish()
+        let names = self.by_name.read().unwrap_or_else(PoisonError::into_inner);
+        f.debug_list().entries(names.keys()).finish()
     }
 }
 
@@ -59,10 +60,38 @@ impl BackendRegistry {
         Self::default()
     }
 
-    /// Registers `backend` as the one that takes `provider`'s credentials.
+    /// Registers `backend` as the one that takes `provider`'s credentials, under its name.
     pub fn register(&mut self, provider: Provider, backend: Arc<dyn Backend>) -> &mut Self {
-        self.by_provider.insert(provider, backend);
+        self.by_provider.insert(provider, Arc::clone(&backend));
+        self.set(backend);
         self
+    }
+
+    /// Adds `backend` under its name, or replaces the one with that name, for subscriptions only.
+    pub fn set(&self, backend: Arc<dyn Backend>) {
+        self.by_name
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(backend.name().to_owned(), backend);
+    }
+
+    /// Removes the backend named `name`, so no new run routes to it.
+    pub fn remove(&self, name: &str) {
+        self.by_name
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
+    }
+
+    /// Every backend by name, such as `claude`: the subscriptions a run can use.
+    #[must_use]
+    pub fn by_name(&self) -> Vec<(String, Arc<dyn Backend>)> {
+        self.by_name
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(name, backend)| (name.clone(), Arc::clone(backend)))
+            .collect()
     }
 
     /// The backend registered for `provider`.
@@ -71,13 +100,22 @@ impl BackendRegistry {
         self.by_provider.get(&provider).cloned()
     }
 
-    /// The provider and backend whose [`Backend::name`] is `name`, such as `claude`.
+    /// The backend whose [`Backend::name`] is `name`, such as `claude`, and the provider whose
+    /// key accounts it takes, or [`Provider::Unknown`] for one that takes none.
     #[must_use]
     pub fn by_backend_name(&self, name: &str) -> Option<(Provider, Arc<dyn Backend>)> {
-        self.by_provider
+        let backend = self
+            .by_name
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()?;
+        let provider = self
+            .by_provider
             .iter()
-            .find(|(_, backend)| backend.name() == name)
-            .map(|(provider, backend)| (*provider, Arc::clone(backend)))
+            .find(|(_, registered)| registered.name() == name)
+            .map_or(Provider::Unknown, |(provider, _)| *provider);
+        Some((provider, backend))
     }
 }
 
@@ -96,8 +134,8 @@ pub trait KeyAccounts: Send + Sync {
 /// Both roles' default accounts, as `accounts/defaults/get` reports them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Defaults {
-    /// The coordinator's default account.
-    pub coordinator: Option<AccountChoice>,
+    /// The orchestrator's default account.
+    pub orchestrator: Option<AccountChoice>,
     /// A worker's default account.
     pub worker: Option<AccountChoice>,
 }
@@ -105,7 +143,7 @@ pub struct Defaults {
 impl Defaults {
     fn for_role(&self, role: Role) -> Option<&AccountChoice> {
         match role {
-            Role::Coordinator => self.coordinator.as_ref(),
+            Role::Orchestrator => self.orchestrator.as_ref(),
             Role::Worker => self.worker.as_ref(),
         }
     }
@@ -140,10 +178,10 @@ impl Selection {
     }
 }
 
-/// The policy `role` actually gets: always [`ToolPolicy::NoWrite`] for [`Role::Coordinator`],
+/// The policy `role` actually gets: always [`ToolPolicy::NoWrite`] for [`Role::Orchestrator`],
 /// whatever `policy` asks for (0004).
 fn enforced_policy(role: Role, policy: ToolPolicy) -> ToolPolicy {
-    if role == Role::Coordinator {
+    if role == Role::Orchestrator {
         ToolPolicy::NoWrite
     } else {
         policy
@@ -152,14 +190,17 @@ fn enforced_policy(role: Role, policy: ToolPolicy) -> ToolPolicy {
 
 /// What [`resolve`] found for a task: its backend, the account it will run as (once its
 /// credential is read), and the policy it actually gets, which may not be what was requested
-/// (0004's coordinator policy).
+/// (0004's orchestrator policy).
 ///
-/// Every field is private. A coordinator's forced [`ToolPolicy::NoWrite`] is meaningless if
+/// Every field is private. An orchestrator's forced [`ToolPolicy::NoWrite`] is meaningless if
 /// something between `resolve` and `start` can change it back, so nothing outside this module can
 /// read or write one without going through [`Resolved::policy`], and [`start`] enforces it again
-/// from [`Resolved::role`] regardless of what `policy()` already says.
+/// from the run's role regardless of what `policy()` already says.
 pub struct Resolved {
     backend: Arc<dyn Backend>,
+    /// The backend a key-account fallback runs on: the provider's startup one (0040), not an
+    /// instance's settings.
+    key_backend: Option<Arc<dyn Backend>>,
     provider: Provider,
     selection: Selection,
     role: Role,
@@ -184,12 +225,6 @@ impl Resolved {
         self.backend.as_ref()
     }
 
-    /// The role this run is for.
-    #[must_use]
-    pub fn role(&self) -> Role {
-        self.role
-    }
-
     /// The policy this run actually gets.
     #[must_use]
     pub fn policy(&self) -> ToolPolicy {
@@ -201,6 +236,7 @@ impl std::fmt::Debug for Resolved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Resolved")
             .field("backend", &self.backend.name())
+            .field("key_backend", &self.key_backend.as_ref().map(|b| b.name()))
             .field("provider", &self.provider)
             .field("selection", &self.selection)
             .field("role", &self.role)
@@ -242,7 +278,7 @@ pub enum RoutingError {
 }
 
 /// Picks `role`'s account and backend: `requested` if given, else `role`'s entry in `defaults`.
-/// The coordinator always gets [`ToolPolicy::NoWrite`], whatever `policy` asks for (0004); a
+/// The orchestrator always gets [`ToolPolicy::NoWrite`], whatever `policy` asks for (0004); a
 /// worker gets `policy` as given.
 ///
 /// This reads no credential and starts nothing; [`start`] does both, right before spawning the
@@ -286,6 +322,7 @@ pub fn resolve(
     };
     Ok(Resolved {
         backend,
+        key_backend: backends.by_provider(provider),
         provider,
         selection,
         role,
@@ -316,13 +353,14 @@ pub fn start(
 ) -> Result<Started, StartError> {
     let Resolved {
         backend,
+        key_backend,
         provider,
         selection,
         role,
         policy,
     } = resolved;
     // Re-enforced here, not just trusted from `resolved`: `Resolved`'s fields are private and
-    // `policy` is already correct by construction, but the coordinator's no-write policy is
+    // `policy` is already correct by construction, but the orchestrator's no-write policy is
     // exactly the thing that must never depend on one code path remembering to apply it.
     let policy = enforced_policy(role, policy);
     let is_subscription = matches!(selection, Selection::Subscription { .. });
@@ -335,11 +373,16 @@ pub fn start(
         // A no-write run never writes, so it has no worker sandbox (0013), whatever was asked.
         request.sandbox = None;
     }
-    if role != Role::Coordinator {
-        // Only the coordinator starts and steers other runs (0019).
-        request.coordinator_tools = None;
+    if role != Role::Orchestrator {
+        // Only an orchestrator gets its Parallax tools here (0019, PLX-380).
+        request.orchestrator_tools = None;
     }
-    let started = backend.start(request.clone())?;
+    if !request.thread {
+        // Only a normal thread gets them as a thread (0041); an orchestrator gets them above, and
+        // its subagents get none.
+        request.thread_tools = None;
+    }
+    let started = start_resuming(&backend, request.clone())?;
 
     let fallback_id = is_subscription
         .then(|| accounts.fallback_for(provider))
@@ -352,7 +395,7 @@ pub fn start(
     let run = Arc::new(FallbackRun::new(Arc::clone(&started.run)));
     let plan = FallbackPlan {
         keys,
-        backend,
+        backend: key_backend.unwrap_or(backend),
         provider,
         account_id: fallback_id,
         run: Arc::clone(&run),
@@ -388,6 +431,8 @@ struct FallbackRun {
     /// target at once, the same way [`crate::backend::CancelSwitch::arm`] cancels a process armed
     /// after the cancel already happened.
     cancelled: AtomicBool,
+    /// [`Run::hold`]'s last flag, which a swap passes on to the new target (PLX-370).
+    held: AtomicBool,
 }
 
 impl FallbackRun {
@@ -395,6 +440,7 @@ impl FallbackRun {
         Self {
             current: Mutex::new(initial),
             cancelled: AtomicBool::new(false),
+            held: AtomicBool::new(false),
         }
     }
 
@@ -407,6 +453,7 @@ impl FallbackRun {
         if self.cancelled.load(Ordering::Acquire) {
             next.cancel();
         }
+        next.hold(self.held.load(Ordering::Acquire));
     }
 }
 
@@ -422,6 +469,15 @@ impl Run for FallbackRun {
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
         self.current().cancel();
+    }
+
+    fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
+        self.current().answer(answer)
+    }
+
+    fn hold(&self, held: bool) {
+        self.held.store(held, Ordering::Release);
+        self.current().hold(held);
     }
 }
 
@@ -471,31 +527,32 @@ async fn drive_with_fallback(
         {
             break failure.clone();
         }
-        if sink.emit(event).await.is_err() {
+        if !forward(&mut sink, &request, event).await {
             return;
         }
     };
 
-    if !matches!(
+    // Only a failure the key account can get past falls back, and only once it starts. Otherwise
+    // the original failure is the answer.
+    let eligible = matches!(
         failure.failure,
         FailureKind::NotSignedIn | FailureKind::RateLimited
-    ) {
-        let _ = sink.emit(finished_failed(failure)).await;
-        return;
-    }
-    let Ok(credential) = key_account::resolve(keys.as_ref(), provider, fallback_id) else {
+    );
+    let fallback = eligible
+        .then(|| key_account::resolve(keys.as_ref(), provider, fallback_id).ok())
+        .flatten()
+        .and_then(|credential| {
+            request.account = AccountRef {
+                id: fallback_id.to_string(),
+                credential,
+            };
+            start_resuming(&backend, request.clone()).ok()
+        });
+    let Some(started) = fallback else {
         let _ = sink.emit(finished_failed(failure)).await;
         return;
     };
     let to_account = fallback_id.to_string();
-    request.account = AccountRef {
-        id: to_account.clone(),
-        credential,
-    };
-    let Ok(started) = backend.start(request.clone()) else {
-        let _ = sink.emit(finished_failed(failure)).await;
-        return;
-    };
     run.swap(&started.run);
     sink.reset_usage(usage_baseline(&request));
     if sink
@@ -511,9 +568,102 @@ async fn drive_with_fallback(
     }
     let mut fallback_events = started.events;
     while let Some(event) = fallback_events.next().await {
-        if sink.emit(event).await.is_err() {
+        if !forward(&mut sink, &request, event).await {
             return;
         }
+    }
+}
+
+/// Emits `event` to `sink`, after [`restart_on_new_session`]. `false` once nothing reads `sink`.
+async fn forward(sink: &mut EventSink, request: &RunRequest, event: Event) -> bool {
+    restart_on_new_session(sink, request, &event);
+    sink.emit(event).await.is_ok()
+}
+
+/// Starts `request` on `backend`. When it resumes a session with a
+/// [`Resume::fallback`](crate::backend::Resume::fallback) on a backend that doesn't fall back
+/// itself, as Codex does (PLX-728), a resume that fails as [`FailureKind::SessionNotFound`]
+/// starts once more as a new session with the fallback as its prompt (PLX-937), and the failed
+/// attempt's events are dropped.
+fn start_resuming(backend: &Arc<dyn Backend>, request: RunRequest) -> Result<Started, StartError> {
+    let fallback = request
+        .resume
+        .as_ref()
+        .and_then(|resume| resume.fallback.clone())
+        .filter(|_| !backend.resume_fallback());
+    let started = backend.start(request.clone())?;
+    let Some(prompt) = fallback else {
+        return Ok(started);
+    };
+    let (sink, events) = EventSink::channel(EVENT_BUFFER, usage_baseline(&request));
+    let run = Arc::new(FallbackRun::new(Arc::clone(&started.run)));
+    let fresh = RunRequest {
+        prompt,
+        resume: None,
+        ..request
+    };
+    tokio::spawn(drive_new_session(
+        sink,
+        Arc::clone(backend),
+        fresh,
+        started.events,
+        Arc::clone(&run),
+    ));
+    Ok(Started { run, events })
+}
+
+/// Forwards `current`'s events to `sink`, holding them until its session starts. If it ends as
+/// [`FailureKind::SessionNotFound`] first, drops them and starts `fresh` in its place, whose
+/// events it forwards instead. See [`start_resuming`].
+async fn drive_new_session(
+    mut sink: EventSink,
+    backend: Arc<dyn Backend>,
+    fresh: RunRequest,
+    mut current: EventStream,
+    run: Arc<FallbackRun>,
+) {
+    let mut held = Vec::new();
+    let mut fresh = Some(fresh);
+    while let Some(event) = current.next().await {
+        if fresh.is_some() {
+            match &event {
+                Event::Finished {
+                    outcome: Outcome::Failed(failure),
+                    ..
+                } if failure.failure == FailureKind::SessionNotFound => {
+                    if let Some(Ok(next)) = fresh.take().map(|fresh| backend.start(fresh)) {
+                        tracing::warn!(message = %failure.message, "could not resume a session; starting a new one");
+                        run.swap(&next.run);
+                        sink.reset_usage(Vec::new());
+                        held.clear();
+                        current = next.events;
+                        continue;
+                    }
+                }
+                Event::SessionStarted { .. } | Event::Finished { .. } => fresh = None,
+                _ => {
+                    held.push(event);
+                    continue;
+                }
+            }
+        }
+        for event in held.drain(..).chain(std::iter::once(event)) {
+            if sink.emit(event).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// Starts `sink`'s usage over when `event` starts a session other than the one `request`
+/// resumes, such as a new Codex thread after a failed resume (PLX-728), so `Finished` reports
+/// only that session's totals.
+fn restart_on_new_session(sink: &mut EventSink, request: &RunRequest, event: &Event) {
+    if let (Event::SessionStarted { session_id, .. }, Some(resume)) = (event, &request.resume)
+        && !resume.fork
+        && *session_id != resume.session_id
+    {
+        sink.reset_usage(Vec::new());
     }
 }
 

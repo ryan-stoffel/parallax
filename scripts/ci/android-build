@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+# The phone app's Android build (PLX-1370): pinned-tls's tests on the JVM, then the debug APK for an
+# x86_64 emulator. The emulator's half is android-e2e.
+cd "$(dirname "$0")/../../apps/mobile"
+set -x
+
+pnpm install --frozen-lockfile
+CI=1 pnpm exec expo prebuild --platform android --no-install
+cd android
+./gradlew --console=plain -PreactNativeArchitectures=x86_64 \
+  :pinned-tls:testDebugUnitTest :app:assembleDebug

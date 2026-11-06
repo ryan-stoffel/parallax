@@ -1,0 +1,13 @@
+# Two threads, each mid-turn, when app-server crashes: both end, failed.
+<
+{"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1"},"model":"gpt-6-sol"}}
+{"id":3,"result":{"thread":{"id":"t-2"},"model":"gpt-6-sol"}}
+<
+<
+{"id":4,"result":{"turn":{"id":"u-1"}}}
+{"id":5,"result":{"turn":{"id":"u-2"}}}
+@exit 3

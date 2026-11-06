@@ -1,79 +1,88 @@
-//! `thread/list`, `repo/add`, `thread/start`, `thread/archive`, and `thread/delete` (#110),
-//! behind the `threads` capability. The logic is [`crate::threads`].
+//! `thread/list`, `repo/add`, `repo/clone` (PLX-905, behind `repoClone`), `thread/start`, `thread/archive`, and `thread/delete` (#110),
+//! behind the `threads` capability, `thread/fork` (0050), behind `threadFork`, `thread/update`
+//! and `repo/update` (0033), behind `threadAttention` (and `threadLineage` for its title and
+//! settled flag, 0041), `repo/refs`, behind `repoRefs`, and `thread/search` (PLX-372), behind
+//! `threadContext`, `thread/import` (PLX-881), behind `threadImport`, and `thread/importChat` (PLX-883), behind
+//! `chatImport`. The logic is [`crate::threads`]; methods that only forward to it route there
+//! straight from `mod.rs`.
+//! `repo/files` is `composer.rs`'s, behind `composerMenus`.
 
-use std::sync::Arc;
-
-use serde_json::Value;
-use wisp_protocol::jsonrpc::{ErrorObject, Request};
-use wisp_protocol::methods::{
-    RepoAdd, RequestMethod, ThreadArchive, ThreadDelete, ThreadList, ThreadStart,
+use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::{
+    ProjectDeleteParams, ProjectDeleteResult, RepoAddResult, RepoCloneParams, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadImportChatParams, ThreadImportParams,
+    ThreadStartParams, ThreadStartResult,
 };
-use wisp_protocol::{
-    RepoAddParams, RepoAddResult, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadListParams, ThreadListResult, ThreadStartParams, ThreadStartResult,
-};
 
-use super::{Context, handle};
-use crate::threads;
-
-/// Whether `method` is one of this module's: a `thread/*` or `repo/*` method.
-pub(crate) fn handles(method: &str) -> bool {
-    method.starts_with("thread/") || method.starts_with("repo/")
-}
-
-/// Answers a `thread/*` or `repo/*` method.
-pub(crate) async fn dispatch(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
-    match request.method.as_str() {
-        ThreadList::NAME => handle::<ThreadList, _, _>(request, |p| list(context, p)).await,
-        RepoAdd::NAME => handle::<RepoAdd, _, _>(request, |p| add_repo(context, p)).await,
-        ThreadStart::NAME => handle::<ThreadStart, _, _>(request, |p| start(context, p)).await,
-        ThreadArchive::NAME => {
-            handle::<ThreadArchive, _, _>(request, |p| archive(context, p)).await
-        }
-        ThreadDelete::NAME => handle::<ThreadDelete, _, _>(request, |p| delete(context, p)).await,
-        other => Err(ErrorObject::method_not_found(other)),
-    }
-}
-
-async fn list(context: &Context, _: ThreadListParams) -> Result<ThreadListResult, ErrorObject> {
-    threads::list(&context.daemon).await
-}
-
-async fn add_repo(context: &Context, params: RepoAddParams) -> Result<RepoAddResult, ErrorObject> {
-    threads::add_repo(&context.daemon, params).await
-}
+use super::Context;
+use crate::{agents, threads};
 
 // Starting and deleting run detached from the request, as `agent/*` does, so a dropped
 // connection never leaves a thread half created or half deleted.
 
-async fn start(
+pub(super) async fn start(
     context: &Context,
-    params: ThreadStartParams,
+    mut params: ThreadStartParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
     super::agent::check_message("prompt", &params.prompt, &params.images)?;
-    let daemon = Arc::clone(&context.daemon);
+    params.threads = agents::attached::check(&context.daemon, params.threads).await?;
     context
-        .daemon
-        .agents
-        .detached(threads::start(daemon, params))
+        .detached(|daemon| threads::start(daemon, params))
         .await
 }
 
-async fn archive(
+/// `repo/clone` (PLX-905), run detached so a dropped connection never leaves a clone half done.
+pub(super) async fn clone(
     context: &Context,
-    params: ThreadArchiveParams,
-) -> Result<ThreadArchiveResult, ErrorObject> {
-    threads::archive(&context.daemon, params).await
+    params: RepoCloneParams,
+) -> Result<RepoAddResult, ErrorObject> {
+    context
+        .detached(|daemon| crate::repo_clone::clone(daemon, params))
+        .await
 }
 
-async fn delete(
+pub(super) async fn fork(
+    context: &Context,
+    params: ThreadForkParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    context
+        .detached(|daemon| threads::fork(daemon, params))
+        .await
+}
+
+pub(super) async fn import(
+    context: &Context,
+    params: ThreadImportParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    context
+        .detached(|daemon| crate::importer::import(daemon, params))
+        .await
+}
+
+pub(super) async fn import_chat(
+    context: &Context,
+    params: ThreadImportChatParams,
+) -> Result<ThreadStartResult, ErrorObject> {
+    context
+        .detached(|daemon| crate::importer::import_chat(daemon, params))
+        .await
+}
+
+pub(super) async fn delete(
     context: &Context,
     params: ThreadDeleteParams,
 ) -> Result<ThreadDeleteResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
+    let command_id = context.command_id;
     context
-        .daemon
-        .agents
-        .detached(async move { threads::delete(&daemon, params.run_id).await })
+        .detached(|daemon| async move { threads::delete(&daemon, params.run_id, command_id).await })
+        .await
+}
+
+pub(super) async fn project_delete(
+    context: &Context,
+    params: ProjectDeleteParams,
+) -> Result<ProjectDeleteResult, ErrorObject> {
+    context
+        .detached(|daemon| async move { crate::projects::delete(&daemon, params).await })
         .await
 }

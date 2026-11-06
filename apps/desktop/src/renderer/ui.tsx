@@ -1,35 +1,143 @@
-import { Check, ChevronDown, Search } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import {
   Fragment,
+  useEffect,
   useId,
   useRef,
   useState,
   type ButtonHTMLAttributes,
+  type ComponentProps,
+  type CSSProperties,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
+  type Ref,
   type ToggleEvent,
 } from "react";
 
-/** A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere. */
-export const shortcut = (keys: string) =>
-  window.wisp.platform === "darwin" ? `⌘${keys.replace("Alt+", "⌥")}` : `Ctrl+${keys}`;
+import { activeCommand, keybindingOf, useShortcutLabel, whenOf, type Command } from "./keybindings";
+import { Check as CheckSymbol } from "./symbols";
+import { Kbd } from "./ui/marks";
+
+// The shared components (0092) live in ui/, and everything imports them from here.
+export * from "./ui/controls";
+export * from "./ui/Dialog";
+export * from "./ui/marks";
 
 /**
- * A square, icon-only toolbar button. `label` is its accessible name and tooltip; `aria-pressed`
- * shows it on.
+ * A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere, and
+ * "Shift+N" is "⌘⇧N" on macOS.
+ */
+export const shortcut = (keys: string) =>
+  window.parallax.platform === "darwin"
+    ? `⌘${keys.replace("Alt+", "⌥").replace("Shift+", "⇧")}`
+    : `Ctrl+${keys}`;
+
+/** The parts of a key press shortcuts read, from a DOM or React keyboard event. */
+export type KeyPress = Pick<
+  globalThis.KeyboardEvent,
+  "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "code" | "key" | "getModifierState"
+>;
+
+/**
+ * The app's own shortcut `e` presses, if any: a command's binding (keybindings.ts), or Mod+1 to
+ * Mod+9 a sidebar row (`rowShortcut`), which can't be rebound. App, ThreadList, and Thread details act
+ * on them, and a repository action's keybinding can't be one.
+ */
+export function appShortcut(e: KeyPress): Command | "row" | undefined {
+  if (rowShortcut(e) !== undefined) return "row";
+  const keybinding = keybindingOf(e);
+  return keybinding ? activeCommand(keybinding) : undefined;
+}
+
+/**
+ * Whether a press in a terminal is the app's alone. On macOS every app shortcut is. Elsewhere,
+ * where they're Ctrl, a plain Ctrl+letter one (Ctrl+N, Ctrl+S) stays the shell's, which readline
+ * and editors use; the terminal's toggle, Ctrl+1 to Ctrl+9, any with Shift or Alt, and any whose When is terminalFocus, are the app's.
+ */
+export function terminalAppShortcut(e: KeyPress): boolean {
+  const command = appShortcut(e);
+  if (command === undefined) return false;
+  const mac = window.parallax.platform === "darwin";
+  return (
+    mac ||
+    command === "terminal" ||
+    command === "row" ||
+    e.shiftKey ||
+    e.altKey ||
+    // Asked for here by name, so it's not the shell's.
+    whenOf(command) === "terminalFocus"
+  );
+}
+
+/** The 0-based row Mod+1 to Mod+9 picks, from the digit `e` presses with Mod and nothing else. */
+export function rowShortcut(e: KeyPress): number | undefined {
+  const digit = /^Digit([1-9])$/.exec(e.code)?.[1];
+  const mod = window.parallax.platform === "darwin" ? e.metaKey : e.ctrlKey;
+  return digit && mod && !e.shiftKey && !e.altKey ? Number(digit) - 1 : undefined;
+}
+
+/** Whether Mod is held, so lists can show their Mod+1 to Mod+9 badges. */
+export function useModHeld() {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    const mod = window.parallax.platform === "darwin" ? "Meta" : "Control";
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key === mod) setHeld(e.type === "keydown");
+    };
+    const listening = new AbortController();
+    const { signal } = listening;
+    window.addEventListener("keydown", key, { signal });
+    window.addEventListener("keyup", key, { signal });
+    // Switching apps with Cmd+Tab never sends its keyup.
+    window.addEventListener("blur", () => setHeld(false), { signal });
+    return () => listening.abort();
+  }, []);
+  return held;
+}
+
+/** The ⌘1 to ⌘9 badge on a row that Mod and its number open. */
+export function RowBadge({ index }: { index: number }) {
+  return <Kbd>{shortcut(String(index + 1))}</Kbd>;
+}
+
+const iconButtonSizes = {
+  sm: "size-6 [&_svg]:size-3.5",
+  md: "size-7 [&_svg]:size-4",
+  lg: "size-8 [&_svg]:size-5",
+};
+
+/**
+ * A square, icon-only button. `label` is its accessible name and tooltip, with `command`'s
+ * current shortcut beside it in the tooltip; `aria-pressed` shows it on. `size` sets the button
+ * and its icon together: sm (24px, 14px icon) in rows and chips, md (28px, 16px) in toolbars, the
+ * default, and lg (32px, 20px) in the browser's toolbar and on its own. `reveal` hides it until
+ * the pointer is over the nearest `group` (a row), or it's focused, open, or pressed.
+ * `className` adds to its classes.
  */
 export function IconButton({
   label,
-  keys,
+  command,
+  size = "md",
+  reveal,
+  className = "",
   children,
   ...props
-}: { label: string; keys?: string } & ButtonHTMLAttributes<HTMLButtonElement>) {
+}: {
+  label: string;
+  command?: Command;
+  size?: keyof typeof iconButtonSizes;
+  reveal?: boolean;
+  ref?: Ref<HTMLButtonElement>;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  const keys = useShortcutLabel(command);
   return (
     <button
       type="button"
       aria-label={label}
-      title={keys ? `${label} (${shortcut(keys)})` : label}
-      className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
+      title={label}
+      data-keys={keys}
+      className={`grid shrink-0 place-items-center rounded-md text-muted-foreground transition-[color,background-color,opacity] enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 aria-pressed:bg-selected aria-pressed:text-foreground ${iconButtonSizes[size]} ${reveal ? "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 aria-pressed:opacity-100" : ""} ${className}`}
       {...props}
     >
       {children}
@@ -37,13 +145,33 @@ export function IconButton({
   );
 }
 
+/**
+ * Set up GitHub, beside a pull request action that failed because `gh` is missing or signed out
+ * on the host (PLX-423). It opens Settings > Source control on that host.
+ */
+export function SetUpGithub({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="shrink-0 rounded-md border border-border px-2 py-0.5 text-meta font-medium text-foreground hover:bg-hover"
+    >
+      Set up GitHub
+    </button>
+  );
+}
+
+/** A search box: a label around a search icon and its input. Callers add the width. */
+export const searchField =
+  "flex h-8 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring";
+
 /** A segmented control's option: a label around a visually hidden radio. */
 export const segment =
-  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
+  "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-body text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
 /**
  * A row of radios drawn as one segmented control, named by `label`. Disabled, it stays in place
- * but can't be changed.
+ * but can't be changed. With `wrap`, options that don't fit take another line.
  */
 export function Segmented<T extends string>({
   label,
@@ -51,25 +179,34 @@ export function Segmented<T extends string>({
   value,
   onChange,
   disabled,
+  wrap,
 }: {
   label: string;
-  options: { value: T; name: string }[];
+  options: { value: T; name: ReactNode; disabled?: boolean; title?: string }[];
   value: T;
   onChange: (value: T) => void;
   disabled?: boolean;
+  wrap?: boolean;
 }) {
+  // Its own radio group, even when another control on the page has the same label.
+  const name = useId();
   return (
     <fieldset
       aria-label={label}
       disabled={disabled}
-      className="flex shrink-0 gap-0.5 rounded-lg border border-border p-0.5 disabled:pointer-events-none disabled:opacity-50"
+      className={`flex gap-0.5 rounded-lg border border-border p-0.5 disabled:pointer-events-none disabled:opacity-50 ${wrap ? "min-w-0 flex-wrap" : "shrink-0"}`}
     >
       {options.map((o) => (
-        <label key={o.value} className={segment}>
+        <label
+          key={o.value}
+          title={o.title}
+          className={`${segment} ${o.disabled ? "opacity-40 hover:text-muted-foreground" : ""}`}
+        >
           <input
             type="radio"
-            name={label}
+            name={name}
             value={o.value}
+            disabled={o.disabled}
             checked={value === o.value}
             onChange={() => onChange(o.value)}
             className="sr-only"
@@ -84,30 +221,161 @@ export function Segmented<T extends string>({
 // Every dropdown shares these: a quiet trigger, and a panel 8px under it with the same radius.
 /** A menu's trigger: sized to its content, highlighted on hover. */
 export const menuButton =
-  "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-[13.5px] text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
+  "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-body text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
+
+// Where a menu grows from as it opens (index.css's .menu-motion): the corner under its trigger.
+const panelOrigins = { start: "origin-top-left", end: "origin-top-right", center: "origin-top" };
+
+const panelAreas = {
+  start: "[position-area:bottom_span-right]",
+  end: "[position-area:bottom_span-left]",
+  center: "[position-area:bottom]",
+};
 
 /**
  * A menu's panel, a native popover: under its trigger and lined up with its left edge (`end`:
- * its right edge), flipping when there's no room. Escape and clicking away close it.
+ * its right edge; `center`: centered under it), flipping when there's no room. Escape and
+ * clicking away close it. It fades and grows in from its trigger, and fades out.
  */
-export const menuPanel = (align: "start" | "end" = "start") =>
-  `inset-auto m-0 mt-2 rounded-lg border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block,flip-inline] ${align === "start" ? "[position-area:bottom_span-right]" : "[position-area:bottom_span-left]"}`;
+export const menuPanel = (align: "start" | "end" | "center" = "start") =>
+  `menu-motion inset-auto m-0 mt-2 rounded-lg border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block,flip-inline] ${panelAreas[align]} ${panelOrigins[align]}`;
 
-/** A row in a menu panel. */
+/**
+ * Where a compact composer tab's card opens: above it, a fixed width, lined up with its right
+ * edge, as it sits at the line's end.
+ */
+export const popoverBeside = "w-[min(26rem,90vw)] [position-area:top_span-left]";
+
+/** A row in a menu panel, its icon 16px (0085). */
 export const menuItem =
-  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body hover:bg-hover [&_svg]:size-4 [&_svg]:shrink-0";
+
+/** The rule between a browser menu's groups, edge to edge. */
+export const toolbarMenuDivider = "-mx-1.5 my-1.5 border-border";
+
+/**
+ * A row in the browser toolbar's menus, as Helium's (PLX-981): its icon, label, and shortcut, or
+ * a check while `checked`, which makes it a checkbox.
+ */
+export function ToolbarMenuRow({
+  icon,
+  label,
+  keys,
+  checked,
+  className = "",
+  ...props
+}: {
+  icon: ReactNode;
+  label: ReactNode;
+  keys?: string;
+  checked?: boolean;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
+      aria-checked={checked}
+      className={`flex h-8 w-full items-center gap-3 rounded-md px-2.5 text-left text-body enabled:hover:bg-hover disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&>svg:first-child]:text-muted-foreground ${className}`}
+      {...props}
+    >
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {/* Drawn from the attribute, so the row's name stays its label. */}
+      {keys && (
+        <kbd
+          aria-hidden
+          data-key={keys}
+          className="shrink-0 pl-3 font-sans text-meta text-faint-foreground before:content-[attr(data-key)]"
+        />
+      )}
+      {checked && <CheckSymbol aria-hidden className="text-accent" />}
+    </button>
+  );
+}
+
+/** A split row's chevron, after a thin divider from its main part. */
+export const splitChevron =
+  "relative grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground before:absolute before:inset-y-2 before:left-0 before:w-px before:bg-border hover:bg-hover hover:before:opacity-0 disabled:opacity-50 [&_svg]:size-4";
+
+/**
+ * Opens a menu on a right-click by clicking its trigger. Where the right-click arrives while a
+ * button is still down (a right-click on macOS and Linux, Control-click on macOS), the menu opens
+ * on its release, which would otherwise close it again as a click outside a popover. A release the
+ * window never sees, as when the button is held while switching apps, opens nothing: the window's
+ * blur, a cancelled pointer, or the next press ends the wait.
+ */
+export function openOnContextMenu(e: MouseEvent<HTMLElement>, trigger: HTMLElement | null) {
+  e.preventDefault();
+  if (e.buttons === 0) return trigger?.click();
+  const wait = new AbortController();
+  const { signal } = wait;
+  window.addEventListener(
+    "pointerup",
+    () => {
+      wait.abort();
+      trigger?.click();
+    },
+    { signal },
+  );
+  for (const type of ["blur", "pointercancel", "pointerdown"])
+    window.addEventListener(type, () => wait.abort(), { signal });
+}
 
 /** Up and Down move focus between a menu's items, wrapping at the ends and passing disabled ones. */
 export function moveFocus(e: KeyboardEvent<HTMLElement>) {
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  // A popover nested in this one, such as the model picker's Access, moves its own focus.
+  const root = e.currentTarget;
+  const nested = (el: Element) => {
+    const popover = el.closest("[popover]");
+    return !!popover && popover !== root && root.contains(popover);
+  };
+  if (nested(e.target as Element)) return;
   e.preventDefault();
-  const items = [
-    ...e.currentTarget.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)'),
-  ];
+  const items = [...root.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)')].filter(
+    (el) => !nested(el),
+  );
   const step = e.key === "ArrowDown" ? 1 : -1;
   const i = items.indexOf(document.activeElement as HTMLElement);
   // From outside the items (a search box), Down starts at the top and Up at the bottom.
   items.at(i === -1 ? (step === 1 ? 0 : -1) : (i + step) % items.length)?.focus();
+}
+
+/**
+ * A popover menu: opening it focuses its first item matching `focus`, then runs `onOpen`, and Up
+ * and Down move between its items (moveFocus). `onClose` runs when it closes.
+ */
+export function Menu({
+  label,
+  align,
+  className,
+  focus = '[role="menuitem"]',
+  onOpen,
+  onClose,
+  ...props
+}: {
+  label: string;
+  align?: "start" | "end" | "center";
+  className: string;
+  focus?: string;
+  onOpen?: () => void;
+  onClose?: () => void;
+} & Pick<ComponentProps<"div">, "ref" | "id" | "onBeforeToggle" | "children">) {
+  return (
+    <div
+      {...props}
+      popover="auto"
+      role="menu"
+      aria-label={label}
+      onToggle={(e: ToggleEvent<HTMLDivElement>) => {
+        if (e.newState !== "open") return onClose?.();
+        e.currentTarget.querySelector<HTMLElement>(focus)?.focus();
+        onOpen?.();
+      }}
+      onKeyDown={moveFocus}
+      className={`${menuPanel(align)} ${className}`}
+    />
+  );
 }
 
 export interface PickerOption {
@@ -120,38 +388,53 @@ export interface PickerOption {
   hint?: string;
   /** Draws a line above this option, to set it apart. */
   divider?: boolean;
+  /** A heading over this option and those after it, until another option names another. */
+  group?: string;
+  /** Styles the label, here and on the trigger, such as a font's own family. */
+  style?: CSSProperties;
 }
 
-/** One choice in a menu: icon, label, and an optional description and hint, checked when chosen. */
+/**
+ * One choice in a menu: icon, label, and an optional description and hint, checked when chosen.
+ * A `disabled` one can't be picked, and its hint should say why.
+ */
 export function MenuOption({
   option: o,
   checked,
+  disabled,
+  role = "menuitemradio",
   onClick,
 }: {
   option: PickerOption;
   checked: boolean;
+  disabled?: boolean;
+  /** "menuitemcheckbox" for an on or off setting beside a menu's choices. */
+  role?: "menuitemradio" | "menuitemcheckbox";
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      role="menuitemradio"
+      role={role}
       aria-checked={checked}
+      disabled={disabled}
       onClick={onClick}
-      className={`${menuItem} ${o.description ? "items-start py-2" : ""}`}
+      className={`${menuItem} ${o.description ? "items-start py-2" : ""} disabled:opacity-50 disabled:hover:bg-transparent`}
     >
       {/* One line tall, so a two-line row's icon sits beside its label. */}
       {o.icon && <span className="grid h-5 place-items-center">{o.icon}</span>}
       <span className="min-w-0 flex-1">
-        <span className="block truncate leading-5">{o.label}</span>
+        <span className="block truncate leading-5" style={o.style}>
+          {o.label}
+        </span>
         {o.description && (
-          <span className="mt-0.5 block text-[12px] leading-snug text-faint-foreground">
+          <span className="mt-0.5 block text-meta leading-snug text-faint-foreground">
             {o.description}
           </span>
         )}
       </span>
       {o.hint && (
-        <span className="shrink-0 text-[11.5px] leading-5 text-faint-foreground">{o.hint}</span>
+        <span className="shrink-0 text-meta leading-5 text-faint-foreground">{o.hint}</span>
       )}
       {/* Always takes its room, so choosing never rewraps a row or resizes the menu. */}
       <span className={`grid h-5 place-items-center ${checked ? "" : "invisible"}`}>
@@ -162,59 +445,82 @@ export function MenuOption({
 }
 
 /** A small heading over a group of a menu's options. */
-export const menuHeading = "px-2 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground";
+export const menuHeading = "px-2 pt-1.5 pb-1 text-meta font-medium text-faint-foreground";
 
 /** The badge on a choice that can't be picked yet, saying why, such as "Not available yet". */
 export const unavailableBadge =
-  "shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[12px] text-amber-500";
+  "shrink-0 rounded-md border border-warning/30 px-2 py-0.5 text-meta text-warning";
+
+export const separator = <div role="separator" className="-mx-1 my-1 h-px bg-border" />;
+
+/** A form control's look, for a `field` Picker's trigger and the fields beside it. */
+const fieldControl =
+  "flex h-8 items-center gap-2 rounded-lg border border-border bg-background px-2.5 text-body text-foreground enabled:hover:border-faint-foreground/60 disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
 /**
  * A dropdown showing the chosen option, with a check beside it in the menu. The chosen option's
- * icon leads, else `icon`. Pass `value` to control it, or leave it to keep its own choice,
- * starting at `defaultValue`. `search` adds a filter box with that placeholder. Other buttons
- * can open the same menu with `popoverTarget={id}`; it anchors to whichever opened it, and
+ * icon leads. Pass `value` to control it, or leave it to keep its own choice. Other buttons can
+ * open the same menu with `popoverTarget={id}`; it anchors to whichever opened it, and
  * `button={false}` leaves them as its only way in.
+ *
+ * `field` draws the trigger as a form control, `className` wide (Parallax's select, used in place
+ * of the native one). `search` adds a filter box with that placeholder, and `custom` offers a
+ * choice for what's typed there when no option is named so, such as any font's name. `footer`
+ * goes under the options, given a function that closes the menu.
  */
 export function Picker({
   id,
   label,
-  icon,
   options,
   value,
-  defaultValue,
   onChange,
   align,
-  search,
   panelClassName = "min-w-44",
   button = true,
+  field,
+  className = "",
+  search,
+  custom,
+  footer,
+  placeholder,
 }: {
   id?: string;
   button?: boolean;
   label: string;
-  icon?: ReactNode;
+  /** What the trigger reads with no option chosen, as when `value` is "". */
+  placeholder?: string;
   options: PickerOption[];
   value?: string;
-  defaultValue?: string;
   onChange?: (value: string) => void;
   align?: "start" | "end";
-  search?: string;
   panelClassName?: string;
+  field?: boolean;
+  className?: string;
+  search?: string;
+  custom?: (query: string) => PickerOption;
+  footer?: (close: () => void) => ReactNode;
 }) {
   const ownId = useId();
   const menuId = id ?? ownId;
   const menu = useRef<HTMLDivElement>(null);
-  const searchBox = useRef<HTMLInputElement>(null);
-  const [own, setOwn] = useState(defaultValue);
+  const [own, setOwn] = useState<string>();
   const [query, setQuery] = useState("");
   // Uncontrolled, it shows the first option until one is picked, even if options arrive later.
   const current =
     options.find((o) => o.value === (value ?? own)) ??
-    (value === undefined ? options[0] : undefined);
+    (value === undefined ? options[0] : custom && value ? custom(value) : undefined);
   const q = query.trim().toLowerCase();
-  const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
+  const shown = q
+    ? options.filter((o) => `${o.label} ${o.group ?? ""}`.toLowerCase().includes(q))
+    : options;
+  const typed =
+    custom && q && !options.some((o) => o.label.toLowerCase() === q)
+      ? custom(query.trim())
+      : undefined;
+  const close = () => menu.current?.hidePopover();
 
   const choose = (o: PickerOption) => {
-    menu.current?.hidePopover();
+    close();
     setOwn(o.value);
     onChange?.(o.value);
   };
@@ -227,11 +533,18 @@ export function Picker({
           popoverTarget={menuId}
           aria-haspopup="menu"
           aria-label={`${label}: ${current?.label ?? "none"}`}
-          className={menuButton}
+          title={current?.label}
+          // It can shrink, cutting a long choice (a branch name) short rather than widening its row.
+          className={field ? `${fieldControl} ${className}` : `${menuButton} min-w-0 ${className}`}
         >
-          {current?.icon ?? icon}
-          {current?.label}
-          <ChevronDown aria-hidden className="opacity-70" />
+          {current?.icon}
+          <span
+            className={`truncate ${field ? "flex-1 text-left" : ""} ${current ? "" : "text-faint-foreground"}`}
+            style={current?.style}
+          >
+            {current?.label ?? placeholder}
+          </span>
+          <ChevronDown aria-hidden className={field ? "text-faint-foreground" : "opacity-70"} />
         </button>
       )}
       <div
@@ -241,41 +554,59 @@ export function Picker({
         role="menu"
         aria-label={label}
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
-          if (e.newState === "closed") return setQuery("");
-          if (search) searchBox.current?.focus();
-          else menu.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+          if (e.newState !== "open") return setQuery("");
+          const box = menu.current?.querySelector<HTMLElement>('input[type="search"]');
+          (box ?? menu.current?.querySelector<HTMLElement>('[aria-checked="true"]'))?.focus();
+          menu.current
+            ?.querySelector('[aria-checked="true"]')
+            ?.scrollIntoView({ block: "nearest" });
         }}
         onKeyDown={moveFocus}
-        className={`${menuPanel(align)} overflow-hidden p-0 ${panelClassName}`}
+        // At least as wide as its trigger.
+        className={`${menuPanel(align)} overflow-hidden p-0 ${field ? "[min-width:anchor-size(width)]" : ""} ${panelClassName}`}
       >
         {search && (
-          <label className="flex items-center gap-2 border-b border-border px-3 py-2.5 focus-within:border-ring">
-            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+          <div className="border-b border-border p-1">
             <input
-              ref={searchBox}
               type="search"
               aria-label={search}
               placeholder={search}
               value={query}
+              spellCheck={false}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && shown[0]) choose(shown[0]);
+                // With nothing typed, Enter keeps the choice.
+                const first = q ? (shown[0] ?? typed) : undefined;
+                if (e.key === "Enter" && first) choose(first);
               }}
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
+              className="h-7 w-full rounded-md bg-transparent px-2 text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
-          </label>
+          </div>
         )}
         <div className="max-h-80 overflow-y-auto p-1">
-          {shown.map((o) => (
+          {shown.map((o, i) => (
             <Fragment key={o.value}>
-              {o.divider && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
-              <MenuOption option={o} checked={o === current} onClick={() => choose(o)} />
+              {o.divider && !q && separator}
+              {o.group && o.group !== shown[i - 1]?.group && (
+                <div className={menuHeading}>{o.group}</div>
+              )}
+              {/* Off-screen rows skip layout and their fonts until scrolled to, so long lists stay quick. */}
+              <div className="[contain-intrinsic-size:auto_32px] [content-visibility:auto]">
+                <MenuOption option={o} checked={o === current} onClick={() => choose(o)} />
+              </div>
             </Fragment>
           ))}
-          {shown.length === 0 && (
-            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
+          {typed && (
+            <>
+              {shown.length > 0 && separator}
+              <MenuOption option={typed} checked={false} onClick={() => choose(typed)} />
+            </>
+          )}
+          {shown.length === 0 && !typed && (
+            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
           )}
         </div>
+        {footer && <div className="border-t border-border p-1">{footer(close)}</div>}
       </div>
     </>
   );
@@ -284,31 +615,40 @@ export function Picker({
 export interface Crumb {
   label: string;
   icon?: ReactNode;
-  /** Makes it a link back to that page. */
+  /**
+   * Makes it a button to that page, such as back to an orchestrator or a parent thread. The last
+   * crumb with one isn't the current page.
+   */
   onClick?: () => void;
 }
 
-/** Where the user is: host, workspace, then the current page, split by slashes. */
-export function Breadcrumb({ items }: { items: Crumb[] }) {
+/**
+ * A trail of pages, split by slashes. The first two keep their names, and crumbs after them shrink
+ * down to a few letters. In a narrow `@container`, a trail of three or more drops its first crumb,
+ * and with `tight`, a wider one drops its first two, for the tabs beside it.
+ */
+export function Breadcrumb({ items, tight }: { items: Crumb[]; tight?: boolean }) {
   return (
-    <nav aria-label="Breadcrumb" className="min-w-0">
-      <ol className="flex min-w-0 items-center gap-2 text-[13px]">
+    <nav aria-label="Breadcrumb" className="-ml-1.5 min-w-0 overflow-x-clip">
+      <ol className="flex min-w-0 items-center gap-0.5 text-body">
         {items.map(({ label, icon, onClick }, i) => {
-          const last = i === items.length - 1;
+          const current = i === items.length - 1 && !onClick;
           const Tag = onClick ? "button" : "span";
+          const kept = i < Math.min(2, items.length - 1);
           return (
-            // The slash is CSS content, so it stays out of the crumb's text.
             <li
               key={i}
-              className={`flex min-w-0 items-center gap-2 ${last ? "" : "shrink-0"} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
+              className={`flex items-center gap-0.5 ${kept ? "max-w-48 shrink-0" : `min-w-16 ${i < items.length - 1 ? "max-w-48" : ""}`} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${tight ? (i < 2 ? "@max-3xl:hidden" : i === 2 ? "@max-3xl:before:hidden" : "") : items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
             >
               <Tag
                 {...(onClick && { type: "button", onClick })}
-                aria-current={last ? "page" : undefined}
-                className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${last ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "rounded-md hover:text-foreground" : ""}`}
+                aria-current={current ? "page" : undefined}
+                className={`flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "hover:bg-hover hover:text-foreground" : ""}`}
               >
                 {icon}
-                <span className="truncate">{label}</span>
+                <span className="truncate" title={label}>
+                  {label}
+                </span>
               </Tag>
             </li>
           );
@@ -319,10 +659,117 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
 }
 
 /** The 52px top row of a pane. On macOS and Windows it is also the window's title bar. */
-export function TopBar({ className = "", children }: { className?: string; children: ReactNode }) {
+export function TopBar({
+  className = "",
+  style,
+  children,
+}: {
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
   return (
-    <div className={`titlebar flex h-13 shrink-0 items-center gap-2 px-3 ${className}`}>
+    <div
+      style={style}
+      className={`titlebar flex h-13 shrink-0 items-center gap-2 px-3 ${className}`}
+    >
       {children}
+    </div>
+  );
+}
+
+/** What a tooltip shows: its element's text, and a shortcut in `data-keys`. */
+type Tip = { text: string; keys?: string; top: number; left: number; above: boolean };
+
+/**
+ * The app's one tooltip, mounted once. Hovering or keyboard-focusing an element with a `title`,
+ * or an icon-only button or link with an `aria-label`, shows that text in a small panel under it
+ * (above it when there's no room). The `title` is held aside while it shows, so the OS tooltip
+ * doesn't show too. An element with `data-tooltip="off"` shows its own and gets none. It fades in.
+ */
+export function Tooltips() {
+  const [tip, setTip] = useState<Tip>();
+  useEffect(() => {
+    let target: HTMLElement | undefined;
+    let title: string | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const hide = () => {
+      clearTimeout(timer);
+      // Unless React set a new title meanwhile.
+      if (target && title !== null && !target.hasAttribute("title"))
+        target.setAttribute("title", title);
+      target = undefined;
+      title = null;
+      setTip(undefined);
+    };
+    const show = (e: Event) => {
+      const el = (e.target as Element | null)?.closest?.<HTMLElement>(
+        ':is([title], :is(button, a, [role="button"])[aria-label]):not([data-tooltip="off"])',
+      );
+      if (el === target) return;
+      hide();
+      if (!el) return;
+      const text = el.getAttribute("title") || el.getAttribute("aria-label");
+      // A button with its own visible text needs no tooltip.
+      if (!text || (!el.hasAttribute("title") && el.textContent?.trim())) return;
+      target = el;
+      title = el.getAttribute("title");
+      el.removeAttribute("title");
+      timer = setTimeout(
+        () => {
+          if (!el.isConnected) return;
+          // A `display: contents` element has no box of its own, so measure what it holds.
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const r = (el.getClientRects().length ? el : range).getBoundingClientRect();
+          const above = r.bottom + 40 > window.innerHeight;
+          setTip({
+            text,
+            keys: el.dataset["keys"],
+            top: above ? r.top - 6 : r.bottom + 6,
+            left: r.left + r.width / 2,
+            above,
+          });
+        },
+        e.type === "focusin" ? 0 : 400,
+      );
+    };
+    const focus = (e: FocusEvent) => {
+      if ((e.target as Element).matches?.(":focus-visible")) show(e);
+    };
+    const out = (e: PointerEvent) => {
+      if (target && !target.contains(e.relatedTarget as Node | null)) hide();
+    };
+    const listening = new AbortController();
+    const { signal } = listening;
+    document.addEventListener("pointerover", show, { signal });
+    document.addEventListener("pointerout", out, { signal });
+    document.addEventListener("focusin", focus, { signal });
+    document.addEventListener("focusout", hide, { signal });
+    document.addEventListener("pointerdown", hide, { capture: true, signal });
+    document.addEventListener("keydown", hide, { capture: true, signal });
+    window.addEventListener("scroll", hide, { capture: true, signal });
+    window.addEventListener("blur", hide, { signal });
+    return () => {
+      hide();
+      listening.abort();
+    };
+  }, []);
+  if (!tip) return null;
+  return (
+    <div
+      role="tooltip"
+      // Centered on its element, but kept 8px inside the window.
+      ref={(el) => {
+        if (!el) return;
+        const half = el.offsetWidth / 2;
+        el.style.left = `${Math.min(Math.max(tip.left - half, 8), window.innerWidth - 8 - 2 * half)}px`;
+      }}
+      style={{ top: tip.top, left: tip.left }}
+      className={`pointer-events-none fixed z-tooltip flex animate-fade-in w-max max-w-80 items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-meta text-foreground shadow-composer ${tip.above ? "-translate-y-full" : ""}`}
+    >
+      <span className="line-clamp-3 break-words">{tip.text}</span>
+      {tip.keys && <kbd className="font-sans text-muted-foreground">{tip.keys}</kbd>}
     </div>
   );
 }

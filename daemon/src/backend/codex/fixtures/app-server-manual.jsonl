@@ -1,0 +1,27 @@
+# A Manual thread: an approval round trip, then a follow-up in the same process. The shapes are
+# 0.159.3's, trimmed from real runs.
+<
+{"id":1,"result":{"userAgent":"plxd/0.159.3","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+# initialized, then thread/start
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1","sessionId":"t-1","preview":"","ephemeral":false,"modelProvider":"openai","model":"gpt-6-sol","status":{"type":"idle"},"turns":[]},"model":"gpt-6-sol","modelProvider":"openai","cwd":"/repo","approvalPolicy":"untrusted","sandbox":{"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false},"reasoningEffort":"medium"}}
+# turn/start
+<
+{"id":3,"result":{"turn":{"id":"u-1","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}
+{"method":"turn/started","params":{"threadId":"t-1","turn":{"id":"u-1","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1790919470,"completedAt":null,"durationMs":null}}}
+{"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-c","pluginId":null,"scriptPath":null,"command":"/bin/zsh -lc 'git commit -m probe'","cwd":"/repo","processId":null,"source":"agent","status":"inProgress","commandActions":[],"aggregatedOutput":null,"exitCode":null,"durationMs":null},"threadId":"t-1","turnId":"u-1","startedAtMs":1790919478629}}
+{"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","threadId":"t-1","turnId":"u-1","itemId":"exec-c","startedAtMs":1790919478628,"environmentId":"local","command":"/bin/zsh -lc 'git commit -m probe'","cwd":"/repo","commandActions":[]}}
+# The answer
+<
+{"method":"serverRequest/resolved","params":{"threadId":"t-1","requestId":0}}
+{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-c","pluginId":null,"scriptPath":null,"command":"/bin/zsh -lc 'git commit -m probe'","cwd":"/repo","processId":"1","source":"unifiedExecStartup","status":"completed","commandActions":[],"aggregatedOutput":"[main 42ed0b6] probe\n","exitCode":0,"durationMs":0},"threadId":"t-1","turnId":"u-1","completedAtMs":1790919478679}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_1","text":"Committed.","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null},"threadId":"t-1","turnId":"u-1","completedAtMs":1790919479961}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"t-1","turnId":"u-1","tokenUsage":{"total":{"totalTokens":110,"inputTokens":100,"cachedInputTokens":40,"cacheWriteInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"last":{"totalTokens":110,"inputTokens":100,"cachedInputTokens":40,"cacheWriteInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"modelContextWindow":258400}}}
+{"method":"turn/completed","params":{"threadId":"t-1","turn":{"id":"u-1","items":[],"itemsView":"summary","status":"completed","error":null,"startedAt":1790919470,"completedAt":1790919479,"durationMs":9621}}}
+# The follow-up's turn/start
+<
+{"id":4,"result":{"turn":{"id":"u-2","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_2","text":"42ed0b6","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null},"threadId":"t-1","turnId":"u-2","completedAtMs":1790919489961}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"t-1","turnId":"u-2","tokenUsage":{"total":{"totalTokens":230,"inputTokens":210,"cachedInputTokens":90,"cacheWriteInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"last":{"totalTokens":120,"inputTokens":110,"cachedInputTokens":50,"cacheWriteInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"modelContextWindow":258400}}}
+{"method":"turn/completed","params":{"threadId":"t-1","turn":{"id":"u-2","items":[],"itemsView":"summary","status":"completed","error":null,"startedAt":1790919480,"completedAt":1790919489,"durationMs":9621}}}

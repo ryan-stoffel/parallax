@@ -1,0 +1,479 @@
+//! Scheduled tasks and pull request watches (0063), behind the `schedules` and `prWatch`
+//! capabilities.
+//!
+//! A scheduled task sends its prompt on a trigger: every interval, at a time of day, or on each
+//! request to its webhook. A task bound to a thread queues the prompt into it, one in an
+//! orchestrator sends it to the orchestrator, and any other launches a new thread per fire.
+//! `schedule/save` creates or replaces one, `schedule/list` lists them, `schedule/run` fires one
+//! now, and `schedule/delete` removes one.
+//!
+//! `pr/watch` has plxd check one of a run's linked pull requests every two minutes and wake the
+//! run with a message when a check fails, the required checks pass, someone else comments, or the
+//! branch starts to conflict. `pr/unwatch` stops it, and `pr/watches` lists a run's watches.
+//! `pr/status` reads one pull request and says whether it is ready to merge. `pr/failureLog`
+//! returns the error lines of each failed check's log on its head (PLX-1019).
+
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::{AccountChoice, AgentEffort, AgentPermission, RepoId, RunId, ScopeId};
+
+/// What fires a scheduled task.
+///
+/// A newer plxd may send a trigger this version does not know; show it as unknown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum Schedule {
+    /// Every `everyMs` milliseconds, at least 60000. An overdue run catches up with one fire.
+    Interval {
+        /// The interval.
+        every_ms: u64,
+    },
+    /// At a local time of day, on every day or on `weekdays`. A run missed by more than 10
+    /// minutes, such as while the host slept, is skipped.
+    FixedTime {
+        /// `HH:MM`, 24-hour, in the host's time zone.
+        time_of_day: String,
+        /// 0 is Sunday and 6 Saturday. Empty means every day.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        weekdays: Vec<u8>,
+    },
+    /// On each request to the task's webhook. The prompt may use `{{body.a.b}}`,
+    /// `{{headers.name}}`, `{{query.name}}`, `{{body}}`, and `{{request}}`.
+    Webhook {
+        /// The signature each request must carry, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        signature: Option<WebhookSignature>,
+    },
+    /// A trigger this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// An HMAC-SHA256 signature over a webhook request's raw body, as GitHub and most senders sign.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookSignature {
+    /// The header that carries it, such as `x-hub-signature-256`.
+    pub header: String,
+    /// How the digest is written in the header.
+    pub encoding: SignatureEncoding,
+    /// Text before the digest, such as `sha256=`. Empty for none.
+    pub prefix: String,
+    /// The shared secret. Only `schedule/save` takes it, and omitting it there keeps the stored
+    /// one. plxd keeps it in the host's keystore and never returns it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub secret: Option<String>,
+    /// In place of `secret`: a `secret-ref:<id>` from `secret/request`, which this save uses up.
+    /// Only the thread that asked for it, named in `schedule/save`'s `from`, can use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub secret_ref: Option<String>,
+}
+
+/// How a webhook signature's digest is written.
+///
+/// A newer client may send an encoding this version does not know; plxd refuses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SignatureEncoding {
+    /// Lowercase or uppercase hexadecimal.
+    Hex,
+    /// Standard base64.
+    Base64,
+    /// An encoding this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// How a scheduled task's last fire went.
+///
+/// A newer plxd may send a status this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ScheduleRunStatus {
+    /// It has not fired.
+    #[default]
+    Never,
+    /// Its prompt is on its way to the thread.
+    Running,
+    /// Its prompt reached the thread.
+    Succeeded,
+    /// Its prompt could not be sent; `lastRunError` says why.
+    Failed,
+    /// A status this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// Where a webhook task receives requests.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleWebhook {
+    /// `/api/hooks/<id>/<token>`. The token is the secret part, so share it only with the sender.
+    pub path: String,
+    /// The full URL: through Parallax Relay while plxd is connected to it (PLX-652), else on
+    /// this host's LAN address while remote access is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    /// Whether requests must carry a valid signature.
+    pub has_secret: bool,
+}
+
+/// A scheduled task, as `schedule/save`, `schedule/list`, and `schedule/run` return it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledTask {
+    /// Its id, a UUID.
+    pub id: String,
+    /// Its name, and the title of each thread it launches.
+    pub title: String,
+    /// What each fire sends. A webhook's placeholders are filled from the request.
+    pub prompt: String,
+    /// A paused task doesn't fire, except by `schedule/run`.
+    pub enabled: bool,
+    /// Its trigger.
+    pub schedule: Schedule,
+    /// The thread each fire queues its prompt into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread: Option<RunId>,
+    /// The orchestrator each fire messages.
+    #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub orchestrator: Option<ScopeId>,
+    /// Without `thread` or `project`: the repo entry each fire launches a thread in. Absent
+    /// launches it with no repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<RepoId>,
+    /// A launched thread's account. Absent uses the worker default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<AccountChoice>,
+    /// A launched thread's model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// A launched thread's effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// A launched thread's access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
+    /// When it fires next. Absent for a webhook or a paused task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub next_run_at: Option<Timestamp>,
+    /// When it last fired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_run_at: Option<Timestamp>,
+    /// How its last fire went.
+    pub last_run_status: ScheduleRunStatus,
+    /// Why its last fire failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_run_error: Option<String>,
+    /// How many times it has fired.
+    pub run_count: u64,
+    /// Where a webhook task receives requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub webhook: Option<ScheduleWebhook>,
+    /// When it was created.
+    pub created_at: Timestamp,
+}
+
+/// Params of `schedule/save`: a task to create, or with `id`, to replace.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleSaveParams {
+    /// The task to replace. Absent creates one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    /// Its name.
+    pub title: String,
+    /// What each fire sends, at most 64 KiB.
+    pub prompt: String,
+    /// Whether it fires on its own.
+    pub enabled: bool,
+    /// Its trigger. An interval is at least 60000 ms.
+    pub schedule: Schedule,
+    /// The thread each fire queues into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread: Option<RunId>,
+    /// The orchestrator each fire messages.
+    #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub orchestrator: Option<ScopeId>,
+    /// The repo entry each fire launches a thread in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<RepoId>,
+    /// A launched thread's account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<AccountChoice>,
+    /// A launched thread's model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// A launched thread's effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub effort: Option<AgentEffort>,
+    /// A launched thread's access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permission: Option<AgentPermission>,
+    /// The thread saving it, for a `secretRef` only that thread can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from: Option<RunId>,
+}
+
+/// Params of `schedule/list`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleListParams {}
+
+/// Result of `schedule/list`: every task on the host, oldest first.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleListResult {
+    /// The tasks.
+    pub tasks: Vec<ScheduledTask>,
+}
+
+/// Params of `schedule/run` and `schedule/delete`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleIdParams {
+    /// The task's id.
+    pub id: String,
+}
+
+/// Result of `schedule/delete`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleDeleteResult {
+    /// False when no task had the id.
+    pub deleted: bool,
+}
+
+/// Result of `pr/watch` and `pr/unwatch`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrWatchResult {
+    /// The pull request's URL.
+    pub url: String,
+    /// Whether plxd watches it for the run now.
+    pub watching: bool,
+    /// Whether it did before the call.
+    pub was_watching: bool,
+}
+
+/// Params of `pr/watches`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrWatchesParams {
+    /// The run.
+    pub run_id: RunId,
+}
+
+/// Result of `pr/watches`: the URLs of the run's linked pull requests that plxd watches.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrWatchesResult {
+    /// The URLs.
+    pub urls: Vec<String>,
+}
+
+/// Result of `pr/status` (PLX-837, PLX-1018): one read of a pull request, and whether it is ready
+/// to merge. A read under 30 s old, by any run or the watch sweep, is shared.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusResult {
+    /// The pull request's URL.
+    pub url: String,
+    /// Its title (PLX-1018).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// Its description, in full. Absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub body: Option<String>,
+    /// `OPEN`, `CLOSED`, or `MERGED`.
+    pub state: String,
+    /// Whether it is a draft.
+    pub draft: bool,
+    /// The head commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_sha: Option<String>,
+    /// The branch it merges from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_branch: Option<String>,
+    /// The branch it merges into.
+    pub base_branch: String,
+    /// The files it changes, at most 100. Absent means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<PrStatusFile>,
+    /// Commits on the base branch the head doesn't have. 0 once it isn't open.
+    pub behind_by: u64,
+    /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
+    pub mergeable: String,
+    /// GitHub's `mergeStateStatus`, such as `CLEAN`, `BLOCKED`, or `BEHIND`.
+    pub merge_state: String,
+    /// `APPROVED`, `CHANGES_REQUESTED`, or `REVIEW_REQUIRED`, when the repository asks for
+    /// reviews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review_decision: Option<String>,
+    /// The head commit's failed checks.
+    pub failing: Vec<PrStatusCheck>,
+    /// The names of its checks still running or queued.
+    pub pending: Vec<String>,
+    /// The names of its checks that passed.
+    pub passed: Vec<String>,
+    /// Every check on the head, by name, with its link and Actions run (PLX-1018). Absent means
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<PrStatusCheck>,
+    /// Review threads nobody has resolved.
+    pub unresolved_threads: Vec<PrStatusThread>,
+    /// Whether plxd watches it for the run.
+    pub watching: bool,
+    /// Open, not a draft, no conflict, not behind, every check passed, no unresolved thread, and
+    /// no change request.
+    pub ready: bool,
+    /// Why it isn't ready, one line each. Empty when it is.
+    pub reasons: Vec<String>,
+}
+
+/// A file a [`PrStatusResult`]'s pull request changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusFile {
+    /// Its path in the repository.
+    pub path: String,
+    /// Lines added.
+    pub additions: u64,
+    /// Lines deleted.
+    pub deletions: u64,
+}
+
+/// A check in a [`PrStatusResult`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusCheck {
+    /// The check's name.
+    pub name: String,
+    /// `pending`, `passed`, or how it failed, in lowercase: `failure`, `cancelled`, `timed out`,
+    /// and so on.
+    pub how: String,
+    /// Whether branch protection requires it.
+    pub required: bool,
+    /// Its log or details page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    /// Its GitHub Actions workflow run, for `gh run`, when it is an Actions check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run_id: Option<u64>,
+}
+
+/// An unresolved review thread in a [`PrStatusResult`], by its first comment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusThread {
+    /// Its GraphQL node id, to reply to or resolve it (PLX-1018).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    /// The file it is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+    /// Who wrote the comment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub author: Option<String>,
+    /// The comment, on one line, at most 200 characters.
+    pub body: String,
+    /// The comment on GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+}
+
+/// Params of `pr/failureLog` (PLX-1019).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFailureLogParams {
+    /// The pull request's web URL.
+    pub url: String,
+    /// Only the failed checks whose name contains this, ignoring case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub check: Option<String>,
+}
+
+/// Result of `pr/failureLog`: the failed checks on a pull request's head, each with its log's
+/// error lines.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFailureLogResult {
+    /// The pull request's URL.
+    pub url: String,
+    /// The head commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_sha: Option<String>,
+    /// Its failed checks, by name. Empty when none failed.
+    pub failures: Vec<PrFailureLog>,
+}
+
+/// A failed check in a [`PrFailureLogResult`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFailureLog {
+    /// The check's name.
+    pub name: String,
+    /// How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+    pub how: String,
+    /// Its GitHub Actions workflow run, when it is an Actions job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workflow_run_id: Option<u64>,
+    /// Its GitHub Actions job, when it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub job_id: Option<u64>,
+    /// Its log or details page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    /// The log's lines around errors, failures, and panics, at most 8 KiB. Says why instead when
+    /// there is no log, such as for a check that isn't an Actions job.
+    pub log: String,
+}

@@ -1,4 +1,4 @@
-import { ChevronDown, Folder, FolderPlus, FolderSearch, Search } from "lucide-react";
+import { ChevronDown, Folder, FolderGit2, FolderPlus, FolderSearch, Search } from "lucide-react";
 import {
   Fragment,
   useEffect,
@@ -11,7 +11,9 @@ import {
 
 import type { ConnectionState } from "../preload/bridge";
 import type { Repo } from "../protocol/generated/protocol";
+import { onConnectionShown } from "./ConnectionStatus";
 import { describeError } from "./errors";
+import { isRepository } from "./threads";
 import { localId, type Host } from "./hosts";
 import { GitHubLogo } from "./logos";
 import { hostIcon } from "./RunTargetMenu";
@@ -25,8 +27,11 @@ import {
   unavailableBadge,
 } from "./ui";
 
-/** A repository on one of wisp's hosts: where a Project works. */
+/** A repository on one of Parallax's hosts: where an orchestrator works. */
 export type Workspace = { hostId: string; repo: Repo };
+
+/** A way the add palette makes a repository on this computer (AddDialog). */
+export type WorkspaceSource = "create" | "browse" | "clone";
 
 /** What the menu knows of a host's repositories, or why it can't list them. */
 type Listing =
@@ -56,20 +61,21 @@ function useListings(hosts: Host[], open: boolean): Readonly<Record<string, List
         return set(hostId, () => ({ status: "unreachable", message: state.error.message }));
       // A host listed before keeps its repositories in view while it's asked again.
       set(hostId, (prev) => (prev?.status === "listed" ? prev : { status: "listing" }));
-      const answer = await window.wisp.request(hostId, "thread/list", {});
+      const answer = await window.parallax.request(hostId, "thread/list", {});
       set(hostId, () =>
         "error" in answer
           ? { status: "failed", message: describeError(answer.error) }
-          : { status: "listed", repos: answer.result.repos.filter((r) => !r.scratch) },
+          : { status: "listed", repos: answer.result.repos.filter(isRepository) },
       );
     };
     const hostIds = ids.split("\n");
-    const stop = window.wisp.onConnectionState((hostId, state) => {
+    // As shown, so a short reconnect leaves an open menu as it is.
+    const stop = onConnectionShown((hostId, state) => {
       if (hostIds.includes(hostId)) void list(hostId, state);
     });
     // It rejects only for a host just removed, which the next render leaves out.
     for (const hostId of hostIds)
-      window.wisp.connectionState(hostId).then(
+      window.parallax.connectionState(hostId).then(
         (state) => list(hostId, state),
         () => {},
       );
@@ -82,22 +88,23 @@ function useListings(hosts: Host[], open: boolean): Readonly<Record<string, List
 }
 
 /**
- * Create Project's Workspace picker. Its button shows the chosen repository and its host's icon.
- * Its menu searches the repositories of every host at once, and groups them by host: this
- * computer, then the SSH hosts, then GitHub. A host that is connecting or can't be reached says
- * so in its own group. This computer's group ends with "Choose folder…", which calls
- * `onChooseFolder`; browsing an SSH host and cloning from GitHub aren't available yet.
+ * Create orchestrator's Workspace picker. Its button shows the chosen repository and its host's
+ * icon. Its menu searches the repositories of every host at once, and groups them by host: this
+ * computer, then the SSH hosts, then GitHub. A host that is connecting or can't be reached says so
+ * in its own group. This computer's group ends with "New repository…" and "Choose folder…", and
+ * GitHub's is "Clone a repository…", each calling `onAdd`. Browsing an SSH host isn't available
+ * yet.
  */
 export function WorkspaceMenu({
   hosts,
   value,
   onChange,
-  onChooseFolder,
+  onAdd,
 }: {
   hosts: Host[];
   value?: Workspace;
   onChange: (workspace: Workspace) => void;
-  onChooseFolder: () => void;
+  onAdd: (source: WorkspaceSource) => void;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -120,6 +127,20 @@ export function WorkspaceMenu({
     menu.current?.hidePopover();
     onChange(workspace);
   };
+  const add = (source: WorkspaceSource, icon: ReactNode, label: string) => (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        menu.current?.hidePopover();
+        onAdd(source);
+      }}
+      className={menuItem}
+    >
+      {icon}
+      <span className="leading-5">{label}</span>
+    </button>
+  );
 
   return (
     <>
@@ -168,7 +189,7 @@ export function WorkspaceMenu({
               const first = shown[0];
               if (first?.repos[0]) choose({ hostId: first.host.id, repo: first.repos[0] });
             }}
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
         <div className="max-h-96 min-h-0 overflow-y-auto p-1">
@@ -190,18 +211,10 @@ export function WorkspaceMenu({
                 {!q && <ListingNote listing={g.listing} />}
                 {!q &&
                   (g.host.id === localId ? (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        menu.current?.hidePopover();
-                        onChooseFolder();
-                      }}
-                      className={menuItem}
-                    >
-                      <FolderPlus aria-hidden />
-                      <span className="leading-5">Choose folder…</span>
-                    </button>
+                    <>
+                      {add("create", <FolderGit2 aria-hidden />, "New repository…")}
+                      {add("browse", <FolderPlus aria-hidden />, "Choose folder…")}
+                    </>
                   ) : (
                     <Unavailable icon={<FolderSearch aria-hidden />} label="Browse folders" />
                   ))}
@@ -215,12 +228,12 @@ export function WorkspaceMenu({
                 <p aria-hidden className={menuHeading}>
                   GitHub
                 </p>
-                <Unavailable icon={<GitHubLogo />} label="Clone a repository" />
+                {add("clone", <GitHubLogo />, "Clone a repository…")}
               </div>
             </>
           )}
           {q && shown.length === 0 && (
-            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
           )}
         </div>
       </div>
@@ -238,13 +251,13 @@ function ListingNote({ listing }: { listing?: Listing }) {
   else if (listing.repos.length === 0) note = "No repositories yet";
   else return null;
   return (
-    <p title={note} className="line-clamp-3 px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
+    <p title={note} className="line-clamp-3 px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
       {note}
     </p>
   );
 }
 
-/** A way to add a repository that wisp can't offer yet: disabled, with a badge that says so. */
+/** A way to add a repository that Parallax can't offer yet: disabled, with a badge that says so. */
 function Unavailable({ icon, label }: { icon: ReactNode; label: string }) {
   return (
     <button

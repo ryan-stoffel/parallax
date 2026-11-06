@@ -11,49 +11,59 @@
 //! [`CancelSwitch`] stop the process directly, and leaves usage totals to [`EventSink`].
 //!
 //! The child gets its arguments as the vendor CLIs would: the resume id, the prompt as a JSON
-//! string, the policy, and the model. Follow-ups reach it on stdin, one JSON string per line.
+//! string, the policy, and the model. A fork's run gets no resume id, so it starts the script's
+//! session, and [`FORKED_FROM_ENV`] names the session it forked. Follow-ups reach it on stdin, one JSON string per line, and
+//! so do answers to its permission requests (PLX-222), each a JSON object in that string. As
+//! Claude Code without its prompt channel denies instead of asking, a run without
+//! [`RunRequest::approvals`] skips the script's requests and takes no answers.
 //! With an API key account, the key is in `FAKE_API_KEY`; with a subscription it is scrubbed, as
 //! 0004 has the Claude backend do with Anthropic's variables. Like every backend, it refuses a
 //! workspace-write run without a [`WorkerSandbox`](super::WorkerSandbox) (0013), though it
 //! enforces none of it.
 //!
-//! Outside unit tests, a `wispd` built with the `fake-backend` feature runs every worker on this
-//! backend when [`SCRIPT_ENV`] names a script, for the app's end-to-end tests (RYA-16).
+//! Outside unit tests, a `plxd` built with the `fake-backend` feature runs every worker on this
+//! backend when [`SCRIPT_ENV`] names a script, for the app's end-to-end tests (PLX-16).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parallax_protocol::AgentPermission;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-use super::event::{Event, Failure, FailureKind, ModelUsage, Outcome, WarningKind};
+use super::event::{
+    ApprovalRequest, Event, Failure, FailureKind, ModelUsage, Outcome, WarningKind,
+};
 use super::process::{
     CancelPolicy, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, StdinMode, StdinPipe,
 };
 use super::sandbox::worker_sandbox;
 use super::{
-    Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, EventSink, FollowUp, RunHandle,
-    RunRequest, StartError, Started, ToolPolicy, TurnId,
+    Answer, ApprovalId, Backend, CancelSwitch, Capabilities, Credential, Decision, EVENT_BUFFER,
+    EventSink, FollowUp, Held, RunHandle, RunRequest, StartError, Started, ToolPolicy, TurnId,
 };
 
 // The feature swaps real agents for scripted ones, so no release may ever have it.
 #[cfg(all(feature = "fake-backend", not(debug_assertions)))]
 compile_error!("the fake-backend feature is for test builds; never build a release with it");
 
-/// The variable naming a JSON script (a [`Script`]) that `wispd serve` runs every worker on,
+/// The variable naming a JSON script (a [`Script`]) that `plxd serve` runs every worker on,
 /// instead of a vendor CLI. Only builds with the `fake-backend` feature take it.
-pub const SCRIPT_ENV: &str = "WISPD_FAKE_BACKEND";
+pub const SCRIPT_ENV: &str = "PLXD_FAKE_BACKEND";
 
 /// The variable the fake CLI takes an API key from.
 pub const API_KEY_ENV: &str = "FAKE_API_KEY";
 
 /// The variable the fake CLI takes a second account's configuration folder from.
 pub const CONFIG_HOME_ENV: &str = "FAKE_CONFIG_HOME";
+
+/// The variable naming the session a fork's run forked (0050), which `echoEnv` can print.
+pub const FORKED_FROM_ENV: &str = "FAKE_FORKED_FROM";
 
 /// A fake CLI's script.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -117,6 +127,17 @@ pub enum Step {
     /// Waits for a follow-up on stdin and prints [`Event::Text`] with it. Exits with code 0 if
     /// stdin ends first.
     AwaitFollowUp,
+    /// Prints [`Event::ApprovalRequested`] with a new approval id, as Claude Code's
+    /// `can_use_tool` asks whether a tool call may run (PLX-222).
+    RequestApproval(AskedApproval),
+    /// Waits for the answer to a permission request on stdin and prints [`Event::Text`] with
+    /// it, as JSON: `{"approvalId", "decision": "allow", "input"?, "always"?}` or
+    /// `{"approvalId", "decision": "deny", "message", "interrupt"}`. Exits with code 0 if stdin
+    /// ends first.
+    AwaitApproval,
+    /// Prints [`Event::ApprovalWithdrawn`] for the script's last `requestApproval`, as Claude
+    /// Code's `control_cancel_request` does when its turn is interrupted.
+    WithdrawApproval,
     /// Writes `content` to the file at `path`, relative to the working directory or absolute,
     /// replacing it, as an agent's edit would.
     WriteFile {
@@ -139,6 +160,49 @@ pub enum Step {
     IgnoreInterrupt,
     /// Waits forever.
     Hang,
+}
+
+/// What a [`Step::RequestApproval`] asks. In JSON, `toolName` and any of the rest.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskedApproval {
+    /// The tool.
+    pub tool_name: String,
+    /// Its input, `{}` by default.
+    #[serde(default = "empty_input")]
+    pub input: serde_json::Value,
+    /// The tool call's id.
+    #[serde(default)]
+    pub call_id: Option<String>,
+    /// Why the CLI asks.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The rules an answer with `always` adds.
+    #[serde(default)]
+    pub always_allow: Vec<String>,
+    /// Whether the request is a question for the user, as `ExitPlanMode`'s is.
+    #[serde(default)]
+    pub interactive: bool,
+}
+
+impl AskedApproval {
+    fn request(&self, approval_id: ApprovalId) -> ApprovalRequest {
+        ApprovalRequest {
+            approval_id,
+            tool_name: self.tool_name.clone(),
+            input: self.input.clone(),
+            call_id: self.call_id.clone(),
+            reason: self.reason.clone(),
+            blocked_path: None,
+            subagent: None,
+            always_allow: self.always_allow.clone(),
+            interactive: self.interactive,
+        }
+    }
+}
+
+fn empty_input() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }
 
 /// A [`Backend`] that runs a [`Script`].
@@ -171,14 +235,7 @@ impl FakeBackend {
         self
     }
 
-    /// Reads output with `limits` instead of the defaults.
-    #[must_use]
-    pub fn with_limits(mut self, limits: OutputLimits) -> Self {
-        self.limits = limits;
-        self
-    }
-
-    /// The fake `wispd serve` runs workers on: `None` when [`SCRIPT_ENV`] is unset, else one
+    /// The fake `plxd serve` runs workers on: `None` when [`SCRIPT_ENV`] is unset, else one
     /// playing the script it names through `launcher`.
     ///
     /// # Errors
@@ -193,7 +250,7 @@ impl FakeBackend {
         let Some(path) = path else { return Ok(None) };
         if !cfg!(feature = "fake-backend") {
             return Err(io::Error::other(format!(
-                "{SCRIPT_ENV} is set, but this wispd was built without the fake-backend feature, \
+                "{SCRIPT_ENV} is set, but this plxd was built without the fake-backend feature, \
                  which only test builds have; unset it"
             )));
         }
@@ -201,7 +258,7 @@ impl FakeBackend {
         Ok(Some(Self::new(launcher.clone(), script)))
     }
 
-    /// Takes no follow-ups, and gives the CLI a closed stdin, as `codex exec` needs.
+    /// Takes no follow-ups, and gives the CLI a closed stdin, as a one-turn CLI needs.
     #[must_use]
     pub fn without_follow_ups(mut self) -> Self {
         self.follow_ups = false;
@@ -216,17 +273,30 @@ impl Backend for FakeBackend {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            follow_ups: self.follow_ups,
-            resume: true,
-            coordinator: true,
-            reports_cost: true,
-            rate_limits: true,
             worker_sandbox: true,
+            fork: true,
+            rewind: true,
+            resume_at: false,
+            switch_in_session: false,
         }
     }
 
+    /// Keeps the session as it is: the fake CLI has no conversation to drop.
+    fn rewind(
+        &self,
+        rewind: super::Rewind,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
+        Box::pin(std::future::ready(Ok(rewind.session_id)))
+    }
+
+    /// An orchestrator's two modes (0042), so the app's end-to-end tests can run one. The fake CLI
+    /// ignores them.
+    fn permissions(&self) -> &[AgentPermission] {
+        &[AgentPermission::Auto, AgentPermission::Bypass]
+    }
+
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
-        // Images alone are a message too (RYA-202), as a resumed run's may be.
+        // Images alone are a message too (PLX-202), as a resumed run's may be.
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
@@ -246,10 +316,15 @@ impl Backend for FakeBackend {
             ToolPolicy::NoWrite => "no-write",
             ToolPolicy::WorkspaceWrite => "workspace-write",
         };
+        // A fork starts the script's own session, and says which one it forked (0050).
         let session = request
             .resume
             .as_ref()
+            .filter(|resume| !resume.fork)
             .map(|resume| resume.session_id.clone());
+        if let Some(resume) = request.resume.as_ref().filter(|resume| resume.fork) {
+            spec.inject.set(FORKED_FROM_ENV, &resume.session_id);
+        }
         spec.args = vec![
             "-c".into(),
             script.into(),
@@ -281,12 +356,28 @@ impl Backend for FakeBackend {
         let switch = CancelSwitch::new();
         switch.arm(process.signals().clone(), self.cancel);
         let (handle, control) = RunHandle::new(request.run_id, self.follow_ups, switch.clone());
+        let held = handle.held();
+        // Answers reach the CLI on stdin, as follow-ups do.
+        let asks = self.follow_ups && request.approvals;
+        let (handle, answers) = if asks {
+            let (handle, answers) = handle.with_answers();
+            (handle, Some(answers))
+        } else {
+            (handle, None)
+        };
         let baseline = request
             .resume
             .map(|resume| resume.usage_totals)
             .unwrap_or_default();
         let (sink, events) = EventSink::channel(EVENT_BUFFER, baseline);
-        tokio::spawn(drive(process, control, sink, switch, request.turn_id));
+        tokio::spawn(drive(
+            process,
+            control,
+            answers,
+            sink,
+            (switch, held),
+            request.turn_id,
+        ));
         Ok(Started {
             run: Arc::new(handle),
             events,
@@ -300,30 +391,45 @@ enum Delivery {
     Failed(TurnId),
 }
 
-/// Writes follow-ups to stdin in order, off the driver's loop, so a CLI that stops reading stdin
-/// can't keep the driver from reading its stdout.
-async fn write_follow_ups(
+/// A line for the CLI's stdin.
+enum Input {
+    /// A follow-up, whose delivery is reported.
+    FollowUp(FollowUp),
+    /// An answer to a permission request, as [`answer_json`] writes it (PLX-222).
+    Answer(String),
+}
+
+/// Writes follow-ups and answers to stdin in order, off the driver's loop, so a CLI that stops
+/// reading stdin can't keep the driver from reading its stdout.
+async fn write_inputs(
     mut stdin: StdinPipe,
-    mut queue: mpsc::UnboundedReceiver<FollowUp>,
+    mut queue: mpsc::UnboundedReceiver<Input>,
     results: mpsc::UnboundedSender<Delivery>,
 ) {
     let mut broken = false;
-    while let Some(follow_up) = queue.recv().await {
-        let mut line = json_string(&follow_up.text);
+    while let Some(input) = queue.recv().await {
+        let (mut line, turn_id) = match input {
+            Input::FollowUp(follow_up) => (json_string(&follow_up.text), Some(follow_up.turn_id)),
+            Input::Answer(answer) => (json_string(&answer), None),
+        };
         line.push('\n');
         broken = broken || stdin.write_all(line.as_bytes()).await.is_err();
-        let result = if broken {
-            Delivery::Failed(follow_up.turn_id)
-        } else {
-            Delivery::Written(follow_up.turn_id)
-        };
-        let _ = results.send(result);
+        if let Some(turn_id) = turn_id {
+            #[cfg(test)]
+            super::report_stall().await;
+            let result = if broken {
+                Delivery::Failed(turn_id)
+            } else {
+                Delivery::Written(turn_id)
+            };
+            let _ = results.send(result);
+        }
     }
 }
 
-/// The follow-ups' way to the CLI: a queue into [`write_follow_ups`], and its results.
+/// The CLI's stdin: a queue into [`write_inputs`], and its results.
 struct Stdin {
-    queue: Option<mpsc::UnboundedSender<FollowUp>>,
+    queue: Option<mpsc::UnboundedSender<Input>>,
     results: Option<mpsc::UnboundedReceiver<Delivery>>,
     writer: Option<tokio::task::JoinHandle<()>>,
 }
@@ -344,7 +450,7 @@ impl Stdin {
         Self {
             queue: Some(queue),
             results: Some(results_rx),
-            writer: Some(tokio::spawn(write_follow_ups(stdin, queue_rx, results))),
+            writer: Some(tokio::spawn(write_inputs(stdin, queue_rx, results))),
         }
     }
 
@@ -358,7 +464,7 @@ impl Stdin {
         control.close();
         while let Ok(follow_up) = control.try_recv() {
             if let Some(queue) = &self.queue {
-                let _ = queue.send(follow_up);
+                let _ = queue.send(Input::FollowUp(follow_up));
             }
         }
         drop(self.queue.take());
@@ -378,24 +484,57 @@ impl Stdin {
     }
 }
 
-/// Runs one fake run: forwards the CLI's events, delivers follow-ups, and decides the outcome
-/// when the CLI exits. Cancelling doesn't go through here: the run's handle signals the process
-/// through `switch`, so it works even while this task waits for a consumer that isn't reading.
+/// An answer as the fake CLI reads it and [`Step::AwaitApproval`] prints it: `{"approvalId",
+/// "decision": "allow", "input"?, "always"?}` or `{"approvalId", "decision": "deny", "message",
+/// "interrupt"}`.
+fn answer_json(answer: &Answer) -> String {
+    let mut json = serde_json::json!({"approvalId": answer.approval_id});
+    match &answer.decision {
+        Decision::Allow { input, always } => {
+            json["decision"] = "allow".into();
+            if let Some(input) = input {
+                json["input"] = input.clone();
+            }
+            if *always {
+                json["always"] = true.into();
+            }
+        }
+        Decision::Deny { message, interrupt } => {
+            json["decision"] = "deny".into();
+            json["message"] = message.as_str().into();
+            json["interrupt"] = (*interrupt).into();
+        }
+    }
+    json.to_string()
+}
+
+/// Runs one fake run: forwards the CLI's events, delivers follow-ups and answers, and decides the
+/// outcome when the CLI exits. Cancelling doesn't go through here: the run's handle signals the
+/// process through `switch`, so it works even while this task waits for a consumer that isn't
+/// reading.
 async fn drive(
     mut process: Process,
     mut control: mpsc::UnboundedReceiver<FollowUp>,
+    mut answers: Option<mpsc::UnboundedReceiver<Answer>>,
     mut sink: EventSink,
-    switch: CancelSwitch,
+    (switch, mut held): (CancelSwitch, Held),
     first_turn: Option<TurnId>,
 ) {
+    // Once a hold is lifted, stdin closes when nothing is outstanding, as a vendor CLI's driver
+    // closes it, and a script waiting for a follow-up exits (0060). A run never held keeps it.
+    let mut released = false;
     let mut stdin = Stdin::start(&mut process, &mut control);
     let mut state = State {
         switch,
         turns: VecDeque::from([first_turn]),
+        asks: answers.is_some(),
+        approvals: HashSet::new(),
         reported: None,
         last_result: None,
     };
     let mut control_open = true;
+    // Follow-ups handed to the writer that it hasn't reported on yet.
+    let mut writing = 0_usize;
     let first = Event::TurnStarted {
         turn_id: first_turn,
     };
@@ -408,22 +547,24 @@ async fn drive(
             // Deliveries first, so a follow-up's TurnStarted comes before what the CLI answers.
             biased;
             Some(delivery) = recv(&mut stdin.results) => {
-                let event = match delivery {
-                    Delivery::Written(turn_id) => {
-                        state.turns.push_back(Some(turn_id));
-                        Event::TurnStarted { turn_id: Some(turn_id) }
-                    }
-                    Delivery::Failed(turn_id) => {
-                        // stdin is gone, so no later follow-up can arrive either.
-                        control.close();
-                        Event::FollowUpDropped { turn_id }
-                    }
-                };
-                if sink.emit(event).await.is_err() {
-                    state.switch.cancel();
-                }
+                writing = writing.saturating_sub(1);
+                state.delivered(delivery, &mut control, &mut sink).await;
             }
             output = process.next() => {
+                // The CLI can read a follow-up and answer it before the writer reports writing
+                // it, so its output waits for that report and comes after its turn's TurnStarted
+                // (PLX-523); its exit doesn't, so a follow-up it never answered is dropped.
+                // ponytail: this stops reading the CLI's output meanwhile, which hangs a CLI that
+                // leaves a pipe's worth of follow-ups unread and then fills its stdout; scripts'
+                // follow-ups are far smaller.
+                if !matches!(output, Some(Output::Exited(_)) | None) {
+                    while writing > 0
+                        && let Some(delivery) = recv(&mut stdin.results).await
+                    {
+                        writing -= 1;
+                        state.delivered(delivery, &mut control, &mut sink).await;
+                    }
+                }
                 let sent = match output {
                     Some(Output::Line(line)) => match state.parse(&line) {
                         Parsed::Event(Some(event)) => sink.emit(event).await,
@@ -446,9 +587,19 @@ async fn drive(
                     state.switch.cancel();
                 }
             }
+            // Only a request the CLI still waits on gets its answer, once.
+            Some(answer) = recv(&mut answers) => {
+                if state.approvals.remove(&answer.approval_id)
+                    && let Some(queue) = &stdin.queue
+                {
+                    let _ = queue.send(Input::Answer(answer_json(&answer)));
+                }
+            }
             follow_up = control.recv(), if control_open => match follow_up {
                 Some(follow_up) => match &stdin.queue {
-                    Some(queue) if queue.send(follow_up.clone()).is_ok() => {}
+                    Some(queue) if queue.send(Input::FollowUp(follow_up.clone())).is_ok() => {
+                        writing += 1;
+                    }
                     _ => {
                         let dropped = Event::FollowUpDropped { turn_id: follow_up.turn_id };
                         let _ = sink.emit(dropped).await;
@@ -457,10 +608,23 @@ async fn drive(
                 None => control_open = false,
             },
             () = sink.closed(), if !state.switch.is_cancelled() => state.switch.cancel(),
+            () = held.changed() => released |= !held.now(),
+        }
+        if released
+            && state.turns.is_empty()
+            && writing == 0
+            && state.approvals.is_empty()
+            && control.is_empty()
+        {
+            drop(stdin.queue.take());
         }
     };
 
     stdin.drop_undelivered(&mut control, &mut sink).await;
+    // As the Claude driver does: a request the CLI still waited on ends with it.
+    for approval_id in std::mem::take(&mut state.approvals) {
+        let _ = sink.emit(Event::ApprovalWithdrawn { approval_id }).await;
+    }
     let outcome = state.outcome(exit);
     let _ = sink.finish(outcome).await;
 }
@@ -484,12 +648,41 @@ struct State {
     switch: CancelSwitch,
     /// Turns the CLI has taken but not finished, oldest first.
     turns: VecDeque<Option<TurnId>>,
+    /// Whether the run takes permission requests: [`RunRequest::approvals`], with a stdin.
+    asks: bool,
+    /// Permission requests the CLI waits on.
+    approvals: HashSet<ApprovalId>,
     /// The outcome the CLI reported itself, before any cancel.
     reported: Option<Outcome>,
     last_result: Option<String>,
 }
 
 impl State {
+    /// Reports a follow-up the writer wrote as its turn started, or one it couldn't as dropped.
+    async fn delivered(
+        &mut self,
+        delivery: Delivery,
+        control: &mut mpsc::UnboundedReceiver<FollowUp>,
+        sink: &mut EventSink,
+    ) {
+        let event = match delivery {
+            Delivery::Written(turn_id) => {
+                self.turns.push_back(Some(turn_id));
+                Event::TurnStarted {
+                    turn_id: Some(turn_id),
+                }
+            }
+            Delivery::Failed(turn_id) => {
+                // stdin is gone, so no later follow-up can arrive either.
+                control.close();
+                Event::FollowUpDropped { turn_id }
+            }
+        };
+        if sink.emit(event).await.is_err() {
+            self.switch.cancel();
+        }
+    }
+
     fn parse(&mut self, line: &[u8]) -> Parsed {
         let warning =
             |warning, detail: String| Parsed::Event(Some(Event::Warning { warning, detail }));
@@ -518,11 +711,12 @@ impl State {
                     format!("an event of kind {:?}", kind.unwrap_or_default()),
                 );
             }
-            Event::TurnFinished { result, .. } => {
+            Event::TurnFinished { result, failed, .. } => {
                 self.last_result.clone_from(&result);
                 Event::TurnFinished {
                     turn_id: self.turns.pop_front().flatten(),
                     result,
+                    failed,
                 }
             }
             Event::Finished { outcome, .. } => {
@@ -530,6 +724,18 @@ impl State {
                     self.reported = Some(outcome);
                 }
                 return Parsed::Event(None);
+            }
+            // A run that takes no answers never asks, as Claude Code without its prompt channel.
+            Event::ApprovalRequested(_) | Event::ApprovalWithdrawn { .. } if !self.asks => {
+                return Parsed::Event(None);
+            }
+            Event::ApprovalRequested(request) => {
+                self.approvals.insert(request.approval_id);
+                Event::ApprovalRequested(request)
+            }
+            Event::ApprovalWithdrawn { approval_id } => {
+                self.approvals.remove(&approval_id);
+                Event::ApprovalWithdrawn { approval_id }
             }
             event => event,
         };
@@ -544,12 +750,10 @@ impl State {
             return Outcome::Cancelled;
         }
         let Some(exit) = exit else {
-            return Outcome::Failed(Failure {
-                failure: FailureKind::Internal,
-                message: "lost track of the process".into(),
-                exit: None,
-                stderr_tail: None,
-            });
+            return Outcome::Failed(Failure::new(
+                FailureKind::Internal,
+                "lost track of the process".into(),
+            ));
         };
         if exit.info.success() {
             return Outcome::Completed {
@@ -603,32 +807,41 @@ enum Piece<'a> {
     Word(&'a str),
 }
 
+/// `printf` for an [`Event::Text`] of `word`'s value: a JSON string already when `quoted`, or text
+/// that goes in the JSON unescaped.
 fn print_text(out: &mut String, word: &str, quoted: bool) {
-    if quoted {
-        print_json(
-            out,
-            &[
-                Piece::Literal(r#"{"kind":"text","text":"#),
-                Piece::Word(word),
-                Piece::Literal("}"),
-            ],
-        );
+    let (open, close) = if quoted {
+        (r#"{"kind":"text","text":"#, "}")
     } else {
-        print_json(
-            out,
-            &[
-                Piece::Literal(r#"{"kind":"text","text":""#),
-                Piece::Word(word),
-                Piece::Literal(r#""}"#),
-            ],
-        );
-    }
+        (r#"{"kind":"text","text":""#, r#""}"#)
+    };
+    print_json(
+        out,
+        &[
+            Piece::Literal(open),
+            Piece::Word(word),
+            Piece::Literal(close),
+        ],
+    );
+}
+
+/// `printf` for `line` as it is.
+fn print_line(out: &mut String, line: &str) {
+    writeln!(out, "printf '%s\\n' {}", quote(line)).expect("infallible");
+}
+
+/// `printf` for one event's line of JSON.
+fn print_event(out: &mut String, event: &Event) -> Result<(), String> {
+    let json = serde_json::to_string(event).map_err(|e| e.to_string())?;
+    print_line(out, &json);
+    Ok(())
 }
 
 /// Compiles a script into a `/bin/sh` program. It takes `$1` resume id, `$2` prompt as a JSON
 /// string, `$3` policy, and `$4` model.
 fn compile(script: &Script) -> Result<String, String> {
     let mut out = String::from("resume=$1; prompt=$2; policy=$3\n");
+    let mut last_approval = None;
     for step in &script.steps {
         match step {
             Step::Init { session_id, model } => {
@@ -650,18 +863,13 @@ fn compile(script: &Script) -> Result<String, String> {
                     ],
                 );
             }
-            Step::Emit(event) => {
-                let json = serde_json::to_string(event).map_err(|e| e.to_string())?;
-                writeln!(out, "printf '%s\\n' {}", quote(&json)).expect("infallible");
-            }
+            Step::Emit(event) => print_event(&mut out, event)?,
             Step::UsageTotal(total) => {
                 let mut json = serde_json::to_value(total).map_err(|e| e.to_string())?;
                 json["kind"] = "usageTotal".into();
-                writeln!(out, "printf '%s\\n' {}", quote(&json.to_string())).expect("infallible");
+                print_line(&mut out, &json.to_string());
             }
-            Step::Raw(line) => {
-                writeln!(out, "printf '%s\\n' {}", quote(line)).expect("infallible");
-            }
+            Step::Raw(line) => print_line(&mut out, line),
             Step::Oversized(bytes) => {
                 writeln!(out, "head -c {bytes} /dev/zero | tr '\\0' x; echo").expect("infallible");
             }
@@ -683,9 +891,20 @@ fn compile(script: &Script) -> Result<String, String> {
                 }
                 print_text(&mut out, &format!("\"${{{name}-<unset>}}\""), false);
             }
-            Step::AwaitFollowUp => {
+            Step::AwaitFollowUp | Step::AwaitApproval => {
                 out.push_str("IFS= read -r line || exit 0\n");
                 print_text(&mut out, "\"$line\"", true);
+            }
+            Step::RequestApproval(asked) => {
+                // A new id for every run, since the script compiles for each.
+                let request = asked.request(ApprovalId::generate());
+                last_approval = Some(request.approval_id);
+                print_event(&mut out, &Event::ApprovalRequested(request))?;
+            }
+            Step::WithdrawApproval => {
+                let approval_id =
+                    last_approval.ok_or("withdrawApproval comes before any requestApproval")?;
+                print_event(&mut out, &Event::ApprovalWithdrawn { approval_id })?;
             }
             Step::WriteFile { path, content } => {
                 writeln!(out, "printf '%s' {} > {}", quote(content), quote(path))
@@ -695,9 +914,9 @@ fn compile(script: &Script) -> Result<String, String> {
                 let event = Event::TurnFinished {
                     turn_id: None,
                     result: result.clone(),
+                    failed: false,
                 };
-                let json = serde_json::to_string(&event).map_err(|e| e.to_string())?;
-                writeln!(out, "printf '%s\\n' {}", quote(&json)).expect("infallible");
+                print_event(&mut out, &event)?;
             }
             Step::Exit(code) => writeln!(out, "exit {code}").expect("infallible"),
             Step::Crash => out.push_str("kill -KILL $$\n"),

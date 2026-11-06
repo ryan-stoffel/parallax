@@ -1,0 +1,35 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "github/status",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "installed": true,
+      "version": "2.100.0",
+      "signedIn": true,
+      "account": "octocat",
+      "checkedAt": "2026-10-02T12:00:00Z"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "github/status",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "installed": true,
+      "version": "2.100.0",
+      "note": "timed out after 5s",
+      "checkedAt": "2026-10-02T12:00:05Z"
+    }
+  }
+]

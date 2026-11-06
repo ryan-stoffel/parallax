@@ -1,0 +1,80 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "preview/call",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "tool": "preview_open",
+      "arguments": { "url": "localhost:5173" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "text": "{\"tabId\": \"tab-1\", \"url\": \"http://localhost:5173/\"}"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "preview/list",
+    "params": { "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "tabs": [
+        {
+          "tabId": "tab-1",
+          "url": "http://localhost:5173/",
+          "title": "Vite App",
+          "loading": false,
+          "human": false,
+          "recording": false
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "preview/frame",
+    "params": { "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01", "tabId": "tab-1", "after": 0 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "seq": 1,
+      "data": "/9j/4AAQ",
+      "width": 1280,
+      "height": 800,
+      "tab": {
+        "tabId": "tab-1",
+        "url": "http://localhost:5173/",
+        "title": "Vite App",
+        "loading": false,
+        "human": false,
+        "recording": false
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "preview/input",
+    "params": {
+      "runId": "01a0f100-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "tabId": "tab-1",
+      "input": { "kind": "mouse", "event": "down", "x": 10.5, "y": 20.5, "button": "left", "clickCount": 1, "modifiers": 0 }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  }
+]

@@ -1,55 +1,134 @@
-//! The methods wispd answers, one module per group, routed through `wisp_protocol`'s method
+//! The methods plxd answers, one module per group, routed through `parallax_protocol`'s method
 //! table so every params and result type is the protocol's own.
 //!
-//! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4
-//! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; RYA-227
-//! `projectEdit`: `project/update` in `project.rs`), and `host.rs` advertises the capability in
-//! `initialize`.
+//! Each capability gets a module here (M3 `agents`: `agent.rs` and `context.rs`; M4 `orchestrator`:
+//! `orchestrator/start` in `orchestrator.rs`; #110 `threads`: `thread.rs`; PLX-227
+//! `orchestratorEdit`: `orchestrator/update` in `orchestrator.rs`; PLX-338 `orchestratorDelete`:
+//! `orchestrator/delete` in `orchestrator.rs`; 0042 `orchestratorFromThreads`:
+//! `orchestrator/fromThreads` in `orchestrator.rs`;
+//! PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link` and `pr/unlink`):
+//! `pr.rs`; PLX-359 `composerMenus` and PLX-993 `repoGrep`: `composer.rs`; PLX-336 `githubStatus`:
+//! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
+//! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`;
+//! PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`;
+//! PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
+//! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
+//! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, `pr/watches`, and
+//! `pr/mergeWhenReady` in `crate::pr_watch`, and `pr/write` in `crate::pr_write`; PLX-650
+//! `setupScripts`: `repo/scripts` and `repo/saveScripts` in `crate::setup_scripts`; 0062
+//! `checkpoints`: `orchestration/threadRuns`, `getTurnDiff`, and `getFullThreadDiff` in
+//! `crate::checkpoints`; PLX-648 `delegation`: `task/delegate`, `task/status`, and
+//! `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`: `secret/request` and
+//! `secret/answer` in `crate::secrets`; PLX-746 `providerUpdates`: `provider_updates.rs`; 0057
+//! `peerGit`: `bundle/*` and `git/startMerge` in `bundle.rs`), and `host.rs` advertises the
+//! capability in `initialize`.
 
 mod accounts;
 mod agent;
-mod context;
+pub(crate) mod bundle;
+mod composer;
+mod connect;
+pub(crate) mod context;
+mod cursor;
 mod defaults;
 mod events;
-mod host;
-mod project;
+pub(crate) mod host;
+pub(crate) mod inbox;
+pub(crate) mod land;
+pub(crate) mod memory;
+mod orchestration;
+pub(crate) mod orchestrator;
+mod pr;
+mod provider_updates;
+pub(crate) mod question;
+mod queue;
+pub(crate) mod read_only;
+mod remote;
 mod thread;
 mod usage;
 
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+use parallax_protocol::jsonrpc::{
+    ErrorObject, INVALID_REQUEST, Notification, Request, RequestId, Response,
+};
+use parallax_protocol::methods::{
+    self, EventsSubscribe, EventsUnsubscribe, Initialize, OrchestrationSubscribeShell,
+    OrchestrationSubscribeThread, RequestMethod,
+};
+use parallax_protocol::{
+    EventsSubscribeResult, EventsUnsubscribeResult, HubsListResult, ProvidersListResult,
+    SubscriptionId, TerminalListResult, TerminalResult,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use wisp_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST, Request, RequestId, Response};
-use wisp_protocol::methods::{
-    AccountsDefaultsGet, AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysList,
-    AccountsKeysRemove, AccountsList, AccountsRefresh, AgentAccept, AgentCancel, AgentDiff,
-    AgentEvents, AgentFile, AgentImage, AgentList, AgentOpenPr, AgentRequestChanges, AgentSend,
-    AgentStart, ContextList, ContextRead, ContextWrite, EventsSubscribe, EventsUnsubscribe,
-    HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList, ProjectStart, ProjectUpdate,
-    RequestMethod, UsageGet, UsageHistory,
-};
-use wisp_protocol::{EventsSubscribeResult, EventsUnsubscribeResult, SubscriptionId};
 
+pub(crate) use accounts::keys::map_keychain_error as keychain_error;
+pub(crate) use agent::check_message;
 pub(crate) use defaults::read_defaults;
-pub(crate) use events::{Cursor, Cursors};
+pub(crate) use events::{Cursor, Cursors, Delivery};
 pub(crate) use host::{Session, initialize, os_version};
 
+use crate::agents::{self, GitAction};
 use crate::server::Daemon;
+use crate::threads;
 
 /// What a request handler has to work with.
 pub(crate) struct Context {
     pub daemon: Arc<Daemon>,
-    /// Cancelled by `$/cancelRequest`, or when the connection closes.
+    /// Cancelled by `$/cancelRequest`, or when the connection closes at once. When the client
+    /// closes its side or plxd shuts down, the connection answers what it read first instead.
+    /// A listed command method uses a token the connection never cancels (0052).
     pub cancel: CancellationToken,
+    /// Cancelled when the connection stops reading: the client closed its side or plxd is
+    /// shutting down. A request that waits for something else, like `agent/wait`, ends then.
+    pub stopped_reading: CancellationToken,
+    /// `commandId` taken out of the params before the method parses them (0052).
+    pub command_id: Option<uuid::Uuid>,
+    /// The connection's writer, for notifications that aren't events, such as a terminal's
+    /// output.
+    pub replies: tokio::sync::mpsc::Sender<Reply>,
+    /// The connection came through Parallax Connect's listener from another of the user's
+    /// devices, which `tailscale whois` checked (0056). Only such a connection syncs You (0082).
+    pub over_connect: bool,
+    /// The connection's device is read-only. [`dispatch`] refuses it anything [`read_only`]
+    /// doesn't allow.
+    pub read_only: bool,
+    /// The connection came through a Parallax Relay stream, whose bytes count against the host's
+    /// daily budget (0091). Its terminals' output is batched and paced ([`crate::terminals`]).
+    pub over_relay: bool,
+}
+
+impl Context {
+    /// Runs `task`, given its own handle on the daemon, detached from the request
+    /// (`Agents::detached`), so a dropped connection or a `$/cancelRequest` never leaves its work
+    /// half done.
+    pub(crate) async fn detached<T, F>(
+        &self,
+        task: impl FnOnce(Arc<Daemon>) -> F,
+    ) -> Result<T, ErrorObject>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, ErrorObject>> + Send + 'static,
+    {
+        self.daemon
+            .agents
+            .detached(task(Arc::clone(&self.daemon)))
+            .await
+    }
 }
 
 /// What the connection's writer sends for a request.
 #[derive(Debug)]
 pub(crate) enum Reply {
     Response(Response),
+    /// `initialize`'s answer, and whether a lagging subscription gets `events/resync`.
+    Initialized {
+        response: Response,
+        resync_notice: bool,
+    },
     /// Send the response, then start delivering the subscription's events.
     Subscribe {
         response: Response,
@@ -60,80 +139,46 @@ pub(crate) enum Reply {
         response: Response,
         subscription: SubscriptionId,
     },
+    /// A notification that isn't an event, such as a terminal's output (PLX-637).
+    Notification(Notification),
 }
 
 /// Answers a request on an initialized connection.
-pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
-    let id = request.id.clone();
-    if context.cancel.is_cancelled() {
-        return Reply::Response(Response::error(Some(id), ErrorObject::request_cancelled()));
+pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Reply {
+    if context.read_only && !read_only::allows_request(&request.method) {
+        return Reply::Response(Response::error(Some(request.id), read_only::refusal()));
     }
+    if let Some(reply) = command_prelude(&mut context, &mut request) {
+        return reply;
+    }
+    let id = request.id.clone();
     let result = match request.method.as_str() {
-        HostHealth::NAME => {
-            handle::<HostHealth, _, _>(&request, |p| ready(Ok(host::health(&context, p)))).await
-        }
-        HostVersion::NAME => {
-            handle::<HostVersion, _, _>(&request, |p| ready(Ok(host::version(&context, p)))).await
-        }
-        name if name.starts_with("project/") => project_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
-        AccountsList::NAME => {
-            handle::<AccountsList, _, _>(&request, |p| accounts::list(&context, p)).await
-        }
-        AccountsRefresh::NAME => {
-            handle::<AccountsRefresh, _, _>(&request, |p| accounts::refresh(&context, p)).await
-        }
-        AccountsKeysAdd::NAME => {
-            handle::<AccountsKeysAdd, _, _>(&request, |p| accounts::keys::add(&context, p)).await
-        }
-        AccountsKeysList::NAME => {
-            handle::<AccountsKeysList, _, _>(&request, |p| accounts::keys::list(&context, p)).await
-        }
-        AccountsKeysRemove::NAME => {
-            handle::<AccountsKeysRemove, _, _>(&request, |p| accounts::keys::remove(&context, p))
-                .await
-        }
-        UsageGet::NAME => handle::<UsageGet, _, _>(&request, |p| usage::get(&context, p)).await,
-        UsageHistory::NAME => {
-            handle::<UsageHistory, _, _>(&request, |p| usage::history(&context, p)).await
-        }
-        AccountsDefaultsGet::NAME => {
-            handle::<AccountsDefaultsGet, _, _>(&request, |p| defaults::get(&context, p)).await
-        }
-        AccountsDefaultsSet::NAME => {
-            handle::<AccountsDefaultsSet, _, _>(&request, |p| defaults::set(&context, p)).await
-        }
-        ContextList::NAME => {
-            handle::<ContextList, _, _>(&request, |p| context::list(&context, p)).await
-        }
-        ContextRead::NAME => {
-            handle::<ContextRead, _, _>(&request, |p| context::read(&context, p)).await
-        }
-        ContextWrite::NAME => {
-            handle::<ContextWrite, _, _>(&request, |p| context::write(&context, p)).await
-        }
-        name if name.starts_with("agent/") => agent_method(&context, &request)
-            .await
-            .unwrap_or_else(|| Err(ErrorObject::method_not_found(name))),
-        name if thread::handles(name) => thread::dispatch(&context, &request).await,
         EventsSubscribe::NAME => {
             let subscribed = match request.params() {
                 Ok(params) => events::subscribe(&context, params).await,
                 Err(error) => Err(error),
             };
-            return match subscribed {
-                Ok(cursor) => Reply::Subscribe {
-                    response: success(
-                        id,
-                        &EventsSubscribeResult {
-                            subscription: cursor.subscription,
-                        },
-                    ),
-                    cursor,
-                },
-                Err(error) => Reply::Response(Response::error(Some(id), error)),
+            let subscribed = subscribed.map(|cursor| {
+                let result = EventsSubscribeResult {
+                    subscription: cursor.subscription,
+                };
+                (result, cursor)
+            });
+            return subscribed_reply(id, subscribed);
+        }
+        OrchestrationSubscribeShell::NAME => {
+            let subscribed = match request.params() {
+                Ok(params) => orchestration::subscribe_shell(&context, params).await,
+                Err(error) => Err(error),
             };
+            return subscribed_reply(id, subscribed);
+        }
+        OrchestrationSubscribeThread::NAME => {
+            let subscribed = match request.params() {
+                Ok(params) => orchestration::subscribe_thread(&context, params).await,
+                Err(error) => Err(error),
+            };
+            return subscribed_reply(id, subscribed);
         }
         EventsUnsubscribe::NAME => {
             return match request.params::<<EventsUnsubscribe as RequestMethod>::Params>() {
@@ -148,7 +193,7 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
             INVALID_REQUEST,
             "Invalid request: the connection is already initialized",
         )),
-        other => Err(ErrorObject::method_not_found(other)),
+        _ => route(&context, &request).await,
     };
     Reply::Response(Response {
         id: Some(id),
@@ -156,64 +201,364 @@ pub(crate) async fn dispatch(context: Context, request: Request) -> Reply {
     })
 }
 
-/// Answers a `project/*` method (RYA-227), or `None` if there is no such method.
-async fn project_method(
+/// A subscription's answer: its result, then its events from `cursor`.
+fn subscribed_reply<T: Serialize>(
+    id: RequestId,
+    subscribed: Result<(T, Cursor), ErrorObject>,
+) -> Reply {
+    match subscribed {
+        Ok((result, cursor)) => Reply::Subscribe {
+            response: success(id, &result),
+            cursor,
+        },
+        Err(error) => Reply::Response(Response::error(Some(id), error)),
+    }
+}
+
+/// A `match` on the request's method with one arm per `Method => handler` pair, `Method` named in
+/// `parallax_protocol::methods`, each answered through [`handle`], and `method_not_found` for any
+/// other name.
+macro_rules! routes {
+    ($context:expr, $request:expr, { $($method:ident => $handler:expr,)* }) => {
+        match $request.method.as_str() {
+            $(methods::$method::NAME => {
+                handle::<methods::$method, _, _>($context, $request, $handler).await
+            })*
+            other => Err(ErrorObject::method_not_found(other)),
+        }
+    };
+}
+
+/// Answers every method but `initialize` and `events/*`, one line per method.
+#[expect(clippy::too_many_lines, reason = "one line per method")]
+async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObject> {
+    let daemon = &context.daemon;
+    routes!(context, request, {
+        HostHealth => |p| ready(Ok(host::health(context, p))),
+        HostVersion => |p| ready(Ok(host::version(context, p))),
+        HostUpdate => |p| daemon.self_update.update(daemon, p),
+        HostAnnounceUpdate => |_| async {
+            daemon.self_update.announce().await;
+            Ok(parallax_protocol::HostAnnounceUpdateResult {})
+        },
+        HostFolders => |p| host::folders(context, p),
+        HostUpload => |p| host::upload(context, p),
+        HostReadUpload => |p| host::read_upload(context, p),
+        HostSettingsGet => |p| host::settings(context, p),
+        HostSettingsSet => |p| host::set_settings(context, p),
+        ConnectDevices => |p| connect::devices(context, p),
+        RemotePair => |p| remote::pair(context, p),
+        RemoteSessions => |p| remote::sessions(context, p),
+        RelayRegister => |p| remote::register_relay(context, p),
+        RelaySign => |p| remote::relay_sign(context, p),
+        RelayHosts => |p| remote::relay_hosts(context, p),
+        RelayCheck => |p| remote::relay_check(context, p),
+        RelayRemove => |p| remote::relay_remove(context, p),
+        RelayId => |p| remote::relay_id(context, p),
+        RelayPushKey => |p| remote::relay_push_key(context, p),
+        AccessGet => |p| remote::access_get(context, p),
+        AccessMerge => |p| remote::access_merge(context, p),
+        AccessApprove => |p| remote::access_approve(context, p),
+        AccessDeny => |p| remote::access_deny(context, p),
+        AccessRemove => |p| remote::access_remove(context, p),
+        AccessSetReadOnly => |p| remote::access_set_read_only(context, p),
+        AccessForgetHost => |p| remote::access_forget_host(context, p),
+        AccessSetupCode => |p| remote::access_setup_code(context, p),
+        RemoteRevoke => |p| remote::revoke(context, p),
+        AccountsList => |p| accounts::list(context, p),
+        AccountsRefresh => |p| accounts::refresh(context, p),
+        AccountsKeysAdd => |p| accounts::keys::add(context, p),
+        AccountsKeysList => |p| accounts::keys::list(context, p),
+        AccountsKeysRemove => |p| accounts::keys::remove(context, p),
+        AccountsDefaultsGet => |p| defaults::get(context, p),
+        AccountsDefaultsSet => |p| defaults::set(context, p),
+        // Each `providers/*` answers with every instance after it (0040).
+        ProvidersList => |p| async move { Ok(providers(daemon, p.refresh).await) },
+        ProvidersSave => |p| async move {
+            daemon.providers.save(p.instance).await?;
+            // A lower reserve, or an instance turned on, may start a waiting child (0046).
+            daemon.agents.placement.notify_one();
+            Ok(providers(daemon, false).await)
+        },
+        ProvidersRemove => |p| async move {
+            daemon.providers.remove(&p.id).await?;
+            Ok(providers(daemon, false).await)
+        },
+        // Each `hubs/*` answers with every hub after it (0089).
+        HubsList => |p| async move {
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(p.refresh).await,
+            })
+        },
+        HubsSave => |p| async move {
+            daemon.providers.save_hub(p).await?;
+            daemon.agents.placement.notify_one();
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
+        },
+        HubsRemove => |p| async move {
+            daemon.providers.remove_hub(&p.id).await?;
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
+        },
+        // A hub's accounts, through its management API (PLX-1070).
+        HubsAccountsSignIn => |p| async move { daemon.providers.hub_sign_in(&p.hub, p.service).await },
+        HubsAccountsCallback => |p| async move {
+            daemon
+                .providers
+                .hub_sign_in_callback(&p.hub, &p.state, &p.redirect_url)
+                .await
+        },
+        HubsAccountsStatus => |p| async move { daemon.providers.hub_sign_in_status(&p.hub, &p.state).await },
+        HubsAccountsCancel => |p| async move { daemon.providers.hub_sign_in_cancel(&p.hub, &p.state).await },
+        HubsAccountsSetEnabled => |p| async move {
+            daemon
+                .providers
+                .set_hub_account_enabled(&p.hub, &p.account, p.enabled)
+                .await?;
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
+        },
+        HubsAccountsRemove => |p| async move {
+            daemon.providers.remove_hub_account(&p.hub, &p.account).await?;
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
+        },
+        ProvidersUpdates => |p| provider_updates::updates(context, p),
+        ProvidersUpgrade => |p| provider_updates::upgrade(context, p),
+        UsageGet => |p| usage::get(context, p),
+        UsageHistory => |p| usage::history(context, p),
+        UsageReportClaim => |p| usage::report_claim(context, p),
+        UsageReportRelease => |p| usage::report_release(context, p),
+        UsageDaily => |p| usage::daily(context, p),
+        UsageLimits => |p| usage::limits(context, p),
+        CursorSignIn => |p| cursor::sign_in(context, p),
+        CursorSignInCancel => |p| ready(Ok(cursor::sign_in_cancel(context, p))),
+        CursorSignOut => |p| cursor::sign_out(context, p),
+        CursorInstall => |p| ready(Ok(cursor::install(context, p))),
+        GithubStatusGet => |p| accounts::github(context, p),
+        GithubInstall => |p| accounts::github_install(context, p),
+        GithubSignInStart => |p| accounts::github_sign_in(context, p),
+        GithubSignInCancel => |p| ready(Ok(accounts::github_sign_in_cancel(context, p))),
+        ContextList => |p| context::list(context, p),
+        ContextRead => |p| context::read(context, p),
+        ContextWrite => |p| context::write(context, p),
+        ContextReadBytes => |p| context::read_bytes(context, p),
+        ContextSaveArtifact => |p| context::save_artifact(context, p),
+        OrchestratorList => |p| orchestrator::list(context, p),
+        OrchestratorCreate => |p| orchestrator::create(context, p),
+        OrchestratorStart => |p| orchestrator::start(context, p),
+        OrchestratorFresh => |p| orchestrator::fresh(context, p),
+        OrchestratorUpdate => |p| orchestrator::update(context, p),
+        OrchestratorDelete => |p| orchestrator::delete(context, p),
+        OrchestratorFromThreads => |p| orchestrator::from_threads(context, p),
+        InboxList => |p| inbox::list(context, p),
+        InboxSeen => |p| inbox::seen(context, p),
+        ThreadList => |_| threads::list(daemon),
+        ThreadStart => |p| thread::start(context, p),
+        ThreadFork => |p| thread::fork(context, p),
+        ThreadImportable => |p| crate::importer::importable(daemon, p),
+        ThreadImport => |p| thread::import(context, p),
+        ThreadImportChat => |p| thread::import_chat(context, p),
+        ThreadImportedChats => |p| crate::importer::imported_chats(daemon, p),
+        ThreadRemoteControl => |p| crate::remote_control::session(daemon, p),
+        ThreadRemoteControlOrigin => |p| crate::remote_control::origin(daemon, p),
+        ThreadArchive => |p| threads::archive(daemon, p, context.command_id),
+        ThreadUpdate => |p| threads::update(daemon, p, context.command_id),
+        ThreadDelete => |p| thread::delete(context, p),
+        ThreadSearch => |p| threads::search(daemon, p),
+        RepoAdd => |p| threads::add_repo(daemon, p),
+        RepoClone => |p| thread::clone(context, p),
+        RepoCloneProgress => crate::repo_clone::progress,
+        RepoRemote => |p| crate::repo_clone::remote(daemon, p),
+        RepoLogo => |p| crate::repo_logo::logo(daemon, p),
+        RepoMatch => |p| crate::repo_clone::matching(daemon, p),
+        RepoUpdate => |p| threads::update_repo(daemon, p),
+        ProjectCreate => |p| crate::projects::create(daemon, p),
+        ThreadSetProject => |p| crate::projects::set_project(daemon, p),
+        ProjectDelete => |p| thread::project_delete(context, p),
+        RepoRefs => |p| threads::refs(daemon, p),
+        RepoGitStatus => |p| threads::git_status(daemon, p),
+        RepoFiles => |p| composer::files(context, p),
+        RepoGrep => |p| composer::grep(context, p),
+        AgentStart => |p| agent::start(context, p),
+        AgentSend => |p| agent::send(context, p),
+        AgentCancel => |p| agent::cancel(context, p),
+        AgentList => |p| agent::list(context, p),
+        AgentEvents => |p| agent::events(context, p),
+        AgentWait => |p| agents::wait::wait(context, p),
+        AgentImage => |p| agents::image(daemon, p),
+        AgentAttach => |p| agents::attach(daemon, p),
+        PreviewCall => |p| async move { Ok(daemon.previews.call(daemon, p).await) },
+        PreviewList => |p| async move { Ok(daemon.previews.list(p).await) },
+        PreviewFrame => |p| daemon.previews.frame(p),
+        PreviewInputSend => |p| daemon.previews.input(p),
+        DeviceState => |p| async move { Ok(daemon.devices.state(p).await) },
+        DeviceSetup => |_| ready(Ok(daemon.devices.setup())),
+        DeviceBoot => |p| daemon.devices.boot(p),
+        DeviceShutdown => |p| daemon.devices.shutdown(p),
+        DeviceCreate => |p| daemon.devices.create(p),
+        DeviceScreenshot => |p| daemon.devices.screenshot(p),
+        DeviceChrome => |p| daemon.devices.chrome(p),
+        DeviceStream => |p| daemon.devices.stream(p, &context.replies, &context.stopped_reading),
+        ComputerAsk => |p| crate::computer::ask(Arc::clone(daemon), p),
+        ComputerStatusGet => |p| crate::computer::status(daemon, p),
+        ComputerForget => |p| crate::computer::forget(daemon, p),
+        AgentDiff => |p| agents::review::diff(daemon, p.run_id),
+        AgentFile => |p| agents::review::file(daemon, p),
+        AgentFiles => |p| agents::review::files(daemon, p),
+        AgentFileCreate => |p| agents::review::create_entry(daemon, p),
+        AgentFileRename => |p| agents::review::rename_entry(daemon, p),
+        AgentFileDelete => |p| agents::review::delete_entry(daemon, p),
+        AgentAccept => |p| agent::accept(context, p),
+        AgentRequestChanges => |p| agent::request_changes(context, p),
+        AgentOpenPr => |p| agent::open_pr(context, p),
+        AgentApprove => |p| agent::approve(context, p),
+        AgentGitStatus => |p| agent::git(context, p.run_id, GitAction::Status),
+        AgentCommit => |p| agent::commit(context, p),
+        AgentPush => |p| agent::git(context, p.run_id, GitAction::Push),
+        AgentCommands => |p| composer::list_commands(context, p),
+        AgentResumeNow => |p| agent::resume_now(context, p),
+        AgentStopTask => |p| agent::stop_task(context, p),
+        AgentSetPermission => |p| agent::set_permission(context, p),
+        AgentAutoResume => |p| agent::auto_resume(context, p),
+        PrView => |p| agents::view_pr(Arc::clone(daemon), p),
+        PrAct => |p| pr::act(context, p),
+        PrDiff => |p| agents::diff_pr(Arc::clone(daemon), p),
+        PrLink => |p| pr::link(context, p, true),
+        PrUnlink => |p| pr::link(context, p, false),
+        QueueList => |p| queue::list(context, p),
+        QueueEdit => |p| queue::edit(context, p),
+        QueueReorder => |p| queue::reorder(context, p),
+        QueueCancel => |p| queue::cancel(context, p),
+        QueueSteer => |p| queue::steer(context, p),
+        QuestionAsk => |p| question::ask(context, p),
+        QuestionAnswer => |p| question::answer(context, p),
+        QuestionEscalate => |p| question::escalate(context, p),
+        QuestionList => |p| question::list(context, p),
+        BoardList => |p| crate::board::list(daemon, p),
+        BoardAdd => |p| crate::board::add(daemon, p),
+        BoardUpdate => |p| crate::board::update(daemon, p),
+        BoardRemove => |p| crate::board::remove(daemon, p),
+        MemoryList => |p| memory::list(context, p),
+        MemoryRead => |p| memory::read(context, p),
+        MemoryWrite => |p| memory::write(context, p),
+        MemoryDelete => |p| memory::delete(context, p),
+        MemoryPropose => |p| memory::propose(context, p),
+        MemorySyncList => |p| memory::sync_list(context, p),
+        MemorySyncRead => |p| memory::sync_read(context, p),
+        LandQueue => |p| land::queue(context, p),
+        LandApprove => |p| land::approve(context, p),
+        LandSendBack => |p| land::send_back(context, p),
+        TerminalOpen => |p| ready(
+            daemon
+                .terminals
+                .open(
+                    p,
+                    &context.replies,
+                    &context.stopped_reading,
+                    context.over_relay,
+                )
+                .map(|()| TerminalResult {})
+        ),
+        TerminalClose => |p| {
+            daemon.terminals.close(p.thread_id, p.terminal_id);
+            ready(Ok(TerminalResult {}))
+        },
+        OrchestrationDispatch => |p| orchestration::dispatch(context, p),
+        OrchestrationThreadHistory => |p| orchestration::thread_history(context, p),
+        OrchestrationThreadRuns => |p| crate::checkpoints::thread_runs(daemon, p),
+        OrchestrationGetTurnDiff => |p| crate::checkpoints::turn_diff(daemon, p),
+        OrchestrationGetFullThreadDiff => |p| crate::checkpoints::full_thread_diff(daemon, p),
+        BundlePrepare => |p| bundle::prepare(daemon, p),
+        BundleRead => |p| bundle::read(daemon, p),
+        BundleDrop => |p| ready(Ok(bundle::drop_bundle(daemon, &p))),
+        BundleBegin => |p| bundle::begin(daemon, p),
+        BundleWrite => |p| bundle::write(daemon, p),
+        BundleApply => |p| bundle::apply(daemon, p),
+        GitStartMerge => |p| bundle::start_merge(daemon, p),
+        TerminalList => |p| ready(Ok(TerminalListResult {
+            terminals: daemon.terminals.list(p.thread_id.as_deref()),
+        })),
+        ScheduleList => |_| crate::schedules::list(daemon),
+        ScheduleSave => |p| crate::schedules::save(daemon, p),
+        ScheduleDelete => |p| crate::schedules::delete(daemon, p),
+        ScheduleRun => |p| crate::schedules::run_now(daemon, p),
+        PrWatch => |p| crate::pr_watch::watch(daemon, p),
+        PrUnwatch => |p| crate::pr_watch::unwatch(daemon, p),
+        PrWatches => |p| crate::pr_watch::watches(daemon, p),
+        PrStatus => |p| crate::pr_watch::status(daemon, p),
+        PrFailureLog => |p| crate::ci_logs::failure_log(daemon, p),
+        PrUploadMedia => |p| crate::pr_media::upload(daemon, p),
+        PrSharedDiff => |p| agents::shared_diff(Arc::clone(daemon), p),
+        PrWrite => |p| crate::pr_write::write(daemon, p),
+        PrGuide => |p| crate::pr_guide::guide(daemon, p),
+        VoiceClean => |p| composer::voice_clean(context, p),
+        PrMergeWhenReady => |p| crate::pr_watch::merge_when_ready(daemon, p),
+        RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
+        TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),
+        TaskStatus => |p| crate::delegation::status(daemon, p),
+        ThreadMergeBack => |p| crate::delegation::merge_back(daemon, p),
+        SecretRequest => |p| crate::secrets::request(daemon, p),
+        SecretAnswer => |p| crate::secrets::answer(daemon, p),
+        RepoSaveScripts => |p| crate::setup_scripts::save(daemon, p),
+    })
+}
+
+/// The provider instances, with each Cursor one's sign-in failure.
+async fn providers(daemon: &Daemon, refresh: bool) -> ProvidersListResult {
+    let mut listed = daemon.providers.list(&daemon.cli_detector, refresh).await;
+    for info in &mut listed.providers {
+        if info.instance.kind == parallax_protocol::ProviderKind::Cursor {
+            info.sign_in_error = daemon.cursor.failure(&info.instance.id);
+        }
+    }
+    listed
+}
+
+/// Cancels a non-listed method, and takes `commandId` off the params.
+fn command_prelude(context: &mut Context, request: &mut Request) -> Option<Reply> {
+    let id = request.id.clone();
+    if context.cancel.is_cancelled() && !crate::commands::keeps_receipt(&request.method) {
+        return Some(Reply::Response(Response::error(
+            Some(id),
+            ErrorObject::request_cancelled(),
+        )));
+    }
+    match crate::commands::take_command_id(request) {
+        Ok(command_id) => context.command_id = command_id,
+        Err(error) => return Some(Reply::Response(Response::error(Some(id), error))),
+    }
+    None
+}
+
+async fn handle<M, F, Fut>(
     context: &Context,
     request: &Request,
-) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        ProjectList::NAME => {
-            handle::<ProjectList, _, _>(request, |p| project::list(context, p)).await
-        }
-        ProjectCreate::NAME => {
-            handle::<ProjectCreate, _, _>(request, |p| project::create(context, p)).await
-        }
-        ProjectStart::NAME => {
-            handle::<ProjectStart, _, _>(request, |p| project::start(context, p)).await
-        }
-        ProjectUpdate::NAME => {
-            handle::<ProjectUpdate, _, _>(request, |p| project::update(context, p)).await
-        }
-        _ => return None,
-    })
-}
-
-/// Answers an `agent/*` method (#156, #157, RYA-191), or `None` if there is no such method.
-async fn agent_method(context: &Context, request: &Request) -> Option<Result<Value, ErrorObject>> {
-    Some(match request.method.as_str() {
-        AgentStart::NAME => handle::<AgentStart, _, _>(request, |p| agent::start(context, p)).await,
-        AgentSend::NAME => handle::<AgentSend, _, _>(request, |p| agent::send(context, p)).await,
-        AgentCancel::NAME => {
-            handle::<AgentCancel, _, _>(request, |p| agent::cancel(context, p)).await
-        }
-        AgentList::NAME => handle::<AgentList, _, _>(request, |p| agent::list(context, p)).await,
-        AgentEvents::NAME => {
-            handle::<AgentEvents, _, _>(request, |p| agent::events(context, p)).await
-        }
-        AgentImage::NAME => handle::<AgentImage, _, _>(request, |p| agent::image(context, p)).await,
-        AgentDiff::NAME => handle::<AgentDiff, _, _>(request, |p| agent::diff(context, p)).await,
-        AgentFile::NAME => handle::<AgentFile, _, _>(request, |p| agent::file(context, p)).await,
-        AgentAccept::NAME => {
-            handle::<AgentAccept, _, _>(request, |p| agent::accept(context, p)).await
-        }
-        AgentRequestChanges::NAME => {
-            handle::<AgentRequestChanges, _, _>(request, |p| agent::request_changes(context, p))
-                .await
-        }
-        AgentOpenPr::NAME => {
-            handle::<AgentOpenPr, _, _>(request, |p| agent::open_pr(context, p)).await
-        }
-        _ => return None,
-    })
-}
-
-async fn handle<M, F, Fut>(request: &Request, handler: F) -> Result<Value, ErrorObject>
+    handler: F,
+) -> Result<Value, ErrorObject>
 where
     M: RequestMethod,
     F: FnOnce(M::Params) -> Fut,
     Fut: Future<Output = Result<M::Result, ErrorObject>>,
 {
     let params = request.params::<M::Params>()?;
+    if let Some(command_id) = context
+        .command_id
+        .filter(|_| crate::commands::RECEIPTED_METHODS.contains(&M::NAME))
+    {
+        return crate::commands::run_receipted::<M, _, _>(
+            &context.daemon,
+            command_id,
+            params,
+            handler,
+        )
+        .await;
+    }
     let result = handler(params).await?;
     serde_json::to_value(result).map_err(ErrorObject::internal_error)
 }
@@ -223,5 +568,90 @@ pub(crate) fn success(id: RequestId, result: &impl Serialize) -> Response {
     match serde_json::to_value(result) {
         Ok(value) => Response::success(id, value),
         Err(error) => Response::error(Some(id), ErrorObject::internal_error(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use parallax_protocol::jsonrpc::Request;
+    use parallax_protocol::methods::{HostSettingsSet, RequestMethod, ThreadSearch};
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{Context, Reply, dispatch};
+    use crate::server::Daemon;
+
+    /// Answers `M` with `params` through the dispatcher, as a connection would.
+    async fn call<M: RequestMethod>(daemon: Arc<Daemon>, params: serde_json::Value) -> M::Result {
+        let context = Context {
+            daemon,
+            cancel: CancellationToken::new(),
+            stopped_reading: CancellationToken::new(),
+            command_id: None,
+            replies: tokio::sync::mpsc::channel(1).0,
+            over_connect: false,
+            read_only: false,
+            over_relay: false,
+        };
+        let request = Request {
+            id: 1.into(),
+            method: M::NAME.to_owned(),
+            params: Some(params),
+        };
+        let Reply::Response(response) = dispatch(context, request).await else {
+            panic!("expected a response");
+        };
+        response.into_result().unwrap()
+    }
+
+    /// `thread/search` runs on the reader, so while the reader is busy the search waits and a
+    /// write doesn't (PLX-457). The blocked job stands in for a slow search.
+    #[tokio::test]
+    async fn a_busy_reader_holds_up_search_but_not_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let reader = Arc::clone(&daemon);
+        let blocked = tokio::spawn(async move {
+            reader
+                .reader
+                .run(&CancellationToken::new(), move |_| {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+            .await
+            .unwrap();
+
+        let search = tokio::spawn(call::<ThreadSearch>(
+            Arc::clone(&daemon),
+            json!({ "query": "notes" }),
+        ));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!search.is_finished(), "the search waits for the reader");
+
+        let settings = tokio::time::timeout(
+            Duration::from_secs(10),
+            call::<HostSettingsSet>(Arc::clone(&daemon), json!({ "autoResume": false })),
+        )
+        .await
+        .expect("the write doesn't wait for the reader");
+        assert!(!settings.auto_resume);
+        assert!(!search.is_finished(), "the reader is still busy");
+
+        release_tx.send(()).unwrap();
+        blocked.await.unwrap().unwrap();
+        let found = tokio::time::timeout(Duration::from_secs(10), search)
+            .await
+            .expect("the search answers once the reader is free")
+            .unwrap();
+        assert!(found.threads.is_empty());
     }
 }

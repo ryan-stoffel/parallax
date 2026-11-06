@@ -1,0 +1,9 @@
+# A turn running a command, which a Stop interrupts with turn/interrupt on the shared app-server.
+<
+{"id":1,"result":{"userAgent":"plxd/0.160.0","codexHome":"/Users/u/.codex","platformFamily":"unix","platformOs":"macos"}}
+<
+<
+{"id":2,"result":{"thread":{"id":"t-1"},"model":"gpt-6-sol"}}
+<
+{"id":3,"result":{"turn":{"id":"u-1"}}}
+{"method":"item/started","params":{"threadId":"t-1","turnId":"u-1","item":{"type":"commandExecution","id":"exec-1","command":"sleep 60","cwd":"/repo","status":"inProgress","commandActions":[],"aggregatedOutput":null,"exitCode":null,"durationMs":null}}}

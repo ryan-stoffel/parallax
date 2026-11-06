@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Exercises scripts/ci/publish-build and finish-release, through gh-retry, against a fake gh. No
+# network.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/../.." && pwd)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# publish-build finds the release folder from its own path, so it runs from a copy of the layout.
+mkdir -p "$work/bin" "$work/repo/scripts/ci" "$work/repo/apps/desktop/release"
+cp "$root/scripts/ci/publish-build" "$root/scripts/ci/finish-release" "$root/scripts/ci/gh-retry" "$work/repo/scripts/ci/"
+touch "$work/repo/apps/desktop/release/"{parallax-1-mac-arm64.dmg,parallax-1-mac-arm64.zip,nightly-mac.yml}
+
+# Logs each call. The fail file holds a pattern and how many matching calls still fail. A failed
+# download leaves a cut-off file, as real gh does, and any other failure prints an error's body to
+# stdout, as gh api does. A download refuses a file that exists unless it has --clobber.
+cat > "$work/bin/gh" << 'FAKE'
+#!/usr/bin/env bash
+echo "$*" >> "$GH_LOG"
+failing() {
+  [ -f "$FAIL_FILE" ] || return 1
+  read -r pattern left < "$FAIL_FILE"
+  [[ $ARGS == *"$pattern"* ]] && [ "$left" -gt 0 ] || return 1
+  echo "$pattern $((left - 1))" > "$FAIL_FILE"
+}
+ARGS=$*
+if [ "$1 $2" = "release download" ]; then
+  file=$7/$5
+  if [ -e "$file" ] && [[ $ARGS != *--clobber* ]]; then echo "$file already exists" >&2; exit 1; fi
+  if failing; then echo "cut off" > "$file"; echo "HTTP 500" >&2; exit 1; fi
+  printf 'version: 1\nfiles:\n  - url: %s\n' "$5" > "$file"
+  exit 0
+fi
+if failing; then echo '{"message":"Server Error"}'; echo "HTTP 500" >&2; exit 1; fi
+case "$1 $2" in
+  "release view") if [ -n "${FAKE_ASSETS:-}" ]; then printf '%s\n' $FAKE_ASSETS; fi ;;
+  "release upload") if [ "$(basename "$4")" = SHA256SUMS ]; then cp "$4" "$SUMS_COPY"; fi ;;
+  "api "*) printf 'sha256:aaa nightly-win-arm64.yml\nsha256:bbb nightly-win-x64.yml\n' ;;
+esac
+FAKE
+chmod +x "$work/bin/gh"
+
+export PATH="$work/bin:$PATH" TAG=v1-nightly CHANNEL=nightly GH_RETRY_WAITS="0 0 0" GH_REPO=ryan-stoffel/parallax
+export GH_LOG=$work/log FAIL_FILE=$work/fail SUMS_COPY=$work/sums
+
+# Runs one script, with the given calls failing, and sets STATUS and CALLS.
+run() {
+  local script=$1
+  shift
+  rm -f "$GH_LOG" "$FAIL_FILE" "$SUMS_COPY"
+  if [ $# -gt 0 ]; then echo "$1 $2" > "$FAIL_FILE"; fi
+  set +e
+  "$work/repo/scripts/ci/$script" > /dev/null 2>&1
+  STATUS=$?
+  set -e
+  CALLS=$(cat "$GH_LOG")
+}
+
+publish() { run publish-build "$@"; }
+finish() { ALL_BUILT=true FAKE_ASSETS="nightly-win-x64.yml nightly-win-arm64.yml" run finish-release "$@"; }
+
+expect_calls() {
+  local want=$1 got
+  got=$(grep -cF -- "$2" <<< "$CALLS" || true)
+  [ "$got" = "$want" ] || { echo "expected $want calls with '$2', got $got"; echo "$CALLS"; exit 1; }
+}
+
+expect_status() {
+  [ "$STATUS" = "$1" ] || { echo "expected exit $1, got $STATUS"; echo "$CALLS"; exit 1; }
+}
+
+# Nothing fails: one upload per file, then publish.
+publish
+expect_status 0
+expect_calls 3 "release upload"
+expect_calls 1 "release edit v1-nightly --draft=false"
+
+# An upload fails twice: only that file is repeated, the metadata still goes last, and it publishes.
+publish "mac-arm64.zip" 2
+expect_status 0
+expect_calls 1 "mac-arm64.dmg"
+expect_calls 3 "mac-arm64.zip --clobber"
+[ "$(grep "release upload" <<< "$CALLS" | tail -n 1)" = "release upload v1-nightly nightly-mac.yml --clobber" ] \
+  || { echo "the metadata didn't go last"; echo "$CALLS"; exit 1; }
+expect_calls 1 "release edit"
+
+# Publishing fails once, as in run 42058401421: the build still passes.
+publish "--draft=false" 1
+expect_status 0
+expect_calls 2 "release edit"
+
+# An upload never works: four tries, then the job fails with no metadata and no publish.
+publish "mac-arm64.zip" 99
+expect_status 1
+expect_calls 4 "mac-arm64.zip --clobber"
+expect_calls 0 "nightly-mac.yml"
+expect_calls 0 "release edit"
+
+# gh api answers a 500 once: its error body stays out of SHA256SUMS, and the retry's answer goes in.
+finish "releases/tags" 1
+expect_status 0
+expect_calls 2 "releases/tags"
+[ "$(cat "$SUMS_COPY")" = "$(printf 'aaa  nightly-win-arm64.yml\nbbb  nightly-win-x64.yml')" ] \
+  || { echo "wrong SHA256SUMS"; cat "$SUMS_COPY"; exit 1; }
+
+# A download is cut off: the retry replaces what it left.
+finish "nightly-win-x64.yml" 1
+expect_status 0
+expect_calls 2 "--pattern nightly-win-x64.yml"
+expect_calls 1 "/SHA256SUMS --clobber"
+
+echo "publish-build.test: ok"

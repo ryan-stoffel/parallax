@@ -1,0 +1,258 @@
+import { GitCompare, Undo2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+
+import type { ThreadRun } from "../protocol/generated/protocol";
+import { useConnectedNow } from "./ConnectionStatus";
+import { describeError } from "./errors";
+import { ChangesDiff } from "./ChangesDiff";
+import { useProviders } from "./providers";
+import { ConfirmDialog, EmptyState, Picker } from "./ui";
+
+/** Open the Changes view, on `runId`'s turn `turn` if given, scrolled to the file at `path`. */
+export type ChangesRequest = { runId?: string; turn?: number; path?: string };
+
+/** A diff as plxd sent it, or why it couldn't. */
+type Shown = { diff: string; truncated?: boolean } | { error: string };
+
+/** The turns the view lists: those that started and weren't undone, oldest first. */
+const turnsOf = (runs: ThreadRun[]) =>
+  runs.filter((r) => r.ordinal !== undefined && r.status !== "rolledBack");
+
+const ready = (r: ThreadRun) => r.checkpoint?.status === "ready";
+
+/** Why Claude can't go back to the end of turn `r`, in plxd's words, or nothing when it can. */
+const cursorRefusal = (r: ThreadRun, sessionId: string | undefined) =>
+  !r.cursor
+    ? `Parallax didn't record where the conversation stood after turn ${r.ordinal}, so it can't go back there. Edit from a later turn instead, or start a new thread.`
+    : r.sessionId !== sessionId
+      ? `Turn ${r.ordinal} ran in an earlier session, before this thread moved between providers, so the conversation can't go back there. Edit from a later turn instead, or start a new thread.`
+      : undefined;
+
+/**
+ * The side panel's Changes view (0062): the open thread's diff across every turn, or one turn's,
+ * from the checkpoints plxd captures as each turn ends. A turn's Edit from here reverts the thread
+ * to before it, as T3 Code's does, keeping or restoring its files, and puts its message back in
+ * the composer through `onCompose`. `prompt` is the first turn's message, which plxd keeps with
+ * the thread. `version` changes when a checkpoint is captured or the thread reverted, which reloads
+ * the turns. `unavailable` says why it can't load, such as a plxd without `checkpoints`.
+ * `sessionId` is the thread's provider session: Claude goes back only to a turn that recorded
+ * where it ended (`cursor`) in that session, as plxd checks. A new `request` for this thread shows
+ * its turn, scrolled to its file, as a turn's changes card asks, and `onRequestShown` then clears
+ * it, so the panel mounting again starts from every turn.
+ */
+export function ChangesPanel({
+  hostId,
+  runId,
+  prompt,
+  backend,
+  sessionId,
+  running,
+  version,
+  request,
+  onRequestShown,
+  unavailable,
+  onCompose,
+}: {
+  hostId: string;
+  runId: string;
+  prompt: string;
+  backend: string;
+  sessionId?: string;
+  running: boolean;
+  version?: number;
+  request?: ChangesRequest;
+  onRequestShown?: () => void;
+  unavailable?: string;
+  onCompose: (text: string) => void;
+}) {
+  const providers = useProviders(hostId);
+  const backendKind =
+    providers?.providers.find((p) => p.instance.id === backend)?.instance.kind ?? backend;
+  const connectedNow = useConnectedNow(hostId);
+  const [runs, setRuns] = useState<ThreadRun[] | { error: string }>();
+  // The turn shown by its ordinal, or every turn.
+  const mine = request?.runId === runId ? request : undefined;
+  const [shownTurn, setShownTurn] = useState<number | "all">(mine?.turn ?? "all");
+  const [asked, setAsked] = useState(mine);
+  if (mine && mine !== asked) {
+    setAsked(mine);
+    if (mine.turn !== undefined) setShownTurn(mine.turn);
+  }
+  // Once shown, the request is done, so the panel opening again starts from every turn.
+  useEffect(() => {
+    if (mine) onRequestShown?.();
+  }, [mine, onRequestShown]);
+  const [shown, setShown] = useState<Shown>();
+  const [reverting, setReverting] = useState(false);
+  const [revertError, setRevertError] = useState<string>();
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  const load = async () => {
+    const answer = await window.parallax.request(hostId, "orchestration/threadRuns", {
+      threadId: runId,
+    });
+    setRuns("error" in answer ? { error: describeError(answer.error) } : answer.result.runs);
+  };
+  useEffect(() => {
+    if (!unavailable) void load();
+    // `load` reads only these.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostId, runId, version, unavailable]);
+
+  useEffect(() => {
+    if (unavailable) return;
+    // Checkpoint details stay on the thread subscription, outside the shell's stream.
+    return window.parallax.watch(hostId, { threadId: runId }, (message) => {
+      if (
+        message.type === "snapshot" ||
+        (message.type === "event" &&
+          ["thread.checkpoint", "thread.reverted"].includes(message.event.event.kind))
+      )
+        void load();
+    });
+    // `load` reads only these.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostId, runId, unavailable]);
+
+  const turns = Array.isArray(runs) ? turnsOf(runs) : [];
+  const latest = turns.findLast(ready)?.ordinal;
+  const turn = shownTurn === "all" ? undefined : turns.find((t) => t.ordinal === shownTurn);
+  // A turn a revert undid falls back to every turn.
+  const ordinal = turn && ready(turn) ? turn.ordinal! : undefined;
+
+  useEffect(() => {
+    if (latest === undefined) return setShown(undefined);
+    if (!connectedNow) return;
+    let stale = false;
+    const answer =
+      ordinal === undefined
+        ? window.parallax.request(hostId, "orchestration/getFullThreadDiff", {
+            threadId: runId,
+            to: latest,
+          })
+        : window.parallax.request(hostId, "orchestration/getTurnDiff", {
+            threadId: runId,
+            from: ordinal - 1,
+            to: ordinal,
+          });
+    void answer.then((a) => {
+      if (!stale) setShown("error" in a ? { error: describeError(a.error) } : a.result);
+    });
+    return () => {
+      stale = true;
+    };
+  }, [hostId, runId, latest, ordinal, connectedNow]);
+
+  const previous = turn ? turns[turns.indexOf(turn) - 1] : undefined;
+  const refusal =
+    running || turns.some((t) => ["starting", "running", "waiting"].includes(t.status))
+      ? "Interrupt the current turn before reverting checkpoints."
+      : !["claude", "codex", "fake"].includes(backendKind)
+        ? "This provider does not support reverting conversation history. Start a new thread instead."
+        : previous && !ready(previous)
+          ? "The previous turn has no ready checkpoint to revert to."
+          : backendKind === "claude" && previous
+            ? cursorRefusal(previous, sessionId)
+            : undefined;
+
+  if (unavailable) return <Empty title="Changes aren't available" hint={unavailable} />;
+  if (runs && "error" in runs) return <Empty title="Couldn't load the changes" hint={runs.error} />;
+  if (runs && latest === undefined)
+    return <Empty title="No changes yet" hint="Edits from this thread show up here for review." />;
+
+  // Edit from here goes back to the turn before this one, or the thread's start.
+  const editFromHere = async (restoreFiles: boolean) => {
+    if (!turn || refusal || reverting) return;
+    const before = previous?.ordinal ?? 0;
+    setReverting(true);
+    setRevertError(undefined);
+    const answer = await window.parallax.request(hostId, "orchestration/dispatch", {
+      type: "checkpoint.rollback",
+      threadId: runId,
+      ordinal: before,
+      ...(restoreFiles && { restoreFiles }),
+    });
+    setReverting(false);
+    if ("error" in answer) return setRevertError(describeError(answer.error));
+    dialog.current?.close();
+    setShownTurn("all");
+    onCompose(turn.text ?? (turns.indexOf(turn) === 0 ? prompt : ""));
+    void load();
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <span className="flex min-w-0 flex-1">
+          <Picker
+            label="Turn"
+            value={String(ordinal ?? "all")}
+            onChange={(v) => setShownTurn(v === "all" ? "all" : Number(v))}
+            options={[
+              { value: "all", label: "All turns" },
+              ...turns.filter(ready).map((t) => ({
+                value: String(t.ordinal),
+                label: `Turn ${t.ordinal}: ${firstLine(t.text ?? (t === turns[0] ? prompt : "")) || "(no text)"}`,
+              })),
+            ]}
+            panelClassName="max-w-96 min-w-60"
+          />
+        </span>
+        {turn && (
+          <button
+            type="button"
+            disabled={!!refusal || reverting}
+            title={refusal}
+            onClick={() => {
+              setRevertError(undefined);
+              dialog.current?.showModal();
+            }}
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Undo2 aria-hidden className="size-3.5" />
+            Edit from here
+          </button>
+        )}
+      </div>
+      {shown && "error" in shown && (
+        <p role="alert" className="px-3 py-2 text-body text-danger">
+          {shown.error}
+        </p>
+      )}
+      {shown && "diff" in shown && (
+        <ChangesDiff
+          key={`${latest}/${ordinal ?? "all"}`}
+          diff={shown.diff}
+          truncated={shown.truncated}
+          focus={asked?.turn === ordinal ? asked : undefined}
+        />
+      )}
+      <ConfirmDialog
+        ref={dialog}
+        title="Edit from here?"
+        action="Revert files too"
+        busy={reverting ? "Reverting…" : undefined}
+        error={refusal ?? revertError}
+        onConfirm={() => void editFromHere(true)}
+        alternate={{ action: "Revert and keep changes", onConfirm: () => void editFromHere(false) }}
+      >
+        Revert chat to before turn {turn?.ordinal}. Its prompt returns to the composer. Revert files
+        too replaces the files in this thread’s worktree. Revert and keep changes leaves them as
+        they are.
+      </ConfirmDialog>
+    </div>
+  );
+}
+
+const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
+
+function Empty({ title, hint }: { title: string; hint: string }) {
+  return (
+    <EmptyState
+      icon={<GitCompare aria-hidden />}
+      title={title}
+      body={hint}
+      className="flex-1 justify-center pb-16"
+    />
+  );
+}

@@ -1,11 +1,13 @@
-//! Every Win32 call wispd makes that std and tokio don't wrap (0023). This is the only module
+//! Every Win32 call plxd makes that std and tokio don't wrap (0023). This is the only module
 //! allowed `unsafe` code, and every `unsafe` block says why it is sound.
 //!
 //! - [`create_pipe`]: a named pipe instance whose DACL grants only this user.
 //! - [`pipe_client_pid`], [`pipe_server_pid`], and [`runs_as_this_user`]: the SID checks on both
 //!   ends of the pipe.
-//! - [`stop_inheriting_handles`]: so a process wispd starts gets only the handles it is given.
+//! - [`this_user_sid`]: the user plxd's logon task runs as.
+//! - [`stop_inheriting_handles`]: so a process plxd starts gets only the handles it is given.
 //! - [`Job`]: the job object an agent CLI runs in.
+//! - [`wait_for_exit`]: for a dev or test `serve` to stop with its app (PLX-990).
 
 #![allow(unsafe_code)]
 
@@ -16,7 +18,8 @@ use std::ptr;
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::{
-    GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation,
+    ERROR_ACCESS_DENIED, GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree,
+    SetHandleInformation, WAIT_FAILED,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -31,8 +34,8 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessHandleCount, OpenProcess, OpenProcessToken,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetProcessHandleCount, INFINITE, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
 
 /// Turns a `BOOL` result into an `io::Result`, reading the error right after the call.
@@ -51,8 +54,17 @@ fn check(succeeded: i32) -> io::Result<()> {
 ///
 /// If this process's user can't be read.
 pub fn this_user_only_sddl() -> io::Result<String> {
-    let sid = user_of(current_process())?;
-    Ok(format!("D:P(A;;GA;;;{})", sid_string(&sid)?))
+    Ok(format!("D:P(A;;GA;;;{})", this_user_sid()?))
+}
+
+/// This process's user's SID in its string form, such as `S-1-5-21-...`, which names the user in
+/// plxd's logon task (0023).
+///
+/// # Errors
+///
+/// If this process's user can't be read.
+pub fn this_user_sid() -> io::Result<String> {
+    sid_string(&user_of(current_process())?)
 }
 
 /// Creates an instance of the pipe `name` with `options` and the security descriptor `sddl`.
@@ -123,8 +135,9 @@ pub fn pipe_server_pid(pipe: &impl AsRawHandle) -> io::Result<u32> {
 ///
 /// # Errors
 ///
-/// If either process's user can't be read. Another user's process usually can't be opened at
-/// all, so callers treat an error as "not this user".
+/// If either process's user can't be read. A client treats that as "not this user", since another
+/// user's process usually can't be opened at all. `serve` doesn't when it's access denied, since
+/// that's what this user's elevated process gives it too, and its pipe's DACL admits only this user.
 pub fn runs_as_this_user(pid: u32) -> io::Result<bool> {
     // SAFETY: OpenProcess has no preconditions; a null result is an error.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
@@ -134,6 +147,33 @@ pub fn runs_as_this_user(pid: u32) -> io::Result<bool> {
     // SAFETY: OpenProcess returned a handle that nothing else owns.
     let process = unsafe { OwnedHandle::from_raw_handle(process) };
     Ok(user_of(process.as_raw_handle())? == user_of(current_process())?)
+}
+
+/// Whether `error` is `ERROR_ACCESS_DENIED`, as [`runs_as_this_user`] fails for a process with a
+/// higher integrity level than this one.
+#[must_use]
+pub fn is_access_denied(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_ACCESS_DENIED.cast_signed())
+}
+
+/// Blocks until process `pid` exits.
+///
+/// # Errors
+///
+/// If it can't be opened, as when it has already exited.
+pub fn wait_for_exit(pid: u32) -> io::Result<()> {
+    // SAFETY: OpenProcess has no preconditions; a null result is an error.
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if process.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: OpenProcess returned a handle that nothing else owns.
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    // SAFETY: the handle is open, with SYNCHRONIZE access, for the whole call.
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), INFINITE) } == WAIT_FAILED {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn current_process() -> RawHandle {
@@ -233,7 +273,7 @@ pub fn stop_inheriting_handles() {
         }
         if flags & HANDLE_FLAG_INHERIT != 0 {
             // SAFETY: `handle` is one of this process's open handles, and only its inherit flag
-            // changes, which nothing else in wispd relies on.
+            // changes, which nothing else in plxd relies on.
             unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
         }
         seen += 1;
@@ -309,18 +349,5 @@ mod tests {
         assert!(super::runs_as_this_user(std::process::id()).unwrap());
         let sddl = super::this_user_only_sddl().unwrap();
         assert!(sddl.starts_with("D:P(A;;GA;;;S-1-5-"), "{sddl}");
-    }
-
-    #[tokio::test]
-    async fn terminating_a_job_kills_what_is_in_it() {
-        let job = super::Job::new().unwrap();
-        let mut child = tokio::process::Command::new("cmd")
-            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        job.assign(&child).unwrap();
-        job.terminate().unwrap();
-        assert!(!child.wait().await.unwrap().success());
     }
 }

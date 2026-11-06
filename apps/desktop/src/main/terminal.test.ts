@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { CliKind } from "../protocol/generated/protocol";
-import { loginCommand } from "./terminal";
+import { loginCommand, hostLogin, masterCommand } from "./terminal";
 
 const mini = { destination: "me@mini", ssh: "ssh" };
 
@@ -13,12 +13,11 @@ test("runs a CLI's sign-in here, through cmd.exe for a Windows batch shim", () =
   expect(loginCommand("codex", "C:\\Tools\\codex.exe", undefined, "win32").args).toEqual(["login"]);
   expect(loginCommand("codex", "C:\\Users\\A B\\npm\\codex.CMD", undefined, "win32")).toEqual({
     file: process.env["ComSpec"] ?? "cmd.exe",
-    args: '/d /s /c ""C:\\Users\\A B\\npm\\codex.CMD" login"',
+    args: ["/d", "/c", "C:\\Users\\A B\\npm\\codex.CMD", "login"],
   });
 });
 
 test("runs it over ssh -t, quoting the path for the host's shell", () => {
-  // From a Mac: Windows runs ssh.exe, which the next test covers.
   const remote = (cli: CliKind, path: string) => loginCommand(cli, path, mini, "darwin");
   const ssh = (...args: string[]) => ({
     file: "ssh",
@@ -45,12 +44,25 @@ test("runs it over ssh -t, quoting the path for the host's shell", () => {
   expect(remote("claude", "C:\\Users\\A B\\.local\\bin\\claude.exe").args.at(-1)).toBe(
     '"C:\\Users\\A B\\.local\\bin\\claude.exe" auth login',
   );
+  // A provider instance's login, with its home: here as a variable, there before the command.
+  const home = { CODEX_HOME: "/Users/me/.codex-work" };
+  expect(loginCommand("codex", "codex", undefined, "darwin", ["login"], home)).toEqual({
+    file: "codex",
+    args: ["login"],
+    env: home,
+  });
+  expect(loginCommand("codex", "codex", mini, "darwin", ["login"], home).args.at(-1)).toBe(
+    "CODEX_HOME=/Users/me/.codex-work codex login",
+  );
 });
 
-test("runs ssh.exe on Windows, where node-pty won't add the extension", () => {
-  const path = "/usr/local/bin/codex";
-  expect(loginCommand("codex", path, mini, "win32").file).toBe("ssh.exe");
-  const custom = { ...mini, ssh: "C:\\Tools\\ssh.exe" };
-  expect(loginCommand("codex", path, custom, "win32").file).toBe("C:\\Tools\\ssh.exe");
-  expect(loginCommand("codex", path, mini, "linux").file).toBe("ssh");
+test("only a saved SSH host has a login, and not on Windows", () => {
+  const saved = [{ id: "h-mini", destination: "me@mini" }];
+  expect(hostLogin("h-mini", saved, "ssh", "darwin")).toEqual(
+    masterCommand({ destination: "me@mini", ssh: "ssh" }),
+  );
+  for (const id of ["h-gone", "local", "tailnet:abc"]) {
+    expect(hostLogin(id, saved, "ssh", "darwin")).toBeUndefined();
+  }
+  expect(hostLogin("h-mini", saved, "ssh", "win32")).toBeUndefined();
 });

@@ -9,20 +9,25 @@
 # none).
 set -euo pipefail
 
+retry=$(cd "$(dirname "$0")" && pwd)/gh-retry
 cd "$(dirname "$0")/../../apps/desktop/release"
+
+gh() { "$retry" "$@"; }
 
 write() {
   if [ "${DRY_RUN:-}" = 1 ]; then echo "dry run: gh $*"; else gh "$@"; fi
 }
 
-# The installers, the macOS zip, and the blockmaps; then the channel's update metadata.
+# The installers, the macOS zip, the blockmaps, and plxd by itself with its .sha256; then the
+# channel's update metadata.
 files=()
-for f in wisp-*; do [ -f "$f" ] && files+=("$f"); done
+for f in parallax-*; do [ -f "$f" ] && files+=("$f"); done
 if [ ${#files[@]} = 0 ]; then echo "publish-build: no installer in $PWD" >&2; exit 1; fi
 # Both Windows builds write <channel>.yml. Each attaches its own as <channel>-win-<arch>.yml, which
 # no updater reads, and release.yml's finish job joins the two from the release into <channel>.yml.
 if [ -f "$CHANNEL.yml" ]; then
-  exe=(wisp-*-win-*.exe)
+  # The installer's name starts with its version; plxd's own exe, parallax-plxd-*, doesn't.
+  exe=(parallax-[0-9]*-win-*.exe)
   [ -f "${exe[0]}" ] || { echo "publish-build: $CHANNEL.yml without a Windows installer" >&2; exit 1; }
   arch=${exe[0]##*-win-}
   mv "$CHANNEL.yml" "$CHANNEL-win-${arch%.exe}.yml"
@@ -43,10 +48,10 @@ for f in "${files[@]}" ${metadata[@]+"${metadata[@]}"}; do grep -qxF -- "$f" <<<
 if [ "$missing" = 0 ]; then
   echo "This build's files are already on $TAG."
 else
-  # The metadata goes last, so an updater never finds it before the files it names. A failed upload
-  # fails the job and leaves the metadata off; re-running the job replaces what did arrive.
-  write release upload "$TAG" "${files[@]}" --clobber
-  if [ ${#metadata[@]} -gt 0 ]; then write release upload "$TAG" "${metadata[@]}" --clobber; fi
+  # One file per call, so a retry repeats only the file that failed. The metadata goes last, so an
+  # updater never finds it before the files it names. An upload that keeps failing fails the job and
+  # leaves the metadata off; re-running the job replaces what did arrive.
+  for f in "${files[@]}" ${metadata[@]+"${metadata[@]}"}; do write release upload "$TAG" "$f" --clobber; done
 fi
 
 # Publishing creates the tag at the commit plan named. Every build does it once its own files are

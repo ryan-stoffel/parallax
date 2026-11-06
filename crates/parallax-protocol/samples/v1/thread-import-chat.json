@@ -1,0 +1,78 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/importedChats",
+    "params": {
+      "chats": [
+        {
+          "source": "chatgpt",
+          "id": "6703a1f2-0b9c-8008-a1b2-3c4d5e6f7a8b",
+          "createdAt": "2026-09-02T18:00:00Z"
+        },
+        {
+          "source": "claudeChat",
+          "id": "f2b7c0de-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+          "createdAt": "2026-08-11T09:30:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "threads": [
+        "01990b8a-7c00-7d3e-8f4a-5b6c7d8e9f01",
+        null
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/importChat",
+    "params": {
+      "source": "claudeChat",
+      "id": "f2b7c0de-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+      "title": "Plan a week in Lisbon",
+      "createdAt": "2026-08-11T09:30:00Z",
+      "messages": [
+        {
+          "role": "user",
+          "text": "Plan a week in Lisbon for two."
+        },
+        {
+          "role": "assistant",
+          "text": "Day one: Alfama and the castle."
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01989835-0e80-7d3e-8f4a-5b6c7d8e9f02",
+        "repo": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "createdAt": "2026-10-19T19:00:00Z",
+        "lastPromptAt": "2026-10-19T19:00:00Z",
+        "archived": true
+      },
+      "run": {
+        "id": "01989835-0e80-7d3e-8f4a-5b6c7d8e9f02",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+        "prompt": "Plan a week in Lisbon for two.",
+        "policy": "workspaceWrite",
+        "status": "completed",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/0e807d3e",
+        "worktreePath": "/Users/me/.parallax/worktrees/scratch/01989835-0e80-7d3e-8f4a-5b6c7d8e9f02",
+        "createdAt": "2026-10-19T19:00:00Z",
+        "updatedAt": "2026-10-19T19:00:00Z"
+      }
+    }
+  }
+]

@@ -1,0 +1,146 @@
+//! `thread/setProject` (0090, PLX-1108): a thread added to a Project keeps working where it was, gets
+//! the Project's instructions in its next CLI process, and leaves the Project when it's deleted.
+
+use parallax_protocol::methods::{ProjectCreate, ProjectDelete, RepoUpdate, ThreadSetProject};
+use parallax_protocol::{
+    ProjectCreateParams, ProjectDeleteParams, RepoUpdateParams, Thread, ThreadSetProjectParams,
+};
+
+use super::*;
+
+/// The fake CLI as a backend that records each run's instructions.
+struct WithInstructions {
+    fake: FakeBackend,
+    seen: Arc<Mutex<Vec<Option<String>>>>,
+}
+
+impl Backend for WithInstructions {
+    fn name(&self) -> &str {
+        self.fake.name()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.fake.capabilities()
+    }
+
+    fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        self.seen.lock().unwrap().push(request.instructions.clone());
+        self.fake.start(request)
+    }
+}
+
+impl Conn {
+    async fn set_project(
+        &mut self,
+        threads: Vec<RunId>,
+        project: Option<RepoId>,
+    ) -> Result<Vec<Thread>, ErrorObject> {
+        self.call::<ThreadSetProject>(ThreadSetProjectParams { threads, project })
+            .await
+            .map(|result| result.threads)
+    }
+}
+
+#[tokio::test]
+async fn a_thread_added_to_a_project_gets_its_instructions_and_leaves_when_it_goes() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(WithInstructions {
+            fake: fake_backend(editing()),
+            seen: Arc::clone(&seen),
+        }),
+    );
+    let host = Host::start(backends);
+    let mut client = host.client().await;
+    let chat = client
+        .call::<ThreadStart>(start_params(None, "Plan a trip"))
+        .await
+        .unwrap()
+        .thread;
+    let mut runs = host.client().await;
+    runs.subscribe(0, Some(scope(chat.repo))).await;
+    runs.until(updated_to(AgentStatus::Completed)).await;
+    let project = client
+        .call::<ProjectCreate>(ProjectCreateParams {
+            id: RepoId::generate(),
+            name: "Travel".to_owned(),
+            icon: None,
+        })
+        .await
+        .unwrap()
+        .repo;
+    client
+        .call::<RepoUpdate>(RepoUpdateParams {
+            repo: project.id,
+            icon: None,
+            icon_if_unset: false,
+            name: None,
+            instructions: Some("Answer in French.".to_owned()),
+            files: None,
+        })
+        .await
+        .unwrap();
+
+    let added = client
+        .set_project(vec![chat.id], Some(project.id))
+        .await
+        .unwrap();
+    assert_eq!(added[0].project, Some(project.id));
+    assert_eq!(added[0].repo, chat.repo, "it keeps working where it was");
+    let listed = client.list().await;
+    let listed = listed.threads.iter().find(|t| t.id == chat.id).unwrap();
+    assert_eq!(listed.project, Some(project.id));
+
+    // Its next CLI process gets the Project's instructions; its first had none. Both are told to
+    // ask for secrets through the card, in the channel every CLI shows its model (0098).
+    client
+        .call::<AgentSend>(message(chat.id, "And a packing list"))
+        .await
+        .unwrap();
+    runs.until(updated_to(AgentStatus::Completed)).await;
+    let seen = seen.lock().unwrap().clone();
+    let (first, last) = (
+        seen[0].as_deref().unwrap_or_default(),
+        seen.last().unwrap().as_deref().unwrap_or_default(),
+    );
+    assert!(!first.contains("Answer in French."), "{seen:?}");
+    assert!(last.contains("Answer in French."), "{seen:?}");
+    #[cfg(not(windows))]
+    for told in [first, last] {
+        assert!(told.contains("request_secret"), "{seen:?}");
+        assert!(told.contains("Permission denied"), "{seen:?}");
+    }
+
+    // A thread started in the Project lives there, and no thread or no Project is refused.
+    let inside = client
+        .call::<ThreadStart>(start_params(Some(project.id), "Book a hotel"))
+        .await
+        .unwrap()
+        .thread;
+    let refused = client.set_project(vec![inside.id], None).await.unwrap_err();
+    assert_eq!(refused.code, INVALID_PARAMS);
+    let none = client
+        .set_project(Vec::new(), Some(project.id))
+        .await
+        .unwrap_err();
+    assert_eq!(none.code, INVALID_PARAMS);
+    let unknown = client
+        .set_project(vec![chat.id], Some(RepoId::generate()))
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&unknown), ErrorKind::RepoNotFound);
+
+    // Deleting the Project deletes what started there and takes the added thread out.
+    client
+        .call::<ProjectDelete>(ProjectDeleteParams {
+            project: project.id,
+        })
+        .await
+        .unwrap();
+    let listed = client.list().await;
+    assert!(listed.threads.iter().all(|t| t.id != inside.id));
+    let chat = listed.threads.iter().find(|t| t.id == chat.id).unwrap();
+    assert_eq!(chat.project, None);
+}

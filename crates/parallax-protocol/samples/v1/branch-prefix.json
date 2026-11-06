@@ -1,0 +1,13 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "host/settings/set",
+    "params": { "branchPrefix": "ryan/" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": { "autoResume": true, "branchPrefix": "ryan/" }
+  }
+]
