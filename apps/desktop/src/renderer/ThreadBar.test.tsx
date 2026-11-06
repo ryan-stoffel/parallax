@@ -7,6 +7,7 @@ import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, LoggedEvent } from "../protocol/generated/protocol";
 import { localId, type Host } from "./hosts";
+import type { PullRequests } from "./PullRequests";
 import { ThreadBar } from "./ThreadBar";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -34,6 +35,7 @@ const render = (props: {
   canOpenPr: boolean;
   onPrOpened?: (url: string) => void;
   onOpenPrs?: () => void;
+  prs?: PullRequests;
 }) =>
   act(() => {
     root ??= createRoot(document.body.appendChild(document.createElement("div")));
@@ -70,6 +72,19 @@ test("it names where the thread runs and its branch, then its pull request, or h
   expect(all.title).toBe("#41, #43");
   act(() => all.click());
   expect(onOpenPrs).toHaveBeenCalledOnce();
+});
+
+test("several pull requests take the color of most of them", () => {
+  const urls = [41, 42, 43].map((n) => `https://github.com/acme/web/pull/${n}`);
+  const state = { [urls[0]!]: "merged", [urls[1]!]: "open", [urls[2]!]: "merged" };
+  const prs = {
+    urls,
+    get: (url: string) => ({ pr: { state: state[url] } }),
+  } as unknown as PullRequests;
+  render({ run: { ...run, pullRequests: urls }, canOpenPr: false, prs });
+  const count = document.querySelector('[aria-label="3 pull requests"] span')!;
+  expect(count.className).toContain("text-project-violet");
+  expect(count.textContent).toBe("3");
 });
 
 test("Create PR opens one titled like the thread and hands it on", async () => {

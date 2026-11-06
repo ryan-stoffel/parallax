@@ -184,7 +184,7 @@ import {
 } from "./ui";
 import { PanelResize } from "./PanelResize";
 import { numberOf } from "./github";
-import { lookOf, usePullRequests, type PullRequests } from "./PullRequests";
+import { majorityLook, usePullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
@@ -3178,21 +3178,6 @@ const groupHeading =
 /** A Traditional folder's heading: a row with its repo's icon and name, its count, and a chevron. */
 const folderHeading =
   "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body font-medium text-foreground/90 transition-colors outline-none enabled:hover:bg-hover enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
-
-/**
- * The look of a thread's linked pull requests: that of the most common state among those read,
- * and the newest linked one on a tie.
- */
-function majorityLook(prs: PullRequests) {
-  const read = prs.urls.flatMap((url) => prs.get(url)?.pr ?? []);
-  let best: (typeof read)[number] | undefined;
-  let top = 0;
-  for (const pr of read) {
-    const n = read.filter((p) => p.state === pr.state).length;
-    if (n >= top) [best, top] = [pr, n];
-  }
-  return lookOf(best);
-}
 
 /** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
 function DraftStatus() {

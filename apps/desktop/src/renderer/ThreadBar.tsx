@@ -1,4 +1,4 @@
-import { GitBranch, GitPullRequest, GitPullRequestArrow, LoaderCircle } from "lucide-react";
+import { GitBranch, GitPullRequestArrow, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
@@ -8,7 +8,7 @@ import { numberOf } from "./github";
 import { GitHubLogo } from "./logos";
 import { lookOf } from "./pr/parts";
 import { notify } from "./notifications";
-import type { PullRequests } from "./PullRequests";
+import { majorityLook, type PullRequests } from "./PullRequests";
 import { hostIcon } from "./RunTargetMenu";
 import { titleOf } from "./threads";
 
@@ -20,7 +20,8 @@ const item =
  * A thread's bar under the composer (PLX-1459), as a new thread's shows where it will run: the
  * computer and checkout the thread runs in and its branch, then its pull request, GitHub's mark and
  * its number in its state's color, which opens in the app as the thread's other PR links do. With
- * more than one, the mark, a pull request icon, and how many, which opens them all (`onOpenPrs`).
+ * more than one, the mark, then how many beside the state icon of most of them, in its color, as
+ * the sidebar shows them, which opens them all (`onOpenPrs`).
  * With none, Create PR once it has a commit (`canOpenPr`). Create PR runs `agent/openPr` and hands the pull request to `onPrOpened`; one that
  * fails for `gh` offers `onSetUpGithub` (PLX-423). `prs` reads each one's state for its chip.
  */
@@ -49,6 +50,8 @@ export function ThreadBar({
   const [opening, setOpening] = useState(false);
   const urls = run.pullRequests ?? [];
   const place = run.checkout ? "Local checkout" : "Worktree";
+  // Neutral in a pane that isn't focused, which reads no pull requests' state.
+  const most = prs ? majorityLook(prs) : lookOf();
   const openPr = async () => {
     setOpening(true);
     const prTitle = title ?? titleOf(run);
@@ -109,8 +112,10 @@ export function ThreadBar({
             className={`${item} hover:bg-hover hover:text-foreground`}
           >
             <GitHubLogo aria-hidden className="text-foreground" />
-            <GitPullRequest aria-hidden />
-            <span className="tabular-nums">{urls.length}</span>
+            <span className={`flex items-center gap-1 tabular-nums ${most.color}`}>
+              <most.Icon aria-hidden />
+              {urls.length}
+            </span>
           </button>
         )}
         {urls.length === 0 && canOpenPr && (
