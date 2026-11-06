@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test } from "vite-plus/test";
 
-import { threadUsageOf, UsageRing } from "./ComposerUsage";
+import { staleContext, threadUsageOf, tokensShort, UsageRing } from "./ComposerUsage";
 import type { RequestUsage } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -57,4 +57,26 @@ test("another provider or account, or a disconnect, can't show this request's me
   expect(line()).toBeUndefined();
   await render({ accountId: "key-account", measured: { ...usage, accountId: "key-account" } });
   expect(line()).toBe("25% of context used");
+});
+
+test("a Claude thread offers compaction from 200k tokens once its prompt cache has gone", () => {
+  const of = (contextTokens: number, kind = "claude") =>
+    threadUsageOf({
+      connected: true,
+      backend: kind,
+      accountId: kind,
+      kind,
+      usage: {
+        ...usage,
+        backend: kind,
+        accountId: kind,
+        usage: { ...usage.usage, contextTokens, contextWindow: 1_000_000 },
+      },
+    });
+  const minutes = (n: number) => Date.parse(usage.at) + n * 60_000;
+  expect(staleContext(of(415_000), minutes(70))).toBe(415_000);
+  expect(staleContext(of(415_000), minutes(60))).toBeUndefined();
+  expect(staleContext(of(199_000), minutes(120))).toBeUndefined();
+  expect(staleContext(of(415_000, "codex"), minutes(120))).toBeUndefined();
+  expect(tokensShort(415_000)).toBe("415k");
 });

@@ -1,3 +1,4 @@
+import { Minimize2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { RequestUsage, ThreadUsage } from "./transcript";
@@ -70,7 +71,27 @@ export interface ComposerUsageData {
   totals?: Totals;
   /** What the ring shows. Absent while there is nothing to say. */
   summary?: Summary;
+  /** A Claude thread's latest request: its context tokens and when it was reported, in ms. */
+  lastRequest?: { tokens: number; at: number };
 }
+
+// T3 Code's numbers: a Claude thread this full is offered compaction once its prompt cache, an
+// hour, has gone.
+const compactFrom = 200_000;
+const cacheGone = 70 * 60_000;
+
+/**
+ * The context tokens to compact before the next message, `at` ms since the epoch: a Claude
+ * thread's, once they're at least 200k and its prompt cache has gone. Else undefined.
+ */
+export function staleContext(data: ComposerUsageData | undefined, at: number) {
+  const last = data?.lastRequest;
+  return last && last.tokens >= compactFrom && at - last.at >= cacheGone ? last.tokens : undefined;
+}
+
+/** Tokens as T3 Code writes them beside its Compact button, such as `415k` or `1.2m`. */
+export const tokensShort = (n: number) =>
+  n >= 999_500 ? `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m` : `${Math.round(n / 1000)}k`;
 
 /** How the ring reads. */
 interface Summary {
@@ -171,6 +192,11 @@ export function threadUsageOf({
           : "Output speed unavailable. This provider does not report model timing, and turn wall-clock time would include tool runs.",
     totals: shownTotals,
     summary,
+    ...(kind === "claude" &&
+      usage &&
+      measured?.contextTokens !== undefined && {
+        lastRequest: { tokens: measured.contextTokens, at: Date.parse(usage.at) },
+      }),
   };
 }
 
@@ -188,9 +214,16 @@ const ringTone = {
  * Hovering or focusing it
  * peeks at a card with the context, then the latest request's speed and cache hit, then the
  * thread's tokens and cost; a click keeps the card open. Each row's tooltip says what it measures.
- * Nothing shows until there is something to say.
+ * With `onCompact`, the card ends with a button that compacts the thread's context, as T3 Code's
+ * meter does. Nothing shows until there is something to say.
  */
-export function UsageRing({ data }: { data: ComposerUsageData }) {
+export function UsageRing({
+  data,
+  onCompact,
+}: {
+  data: ComposerUsageData;
+  onCompact?: () => void;
+}) {
   const [peek, setPeek] = useState(false);
   const [kept, setKept] = useState(false);
   const open = peek || kept;
@@ -270,6 +303,19 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
         className="absolute right-0 bottom-full z-20 mb-2 w-72 rounded-xl border border-border bg-surface p-3.5 text-body text-foreground shadow-composer tabular-nums"
       >
         <UsageRows data={data} />
+        {onCompact && (
+          <button
+            type="button"
+            onClick={() => {
+              close();
+              onCompact();
+            }}
+            className="mt-3 flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border text-body hover:bg-hover [&_svg]:size-4 [&_svg]:text-muted-foreground"
+          >
+            <Minimize2 aria-hidden />
+            Compact context
+          </button>
+        )}
       </div>
     </div>
   );
