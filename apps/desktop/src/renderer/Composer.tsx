@@ -1137,6 +1137,8 @@ export function Composer({
   const lastAt = claudeUsage?.at;
   useEffect(() => {
     if (lastAt === undefined) return;
+    // Current at once, too, such as after waking or reconnecting.
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
   }, [lastAt]);
@@ -1575,7 +1577,7 @@ export function Composer({
       !keepHistory &&
       !steer &&
       !background &&
-      !/^\/compact$/i.test(sentText);
+      !/^\/compact(?:\s|$)/i.test(sentText);
     const failed =
       (compactFirst ? await onSend!("/compact", options, [], []) : undefined) ??
       (await (steer ? onSteer! : background ? onSendInBackground! : onSend)(

@@ -704,6 +704,10 @@ test("a stale Claude thread compacts before the next message, unless Keep is pic
     "/compact",
     "Pick up where we left off",
   ]);
+  // A `/compact` of its own, with instructions or not, isn't compacted first.
+  onSend.mockClear();
+  await send("/compact keep the API notes");
+  expect(onSend.mock.calls.map(([text]) => text)).toEqual(["/compact keep the API notes"]);
 
   onSend.mockClear();
   act(() => toggle().click());
