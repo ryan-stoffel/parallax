@@ -344,14 +344,19 @@ impl Store {
     }
 
     /// The Clerk user id this host registered with the relay under, if it has (0091), and on the
-    /// instance `issuer`. One on another instance, or recorded before plxd kept the instance, is
-    /// none: its tokens can't be checked here, so the host is set up again (PLX-1049).
+    /// instance `issuer`. One recorded before plxd kept the instance is on `unrecorded`. One on
+    /// another instance is none: its tokens can't be checked here (PLX-1049).
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn relay_account(&self, issuer: &str) -> Result<Option<String>, StoreError> {
-        if self.text(RELAY_ACCOUNT_ISSUER)?.as_deref() != Some(issuer) {
+    pub fn relay_account(
+        &self,
+        issuer: &str,
+        unrecorded: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let recorded = self.text(RELAY_ACCOUNT_ISSUER)?;
+        if recorded.as_deref().unwrap_or(unrecorded) != issuer {
             return Ok(None);
         }
         self.text(RELAY_ACCOUNT)
@@ -625,31 +630,27 @@ mod tests {
         assert!(store.remote().unwrap());
     }
 
-    /// The account counts only on the Clerk instance it was recorded on (PLX-1049): one from
-    /// another instance, or from before plxd kept the instance, reads as none.
+    /// The account counts only on the Clerk instance it was recorded on (PLX-1049), and one from
+    /// before plxd kept the instance is on the one named for it: the development instance.
     #[test]
     fn the_relay_account_is_none_on_another_clerk_instance() {
         const DEV: &str = "https://adjusted-mastodon-8705.clerk.accounts.dev";
         const PROD: &str = "https://clerk.parallax.codes";
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
+        let account = |issuer| store.relay_account(issuer, DEV).unwrap();
         store
             .set_text(super::RELAY_ACCOUNT, Some("user_old"))
             .unwrap();
-        assert_eq!(store.relay_account(DEV).unwrap(), None);
+        assert_eq!(account(DEV).as_deref(), Some("user_old"));
+        assert_eq!(account(PROD), None);
 
         store.set_relay_account("user_dev", DEV).unwrap();
-        assert_eq!(
-            store.relay_account(DEV).unwrap().as_deref(),
-            Some("user_dev")
-        );
-        assert_eq!(store.relay_account(PROD).unwrap(), None);
+        assert_eq!(account(DEV).as_deref(), Some("user_dev"));
+        assert_eq!(account(PROD), None);
 
         store.set_relay_account("user_prod", PROD).unwrap();
-        assert_eq!(
-            store.relay_account(PROD).unwrap().as_deref(),
-            Some("user_prod")
-        );
-        assert_eq!(store.relay_account(DEV).unwrap(), None);
+        assert_eq!(account(PROD).as_deref(), Some("user_prod"));
+        assert_eq!(account(DEV), None);
     }
 }

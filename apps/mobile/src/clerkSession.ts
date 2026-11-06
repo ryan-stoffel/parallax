@@ -29,10 +29,13 @@ export async function refreshOrSignOut<T>(
 /** What the sign-in screen says after a session from another Clerk instance is dropped. */
 export const MOVED = "Parallax accounts moved. Sign in again, then set up each computer again.";
 
+/** The development instance's Frontend API, which issued every session saved before the phone kept one. */
+const DEVELOPMENT_API = "https://adjusted-mastodon-8705.clerk.accounts.dev";
+
 /**
- * The session the Keychain held as `raw`, if the Clerk instance at `api` issued it. One from
- * another instance, or saved before the app kept one, as before the move to production
- * (PLX-1049), is `moved`: its tokens mean nothing here, so the phone is signed out.
+ * The session the Keychain held as `raw`, if the Clerk instance at `api` issued it. One saved
+ * before the phone kept its instance is the development instance's. One from another instance is
+ * `moved`: its tokens mean nothing here, so the phone is signed out (PLX-1049).
  */
 export function restore<T extends { api: string }>(
   raw: string | null,
@@ -40,5 +43,7 @@ export function restore<T extends { api: string }>(
 ): { session: T | null; moved: boolean } {
   if (!raw) return { session: null, moved: false };
   const saved = JSON.parse(raw) as Partial<T>;
-  return saved.api === api ? { session: saved as T, moved: false } : { session: null, moved: true };
+  return (saved.api ?? DEVELOPMENT_API) === api
+    ? { session: { ...saved, api } as T, moved: false }
+    : { session: null, moved: true };
 }

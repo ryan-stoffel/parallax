@@ -468,14 +468,15 @@ async fn lists(daemon: &Daemon) -> Result<Lists, ErrorObject> {
 }
 
 /// The Clerk user id this host registered under (0091), if it's on the Clerk instance plxd checks
-/// tokens against. One recorded on another instance is none, so the host is set up again
-/// (PLX-1049).
+/// tokens against. One recorded before plxd kept the instance is on the development instance, the
+/// only one then. One recorded on another instance is none (PLX-1049).
 pub(crate) async fn account(daemon: &Daemon) -> Option<String> {
     let issuer = daemon.clerk.issuer().to_owned();
     daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
-            db.relay_account(&issuer).map_err(|e| store_error(&e))
+            db.relay_account(&issuer, crate::clerk::DEVELOPMENT_ISSUER)
+                .map_err(|e| store_error(&e))
         })
         .await
         .ok()

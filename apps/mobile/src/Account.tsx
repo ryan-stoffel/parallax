@@ -34,11 +34,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, Icon, Mark, SkyBanner, T, useColors } from "./ui";
 
 // The Clerk instance and the desktop app's OAuth application there, both public (desktop:
-// main/account.ts): production's (PLX-1049). The phone signs in as the same application.
-// EXPO_PUBLIC_CLERK_API and EXPO_PUBLIC_CLERK_CLIENT_ID point a build at another instance, such as
-// the development one.
-const PUBLISHABLE_KEY = "pk_live_Y2xlcmsucGFyYWxsYXguY29kZXMk";
-const CLIENT_ID = process.env.EXPO_PUBLIC_CLERK_CLIENT_ID ?? "mp9Q72aAbB0LC83O";
+// main/account.ts): the development instance's until the move to production ships (PLX-1465).
+// The phone signs in as the same application. EXPO_PUBLIC_CLERK_API and
+// EXPO_PUBLIC_CLERK_CLIENT_ID point a build at another instance.
+const PUBLISHABLE_KEY = "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
+const CLIENT_ID = process.env.EXPO_PUBLIC_CLERK_CLIENT_ID ?? "SXDueyOLOJ2v4Vmq";
 const SCOPES = "profile email offline_access";
 const KEY = "account";
 /** Where Clerk sends the sign-in back: one of the OAuth application's redirect URIs. */
