@@ -1,0 +1,24 @@
+/* Both pages' style, in the colors of the relay's sign-in page (relay/src/connect-code.ts). */
+:root { color-scheme: light dark; --bg: #fff; --fg: #1e1b4b; --muted: #4a4868; --line: rgb(30 27 75 / 10%); --code: rgb(30 27 75 / 4%); --link: #2b5cff; --overlap: #1e1b4b; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #000; --fg: #e8e8e8; --muted: #a3a3a3; --line: rgb(255 255 255 / 10%); --code: rgb(255 255 255 / 6%); --link: #5b80ff; --overlap: #e4e4e7; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+main { width: min(720px, 100%); margin: 0 auto; padding: 48px 20px 64px; }
+header { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
+header svg { width: 28px; height: 28px; }
+header a { color: var(--fg); font-weight: 600; font-size: 18px; text-decoration: none; }
+h1 { margin: 0 0 8px; font-size: 26px; line-height: 1.25; letter-spacing: -.02em; }
+h2 { margin: 36px 0 8px; font-size: 18px; }
+p, li { color: var(--muted); }
+p { margin: 8px 0; }
+ul { padding-left: 20px; }
+li { margin: 4px 0; }
+a { color: var(--link); }
+strong { color: var(--fg); font-weight: 600; }
+code { font: .9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--fg); }
+pre { margin: 8px 0 16px; padding: 12px 14px; white-space: pre-wrap; word-break: break-all; border: 1px solid var(--line); border-radius: 8px; background: var(--code); }
+pre code { font-size: 13px; }
+nav { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); }
+.todo { padding: 1px 4px; border-radius: 4px; background: #ffe58a; color: #000; }
