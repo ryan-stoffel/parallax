@@ -51,11 +51,18 @@ const render = (props: {
     );
   });
 
-test("it names where the thread runs and its branch, then its pull request, or how many", () => {
+test("it labels the place icons and shows its branch, then its pull request, or how many", () => {
   const url = "https://github.com/acme/web/pull/41";
   render({ run: { ...run, pullRequests: [url] }, canOpenPr: true });
   const text = document.body.textContent;
-  expect(text).toContain("macbook·Worktree");
+  expect(text).not.toContain("macbook");
+  expect(text).not.toContain("Worktree");
+  expect(document.querySelector('[role="img"][aria-label="macbook"]')?.getAttribute("title")).toBe(
+    "macbook",
+  );
+  expect(document.querySelector('[role="img"][aria-label="Worktree"]')?.getAttribute("title")).toBe(
+    "Worktree",
+  );
   expect(text).toContain("parallax/readme");
   expect(document.querySelector(`a[href="${url}"]`)?.textContent).toBe("#41");
   // A thread with a pull request has no Create PR.
@@ -72,6 +79,11 @@ test("it names where the thread runs and its branch, then its pull request, or h
   expect(all.title).toBe("#41, #43");
   act(() => all.click());
   expect(onOpenPrs).toHaveBeenCalledOnce();
+
+  render({ run: { ...run, checkout: true }, canOpenPr: false });
+  expect(
+    document.querySelector('[role="img"][aria-label="Local checkout"]')?.getAttribute("title"),
+  ).toBe("Local checkout");
 });
 
 test("several pull requests take the color of most of them", () => {

@@ -1,4 +1,4 @@
-import { GitBranch, GitPullRequestArrow, LoaderCircle } from "lucide-react";
+import { Folder, FolderGit2, GitBranch, GitPullRequestArrow, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
@@ -18,7 +18,7 @@ const item =
 
 /**
  * A thread's bar under the composer (PLX-1459), as a new thread's shows where it will run: the
- * computer and checkout the thread runs in and its branch, then its pull requests, marked as the
+ * computer and checkout as icons on the left, and its branch and pull requests on the right, marked as the
  * sidebar marks them after GitHub's: the state icon of most of them in its color, then the one's
  * number, which opens in the app as the thread's other PR links do, or `+N` more, which opens them
  * all (`onOpenPrs`).
@@ -71,25 +71,21 @@ export function ThreadBar({
   };
   return (
     <>
-      <span className="flex min-w-0 items-center">
-        <span className={`${item} shrink-0`} title={`${host.name} · ${place}`}>
+      <span className="flex shrink-0 items-center">
+        <span className={item} role="img" aria-label={host.name} title={host.name}>
           {hostIcon(host)}
-          <span className="composer-host truncate">{host.name}</span>
-          <span className="composer-detail flex shrink-0 items-center gap-1.5">
-            <span aria-hidden className="text-faint-foreground">
-              ·
-            </span>
-            {place}
-          </span>
         </span>
+        <span className={item} role="img" aria-label={place} title={place}>
+          {run.checkout ? <Folder aria-hidden /> : <FolderGit2 aria-hidden />}
+        </span>
+      </span>
+      <span className="flex min-w-0 items-center gap-1">
         {run.branch && (
           <span className={item} title={`Branch: ${run.branch}`}>
             <GitBranch aria-hidden />
             <span className="truncate">{run.branch}</span>
           </span>
         )}
-      </span>
-      <span className="flex shrink-0 items-center gap-1">
         {urls.length > 0 &&
           (() => {
             // As the sidebar marks them: the state icon of most of them, then the one's number or
@@ -108,7 +104,7 @@ export function ThreadBar({
               <a
                 href={urls[0]}
                 title={prs?.get(urls[0]!)?.pr?.title ?? urls[0]}
-                className={`${item} hover:bg-hover`}
+                className={`${item} shrink-0 hover:bg-hover`}
               >
                 {mark}
               </a>
@@ -118,7 +114,7 @@ export function ThreadBar({
                 aria-label={`${urls.length} pull requests`}
                 title={urls.map((url) => `#${numberOf(url)}`).join(", ")}
                 onClick={onOpenPrs}
-                className={`${item} hover:bg-hover`}
+                className={`${item} shrink-0 hover:bg-hover`}
               >
                 {mark}
               </button>
@@ -129,7 +125,7 @@ export function ThreadBar({
             type="button"
             disabled={opening}
             onClick={() => void openPr()}
-            className={`${item} enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-60`}
+            className={`${item} shrink-0 enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-60`}
           >
             {opening ? (
               <LoaderCircle aria-hidden className="animate-spin" />
