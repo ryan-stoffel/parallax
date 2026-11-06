@@ -515,22 +515,26 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
     server.stop().await;
 }
 
-/// A route to `to` through loopback that counts the connections made through it.
-async fn counting_route(to: String) -> (String, Arc<AtomicUsize>) {
+/// A route to `to` through loopback that counts the connections made through it, and the
+/// connections it carries, which a test can cut.
+type Carried = Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>;
+async fn counting_route(to: String) -> (String, Arc<AtomicUsize>, Carried) {
     let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
     let route = listener.local_addr().unwrap().to_string();
     let count = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&count);
+    let carried = Carried::default();
+    let (counted, carrying) = (Arc::clone(&count), Arc::clone(&carried));
     tokio::spawn(async move {
         while let Ok((mut inbound, _)) = listener.accept().await {
             counted.fetch_add(1, Ordering::Relaxed);
             let mut outbound = tokio::net::TcpStream::connect(&to).await.unwrap();
-            tokio::spawn(async move {
+            let copy = tokio::spawn(async move {
                 let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
             });
+            carrying.lock().unwrap().push(copy.abort_handle());
         }
     });
-    (route, count)
+    (route, count, carried)
 }
 
 /// Through the relay each connection is a stream, so a new device's sign-in, its request's value,
@@ -541,7 +545,7 @@ async fn a_sign_in_takes_one_connection_from_its_request_to_its_approval() {
     let dir = temp_dir();
     let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
     set_relay(&mut client, true).await;
-    let (route, connections) = counting_route(route).await;
+    let (route, connections, _) = counting_route(route).await;
     let phone = temp_dir();
 
     let (route, signed_in) = sign_in(&issuer, &[route], &host_id, USER, "phone", phone.path())
@@ -565,6 +569,44 @@ async fn a_sign_in_takes_one_connection_from_its_request_to_its_approval() {
         "{approved:?}"
     );
     assert_eq!(connections.load(Ordering::Relaxed), 1);
+    server.stop().await;
+}
+
+/// A kept connection the host closed before the next step gets no answer, so the step goes again
+/// on a new connection, as it would have before connections were kept.
+#[tokio::test]
+async fn a_step_on_a_kept_connection_the_host_closed_goes_again_on_a_new_one() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    set_relay(&mut client, true).await;
+    let (route, connections, carried) = counting_route(route).await;
+    let phone = temp_dir();
+
+    let (route, signed_in) = sign_in(&issuer, &[route], &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    let SignIn::Pending { request, .. } = signed_in else {
+        panic!("a new device waits: {signed_in:?}");
+    };
+    for copy in carried.lock().unwrap().drain(..) {
+        copy.abort();
+    }
+    let waiting = {
+        let (request, dir, host_id) = (request.clone(), phone.path().to_owned(), host_id.clone());
+        tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
+    };
+    sleep(Duration::from_millis(200)).await;
+    client
+        .call::<AccessApprove>(AccessRequestParams { request })
+        .await
+        .unwrap();
+    let approved = waiting.await.unwrap();
+    assert!(
+        matches!(approved, Ok(SignIn::Approved { .. })),
+        "{approved:?}"
+    );
+    assert_eq!(connections.load(Ordering::Relaxed), 2);
     server.stop().await;
 }
 

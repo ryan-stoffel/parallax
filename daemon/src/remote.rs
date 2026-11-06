@@ -1153,22 +1153,26 @@ fn kept(route: &str, pin: &Pin) -> Option<TlsStream<crate::relay::Stream>> {
     Some(kept.swap_remove(at).tls)
 }
 
-/// One HTTPS request to `route` as a sign-in step: on the connection the last step left open when
-/// there is one, so a sign-in through the relay takes one stream (PLX-1462), else on a new one.
-/// Pinning holds either way, since a connection is kept with the pin it was checked against.
-async fn step(
-    route: &str,
-    pin: &Pin,
-    method: &str,
-    path: &str,
-    headers: &[(&str, &str)],
-    body: Option<&serde_json::Value>,
-) -> Result<(u16, Vec<u8>), Error> {
-    let tls = match kept(route, pin) {
-        Some(tls) => tls,
-        None => open_pinned(route, pin).await?.0,
+/// A request's connection failed before any of its answer came back, which a kept connection the
+/// host already closed does. It keeps the network's error, and says what it says.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct Unanswered(io::Error);
+
+/// [`Unanswered`], as the error a request answers with.
+fn unanswered(error: io::Error) -> Error {
+    Error::Io(io::Error::other(Unanswered(error)))
+}
+
+/// Whether `error` is [`Unanswered`].
+fn is_unanswered(error: &Error) -> bool {
+    let Error::Io(error) = error else {
+        return false;
     };
-    send(tls, route, Some(pin), method, path, headers, body).await
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<Unanswered>())
+        .is_some()
 }
 
 /// The [`Descriptor`] of the host at the end of `stream`, over TLS to the certificate `pin`
@@ -1215,9 +1219,9 @@ async fn send(
         let _ = write!(head, "{name}: {value}\r\n");
     }
     head.push_str("\r\n");
-    tls.write_all(head.as_bytes()).await?;
-    tls.write_all(body.as_bytes()).await?;
-    tls.flush().await?;
+    tls.write_all(head.as_bytes()).await.map_err(unanswered)?;
+    tls.write_all(body.as_bytes()).await.map_err(unanswered)?;
+    tls.flush().await.map_err(unanswered)?;
     let (status, answer, open) = read_answer(&mut tls).await?;
     if let Some(pin) = keep.filter(|_| open && status == 202) {
         leave_open(route, pin, tls);
@@ -1226,7 +1230,8 @@ async fn send(
 }
 
 /// The status and body of the answer on `tls`, read to its `Content-Length`, or to the end without
-/// one, and whether the host keeps the connection open after it.
+/// one, and whether the host keeps the connection open after it. [`Unanswered`] when the connection
+/// ended before the answer's first byte.
 async fn read_answer(
     tls: &mut TlsStream<crate::relay::Stream>,
 ) -> Result<(u16, Vec<u8>, bool), Error> {
@@ -1238,8 +1243,16 @@ async fn read_answer(
             Ok(read) => read,
             // A peer that closes without TLS's close_notify still sent the whole answer.
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => 0,
+            Err(error) if answer.is_empty() => return Err(unanswered(error)),
             Err(error) => return Err(error.into()),
         };
+        if read == 0 && answer.is_empty() {
+            let ended = io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "plxd closed the connection without answering",
+            );
+            return Err(unanswered(ended));
+        }
         answer.extend_from_slice(&chunk[..read]);
         let mut headers = [httparse::EMPTY_HEADER; 16];
         let mut response = httparse::Response::new(&mut headers);
@@ -1703,7 +1716,11 @@ async fn sign_in_at(
     })
 }
 
-/// One call to `/api/auth/approval` with `body`: 200 with a session, or 202 while it waits.
+/// One call to `/api/auth/approval` with `body`: 200 with a session, or 202 while it waits. It goes
+/// on the connection the last sign-in step left open when there is one, so a sign-in through the
+/// relay takes one stream (PLX-1462). Pinning holds, since a connection is kept with its pin. A kept
+/// connection the host already closed gets no answer, and then the call goes once more on a new
+/// one, with a new proof. Sending the same step twice is safe.
 async fn approval_step(
     route: &str,
     pin: &Pin,
@@ -1711,9 +1728,22 @@ async fn approval_step(
     body: &serde_json::Value,
 ) -> Result<(u16, serde_json::Value), Error> {
     let path = "/api/auth/approval";
-    let proof = key.proof("POST", &url(route, path), None);
-    let headers = [("DPoP", proof.as_str())];
-    let (status, answer) = step(route, pin, "POST", path, &headers, Some(body)).await?;
+    let call = async |tls| {
+        let proof = key.proof("POST", &url(route, path), None);
+        let headers = [("DPoP", proof.as_str())];
+        send(tls, route, Some(pin), "POST", path, &headers, Some(body)).await
+    };
+    let reused = match kept(route, pin) {
+        Some(tls) => match call(tls).await {
+            Err(error) if is_unanswered(&error) => None,
+            sent => Some(sent?),
+        },
+        None => None,
+    };
+    let (status, answer) = match reused {
+        Some(answered) => answered,
+        None => call(open_pinned(route, pin).await?.0).await?,
+    };
     match status {
         200 | 202 => Ok((status, json(&answer)?)),
         401 | 403 => Err(Error::Refused),
