@@ -470,6 +470,29 @@ pub fn host_proof_client(candidate: bool) {
     PROOF_CLIENT.store(candidate, Ordering::Relaxed);
 }
 
+/// Controls/observes only the local fixture's host data socket, leaving control online.
+#[cfg(feature = "host-routing-proof")]
+pub async fn host_proof_carrier(host_id: &str, replace: Option<bool>) -> Result<bool, Error> {
+    let (url, token) = CLIENT
+        .get()
+        .ok_or_else(|| Error::Protocol("proof not signed in".into()))?;
+    let body = replace.map(|replace| json!({ "replace": replace }));
+    let (status, answer) = http(
+        url,
+        if replace.is_some() { "POST" } else { "GET" },
+        &format!("/v1/hosts/{host_id}/proof-carrier"),
+        Some(token),
+        body.as_ref(),
+    )
+    .await?;
+    if status != 200 {
+        return Err(Error::Protocol(format!(
+            "proof carrier control refused: {status}"
+        )));
+    }
+    Ok(answer["ready"] == true)
+}
+
 /// [`websocket`], with the HTTP status the relay refused the upgrade with, if it answered one.
 async fn upgrade(
     url: &str,
@@ -1908,18 +1931,9 @@ async fn stream(
     spare: Option<mpsc::Sender<()>>,
     (held, gone, check): (Held, mpsc::UnboundedSender<String>, watch::Receiver<()>),
 ) {
-    let id = message["stream"].as_str().unwrap_or_default();
-    let token = message["token"].as_str().unwrap_or_default();
-    // Both go into a path, so only their alphabets.
-    let plain = |text: &str, extra: &[u8]| {
-        !text.is_empty()
-            && text
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
-    };
-    if !plain(id, b"-") || !plain(token, b"-_") {
+    let Some((id, token)) = stream_identity(&message) else {
         return warn!("the relay announced a stream with a bad id or token");
-    }
+    };
     let end = EndSlot::default();
     let holding = Holding::new(held, gone, id, Arc::clone(&end));
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
@@ -2019,6 +2033,19 @@ async fn stream(
             }
         }
     }
+}
+
+/// A stream's id and one-time token go into a path, so accept only their alphabets.
+fn stream_identity(message: &Value) -> Option<(&str, &str)> {
+    let id = message["stream"].as_str()?;
+    let token = message["token"].as_str()?;
+    let plain = |text: &str, extra: &[u8]| {
+        !text.is_empty()
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
+    };
+    (plain(id, b"-") && plain(token, b"-_")).then_some((id, token))
 }
 
 /// plxd's answer to a webhook frame from the relay: the head's JSON length (u32, big-endian), the

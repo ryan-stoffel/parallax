@@ -28,14 +28,15 @@ export class ProofHost extends HostRelay {
     if (!this.slots.has(id)) return super.streamObject(host, id);
     return {
       arm: async () => {},
-      close: async (code: number, reason: string) => { await this.finish(id, code, reason, false); },
+      close: async (code: number, reason: string) => { await this.finish(id, code, reason); },
       hostJoined: async () => this.slots.get(id)?.joined === true,
       taken: async () => {},
       hostGone: async () => { await this.finish(id); },
     };
   }
   private signal(id: string, t: string, extra = {}) {
-    this.carrier?.send(JSON.stringify({ t, id, ...extra }));
+    if (this.carrier?.readyState === WebSocket.OPEN)
+      this.carrier.send(JSON.stringify({ t, id, ...extra }));
   }
   private ready(id: string) {
     const s = this.slots.get(id);
@@ -48,6 +49,8 @@ export class ProofHost extends HostRelay {
   async proofConnect(user: string): Promise<Response> {
     const refused = await this.admit(user);
     if (refused) return Response.json(refused, { status: refused.status });
+    if (this.carrier?.readyState !== WebSocket.OPEN)
+      return Response.json({ error: "carrier_unavailable" }, { status: 503 });
     const opened = await this.newStream(user, false, true);
     if ("error" in opened) return Response.json(opened, { status: opened.status });
     const s = this.slots.get(opened.stream);
@@ -79,8 +82,10 @@ export class ProofHost extends HostRelay {
       const [client, server] = Object.values(new WebSocketPair());
       this.carrier = server!;
       server!.binaryType = "arraybuffer";
-    server!.accept();
-      server!.addEventListener("message", e => { void this.fromCarrier(e.data); });
+      server!.accept();
+      server!.addEventListener("message", e => {
+        if (this.carrier === server) void this.fromCarrier(e.data);
+      });
       const lost = () => {
         try { server!.close(1000, "closed"); } catch {}
         if (this.carrier !== server) return;
@@ -95,14 +100,28 @@ export class ProofHost extends HostRelay {
     // Original signed, replay-checked host control authentication issues a single-use carrier token.
     const response = await super.fetch(request);
     if (response.status === 101) {
-      for (const id of this.slots.keys()) await this.finish(id, 1011, "control epoch changed");
-      this.carrier?.close(1000, "epoch changed");
-      this.carrier = undefined;
-      this.token = randomToken();
-      for (const ws of this.ctx.getWebSockets("host"))
-        ws.send(JSON.stringify({ t: "proof", token: this.token }));
+      await this.replaceCarrier(true, "control epoch changed");
     }
     return response;
+  }
+  /** Local proof fault injection, with the same account ownership check as admission. */
+  async proofCarrier(user: string, replace?: boolean) {
+    const status = await this.status(user);
+    if (!status?.online) return { status: 404 };
+    if (replace !== undefined) await this.replaceCarrier(replace, "carrier replaced");
+    return { status: 200, ready: this.carrier?.readyState === WebSocket.OPEN };
+  }
+  private async replaceCarrier(replace: boolean, reason: string) {
+    this.token = undefined;
+    const carrier = this.carrier;
+    this.carrier = undefined; // Ignore any late messages from this generation before yielding.
+    for (const id of this.slots.keys()) await this.finish(id, 1011, reason);
+    if (carrier?.readyState === WebSocket.OPEN) carrier.close(1000, reason);
+    if (replace) {
+      this.token = randomToken();
+      for (const ws of this.ctx.getWebSockets("host"))
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "proof", token: this.token }));
+    }
   }
   private async fromCarrier(message: string | ArrayBuffer) {
     if (typeof message !== "string") {
@@ -143,13 +162,13 @@ export class ProofHost extends HostRelay {
     const bytes = s.bytes; s.bytes = 0;
     if (!(await this.report(id, bytes, closed)) && !closed) await this.finish(id, 4429, "daily limit");
   }
-  private async finish(id: string, code = 1000, reason = "closed", report = true) {
+  private async finish(id: string, code = 1000, reason = "closed") {
     const s = this.slots.get(id);
     if (!s || s.ending) return;
     s.ending = true;
     // Drain notification is ordered after DATA, independently of accounting settlement.
     s.client?.close(code, reason); this.signal(id, "fin");
-    if (report) await this.settle(id, true);
+    await this.settle(id, true);
     this.slots.delete(id);
   }
   private async scheduleProof() {
@@ -166,9 +185,9 @@ export class ProofHost extends HostRelay {
 }
 export default {
   async fetch(request: Request, env: Env) {
-    const match = new URL(request.url).pathname.match(/^\/v1\/hosts\/([\w-]{43})\/(proof-connect|proof-data)$/);
+    const match = new URL(request.url).pathname.match(/^\/v1\/hosts\/([\w-]{43})\/(proof-connect|proof-data|proof-carrier)$/);
     if (!match) return worker.fetch(request as Parameters<typeof worker.fetch>[0], env);
-    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response(null, {status:426});
+    if (match[2] !== "proof-carrier" && request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response(null, {status:426});
     const address = network(request.headers.get("cf-connecting-ip") ?? "");
     if (!(await env.ANON.limit({key:`${address}:${match[1]}`})).success)
       return Response.json({error:"rate_limited"},{status:429});
@@ -177,6 +196,17 @@ export default {
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
     const user = token ? await verifySession(env, token).catch(() => null) : null;
     if (!user) return new Response(null, { status: 401 });
+    if (match[2] === "proof-carrier") {
+      if (request.method === "GET") {
+        const result = await host.proofCarrier(user);
+        return Response.json(result, {status:result.status});
+      }
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      const body = await request.json() as {replace?: unknown};
+      if (typeof body.replace !== "boolean") return new Response(null, { status: 400 });
+      const result = await host.proofCarrier(user, body.replace);
+      return Response.json(result, {status:result.status});
+    }
     return host.fetch("https://proof/proof-client", {headers: {upgrade: "websocket", "x-proof-user": user}});
   },
 };

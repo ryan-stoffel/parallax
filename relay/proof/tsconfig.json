@@ -1,1 +1,1 @@
-{"extends":"../tsconfig.json","include":["../src","./worker.ts","./host.test.ts"]}
+{"extends":"../tsconfig.json","include":["../src","./worker.ts","./host.test.ts","./reconnect.test.ts"]}

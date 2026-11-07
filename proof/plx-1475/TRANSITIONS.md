@@ -10,7 +10,7 @@ Base: 98c78ca4e5a735c22c12c24148e6eed126fd88c4. Production default unchanged.
 | Directional FIN | Prior DATA sent before FIN notification | Native pipe drains and waits for close response before Holding cleanup. No replay |
 | Carrier loss | Stop all streams | Ordered drain cannot be asserted on loss, close and settle once locally |
 | Report | Original frame minimum / byte threshold / timer and HostRelay.report | No retry/dedup semantics added, report failure is unsupported |
-| Epoch change | Original control proof and settleStreams | Close proof streams, invalidate carrier token; no stream migration |
+| Epoch change | Original control proof and settleStreams | Settle buffered proof counts, close proof streams, invalidate carrier token; no stream migration |
 
 Test-only subclass and debug-only native adapter. Local per-stream sockets bridge native pipe into
 one persistent host network socket. Client sockets remain fresh. This serial feasibility adapter
@@ -20,3 +20,8 @@ Unproved: report commit/ack loss and crash debt, stale-owner delayed reports, hi
 reconciliation, total resident memory, slow-reader fairness, control floods, full revocation races,
 UTC rollover, proxy diversity. These block adoption/security parity. No comparative timing may be
 accepted until implemented-slice cap/accounting/final HTTP response/WS drain gates pass.
+
+Carrier fault injection is local-only and account-checked. Loss/replacement leaves
+control online; detached generations cannot send into replacement logical streams.
+Accounting on reconnect is tested before unregister can reset traffic. Durable
+crash recovery, stale-owner reports and commit/ack-loss deduplication remain unproved.

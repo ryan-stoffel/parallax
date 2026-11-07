@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { delayDuplex } from "./delay-duplex.mjs";
 
 const proof = process.env.PLX_HOST_PROOF === "1";
 const relayDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -99,18 +100,9 @@ if (proof) {
   });
   await new Promise(resolve => front.listen(0, "127.0.0.1", resolve));
   const delay = Number(process.env.PLX_HOST_PROOF_DELAY_MS ?? 0);
-  delayed = createServer(socket => {
-    const upstream = connect(front.address().port, "127.0.0.1");
-    const leg = (from, to) => {
-      from.on("data", chunk => {
-        from.pause();
-        setTimeout(() => { if (!to.destroyed) to.write(chunk, () => from.resume()); }, delay);
-      });
-      from.on("end", () => to.end());
-      from.on("error", () => to.destroy());
-      from.on("close", () => to.destroy());
-    };
-    leg(socket, upstream); leg(upstream, socket);
+  delayed = createServer({allowHalfOpen:true}, socket => {
+    const upstream = connect({port:front.address().port,host:"127.0.0.1",allowHalfOpen:true});
+    delayDuplex(socket, upstream, delay);
   });
   await new Promise(resolve => delayed.listen(0, "127.0.0.1", resolve));
   url = `https://127.0.0.1:${delayed.address().port}`;
