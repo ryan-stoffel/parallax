@@ -1,0 +1,56 @@
+# Parallax Relay (PLX-652, decision 0068). README.md has the deploy steps and what they need.
+#
+# The top level is production. `pnpm dev` runs `[env.dev]`. Both take Clerk's production and
+# development instances.
+name = "parallax-relay"
+main = "proof/worker.ts"
+compatibility_date = "2026-10-01"
+
+# relay.parallax.codes, on the account's parallax.codes zone, and no workers.dev URL.
+routes = []
+workers_dev = false
+
+# Clerk's production and development instances (0067), in that order, each with its JWKS and the
+# desktop app's OAuth application, whose access tokens the relay accepts. All public. The apps use
+# development until the account move ships (PLX-1465), and it leaves only after that, PLX-1457,
+# and a stable release carrying both (README.md).
+[vars]
+CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
+CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
+CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq"
+
+# Workers Logs keeps every console line, which `src/log.ts` keeps free of ids and tokens (PLX-1349).
+[observability]
+enabled = true
+
+# Invocation logs stay off: each holds its request's URL, and those carry full host ids, webhook
+# tokens, and stream tokens.
+[observability.logs]
+invocation_logs = false
+
+[[durable_objects.bindings]]
+name = "HOSTS"
+class_name = "ProofHost"
+
+[[durable_objects.bindings]]
+name = "USERS"
+class_name = "UserAccount"
+
+# One per client stream, so one stream's bytes don't queue behind another's (0091).
+[[durable_objects.bindings]]
+name = "STREAMS"
+class_name = "StreamRelay"
+
+# Anonymous requests per address and host, before they reach a host's object.
+[[ratelimits]]
+name = "ANON"
+namespace_id = "6520"
+simple = { limit = 120, period = 60 }
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ProofHost", "UserAccount"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["StreamRelay"]

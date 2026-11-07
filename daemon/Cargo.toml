@@ -17,6 +17,7 @@ workspace = true
 # Linux, so workers need neither installed (PLX-895). Release builds (scripts/ci/package-app).
 [features]
 fake-backend = []
+host-routing-proof = []
 sandbox-tools = []
 
 [dependencies]

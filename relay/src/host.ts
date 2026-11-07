@@ -190,7 +190,7 @@ export class HostRelay extends DurableObject<Env> {
    * A new stream for plxd to join, armed with the hash of the one-time token plxd is sent with
    * it, and counted as open. A spare waits for the next client.
    */
-  private async newStream(user: string, spare: boolean): Promise<Refusal | { stream: string }> {
+  protected async newStream(user: string, spare: boolean, proofRoute = false): Promise<Refusal | { stream: string }> {
     const reserved = await this.ctx.blockConcurrencyWhile(async () => {
       const owner = await this.owner();
       if (owner?.user !== user) return { status: 404, error: "not_found" } as Refusal;
@@ -209,10 +209,10 @@ export class HostRelay extends DurableObject<Env> {
     });
     if ("error" in reserved) return reserved;
     const { id, stream, owner, host, proof } = reserved;
-    const object = this.env.STREAMS.get(id);
+    const object = this.streamObject(owner.hostId, stream)!;
     try {
       const token = randomToken();
-      await object.arm({ hostId: owner.hostId, stream, tokenHash: await sha256(token) });
+      const transport = await this.armStream(object, { hostId: owner.hostId, stream, tokenHash: await sha256(token) }, spare, proofRoute);
       const published = await this.ctx.blockConcurrencyWhile(async () => {
         const currentProof = await this.ctx.storage.get<number>("lastProof");
         const current = await this.streams();
@@ -220,21 +220,33 @@ export class HostRelay extends DurableObject<Env> {
         if (!current[stream] || currentProof !== proof || !this.host()) return false;
         current[stream] = spare ? { spare: true } : {};
         await this.ctx.storage.put<Streams>("streams", current);
-        host.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}) }));
+        host.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}), ...transport }));
         return true;
       });
       if (!published) {
-        await object.close(1000, "admission canceled");
+        await this.streamObject(owner.hostId, stream)?.close(1000, "admission canceled");
         await this.forgetStream(stream);
         return { status: 503, error: "host_offline" };
       }
       return { stream };
     } catch (error) {
       // An arm may have committed before its RPC failed. Close before releasing capacity.
-      await object.close(1000, "admission failed");
+      await this.streamObject(owner.hostId, stream)?.close(1000, "admission failed");
       await this.forgetStream(stream);
       throw error;
     }
+  }
+
+  /** Test subclasses can route bytes locally while retaining this authority's slot transitions. */
+  protected streamObject(hostId: string, stream: string): Pick<import("./stream").StreamRelay,
+    "arm" | "close" | "hostJoined" | "taken" | "hostGone"> | null {
+    return streamObject(this.env, hostId, stream);
+  }
+
+  protected async armStream(object: NonNullable<ReturnType<HostRelay["streamObject"]>>,
+    armed: { hostId: string; stream: string; tokenHash: string }, _spare: boolean, _proof = false): Promise<Record<string, boolean>> {
+    await object.arm(armed);
+    return {};
   }
 
   private async forgetStream(stream: string) {
@@ -261,7 +273,7 @@ export class HostRelay extends DurableObject<Env> {
     });
     await Promise.all(
       armed.map((id) =>
-        streamObject(this.env, hostId, id)
+        this.streamObject(hostId, id)
           ?.close(code, reason)
           .catch((error) => logError("host.closeStreams", this.context(), error)),
       ),
@@ -281,7 +293,7 @@ export class HostRelay extends DurableObject<Env> {
     const stays = await Promise.all(
       ids.map(async (id) => {
         if (!listed.has(id)) return false;
-        const joined = streamObject(this.env, hostId, id)?.hostJoined();
+        const joined = this.streamObject(hostId, id)?.hostJoined();
         return joined?.catch((error) => {
           logError("host.settleStreams", this.context(), error);
           return false;
@@ -384,7 +396,7 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** Whether `user` may open a stream to this host now, which counts against `LIMITS.opens`. */
-  private async admit(user: string): Promise<Refusal | null> {
+  protected async admit(user: string): Promise<Refusal | null> {
     const owner = await this.owner();
     // Another user's host looks the same as no host.
     if (owner?.user !== user) return { status: 404, error: "not_found" };
@@ -453,7 +465,7 @@ export class HostRelay extends DurableObject<Env> {
       const { spare, owner } = taken;
       // Ownership is durable before the Worker gets the id. This object's lifetime, not the
       // Worker's request, owns cleanup. A late notification must not re-arm a joined stream.
-      const notification = streamObject(this.env, owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT, timed);
+      const notification = this.streamObject(owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT, timed);
       if (notification) this.ctx.waitUntil(notification.catch((error) => logError("host.take", this.context(), error)));
       return { stream: spare, ...(timed ? { spare: true } : {}) };
     }
@@ -603,7 +615,7 @@ export class HostRelay extends DurableObject<Env> {
       if (streams[parsed.stream]?.pending) {
         await this.forgetStream(parsed.stream);
       } else if (owner && Object.hasOwn(streams, parsed.stream))
-        await streamObject(this.env, owner.hostId, parsed.stream)
+        await this.streamObject(owner.hostId, parsed.stream)
           ?.hostGone()
           .catch((error) => logError("host.gone", this.context(), error));
     } else if (parsed?.t === "removed" && typeof parsed.statement === "string") {
