@@ -57,7 +57,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 pub(crate) mod check;
+#[cfg(feature = "host-routing-proof")]
+mod host_proof;
 mod proxy;
+#[cfg(all(feature = "host-routing-proof", not(debug_assertions)))]
+compile_error!("host-routing-proof is for disposable debug builds only");
 mod seal;
 
 use self::proxy::Proxy;
@@ -458,6 +462,14 @@ async fn websocket(
         .map_err(|(_, error)| error)
 }
 
+#[cfg(feature = "host-routing-proof")]
+static PROOF_CLIENT: AtomicBool = AtomicBool::new(false);
+/// Selects the local proof route for fresh client opens in disposable integration tests.
+#[cfg(feature = "host-routing-proof")]
+pub fn host_proof_client(candidate: bool) {
+    PROOF_CLIENT.store(candidate, Ordering::Relaxed);
+}
+
 /// [`websocket`], with the HTTP status the relay refused the upgrade with, if it answered one.
 async fn upgrade(
     url: &str,
@@ -472,6 +484,12 @@ async fn upgrade(
         .map_err(|e| (None, e.into()))?;
     crate::connect_timing::mark("outer_tls_ready");
     let scheme = if base.tls { "wss" } else { "ws" };
+    #[cfg(feature = "host-routing-proof")]
+    let path = if PROOF_CLIENT.load(Ordering::Relaxed) {
+        path.replace("/connect", "/proof-connect")
+    } else {
+        path.to_owned()
+    };
     let address = format!("{scheme}://{}{path}", base.authority());
     let mut request = address
         .into_client_request()
@@ -778,6 +796,8 @@ async fn ticketed(url: &str, token: &str, host_id: &str) -> Result<WebSocketStre
 /// The relay connection's state, and the wake-up for setting changes.
 #[derive(Debug)]
 pub(crate) struct Relay {
+    #[cfg(feature = "host-routing-proof")]
+    proof: tokio::sync::Mutex<Option<host_proof::Carrier>>,
     /// The relay's URL.
     pub url: String,
     /// Wakes [`run`] when `relay` or `remote` changes, or a registration succeeds.
@@ -856,6 +876,8 @@ impl Relay {
     pub(crate) fn new(url: String) -> Self {
         Self {
             url,
+            #[cfg(feature = "host-routing-proof")]
+            proof: tokio::sync::Mutex::new(None),
             changed: Notify::new(),
             hooks_changed: Notify::new(),
             clock_offset: AtomicI64::new(0),
@@ -1804,6 +1826,14 @@ async fn serve(
                         } else {
                             serde_json::from_str(&text).unwrap_or(Value::Null)
                         };
+                        #[cfg(feature = "host-routing-proof")]
+                        if message["t"] == "proof" {
+                            if let Some(token) = message["token"].as_str() {
+                                let carrier = host_proof::start(&daemon.relay.url, host_id, token, stop.child_token()).await;
+                                *daemon.relay.proof.lock().await = carrier.ok();
+                            }
+                            continue;
+                        }
                         if message["t"] == "check" {
                             daemon.relay.check_answered(message);
                         } else if message["t"] == "open" && serving(daemon).await {
@@ -1896,9 +1926,22 @@ async fn stream(
     let mut unused = spare.clone();
     let relay = &daemon.relay;
     let joined = async {
-        let mut socket = websocket(&relay.url, &path, &[]).await?;
+        #[cfg(feature = "host-routing-proof")]
+        let socket = if message["proof"] == true {
+            let carrier = relay.proof.lock().await;
+            carrier
+                .as_ref()
+                .ok_or_else(|| Error::Protocol("proof carrier unavailable".into()))?
+                .open(id, token)
+                .await?
+        } else {
+            websocket(&relay.url, &path, &[]).await?
+        };
+        #[cfg(not(feature = "host-routing-proof"))]
+        let socket = websocket(&relay.url, &path, &[]).await?;
+        let mut socket = socket;
         let mut keepalive = Keepalive::new(check);
-        if spare.is_some() {
+        if spare.is_some() || (cfg!(feature = "host-routing-proof") && message["proof"] == true) {
             loop {
                 tokio::select! {
                     biased;

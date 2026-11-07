@@ -9,6 +9,7 @@ const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 20
 const kid = "test";
 
 export default defineConfig({
+  test: { include: ["test/**/*.test.ts"] },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.toml" },
