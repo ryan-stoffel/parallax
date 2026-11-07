@@ -265,8 +265,10 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
     ));
     final_http(&route, &paired.fingerprint).await;
     replace_carrier(&mut client, &route, &paired.fingerprint, phone.path()).await;
-    sleep(Duration::from_secs(35)).await;
-    sleep(Duration::from_secs(35)).await;
+    let admin_last_used = Instant::now();
+    // Limiter::allow (relay/src/crypto.ts) resets after 60 s. Discard gate admissions' window,
+    // with 1 s margin, before the unchanged 3 s/sample pacing (at most 20 opens/minute).
+    sleep(Duration::from_secs(61)).await;
     let mut failures = 0;
     for pair in 0..30 {
         for candidate in if pair % 2 == 0 {
@@ -286,6 +288,18 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
         }
     }
     assert_eq!(failures, 0, "raw failures above, no timing acceptance");
+    eprintln!(
+        "host-proof lifecycle: samples complete; local admin idle for at least {:?}",
+        admin_last_used.elapsed()
+    );
+    // Config's unchanged 90 s idle deadline closes only this unused local connection.
+    assert!(
+        client.closes_within(PATIENCE).await,
+        "expected stale local admin EOF after benchmark idle; not a carrier result"
+    );
+    eprintln!(
+        "host-proof lifecycle: stale admin EOF observed; opening remote app before revocation"
+    );
     relay::host_proof_client(true);
     let dialed = remote::dial(
         std::slice::from_ref(&route),
@@ -296,6 +310,17 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
     .unwrap();
     let mut app = App::bridged(dialed.socket);
     assert!(app.initialize().await["result"].is_object());
+    eprintln!(
+        "host-proof lifecycle: remote app initialized; reconnecting local admin for revocation"
+    );
+    let mut client = Client::ready(&server.socket).await;
+    client
+        .call::<parallax_protocol::methods::HostHealth>(parallax_protocol::HostHealthParams {})
+        .await
+        .expect(
+            "fresh local admin health must answer; distinguish daemon failure from stale admin EOF",
+        );
+    eprintln!("host-proof lifecycle: fresh local admin healthy; listing remote sessions");
     let sessions = client
         .call::<RemoteSessions>(RemoteSessionsParams {})
         .await
@@ -305,6 +330,9 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
         .iter()
         .find(|s| s.name == "proof-client")
         .unwrap();
+    eprintln!(
+        "host-proof lifecycle: revoking session with the original remote app still connected"
+    );
     client
         .call::<RemoteRevoke>(RemoteRevokeParams {
             id: session.id.clone(),
@@ -315,6 +343,7 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
         app.closes().await,
         "revocation must close metadata-registered relay stream"
     );
+    eprintln!("host-proof lifecycle: live app closed by revocation; checking fresh redial refusal");
     assert!(
         remote::dial(
             std::slice::from_ref(&route),
@@ -324,6 +353,7 @@ async fn fresh_clients_use_persistent_host_carrier_for_real_rpc() {
         .await
         .is_err()
     );
+    eprintln!("host-proof lifecycle: revocation/redial gates passed");
     relay::host_proof_client(false);
     server.stop().await;
 }

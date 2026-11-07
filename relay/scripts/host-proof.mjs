@@ -10,7 +10,7 @@ const env = Object.fromEntries(["PATH","RUSTUP_HOME","CARGO_HOME","RUSTUP_TOOLCH
   .filter(k => process.env[k]).map(k => [k,process.env[k]]));
 Object.assign(env,{RUSTUP_HOME:process.env.RUSTUP_HOME ?? join(homedir(),".rustup"),
   CARGO_HOME:process.env.CARGO_HOME ?? join(homedir(),".cargo"),PATH:`${bin}:${env.PATH}`,HOME:root,XDG_CONFIG_HOME:join(root,"config"),
-  XDG_DATA_HOME:join(root,"data"),TMPDIR:root,WRANGLER_SEND_METRICS:"false",CI:"true",PLX_HOST_PROOF:"1"});
+  XDG_DATA_HOME:join(root,"data"),TMPDIR:root,WRANGLER_SEND_METRICS:"false",CI:"true",RUST_BACKTRACE:"1",PLX_HOST_PROOF:"1"});
 for (const delay of [0,20,50]) {
   console.log(JSON.stringify({hostProofLegDelayMs:delay}));
   const code = await new Promise(resolve => {

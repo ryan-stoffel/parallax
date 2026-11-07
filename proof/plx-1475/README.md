@@ -54,7 +54,10 @@ The parent clock begins before spawn and records launch-to-ready, initialize and
 replay markers received over stdout, including process-launch and IPC overhead.
 Each sample includes a child PID and child-measured network-connect duration.
 No helper, client process, TLS configuration or client socket survives between
-counted samples. Admission pacing is outside intent and preserves real limits.
+counted samples. Admission pacing is outside intent and preserves real limits:
+Limiter::allow uses a 60-second fixed window with 30 host opens/minute. One
+61-second wait after correctness gates clears those admissions (1-second margin),
+then the unchanged 3-second gap limits counted attempts to at most 20/minute.
 
 Startup records control-online separately from host-start through the first usable
 candidate connection in a fresh child. This startup case explicitly includes fake
@@ -95,8 +98,11 @@ summed, and local/CI delay results do not predict deployed latency.
   old certificate did not exercise rustls's rejection and was insufficient.
 - Production and fixture TypeScript checks, Node syntax, Rust format and diff
   whitespace checks passed.
-- Native proof runtime beyond registration, final HTTP/WS drain, AB/BA samples, startup/unavailable/
-  carrier replacement and native revocation are **not yet validated**. CI is required.
+- Head `dc601f9b6e789e1de984be4b06813e44af3b3f69`, run `42384175655`, Linux job
+  `128438007266`, accepted the corrected certificate and reached native 0 ms trials.
+  It printed all 30 pairs, then failed the post-trial local admin send with BrokenPipe.
+  These are partial experiment records, not an accepted complete proof. The 20/50 ms
+  runs and completion of all lifecycle gates remain pending new-head CI.
 - No security parity or adoption recommendation. No production gain established.
 
 Beyond the implemented slice, unproved invariants include DPoP replay/approval
@@ -117,3 +123,19 @@ before discarding the local slot. A passing reconnect test reads saved usage bef
 unregister, then proves a fresh generation adds exactly its own two frames. This is
 a bounded fixture correction. Legacy StreamRelay.close and inherited delta-report
 retry/ack-loss semantics are unchanged and are not claimed safe under new failures.
+
+## Post-trial admin channel
+
+The admin is a local Unix protocol connection, separate from the remote app under
+test. Config::new defaults to a 90-second input-idle timeout; connection::read closes
+that connection when no frame arrives. Client has no heartbeat. Before the failed
+RemoteSessions send, the original two 35-second waits and 60 three-second gaps
+alone kept it unused for at least 250 seconds. The last child still completed its
+remote RPCs, consistent with a live daemon and expired admin channel. This source
+trace explains the cached BrokenPipe; it is not a new local native reproduction.
+
+The revised proof checks the stale channel's EOF, initializes the actual remote app,
+then reconnects local administration and requires health before session lookup and
+revocation. It still requires that same remote app to close and fresh redial to be
+refused. Phase logs and backtraces distinguish daemon reachability from admin idle
+closure and remote revocation failures. New-head CI must confirm the full sequence.
