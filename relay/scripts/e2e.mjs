@@ -4,7 +4,7 @@
 // Arguments replace the cargo command, such as `node scripts/e2e.mjs cargo test --release ...`.
 import { spawn } from "node:child_process";
 import { createSign, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -36,15 +36,30 @@ const port = await new Promise((resolve) => {
   });
 });
 const scratch = mkdtempSync(join(tmpdir(), "plx-relay-e2e-"));
+// Never let test daemons discover the operator's account or tailnet.
+for (const dir of ["bin", "home", "tmp", "cache", "config", "data", "runtime"]) {
+  mkdirSync(join(scratch, dir), { mode: 0o700 });
+}
+writeFileSync(join(scratch, "bin", "tailscale"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+const isolated = {
+  PATH: `${join(scratch, "bin")}:${process.env.PATH}`,
+  HOME: join(scratch, "home"), TMPDIR: join(scratch, "tmp"),
+  XDG_CACHE_HOME: join(scratch, "cache"), XDG_CONFIG_HOME: join(scratch, "config"),
+  XDG_DATA_HOME: join(scratch, "data"), XDG_RUNTIME_DIR: join(scratch, "runtime"),
+  // The CI-installed toolchain/cache, not inherited daemon or vendor credentials.
+  CARGO_HOME: process.env.CARGO_HOME ?? join(process.env.HOME, ".cargo"),
+  RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(process.env.HOME, ".rustup"),
+  WRANGLER_SEND_METRICS: "false",
+};
 const envFile = join(scratch, ".env");
 writeFileSync(envFile, `CLERK_ISSUER=${issuer}\nCLERK_JWKS='${JSON.stringify(jwks)}'\n`);
 
 const wrangler = spawn(
   join(relayDir, "node_modules", ".bin", "wrangler"),
-  ["dev", "--ip", "127.0.0.1", "--port", String(port), "--env-file", envFile,
+  ["dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--env-file", envFile,
     "--persist-to", join(scratch, "state"), "--show-interactive-dev-session=false", "--log-level", "warn"],
   { cwd: relayDir, stdio: ["ignore", "inherit", "inherit"], detached: true,
-    env: { ...process.env, WRANGLER_SEND_METRICS: "false" } },
+    env: isolated },
 );
 const stop = () => {
   try {
@@ -74,7 +89,7 @@ const test = spawn(command, args, {
   stdio: "inherit",
   // Two accounts, since the tests together register more computers than one account holds.
   env: {
-    ...process.env,
+    ...isolated,
     PLXD_TEST_RELAY_URL: url,
     PLXD_TEST_RELAY_TOKEN: sessionToken("user_e2e"),
     PLXD_TEST_RELAY_CHECK_TOKEN: sessionToken("user_e2e_check"),

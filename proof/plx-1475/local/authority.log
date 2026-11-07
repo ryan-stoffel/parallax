@@ -1,0 +1,59 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.5 [39m[90m/Users/ryan-stoffel/.parallax/worktrees/plx-1475/relay[39m
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2mpublic admission still arms a separate StreamRelay before returning a fresh slot
+[22m[39m{"event":"host_connected","object":"host","id":"081cdbec","host":"XlxBLfpX","open_before":0,"streams_kept":0,"since_last_ms":null}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2mpublic admission still arms a separate StreamRelay before returning a fresh slot
+[22m[39m{"issue":"PLX-1475","kind":"authority-gate","code":"STREAM_AUTHORITY_RETAINS_ARM","armedBeforeOpenReturned":true}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2mpublic admission still arms a separate StreamRelay before returning a fresh slot
+[22m[39m{"event":"socket_closing","object":"host","id":"081cdbec","host":"XlxBLfpX","by":"relay","code":4410,"reason":"removed"}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2mpublic admission still arms a separate StreamRelay before returning a fresh slot
+[22m[39m{"event":"socket_closed","object":"host","id":"081cdbec","host":"XlxBLfpX","by":"relay","code":4410,"reason":"removed","clean":true}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma committed report cannot be retried exactly once after losing its acknowledgment
+[22m[39m{"event":"host_connected","object":"host","id":"70bea2b0","host":"cbDaFYb-","open_before":0,"streams_kept":0,"since_last_ms":null}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma committed report cannot be retried exactly once after losing its acknowledgment
+[22m[39m{"issue":"PLX-1475","kind":"authority-gate","code":"REPORT_RETRY_DOUBLE_CHARGES","first":16384,"retried":32768}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma committed report cannot be retried exactly once after losing its acknowledgment
+[22m[39m{"event":"socket_closing","object":"host","id":"70bea2b0","host":"cbDaFYb-","by":"relay","code":4410,"reason":"removed"}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma delayed old-owner report has no epoch with which to reject its charge
+[22m[39m{"event":"socket_closed","object":"host","id":"70bea2b0","host":"cbDaFYb-","by":"relay","code":4410,"reason":"removed","clean":true}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma delayed old-owner report has no epoch with which to reject its charge
+[22m[39m{"event":"host_connected","object":"host","id":"154a3667","host":"EteMtbns","open_before":0,"streams_kept":0,"since_last_ms":null}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma delayed old-owner report has no epoch with which to reject its charge
+[22m[39m{"event":"socket_closing","object":"host","id":"154a3667","host":"EteMtbns","by":"relay","code":4409,"reason":"moved to another user"}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma delayed old-owner report has no epoch with which to reject its charge
+[22m[39m{"event":"socket_closed","object":"host","id":"154a3667","host":"EteMtbns","by":"relay","code":4409,"reason":"moved to another user","clean":true}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2ma delayed old-owner report has no epoch with which to reject its charge
+[22m[39m{"issue":"PLX-1475","kind":"authority-gate","code":"REPORT_HAS_NO_OWNER_EPOCH","chargedCurrentOwner":16384}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2m17 concurrent public opens share the legacy spare and pending 16-slot ledger
+[22m[39m{"event":"host_connected","object":"host","id":"a8c22937","host":"LiKZkMq1","open_before":0,"streams_kept":0,"since_last_ms":null}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2m17 concurrent public opens share the legacy spare and pending 16-slot ledger
+[22m[39m{"issue":"PLX-1475","kind":"authority-gate","code":"COMMON_CAP_GATE_FAILED","attempts":17,"accepted":17,"distinct":17,"slots":17,"refusals":0,"spareTaken":true,"candidateClaimExercised":false}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2m17 concurrent public opens share the legacy spare and pending 16-slot ledger
+[22m[39m{"event":"socket_closing","object":"host","id":"a8c22937","host":"LiKZkMq1","by":"relay","code":4410,"reason":"removed"}
+
+[90mstdout[2m | test/host-proof.test.ts[2m > [22m[2m17 concurrent public opens share the legacy spare and pending 16-slot ledger
+[22m[39m{"event":"socket_closed","object":"host","id":"a8c22937","host":"LiKZkMq1","by":"relay","code":4410,"reason":"removed","clean":true}
+
+ [32m✓[39m test/host-proof.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[2m | [22m[36m1 expected fail[39m[90m (4)[39m
+[2m   Start at [22m 20:56:01
+[2m   Duration [22m 495ms[2m (tests 51%, transform 39%, import 7%, worker 3%)[22m
+
+JSON report written to /Users/ryan-stoffel/.parallax/worktrees/plx-1475/proof/plx-1475/local/authority-results.json

@@ -1,0 +1,535 @@
+{
+  "kind": "source and supplied artifact verification, NOT candidate measurements",
+  "sourcePin": "265b931bb592bd0bbb0131b55f248d67a30c9f2d",
+  "binarySourceReference": "447d2567db13b6a1c0cbdb970854fe69c4c3a88f",
+  "binaryExecuted": false,
+  "binarySha256": "93daf8fea63862a82b4d62bd523819c439ded6d693b5c96d8594283be475ba8a",
+  "daemonChangesSinceBinarySourceReference": [
+    "daemon/src/connect_timing.rs"
+  ],
+  "artifactPath": "/Users/ryan-stoffel/.parallax/uploads/01a1b44f-82d5-778a-bb40-921006432c27/connect-timings-wifi-join.jsonl",
+  "artifactSha256": "8990fbae2fbe914a32736172f172e5996dc3ed82ce557b69907ec052cb14f81e",
+  "fileHashes": {
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/daemon/src/relay.rs": "39dbf6610265f4020ce0238e2e2a8b9a044ec1636de230d2a4e9c5c4db2bbd8a",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/daemon/src/remote.rs": "b36b3766d6c6fbc340f0527bfd5d57c112bab890ab1263fa5edcc8bc1343fb91",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/daemon/src/server/remote.rs": "41baaed54b4d875445e65facbd6b78831b252ed1d727d8d742d5fc781910db3b",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/daemon/src/server/connection.rs": "5d707450c1ad78d70dc494674d681af2c0db90784e5d3eed1c8ea56a88b72d24",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/relay/src/index.ts": "86c3aaaa83b108c8dfb0c8fabd641fd6b0f94e3a585ea03a05bdbc56d027c5b1",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/relay/src/host.ts": "ced2d6a15155700af235bf248c67a3a1f0310bb7e7c1b797f8387e52b3933f35",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/relay/src/stream.ts": "4e4cc0001e314781b68a9c0ef039d03301652ab052bc081cae5738dbb2f80fc6",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1475/relay/src/crypto.ts": "f8895e861357d8e520e6f11c048542237875618a48b553c7270199d9e2eb0788",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1470-proof/RESEARCH.md": "eb9722cf9a21dc8dc5bf1af6eaafce90986e0197c2d2068a0ac58979b0ba2d85",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1471-research/HANDOFF.md": "c196d5200974ce0e98f1006f78d0a34105818c04163b91109eef9f6b0bccd259",
+    "/Users/ryan-stoffel/.parallax/worktrees/plx-1471-research/COLD-PATH-ADDENDUM.md": "18db29c8e33dc1d2cd193aaffdf308155f0475d8716836374c06ad03a6948d24"
+  },
+  "reportedProductSummaries": {
+    "parallax": {
+      "connect": {
+        "n": 30,
+        "medianMs": 582,
+        "p95Ms": 743
+      },
+      "firstEvent": {
+        "n": 30,
+        "medianMs": 744,
+        "p95Ms": 887
+      },
+      "roundTrip": {
+        "n": 50,
+        "medianMs": 70,
+        "p95Ms": 102
+      }
+    },
+    "t3": {
+      "connect": {
+        "n": 30,
+        "medianMs": 362,
+        "p95Ms": 460
+      },
+      "firstEvent": {
+        "n": 30,
+        "medianMs": 415,
+        "p95Ms": 509
+      },
+      "roundTrip": {
+        "n": 50,
+        "medianMs": 50,
+        "p95Ms": 134
+      }
+    }
+  },
+  "matchedStageSummaries": {
+    "outer_tcp": {
+      "n": 30,
+      "medianMs": 32.085,
+      "p95Ms": 117.798,
+      "minMs": 24.449,
+      "maxMs": 117.933
+    },
+    "outer_tls": {
+      "n": 30,
+      "medianMs": 32.2765,
+      "p95Ms": 49.42199999999999,
+      "minMs": 26.245999999999995,
+      "maxMs": 91.96000000000001
+    },
+    "outer_upgrade": {
+      "n": 30,
+      "medianMs": 233.5,
+      "p95Ms": 384.9000000000001,
+      "minMs": 164.724,
+      "maxMs": 434.684
+    },
+    "inner_tls": {
+      "n": 30,
+      "medianMs": 110.11099999999999,
+      "p95Ms": 251.245,
+      "minMs": 57.44400000000002,
+      "maxMs": 281.61800000000005
+    },
+    "inner_ws": {
+      "n": 30,
+      "medianMs": 72.40599999999998,
+      "p95Ms": 131.15600000000006,
+      "minMs": 54.27099999999996,
+      "maxMs": 153.98299999999995
+    },
+    "stream_join": {
+      "n": 30,
+      "medianMs": 42.5,
+      "p95Ms": 93,
+      "minMs": 31,
+      "maxMs": 98
+    },
+    "join_read": {
+      "n": 30,
+      "medianMs": 0.0,
+      "p95Ms": 0,
+      "minMs": 0,
+      "maxMs": 0
+    },
+    "join_ready": {
+      "n": 30,
+      "medianMs": 0.0,
+      "p95Ms": 0,
+      "minMs": 0,
+      "maxMs": 0
+    },
+    "join_delete_alarm": {
+      "n": 30,
+      "medianMs": 0.0,
+      "p95Ms": 0,
+      "minMs": 0,
+      "maxMs": 0
+    },
+    "join_total": {
+      "n": 30,
+      "medianMs": 0.0,
+      "p95Ms": 0,
+      "minMs": 0,
+      "maxMs": 0
+    }
+  },
+  "rawDerivedStageMs": [
+    {
+      "sample": 1,
+      "outer_tcp": 30.467000000000002,
+      "outer_tls": 30.999000000000002,
+      "outer_upgrade": 230.84300000000002,
+      "inner_tls": 74.118,
+      "inner_ws": 67.012,
+      "stream_join": 32,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 2,
+      "outer_tcp": 117.933,
+      "outer_tls": 33.36399999999999,
+      "outer_upgrade": 384.9000000000001,
+      "inner_tls": 133.32600000000002,
+      "inner_ws": 60.142999999999915,
+      "stream_join": 45,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 3,
+      "outer_tcp": 58.714,
+      "outer_tls": 37.297999999999995,
+      "outer_upgrade": 278.016,
+      "inner_tls": 99.55099999999999,
+      "inner_ws": 63.44199999999995,
+      "stream_join": 36,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 4,
+      "outer_tcp": 31.555,
+      "outer_tls": 38.065000000000005,
+      "outer_upgrade": 312.783,
+      "inner_tls": 87.53000000000003,
+      "inner_ws": 71.35399999999998,
+      "stream_join": 34,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 5,
+      "outer_tcp": 112.677,
+      "outer_tls": 34.70700000000001,
+      "outer_upgrade": 167.00300000000001,
+      "inner_tls": 82.58100000000002,
+      "inner_ws": 73.30600000000004,
+      "stream_join": 35,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 6,
+      "outer_tcp": 29.287,
+      "outer_tls": 40.187,
+      "outer_upgrade": 313.837,
+      "inner_tls": 103.464,
+      "inner_ws": 55.877999999999986,
+      "stream_join": 38,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 7,
+      "outer_tcp": 91.57,
+      "outer_tls": 31.10600000000001,
+      "outer_upgrade": 197.01799999999997,
+      "inner_tls": 79.923,
+      "inner_ws": 77.606,
+      "stream_join": 40,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 8,
+      "outer_tcp": 32.451,
+      "outer_tls": 30.526000000000003,
+      "outer_upgrade": 319.611,
+      "inner_tls": 211.84199999999998,
+      "inner_ws": 54.658000000000015,
+      "stream_join": 82,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 9,
+      "outer_tcp": 32.897,
+      "outer_tls": 35.344,
+      "outer_upgrade": 306.199,
+      "inner_tls": 116.75799999999998,
+      "inner_ws": 73.71300000000002,
+      "stream_join": 77,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 10,
+      "outer_tcp": 83.683,
+      "outer_tls": 34.81699999999999,
+      "outer_upgrade": 186.10400000000004,
+      "inner_tls": 74.40100000000001,
+      "inner_ws": 71.92899999999997,
+      "stream_join": 35,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 11,
+      "outer_tcp": 24.449,
+      "outer_tls": 32.241,
+      "outer_upgrade": 184.677,
+      "inner_tls": 160.137,
+      "inner_ws": 76.12200000000001,
+      "stream_join": 39,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 12,
+      "outer_tcp": 104.77600000000001,
+      "outer_tls": 38.163,
+      "outer_upgrade": 230.666,
+      "inner_tls": 251.245,
+      "inner_ws": 74.05399999999997,
+      "stream_join": 74,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 13,
+      "outer_tcp": 31.719000000000005,
+      "outer_tls": 49.42199999999999,
+      "outer_upgrade": 202.45000000000005,
+      "inner_tls": 73.82499999999999,
+      "inner_ws": 75.98899999999998,
+      "stream_join": 37,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 14,
+      "outer_tcp": 30.688,
+      "outer_tls": 30.916,
+      "outer_upgrade": 238.18,
+      "inner_tls": 238.33100000000007,
+      "inner_ws": 82.221,
+      "stream_join": 83,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 15,
+      "outer_tcp": 33.413,
+      "outer_tls": 29.440999999999995,
+      "outer_upgrade": 183.53900000000002,
+      "inner_tls": 86.251,
+      "inner_ws": 67.55100000000004,
+      "stream_join": 34,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 16,
+      "outer_tcp": 63.841,
+      "outer_tls": 33.881,
+      "outer_upgrade": 185.548,
+      "inner_tls": 94.89099999999996,
+      "inner_ws": 72.59499999999997,
+      "stream_join": 36,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 17,
+      "outer_tcp": 30.347,
+      "outer_tls": 26.630999999999997,
+      "outer_upgrade": 232.324,
+      "inner_tls": 231.76599999999996,
+      "inner_ws": 61.40300000000002,
+      "stream_join": 82,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 18,
+      "outer_tcp": 30.415,
+      "outer_tls": 91.96000000000001,
+      "outer_upgrade": 284.669,
+      "inner_tls": 78.42599999999999,
+      "inner_ws": 108.27299999999997,
+      "stream_join": 31,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 19,
+      "outer_tcp": 107.70400000000001,
+      "outer_tls": 26.245999999999995,
+      "outer_upgrade": 231.357,
+      "inner_tls": 249.322,
+      "inner_ws": 71.51200000000006,
+      "stream_join": 78,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 20,
+      "outer_tcp": 30.046,
+      "outer_tls": 32.724999999999994,
+      "outer_upgrade": 434.684,
+      "inner_tls": 86.72299999999996,
+      "inner_ws": 131.15600000000006,
+      "stream_join": 48,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 21,
+      "outer_tcp": 25.663999999999998,
+      "outer_tls": 29.753,
+      "outer_upgrade": 196.722,
+      "inner_tls": 79.59100000000001,
+      "inner_ws": 80.75599999999997,
+      "stream_join": 40,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 22,
+      "outer_tcp": 114.783,
+      "outer_tls": 32.312,
+      "outer_upgrade": 243.129,
+      "inner_tls": 246.31799999999998,
+      "inner_ws": 54.27099999999996,
+      "stream_join": 93,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 23,
+      "outer_tcp": 30.266,
+      "outer_tls": 26.451999999999998,
+      "outer_upgrade": 164.724,
+      "inner_tls": 80.21900000000002,
+      "inner_ws": 72.21699999999998,
+      "stream_join": 36,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 24,
+      "outer_tcp": 117.798,
+      "outer_tls": 29.108999999999995,
+      "outer_upgrade": 213.595,
+      "inner_tls": 281.61800000000005,
+      "inner_ws": 57.38900000000001,
+      "stream_join": 89,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 25,
+      "outer_tcp": 35.223,
+      "outer_tls": 35.461000000000006,
+      "outer_upgrade": 333.74199999999996,
+      "inner_tls": 213.488,
+      "inner_ws": 153.98299999999995,
+      "stream_join": 93,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 26,
+      "outer_tcp": 25.905,
+      "outer_tls": 27.726,
+      "outer_upgrade": 214.463,
+      "inner_tls": 220.827,
+      "inner_ws": 78.15800000000002,
+      "stream_join": 79,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 27,
+      "outer_tcp": 31.124000000000002,
+      "outer_tls": 30.442999999999998,
+      "outer_upgrade": 295.426,
+      "inner_tls": 57.44400000000002,
+      "inner_ws": 55.170000000000016,
+      "stream_join": 35,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 28,
+      "outer_tcp": 36.975,
+      "outer_tls": 43.22,
+      "outer_upgrade": 234.676,
+      "inner_tls": 203.90399999999994,
+      "inner_ws": 89.59199999999998,
+      "stream_join": 84,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 29,
+      "outer_tcp": 28.725,
+      "outer_tls": 30.403000000000002,
+      "outer_upgrade": 262.547,
+      "inner_tls": 221.82099999999997,
+      "inner_ws": 77.55100000000004,
+      "stream_join": 89,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    },
+    {
+      "sample": 30,
+      "outer_tcp": 30.179,
+      "outer_tls": 30.829,
+      "outer_upgrade": 301.471,
+      "inner_tls": 201.33299999999997,
+      "inner_ws": 70.77499999999998,
+      "stream_join": 98,
+      "join_read": 0,
+      "join_ready": 0,
+      "join_delete_alarm": 0,
+      "join_total": 0
+    }
+  ],
+  "candidateCarrierStartupSamples": [],
+  "candidateFreshLogicalStreamSamples": [],
+  "limitations": [
+    "No candidate implementation, no local injected delay runs, no security parity validation.",
+    "Binary build provenance cannot be established from source match and hash alone.",
+    "Cloudflare production clocks advance after I/O, not CPU execution: zeros are timer-invisible, not negligible/submillisecond work.",
+    "Whole join RPC cause unresolved: local CPU, pre-entry gates, queue/network/wake/response; no measured storage-wait removal.",
+    "End-to-end quantiles are stored summaries, not recomputable from raw end-to-end samples.",
+    "Product summaries differ in handler/process/security boundaries."
+  ]
+}

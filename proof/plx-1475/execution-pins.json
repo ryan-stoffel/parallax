@@ -1,0 +1,20 @@
+{
+  "sourcePin": "265b931bb592bd0bbb0131b55f248d67a30c9f2d",
+  "files": {
+    "daemon/src/relay.rs": "39dbf6610265f4020ce0238e2e2a8b9a044ec1636de230d2a4e9c5c4db2bbd8a",
+    "daemon/src/remote.rs": "b36b3766d6c6fbc340f0527bfd5d57c112bab890ab1263fa5edcc8bc1343fb91",
+    "daemon/src/server/remote.rs": "41baaed54b4d875445e65facbd6b78831b252ed1d727d8d742d5fc781910db3b",
+    "daemon/src/server/connection.rs": "5d707450c1ad78d70dc494674d681af2c0db90784e5d3eed1c8ea56a88b72d24",
+    "relay/src/host.ts": "ced2d6a15155700af235bf248c67a3a1f0310bb7e7c1b797f8387e52b3933f35",
+    "relay/src/index.ts": "86c3aaaa83b108c8dfb0c8fabd641fd6b0f94e3a585ea03a05bdbc56d027c5b1",
+    "relay/src/stream.ts": "4e4cc0001e314781b68a9c0ef039d03301652ab052bc081cae5738dbb2f80fc6",
+    "relay/scripts/e2e.mjs": "2c0b5ca6996f9bb94f9f66d74c25c954777ace32244152454855fcf987dcbef9",
+    "relay/scripts/proof-authority.mjs": "021561f899be890f67d63511f03c855059b2f93d7b3b563b0a49cb9933537578",
+    "relay/test/host-proof.test.ts": "b7d04a56f3ec279b1500c211c9ee1c594e498167d260d0cd92b355e0c1f8f650",
+    ".github/workflows/ci.yml": "ae869b044ce0db45915045c9304b737928d618045747fe870409d531f36d3ff1"
+  },
+  "candidateImplemented": false,
+  "timingAccepted": false,
+  "stop": "STOP_COMMON_CAP_GATE",
+  "bug": "PLX-1476"
+}
