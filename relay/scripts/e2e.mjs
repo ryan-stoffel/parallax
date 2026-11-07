@@ -3,7 +3,7 @@
 // with a local Clerk: a fresh RSA key whose JWKS the relay trusts, and session tokens it signed.
 // Arguments replace the cargo command, such as `node scripts/e2e.mjs cargo test --release ...`.
 import { spawn, spawnSync } from "node:child_process";
-import { createSign, generateKeyPairSync } from "node:crypto";
+import { createSign, generateKeyPairSync, X509Certificate } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, connect } from "node:net";
 import { request as httpRequest } from "node:http";
@@ -76,12 +76,45 @@ let delayed;
 let ca;
 if (proof) {
   ca = join(scratch, "ca.pem");
-  const key = join(scratch, "key.pem");
-  const cert = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-    "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
-    "-keyout", key, "-out", ca], {stdio:"ignore"});
-  if (cert.status !== 0) { stop(); throw new Error("local TLS certificate failed"); }
-  front = createHttpsServer({key:readFileSync(key), cert:readFileSync(ca)}, (req,res) => {
+  const caKey = join(scratch, "ca-key.pem");
+  const key = join(scratch, "server-key.pem");
+  const leaf = join(scratch, "server.pem");
+  const csr = join(scratch, "server.csr");
+  const extensions = join(scratch, "server.ext");
+  writeFileSync(extensions, [
+    "basicConstraints=critical,CA:FALSE",
+    "keyUsage=critical,digitalSignature,keyEncipherment",
+    "extendedKeyUsage=serverAuth",
+    "subjectAltName=IP:127.0.0.1,DNS:localhost",
+    "subjectKeyIdentifier=hash",
+    "authorityKeyIdentifier=keyid,issuer",
+  ].join("\n"));
+  const openssl = args => {
+    if (spawnSync("openssl", args, {stdio:"ignore"}).status !== 0)
+      throw new Error("fixture certificate generation/verification failed");
+  };
+  try {
+    openssl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-sha256",
+      "-subj", "/CN=Parallax proof CA", "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
+      "-addext", "keyUsage=critical,keyCertSign,cRLSign", "-addext", "subjectKeyIdentifier=hash",
+      "-keyout", caKey, "-out", ca]);
+    openssl(["req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
+      "-keyout", key, "-out", csr]);
+    openssl(["x509", "-req", "-in", csr, "-CA", ca, "-CAkey", caKey, "-CAcreateserial",
+      "-days", "1", "-sha256", "-extfile", extensions, "-out", leaf]);
+    if (!new X509Certificate(readFileSync(ca)).ca || new X509Certificate(readFileSync(leaf)).ca)
+      throw new Error("fixture requires separate CA and end-entity certificates");
+    // Verify the actual served leaf against only the generated CA before native registration.
+    const verify = ["verify", "-x509_strict", "-purpose", "sslserver", "-CAfile", ca,
+      "-no-CApath", "-no-CAstore"];
+    openssl([...verify, "-verify_hostname", "localhost", leaf]);
+    openssl([...verify, "-verify_ip", "127.0.0.1", leaf]);
+    console.log("host-proof fixture PKI: CA/leaf constraints, server purpose, localhost/IP chain verified");
+  } catch (error) {
+    stop();
+    throw error;
+  }
+  front = createHttpsServer({key:readFileSync(key), cert:readFileSync(leaf)}, (req,res) => {
     const upstream = httpRequest({hostname:"127.0.0.1",port,method:req.method,path:req.url,headers:req.headers}, answer => {
       res.writeHead(answer.statusCode, answer.headers); answer.pipe(res);
     });

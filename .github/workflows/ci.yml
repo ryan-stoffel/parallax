@@ -176,7 +176,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/host-proof-artifacts"
           git rev-parse HEAD > "$RUNNER_TEMP/host-proof-artifacts/source.txt"
-          sha256sum src/host.ts proof/worker.ts scripts/delay-duplex.mjs scripts/delay-duplex.test.mjs ../daemon/src/relay.rs ../daemon/src/relay/host_proof.rs > "$RUNNER_TEMP/host-proof-artifacts/source.sha256"
+          sha256sum src/host.ts proof/worker.ts scripts/delay-duplex.mjs scripts/delay-duplex.test.mjs scripts/e2e.mjs ../daemon/src/relay.rs ../daemon/src/relay/host_proof.rs > "$RUNNER_TEMP/host-proof-artifacts/source.sha256"
           node --test scripts/delay-duplex.test.mjs | tee "$RUNNER_TEMP/host-proof-artifacts/delay-proxy.log"
           pnpm exec tsc -p proof/tsconfig.json
           pnpm exec vitest run --config proof/vitest.config.ts --reporter=json --outputFile="$RUNNER_TEMP/host-proof-artifacts/authority.json"

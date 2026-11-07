@@ -32,9 +32,14 @@ node scripts/host-proof.mjs
 
 The runner removes inherited credentials/proxy configuration, uses a temporary
 HOME/XDG/data, puts a failing tailscale first in PATH, and invokes the existing
-fake-RSA/JWKS e2e harness with local-only Wrangler. A fresh loopback CA signs the
-outer TLS endpoint. Ordered raw TCP directional delivery adds 0/20/50 ms to each
-leg. Both routes use the same listener, host, handler and payload. No remote
+fake-RSA/JWKS e2e harness with local-only Wrangler. A separate ephemeral CA
+(CA:TRUE, certificate-signing usage) signs the localhost/IP-SAN server leaf
+(CA:FALSE, digitalSignature/keyEncipherment, serverAuth EKU). Only the CA goes
+in the isolated SSL_CERT_FILE; the HTTPS server serves the leaf. Before native
+registration, the actual fixture checks CA/end-entity roles and runs OpenSSL
+strict chain/server-purpose verification for both localhost and 127.0.0.1 using
+only this CA. These preflights do not replace acceptance by rustls in Linux CI.
+Ordered raw TCP directional delivery adds 0/20/50 ms to each leg. Both routes use the same listener, host, handler and payload. No remote
 Wrangler, real identity, real daemon, tailnet or secret is needed.
 
 Relay gates run before the native proof in normal Linux PR CI. The actual delay
@@ -79,10 +84,18 @@ summed, and local/CI delay results do not predict deployed latency.
 - Prior head `3849c7c5df253dffec923c355f8f1fc83e4ba87c` failed Clippy before native
   execution in run `42343135560`. Its in-process client timings were not executed
   and would not satisfy fresh-process sampling. This revision extracts stream
-  identity validation without lint suppression; CI must verify the fix.
+  identity validation without lint suppression. Run `42383198803` on subsequent
+  head `4abe9191e3305322c2622027ec256ef5870e264b` passed that lint boundary and
+  the other four Rust platforms. Linux passed 13 existing native relay tests and
+  6 actual-delay tests, then rejected the proof's first registration with rustls
+  `CaUsedAsEndEntity`. No proof samples were produced. The fixture had served its
+  CA as the leaf; this focused revision separates them with explicit constraints.
+- Corrected fixture: local strict OpenSSL purpose/chain/name preflight and isolated
+  TLS smoke inspecting the actual served leaf passed. Node-only TLS smoke on the
+  old certificate did not exercise rustls's rejection and was insufficient.
 - Production and fixture TypeScript checks, Node syntax, Rust format and diff
   whitespace checks passed.
-- Native compile/execution, final HTTP/WS drain, AB/BA samples, startup/unavailable/
+- Native proof runtime beyond registration, final HTTP/WS drain, AB/BA samples, startup/unavailable/
   carrier replacement and native revocation are **not yet validated**. CI is required.
 - No security parity or adoption recommendation. No production gain established.
 
