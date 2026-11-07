@@ -35,11 +35,29 @@ pub fn mark(stage: &'static str) {
 /// Relay durations are untrusted: emit only known names and bounded finite numbers.
 /// These are durations, unlike the cumulative client checkpoints.
 pub fn server(value: &str) {
-    for item in value.split(',').take(6) {
+    for item in value.split(',').take(16) {
         let Some((name, duration)) = item.trim().split_once(";dur=") else {
             continue;
         };
-        if !["auth", "host_open", "stream_join", "admit", "take", "spare"].contains(&name) {
+        if ![
+            "auth",
+            "host_open",
+            "stream_join",
+            "admit",
+            "take",
+            "spare",
+            "join_read",
+            "join_ready",
+            "join_delete_alarm",
+            "join_total",
+            "taken_entry",
+            "taken_read",
+            "taken_alarm",
+            "taken_outcome",
+            "taken_total",
+        ]
+        .contains(&name)
+        {
             continue;
         }
         let Ok(ms) = duration.parse::<f64>() else {
@@ -52,5 +70,66 @@ pub fn server(value: &str) {
         {
             eprintln!("connect-server-timing {name} {ms:.3}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    // A child process gives each case its own cached opt-in and line budget.
+    #[test]
+    fn emit_server_timings_child() {
+        if let Ok(value) = std::env::var("PLXD_TIMING_TEST_HEADER") {
+            for _ in 0..8 {
+                server(&value);
+            }
+        }
+    }
+
+    #[test]
+    fn server_allowlist_is_opt_in_finite_and_bounded() {
+        let capture = |header: &str, enabled: bool| {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["emit_server_timings_child", "--nocapture"])
+                .env("PLXD_CONNECT_TIMINGS", if enabled { "1" } else { "0" })
+                .env("PLXD_TIMING_TEST_HEADER", header)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stderr).unwrap()
+        };
+        let names = [
+            "auth",
+            "host_open",
+            "stream_join",
+            "admit",
+            "take",
+            "spare",
+            "join_read",
+            "join_ready",
+            "join_delete_alarm",
+            "join_total",
+            "taken_entry",
+            "taken_read",
+            "taken_alarm",
+            "taken_outcome",
+            "taken_total",
+        ];
+        let header = names.map(|name| format!("{name};dur=1")).join(", ");
+        assert!(capture(&header, false).is_empty());
+        let output = capture(&header, true);
+        assert_eq!(output.lines().count(), 64);
+        for name in names {
+            assert!(output.contains(&format!("connect-server-timing {name} 1.000\n")));
+        }
+        assert!(capture("unknown;dur=1,join_read;dur=NaN,join_ready;dur=inf,join_total;dur=-1,taken_total;dur=60001", true).is_empty());
+        let output = capture("join_read;dur=0,join_total;dur=60000", true);
+        assert_eq!(output.lines().count(), 16);
+        assert!(output.contains("join_read 0.000\n"));
+        assert!(output.contains("join_total 60000.000\n"));
+        let header = format!("{}join_total;dur=1", "unknown;dur=1,".repeat(16));
+        assert!(capture(&header, true).is_empty());
     }
 }

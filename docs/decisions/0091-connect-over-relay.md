@@ -194,3 +194,29 @@ Each is one Linear issue. All seven land in one pull request, built in this orde
 - Existing Connect computers migrate over one release, with no action from the user beyond being signed in.
 - Production Clerk (PLX-1049) has to register `https://relay.parallax.codes/connect/code` as a redirect URI of the desktop app's OAuth application.
 - On a network that inspects TLS, a host needs Clerk's host exempted from inspection to accept new account sign-ins (PLX-1363).
+
+Amended 2026-11-06 (PLX-1472): opted-in client upgrades also expose StreamRelay-local
+`join_read` (entry through the armed read), `join_ready` (entry through both ready sends,
+only when paired), `join_delete_alarm` (elapsed deletion, only when paired), and
+`join_total` (entry through lifecycle work, before header/response construction). These
+are local monotonic durations in milliseconds, not timestamps. `stream_join` still
+measures the Worker's entire object fetch. Its per-request difference from `join_total`
+includes RPC transit, pre-entry queue/wake/gates, and response overhead. It cannot
+separate those causes or establish that a storage gate caused production delay. Read
+and alarm durations include awaited scheduling/storage latency, not just CPU time.
+The entry-to-ready and read windows are nested inside total and must not be summed.
+
+For an opted-in spare claim, the existing background taken RPC records volatile
+`taken_entry=1`, `taken_read` (entry through armed read), `taken_alarm` (alarm write
+elapsed), `taken_total` (entry through completion), and `taken_outcome` (1=set,
+2=skipped because joined or ended). Entry/outcome are numeric flags. Join snapshots only
+stages already observed in its own uniquely armed stream object. Missing stages mean
+unfinished or unavailable, including after eviction, on a non-spare or legacy ticket
+claim, or if taken has not entered yet. Absence does not prove taken never ran. These
+observations are never persisted, awaited, fetched separately, or reused across armed
+streams. No cross-machine clocks are subtracted. The Worker forwards the opt-in only
+after admission and emits these headers only on successful client upgrades. New fields
+are finite and bounded to 0–60,000; older daemons ignore them and newer daemons accept
+headers without them. Diagnostic defaults, all existing storage awaits/gates and stream
+lifecycle ordering stay unchanged. This diagnostic establishes no latency saving or
+product parity claim and does not authorize production deployment.

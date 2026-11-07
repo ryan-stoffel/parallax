@@ -413,7 +413,7 @@ describe("streams", () => {
       expect(response.status).toBe(101);
       const timing = response.headers.get("server-timing");
       if (timed) {
-        expect(timing).toMatch(/^auth;dur=[\d.]+, host_open;dur=[\d.]+, stream_join;dur=[\d.]+, admit;dur=[\d.]+, take;dur=[\d.]+, spare;dur=1$/);
+        expect(timing).toMatch(/^auth;dur=[\d.]+, host_open;dur=[\d.]+, stream_join;dur=[\d.]+, admit;dur=[\d.]+, take;dur=[\d.]+, spare;dur=1, join_read;dur=[\d.]+, join_ready;dur=[\d.]+, join_delete_alarm;dur=[\d.]+, join_total;dur=[\d.]+/);
       } else expect(timing).toBeNull();
       response.webSocket!.accept();
       expect(await side.next()).toBe("ready");
@@ -423,6 +423,128 @@ describe("streams", () => {
     const refused = await SELF.fetch(`${BASE}/v1/hosts/${host.id}/connect`, { headers: { upgrade: "websocket", "x-parallax-timing": "1" } });
     expect(refused.status).toBe(401);
     expect(refused.headers.get("server-timing")).toBeNull();
+  });
+
+  it("separates local read and alarm-delete delay from pre-entry RPC delay", async () => {
+    const { host, token, control } = await online();
+    const armed = StreamRelay.prototype as unknown as { armed(): Promise<unknown> };
+    const originalRead = armed.armed;
+    const originalFetch = StreamRelay.prototype.fetch;
+    for (const stage of ["read", "alarm", "rpc"] as const) {
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, open));
+      const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 80));
+      let deleteSpy: ReturnType<typeof vi.spyOn> | undefined;
+      if (stage === "alarm") await runInDurableObject(streamObject(open.stream), (_, state) => {
+        const originalDelete = state.storage.deleteAlarm.bind(state.storage);
+        deleteSpy = vi.spyOn(state.storage, "deleteAlarm").mockImplementation(async () => {
+          await pause();
+          return originalDelete();
+        });
+      });
+      const readSpy = vi.spyOn(armed, "armed").mockImplementation(async function (this: StreamRelay) {
+        if (stage === "read") await pause();
+        return originalRead.call(this);
+      });
+      const fetchSpy = vi.spyOn(StreamRelay.prototype, "fetch").mockImplementation(async function (this: StreamRelay, request) {
+        if (stage === "rpc") await pause();
+        return originalFetch.call(this, request);
+      });
+      try {
+        const response = await SELF.fetch(`${BASE}/v1/hosts/${host.id}/connect`, {
+          headers: { upgrade: "websocket", authorization: `Bearer ${token}`, "x-parallax-timing": "1" },
+        });
+        expect(response.status).toBe(101);
+        const times = Object.fromEntries(response.headers.get("server-timing")!.split(", ").map((part) => {
+          const [name, value] = part.split(";dur=");
+          return [name, Number(value)];
+        }));
+        expect(times.stream_join).toBeGreaterThanOrEqual(70);
+        if (stage === "read") {
+          expect(times.join_read).toBeGreaterThanOrEqual(70);
+          expect(times.join_total).toBeGreaterThanOrEqual(times.join_read!);
+        } else if (stage === "alarm") {
+          expect(times.join_delete_alarm).toBeGreaterThanOrEqual(70);
+          expect(times.join_total).toBeGreaterThanOrEqual(times.join_delete_alarm!);
+        } else {
+          expect(times.stream_join! - times.join_total!).toBeGreaterThanOrEqual(70);
+        }
+        response.webSocket!.accept();
+        await side.next();
+        response.webSocket!.close();
+        side.ws.close();
+      } finally {
+        deleteSpy?.mockRestore();
+        readSpy.mockRestore();
+        fetchSpy.mockRestore();
+      }
+    }
+  });
+
+  it("snapshots taken-first stages and leaves unfinished join-first work absent", async () => {
+    const { host, control } = await online();
+    for (const order of ["taken-first", "join-first", "unavailable"] as const) {
+      const takenFirst = order === "taken-first";
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, open));
+      const object = streamObject(open.stream);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const armed = StreamRelay.prototype as unknown as { armed(): Promise<unknown> };
+      const original = armed.armed;
+      let reading = false;
+      const spy = vi.spyOn(armed, "armed").mockImplementation(async function (this: StreamRelay) {
+        if (order === "join-first" && !reading) {
+          reading = true;
+          await gate;
+        }
+        return original.call(this);
+      });
+      let pending: Promise<void> | undefined;
+      try {
+        if (takenFirst) await object.taken(Date.now() + 30_000, true);
+        else if (order === "join-first") {
+          pending = object.taken(Date.now() + 30_000, true);
+          await expect.poll(() => reading).toBe(true);
+        }
+        const response = await object.fetch("https://stream/client", {
+          headers: { upgrade: "websocket", "x-parallax-timing": "1" },
+        });
+        expect(response.status).toBe(101);
+        const header = response.headers.get("server-timing")!;
+        if (order === "unavailable") expect(header).not.toContain("taken_");
+        else expect(header).toContain("taken_entry;dur=1.000");
+        if (takenFirst) {
+          expect(header).toContain("taken_read;dur=");
+          expect(header).toContain("taken_alarm;dur=");
+          expect(header).toContain("taken_outcome;dur=1.000");
+          expect(header).toContain("taken_total;dur=");
+        } else {
+          expect(header).not.toContain("taken_read");
+          expect(header).not.toContain("taken_outcome");
+          expect(header).not.toContain("taken_total");
+        }
+        response.webSocket!.accept();
+        await side.next();
+        release();
+        await pending;
+        if (order === "join-first") {
+          const timing = await runInDurableObject(object, (relay) =>
+            (relay as unknown as { takenTiming: Record<string, number> }).takenTiming);
+          expect(timing.taken_outcome).toBe(2);
+          expect(timing.taken_alarm).toBeUndefined();
+        }
+        expect(await runDurableObjectAlarm(object)).toBe(false);
+        response.webSocket!.close();
+        side.ws.close();
+      } finally {
+        release();
+        await pending;
+        spy.mockRestore();
+      }
+    }
   });
 
   it("joins a client to plxd's spare stream without asking plxd first", async () => {
@@ -489,18 +611,18 @@ describe("streams", () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const original = StreamRelay.prototype.taken;
     let deadline: number | undefined;
-    const spy = vi.spyOn(StreamRelay.prototype, "taken").mockImplementation(async function (this: StreamRelay, at) {
+    const spy = vi.spyOn(StreamRelay.prototype, "taken").mockImplementation(async function (this: StreamRelay, at, timed) {
       deadline = at;
       await gate;
-      await original.call(this, at);
+      await original.call(this, at, timed);
     });
     try {
       const object = hosts.get(hosts.idFromName(host.id));
       // The Worker disappears after open, without bringing a client to the stream.
-      expect(await object.open(account(user))).toEqual({ stream: open.stream });
+      expect(await object.open(account(user), true)).toMatchObject({ stream: open.stream, timing: { spare: true } });
       expect(await openStreams(host)).toEqual({ [open.stream]: {} });
       await expect.poll(() => deadline).toBeTypeOf("number");
-      expect(await object.open(account(user))).not.toEqual({ stream: open.stream });
+      expect((await object.open(account(user), true) as { stream: string }).stream).not.toBe(open.stream);
       release();
       await expect.poll(() => runInDurableObject(streamObject(open.stream), (_, state) =>
         state.storage.getAlarm())).toBe(deadline);
@@ -524,13 +646,13 @@ describe("streams", () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const original = StreamRelay.prototype.taken;
     let finished = false;
-    const spy = vi.spyOn(StreamRelay.prototype, "taken").mockImplementation(async function (this: StreamRelay, at) {
+    const spy = vi.spyOn(StreamRelay.prototype, "taken").mockImplementation(async function (this: StreamRelay, at, timed) {
       await gate;
-      await original.call(this, at);
+      await original.call(this, at, timed);
       finished = true;
     });
     try {
-      const client = opened(await connect(host, token));
+      const client = opened(await socket(`/v1/hosts/${host.id}/connect`, { authorization: `Bearer ${token}`, "x-parallax-timing": "1" }));
       expect(await client.next()).toBe("ready");
       expect(await side.next()).toBe("ready");
       client.ws.send(new Uint8Array([1]));
@@ -541,7 +663,7 @@ describe("streams", () => {
       await expect.poll(() => finished).toBe(true);
       expect(await runInDurableObject(streamObject(open.stream), (_, state) => state.storage.getAlarm())).toBe(alarm);
       await evictDurableObject(streamObject(open.stream));
-      await streamObject(open.stream).taken();
+      await streamObject(open.stream).taken(undefined, true);
       expect(await runInDurableObject(streamObject(open.stream), (_, state) => state.storage.getAlarm())).toBe(alarm);
       const { control: again } = await connectHost(host, [open.stream]);
       await again.next();
@@ -550,7 +672,7 @@ describe("streams", () => {
       client.ws.close();
       await side.closed;
       await expect.poll(() => openStreams(host)).toEqual({});
-      await streamObject(open.stream).taken();
+      await streamObject(open.stream).taken(undefined, true);
       expect(await runDurableObjectAlarm(streamObject(open.stream))).toBe(false);
     } finally {
       release();

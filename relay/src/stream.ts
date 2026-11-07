@@ -64,6 +64,8 @@ export class StreamRelay extends DurableObject<Env> {
   /** Whether the relay has begun ending this stream, so a close from here on isn't an end's own.
    *  In memory, since an end answers a close long before the object could hibernate. */
   private ending = false;
+  // One claim per uniquely armed stream. Volatile and never awaited by join; eviction loses it.
+  private takenTiming?: Record<string, number>;
 
   private armed() {
     return this.ctx.storage.get<Armed>("armed");
@@ -112,6 +114,7 @@ export class StreamRelay extends DurableObject<Env> {
 
   /** Called by the host's object before it tells plxd or a client about this stream. */
   async arm(armed: Armed) {
+    this.takenTiming = undefined;
     await this.ctx.storage.put("armed", armed);
   }
 
@@ -123,12 +126,28 @@ export class StreamRelay extends DurableObject<Env> {
 
   /** A client took this stream as the spare, and the Worker is bringing it here. If it hung up or
    *  the Worker failed, nothing else would end this stream, since plxd's end stays open. */
-  async taken(deadline = Date.now() + JOIN_TIMEOUT) {
+  async taken(deadline = Date.now() + JOIN_TIMEOUT, timed = false) {
+    const start = timed ? performance.now() : 0;
+    const timing: Record<string, number> | undefined = timed ? (this.takenTiming = { taken_entry: 1 }) : undefined;
     // The client may have arrived, or the stream ended, while this RPC was in flight. Read
     // durable state first, then check sockets without yielding before the alarm write. Storage
     // input gates serialize that write with join's deleteAlarm, including after hibernation.
-    if (!(await this.armed()) || this.ending || this.reported || this.ctx.getWebSockets("client").length) return;
+    const armed = await this.armed();
+    if (timing) timing.taken_read = performance.now() - start;
+    if (!armed || this.ending || this.reported || this.ctx.getWebSockets("client").length) {
+      if (timing) {
+        timing.taken_outcome = 2; // Skipped: joined or ended.
+        timing.taken_total = performance.now() - start;
+      }
+      return;
+    }
+    const alarmStart = timed ? performance.now() : 0;
     await this.ctx.storage.setAlarm(deadline);
+    if (timing) {
+      timing.taken_alarm = performance.now() - alarmStart;
+      timing.taken_outcome = 1; // Alarm set.
+      timing.taken_total = performance.now() - start;
+    }
   }
 
   /** plxd says its end is gone, which it can know long before this object does, since a dead
@@ -161,8 +180,12 @@ export class StreamRelay extends DurableObject<Env> {
 
   /** Brings one end's WebSocket to this stream. */
   private async join(request: Request): Promise<Response> {
+    const timed = new URL(request.url).pathname === "/client" && request.headers.get("x-parallax-timing") === "1";
+    const start = timed ? performance.now() : 0;
+    const timing: Record<string, number> = {};
     const url = new URL(request.url);
     const armed = await this.armed();
+    if (timed) timing.join_read = performance.now() - start;
     if (!armed) return json(404, { error: "not_found" });
     let side: Side;
     if (url.pathname === "/client") {
@@ -188,11 +211,22 @@ export class StreamRelay extends DurableObject<Env> {
       // Both ends are here: each learns it, plxd's side then dials its own listener.
       ours!.send("ready");
       other.send("ready");
+      if (timed) timing.join_ready = performance.now() - start;
+      const alarmStart = timed ? performance.now() : 0;
       await this.ctx.storage.deleteAlarm();
+      if (timed) timing.join_delete_alarm = performance.now() - alarmStart;
     } else if (side === "client") {
       await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT);
     }
-    return new Response(null, { status: 101, webSocket: theirs });
+    const headers = new Headers();
+    if (timed) {
+      timing.join_total = performance.now() - start;
+      // Snapshot only stages already observed. Missing fields mean unavailable, never zero.
+      headers.set("server-timing", Object.entries({ ...timing, ...this.takenTiming })
+        .filter(([, ms]) => Number.isFinite(ms) && ms >= 0 && ms <= 60_000)
+        .map(([name, ms]) => `${name};dur=${ms.toFixed(3)}`).join(", "));
+    }
+    return new Response(null, { status: 101, webSocket: theirs, headers });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
