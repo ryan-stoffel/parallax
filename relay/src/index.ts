@@ -124,13 +124,15 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   const object = streamObject(env, hostId, opened.stream);
   if (!object) return json(404, { error: "not_found" });
   const joinStart = performance.now();
-  const response = await object.fetch("https://stream/client", { headers: { upgrade: "websocket" } });
+  const response = await object.fetch("https://stream/client", { headers: { upgrade: "websocket", ...(timed ? { "x-parallax-timing": "1" } : {}) } });
   if (!timed || response.status !== 101) return response;
   record("stream_join", joinStart);
   if (opened.timing) {
     times.push(`admit;dur=${opened.timing.admitMs.toFixed(3)}`, `take;dur=${opened.timing.takeMs.toFixed(3)}`, `spare;dur=${opened.timing.spare ? 1 : 0}`);
   }
   const headers = new Headers(response.headers);
+  const local = response.headers.get("server-timing");
+  if (local) times.push(local);
   headers.set("server-timing", times.join(", "));
   return new Response(null, { status: 101, webSocket: response.webSocket, headers });
 }

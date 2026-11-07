@@ -394,7 +394,7 @@ export class HostRelay extends DurableObject<Env> {
       await this.ctx.storage.put<Streams>("streams", streams);
       // Ownership is durable before the Worker gets the id. This object's lifetime, not the
       // Worker's request, owns cleanup. A late notification must not re-arm a joined stream.
-      const taken = streamObject(this.env, owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT);
+      const taken = streamObject(this.env, owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT, timed);
       if (taken) this.ctx.waitUntil(taken.catch((error) => logError("host.take", this.context(), error)));
       return { stream: spare, ...(timed ? { spare: true } : {}) };
     }
