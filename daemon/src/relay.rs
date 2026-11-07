@@ -57,7 +57,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 pub(crate) mod check;
+#[cfg(feature = "host-routing-proof")]
+mod host_proof;
 mod proxy;
+#[cfg(all(feature = "host-routing-proof", not(debug_assertions)))]
+compile_error!("host-routing-proof is for disposable debug builds only");
 mod seal;
 
 use self::proxy::Proxy;
@@ -458,6 +462,37 @@ async fn websocket(
         .map_err(|(_, error)| error)
 }
 
+#[cfg(feature = "host-routing-proof")]
+static PROOF_CLIENT: AtomicBool = AtomicBool::new(false);
+/// Selects the local proof route for fresh client opens in disposable integration tests.
+#[cfg(feature = "host-routing-proof")]
+pub fn host_proof_client(candidate: bool) {
+    PROOF_CLIENT.store(candidate, Ordering::Relaxed);
+}
+
+/// Controls/observes only the local fixture's host data socket, leaving control online.
+#[cfg(feature = "host-routing-proof")]
+pub async fn host_proof_carrier(host_id: &str, replace: Option<bool>) -> Result<bool, Error> {
+    let (url, token) = CLIENT
+        .get()
+        .ok_or_else(|| Error::Protocol("proof not signed in".into()))?;
+    let body = replace.map(|replace| json!({ "replace": replace }));
+    let (status, answer) = http(
+        url,
+        if replace.is_some() { "POST" } else { "GET" },
+        &format!("/v1/hosts/{host_id}/proof-carrier"),
+        Some(token),
+        body.as_ref(),
+    )
+    .await?;
+    if status != 200 {
+        return Err(Error::Protocol(format!(
+            "proof carrier control refused: {status}"
+        )));
+    }
+    Ok(answer["ready"] == true)
+}
+
 /// [`websocket`], with the HTTP status the relay refused the upgrade with, if it answered one.
 async fn upgrade(
     url: &str,
@@ -472,6 +507,12 @@ async fn upgrade(
         .map_err(|e| (None, e.into()))?;
     crate::connect_timing::mark("outer_tls_ready");
     let scheme = if base.tls { "wss" } else { "ws" };
+    #[cfg(feature = "host-routing-proof")]
+    let path = if PROOF_CLIENT.load(Ordering::Relaxed) {
+        path.replace("/connect", "/proof-connect")
+    } else {
+        path.to_owned()
+    };
     let address = format!("{scheme}://{}{path}", base.authority());
     let mut request = address
         .into_client_request()
@@ -778,6 +819,8 @@ async fn ticketed(url: &str, token: &str, host_id: &str) -> Result<WebSocketStre
 /// The relay connection's state, and the wake-up for setting changes.
 #[derive(Debug)]
 pub(crate) struct Relay {
+    #[cfg(feature = "host-routing-proof")]
+    proof: tokio::sync::Mutex<Option<host_proof::Carrier>>,
     /// The relay's URL.
     pub url: String,
     /// Wakes [`run`] when `relay` or `remote` changes, or a registration succeeds.
@@ -856,6 +899,8 @@ impl Relay {
     pub(crate) fn new(url: String) -> Self {
         Self {
             url,
+            #[cfg(feature = "host-routing-proof")]
+            proof: tokio::sync::Mutex::new(None),
             changed: Notify::new(),
             hooks_changed: Notify::new(),
             clock_offset: AtomicI64::new(0),
@@ -1804,6 +1849,14 @@ async fn serve(
                         } else {
                             serde_json::from_str(&text).unwrap_or(Value::Null)
                         };
+                        #[cfg(feature = "host-routing-proof")]
+                        if message["t"] == "proof" {
+                            if let Some(token) = message["token"].as_str() {
+                                let carrier = host_proof::start(&daemon.relay.url, host_id, token, stop.child_token()).await;
+                                *daemon.relay.proof.lock().await = carrier.ok();
+                            }
+                            continue;
+                        }
                         if message["t"] == "check" {
                             daemon.relay.check_answered(message);
                         } else if message["t"] == "open" && serving(daemon).await {
@@ -1878,27 +1931,31 @@ async fn stream(
     spare: Option<mpsc::Sender<()>>,
     (held, gone, check): (Held, mpsc::UnboundedSender<String>, watch::Receiver<()>),
 ) {
-    let id = message["stream"].as_str().unwrap_or_default();
-    let token = message["token"].as_str().unwrap_or_default();
-    // Both go into a path, so only their alphabets.
-    let plain = |text: &str, extra: &[u8]| {
-        !text.is_empty()
-            && text
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
-    };
-    if !plain(id, b"-") || !plain(token, b"-_") {
+    let Some((id, token)) = stream_identity(&message) else {
         return warn!("the relay announced a stream with a bad id or token");
-    }
+    };
     let end = EndSlot::default();
     let holding = Holding::new(held, gone, id, Arc::clone(&end));
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
     let mut unused = spare.clone();
     let relay = &daemon.relay;
     let joined = async {
-        let mut socket = websocket(&relay.url, &path, &[]).await?;
+        #[cfg(feature = "host-routing-proof")]
+        let socket = if message["proof"] == true {
+            let carrier = relay.proof.lock().await;
+            carrier
+                .as_ref()
+                .ok_or_else(|| Error::Protocol("proof carrier unavailable".into()))?
+                .open(id, token)
+                .await?
+        } else {
+            websocket(&relay.url, &path, &[]).await?
+        };
+        #[cfg(not(feature = "host-routing-proof"))]
+        let socket = websocket(&relay.url, &path, &[]).await?;
+        let mut socket = socket;
         let mut keepalive = Keepalive::new(check);
-        if spare.is_some() {
+        if spare.is_some() || (cfg!(feature = "host-routing-proof") && message["proof"] == true) {
             loop {
                 tokio::select! {
                     biased;
@@ -1976,6 +2033,19 @@ async fn stream(
             }
         }
     }
+}
+
+/// A stream's id and one-time token go into a path, so accept only their alphabets.
+fn stream_identity(message: &Value) -> Option<(&str, &str)> {
+    let id = message["stream"].as_str()?;
+    let token = message["token"].as_str()?;
+    let plain = |text: &str, extra: &[u8]| {
+        !text.is_empty()
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
+    };
+    (plain(id, b"-") && plain(token, b"-_")).then_some((id, token))
 }
 
 /// plxd's answer to a webhook frame from the relay: the head's JSON length (u32, big-endian), the

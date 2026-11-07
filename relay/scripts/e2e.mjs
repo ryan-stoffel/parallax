@@ -2,14 +2,19 @@
 // Runs plxd's relay test (daemon/tests/server/relay.rs) against this Worker under `wrangler dev`,
 // with a local Clerk: a fresh RSA key whose JWKS the relay trusts, and session tokens it signed.
 // Arguments replace the cargo command, such as `node scripts/e2e.mjs cargo test --release ...`.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createSign, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, connect } from "node:net";
+import { request as httpRequest } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { delayDuplex } from "./delay-duplex.mjs";
 
+const proof = process.env.PLX_HOST_PROOF === "1";
 const relayDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const issuer = "https://clerk.e2e";
 const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -41,7 +46,7 @@ writeFileSync(envFile, `CLERK_ISSUER=${issuer}\nCLERK_JWKS='${JSON.stringify(jwk
 
 const wrangler = spawn(
   join(relayDir, "node_modules", ".bin", "wrangler"),
-  ["dev", "--ip", "127.0.0.1", "--port", String(port), "--env-file", envFile,
+  ["dev", "--local", ...(proof ? ["--config", "proof.toml"] : []), "--ip", "127.0.0.1", "--port", String(port), "--env-file", envFile,
     "--persist-to", join(scratch, "state"), "--show-interactive-dev-session=false", "--log-level", "warn"],
   { cwd: relayDir, stdio: ["ignore", "inherit", "inherit"], detached: true,
     env: { ...process.env, WRANGLER_SEND_METRICS: "false" } },
@@ -53,7 +58,7 @@ const stop = () => {
   rmSync(scratch, { recursive: true, force: true });
 };
 
-const url = `http://127.0.0.1:${port}`;
+let url = `http://127.0.0.1:${port}`;
 const deadline = Date.now() + 60_000;
 for (;;) {
   const answer = await fetch(`${url}/v1/hosts`).catch(() => null);
@@ -66,6 +71,42 @@ for (;;) {
   await new Promise((resolve) => setTimeout(resolve, 250));
 }
 
+let front;
+let delayed;
+let ca;
+if (proof) {
+  ca = join(scratch, "ca.pem");
+  const key = join(scratch, "key.pem");
+  const cert = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+    "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
+    "-keyout", key, "-out", ca], {stdio:"ignore"});
+  if (cert.status !== 0) { stop(); throw new Error("local TLS certificate failed"); }
+  front = createHttpsServer({key:readFileSync(key), cert:readFileSync(ca)}, (req,res) => {
+    const upstream = httpRequest({hostname:"127.0.0.1",port,method:req.method,path:req.url,headers:req.headers}, answer => {
+      res.writeHead(answer.statusCode, answer.headers); answer.pipe(res);
+    });
+    upstream.on("error", () => { res.writeHead(502); res.end(); });
+    req.pipe(upstream);
+  });
+  front.on("upgrade", (req, socket, head) => {
+    const upstream = connect(port, "127.0.0.1", () => {
+      upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${Object.entries(req.headers).map(([k,v]) => `${k}: ${v}`).join("\r\n")}\r\n\r\n`);
+      if (head.length) upstream.write(head);
+      socket.pipe(upstream).pipe(socket);
+    });
+    upstream.on("error", () => socket.destroy());
+    socket.on("error", () => upstream.destroy());
+    socket.on("close", () => upstream.destroy());
+  });
+  await new Promise(resolve => front.listen(0, "127.0.0.1", resolve));
+  const delay = Number(process.env.PLX_HOST_PROOF_DELAY_MS ?? 0);
+  delayed = createServer({allowHalfOpen:true}, socket => {
+    const upstream = connect({port:front.address().port,host:"127.0.0.1",allowHalfOpen:true});
+    delayDuplex(socket, upstream, delay);
+  });
+  await new Promise(resolve => delayed.listen(0, "127.0.0.1", resolve));
+  url = `https://127.0.0.1:${delayed.address().port}`;
+}
 const [command, ...args] = process.argv.length > 2
   ? process.argv.slice(2)
   : ["cargo", "test", "-p", "plxd", "--test", "server", "relay::"];
@@ -75,12 +116,14 @@ const test = spawn(command, args, {
   // Two accounts, since the tests together register more computers than one account holds.
   env: {
     ...process.env,
+    ...(ca ? {SSL_CERT_FILE:ca} : {}),
     PLXD_TEST_RELAY_URL: url,
     PLXD_TEST_RELAY_TOKEN: sessionToken("user_e2e"),
     PLXD_TEST_RELAY_CHECK_TOKEN: sessionToken("user_e2e_check"),
   },
 });
 test.on("exit", (code) => {
+  front?.close(); delayed?.close();
   stop();
   process.exit(code ?? 1);
 });

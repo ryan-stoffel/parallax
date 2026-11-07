@@ -37,6 +37,8 @@ use crate::remote::{App, LOOPBACK, new_code, open, open_account, set_remote, wai
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 use crate::thread_tools::Keys;
 
+#[cfg(feature = "host-routing-proof")]
+mod host_proof;
 mod proxied;
 
 async fn set_relay(client: &mut Client, on: bool) {
