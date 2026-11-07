@@ -19,7 +19,7 @@ type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
 
 /** The streams open to this host, by id, each its own [`StreamRelay`]. `spare` marks the one
  *  plxd keeps waiting for the next client (0091). */
-type Streams = Record<string, { spare?: true }>;
+type Streams = Record<string, { spare?: true; pending?: true }>;
 
 /** Why the relay refused a request, with its HTTP status. */
 type Refusal = { status: number; error: string };
@@ -190,27 +190,77 @@ export class HostRelay extends DurableObject<Env> {
    * A new stream for plxd to join, armed with the hash of the one-time token plxd is sent with
    * it, and counted as open. A spare waits for the next client.
    */
-  private async newStream(hostId: string, spare: boolean) {
-    const id = this.env.STREAMS.newUniqueId();
-    const stream = id.toString();
-    const token = randomToken();
-    await this.env.STREAMS.get(id).arm({ hostId, stream, tokenHash: await sha256(token) });
-    const streams = await this.streams();
-    streams[stream] = spare ? { spare: true } : {};
-    await this.ctx.storage.put<Streams>("streams", streams);
-    this.host()?.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}) }));
-    return stream;
+  private async newStream(user: string, spare: boolean): Promise<Refusal | { stream: string }> {
+    const reserved = await this.ctx.blockConcurrencyWhile(async () => {
+      const owner = await this.owner();
+      if (owner?.user !== user) return { status: 404, error: "not_found" } as Refusal;
+      const host = this.host();
+      if (!host) return { status: 503, error: "host_offline" } as Refusal;
+      const proof = await this.ctx.storage.get<number>("lastProof");
+      const streams = await this.streams();
+      if (Object.keys(streams).length >= MAX_STREAMS)
+        return { status: 429, error: "too_many_streams" } as Refusal;
+      const id = this.env.STREAMS.newUniqueId();
+      const stream = id.toString();
+      // Only local storage is gated. Hashing and remote arm must allow reports and reconnects.
+      streams[stream] = spare ? { pending: true, spare: true } : { pending: true };
+      await this.ctx.storage.put<Streams>("streams", streams);
+      return { id, stream, owner, host, proof };
+    });
+    if ("error" in reserved) return reserved;
+    const { id, stream, owner, host, proof } = reserved;
+    const object = this.env.STREAMS.get(id);
+    try {
+      const token = randomToken();
+      await object.arm({ hostId: owner.hostId, stream, tokenHash: await sha256(token) });
+      const published = await this.ctx.blockConcurrencyWhile(async () => {
+        const currentProof = await this.ctx.storage.get<number>("lastProof");
+        const current = await this.streams();
+        // Reconnect, removal, gone or a report may have canceled the reservation during arm.
+        if (!current[stream] || currentProof !== proof || !this.host()) return false;
+        current[stream] = spare ? { spare: true } : {};
+        await this.ctx.storage.put<Streams>("streams", current);
+        host.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}) }));
+        return true;
+      });
+      if (!published) {
+        await object.close(1000, "admission canceled");
+        await this.forgetStream(stream);
+        return { status: 503, error: "host_offline" };
+      }
+      return { stream };
+    } catch (error) {
+      // An arm may have committed before its RPC failed. Close before releasing capacity.
+      await object.close(1000, "admission failed");
+      await this.forgetStream(stream);
+      throw error;
+    }
+  }
+
+  private async forgetStream(stream: string) {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const streams = await this.streams();
+      if (stream in streams) {
+        delete streams[stream];
+        await this.ctx.storage.put<Streams>("streams", streams);
+      }
+    });
   }
 
   /** Closes the objects of the open streams `ids` names, every one when it's not given, and forgets
    *  them. */
   private async closeStreams(hostId: string, code: number, reason: string, ids?: string[]) {
-    const streams = await this.streams();
-    const closing = ids ?? Object.keys(streams);
-    for (const id of closing) delete streams[id];
-    if (closing.length) await this.ctx.storage.put<Streams>("streams", streams);
+    const armed = await this.ctx.blockConcurrencyWhile(async () => {
+      const streams = await this.streams();
+      const closing = ids ?? Object.keys(streams);
+      // Pending arms own their eventual close, after arm has finished.
+      const armed = closing.filter((id) => !streams[id]?.pending);
+      for (const id of closing) delete streams[id];
+      if (closing.length) await this.ctx.storage.put<Streams>("streams", streams);
+      return armed;
+    });
     await Promise.all(
-      closing.map((id) =>
+      armed.map((id) =>
         streamObject(this.env, hostId, id)
           ?.close(code, reason)
           .catch((error) => logError("host.closeStreams", this.context(), error)),
@@ -354,7 +404,7 @@ export class HostRelay extends DurableObject<Env> {
     const refused = await this.admit(user);
     if (refused) return refused;
     const admitted = performance.now();
-    const taken = await this.take(timed);
+    const taken = await this.take(user, timed);
     if ("error" in taken || !timed) return taken;
     return { stream: taken.stream, timing: { admitMs: admitted - start, takeMs: performance.now() - admitted, spare: taken.spare === true } };
   }
@@ -381,26 +431,33 @@ export class HostRelay extends DurableObject<Env> {
     if (!found || found.expires < Date.now() || found.user !== owner?.user)
       return { status: 401, error: "unauthorized" };
     if (!this.host()) return { status: 503, error: "host_offline" };
-    return this.take();
+    return this.take(found.user);
   }
 
   /** The spare stream, else a new one within [`MAX_STREAMS`]. */
-  private async take(timed = false): Promise<Refusal | { stream: string; spare?: boolean }> {
-    const owner = (await this.owner())!;
-    const streams = await this.streams();
-    const spare = Object.keys(streams).find((id) => streams[id]?.spare);
-    if (spare) {
-      streams[spare] = {};
-      await this.ctx.storage.put<Streams>("streams", streams);
+  private async take(user: string, timed = false): Promise<Refusal | { stream: string; spare?: boolean }> {
+    const taken = await this.ctx.blockConcurrencyWhile(async () => {
+      const owner = await this.owner();
+      if (owner?.user !== user) return { status: 404, error: "not_found" } as Refusal;
+      const streams = await this.streams();
+      const spare = Object.keys(streams).find((id) => streams[id]?.spare && !streams[id]?.pending);
+      if (spare) {
+        streams[spare] = {};
+        await this.ctx.storage.put<Streams>("streams", streams);
+        return { spare, owner };
+      }
+      return null;
+    });
+    if (taken && "error" in taken) return taken;
+    if (taken) {
+      const { spare, owner } = taken;
       // Ownership is durable before the Worker gets the id. This object's lifetime, not the
       // Worker's request, owns cleanup. A late notification must not re-arm a joined stream.
-      const taken = streamObject(this.env, owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT, timed);
-      if (taken) this.ctx.waitUntil(taken.catch((error) => logError("host.take", this.context(), error)));
+      const notification = streamObject(this.env, owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT, timed);
+      if (notification) this.ctx.waitUntil(notification.catch((error) => logError("host.take", this.context(), error)));
       return { stream: spare, ...(timed ? { spare: true } : {}) };
     }
-    if (Object.keys(streams).length >= MAX_STREAMS)
-      return { status: 429, error: "too_many_streams" };
-    return { stream: await this.newStream(owner.hostId, false) };
+    return this.newStream(user, false);
   }
 
   /**
@@ -408,13 +465,7 @@ export class HostRelay extends DurableObject<Env> {
    * its place. Answers whether the host's day has room. When it doesn't, every stream closes.
    */
   async report(stream: string, bytes: number, closed: boolean): Promise<boolean> {
-    if (closed) {
-      const streams = await this.streams();
-      if (stream in streams) {
-        delete streams[stream];
-        await this.ctx.storage.put<Streams>("streams", streams);
-      }
-    }
+    if (closed) await this.forgetStream(stream);
     if (await this.count(bytes)) return true;
     const owner = await this.owner();
     if (owner) await this.closeStreams(owner.hostId, 4429, "daily limit");
@@ -538,15 +589,20 @@ export class HostRelay extends DurableObject<Env> {
       // plxd asks once its spare was taken or ended, so any spare still listed is gone.
       const owner = await this.owner();
       if (!owner || !this.limits.allow("spares", LIMITS.spares)) return;
-      const streams = await this.streams();
-      for (const id of Object.keys(streams)) if (streams[id]?.spare) delete streams[id];
-      await this.ctx.storage.put<Streams>("streams", streams);
-      if (Object.keys(streams).length < MAX_STREAMS) await this.newStream(owner.hostId, true);
+      await this.ctx.blockConcurrencyWhile(async () => {
+        const streams = await this.streams();
+        for (const id of Object.keys(streams)) if (streams[id]?.spare) delete streams[id];
+        await this.ctx.storage.put<Streams>("streams", streams);
+      });
+      await this.newStream(owner.user, true);
     } else if (parsed?.t === "gone" && typeof parsed.stream === "string") {
       // plxd says this whenever a stream ends, so it's usually already forgotten. Only an id in
       // this host's own record counts, so the message can't reach another host's stream.
       const owner = await this.owner();
-      if (owner && Object.hasOwn(await this.streams(), parsed.stream))
+      const streams = await this.streams();
+      if (streams[parsed.stream]?.pending) {
+        await this.forgetStream(parsed.stream);
+      } else if (owner && Object.hasOwn(streams, parsed.stream))
         await streamObject(this.env, owner.hostId, parsed.stream)
           ?.hostGone()
           .catch((error) => logError("host.gone", this.context(), error));
