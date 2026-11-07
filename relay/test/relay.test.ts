@@ -479,6 +479,85 @@ describe("streams", () => {
     expect(await runDurableObjectAlarm(streamObject(taken.open.stream))).toBe(false);
   });
 
+  it("commits one spare owner without waiting for cleanup, which survives an absent Worker and eviction", async () => {
+    const user = `user_${crypto.randomUUID()}`;
+    const { host, control } = await online(user);
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, open));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = StreamRelay.prototype.taken;
+    let deadline: number | undefined;
+    const spy = vi.spyOn(StreamRelay.prototype, "taken").mockImplementation(async function (this: StreamRelay, at) {
+      deadline = at;
+      await gate;
+      await original.call(this, at);
+    });
+    try {
+      const object = hosts.get(hosts.idFromName(host.id));
+      // The Worker disappears after open, without bringing a client to the stream.
+      expect(await object.open(account(user))).toEqual({ stream: open.stream });
+      expect(await openStreams(host)).toEqual({ [open.stream]: {} });
+      await expect.poll(() => deadline).toBeTypeOf("number");
+      expect(await object.open(account(user))).not.toEqual({ stream: open.stream });
+      release();
+      await expect.poll(() => runInDurableObject(streamObject(open.stream), (_, state) =>
+        state.storage.getAlarm())).toBe(deadline);
+      await evictDurableObject(object);
+      await evictDurableObject(streamObject(open.stream));
+      expect(await runDurableObjectAlarm(streamObject(open.stream))).toBe(true);
+      expect(await side.closed).toBe(4408);
+      await expect.poll(() => openStreams(host)).not.toHaveProperty(open.stream);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  it("ignores late taken after client join, reporting, eviction, reconnect and close", async () => {
+    const { host, token, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, open));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = StreamRelay.prototype.taken;
+    let finished = false;
+    const spy = vi.spyOn(StreamRelay.prototype, "taken").mockImplementation(async function (this: StreamRelay, at) {
+      await gate;
+      await original.call(this, at);
+      finished = true;
+    });
+    try {
+      const client = opened(await connect(host, token));
+      expect(await client.next()).toBe("ready");
+      expect(await side.next()).toBe("ready");
+      client.ws.send(new Uint8Array([1]));
+      await side.next();
+      const alarm = await runInDurableObject(streamObject(open.stream), (_, state) => state.storage.getAlarm());
+      expect(alarm).not.toBeNull();
+      release();
+      await expect.poll(() => finished).toBe(true);
+      expect(await runInDurableObject(streamObject(open.stream), (_, state) => state.storage.getAlarm())).toBe(alarm);
+      await evictDurableObject(streamObject(open.stream));
+      await streamObject(open.stream).taken();
+      expect(await runInDurableObject(streamObject(open.stream), (_, state) => state.storage.getAlarm())).toBe(alarm);
+      const { control: again } = await connectHost(host, [open.stream]);
+      await again.next();
+      client.ws.send(new Uint8Array([2]));
+      expect(await side.next()).toEqual(new Uint8Array([2]).buffer);
+      client.ws.close();
+      await side.closed;
+      await expect.poll(() => openStreams(host)).toEqual({});
+      await streamObject(open.stream).taken();
+      expect(await runDurableObjectAlarm(streamObject(open.stream))).toBe(false);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
   it("closes a stream plxd says is gone, counting its frames, and only plxd's own", async () => {
     const { host, token, control } = await online();
     const client = opened(await connect(host, token));

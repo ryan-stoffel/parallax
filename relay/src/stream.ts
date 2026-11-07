@@ -123,8 +123,12 @@ export class StreamRelay extends DurableObject<Env> {
 
   /** A client took this stream as the spare, and the Worker is bringing it here. If it hung up or
    *  the Worker failed, nothing else would end this stream, since plxd's end stays open. */
-  async taken() {
-    await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT);
+  async taken(deadline = Date.now() + JOIN_TIMEOUT) {
+    // The client may have arrived, or the stream ended, while this RPC was in flight. Read
+    // durable state first, then check sockets without yielding before the alarm write. Storage
+    // input gates serialize that write with join's deleteAlarm, including after hibernation.
+    if (!(await this.armed()) || this.ending || this.reported || this.ctx.getWebSockets("client").length) return;
+    await this.ctx.storage.setAlarm(deadline);
   }
 
   /** plxd says its end is gone, which it can know long before this object does, since a dead
