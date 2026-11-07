@@ -12,7 +12,7 @@ import {
 import { type Env, json } from "./index";
 import { logError, logEvent, logged, scrub, short } from "./log";
 import { MAX_SEALED, type Notification } from "./push";
-import { streamObject } from "./stream";
+import { JOIN_TIMEOUT, streamObject } from "./stream";
 
 /** The user a host is registered to, and its key. */
 type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
@@ -392,9 +392,10 @@ export class HostRelay extends DurableObject<Env> {
     if (spare) {
       streams[spare] = {};
       await this.ctx.storage.put<Streams>("streams", streams);
-      await streamObject(this.env, owner.hostId, spare)
-        ?.taken()
-        .catch((error) => logError("host.take", this.context(), error));
+      // Ownership is durable before the Worker gets the id. This object's lifetime, not the
+      // Worker's request, owns cleanup. A late notification must not re-arm a joined stream.
+      const taken = streamObject(this.env, owner.hostId, spare)?.taken(Date.now() + JOIN_TIMEOUT);
+      if (taken) this.ctx.waitUntil(taken.catch((error) => logError("host.take", this.context(), error)));
       return { stream: spare, ...(timed ? { spare: true } : {}) };
     }
     if (Object.keys(streams).length >= MAX_STREAMS)
