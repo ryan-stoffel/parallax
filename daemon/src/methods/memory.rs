@@ -376,14 +376,15 @@ async fn you_lock(
     }
 }
 
-/// Refuses a sync method on a connection that didn't come over Parallax Connect (0082).
+/// Refuses a sync method on a connection that isn't another of the user's computers
+/// ([`Context::over_connect`]): a device's or a browser's session gets none (0082, 0101).
 fn connect_only(context: &Context, method: &str) -> Result<(), ErrorObject> {
     if context.over_connect {
         return Ok(());
     }
     Err(ErrorObject::new(
         INVALID_REQUEST,
-        format!("memory/{method} is only for another of your devices over Parallax Connect"),
+        format!("memory/{method} is only for another of your computers"),
     ))
 }
 

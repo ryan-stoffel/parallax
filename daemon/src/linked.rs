@@ -497,7 +497,8 @@ async fn workspace_there(
     Ok((repo, base))
 }
 
-/// Run `parent`'s row, and the folder of its thread's repository, unless it has none.
+/// Run `parent`'s row, and the folder of its thread's repository, unless it has none. A thread in
+/// an orchestrator has its orchestrator's repository (PLX-1362).
 async fn parent_and_repo(
     daemon: &Daemon,
     parent: RunId,
@@ -515,6 +516,13 @@ async fn parent_and_repo(
                 .filter(|repo| !repo.fields.scratch)
                 .map(|repo| repo.fields.path),
             None => None,
+        };
+        let path = match path {
+            Some(path) => Some(path),
+            None => db
+                .get_orchestrator(row.fields.project_id)
+                .map_err(error)?
+                .and_then(|orchestrator| orchestrator.repo_path),
         };
         Ok((row, path))
     })

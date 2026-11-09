@@ -1,11 +1,12 @@
 //! Parallax Relay end to end (PLX-652, 0068): plxd behind a local relay (`wrangler dev`), a client
 //! pairing and connecting through it with TLS to plxd's pinned certificate, and webhooks
 //! forwarded with plxd's signature check and held while plxd is away. Then two plxds working
-//! across it with only their host keys (0101).
+//! across it with only their host keys and Tailscale stopped (0101), and syncing You memory
+//! (PLX-1362).
 //!
 //! Runs only when `relay/scripts/e2e.mjs` starts a relay and passes its URL and a Clerk token in
-//! `PLXD_TEST_RELAY_URL`, `PLXD_TEST_RELAY_TOKEN`, `PLXD_TEST_RELAY_CHECK_TOKEN`, and
-//! `PLXD_TEST_RELAY_PEERS_TOKEN`. Elsewhere it passes without doing anything, but for the older
+//! `PLXD_TEST_RELAY_URL`, `PLXD_TEST_RELAY_TOKEN`, `PLXD_TEST_RELAY_CHECK_TOKEN`,
+//! `PLXD_TEST_RELAY_PEERS_TOKEN`, and `PLXD_TEST_RELAY_SYNC_TOKEN`. Elsewhere it passes without doing anything, but for the older
 //! relay's test, whose relay is its own.
 
 use std::sync::Arc;
@@ -16,16 +17,16 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::jsonrpc::Message;
 use parallax_protocol::methods::{
     AccessGet, AccessMerge, AccessRemove, AgentEvents, AgentList, HostAnnounceUpdate,
-    HostSettingsGet, HostSettingsSet, OrchestratorCreate, RelayCheck, RelayHosts, RelayId,
-    RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
+    HostSettingsGet, HostSettingsSet, OrchestratorCreate, PeerComputers, RelayCheck, RelayHosts,
+    RelayId, RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
     ScheduleSave, ThreadStart,
 };
 use parallax_protocol::{
     AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice, AgentEventsParams,
     AgentListParams, AgentOutputItem, HostAnnounceUpdateParams, HostSettingsGetParams,
-    HostSettingsSetParams, ParallaxEvent, RelayCheckParams, RelayCheckPart, RelayHostsParams,
-    RelayIdParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelayStatus,
-    RemoteRevokeParams, RemoteSessionsParams, RunId, Schedule, ScheduleListParams,
+    HostSettingsSetParams, ParallaxEvent, PeerComputersParams, RelayCheckParams, RelayCheckPart,
+    RelayHostsParams, RelayIdParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
+    RelayStatus, RemoteRevokeParams, RemoteSessionsParams, RunId, Schedule, ScheduleListParams,
     ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
 use plxd::backend::fake::Step;
@@ -44,6 +45,7 @@ use crate::remote::{App, LOOPBACK, new_code, open, open_account, set_remote, wai
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 use crate::thread_tools::Keys;
 use crate::threads::start_params;
+use crate::you_sync::{TABS, body, list, write};
 
 #[cfg(feature = "host-routing-proof")]
 mod host_proof;
@@ -673,19 +675,49 @@ async fn the_connection_check_says_an_older_relay_needs_updating() {
     assert!(older.fix.unwrap().contains("relay needs updating"));
 }
 
+/// A computer whose Tailscale is stopped.
+#[derive(Debug)]
+struct Stopped;
+
+impl plxd::tailnet::Tailnet for Stopped {
+    fn status(
+        &self,
+    ) -> futures_util::future::BoxFuture<'_, Result<plxd::tailnet::Status, plxd::tailnet::NotRunning>>
+    {
+        Box::pin(async { Err(plxd::tailnet::NotRunning::Stopped("stopped".to_owned())) })
+    }
+
+    fn whois(
+        &self,
+        _: std::net::SocketAddr,
+    ) -> futures_util::future::BoxFuture<'_, Result<plxd::tailnet::Whois, String>> {
+        Box::pin(async { Err("stopped".to_owned()) })
+    }
+}
+
 /// One computer on the account: its plxd behind the relay, and a repository cloned from `origin`.
 struct Computer {
     dir: tempfile::TempDir,
     port: u16,
     url: String,
+    /// How often it pulls You memory.
+    every: Duration,
     server: Option<InProcess>,
     client: Client,
     id: String,
 }
 
 impl Computer {
-    fn config(dir: &std::path::Path, port: u16, url: &str) -> plxd::server::Config {
+    fn config(
+        dir: &std::path::Path,
+        port: u16,
+        url: &str,
+        every: Duration,
+    ) -> plxd::server::Config {
         let mut config = InProcess::config(dir);
+        // Tailscale is stopped: only the relay joins the two.
+        config.tailnet = Some(Arc::new(Stopped));
+        config.you_sync_interval = every;
         config.remote_address = Some(LOOPBACK);
         config.remote_port = port;
         url.clone_into(&mut config.relay_url);
@@ -700,8 +732,13 @@ impl Computer {
 
     /// A computer named `name`, registered with `token` and connected to the relay at `url`.
     async fn start(name: &str, url: &str, token: &str) -> Self {
+        Self::start_syncing(name, url, token, Duration::from_mins(1)).await
+    }
+
+    /// As [`Computer::start`], pulling You memory `every`.
+    async fn start_syncing(name: &str, url: &str, token: &str, every: Duration) -> Self {
         let (dir, port) = (temp_dir(), free_port());
-        let server = InProcess::start(Self::config(dir.path(), port, url));
+        let server = InProcess::start(Self::config(dir.path(), port, url, every));
         let mut client = Client::ready(&server.socket).await;
         client
             .call::<HostSettingsSet>(HostSettingsSetParams {
@@ -727,6 +764,7 @@ impl Computer {
             dir,
             port,
             url: url.to_owned(),
+            every,
             server: Some(server),
             client,
             id,
@@ -759,7 +797,12 @@ impl Computer {
 
     /// Starts plxd again on the same data folder.
     async fn start_again(&mut self) {
-        let server = InProcess::start(Self::config(self.dir.path(), self.port, &self.url));
+        let server = InProcess::start(Self::config(
+            self.dir.path(),
+            self.port,
+            &self.url,
+            self.every,
+        ));
         self.client = Client::ready(&server.socket).await;
         self.server = Some(server);
         relay_status(&mut self.client, |s| s.connected).await;
@@ -1043,6 +1086,60 @@ async fn an_agent_works_on_another_computer_through_the_relay() {
         .await;
     assert!(launched["runId"].is_string(), "{launched}");
 
+    // A thread in an orchestrator hands work there too, found by the orchestrator's repository.
+    let orchestrator = parallax_protocol::OrchestratorCreateParams {
+        repo_path: Some(repo.to_str().unwrap().to_owned()),
+        id: parallax_protocol::ScopeId::generate(),
+        name: "app".to_owned(),
+        icon: None,
+        permission: None,
+        autonomy: None,
+        base_branch: None,
+    };
+    let orchestrator = here
+        .client
+        .call::<OrchestratorCreate>(orchestrator)
+        .await
+        .unwrap()
+        .orchestrator
+        .id;
+    let lead = here
+        .client
+        .call::<ThreadStart>(parallax_protocol::ThreadStartParams {
+            orchestrator: Some(orchestrator),
+            ..start_params(None, "Lead the work.")
+        })
+        .await
+        .unwrap()
+        .run
+        .id;
+    let mut lead_mcp = Mcp::spawn(mcp_command(
+        here.dir.path(),
+        &["--thread", &lead.to_string()],
+    ))
+    .await;
+    let task = json!({"task": "A child's work.", "target": {"computer": there_id}});
+    let child = lead_mcp.ok("delegate_task", task).await;
+    assert_eq!(child["computer"]["id"], there_id.as_str(), "{child}");
+    let child: RunId = child["taskId"].as_str().unwrap().parse().unwrap();
+    let runs = there
+        .client
+        .call::<AgentList>(AgentListParams { project: None });
+    let run = runs
+        .await
+        .unwrap()
+        .runs
+        .into_iter()
+        .find(|run| run.id == child);
+    let run = run.expect("the child runs there");
+    assert!(run.prompt.contains("A child's work."), "{}", run.prompt);
+    assert!(
+        run.worktree_path.unwrap().contains("copy"),
+        "in There's copy"
+    );
+    here.message_with(lead, &format!("Delegated task {child}"))
+        .await;
+
     // Off closes the session, and the next call says why.
     there.set_agent_work(false).await;
     let sessions = there.client.call::<RemoteSessions>(RemoteSessionsParams {});
@@ -1056,6 +1153,65 @@ async fn an_agent_works_on_another_computer_through_the_relay() {
         assert!(Instant::now() < deadline, "{said}");
         sleep(Duration::from_millis(200)).await;
     }
+
+    for id in [here_id, there_id] {
+        let removed = here.client.call::<RelayRemove>(RelayRemoveParams {
+            token: token.clone(),
+            host_id: id,
+        });
+        removed.await.unwrap();
+    }
+}
+
+/// You memory between two computers through the relay, with Tailscale stopped on both (PLX-1362):
+/// nothing comes from a computer that hasn't approved the one pulling, and once it has, an entry
+/// written on it arrives, recorded under its relay id.
+#[tokio::test]
+async fn you_memory_syncs_through_the_relay_with_tailscale_stopped() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_SYNC_TOKEN"),
+    ) else {
+        return;
+    };
+    let every = Duration::from_secs(2);
+    let mut here = Computer::start_syncing("Here", &url, &token, every).await;
+    let mut there = Computer::start_syncing("There", &url, &token, every).await;
+    let (here_id, there_id) = (here.id.clone(), there.id.clone());
+    for computer in [&mut here, &mut there] {
+        computer.set_agent_work(true).await;
+        relay_status(&mut computer.client, |s| s.connected).await;
+    }
+    write(&mut here.client, TABS, "Tabs", "Use tabs.").await;
+
+    // There approved Here, but Here hasn't approved There, so Here gives it nothing, and says why
+    // to There's own client of it, the one its pulls use.
+    there.trust(&here_id).await;
+    sleep(every * 3).await;
+    assert_eq!(body(&mut there.client, TABS).await, None);
+    let listed = there.client.call::<PeerComputers>(PeerComputersParams {});
+    let listed = listed.await.unwrap().computers;
+    let shown = listed
+        .iter()
+        .find(|computer| computer.id == here_id)
+        .unwrap();
+    let why = shown.why_not.as_deref().unwrap_or_default();
+    assert!(why.contains("hasn't approved"), "{shown:?}");
+
+    // Once it has, the entry arrives after There's wait for a computer that refused it.
+    here.trust(&there_id).await;
+    let deadline = Instant::now() + every * 10 + PATIENCE;
+    while body(&mut there.client, TABS).await.as_deref() != Some("Use tabs.") {
+        assert!(Instant::now() < deadline, "the entry never reached There");
+        sleep(Duration::from_millis(200)).await;
+    }
+    let files = list(&mut there.client).await;
+    let file = files.iter().find(|file| file.path == TABS).unwrap();
+    let machine = file.machine.clone().unwrap();
+    assert_eq!(
+        (machine.id, machine.name),
+        (here_id.clone(), "Here".to_owned())
+    );
 
     for id in [here_id, there_id] {
         let removed = here.client.call::<RelayRemove>(RelayRemoveParams {

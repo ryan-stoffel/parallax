@@ -154,6 +154,7 @@ const test = spawn(command, args, {
     PLXD_TEST_RELAY_TOKEN: sessionToken("user_e2e"),
     PLXD_TEST_RELAY_CHECK_TOKEN: sessionToken("user_e2e_check"),
     PLXD_TEST_RELAY_PEERS_TOKEN: sessionToken("user_e2e_peers"),
+    PLXD_TEST_RELAY_SYNC_TOKEN: sessionToken("user_e2e_sync"),
   },
 });
 test.on("exit", (code) => {

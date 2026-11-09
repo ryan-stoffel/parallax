@@ -1374,7 +1374,7 @@ async fn serve_socket(
     let closing = daemon.remote.watch(&session, closing);
     // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off. A
     // device made read-only after this has the connection closed too, as a revoke does.
-    let Some(read_only) = session_read_only(&daemon, &session).await else {
+    let Some((read_only, computer)) = session_kind(&daemon, &session).await else {
         let refusal = refused("a revoked session");
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
@@ -1395,12 +1395,13 @@ async fn serve_socket(
     let (local_in, local_out) = tokio::io::split(local);
     let over_relay = relay_stream.is_some();
     let ended = closing.clone();
+    // Another computer's peer session is one of the user's computers, as Connect's is (0101).
     let serve = connection::serve(
         plain,
         daemon,
         stop_reading,
         closing,
-        false,
+        computer,
         read_only,
         over_relay,
         true,
@@ -1687,23 +1688,26 @@ async fn session_for(daemon: &Daemon, token: &str) -> Option<StoredSession> {
         .find(|s| s.token_hash == hash)
 }
 
-/// Whether session `id`'s device is read-only, if it may have a socket now: it exists, and a
-/// browser's only while `remoteWeb` is on. Lists it can't read leave it no socket, rather than full
-/// access.
-async fn session_read_only(daemon: &Daemon, id: &str) -> Option<bool> {
+/// Whether session `id`'s device is read-only, and whether it is another computer's peer session
+/// (0101), if it may have a socket now: it exists, and a browser's only while `remoteWeb` is on.
+/// Lists it can't read leave it no socket, rather than full access.
+async fn session_kind(daemon: &Daemon, id: &str) -> Option<(bool, bool)> {
     let id = id.to_owned();
-    let (browser, read_only) = daemon
+    let (browser, read_only, peer) = daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
             let lists = access::read_lists(db)?;
             let sessions = read_sessions(db)?;
             let session = sessions.iter().find(|s| s.id == id);
-            Ok(session.map(|s| (s.browser, lists.read_only_clients.contains(&s.thumbprint))))
+            Ok(session.map(|s| {
+                let read_only = lists.read_only_clients.contains(&s.thumbprint);
+                (s.browser, read_only, s.peer)
+            }))
         })
         .await
         .ok()
         .flatten()?;
-    (!browser || web_on(daemon).await).then_some(read_only)
+    (!browser || web_on(daemon).await).then_some((read_only, peer))
 }
 
 /// Closes every browser's connections, as `remoteWeb` turns off. Their sessions stay, for when it
