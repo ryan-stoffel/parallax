@@ -376,14 +376,16 @@ async fn you_lock(
     }
 }
 
-/// Refuses a sync method on a connection that didn't come over Parallax Connect (0082).
+/// Refuses a sync method on a connection that came from neither another computer's Connect nor the
+/// remote listener, where another computer's peer session arrives (0082, PLX-1362). Any session
+/// there may already read You with `memory/read`, and a read-only device is refused both.
 fn connect_only(context: &Context, method: &str) -> Result<(), ErrorObject> {
-    if context.over_connect {
+    if context.over_connect || context.over_remote {
         return Ok(());
     }
     Err(ErrorObject::new(
         INVALID_REQUEST,
-        format!("memory/{method} is only for another of your devices over Parallax Connect"),
+        format!("memory/{method} is only for another of your computers"),
     ))
 }
 

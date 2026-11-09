@@ -127,7 +127,7 @@ fn pair() -> (Host, Host, Arc<AtomicBool>) {
     (a, b, online)
 }
 
-async fn write(client: &mut Client, path: &str, title: &str, content: &str) {
+pub(crate) async fn write(client: &mut Client, path: &str, title: &str, content: &str) {
     let params = MemoryWriteParams {
         scope: MemoryScope::You,
         path: path.to_owned(),
@@ -139,14 +139,14 @@ async fn write(client: &mut Client, path: &str, title: &str, content: &str) {
     client.call::<MemoryWrite>(params).await.unwrap();
 }
 
-async fn list(client: &mut Client) -> Vec<MemoryFile> {
+pub(crate) async fn list(client: &mut Client) -> Vec<MemoryFile> {
     let params = MemoryListParams {
         scope: MemoryScope::You,
     };
     client.call::<MemoryList>(params).await.unwrap().files
 }
 
-async fn body(client: &mut Client, path: &str) -> Option<String> {
+pub(crate) async fn body(client: &mut Client, path: &str) -> Option<String> {
     let params = MemoryReadParams {
         scope: MemoryScope::You,
         path: path.to_owned(),
@@ -193,7 +193,7 @@ async fn proposals(a: &mut Client, b: &mut Client) -> [Vec<(String, String)>; 2]
     each
 }
 
-const TABS: &str = "memory/preference/tabs.md";
+pub(crate) const TABS: &str = "memory/preference/tabs.md";
 
 #[tokio::test]
 async fn only_another_device_over_connect_may_sync() {

@@ -4,10 +4,19 @@
 //! that syncs ([`synced`]), a version vector, the machine that wrote that version, and a
 //! tombstone for a deletion. A scan ([`record`]) compares the folder with the rows and stamps
 //! what changed as this machine's, so a write through plxd, an edit on disk, and an edit made
-//! while plxd was down all count the same. While `connect` is on, [`run`] scans, then pulls each
-//! online Connect device's rows with `memory/syncList`, reads the text of the ones this host
-//! lacks with `memory/syncRead`, and applies them by [`merge`]'s rules. A peer's `memory/syncList`
-//! scans first too ([`list`]), so it always sees the latest.
+//! while plxd was down all count the same. While `connect` or `relay` is on, [`run`] scans, then
+//! pulls each peer's rows with `memory/syncList`, reads the text of the ones this host lacks with
+//! `memory/syncRead`, and applies them by [`merge`]'s rules. A peer's `memory/syncList` scans first
+//! too ([`list`]), so it always sees the latest.
+//!
+//! The peers are each online Connect device while `connect` is on, and each online computer the
+//! relay lists while `relay` is on, through [`crate::peer::RelayPeers`]' clients: host-key proof,
+//! TLS pinned to the computer's relay id, and no account token (0101, PLX-1362). Such a computer
+//! answers only when it approved this one and has `agentWork` on, since its peer session is the
+//! only way in. A computer on both is pulled twice, which changes nothing the second time.
+//!
+//! A machine's id in the version vectors is its tailnet node ID while Tailscale answers, else its
+//! relay id. Only that machine counts under either, so a clock stays right across a change.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -402,23 +411,28 @@ async fn blocking<T: Send + 'static>(
     }
 }
 
-/// This node's tailnet status, and this machine as You's versions name it.
-async fn this_machine(daemon: &Daemon) -> Result<(Status, MemoryMachine), ErrorObject> {
-    let status = daemon
-        .connect
-        .tailnet
-        .status()
-        .await
-        .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
+/// This node's tailnet status, when Tailscale answers, and this machine as You's versions name it:
+/// by its tailnet node ID then, else by its relay id.
+async fn this_machine(daemon: &Daemon) -> Result<(Option<Status>, MemoryMachine), ErrorObject> {
+    let status = daemon.connect.tailnet.status().await.ok();
     let name = daemon
         .reader
         .run(&CancellationToken::new(), |db| {
             db.device_name().map_err(|e| store_error(&e))
         })
         .await?;
+    let (id, host_name) = if let Some(status) = &status {
+        (status.this.id.clone(), status.this.host_name.clone())
+    } else {
+        let key = crate::relay::signer(daemon)
+            .await
+            .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
+        let name = crate::server::remote::host_name(daemon).await;
+        (key.thumbprint(), name)
+    };
     let machine = MemoryMachine {
-        id: status.this.id.clone(),
-        name: name.unwrap_or_else(|| status.this.host_name.clone()),
+        id,
+        name: name.unwrap_or(host_name),
     };
     Ok((status, machine))
 }
@@ -456,9 +470,10 @@ pub(crate) async fn read(
     read.unwrap_or_else(|error| Err(ErrorObject::internal_error(error.to_string())))
 }
 
-/// Pulls You memory from the user's other Connect devices, at their Connect listener's `port`,
-/// every `every` while `connect` is on, until `stop`. The first pull is one `every` after start,
-/// once the Connect listener has had its first check.
+/// Pulls You memory from the user's other computers every `every` while `connect` or `relay` is on,
+/// until `stop`: Connect devices at their Connect listener's `port`, and the relay's computers
+/// through it. The first pull is one `every` after start, once the Connect listener has had its
+/// first check.
 pub(crate) async fn run(daemon: Arc<Daemon>, every: Duration, port: u16, stop: CancellationToken) {
     let peers = Peers::new(Arc::clone(&daemon.connect.tailnet), port);
     let mut tick = time::interval_at(time::Instant::now() + every, every);
@@ -480,16 +495,17 @@ pub(crate) async fn run(daemon: Arc<Daemon>, every: Duration, port: u16, stop: C
 /// A peer's versions, and the texts read for them, by path.
 type Fetched = (Vec<MemorySyncEntry>, HashMap<String, String>);
 
-/// Scans, then pulls every online device at once, each device's calls within `every`, so a
-/// device that went to sleep mid-call can't hold up the others.
+/// Scans, then pulls every online peer at once, each peer's calls within `every`, so a peer that
+/// went to sleep mid-call can't hold up the others.
 async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers, every: Duration) -> Result<(), ErrorObject> {
-    let on = daemon
+    let connect = daemon
         .reader
         .run(&CancellationToken::new(), |db| {
             db.connect().map_err(|e| store_error(&e))
         })
         .await?;
-    if !on {
+    let relay = crate::relay::wanted(daemon).await;
+    if !connect && !relay {
         return Ok(());
     }
     let (status, me) = this_machine(daemon).await?;
@@ -497,11 +513,30 @@ async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers, every: Duration) -> Resul
         let _sync = daemon.you_sync.lock().await;
         record(daemon, &me).await?;
     }
-    let pulls = status.own_peers().filter(|node| node.online).map(|node| {
-        let (client, me) = (peers.client(&node.id), &me);
+    let mut clients = Vec::new();
+    if connect && let Some(status) = &status {
+        for node in status.own_peers().filter(|node| node.online) {
+            clients.push((node.host_name.clone(), peers.client(&node.id)));
+        }
+    }
+    if relay {
+        match daemon.relay_peers.hosts(daemon).await {
+            Ok(hosts) => {
+                for host in hosts {
+                    if host.online && !host.this_computer {
+                        let (client, _) = daemon.relay_peers.client(daemon, &host.host_id);
+                        clients.push((host.name, client));
+                    }
+                }
+            }
+            Err(error) => debug!(%error, "could not list this account's computers"),
+        }
+    }
+    let pulls = clients.iter().map(|(name, client)| {
+        let me = &me;
         async move {
-            if let Err(error) = pull(daemon, &client, me, every).await {
-                debug!(device = %node.host_name, %error, "could not pull You memory");
+            if let Err(error) = pull(daemon, client, me, every).await {
+                debug!(peer = %name, %error, "could not pull You memory");
             }
         }
     });
