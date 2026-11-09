@@ -952,6 +952,30 @@ const MIGRATIONS: &[Migration] = &[
         CREATE UNIQUE INDEX threads_orchestrator ON threads (orchestrator_id)
             WHERE orchestrator_id IS NOT NULL;",
     },
+    // Agents working across computers (0101). A task or notifying thread on another computer: its
+    // run id there, the computer, the run here that started it, and how it ended. `delivery` and
+    // `completion_wake` are task states as `thread_lineage`'s payload keeps them. An open row has
+    // no `ended_at`, and plxd follows it, across restarts, until it has one.
+    Migration {
+        version: 61,
+        sql: "CREATE TABLE remote_runs (
+            id TEXT NOT NULL PRIMARY KEY,
+            host_id TEXT NOT NULL,
+            host_name TEXT NOT NULL,
+            parent TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            task INTEGER NOT NULL,
+            completion_wake TEXT NOT NULL,
+            delivery TEXT NOT NULL,
+            status TEXT NOT NULL,
+            summary TEXT,
+            reason TEXT,
+            ended_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX remote_runs_open ON remote_runs (ended_at);
+        CREATE INDEX remote_runs_parent ON remote_runs (parent);",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

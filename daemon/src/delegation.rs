@@ -235,7 +235,7 @@ pub(crate) async fn delegate(
             scope,
             prompt,
             images: Vec::new(),
-            threads: Vec::new(),
+            attachments: crate::agents::attached::Attachments::default(),
             account: Some(
                 account.unwrap_or_else(|| agents::session_account(&row.state.account_id)),
             ),
@@ -515,11 +515,41 @@ pub(crate) fn quiet(db: &Store, tasks: &[Uuid]) -> Result<Vec<Uuid>, ErrorObject
             .map_err(|e| store_error(&e))?
             .and_then(|lineage| payload(&lineage).task)
             .is_none_or(|task| task.delivery == TaskDelivery::Pending);
-        if !pending {
+        // A task on another computer has a row of its own (0101).
+        let remote_pending = db
+            .remote_run(task)
+            .map_err(|e| store_error(&e))?
+            .is_none_or(|row| row.delivery == pending_name());
+        if !pending || !remote_pending {
             quiet.push(task);
         }
     }
     Ok(quiet)
+}
+
+/// [`TaskDelivery::Pending`], as a remote run's row stores it.
+fn pending_name() -> String {
+    agents::convert::option_name(TaskDelivery::Pending).unwrap_or_default()
+}
+
+/// Whether a remote run's end wakes its parent, by [`wakes`]' rule (0101): not after the parent
+/// read or cancelled the task, nor for a `settled_only` task while the parent's turn runs, which
+/// waits on it.
+pub(crate) fn remote_wakes(
+    db: &Store,
+    row: &parallax_store::RemoteRun,
+) -> Result<bool, ErrorObject> {
+    if row.delivery != pending_name() {
+        return Ok(false);
+    }
+    if row.completion_wake
+        == agents::convert::option_name(CompletionWake::SettledOnly).unwrap_or_default()
+        && let Some(parent) = db.get_run(row.parent).map_err(|e| store_error(&e))?
+        && in_turn(agents::snapshot(&parent, None)?.status)
+    {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// The folder a checkout thread works in (0063): the worktree it shares, or else `scope`'s

@@ -214,6 +214,7 @@ impl<'a> Fold<'a> {
                 from,
                 images,
                 threads,
+                ..
             } => self.start(*turn_id, |run| {
                 run.text.clone_from(text);
                 run.wake = *wake;

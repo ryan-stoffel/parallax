@@ -15,6 +15,8 @@ A Project lives on one computer, and `thread/setProject` only takes a Project on
 - **The plus button** lists threads on every connected computer, including archived and orchestrator threads. Adding an archived thread un-archives it, since the page lists no archived threads.
 - plxd doesn't change. Each same-named Project stays its own entry on its own computer.
 
+Amended 2026-11-04 (PLX-1373): plxds can now reach each other for agent work ([0101](0101-agents-work-across-computers.md)). Projects stay as this record has them.
+
 ## Rejected
 
 | Option | Why not |

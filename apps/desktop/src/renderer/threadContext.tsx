@@ -1,18 +1,46 @@
 // Threads attached to a message as context (PLX-378, decision 0047): how one looks as a chip, in
 // the composer and in the sent message, and what attaching takes.
-import { MessagesSquare, X } from "lucide-react";
-import { createContext, useContext, type ComponentType, type SVGProps } from "react";
+import { MessagesSquare, Server } from "lucide-react";
+import {
+  createContext,
+  Fragment,
+  useContext,
+  type ComponentType,
+  type ReactNode,
+  type SVGProps,
+} from "react";
 
 import type { ConnectionState } from "../preload/bridge";
+import type { RemoteThreadRef } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
+import type { Host } from "./hosts";
+import { Chip, withMentions } from "./Mention";
+import { hostIcon } from "./RunTargetMenu";
 import { age, backendLogos } from "./Sidebar";
+import { memory } from "./stored";
 import type { ThreadsState } from "./threads";
+
+export type { Mentions } from "./threads";
+
+/** One of the account's other computers (0101), which a message can name by its relay id. */
+export interface OtherComputer {
+  host: Host;
+  relayId: string;
+  connected: boolean;
+  /** Whether its plxd has `agentWork`. */
+  capable: boolean;
+  /** Its threads, as the sidebar has them. */
+  state: ThreadsState;
+}
 
 /** The open host's threads, for each one's title, provider, and time, and how to open one. */
 export interface ThreadLinks {
   hostId: string;
   state: ThreadsState;
   open: (runId: string) => void;
+  /** The other computers a message can name, and how to open a thread on one. */
+  others?: readonly OtherComputer[];
+  openOther?: (hostId: string, runId: string) => void;
 }
 
 /** What the composer needs to attach threads: the most a message takes, and the open thread, which can't attach itself. */
@@ -30,10 +58,33 @@ export function attachThreads(
   links: ThreadLinks | undefined,
   self?: string,
 ): AttachThreads | undefined {
-  const options =
-    connection?.status === "connected" ? connection.capabilities["threadContext"] : undefined;
-  const max = options?.["maxThreads"];
-  return links && typeof max === "number" ? { ...links, max, self } : undefined;
+  const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
+  const max = capabilities?.["threadContext"]?.["maxThreads"];
+  if (!links || typeof max !== "number") return undefined;
+  // A plxd without `agentWork` can't take a message naming them.
+  const others = capabilities && "agentWork" in capabilities ? links.others : undefined;
+  return { ...links, max, self, others };
+}
+
+/** Whether each other computer has `agentWork` on, by host id, as last read. */
+export const agentWorkOn = memory<Readonly<Record<string, boolean>>>({});
+
+/** Reads whether `hostId` has `agentWork` on. */
+export async function readAgentWork(hostId: string) {
+  const answer = await window.parallax
+    .request(hostId, "host/settings/get", {})
+    .catch(() => undefined);
+  if (answer && "result" in answer)
+    agentWorkOn.set({ ...agentWorkOn.get(), [hostId]: !!answer.result.agentWork });
+}
+
+/** A computer as a chip: its icon and name, or a server's and `name` for one no longer listed. */
+export function ComputerChip({ host, name }: { host?: Host; name: string }) {
+  return (
+    <Chip tone="thread" title={`Computer: ${name}`} icon={host ? hostIcon(host) : <Server />}>
+      {name}
+    </Chip>
+  );
 }
 
 /** The open host's threads, for the transcript's chips, which open the thread they name. */
@@ -61,63 +112,137 @@ export function lookOf(state: ThreadsState | undefined, runId: string): ThreadLo
 }
 
 /**
- * An attached thread, the size of the composer's image thumbnails: its provider, how long ago it
- * was prompted, and its title. With `onOpen` it's a button that opens the thread; with `onRemove`
- * it has a remove button in its corner, as an image does.
+ * An attached thread as a chip, in the composer and in sent messages: its title, as `state` has it
+ * now or else `saved`, then muted the other computer it's `on`. Its repository is in its tooltip.
+ * With `onOpen` it's a button that opens the thread.
  */
-function ThreadChip({
-  look,
+export function ThreadRefChip({
+  state,
+  runId,
+  saved,
+  on,
   onOpen,
-  onRemove,
 }: {
-  look: ThreadLook;
+  state: ThreadsState | undefined;
+  runId: string;
+  saved: string;
+  on?: Host;
   onOpen?: () => void;
-  onRemove?: () => void;
 }) {
-  const body = (
-    <>
-      <span className="flex items-center gap-1.5 text-meta text-faint-foreground">
-        <look.Logo aria-hidden className="size-3.5 shrink-0" />
-        {look.age ? `Thread · ${look.age}` : "Thread"}
-      </span>
-      <span className="w-full truncate text-body text-foreground">{look.title}</span>
-    </>
-  );
-  const box =
-    "flex h-14 w-48 flex-col items-start justify-center gap-1 rounded-xl border border-border bg-surface px-3 text-left";
+  const look = lookOf(state, runId);
+  const repoId = state?.threads.find((t) => t.id === runId)?.repo;
+  const repo = state?.repos.find((r) => r.id === repoId);
+  const shown = look.known ? look.title : saved || look.title;
+  const where = on ? `Thread on ${on.name}` : "Thread";
+  const inRepo = repo && !repo.scratch ? ` in ${repo.name}` : "";
   return (
-    <span className="relative" data-thread-chip>
-      {onOpen ? (
-        <button
-          type="button"
-          title={`Open ${look.title}`}
-          onClick={onOpen}
-          className={`${box} hover:bg-hover`}
-        >
-          {body}
-        </button>
-      ) : (
-        <span className={box}>{body}</span>
-      )}
-      {onRemove && (
-        <button
-          type="button"
-          aria-label={`Remove ${look.title}`}
-          onClick={onRemove}
-          className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
-        >
-          <X className="size-3" />
-        </button>
-      )}
-    </span>
+    <Chip
+      tone="thread"
+      title={onOpen ? `Open ${shown}${on ? ` on ${on.name}` : ""}` : `${where}: ${shown}${inRepo}`}
+      icon={<MessagesSquare aria-hidden />}
+      onOpen={onOpen}
+      end={on && <span>on {on.name}</span>}
+    >
+      {shown}
+    </Chip>
   );
 }
 
-/** A thread a sent message carried, as a chip that opens it while the host lists it. */
-export function SentThread({ runId }: { runId: string }) {
+/** A thread a sent message attached, which opens while its computer lists it. */
+function SentThreadChip({
+  runId,
+  saved,
+  computer,
+}: {
+  runId: string;
+  saved: string;
+  computer?: string;
+}) {
   const links = useContext(ThreadLinksContext);
-  const look = lookOf(links?.state, runId);
-  return (
-    <ThreadChip look={look} onOpen={links && look.known ? () => links.open(runId) : undefined} />
-  );
+  const other = computer ? links?.others?.find((o) => o.relayId === computer) : undefined;
+  const state = computer ? other?.state : links?.state;
+  const open =
+    !state?.threads.some((t) => t.id === runId) || !links
+      ? undefined
+      : other
+        ? () => links.openOther?.(other.host.id, runId)
+        : () => links.open(runId);
+  return <ThreadRefChip state={state} runId={runId} saved={saved} on={other?.host} onOpen={open} />;
+}
+
+/** `list`'s first item that `is` picks, taken out of it. */
+function take<T>(list: T[], is: (item: T) => boolean): T | undefined {
+  const at = list.findIndex(is);
+  return at < 0 ? undefined : list.splice(at, 1)[0];
+}
+
+/**
+ * A sent message's text, with its known tokens as chips, and each `@"Name"` it attached as that
+ * chip where it was typed. Each token takes the next attachment of its name: a computer by its name,
+ * a thread on another computer by its saved title, and a thread here by its title now. A token holds
+ * the title at sending, so one left over goes to the next thread here, which is one renamed or
+ * deleted since. What no token took leads the text. A token nothing takes stays text.
+ */
+export function SentText({
+  text,
+  threads,
+  computers,
+  remoteThreads,
+  known,
+}: {
+  text: string;
+  threads?: readonly string[];
+  computers?: readonly string[];
+  remoteThreads?: readonly RemoteThreadRef[];
+  known: (token: string) => boolean;
+}): ReactNode {
+  const links = useContext(ThreadLinksContext);
+  if (!threads?.length && !computers?.length && !remoteThreads?.length)
+    return withMentions(text, known);
+  const hosts = (computers ?? []).flatMap((id) => {
+    const other = links?.others?.find((o) => o.relayId === id);
+    return other ? [other.host] : [];
+  });
+  const remote = [...(remoteThreads ?? [])];
+  const here = [...(threads ?? [])];
+  const titleHere = (id: string) => {
+    const look = lookOf(links?.state, id);
+    return look.known ? look.title : undefined;
+  };
+  // Attachments' own titles first, longest first, since one may hold a `"` or read as a skill.
+  const titles = [
+    ...hosts.map((h) => h.name),
+    ...remote.map((t) => t.title),
+    ...here.flatMap((id) => titleHere(id) ?? []),
+  ].sort((a, b) => b.length - a.length);
+  const exact = titles.map((t) => `@"${t}"`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pieces = text.split(new RegExp(`(${[...exact, '@"[^"]*"'].join("|")})`));
+  const titleAt = (i: number) => pieces[i]!.slice(2, -1);
+  const chips: ReactNode[] = [];
+  for (let i = 1; i < pieces.length; i += 2) {
+    const title = titleAt(i);
+    const host = take(hosts, (h) => h.name === title);
+    const thread = host ? undefined : take(remote, (t) => t.title === title);
+    const runId = host || thread ? undefined : take(here, (id) => titleHere(id) === title);
+    if (host) chips[i] = <ComputerChip key={i} host={host} name={host.name} />;
+    else if (thread)
+      chips[i] = (
+        <SentThreadChip key={i} runId={thread.runId} saved={title} computer={thread.computer} />
+      );
+    else if (runId) chips[i] = <SentThreadChip key={i} runId={runId} saved={title} />;
+  }
+  for (let i = 1; i < pieces.length; i += 2) {
+    const runId = chips[i] ? undefined : here.shift();
+    if (runId) chips[i] = <SentThreadChip key={i} runId={runId} saved={titleAt(i)} />;
+  }
+  return [
+    ...hosts.map((h) => <ComputerChip key={h.id} host={h} name={h.name} />),
+    ...remote.map((t) => (
+      <SentThreadChip key={t.runId} runId={t.runId} saved={t.title} computer={t.computer} />
+    )),
+    ...here.map((runId) => <SentThreadChip key={runId} runId={runId} saved="" />),
+    ...pieces.map((piece, i) =>
+      i % 2 ? (chips[i] ?? piece) : <Fragment key={i}>{withMentions(piece, known)}</Fragment>,
+    ),
+  ];
 }

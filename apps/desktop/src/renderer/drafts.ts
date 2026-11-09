@@ -13,6 +13,8 @@ export interface ComposerContents {
   threads: string[];
   /** The Access picked for a New thread, over the default. */
   permission?: AgentPermission;
+  /** The provider instance a New thread runs on, picked or the default, when one is chosen. */
+  provider?: string;
 }
 
 /** A New Thread prompt left unsent (PLX-788), with where it would run. */

@@ -2149,6 +2149,75 @@ async fn dial_at(
     Ok(socket)
 }
 
+/// Why a computer gave this plxd no session at `/api/auth/peer` (0101).
+#[derive(Debug)]
+pub enum PeerRefusal {
+    /// It said no, and will until its user changes something: its words.
+    ForGood(String),
+    /// It couldn't be asked.
+    Failed(Error),
+}
+
+/// A session on the computer with relay id `host_id`, over `stream`, from `POST /api/auth/peer`
+/// with a `DPoP` proof by `key`, this computer's host key, named `name` (0101). TLS is pinned to
+/// `host_id` before the proof goes out.
+///
+/// # Errors
+///
+/// [`PeerRefusal`].
+pub async fn peer_session(
+    stream: crate::relay::Stream,
+    host_id: &str,
+    key: &DpopKey,
+    name: &str,
+) -> Result<String, PeerRefusal> {
+    let route = format!("{RELAY_ROUTE}{host_id}");
+    let pin = Pin::HostId(host_id.to_owned());
+    let (tls, _) = tls_over(stream, &pin).await.map_err(PeerRefusal::Failed)?;
+    let path = "/api/auth/peer";
+    let proof = key.proof("POST", &url(&route, path), None);
+    let body = json!({ "clientLabel": name });
+    let headers = [("DPoP", proof.as_str())];
+    let (status, answer) = send(tls, &route, None, "POST", path, &headers, Some(&body))
+        .await
+        .map_err(PeerRefusal::Failed)?;
+    let answer = json::<serde_json::Value>(&answer).map_err(PeerRefusal::Failed)?;
+    match (status, answer["accessToken"].as_str()) {
+        (200, Some(token)) => Ok(token.to_owned()),
+        (403, _) => Err(PeerRefusal::ForGood(
+            answer["error_description"]
+                .as_str()
+                .unwrap_or("it refused this computer")
+                .to_owned(),
+        )),
+        _ => Err(PeerRefusal::Failed(Error::Protocol(format!(
+            "{path} answered {status}: {}",
+            answer["error_description"]
+                .as_str()
+                .or_else(|| answer["error"].as_str())
+                .unwrap_or("no reason")
+        )))),
+    }
+}
+
+/// The WebSocket `/ws` of the computer with relay id `host_id`, over `stream`, with the session
+/// `token` and a proof by `key`, and TLS pinned to `host_id` (0101).
+///
+/// # Errors
+///
+/// [`Error::Refused`] when it no longer takes the session, [`Error::WrongHost`] when another key
+/// answers, or the network's error.
+pub async fn peer_socket(
+    stream: crate::relay::Stream,
+    host_id: &str,
+    token: &str,
+    key: &DpopKey,
+) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+    let route = format!("{RELAY_ROUTE}{host_id}");
+    let (tls, _) = tls_over(stream, &Pin::HostId(host_id.to_owned())).await?;
+    upgrade(&route, tls, token, key).await
+}
+
 /// Joins `socket` to `plxd dial`'s stdio: each line of `input` goes as a text frame, and each
 /// frame comes out as a line. The end of `input` closes the socket; it's over when the host
 /// closes it.

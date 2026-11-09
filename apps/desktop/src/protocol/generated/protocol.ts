@@ -458,6 +458,11 @@ export type ParallaxRequests = {
 	 */
 	"repo/match": { params: RepoMatchParams, result: RepoMatchResult },
 	/**
+	 * `repo/fetchBase`: brings a ref a new worktree will start from up to date (0101). Gated
+	 * on the `agentWork` capability.
+	 */
+	"repo/fetchBase": { params: RepoFetchBaseParams, result: RepoFetchBaseResult },
+	/**
 	 * `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
 	 * scratch repository of its own when no repo is given. Idempotent on its
 	 * client-generated run id.
@@ -699,6 +704,24 @@ export type ParallaxRequests = {
 	 * answers with the rest.
 	 */
 	"relay/remove": { params: RelayRemoveParams, result: RelayHostsResult },
+	/**
+	 * `peer/computers`: the account's computers, and whether agents here can work on each
+	 * (0101). Gated on the `agentWork` capability, like every `peer/*` method, which plxd
+	 * answers only on its local socket.
+	 */
+	"peer/computers": { params: PeerComputersParams, result: PeerComputersResult },
+	/**
+	 * `peer/call`: one thread tool's request, forwarded to another computer (0101).
+	 */
+	"peer/call": { params: PeerCallParams, result: PeerCallResult },
+	/**
+	 * `peer/start`: starts a thread on another computer for a run here (0101).
+	 */
+	"peer/start": { params: PeerStartParams, result: PeerStartResult },
+	/**
+	 * `peer/task`: reads a task a run here delegated to another computer (0101).
+	 */
+	"peer/task": { params: PeerTaskParams, result: PeerTaskResult },
 	/**
 	 * `relay/id`: this host's relay id, so a client on another route, such as a `tailnet:`
 	 * connection, can match it to the account's host list (0091), and its current routes,
@@ -1206,6 +1229,7 @@ export const REQUEST_METHODS = [
 	"repo/remote",
 	"repo/logo",
 	"repo/match",
+	"repo/fetchBase",
 	"thread/start",
 	"thread/fork",
 	"thread/importable",
@@ -1251,6 +1275,10 @@ export const REQUEST_METHODS = [
 	"relay/hosts",
 	"relay/check",
 	"relay/remove",
+	"peer/computers",
+	"peer/call",
+	"peer/start",
+	"peer/task",
 	"relay/id",
 	"relay/pushKey",
 	"access/get",
@@ -1525,6 +1553,30 @@ export type HostHealthResult = {
 	 * How busy the store's job queue is (PLX-445). An older plxd leaves it out.
 	 */
 	queues?: HostQueues,
+	/**
+	 * How much of the computer is in use, for balancing new threads (0101). An older plxd leaves
+	 * it out.
+	 */
+	load?: HostLoad,
+};
+
+/**
+ * How much of the computer's CPU and memory is in use, as percentages from 0 to 100, and how many
+ * CPU cores it has.
+ */
+export type HostLoad = {
+	/**
+	 * CPU in use across every core, since plxd last measured it.
+	 */
+	cpu: number,
+	/**
+	 * Memory in use, not counting what the system can take back, such as file caches.
+	 */
+	memory: number,
+	/**
+	 * Logical CPU cores, so a bigger computer can take more.
+	 */
+	cores: number,
 };
 
 /**
@@ -3841,6 +3893,14 @@ export type AgentSendParams = {
 	 */
 	threads?: Array<RunId>,
 	/**
+	 * Computers the user named in the message, as `thread/start`'s (0101).
+	 */
+	computers?: Array<string>,
+	/**
+	 * Threads on the user's other computers attached to the message, as `thread/start`'s (0101).
+	 */
+	remoteThreads?: Array<RemoteThreadRef>,
+	/**
 	 * The thread sending it through its Parallax tools (0041), which the turn's `turnStarted`
 	 * names. It must be a run on the host, or the send fails with `runNotFound`. Absent for the
 	 * user's own message. Behind `threadTools`.
@@ -3860,6 +3920,25 @@ export type AgentSendParams = {
  * A newer peer may send a value this version does not know; treat it as unknown.
  */
 export type AgentDelivery = "queue" | "steer";
+
+/**
+ * A thread on another computer attached to a message as a reference, which the agent reads with
+ * `thread_read` when it needs it (0101).
+ */
+export type RemoteThreadRef = {
+	/**
+	 * The computer's relay id.
+	 */
+	computer: string,
+	/**
+	 * The thread's run id on that computer.
+	 */
+	runId: RunId,
+	/**
+	 * Its title, as the user picked it.
+	 */
+	title: string,
+};
 
 /**
  * A follow-up turn's id: a version 7 UUID that the client generates once and sends again on
@@ -4334,7 +4413,17 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	 * got a summary of each ahead of the message, which `text` and the run's `prompt` leave
 	 * out. Absent when it had none.
 	 */
-	threads?: Array<RunId>, } | { "kind": "textDelta",
+	threads?: Array<RunId>,
+	/**
+	 * The computers the user named in the turn's message, by relay id (0101). The agent was
+	 * told about them ahead of the message, which `text` and the run's `prompt` leave out.
+	 * Absent when it had none.
+	 */
+	computers?: Array<string>,
+	/**
+	 * The threads on other computers attached to the turn's message (0101), as `computers`.
+	 */
+	remoteThreads?: Array<RemoteThreadRef>, } | { "kind": "textDelta",
 	/**
 	 * The vendor's id for the message, when it has one.
 	 */
@@ -6529,6 +6618,32 @@ export type RepoMatchResult = {
 };
 
 /**
+ * Params of `repo/fetchBase`: brings a ref a new worktree will start from up to date, for a thread
+ * another computer starts here (0101). Behind `agentWork`.
+ */
+export type RepoFetchBaseParams = {
+	/**
+	 * The entry's id.
+	 */
+	repo: RepoId,
+	/**
+	 * The ref. A remote-tracking branch, such as `origin/develop`, is fetched first. A fetch that
+	 * fails, as offline, leaves what was last fetched.
+	 */
+	base: string,
+};
+
+/**
+ * Result of `repo/fetchBase`.
+ */
+export type RepoFetchBaseResult = {
+	/**
+	 * The commit `base` names now.
+	 */
+	commit: string,
+};
+
+/**
  * Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
  * starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
  * worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
@@ -6639,6 +6754,19 @@ export type ThreadStartParams = {
 	 * Threads attached to the first message as context, as `agent/start` takes them.
 	 */
 	threads?: Array<RunId>,
+	/**
+	 * Computers the user named in the first message, by relay id, behind `agentWork` (0101). The
+	 * agent is told them and how to run work there, ahead of the message. `turnStarted` lists
+	 * them, and `text` and the run's `prompt` leave them out. At most `threadContext`'s
+	 * `maxThreads`.
+	 */
+	computers?: Array<string>,
+	/**
+	 * Threads on the user's other computers attached to the first message as references, behind
+	 * `agentWork` (0101). The agent reads each with `thread_read` when it needs it, so attaching
+	 * a long one costs nothing until then. Otherwise as `computers`.
+	 */
+	remoteThreads?: Array<RemoteThreadRef>,
 	/**
 	 * The model that names the thread once it has started (0058), behind `threadNaming`. plxd
 	 * asks it for a title and a branch name from `prompt`, then sets the title unless the thread
@@ -8339,6 +8467,12 @@ export type HostSettings = {
 	 */
 	relay?: boolean,
 	/**
+	 * Whether agents on the user's other computers may work here, labelled "Let agents on my
+	 * other computers work here" (0101). Off by default. An older plxd, without the `agentWork`
+	 * capability, leaves it out.
+	 */
+	agentWork?: boolean,
+	/**
 	 * This device's nickname for Parallax Connect, when one is set.
 	 */
 	deviceName?: string,
@@ -8387,6 +8521,12 @@ export type HostSettingsSetParams = {
 	 * The new `relay`, behind the `relay` capability. Absent leaves it.
 	 */
 	relay?: boolean,
+	/**
+	 * The new `agentWork`, behind the `agentWork` capability (0101). Absent leaves it. On turns
+	 * `remote` on, and `remote` off turns it off, since other computers arrive at that listener.
+	 * Off closes the sessions it gave, and answers with `remote` as it stands.
+	 */
+	agentWork?: boolean,
 	/**
 	 * The new `deviceName`, behind the `connect` capability. `""` clears it. Control characters
 	 * are dropped and the rest trimmed to at most 64 characters.
@@ -8779,6 +8919,277 @@ export type RelayRemoveParams = {
 	 */
 	hostId: string,
 };
+
+/**
+ * Params of `peer/computers`.
+ */
+export type PeerComputersParams = Record<symbol, never>;
+
+/**
+ * Result of `peer/computers`.
+ */
+export type PeerComputersResult = {
+	/**
+	 * The account's computers on the relay, this one included.
+	 */
+	computers: Array<LinkedComputer>,
+};
+
+/**
+ * One of the account's computers, as `linked_computers` shows it.
+ */
+export type LinkedComputer = {
+	/**
+	 * Its relay id.
+	 */
+	id: string,
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Whether it is connected to the relay now.
+	 */
+	online: boolean,
+	/**
+	 * Whether it is the computer that answered.
+	 */
+	thisComputer: boolean,
+	/**
+	 * Whether agents here can work on it now.
+	 */
+	takesAgentWork: boolean,
+	/**
+	 * Why they can't, for people and agents.
+	 */
+	whyNot?: string,
+	/**
+	 * Its agents with a turn running, when it could be asked.
+	 */
+	runningAgents?: number,
+	/**
+	 * How busy it is, when it could be asked.
+	 */
+	load?: HostLoad,
+};
+
+/**
+ * Params of `peer/call`: one request forwarded to another computer's plxd. Only the methods the
+ * thread tools use are allowed.
+ */
+export type PeerCallParams = {
+	/**
+	 * The computer: its relay id, or its name when one computer has it.
+	 */
+	computer: string,
+	/**
+	 * The method, such as `agent/events`.
+	 */
+	method: string,
+	/**
+	 * The method's params.
+	 */
+	params: unknown,
+};
+
+/**
+ * Result of `peer/call`: the method's own result. An error from the other computer comes back
+ * as it was, with its data.
+ */
+export type PeerCallResult = unknown;
+
+/**
+ * Params of `peer/start`: starts a thread on another computer for run `parent` here. Idempotent
+ * on `runId`. plxd refuses a mode that needs less approval than the parent's.
+ */
+export type PeerStartParams = {
+	/**
+	 * The computer: its relay id, or its name when one computer has it.
+	 */
+	computer: string,
+	/**
+	 * The new thread's run id.
+	 */
+	runId: RunId,
+	/**
+	 * The run that starts it.
+	 */
+	parent: RunId,
+	/**
+	 * Its first message, which plxd opens by naming this computer and the parent.
+	 */
+	prompt: string,
+	/**
+	 * Its title.
+	 */
+	title?: string,
+	/**
+	 * The account it runs on. Absent with `completionWake` means the parent's backend, and
+	 * without it the other computer's default.
+	 */
+	account?: AccountChoice,
+	/**
+	 * The model.
+	 */
+	model?: string,
+	/**
+	 * The effort.
+	 */
+	effort?: AgentEffort,
+	/**
+	 * Its mode. Absent is the parent's.
+	 */
+	permission?: AgentPermission,
+	/**
+	 * The workspace it gets.
+	 */
+	workspace: PeerWorkspace,
+	/**
+	 * The repo entry on the other computer. Absent is the one `repo/match` finds there for the
+	 * parent's `origin`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The ref a new worktree starts from. Absent is `origin`'s default branch there.
+	 */
+	base?: string,
+	/**
+	 * With a checkout, the branch to switch to first.
+	 */
+	checkoutRef?: string,
+	/**
+	 * Threads on the other computer to attach to the first message.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * Whether its end wakes the parent. A task always does, by its `completionWake`.
+	 */
+	notify: boolean,
+	/**
+	 * Present for a delegated task: how its end wakes the parent.
+	 */
+	completionWake?: CompletionWake,
+};
+
+/**
+ * When a delegated task's end wakes its parent, as T3 Code's `completionWake`.
+ *
+ * A newer peer may send a policy this version does not know; plxd refuses it.
+ */
+export type CompletionWake = "always" | "settled_only";
+
+/**
+ * Which workspace a thread on another computer gets.
+ */
+export type PeerWorkspace = "worktree" | "checkout" | "none";
+
+/**
+ * Result of `peer/start`.
+ */
+export type PeerStartResult = {
+	/**
+	 * The computer's relay id.
+	 */
+	computer: string,
+	/**
+	 * The computer's name.
+	 */
+	computerName: string,
+	/**
+	 * The thread on it.
+	 */
+	thread: Thread,
+	/**
+	 * The thread's run, as it stands.
+	 */
+	run: AgentRun,
+};
+
+/**
+ * Params of `peer/task`: reads a task run `parent` delegated to another computer, as `task/status`
+ * reads a local one, and records what the parent did with it.
+ */
+export type PeerTaskParams = {
+	/**
+	 * The run that delegated it.
+	 */
+	parent: RunId,
+	/**
+	 * The task.
+	 */
+	taskId: RunId,
+	/**
+	 * Counts an ended task's result as read, so its end no longer wakes the parent.
+	 */
+	acknowledge: boolean,
+	/**
+	 * A new wake policy.
+	 */
+	completionWake?: CompletionWake,
+	/**
+	 * Stops its end waking the parent, as `task_cancel` does.
+	 */
+	dispose: boolean,
+};
+
+/**
+ * Result of `peer/task`.
+ */
+export type PeerTaskResult = {
+	/**
+	 * The task, or absent when `parent` delegated no such task to another computer.
+	 */
+	task?: RemoteTask,
+};
+
+/**
+ * A task on another computer, as plxd last knew it.
+ */
+export type RemoteTask = {
+	/**
+	 * The task, which is its thread's run id on that computer.
+	 */
+	taskId: RunId,
+	/**
+	 * The computer's relay id.
+	 */
+	computer: string,
+	/**
+	 * The computer's name, when plxd could read it.
+	 */
+	computerName: string,
+	/**
+	 * Its title.
+	 */
+	title: string,
+	/**
+	 * Its status, `running` until its end was seen.
+	 */
+	status: AgentStatus,
+	/**
+	 * The end of its last output, once it ended.
+	 */
+	summary?: string,
+	/**
+	 * Why it ended, when plxd ended it because the computer refused or left.
+	 */
+	reason?: string,
+	/**
+	 * How its end reaches the parent.
+	 */
+	completionWake: CompletionWake,
+	/**
+	 * Whether its end was delivered, read, or dropped.
+	 */
+	delivery: TaskDelivery,
+};
+
+/**
+ * Whether a delegated task's end still wakes its parent.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type TaskDelivery = "pending" | "acknowledged" | "disposed";
 
 /**
  * Params of `relay/id`.
@@ -11090,13 +11501,6 @@ export type TaskDelegateParams = {
 };
 
 /**
- * When a delegated task's end wakes its parent, as T3 Code's `completionWake`.
- *
- * A newer peer may send a policy this version does not know; plxd refuses it.
- */
-export type CompletionWake = "always" | "settled_only";
-
-/**
  * Params of `task/status`: reads a task `parent` delegated, after the changes asked for.
  */
 export type TaskStatusParams = {
@@ -11147,13 +11551,6 @@ export type DelegatedTask = {
 	 */
 	run: AgentRun,
 };
-
-/**
- * Whether a delegated task's end still wakes its parent.
- *
- * A newer plxd may send a state this version does not know; treat it as unknown.
- */
-export type TaskDelivery = "pending" | "acknowledged" | "disposed";
 
 /**
  * Params of `thread/mergeBack`: `source`'s context since it forked from `target`, or for

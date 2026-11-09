@@ -74,42 +74,44 @@ use crate::{
     OrchestratorCreateResult, OrchestratorDeleteParams, OrchestratorDeleteResult,
     OrchestratorFreshParams, OrchestratorFromThreadsParams, OrchestratorFromThreadsResult,
     OrchestratorListParams, OrchestratorListResult, OrchestratorStartParams,
-    OrchestratorUpdateParams, OrchestratorUpdateResult, PrActParams, PrDiffResult, PrGuideParams,
-    PrGuideResult, PrMergeWhenReadyParams, PrStatusResult, PrViewParams, PrWatchResult,
-    PrWatchesParams, PrWatchesResult, PrWriteParams, PrWriteResult, PreviewCallParams,
-    PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInputParams,
-    PreviewInputResult, PreviewListParams, PreviewListResult, ProjectCreateParams,
-    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, PromptImage,
-    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
-    ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
-    PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
-    QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RelayCheckParams,
-    RelayCheckResult, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
-    RelayPushKeyParams, RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams,
-    RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams,
-    RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
-    RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
-    RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoLogoParams, RepoLogoResult,
-    RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult, RepoRemoteParams,
-    RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams, RepoScriptsResult,
-    RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams,
-    ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams, SecretAnswerResult,
-    SecretRequestParams, SecretRequestResult, SubscribeShellParams, SubscribeShellResult,
-    SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams, TaskStatusParams,
-    TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams,
-    TerminalOutputParams, TerminalResizeParams, TerminalResult, TerminalWriteParams,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadImportChatParams,
-    ThreadImportParams, ThreadImportableParams, ThreadImportableResult, ThreadImportedChatsParams,
-    ThreadImportedChatsResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
-    ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult, ThreadSearchParams,
-    ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult,
-    UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams,
-    UsageHistoryResult, UsageLimitsParams, UsageLimitsResult, UsageReportClaimParams,
-    UsageReportClaimResult, UsageReportReleaseParams, UsageReportReleaseResult, VoiceCleanParams,
-    VoiceCleanResult,
+    OrchestratorUpdateParams, OrchestratorUpdateResult, PeerCallParams, PeerCallResult,
+    PeerComputersParams, PeerComputersResult, PeerStartParams, PeerStartResult, PeerTaskParams,
+    PeerTaskResult, PrActParams, PrDiffResult, PrGuideParams, PrGuideResult,
+    PrMergeWhenReadyParams, PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams,
+    PrWatchesResult, PrWriteParams, PrWriteResult, PreviewCallParams, PreviewCallResult,
+    PreviewFrameParams, PreviewFrameResult, PreviewInputParams, PreviewInputResult,
+    PreviewListParams, PreviewListResult, ProjectCreateParams, ProjectCreateResult,
+    ProjectDeleteParams, ProjectDeleteResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
+    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RelayCheckParams, RelayCheckResult,
+    RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult, RelayPushKeyParams,
+    RelayPushKeyResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult,
+    RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
+    RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
+    RepoCloneProgressResult, RepoFetchBaseParams, RepoFetchBaseResult, RepoFilesParams,
+    RepoFilesResult, RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoLogoParams,
+    RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
+    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
+    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
+    ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
+    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
+    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
+    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
+    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
+    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
+    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
+    ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
+    TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
+    UsageReportClaimParams, UsageReportClaimResult, UsageReportReleaseParams,
+    UsageReportReleaseResult, VoiceCleanParams, VoiceCleanResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -494,6 +496,9 @@ method_table! {
         /// plxd's (0057). Not behind a capability of its own: a plxd without it answers
         /// `methodNotFound`.
         RepoMatch = "repo/match": RepoMatchParams => RepoMatchResult;
+        /// `repo/fetchBase`: brings a ref a new worktree will start from up to date (0101). Gated
+        /// on the `agentWork` capability.
+        RepoFetchBase = "repo/fetchBase": RepoFetchBaseParams => RepoFetchBaseResult;
         /// `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
         /// scratch repository of its own when no repo is given. Idempotent on its
         /// client-generated run id.
@@ -646,6 +651,16 @@ method_table! {
         /// `relay/remove`: removes one of the user's hosts from the relay, freeing its place, and
         /// answers with the rest.
         RelayRemove = "relay/remove": RelayRemoveParams => RelayHostsResult;
+        /// `peer/computers`: the account's computers, and whether agents here can work on each
+        /// (0101). Gated on the `agentWork` capability, like every `peer/*` method, which plxd
+        /// answers only on its local socket.
+        PeerComputers = "peer/computers": PeerComputersParams => PeerComputersResult;
+        /// `peer/call`: one thread tool's request, forwarded to another computer (0101).
+        PeerCall = "peer/call": PeerCallParams => PeerCallResult;
+        /// `peer/start`: starts a thread on another computer for a run here (0101).
+        PeerStart = "peer/start": PeerStartParams => PeerStartResult;
+        /// `peer/task`: reads a task a run here delegated to another computer (0101).
+        PeerTask = "peer/task": PeerTaskParams => PeerTaskResult;
         /// `relay/id`: this host's relay id, so a client on another route, such as a `tailnet:`
         /// connection, can match it to the account's host list (0091), and its current routes,
         /// so a client can refresh a changed LAN or Tailscale address. Gated on the

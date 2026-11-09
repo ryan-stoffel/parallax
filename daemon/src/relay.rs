@@ -30,6 +30,9 @@
 //! and no more: clients' streams are still TLS to a pinned certificate. Clerk's doesn't ([`Roots`]).
 //!
 //! [`check`] opens such a stream back to this host, to prove the whole path works (PLX-1356).
+//!
+//! plxd itself reaches another of its user's hosts with no token: [`peer_hosts`] and
+//! [`peer_stream`] prove it with the time and route signed by its host key (0101).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
@@ -315,6 +318,159 @@ fn default_port(tls: bool) -> u16 {
 /// What a relay call signed in with the user's Clerk session answers when the relay refuses it.
 const SIGN_IN_REFUSED: &str = "The relay didn't accept this sign-in.";
 
+/// The header a plxd's proof of itself comes in on another plxd's routes (0101).
+const PEER_HEADER: &str = "x-parallax-peer";
+
+/// What plxd signs, with the time in milliseconds, to use `route` as itself: `hosts`, or
+/// `connect/<target host id>`.
+fn peer_message(host_id: &str, route: &str, at: i64) -> String {
+    format!("parallax-relay-peer\n{host_id}\n{route}\n{at}")
+}
+
+/// This computer's proof for `route`, by the relay's clock as last measured.
+fn peer_proof(key: &DpopKey, relay: &Relay, route: &str) -> String {
+    let host_id = key.thumbprint();
+    let at = now_ms() + relay.clock_offset.load(Ordering::Relaxed);
+    let signature = key.sign(peer_message(&host_id, route, at).as_bytes());
+    format!("{host_id}.{at}.{}", remote::base64url(&signature))
+}
+
+/// Why plxd couldn't reach another of its user's hosts through the relay (0101).
+#[derive(Debug)]
+pub enum PeerError {
+    /// The computer isn't connected to the relay now.
+    Offline,
+    /// The relay knows no such computer of this user's, so it left the account.
+    NotOnAccount,
+    /// The relay refused this computer's proof, which a relay from before 0101 does.
+    ProofRefused,
+    /// The relay's limits, for now.
+    Limited,
+    /// Anything else, in words.
+    Failed(String),
+}
+
+impl std::fmt::Display for PeerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Offline => write!(f, "it's offline"),
+            Self::NotOnAccount => write!(f, "it's no longer on this account"),
+            Self::ProofRefused => write!(
+                f,
+                "the relay refused this computer's proof, so this computer isn't registered, or \
+                 the relay needs updating"
+            ),
+            Self::Limited => write!(f, "the relay's limits say to try again in a minute"),
+            Self::Failed(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+/// `relay`'s measure of the relay's clock from `relay_ms`, its refusal of a proof for its time:
+/// the offset to sign with, kept for later proofs. A clock off by more than a day isn't a drift to
+/// correct for, and keeps the sums from overflowing.
+fn adopt_clock(relay: &Relay, relay_ms: i64) -> Result<i64, Error> {
+    let Some(offset) = relay_ms
+        .checked_sub(now_ms())
+        .filter(|offset| offset.abs() <= MAX_CLOCK_OFFSET_MS)
+    else {
+        warn!(
+            relay_ms,
+            "the relay's time is over a day from this computer's; not using it"
+        );
+        return Err(Error::Clock(relay_ms));
+    };
+    warn!(
+        seconds = offset / 1000,
+        "this computer's clock is off from the relay's; signing with the relay's time"
+    );
+    relay.clock_offset.store(offset, Ordering::Relaxed);
+    Ok(offset)
+}
+
+/// The hosts this computer's user has on the relay, with no token: proven by the host key, and
+/// the relay's clock adopted once if it says this one is off (0101).
+///
+/// # Errors
+///
+/// [`PeerError`].
+pub(crate) async fn peer_hosts(daemon: &Daemon) -> Result<Vec<RelayHost>, PeerError> {
+    let key = signer(daemon)
+        .await
+        .map_err(|e| PeerError::Failed(e.to_string()))?;
+    let own = key.thumbprint();
+    let relay = &daemon.relay;
+    let mut retried = false;
+    let body = loop {
+        let header = format!("{PEER_HEADER}: {}\r\n", peer_proof(&key, relay, "hosts"));
+        let answered = request(
+            &relay.url,
+            Roots::WithOs,
+            "GET",
+            "/v1/hosts",
+            Some(&header),
+            None,
+        )
+        .await;
+        match answered {
+            Ok((200, body, _)) => break body,
+            Ok((401, body, _)) => {
+                let now = body["now"].as_i64();
+                if retried || now.is_none_or(|now| adopt_clock(relay, now).is_err()) {
+                    return Err(PeerError::ProofRefused);
+                }
+                retried = true;
+            }
+            Ok((429, _, _)) => return Err(PeerError::Limited),
+            Ok((status, _, _)) => {
+                return Err(PeerError::Failed(format!("the relay answered {status}")));
+            }
+            Err(error) => return Err(PeerError::Failed(cant_reach(&error))),
+        }
+    };
+    Ok(listed_hosts(&body, Some(&own)))
+}
+
+/// A byte stream to the host `host_id`, with no token: proven by the host key, the relay's clock
+/// adopted once if it says this one is off (0101). The relay can't read it: the caller runs TLS
+/// to the host's pinned certificate over it.
+///
+/// # Errors
+///
+/// [`PeerError`].
+pub(crate) async fn peer_stream(daemon: &Daemon, host_id: &str) -> Result<DuplexStream, PeerError> {
+    let key = signer(daemon)
+        .await
+        .map_err(|e| PeerError::Failed(e.to_string()))?;
+    let relay = &daemon.relay;
+    let path = format!("/v1/hosts/{host_id}/connect");
+    let route = format!("connect/{host_id}");
+    let mut retried = false;
+    let mut socket = loop {
+        let proof = peer_proof(&key, relay, &route);
+        match upgrade(&relay.url, &path, &[(PEER_HEADER, proof.as_str())]).await {
+            Ok(socket) => break socket,
+            Err((_, Error::Clock(now))) if !retried && adopt_clock(relay, now).is_ok() => {
+                retried = true;
+            }
+            Err((Some(401), _)) => return Err(PeerError::ProofRefused),
+            Err((Some(404), _)) => return Err(PeerError::NotOnAccount),
+            Err((Some(503), _)) => return Err(PeerError::Offline),
+            Err((Some(429), _)) => return Err(PeerError::Limited),
+            Err((_, error)) => return Err(PeerError::Failed(cant_reach(&error))),
+        }
+    };
+    // The relay says so once the host joined the stream, which one with `remote` off never does.
+    match time::timeout(remote::REQUEST_TIMEOUT, socket.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) if text.as_str() == "ready" => {
+            Ok(pipe(socket, None, EndSlot::default()).0)
+        }
+        _ => Err(PeerError::Failed(
+            "it didn't join the relay's stream, so its remote access may be off".to_owned(),
+        )),
+    }
+}
+
 /// What a relay call answers when it couldn't reach the relay.
 fn cant_reach(error: &Error) -> String {
     format!("Parallax couldn't reach the relay: {error}")
@@ -338,27 +494,35 @@ async fn http(
     token: Option<&str>,
     body: Option<&Value>,
 ) -> Result<(u16, Value), Error> {
-    let (status, body, _) = request(url, Roots::WithOs, method, path, token, body).await?;
+    let authorization = token.map(|token| format!("Authorization: Bearer {token}\r\n"));
+    let (status, body, _) = request(
+        url,
+        Roots::WithOs,
+        method,
+        path,
+        authorization.as_deref(),
+        body,
+    )
+    .await?;
     Ok((status, body))
 }
 
-/// One JSON request: its status, JSON body, and `Cache-Control` `max-age`.
+/// One JSON request, with `credential` as a whole header line when given: its status, JSON body,
+/// and `Cache-Control` `max-age`.
 async fn request(
     url: &str,
     roots: Roots,
     method: &str,
     path: &str,
-    token: Option<&str>,
+    credential: Option<&str>,
     body: Option<&Value>,
 ) -> Result<Answer, Error> {
     let base = Base::parse(url)?;
     let mut stream = base.connect(roots).await?;
     let body = body.map(ToString::to_string).unwrap_or_default();
-    let authorization = token
-        .map(|token| format!("Authorization: Bearer {token}\r\n"))
-        .unwrap_or_default();
+    let credential = credential.unwrap_or_default();
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\n{authorization}\
+        "{method} {path} HTTP/1.1\r\nHost: {}\r\n{credential}\
          Connection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         base.authority(),
         body.len()
@@ -1052,7 +1216,7 @@ pub(crate) async fn sign(
 }
 
 /// The host key as the relay knows it.
-async fn signer(daemon: &Daemon) -> Result<DpopKey, Error> {
+pub(crate) async fn signer(daemon: &Daemon) -> Result<DpopKey, Error> {
     let key = crate::server::remote::host_key(daemon).await?;
     key.signer()
         .ok_or_else(|| Error::Protocol("the host key isn't P-256".to_owned()))
@@ -1149,30 +1313,37 @@ pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<RelayHostsResu
             ));
         }
     };
-    let Some(listed) = body["hosts"].as_array() else {
+    if !body["hosts"].is_array() {
         return Err(ErrorObject::invalid_params(
             "The relay's answer didn't list any hosts.",
         ));
-    };
-    let hosts = listed
-        .iter()
-        .filter_map(|host| {
-            let host_id = host["hostId"].as_str()?.to_owned();
-            Some(RelayHost {
-                this_computer: own.as_deref() == Some(host_id.as_str()),
-                name: host["name"].as_str().unwrap_or_default().to_owned(),
-                online: host["online"].as_bool().unwrap_or(false),
-                usage: serde_json::from_value(host["usage"].clone()).ok(),
-                host_id,
-            })
-        })
-        .collect();
+    }
+    let hosts = listed_hosts(&body, own.as_deref());
     let removed = body["removed"].as_array().map(|ids| {
         ids.iter()
             .filter_map(|id| id.as_str().map(str::to_owned))
             .collect()
     });
     Ok(RelayHostsResult { hosts, removed })
+}
+
+/// The hosts in the relay's answer `body`, the one named `own` marked.
+fn listed_hosts(body: &Value, own: Option<&str>) -> Vec<RelayHost> {
+    body["hosts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|host| {
+            let host_id = host["hostId"].as_str()?.to_owned();
+            Some(RelayHost {
+                this_computer: own == Some(host_id.as_str()),
+                name: host["name"].as_str().unwrap_or_default().to_owned(),
+                online: host["online"].as_bool().unwrap_or(false),
+                usage: serde_json::from_value(host["usage"].clone()).ok(),
+                host_id,
+            })
+        })
+        .collect()
 }
 
 /// `relay/remove`: removes the user's host `host_id` from the relay, which frees its place. One
@@ -1578,26 +1749,7 @@ async fn connected(
     let relay = &daemon.relay;
     let (socket, checks) = match timed(now_ms() + relay.clock_offset.load(Ordering::Relaxed)).await
     {
-        Err(Error::Clock(relay_ms)) => {
-            // A clock off by more than a day isn't a drift to correct for, and keeps the sums below
-            // from overflowing.
-            let Some(offset) = relay_ms
-                .checked_sub(now_ms())
-                .filter(|offset| offset.abs() <= MAX_CLOCK_OFFSET_MS)
-            else {
-                warn!(
-                    relay_ms,
-                    "the relay's time is over a day from this computer's; not using it"
-                );
-                return Err(Error::Clock(relay_ms));
-            };
-            warn!(
-                seconds = offset / 1000,
-                "this computer's clock is off from the relay's; signing with the relay's time"
-            );
-            relay.clock_offset.store(offset, Ordering::Relaxed);
-            timed(now_ms() + offset).await?
-        }
+        Err(Error::Clock(relay_ms)) => timed(now_ms() + adopt_clock(relay, relay_ms)?).await?,
         other => other?,
     };
     info!(%host_id, "connected to the relay");

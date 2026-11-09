@@ -352,6 +352,7 @@ impl Serving {
                             true,
                             false,
                             false,
+                            false,
                         )
                         .await
                         .log(connection::Route::Tailnet);

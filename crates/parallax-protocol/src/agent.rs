@@ -12,6 +12,7 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
+use crate::peer::RemoteThreadRef;
 use crate::{
     AccountChoice, AgentApprovalBy, AgentApprovalDecision, AgentDelivery, ApprovalId,
     ParallaxEvent, ScopeId,
@@ -579,6 +580,14 @@ pub enum AgentOutputItem {
         /// out. Absent when it had none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         threads: Vec<RunId>,
+        /// The computers the user named in the turn's message, by relay id (0101). The agent was
+        /// told about them ahead of the message, which `text` and the run's `prompt` leave out.
+        /// Absent when it had none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        computers: Vec<String>,
+        /// The threads on other computers attached to the turn's message (0101), as `computers`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        remote_threads: Vec<RemoteThreadRef>,
     },
     /// Part of the assistant's reply, as it streams.
     TextDelta {
@@ -1147,6 +1156,12 @@ pub struct AgentSendParams {
     /// the run's CLI gets their summaries when it's sent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<RunId>,
+    /// Computers the user named in the message, as `thread/start`'s (0101).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub computers: Vec<String>,
+    /// Threads on the user's other computers attached to the message, as `thread/start`'s (0101).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_threads: Vec<RemoteThreadRef>,
     /// The thread sending it through its Parallax tools (0041), which the turn's `turnStarted`
     /// names. It must be a run on the host, or the send fails with `runNotFound`. Absent for the
     /// user's own message. Behind `threadTools`.

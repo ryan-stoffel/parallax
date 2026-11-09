@@ -810,6 +810,8 @@ export type DeviceHost = {
   addedRoutes?: string[];
   /** The route its connection last went over. */
   route?: string;
+  /** Added with Allow alone, so agent work doesn't trust it (PLX-1402). */
+  addedWithAllow?: true;
 };
 
 /**

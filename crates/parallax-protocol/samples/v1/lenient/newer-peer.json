@@ -31,7 +31,7 @@
   {
     "jsonrpc": "2.0",
     "id": 2,
-    "result": { "uptimeSeconds": 5, "store": "migrating", "runningAgents": 2, "load": 0.5 }
+    "result": { "uptimeSeconds": 5, "store": "migrating", "runningAgents": 2, "temperature": 0.5 }
   },
   {
     "jsonrpc": "2.0",

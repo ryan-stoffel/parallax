@@ -174,9 +174,15 @@ impl Closed {
 /// Serves one connection until it closes, and says why it did. `closing` closes it at once;
 /// `stop_reading` stops reading and closes it after the requests already read are answered.
 /// `over_connect` says it came through Parallax Connect's listener and its `whois` check
-/// ([`Context::over_connect`]). `read_only` says its device is limited to reads
+/// ([`Context::over_connect`]), and `over_remote` through the remote listener
+/// ([`Context::over_remote`]). `read_only` says its device is limited to reads
 /// ([`Context::read_only`]), and `over_relay` that it came through a relay stream
 /// ([`Context::over_relay`]).
+#[expect(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "how the connection came, one flag each"
+)]
 pub(crate) async fn serve<S>(
     stream: S,
     daemon: Arc<Daemon>,
@@ -185,6 +191,7 @@ pub(crate) async fn serve<S>(
     over_connect: bool,
     read_only: bool,
     over_relay: bool,
+    over_remote: bool,
 ) -> Closed
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
@@ -208,6 +215,7 @@ where
         reason: Reason::HostClosed,
         error: None,
         over_relay,
+        over_remote,
     };
     let stall = Stall {
         timeout: daemon.limits.idle_timeout,
@@ -249,6 +257,10 @@ enum End {
     Close,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "how the connection came, one flag each"
+)]
 struct Reader<S> {
     frames: FramedRead<ReadHalf<S>, FrameCodec>,
     daemon: Arc<Daemon>,
@@ -268,6 +280,7 @@ struct Reader<S> {
     reason: Reason,
     error: Option<String>,
     over_relay: bool,
+    over_remote: bool,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
@@ -421,6 +434,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             over_connect: self.over_connect,
             read_only: self.read_only,
             over_relay: self.over_relay,
+            over_remote: self.over_remote,
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -929,6 +943,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         ));
         let (read, mut write) = tokio::io::split(client);
         for request in requests {
@@ -970,6 +985,7 @@ mod tests {
                 Arc::clone(daemon),
                 stop.clone(),
                 closing.clone(),
+                false,
                 false,
                 false,
                 false,

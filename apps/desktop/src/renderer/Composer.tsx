@@ -8,7 +8,6 @@ import {
   ListChecks,
   LockOpen,
   LoaderCircle,
-  MessagesSquare,
   Mic,
   Minimize2,
   Paperclip,
@@ -77,6 +76,7 @@ import type {
   AgentRun,
   OrchestratorPermission,
   PromptImage,
+  RemoteThreadRef,
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
 import { sizeOf } from "./documents";
@@ -96,6 +96,7 @@ import { citationText, CommentBox, type Citation } from "./Cite";
 import { numberOf } from "./github";
 import { GitHubLogo } from "./logos";
 import { Chip, fileIcon, Mention, PullRequestsContext } from "./Mention";
+import { hostIcon } from "./RunTargetMenu";
 import { lookOf as lookOfPr } from "./pr/parts";
 import { imageFromUrl, imageUrl, readImage, type ImageCaps } from "./images";
 import { Lightbox } from "./Lightbox";
@@ -109,7 +110,16 @@ import { behaviorPrefs, newThreadPrefs, type RepoPrefs } from "./prefs";
 import { accessLevels } from "./catalog";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { RepoIcon } from "./Sidebar";
-import { lookOf, type AttachThreads } from "./threadContext";
+import {
+  agentWorkOn,
+  ComputerChip,
+  lookOf,
+  readAgentWork,
+  ThreadRefChip,
+  type AttachThreads,
+  type Mentions,
+  type OtherComputer,
+} from "./threadContext";
 import type { ThreadsState } from "./threads";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { stored } from "./stored";
@@ -135,11 +145,12 @@ export const accessOptions: Record<AgentPermission, PickerOption> = {
 };
 
 /** What the inline thread and image chips read to draw themselves: the attached images, how to
- * remove one, and the host's threads. */
+ * remove one, the host's threads, and the other computers. */
 const RefsContext = createContext<{
   images: readonly PromptImage[];
   removeImage?: (i: number) => void;
   threads?: ThreadsState;
+  others?: readonly OtherComputer[];
 }>({
   images: [],
 });
@@ -155,7 +166,14 @@ function imageKey(image: PromptImage): string {
 }
 
 /** The inline nodes that stand for something attached, each drawn as a chip and deleted whole. */
-const chipNodes = new Set(["mention", "threadRef", "imageRef", "citeRef"]);
+const chipNodes = new Set([
+  "mention",
+  "threadRef",
+  "computerRef",
+  "remoteThreadRef",
+  "imageRef",
+  "citeRef",
+]);
 
 /** An inline atom drawn by `view`, with `attrs` as its attributes. */
 const chipNode = (
@@ -216,35 +234,42 @@ const MentionNode = chipNode("mention", { token: "" }, ({ node }) => (
   }),
 });
 
-/** An attached thread where it was picked: its orchestrator's icon, its title, and its provider. */
-function ThreadRef({ runId, title }: { runId: string; title: string }) {
-  const { threads } = useContext(RefsContext);
-  const look = lookOf(threads, runId);
-  const repoId = threads?.threads.find((t) => t.id === runId)?.repo;
-  const repo = threads?.repos.find((r) => r.id === repoId);
-  const shown = look.known ? look.title : title || look.title;
-  // A chat bubble says it's a thread; its orchestrator and provider follow its title.
-  return (
-    <Chip
-      tone="thread"
-      title={`Thread: ${repo ? `${shown} · ${repo.name}` : shown}`}
-      icon={<MessagesSquare aria-hidden className="text-muted-foreground" />}
-      end={
-        <>
-          {repo && !repo.scratch && <RepoIcon repo={repo} />}
-          <look.Logo aria-hidden />
-        </>
-      }
-    >
-      {shown}
-    </Chip>
-  );
-}
-
 // An attached thread in the text (PLX-378): sent as its title, `@"Title"`, beside its run id.
-const ThreadRefNode = chipNode("threadRef", { runId: "", title: "" }, ({ node }) => (
-  <ThreadRef runId={node.attrs["runId"] as string} title={node.attrs["title"] as string} />
-));
+const ThreadRefNode = chipNode("threadRef", { runId: "", title: "" }, ({ node }) => {
+  const { threads } = useContext(RefsContext);
+  return (
+    <ThreadRefChip
+      state={threads}
+      runId={node.attrs["runId"] as string}
+      saved={node.attrs["title"] as string}
+    />
+  );
+});
+
+// A computer named in the text (0101): sent as its name, `@"Name"`, beside its relay id.
+const ComputerRefNode = chipNode("computerRef", { computer: "", name: "" }, ({ node }) => {
+  const { others } = useContext(RefsContext);
+  const other = others?.find((o) => o.relayId === node.attrs["computer"]);
+  return <ComputerChip host={other?.host} name={node.attrs["name"] as string} />;
+});
+
+// A thread on another computer in the text (0101): sent as its title, as a thread here is.
+const RemoteThreadRefNode = chipNode(
+  "remoteThreadRef",
+  { computer: "", runId: "", title: "" },
+  ({ node }) => {
+    const { others } = useContext(RefsContext);
+    const other = others?.find((o) => o.relayId === node.attrs["computer"]);
+    return (
+      <ThreadRefChip
+        state={other?.state}
+        runId={node.attrs["runId"] as string}
+        saved={node.attrs["title"] as string}
+        on={other?.host}
+      />
+    );
+  },
+);
 
 /** A pasted image where it was pasted: its thumbnail, its number among the images, and its size.
  * Hovering shows an X at its end that removes the image. */
@@ -371,19 +396,42 @@ function threadsIn(doc: ProseMirrorNode): string[] {
   return [...new Set(ids)];
 }
 
+/** The most computers, and the most threads on other computers, a message names (0101). */
+const maxMentions = 8;
+
+/** The computers and threads on them that `doc` names, in order, once each. */
+function mentionsIn(doc: ProseMirrorNode) {
+  const computers = new Set<string>();
+  const remoteThreads = new Map<string, RemoteThreadRef>();
+  doc.descendants((node) => {
+    if (node.type.name === "computerRef") computers.add(node.attrs["computer"] as string);
+    if (node.type.name === "remoteThreadRef")
+      remoteThreads.set(node.attrs["runId"] as string, {
+        computer: node.attrs["computer"] as string,
+        runId: node.attrs["runId"] as string,
+        title: node.attrs["title"] as string,
+      });
+  });
+  return { computers: [...computers], remoteThreads: [...remoteThreads.values()] };
+}
+
 /**
  * A transaction turning each `@"Title"` in `state`'s text whose title `titled` knows into that
- * thread's chip, or undefined for none, such as a stopped prompt put back as text.
+ * chip, a node's name and attributes, or undefined for none, such as a stopped prompt put back as
+ * text.
  */
-function threadRefsIn(state: EditorState, titled: ReadonlyMap<string, string>) {
+function chipsIn(
+  state: EditorState,
+  titled: ReadonlyMap<string, { node: string; attrs: Record<string, string> }>,
+) {
   const { tr } = state;
   state.doc.descendants((node, pos, parent) => {
     if (!node.isText || parent?.type.spec.code) return;
     for (const m of node.text!.matchAll(/@"([^"]*)"/g)) {
-      const runId = titled.get(m[1]!);
-      if (runId === undefined) continue;
+      const known = titled.get(m[1]!);
+      if (known === undefined) continue;
       const from = pos + m.index;
-      const chip = state.schema.nodes["threadRef"]!.create({ runId, title: m[1] });
+      const chip = state.schema.nodes[known.node]!.create(known.attrs);
       tr.replaceWith(tr.mapping.map(from), tr.mapping.map(from + m[0].length), chip);
     }
   });
@@ -456,6 +504,8 @@ const extensions = [
   Text,
   MentionNode,
   ThreadRefNode,
+  ComputerRefNode,
+  RemoteThreadRefNode,
   ImageRefNode,
   CiteRefNode,
   typedAs(Bold, /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/),
@@ -493,6 +543,8 @@ const markdown = new MarkdownSerializer(
     hardBreak: (state) => state.write("\n"),
     mention: (state, node) => state.text(node.attrs["token"] as string, false),
     threadRef: (state, node) => state.text(`@"${node.attrs["title"] as string}"`, false),
+    computerRef: (state, node) => state.text(`@"${node.attrs["name"] as string}"`, false),
+    remoteThreadRef: (state, node) => state.text(`@"${node.attrs["title"] as string}"`, false),
     imageRef: (state, node) => {
       const name = (state.options as Naming).imageName?.(node.attrs["key"] as string);
       if (name) state.text(`[${name}]`, false);
@@ -592,7 +644,7 @@ function triggerAt(editor: Editor): Trigger | undefined {
  * isn't an undo step of its own, so undo takes back what was typed, nor an edit, so a recalled
  * prompt stays recalled for Up and Down.
  */
-function mentionsIn(state: EditorState, known: (token: string) => boolean) {
+function tokensIn(state: EditorState, known: (token: string) => boolean) {
   const { tr, selection } = state;
   state.doc.descendants((node, pos, parent) => {
     if (!node.isText || parent?.type.spec.code || node.marks.some((m) => m.type.spec.code)) return;
@@ -710,11 +762,15 @@ interface MenuEntry {
   detail?: string;
   hint?: string;
   icon?: ReactNode;
-  /** Where it comes from, at the row's end: a skill's plugin, or a thread's orchestrator. */
+  /** Where it comes from, at the row's end: a skill's plugin. */
   badge?: ReactNode;
+  /** Where a thread is, in plain muted text at the row's end: its repository or other computer. */
+  where?: ReactNode;
   /** Muted text at the row's end, such as how long ago a thread was prompted. */
   meta?: string;
-  group: "Controls" | "Commands and skills" | "Threads" | "Files" | "Pull requests";
+  group: "Controls" | "Commands and skills" | "Computers" | "Threads" | "Files" | "Pull requests";
+  /** Shown dimmed, and picking it does nothing. `detail` says why. */
+  disabled?: boolean;
   pick: () => void;
 }
 
@@ -766,6 +822,7 @@ export interface Unanswered {
   text: string;
   images: () => Promise<PromptImage[]>;
   threads?: readonly string[];
+  mentions?: Mentions;
 }
 
 export interface ComposerProps {
@@ -776,8 +833,8 @@ export interface ComposerProps {
   /** The repository's own defaults for a new thread, over Settings > Threads'. */
   repoDefaults?: RepoPrefs;
   /**
-   * Sends the text, images, and attached threads' run ids, with the chosen run options (empty
-   * without `backend`). Resolves to an error message, which puts them back and shows in a
+   * Sends the text, images, attached threads' run ids, and what else it names, with the chosen
+   * run options (empty without `backend`). Resolves to an error message, which puts them back and shows in a
    * notification; `""` puts them back with no message. Absent: Send stays off.
    */
   onSend?: (
@@ -785,6 +842,7 @@ export interface ComposerProps {
     options: RunOptions,
     images: PromptImage[],
     threads: string[],
+    mentions?: Mentions,
   ) => Promise<string | undefined>;
   /** Sends as `onSend` does, for Cmd/Ctrl+Enter anywhere in the box: a new thread's background start. */
   onSendInBackground?: ComposerProps["onSend"];
@@ -806,6 +864,11 @@ export interface ComposerProps {
   unanswered?: Unanswered;
   /** Why sending is off right now, shown in place of the box's hint. */
   disabledReason?: string;
+  /**
+   * Why a send has to wait a moment, as while the Load Balancer checks. The box still takes text,
+   * a send does nothing, and the send button says so.
+   */
+  sendWaits?: string;
   /** The row inside the box, over the text: the thread's plan, queue, and what it waits on. */
   top?: ReactNode;
   /** The bar tucked under the box: where the thread runs, or an open run's status. */
@@ -894,7 +957,8 @@ export interface ComposerProps {
   menus?: { hostId: string; repo?: string; runId?: string };
   /**
    * The host's threads, on a plxd with `threadContext` (0047): `@` lists them above the files, and
-   * a sidebar row dropped on the box attaches one, as a chip in the text. Absent: neither.
+   * a sidebar row dropped on the box attaches one, as a chip in the text. On a plxd with
+   * `agentWork`, `@` also lists the other computers and their threads (0101). Absent: none of it.
    */
   attach?: AttachThreads;
   /** What the box starts with, such as a reopened draft (PLX-788). Read once, as it mounts. */
@@ -932,7 +996,8 @@ const lineWidth = 480;
  * move through it, Enter or Tab picks, and Esc closes it.
  * With `attach`, `@` also lists the host's threads above the files: its newest, or the best matches
  * for what's typed (`rankThreads`). Picking one, or dropping a sidebar row on the box, attaches it
- * as a chip in the text, sent as `@"Title"` (PLX-378).
+ * as a chip in the text, sent as `@"Title"` (PLX-378). On a plxd with `agentWork` it lists the
+ * account's other connected computers and their threads too (0101), which go out beside the threads.
  * Under a `PullRequestsContext`, `#` lists the thread's pull requests, newest first. Picking one
  * puts it in the text as a chip, sent as its URL (PLX-1342).
  */
@@ -947,6 +1012,7 @@ export function Composer({
   onPermission,
   unanswered,
   disabledReason,
+  sendWaits,
   top,
   tab,
   footer,
@@ -1008,6 +1074,11 @@ export function Composer({
   const [shown, setShown] = useState<PromptImage>();
   // Attached threads' run ids, as the text's thread chips have them, kept on every edit.
   const [threads, setThreads] = useState<string[]>(initial?.threads ?? []);
+  // What the text's computer and remote thread chips name, kept on every edit, which `@` leaves out.
+  const [named, setNamed] = useState<ReturnType<typeof mentionsIn>>({
+    computers: [],
+    remoteThreads: [],
+  });
   // Why an image, file, or thread wasn't added, in a notification an add that takes clears.
   const setAttachError = (why?: string) =>
     why
@@ -1059,6 +1130,9 @@ export function Composer({
     defaultModel ??
     runModels.find((m) => choices.includes(m)) ??
     choices[0];
+  // What the Load Balancer needs another computer to run: not `model`, which falls back to whatever
+  // this computer has.
+  const chosenProvider = pickedModel?.provider ?? defaults.model?.provider;
   // Where the message goes: the run's backend, or the instance that runs the picked model.
   const target = run && model && model.provider !== run.id ? model.provider : backend;
   const targetBackend = instanceOf(target);
@@ -1222,6 +1296,53 @@ export function Composer({
       live = false;
     };
   }, [threadHost, search]);
+  // Each new `@` asks the other computers once whether they take agent work, which a change in
+  // Settings or on the computer itself shows after. The last answer shows meanwhile.
+  const others = attach?.others;
+  const othersKey = others
+    ?.filter((o) => o.connected && o.capable)
+    .map((o) => o.host.id)
+    .join("\n");
+  const workOn = agentWorkOn.use();
+  const namingAt = trigger?.kind === "@" ? trigger.from : undefined;
+  useEffect(() => {
+    if (namingAt === undefined || !othersKey) return;
+    for (const id of othersKey.split("\n")) void readAgentWork(id);
+  }, [namingAt, othersKey]);
+  // Takes chips past a message's caps out of the text, the last ones first, saying why.
+  const keepMentionCap = () => {
+    for (const name of ["computerRef", "remoteThreadRef"]) {
+      let seen = 0;
+      const tr = withoutNodes(editor.state, name, () => ++seen > maxMentions);
+      if (!tr) continue;
+      editor.view.dispatch(tr);
+      setAttachError(`A message names at most ${maxMentions} computers and threads on them.`);
+    }
+  };
+  // Puts one computer or remote thread in the text where `@` was typed, up to its cap.
+  const addMention = (
+    name: "computerRef" | "remoteThreadRef",
+    attrs: Record<string, string>,
+    at: Trigger,
+  ) => {
+    let seen = 0;
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === name) seen++;
+    });
+    const chain = editor.chain().focus();
+    if (seen >= maxMentions) {
+      setAttachError(`A message names at most ${maxMentions} computers and threads on them.`);
+      chain.deleteRange(at).run();
+      return;
+    }
+    setAttachError(undefined);
+    chain
+      .insertContentAt(at, [
+        { type: name, attrs },
+        { type: "text", text: " " },
+      ])
+      .run();
+  };
   // Takes thread chips past the host's cap out of the text, the last ones first, saying why.
   const keepThreadCap = () => {
     const max = attach?.max ?? 0;
@@ -1352,7 +1473,7 @@ export function Composer({
         key: `thread:${id}`,
         label: look.title,
         icon: <look.Logo aria-hidden />,
-        badge: repo && !repo.scratch && (
+        where: repo && !repo.scratch && (
           <>
             <RepoIcon repo={repo} />
             {repo.name}
@@ -1362,6 +1483,65 @@ export function Composer({
         meta: look.age,
         group: "Threads",
         pick: () => addThreads([id], trigger),
+      };
+    });
+    const listed = (others ?? []).filter((o) => o.connected);
+    const computerRows = byName(listed, trigger.query, (o) => o.host.name)
+      .filter((o) => !named.computers.includes(o.relayId))
+      .map((o): MenuEntry => {
+        const on = workOn[o.host.id];
+        const why = !o.capable
+          ? "Needs a newer plxd"
+          : on === undefined
+            ? "Checking…"
+            : on
+              ? undefined
+              : "Agents can't work here";
+        return {
+          key: `computer:${o.relayId}`,
+          label: o.host.name,
+          description: why,
+          detail: !o.capable
+            ? `${o.host.name}'s plxd is too old to take work from your other computers.`
+            : why && on === false
+              ? `Turn on ${o.host.name} under Agents can work here, in Settings > Connections.`
+              : undefined,
+          icon: hostIcon(o.host),
+          group: "Computers",
+          disabled: !!why,
+          pick: () =>
+            addMention("computerRef", { computer: o.relayId, name: o.host.name }, trigger),
+        };
+      });
+    // Only the state the app holds, so typing asks no computer anything.
+    const remoteThreads = listed
+      .filter((o) => workOn[o.host.id] && o.capable)
+      .flatMap((o) =>
+        rankThreads(o.state, trigger.query, [])
+          .filter((id) => !named.remoteThreads.some((t) => t.runId === id))
+          .map((id) => ({ o, id, thread: o.state.threads.find((t) => t.id === id)! })),
+      )
+      .sort((a, b) => Date.parse(lastPrompt(b.thread)) - Date.parse(lastPrompt(a.thread)));
+    const remoteRows = remoteThreads.slice(0, maxThreadRows).map(({ o, id }): MenuEntry => {
+      const look = lookOf(o.state, id);
+      return {
+        key: `remote:${o.relayId}/${id}`,
+        label: look.title,
+        icon: <look.Logo aria-hidden />,
+        where: (
+          <>
+            {hostIcon(o.host)}
+            {o.host.name}
+          </>
+        ),
+        meta: look.age,
+        group: "Threads",
+        pick: () =>
+          addMention(
+            "remoteThreadRef",
+            { computer: o.relayId, runId: id, title: look.title.slice(0, 80) },
+            trigger,
+          ),
       };
     });
     const fileRows = matchPaths(loadedPaths ?? [], trigger.query).map((path): MenuEntry => {
@@ -1376,7 +1556,8 @@ export function Composer({
         pick: () => replaceTrigger(trigger, `@${path} `),
       };
     });
-    entries = [...threadRows, ...fileRows];
+    // Threads here, then on other computers, under one heading.
+    entries = [...computerRows, ...threadRows, ...remoteRows, ...fileRows];
   } else if (trigger?.kind === "#") {
     const title = (url: string) => pullRequests?.get(url)?.pr?.title ?? "";
     entries = byName(
@@ -1535,6 +1716,15 @@ export function Composer({
     );
     // Without the space a chip leaves after itself at the end.
     let sentText = toMarkdown(editor.state.doc, { imageName }).replace(/\s+$/, "");
+    // Only computers this box lists: undo or a draft can bring back one it no longer does.
+    const naming = mentionsIn(editor.state.doc);
+    const lists = (relayId: string) => !!others?.some((o) => o.relayId === relayId);
+    const computers = naming.computers.filter(lists).slice(0, maxMentions);
+    const remoteThreads = naming.remoteThreads
+      .filter((t) => lists(t.computer))
+      .slice(0, maxMentions);
+    const mentioned: [] | [Mentions] =
+      computers.length + remoteThreads.length > 0 ? [{ computers, remoteThreads }] : [];
     // Images too, so the agent has each as a file as well as seeing it (PLX-799).
     const uploads = canUpload
       ? [...sentFiles, ...sentImages.map((image, i) => encodedImage(image, i + 1))]
@@ -1585,6 +1775,7 @@ export function Composer({
         options,
         sentImages,
         sentThreads,
+        ...mentioned,
       ));
     if (failed === undefined) {
       setKeepHistory(false);
@@ -1595,6 +1786,7 @@ export function Composer({
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
       editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
       keepThreadCap();
+      keepMentionCap();
       setImages((added) => [...sentImages, ...added].slice(0, imageCaps?.maxImages));
       if (failed) notify({ tone: "error", title: "Couldn't send the message", body: failed });
     }
@@ -1615,13 +1807,31 @@ export function Composer({
       if (attach && back.threads?.length) {
         // Each thread the text names as `@"Title"` becomes its chip again, and any it doesn't
         // name goes in at the cursor.
-        const titled = new Map(back.threads.map((id) => [lookOf(attach.state, id).title, id]));
-        const tr = threadRefsIn(editor.state, titled);
+        const titled = new Map(
+          back.threads.map((runId) => {
+            const title = lookOf(attach.state, runId).title;
+            return [title, { node: "threadRef", attrs: { runId, title } }];
+          }),
+        );
+        const tr = chipsIn(editor.state, titled);
         if (tr) editor.view.dispatch(tr);
         const named = threadsIn(editor.state.doc);
         addThreads(back.threads.filter((id) => !named.includes(id)));
         keepThreadCap();
       }
+      // Each computer and remote thread the text names becomes its chip again.
+      const named: [string, { node: string; attrs: Record<string, string> }][] = (
+        back.mentions?.remoteThreads ?? []
+      ).map(({ computer, runId, title }) => [
+        title,
+        { node: "remoteThreadRef", attrs: { computer, runId, title } },
+      ]);
+      for (const computer of back.mentions?.computers ?? []) {
+        const name = others?.find((o) => o.relayId === computer)?.host.name;
+        if (name) named.push([name, { node: "computerRef", attrs: { computer, name } }]);
+      }
+      const tr = chipsIn(editor.state, new Map(named));
+      if (tr) editor.view.dispatch(tr);
       void back
         .images()
         .then((images) =>
@@ -1657,7 +1867,9 @@ export function Composer({
       setThreads(ids);
       // A paste can bring more threads than a message takes.
       if (attach && ids.length > attach.max) keepThreadCap();
-      const mentions = mentionsIn(editor.state, known);
+      setNamed(mentionsIn(editor.state.doc));
+      keepMentionCap();
+      const mentions = tokensIn(editor.state, known);
       if (mentions) editor.view.dispatch(mentions);
     },
     onSelectionUpdate: ({ editor }) => {
@@ -1693,8 +1905,9 @@ export function Composer({
           // Only a loading row: the keys do what they do without a menu.
           else if (entries.length === 0) return false;
           else if (step) setActive((highlighted + step + entries.length) % entries.length);
-          else if (event.key === "Enter" || event.key === "Tab") entries[highlighted]!.pick();
-          else return false;
+          else if (event.key === "Enter" || event.key === "Tab") {
+            if (!entries[highlighted]!.disabled) entries[highlighted]!.pick();
+          } else return false;
           return true;
         }
         if ((event.key === "ArrowUp" || event.key === "ArrowDown") && plain) {
@@ -1885,9 +2098,20 @@ export function Composer({
           images,
           files,
           threads,
-          ...(newThread && { permission: pickedPermission }),
+          ...(newThread && { permission: pickedPermission, provider: chosenProvider }),
         };
-  }, [contents, editor, text, images, files, threads, uploading, newThread, pickedPermission]);
+  }, [
+    contents,
+    editor,
+    text,
+    images,
+    files,
+    threads,
+    uploading,
+    newThread,
+    pickedPermission,
+    chosenProvider,
+  ]);
 
   // A draft New Thread reopens or seeds goes on where its text ends.
   const startsWithDraft = useRef(newThread && !!initial);
@@ -1904,6 +2128,15 @@ export function Composer({
     // Not an undo step, so undo can't bring another computer's threads back.
     const tr = withoutNodes(editor.state, "threadRef", () => true);
     if (tr) editor.view.dispatch(tr);
+    // A computer can't be named from itself.
+    for (const name of ["computerRef", "remoteThreadRef"]) {
+      const own = withoutNodes(
+        editor.state,
+        name,
+        (node) => host === `account:${node.attrs["computer"] as string}`,
+      );
+      if (own) editor.view.dispatch(own);
+    }
   }, [host, editor]);
 
   const voiceSelection = useRef({ from: 1, to: 1 });
@@ -1945,7 +2178,8 @@ export function Composer({
     clean: (text) => cleanDictation(text, hostId, { backend: target, repo, runId }),
   });
   voiceBusy.current = voice.phase !== "idle";
-  const canSend = !!onSend && !disabledReason && !empty && !uploading && !voiceBusy.current;
+  const canSend =
+    !!onSend && !disabledReason && !sendWaits && !empty && !uploading && !voiceBusy.current;
   useEffect(() => {
     editor.setEditable(voice.phase === "idle" && !uploading);
     if (voice.phase === "idle" && focusAfterVoice.current) {
@@ -1959,7 +2193,7 @@ export function Composer({
 
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {
-    const mentions = mentionsIn(editor.state, known);
+    const mentions = tokensIn(editor.state, known);
     if (mentions) editor.view.dispatch(mentions);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `known` reads only these lists.
   }, [editor, loadedCommands, loadedPaths]);
@@ -2123,7 +2357,7 @@ export function Composer({
                       ? "Commands"
                       : trigger.kind === "#"
                         ? "Pull requests"
-                        : entries[0]?.group === "Threads"
+                        : entries[0] && entries[0].group !== "Files"
                           ? "Threads and files"
                           : "Files"
                   }
@@ -2134,7 +2368,7 @@ export function Composer({
                       {entry.group !== entries[i - 1]?.group && (
                         <div
                           role="presentation"
-                          className="px-2.5 pt-2 pb-1 text-caption font-medium tracking-wide text-faint-foreground uppercase"
+                          className="px-2.5 pt-2 pb-1 text-meta font-medium text-faint-foreground"
                         >
                           {entry.group}
                         </div>
@@ -2143,13 +2377,14 @@ export function Composer({
                         id={`${menuId}-${i}`}
                         role="option"
                         aria-selected={i === highlighted}
+                        aria-disabled={entry.disabled}
                         // The box keeps focus, so typing goes on filtering.
                         onMouseDown={(e) => {
                           e.preventDefault();
-                          entry.pick();
+                          if (!entry.disabled) entry.pick();
                         }}
                         onMouseMove={() => setActive(i)}
-                        className={`flex h-9 w-full cursor-default items-center gap-2.5 rounded-md px-2.5 text-left text-body ${i === highlighted ? "bg-hover" : ""}`}
+                        className={`flex h-9 w-full cursor-default items-center gap-2.5 rounded-md px-2.5 text-left text-body ${i === highlighted ? "bg-hover" : ""} ${entry.disabled ? "opacity-50" : ""}`}
                       >
                         <span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_img]:size-4 [&_svg]:size-4">
                           {entry.icon}
@@ -2171,6 +2406,11 @@ export function Composer({
                         {entry.badge && (
                           <span className="flex max-w-[30%] shrink-0 items-center gap-1.5 truncate rounded-md bg-hover px-1.5 py-0.5 text-caption text-muted-foreground [&_svg]:size-3.5">
                             {entry.badge}
+                          </span>
+                        )}
+                        {entry.where && (
+                          <span className="flex max-w-[30%] shrink-0 items-center gap-1.5 truncate text-meta text-faint-foreground [&_svg]:size-3.5">
+                            {entry.where}
                           </span>
                         )}
                         {entry.meta && (
@@ -2292,6 +2532,7 @@ export function Composer({
                   images,
                   removeImage: uploading ? undefined : removeImage,
                   threads: attach?.state,
+                  others: attach?.others,
                 }}
               >
                 <EditorContent editor={editor} />
@@ -2376,11 +2617,17 @@ export function Composer({
                 <button
                   type="button"
                   aria-label="Send"
+                  aria-busy={!!sendWaits}
+                  title={sendWaits}
                   disabled={!canSend}
                   onClick={() => void submit()}
                   className="composer-send composer-action send-sky bg-send text-send-foreground"
                 >
-                  <ArrowUp className="size-4" />
+                  {sendWaits ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <ArrowUp className="size-4" />
+                  )}
                 </button>
               )}
             </div>

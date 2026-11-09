@@ -1742,6 +1742,8 @@ impl App {
                 base: None,
                 checkout_ref: None,
                 threads: Vec::new(),
+                computers: Vec::new(),
+                remote_threads: Vec::new(),
                 naming: None,
             })
             .await?;

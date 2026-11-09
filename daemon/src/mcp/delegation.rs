@@ -9,20 +9,26 @@
 //! task wakes the caller when it ends (`completionWake: always`); `wait` blocks for its result
 //! and wakes the caller only if its turn ended first (`settled_only`), or after the wait times
 //! out (`always` again), as T3's.
+//!
+//! With `target.computer` the task runs on another of the user's computers (0101), as an ordinary
+//! thread in a new worktree of that computer's copy of the repository. This plxd starts it, follows
+//! it across restarts, and its end wakes the caller the same way. `task_status` and `task_cancel`
+//! find such a task with no extra argument.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    OrchestrationDispatch, ProvidersList, SecretAnswer, SecretRequest, TaskDelegate, TaskStatus,
-    ThreadMergeBack,
+    OrchestrationDispatch, PeerStart, PeerTask, ProvidersList, SecretAnswer, SecretRequest,
+    TaskDelegate, TaskStatus, ThreadMergeBack,
 };
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentPermission, AgentRun, AgentStatus, CompletionWake,
-    DelegatedTask, OrchestrationCommand, ProvidersListParams, RunId, SecretAnswerParams,
-    SecretChoice, SecretDelivery, SecretInput, SecretRequestParams, SecretRequestResult,
-    SecretStatus, TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
+    DelegatedTask, OrchestrationCommand, PeerStartParams, PeerTaskParams, PeerTaskResult,
+    PeerWorkspace, ProvidersListParams, RemoteTask, RunId, SecretAnswerParams, SecretChoice,
+    SecretDelivery, SecretInput, SecretRequestParams, SecretRequestResult, SecretStatus,
+    TaskDelegateParams, TaskStatusParams, ThreadMergeBackParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -82,6 +88,9 @@ pub fn definitions() -> Vec<Value> {
         },
         "additionalProperties": false,
     });
+    let mut delegate_target = target.clone();
+    delegate_target["properties"]["computer"] = json!({"type": "string", "description": "Run it on another of the user's computers instead: an id or name from linked_computers. It becomes an ordinary thread there, in a new worktree of that computer's copy of your repository, from origin's default branch or base, with that computer's accounts. Commits you haven't pushed aren't there, so push first, and get results from its last message and what it pushes. An error if the computer is offline, unknown, unapproved, refuses, or lacks the repository; it never falls back to this computer."});
+    delegate_target["properties"]["base"] = json!({"type": "string", "description": "With computer, the ref the worktree starts from, such as origin/develop."});
     let runtime_mode = json!({
         "type": "string",
         "enum": ["inherit", "plan", "manual", "edit", "auto", "bypass"],
@@ -99,11 +108,11 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "delegate_task",
-            "Delegate one task to a Parallax-owned child agent of THIS thread, working in your worktree and branch, and run it with only the task prompt, without your conversation. Choose a provider and model from orchestrator_capabilities; this is how to use another provider or a model your native subagents lack. Provider, model, effort, and mode inherit unless target or runtimeMode overrides them. Prefer mode='async' for long work: its end wakes this thread with a message once your turn is over, so end your turn instead of polling, and use task_status only when you need the result mid-turn. mode='wait' blocks until it ends or timeoutMs passes; waitTimedOut=true means the wait ended, not the task, and its end then wakes you. For each review round, delegate again with the full context and a new clientRequestId, rather than messaging the child.",
+            "Delegate one task to a Parallax-owned child agent of THIS thread, working in your worktree and branch, and run it with only the task prompt, without your conversation. Choose a provider and model from orchestrator_capabilities; this is how to use another provider or a model your native subagents lack. Provider, model, effort, and mode inherit unless target or runtimeMode overrides them. Prefer mode='async' for long work: its end wakes this thread with a message once your turn is over, so end your turn instead of polling, and use task_status only when you need the result mid-turn. mode='wait' blocks until it ends or timeoutMs passes; waitTimedOut=true means the wait ended, not the task, and its end then wakes you. For each review round, delegate again with the full context and a new clientRequestId, rather than messaging the child. With target.computer it runs on another of the user's computers instead of in your worktree: see target.",
             object(
                 json!({
                     "task": {"type": "string", "description": "The self-contained task, at most 64 KiB."},
-                    "target": target,
+                    "target": delegate_target,
                     "title": {"type": "string", "description": "Its title in the sidebar."},
                     "role": {"type": "string", "enum": ["implementation", "research", "review", "design", "test", "general"]},
                     "mode": {"type": "string", "enum": ["async", "wait"], "description": "Default async."},
@@ -209,6 +218,12 @@ struct Target {
     model: Option<String>,
     #[serde(default)]
     effort: Option<AgentEffort>,
+    /// `delegate_task` only: the other computer it runs on (0101).
+    #[serde(default)]
+    computer: Option<String>,
+    /// With `computer`, the ref its worktree starts from.
+    #[serde(default)]
+    base: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -334,11 +349,21 @@ impl Delegation {
             "delegate_task" => self.delegate(plxd, caller, parse(arguments)?).await,
             "task_status" => {
                 let TaskArgs { task_id } = parse(arguments)?;
+                if let Some(task) = remote_task(plxd, caller, task_id, false, None, false).await {
+                    let shown = shown_remote(plxd, &task, false).await;
+                    if shown["workState"] == "result_available" {
+                        remote_task(plxd, caller, task_id, true, None, false).await;
+                    }
+                    return Ok(pretty(&shown));
+                }
                 let task = status(plxd, caller, task_id, true, None, false).await?;
                 Ok(pretty(&shown(plxd, &task, false).await?))
             }
             "task_cancel" => {
                 let CancelArgs { task_id, .. } = parse(arguments)?;
+                if let Some(task) = remote_task(plxd, caller, task_id, false, None, false).await {
+                    return cancel_remote(plxd, caller, &task).await;
+                }
                 cancel(plxd, caller, task_id).await
             }
             "create_threads" => self.create(plxd, caller, parse(arguments)?).await,
@@ -401,6 +426,28 @@ impl Delegation {
             runtime_mode,
         } = args;
         check_text("task", &task, MAX_TEXT_BYTES)?;
+        let (target, remote) = match target {
+            Some(Target {
+                computer: Some(computer),
+                base,
+                provider_instance_id,
+                model,
+                effort,
+            }) => (
+                Some(Target {
+                    provider_instance_id,
+                    model,
+                    effort,
+                    computer: None,
+                    base: None,
+                }),
+                Some((computer, base)),
+            ),
+            Some(Target { base: Some(_), .. }) => {
+                return Err("target.base goes with target.computer".to_owned());
+            }
+            target => (target, None),
+        };
         let prompt = match role {
             None | Some(Role::General) => task,
             Some(role) => format!(
@@ -414,17 +461,24 @@ impl Delegation {
         } else {
             CompletionWake::Always
         };
-        let started = plxd
-            .call::<TaskDelegate>(params(
-                self.run_id(client_request_id),
-                caller,
-                prompt,
-                title,
-                target,
-                runtime_mode.as_deref(),
-                Some(completion_wake),
-            )?)
-            .await?;
+        let params = params(
+            self.run_id(client_request_id),
+            caller,
+            prompt,
+            title,
+            target,
+            runtime_mode.as_deref(),
+            Some(completion_wake),
+        )?;
+        if let Some((computer, base)) = remote {
+            let timeout = wait.then(|| {
+                timeout_ms
+                    .map_or(DEFAULT_WAIT, Duration::from_millis)
+                    .clamp(Duration::from_millis(1), MAX_WAIT)
+            });
+            return delegate_remote(plxd, computer, base, params, timeout).await;
+        }
+        let started = plxd.call::<TaskDelegate>(params).await?;
         let task_id = started.run.id;
         if !wait {
             let task = status(plxd, caller, task_id, false, None, false).await?;
@@ -469,6 +523,16 @@ impl Delegation {
                 runtime_mode,
             } = thread;
             check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
+            if target
+                .as_ref()
+                .is_some_and(|target| target.computer.is_some() || target.base.is_some())
+            {
+                return Err(
+                    "create_threads works in your worktree; use thread_launch with computer for \
+                     another computer"
+                        .to_owned(),
+                );
+            }
             let request = client_request_id
                 .as_ref()
                 .map(|request| format!("{request}/{index}"));
@@ -616,6 +680,153 @@ async fn request_secret(
         _ if timed_out => json!({"status": "timed_out"}),
         _ => json!({"status": "cancelled"}),
     }))
+}
+
+/// `delegate_task` with `target.computer`: starts `params`' task there, with this plxd following it
+/// (0101). With `timeout`, blocks for its result as a local task's `wait` does.
+async fn delegate_remote(
+    plxd: &Plxd,
+    computer: String,
+    base: Option<String>,
+    params: TaskDelegateParams,
+    timeout: Option<Duration>,
+) -> Result<String, String> {
+    let TaskDelegateParams {
+        run_id,
+        owner,
+        prompt,
+        title,
+        account,
+        model,
+        effort,
+        permission,
+        completion_wake,
+    } = params;
+    let started = plxd
+        .call::<PeerStart>(PeerStartParams {
+            computer,
+            run_id,
+            parent: owner,
+            prompt,
+            title,
+            account,
+            model,
+            effort,
+            permission,
+            workspace: PeerWorkspace::Worktree,
+            repo: None,
+            base,
+            checkout_ref: None,
+            threads: Vec::new(),
+            notify: true,
+            completion_wake,
+        })
+        .await?;
+    let task_id = started.run.id;
+    let Some(timeout) = timeout else {
+        let task = remote_task(plxd, owner, task_id, false, None, false)
+            .await
+            .ok_or("the task's row is gone")?;
+        return Ok(pretty(&shown_remote(plxd, &task, false).await));
+    };
+    let there = plxd.on_computer(&started.computer);
+    let ended = wait_for(&there, task_id, timeout).await?;
+    let (acknowledge, wake) = if ended {
+        (true, None)
+    } else {
+        // The wait no longer delivers its end, so its end wakes this thread.
+        (false, Some(CompletionWake::Always))
+    };
+    let task = remote_task(plxd, owner, task_id, acknowledge, wake, false)
+        .await
+        .ok_or("the task's row is gone")?;
+    Ok(pretty(&shown_remote(plxd, &task, !ended).await))
+}
+
+/// `peer/task` for `caller`'s task `task_id`, if it's one on another computer. A plxd that can't
+/// say is treated as having none, so the local path answers.
+async fn remote_task(
+    plxd: &Plxd,
+    caller: RunId,
+    task_id: RunId,
+    acknowledge: bool,
+    completion_wake: Option<CompletionWake>,
+    dispose: bool,
+) -> Option<RemoteTask> {
+    let answered = plxd
+        .call::<PeerTask>(PeerTaskParams {
+            parent: caller,
+            task_id,
+            acknowledge,
+            completion_wake,
+            dispose,
+        })
+        .await;
+    match answered {
+        Ok(PeerTaskResult { task }) => task,
+        Err(_) => None,
+    }
+}
+
+/// A task on another computer as T3's tools show one: from that computer when it answers, else as
+/// this plxd last knew it.
+async fn shown_remote(plxd: &Plxd, task: &RemoteTask, wait_timed_out: bool) -> Value {
+    let computer = json!({"id": task.computer, "name": task.computer_name});
+    let there = plxd.on_computer(&task.computer);
+    if task.reason.is_none()
+        && let Ok(run) = find_run(&there, task.task_id).await
+    {
+        let live = DelegatedTask {
+            task_id: task.task_id,
+            parent: task.task_id,
+            completion_wake: task.completion_wake,
+            delivery: task.delivery,
+            run,
+        };
+        if let Ok(mut shown) = shown(&there, &live, wait_timed_out).await {
+            shown["computer"] = computer;
+            return shown;
+        }
+    }
+    let ended = task.status != AgentStatus::Running;
+    json!({
+        "taskId": task.task_id,
+        "childThreadId": task.task_id,
+        "computer": computer,
+        "status": status_name(task.status),
+        "workState": if ended { "result_available" } else { "working" },
+        "summary": task.summary,
+        "error": task.reason,
+        "waitTimedOut": wait_timed_out,
+    })
+}
+
+/// `task_cancel` for a task on another computer: Stop there, then its end no longer wakes the
+/// caller. A computer that can't be reached is the tool's error, and the task keeps waking it.
+async fn cancel_remote(plxd: &Plxd, caller: RunId, task: &RemoteTask) -> Result<String, String> {
+    let there = plxd.on_computer(&task.computer);
+    let run = find_run(&there, task.task_id).await?;
+    let mine = find_run(plxd, caller).await?;
+    crate::delegation::check_mode(mine.permission, run.permission).map_err(|_| {
+        format!(
+            "task {} now runs in a mode above yours, so you can't stop it",
+            task.task_id
+        )
+    })?;
+    let was_ended = ended(&run);
+    there
+        .call::<OrchestrationDispatch>(OrchestrationCommand::RunInterrupt {
+            thread_id: task.task_id,
+            hold_queue: true,
+        })
+        .await?;
+    remote_task(plxd, caller, task.task_id, false, None, true).await;
+    let status = if was_ended {
+        status_name(run.status)
+    } else {
+        "cancel_requested"
+    };
+    Ok(pretty(&json!({"taskId": task.task_id, "status": status})))
 }
 
 /// `task/status` for `caller`'s task `task_id`.

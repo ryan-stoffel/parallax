@@ -338,6 +338,8 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             from: None,
             images: Vec::new(),
             threads: Vec::new(),
+            computers: Vec::new(),
+            remote_threads: Vec::new(),
         },
         Event::TextDelta { message_id, text } => AgentOutputItem::TextDelta {
             message_id: id(message_id.as_deref()),

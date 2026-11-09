@@ -169,6 +169,8 @@ pub(crate) fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartPar
         base: None,
         checkout_ref: None,
         threads: Vec::new(),
+        computers: Vec::new(),
+        remote_threads: Vec::new(),
         naming: None,
     }
 }

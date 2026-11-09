@@ -12,6 +12,7 @@ import { useCopy } from "../AgentChat";
 import { statusLabel, useConnectedNow, useShownConnection } from "../ConnectionStatus";
 import { localId, useConnect, useHosts, type Host } from "../hosts";
 import { dismiss, notify } from "../notifications";
+import { AgentWorkSettings, LoadBalancerSettings } from "./AgentsAcrossComputers";
 import {
   ConfirmRemove,
   primaryButton,
@@ -115,7 +116,7 @@ function ConnectionCheck() {
  * while this computer advertises itself by name over mDNS, and the computers paired with this one
  * can be revoked or made read-only (PLX-1364), even with the switch off. Below, the computers this app paired with, each with
  * its connection and Remove, and Pair computer, which finds the computers showing a code, or takes
- * an address, then the code.
+ * an address, then the code. Between them, Agents can work here and the Load Balancer (0101).
  */
 export function LanSettings() {
   const local = useShownConnection(localId);
@@ -129,6 +130,8 @@ export function LanSettings() {
   const [on, setOn] = useState<boolean>();
   const [web, setWeb] = useState<boolean>();
   const [relay, setRelay] = useState<boolean>();
+  // This computer's `agentWork`, on a plxd that has it. It and `on` change each other in plxd.
+  const [agentWork, setAgentWork] = useState<boolean>();
   // The account's computers on the relay, while Reach from anywhere is on.
   const [relayHosts, setRelayHosts] = useState<RelayHost[]>();
   // The relay host whose Remove is waiting for a second click.
@@ -154,6 +157,7 @@ export function LanSettings() {
       setOn(answer.result.remote);
       setWeb(answer.result.remoteWeb);
       setRelay(answer.result.relay);
+      setAgentWork(answer.result.agentWork);
     });
     void readSessions();
   }, [connectedNow]);
@@ -181,7 +185,17 @@ export function LanSettings() {
     if ("error" in answer)
       return failed(`Couldn't turn pairing ${next ? "on" : "off"}`, answer.error.message);
     setOn(answer.result.remote);
+    setAgentWork(answer.result.agentWork);
     setCode(undefined);
+    void readSessions();
+  };
+  const toggleAgentWork = async (next: boolean) => {
+    retry();
+    const answer = await window.parallax.request(localId, "host/settings/set", { agentWork: next });
+    if ("error" in answer)
+      return failed(`Couldn't turn agent work ${next ? "on" : "off"}`, answer.error.message);
+    setAgentWork(answer.result.agentWork);
+    setOn(answer.result.remote);
     void readSessions();
   };
   const toggleWeb = async (next: boolean) => {
@@ -319,6 +333,14 @@ export function LanSettings() {
           </details>
         )}
       </Section>
+      <AgentWorkSettings
+        local={
+          connected && "agentWork" in local.capabilities && agentWork !== undefined
+            ? { on: agentWork, relay: !!relay, toggle: (next) => void toggleAgentWork(next) }
+            : undefined
+        }
+      />
+      <LoadBalancerSettings />
       <Section title="Same network">
         <Row title="Pair computers on this network" description={GRANTS}>
           <Switch

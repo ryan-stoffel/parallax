@@ -100,6 +100,7 @@ function useListed(
   const listed = useSyncExternalStore(subscribe, read);
   const key = hostIds.join("\n");
   useEffect(() => {
+    if (!key) return;
     for (const id of key.split("\n")) ask(id);
   }, [key]);
   return listed;

@@ -7,11 +7,21 @@ import { parseProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
 import type { CloneAsk } from "./clone";
 import { Composer } from "./Composer";
-import { useConnectedNow, useShownConnection } from "./ConnectionStatus";
+import { useConnectedNow, useRealConnections, useShownConnection } from "./ConnectionStatus";
 import { drafts, isEmpty, type ComposerContents } from "./drafts";
 import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { imageCaps } from "./images";
+import {
+  answerMs,
+  askComputer,
+  assess,
+  loadBalancer,
+  pickComputer,
+  tiesOf,
+  whyText,
+  type Candidate,
+} from "./loadBalancer";
 import { uploadBytes } from "./uploads";
 import type { RunOptions } from "./models";
 import { dismiss, notify, update } from "./notifications";
@@ -19,7 +29,12 @@ import { newThreadPrefs, useRepoPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
 import { accountOptions, defaultBackend, type AccountOption } from "./settings/shared";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
-import { attachThreads, ThreadLinksContext, type ThreadLinks } from "./threadContext";
+import {
+  attachThreads,
+  ThreadLinksContext,
+  type Mentions,
+  type ThreadLinks,
+} from "./threadContext";
 import {
   noRepo,
   repoless,
@@ -62,6 +77,14 @@ interface NewThreadProps {
   onPickElsewhere: (hostId: string, groupId: string) => void;
   /** The computers, by id, that lack the picked repository, for the Computer menu. */
   missing?: ReadonlySet<string>;
+  /** The computers, by id, that list the picked repository, which the Load Balancer can pick. */
+  listing?: ReadonlySet<string>;
+  /** Whether this is a new draft the Load Balancer places, not one opened on a computer on purpose. */
+  balanced?: boolean;
+  /** Whether the open host's repositories are in, so the Load Balancer knows which it's placing. */
+  listed?: boolean;
+  /** Opens Settings where the Load Balancer's computers are chosen. */
+  onOpenLoadBalancer?: () => void;
   /** Whether another computer has a repository of this name, so the heading names the computer. */
   shared?: boolean;
   /** Whether the host is this computer, so its folders can be picked. */
@@ -106,6 +129,25 @@ const noAccounts =
 const workerBackends = new Map<string, string | undefined>();
 
 /**
+ * Where the Load Balancer (0101) stands for a draft. `new` hasn't asked yet, `checking` is asking,
+ * `picked` holds its pick, and `none` found no computer, saying why of each. `pinned` left the draft
+ * where it is, since what it holds is tied there. `manual` is the user's own pick, or a draft opened
+ * on a computer on purpose.
+ */
+type Balance =
+  | { state: "new" | "manual" }
+  | { state: "checking"; id: number }
+  | { state: "picked"; why: Record<string, string> }
+  | { state: "none"; why: Record<string, string>; leftOut: boolean }
+  | { state: "pinned"; pinned: "threads" | "files" };
+
+// What each draft's Load Balancer last settled on, since opening a tab again mounts its screen anew.
+const balances = new Map<string, Balance>();
+let checks = 0;
+
+const noRoom = "No computer can take this thread. Pick one under the box.";
+
+/**
  * The New Thread screen: a centered composer, and under it where the thread runs. When the host
  * has no usable default account for threads, it picks the only one there is (and says so), or asks
  * which to use, sets it as the default, and retries the same start. plxd never picks one itself, so it never spends
@@ -121,6 +163,10 @@ export function NewThread({
   elsewhere,
   onPickElsewhere,
   missing,
+  listing,
+  balanced = false,
+  listed = true,
+  onOpenLoadBalancer,
   shared,
   local,
   addRepo,
@@ -171,6 +217,7 @@ export function NewThread({
     prompt: string;
     images: PromptImage[];
     threads: string[];
+    mentions: Mentions;
   }>();
   const failed = useRef<Attempt>(undefined);
   // The screen stays mounted when another computer is picked, so the Composer keeps its draft.
@@ -200,6 +247,7 @@ export function NewThread({
       const box = contents.current;
       if (box && !isEmpty(box) && !opening.current)
         drafts.put({ ...box, ...where.current, id: draftId });
+      if (opening.current) balances.delete(draftId);
     };
   }, [draftId]);
   // The repository's own defaults (Settings > Projects), over the global ones.
@@ -247,6 +295,8 @@ export function NewThread({
     failed.current = error ? attempt : undefined;
     if (!error) {
       onStarted(attempt.runId, attempt.background);
+      // New Thread stays open, and the next thread is a new one to place.
+      if (attempt.background && balance.state === "picked") checkBalance();
       return undefined;
     }
     // No default, or one naming a removed key account: both need an account picked. Asks once
@@ -279,16 +329,23 @@ export function NewThread({
     images: PromptImage[],
     threads: string[],
     background: boolean,
+    mentions: Mentions = {},
   ): Promise<string | undefined> => {
     if (moving || asking) {
       // One held send at a time: a second, as after Cmd/Ctrl+Enter, goes back in the box.
       if (held)
         return `Waiting for ${group.name} to be ready on ${hostName((moving ?? asking)!.hostId)}`;
-      if (!background) setStarting({ prompt, images, threads });
+      if (!background) setStarting({ prompt, images, threads, mentions });
       opening.current = !background;
       return new Promise((done) =>
-        setHeld({ send: [prompt, options, images, threads, background], done }),
+        setHeld({ send: [prompt, options, images, threads, background, mentions], done }),
       );
+    }
+    // It found no computer, so nothing starts until the user picks one or it finds one.
+    if (balanceOn && balance.state === "none") {
+      setStarting(undefined);
+      opening.current = false;
+      return noRoom;
     }
     setChoices(undefined);
     const last = failed.current;
@@ -301,13 +358,14 @@ export function NewThread({
       last.images.length === images.length &&
       last.images.every((image, i) => image === images[i]) &&
       last.threads.join() === threads.join() &&
+      JSON.stringify(last.mentions) === JSON.stringify(mentions) &&
       JSON.stringify(last.options) === JSON.stringify(options) &&
       last.checkout === checkout &&
       last.gitRef === gitRef
         ? last
         : undefined;
     // A background start leaves the box empty for the next thread.
-    if (!background) setStarting({ prompt, images, threads });
+    if (!background) setStarting({ prompt, images, threads, mentions });
     opening.current = !background;
     const error = await attemptStart({
       runId: same?.runId ?? uuidv7(),
@@ -315,6 +373,7 @@ export function NewThread({
       prompt,
       images,
       threads,
+      mentions,
       options,
       checkout,
       gitRef,
@@ -417,16 +476,179 @@ export function NewThread({
     } else void send(...held.send).then(held.done);
   });
 
+  // The Load Balancer (0101): a new draft starts on it, and its pick holds for the draft until a
+  // manual pick, or choosing it again.
+  const balanceSettings = loadBalancer.use();
+  const balanceOn = balanceSettings.on && hosts.length > 1 && !group.project;
+  const [balance, setBalance] = useState<Balance>(
+    () => balances.get(draftId) ?? { state: balanced ? "new" : "manual" },
+  );
+  useEffect(() => {
+    if (balance.state !== "checking") balances.set(draftId, balance);
+  }, [draftId, balance]);
+  const reading = runOptions && read?.hostId !== hostId;
+  // Until the draft is on its pick and knows that computer's backend. The box sends nothing
+  // meanwhile, since a send uploads its files and fixes its model for the computer it's on.
+  const checking =
+    balanceOn &&
+    (balance.state === "checking" || (balance.state === "picked" && (!!moving || reading)));
+  const checkBalance = () => setBalance({ state: "checking", id: ++checks });
+  const connections = useRealConnections(hosts.map((h) => h.id));
+  // Whether every computer it could pick has said what it can: connected or not, and its repositories.
+  const settled = hosts.every((h, i) => {
+    const state = connections[i];
+    if (balanceSettings.leftOut.includes(h.id)) return true;
+    if (!state || state.status === "connecting") return false;
+    return (
+      state.status !== "connected" ||
+      repoless(group) ||
+      !!listing?.has(h.id) ||
+      !!missing?.has(h.id)
+    );
+  });
+  // A computer that takes its time doesn't hold the check up for long.
+  const [waited, setWaited] = useState(false);
+  const checkId = balanceOn && balance.state === "checking" ? balance.id : undefined;
+  useEffect(() => {
+    if (checkId === undefined) return;
+    const timer = setTimeout(() => setWaited(true), answerMs);
+    return () => {
+      clearTimeout(timer);
+      setWaited(false);
+    };
+  }, [checkId]);
+  const ready = settled || waited;
+  useEffect(() => {
+    if (balance.state === "new" && balanceOn && listed) checkBalance();
+  }, [balance.state, balanceOn, listed]);
+  // What a check decides on once its computers have answered, as it is by then.
+  const current = useRef({
+    hosts,
+    connections,
+    balanceSettings,
+    listing,
+    group,
+    shownHostId,
+    pickHost,
+  });
+  useEffect(() => {
+    current.current = {
+      hosts,
+      connections,
+      balanceSettings,
+      listing,
+      group,
+      shownHostId,
+      pickHost,
+    };
+  });
+  // Asks each computer that could take the thread once, then decides among those that answered, as
+  // things are then. Leaving the draft, a manual pick, or a newer check ends it unheard.
+  useEffect(() => {
+    if (checkId === undefined || !ready) return;
+    let live = true;
+    const able = hosts.filter(
+      (h, i) =>
+        connections[i]?.status === "connected" &&
+        !balanceSettings.leftOut.includes(h.id) &&
+        (repoless(group) || listing?.has(h.id)),
+    );
+    void (async () => {
+      const answers = new Map(
+        await Promise.all(able.map(async (h) => [h.id, await askComputer(h.id, true)] as const)),
+      );
+      if (!live) return;
+      const now = current.current;
+      const leftOut = now.balanceSettings.leftOut;
+      // What the box holds now, since it may have changed while they answered.
+      const box = contents.current;
+      const { pinned, named } = tiesOf(box);
+      if (pinned) return setBalance({ state: "pinned", pinned });
+      const candidates = now.hosts.map((h, i): Candidate => ({
+        id: h.id,
+        preference: now.balanceSettings.preferences[h.id] ?? "normal",
+        barred: leftOut.includes(h.id)
+          ? "left-out"
+          : now.connections[i]?.status !== "connected"
+            ? "offline"
+            : !repoless(now.group) && !now.listing?.has(h.id)
+              ? "no-repository"
+              : named.some((relayId) => h.id === `account:${relayId}`)
+                ? "named"
+                : undefined,
+        ...answers.get(h.id),
+        provider: box?.provider,
+      }));
+      const why = Object.fromEntries(
+        candidates.flatMap((c) => {
+          const verdict = assess(c);
+          return "why" in verdict ? [[c.id, whyText[verdict.why]]] : [];
+        }),
+      );
+      const pick = pickComputer(candidates);
+      if (!pick) {
+        return setBalance({
+          state: "none",
+          why,
+          leftOut: now.hosts.every((h) => leftOut.includes(h.id)),
+        });
+      }
+      setBalance({ state: "picked", why });
+      if (pick !== now.shownHostId) await now.pickHost(pick);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [checkId, ready]);
+  // Another repository may be on other computers, so picking one checks again, unless the user
+  // picked the computer. A Project picks its computer itself (`tray`).
+  const pickGroup = (groupId: string) => {
+    onGroupChange(groupId);
+    if (groups.find((g) => g.id === groupId)?.project) setBalance({ state: "manual" });
+    else if (["checking", "picked", "none"].includes(balance.state)) checkBalance();
+  };
+  const pickManually = (id: string) => {
+    setBalance({ state: "manual" });
+    return pickHost(id);
+  };
+  // Picking a branch or worktree keeps the draft where it is, so a check under way ends here.
+  const stayPut = () => {
+    if (balance.state === "new" || balance.state === "checking") setBalance({ state: "manual" });
+  };
+  const balancerMenu = balanceOn
+    ? {
+        on: ["checking", "picked", "none"].includes(balance.state),
+        checking,
+        none: balance.state === "none",
+        why: balance.state === "picked" || balance.state === "none" ? balance.why : undefined,
+        problem:
+          balance.state === "none"
+            ? balance.leftOut
+              ? "Every computer is left out."
+              : "No computer can take this thread. Pick one."
+            : balance.state === "pinned"
+              ? balance.pinned === "threads"
+                ? "Stays here, with threads from this computer attached."
+                : "Stays here, with files from this computer named."
+              : undefined,
+        onChoose: () => {
+          setPickedRef(undefined);
+          checkBalance();
+        },
+        onSettings: balance.state === "none" ? onOpenLoadBalancer : undefined,
+      }
+    : undefined;
+
   const pickRepository = async () => {
     const path = await window.parallax.pickFolder();
     if (!path) return;
     const repo = await addRepo(path);
     if (typeof repo === "string")
       notify({ tone: "error", title: "Couldn't add the repository", body: repo });
-    else onGroupChange(repo.id);
+    else pickGroup(repo.id);
   };
 
-  const hold = starting !== undefined || (runOptions && read?.hostId !== hostId);
+  const hold = starting !== undefined || reading;
 
   // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
@@ -457,6 +679,7 @@ export function NewThread({
                 text: starting.prompt,
                 images: starting.images,
                 threads: starting.threads,
+                ...starting.mentions,
               },
             ]}
             sent={new Map()}
@@ -508,7 +731,7 @@ export function NewThread({
                   type="button"
                   onClick={() => {
                     setChoices(undefined);
-                    onGroupChange(noRepo);
+                    pickGroup(noRepo);
                   }}
                   aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
                   className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
@@ -535,8 +758,11 @@ export function NewThread({
                 if (value === addRepository) return void pickRepository();
                 setChoices(undefined);
                 const other = elsewhere.find((o) => elsewhereValue(o) === value);
-                if (other) onPickElsewhere(other.host.id, other.repo.id);
-                else onGroupChange(value);
+                if (other) {
+                  // Another computer's repository, picked on purpose.
+                  setBalance({ state: "manual" });
+                  onPickElsewhere(other.host.id, other.repo.id);
+                } else pickGroup(value);
               }}
               options={[
                 ...groups.map((g) => ({
@@ -579,11 +805,11 @@ export function NewThread({
           contents={contents}
           // The box looks the same while a start is under way, or while another computer's backend
           // stands in for this one's, so a send meanwhile stays in it.
-          onSend={(prompt, options, images, threads) =>
-            hold ? Promise.resolve("") : send(prompt, options, images, threads, false)
+          onSend={(prompt, options, images, threads, mentions) =>
+            hold ? Promise.resolve("") : send(prompt, options, images, threads, false, mentions)
           }
-          onSendInBackground={(prompt, options, images, threads) =>
-            hold ? Promise.resolve("") : send(prompt, options, images, threads, true)
+          onSendInBackground={(prompt, options, images, threads, mentions) =>
+            hold ? Promise.resolve("") : send(prompt, options, images, threads, true, mentions)
           }
           attach={attachThreads(connection, threadLinks)}
           backend={runOptions ? backend : undefined}
@@ -591,6 +817,7 @@ export function NewThread({
           connected={connected}
           contextAndFast={connected && "contextAndFast" in connection.capabilities}
           disabledReason={disabledReason}
+          sendWaits={checking ? "The Load Balancer is checking your computers" : undefined}
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           menus={
@@ -615,18 +842,23 @@ export function NewThread({
                   <RunTargetMenu
                     hosts={hosts}
                     hostId={shownHostId}
-                    busy={!!moving}
-                    onHostChange={pickHost}
+                    busy={!!moving || checking}
+                    onHostChange={pickManually}
+                    balancer={balancerMenu}
                   />
                 ) : (
                   <>
                     <RunTargetMenu
                       hosts={hosts}
                       hostId={shownHostId}
-                      busy={!!moving}
-                      onHostChange={pickHost}
+                      busy={!!moving || checking}
+                      onHostChange={pickManually}
+                      balancer={balancerMenu}
                       workspace={checkout ? "checkout" : "worktree"}
-                      onWorkspaceChange={setWorkspace}
+                      onWorkspaceChange={(next) => {
+                        stayPut();
+                        setWorkspace(next);
+                      }}
                       checkoutUnavailable={checkoutUnavailable}
                       missing={missing && { repo: group.name, hostIds: missing }}
                     />
@@ -638,7 +870,10 @@ export function NewThread({
                         value={gitRef}
                         preferred={repoDefaults.base}
                         fromCurrent={globalDefaults.worktreeBase === "current"}
-                        onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
+                        onChange={(ref, chosen) => {
+                          if (chosen) stayPut();
+                          setPickedRef({ groupId: group.id, checkout, ref });
+                        }}
                       />
                     )}
                   </>

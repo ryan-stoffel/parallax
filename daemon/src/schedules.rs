@@ -652,6 +652,8 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
                 base: None,
                 checkout_ref: None,
                 threads: Vec::new(),
+                computers: Vec::new(),
+                remote_threads: Vec::new(),
                 naming: None,
             },
         )
@@ -705,6 +707,8 @@ async fn send(
         account: None,
         images: Vec::new(),
         threads: Vec::new(),
+        computers: Vec::new(),
+        remote_threads: Vec::new(),
         from: None,
         delivery: None,
     };
