@@ -1711,7 +1711,7 @@ export function App() {
       {failedList && (
         <CrashScreen
           title={`Couldn't load your threads${listed.length > 1 ? ` on ${failedList.host.name}` : ""}`}
-          message="Parallax couldn't read the thread list on this computer. Try again, or copy the error to report it."
+          message="Parallax couldn't read this computer's thread list."
           details={failedList.view.error!}
           action={{ label: "Try again", onClick: failedList.view.retry }}
           onDismiss={() => setSetAside((now) => new Set(now).add(failedList.view.error!))}

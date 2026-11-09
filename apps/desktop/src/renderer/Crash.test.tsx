@@ -20,7 +20,7 @@ function Broken(): never {
   throw new Error("no such column: unarchived_at");
 }
 
-test("a render that throws shows the crash screen with Reload and the error under Error details", () => {
+test("a render that throws shows the crash screen with Reload and the error under Show details", () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   window.parallax = {
     version: async () => "2611.1.0",
@@ -38,7 +38,9 @@ test("a render that throws shows the crash screen with Reload and the error unde
   expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Reload")).toBe(
     true,
   );
-  expect(document.querySelector("details pre")?.textContent).toContain(
-    "no such column: unarchived_at",
+  const show = [...document.querySelectorAll("button")].find(
+    (b) => b.textContent === "Show details",
   );
+  act(() => show!.click());
+  expect(document.querySelector("pre")?.textContent).toContain("no such column: unarchived_at");
 });

@@ -1,6 +1,5 @@
 import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 
-import { icons } from "./icons";
 import { ParallaxMark } from "./logos";
 import { Button } from "./ui";
 
@@ -25,7 +24,7 @@ export class CrashBoundary extends Component<{ children: ReactNode }, { details?
     ) : (
       <CrashScreen
         title="Parallax hit a problem"
-        message="This window stopped working. Your threads are saved, and running agents keep going. Reload to pick up where you left off."
+        message="This window stopped working. Your threads are saved and agents keep running."
         details={this.state.details}
         action={{ label: "Reload", onClick: () => window.location.reload() }}
       />
@@ -35,8 +34,8 @@ export class CrashBoundary extends Component<{ children: ReactNode }, { details?
 
 /**
  * The whole window when something fails (PLX-1482): what happened in plain words, one action to
- * recover, Copy error, and the technical text folded under Error details. `onDismiss` adds
- * Continue anyway, for a failure the rest of the app can work around.
+ * recover, Copy error, and the technical text behind Show details. `onDismiss` adds Continue
+ * anyway, for a failure the rest of the app can work around.
  */
 export function CrashScreen({
   title,
@@ -53,6 +52,7 @@ export function CrashScreen({
 }) {
   const [version, setVersion] = useState<string>();
   const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
   // A modal dialog, so the app under it is inert and focus starts on the action and stays here.
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -85,50 +85,53 @@ export function CrashScreen({
     >
       {/* Something to drag the window by, since the page draws the title bar. */}
       <div className="titlebar h-11 shrink-0" />
-      <main className="flex flex-1 items-center justify-center overflow-y-auto px-6 pb-16">
-        <div className="w-full max-w-md motion-safe:animate-[sidebar-rise_240ms_ease-out]">
-          <div className="relative size-12">
-            <ParallaxMark className="size-12" />
-            <span className="absolute -right-1 -bottom-1 grid size-5 place-items-center rounded-full bg-danger text-danger-foreground ring-[3px] ring-[var(--background)]">
-              <icons.warning aria-hidden className="size-3" strokeWidth={2.5} />
-            </span>
-          </div>
-          <h1 id="crash-title" className="mt-6 text-display font-semibold tracking-tight">
+      <main className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 text-center">
+        <div className="flex w-full max-w-sm flex-col items-center motion-safe:animate-[sidebar-rise_240ms_ease-out]">
+          <ParallaxMark className="size-10" />
+          <h1 id="crash-title" className="mt-6 text-heading font-semibold tracking-tight">
             {title}
           </h1>
-          <p id="crash-message" className="mt-2 text-reading leading-relaxed text-muted-foreground">
+          <p id="crash-message" className="mt-1.5 text-body leading-relaxed text-muted-foreground">
             {message}
           </p>
-          <div className="mt-7 flex items-center gap-2">
+          <div className="mt-6 flex items-center gap-2">
             <Button variant="primary" onClick={action.onClick}>
-              <icons.refresh aria-hidden />
               {action.label}
             </Button>
             <Button variant="outline" onClick={copy}>
-              {copied ? <icons.done aria-hidden /> : <icons.copy aria-hidden />}
               {copied ? "Copied" : "Copy error"}
             </Button>
+          </div>
+          <div className="mt-4 flex items-center gap-3 text-meta text-faint-foreground">
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={() => setOpen(!open)}
+              className="hover:text-foreground"
+            >
+              {open ? "Hide details" : "Show details"}
+            </button>
             {onDismiss && (
-              <Button className="ml-auto" onClick={onDismiss}>
-                Continue anyway
-              </Button>
+              <>
+                <span aria-hidden>·</span>
+                <button type="button" onClick={onDismiss} className="hover:text-foreground">
+                  Continue anyway
+                </button>
+              </>
             )}
           </div>
-          <details className="group mt-8 overflow-hidden rounded-xl bg-surface ring-1 ring-border">
-            <summary className="flex cursor-default list-none items-center justify-between px-3.5 py-2.5 text-meta font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-              Error details
-              <icons.expand
-                aria-hidden
-                className="size-3.5 transition-transform group-open:rotate-180"
-              />
-            </summary>
-            <pre className="max-h-56 overflow-auto border-t border-border px-3.5 py-3 text-caption [font-variant-ligatures:none] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground select-text">
-              {details}
-            </pre>
-          </details>
-          {version && <p className="mt-4 text-caption text-faint-foreground">Parallax {version}</p>}
         </div>
+        {open && (
+          <pre className="mt-5 max-h-56 w-full max-w-lg overflow-auto rounded-xl bg-surface px-3.5 py-3 text-left text-caption [font-variant-ligatures:none] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground ring-1 ring-border select-text">
+            {details}
+          </pre>
+        )}
       </main>
+      {version && (
+        <p className="shrink-0 pb-4 text-center text-caption text-faint-foreground">
+          Parallax {version}
+        </p>
+      )}
     </dialog>
   );
 }
