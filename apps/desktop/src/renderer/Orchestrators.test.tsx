@@ -971,14 +971,14 @@ test("Usage waits under More until Settings shows it in the head, and pinned Pro
   await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
   expect(sidebarButton("Usage")!.closest("[inert]")).toBeNull();
 
-  // Pinning a Project from its card lists it under Pinned as a card: its icon and "Project", then
-  // its name, with no status. It opens the Project.
+  // Pinning a Project from its card lists it under Pinned as a card: its name, then its icon and
+  // "Project", with no status. It opens the Project.
   openProjectsPage();
   await click(document.querySelector('main button[aria-label="Pin Essays"]'));
   expect(pinnedProjects.get()).toEqual(["local/s-essays"]);
   const pinned = () => document.querySelector('#sidebar section[aria-label="Pinned"]')!;
   const project = pinned().querySelector('li[data-kind="project"]')!;
-  expect(project.querySelector("button[data-row]")!.textContent).toBe("ProjectEssays");
+  expect(project.querySelector("button[data-row]")!.textContent).toBe("EssaysProject");
   expect(project.querySelector("[data-status]")!.textContent).toBe("");
   await click(project.querySelector("button[data-row]"));
   expect(crumbs()).toEqual(["This Mac", "Essays"]);
@@ -1061,8 +1061,7 @@ test("the Projects page filters, sorts, and searches its cards, and says when no
   expect(projectNames()).toEqual(["Recipes", "Essays", "Apartment"]);
 
   // A card's details: its threads, files, and instructions.
-  const details = (name: string) =>
-    projectCard(name).querySelector("[data-title]")!.nextElementSibling!.textContent;
+  const details = (name: string) => projectCard(name).lastElementChild!.textContent;
   expect(details("Essays")).toBe("1 thread1 file");
   expect(details("Apartment")).toBe("0 threadsInstructions");
 
@@ -1623,13 +1622,13 @@ test("Inbox has a Projects button beside its search and Pull requests in the Pro
       s.textContent?.startsWith("Projects"),
     ),
   ).toBe(false);
-  // An orchestrator thread lists by activity as a thread does, on a thread's card: its repo, then
-  // its name, then its branch, with no count of its threads (0093).
+  // An orchestrator thread lists by activity as a thread does, on a thread's card: its name, then
+  // its repo, then its branch, with no count of its threads (0093, PLX-1496).
   const rows = () =>
     [...sidebar.querySelectorAll('ul[aria-label="Threads"] li[data-kind="orchestrator"]')].map(
       (li) => li.querySelector("button[data-row]")!.textContent,
     );
-  expect(rows()).toEqual(["parallax3hphotonmain", "No repo3dembermain"]);
+  expect(rows()).toEqual(["photonparallax3hmain", "emberNo repo3dmain"]);
   expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
   // Inbox's Pull requests and Usage are in the Profile menu, not the footer.
   const menuPages = () =>

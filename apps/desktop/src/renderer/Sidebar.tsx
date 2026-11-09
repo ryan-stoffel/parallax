@@ -1767,7 +1767,7 @@ export function ThreadList({
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
   // An orchestrator thread's card, as a thread's is (0093): dense in Traditional, and `nested` under
-  // its repo's heading, it leaves out its first line.
+  // its repo's heading, it leaves out its repo's line.
   const orchestratorCard = (p: Item & { kind: "orchestrator" }, nested = false) => {
     const n = modHeld ? listed.indexOf(p) : -1;
     return (
@@ -2801,9 +2801,9 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 export const backendLogo = (backend: string) => backendLogos[backend] ?? instanceLogo(backend);
 
 /**
- * An orchestrator thread's card (0093), the same card a thread's is: its repo's icon and name, with
- * its status at the end (what it asks of the user, or how long ago it was last active), then its
- * name, then its branch, computer, its run's provider, and pull requests (`useRowDetails`). Under
+ * An orchestrator thread's card (0093), the same card a thread's is: its name, then its repo's icon
+ * and name, with its status at the end (what it asks of the user, as a mark, or how long ago it was
+ * last active), then its branch, computer, its run's provider, and pull requests (`useRowDetails`). Under
  * its repo's folder it leaves out the repo, as a thread does. Hovering or focusing it shows its
  * actions button, whose menu also opens by right-clicking the row, or with A: Rename, Change icon,
  * and the rest its plxd allows.
@@ -2834,7 +2834,7 @@ function OrchestratorRow({
   /** Under its repo's heading, which names the repo. */
   nested?: boolean;
   orchestrator: Orchestrator;
-  /** The repo it works in, which its first line names. */
+  /** The repo it works in, which its second line names. */
   repo?: Repo;
   /** Its own and its children's runs (0042), its own among them for its provider and PRs. */
   runs: readonly AgentRun[];
@@ -2854,7 +2854,7 @@ function OrchestratorRow({
   onOpen: () => void;
   /** Keyboard moves on the focused row. */
   onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
-  /** For a pinned one: its pin, in its top-right as a pinned thread's is, unpins it. */
+  /** For a pinned one: its pin, after its status as a pinned thread's is, unpins it. */
   onUnpin?: () => void;
 }) {
   const menuId = useId();
@@ -2881,7 +2881,8 @@ function OrchestratorRow({
         !nested && (compact ? <RepoIcon repo={repo} /> : <RowPlace repo={repo} words={words} />)
       }
       status={
-        badge ?? (attention === "settled" ? age(at) : <AttentionBadge attention={attention} />)
+        badge ??
+        (attention === "settled" ? age(at) : <AttentionBadge attention={attention} iconOnly />)
       }
       title={<Marked text={orchestrator.name} words={words} />}
       aside={aside}
@@ -2954,7 +2955,7 @@ function OrchestratorRow({
 }
 
 /**
- * Where a row is, as a card's first line shows it: its repo's icon and name, or No repo. `label`
+ * Where a row is, as a card's second line shows it: its repo's icon and name, or No repo. `label`
  * names it otherwise, as a Project's card says "Project".
  */
 export function RowPlace({
@@ -3048,7 +3049,7 @@ function useRowDetails({
         ? "passed"
         : undefined;
   const changed = !!git && !!(git.ahead || git.changes);
-  // A pin isn't a detail: it sits in the row's top-right, so pinning doesn't change its height.
+  // A pin isn't a detail: it sits after the row's status, so pinning doesn't change its height.
   const hasDetails = changed || prs.urls.length > 0 || providers.length > 0 || !!device?.icon;
   // Its computer, then its provider's logo: in gray, so a list isn't striped with providers' colors,
   // but in color while open.
@@ -3172,18 +3173,24 @@ const groupHeading =
 const folderHeading =
   "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body font-medium text-foreground/90 transition-colors outline-none enabled:hover:bg-hover enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
-/** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
+/** A row's status that isn't its attention: an icon in the warning color, then what it says. */
+const statusMark = "flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5";
+
+/**
+ * A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). Its
+ * icon alone, as a row's attention is (PLX-1496).
+ */
 function DraftStatus() {
   return (
-    <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+    <span title="Draft" className={statusMark}>
       <PencilLine aria-hidden />
-      Draft
+      <span className="sr-only">Draft</span>
     </span>
   );
 }
 
 /**
- * An unsent New Thread prompt's card (PLX-788): its repo and a Draft status, then its first line,
+ * An unsent New Thread prompt's card (PLX-788): its first line, then its repo and a Draft status,
  * outlined in the warning color (PLX-932). Opening it reopens New Thread with it, which takes it
  * off the list; its X, shown on hover, discards it.
  */
@@ -3240,11 +3247,12 @@ function DraftRow({
 }
 
 /**
- * A thread's card (0033, 0075, PLX-1043): its repo's icon and name with its status at the end (what
- * it asks of the user, when its snooze ends, or how long ago it was last active), its title in bold, then its branch (not
+ * A thread's card (0033, 0075, PLX-1043): its title in bold, at the row's full width (PLX-1496),
+ * then its repo's icon and name with its status at the end (what it asks of the user, as a mark
+ * alone, when its snooze ends, or how long ago it was last active), then its branch (not
  * a Chat's), cut in the middle (`shortBranch`), its git status, linked pull requests (the number
  * of one, or +N for more) and their checks, its computer, and its provider, in color while it's
- * open. A pinned one keeps its pin in its top-right, which unpins it (0094). Under a search, the
+ * open. A pinned one keeps its pin at its status's end, which unpins it (0094). Under a search, the
  * words found are marked, and a match only in its messages shows a line of them. Resting on it
  * shows its card; hovering or focusing it swaps the status for Snooze, Archive, and more actions,
  * which also open by right-clicking the row: native popovers, so Escape and clicking away close
@@ -3428,14 +3436,18 @@ function ThreadRow({
   const status =
     badge ??
     (!thread.archived && snoozed(thread, attention) ? (
-      <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+      <span title={`Wakes ${resumeTime(thread.snoozedUntil!)}`} className={statusMark}>
         <RingingAlarmMark />
-        Wakes {resumeTime(thread.snoozedUntil!)}
+        <span className="sr-only">Wakes</span> {resumeTime(thread.snoozedUntil!)}
       </span>
     ) : run?.status === "waiting" && attention === "settled" && !thread.archived ? (
-      <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+      <span
+        title={run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
+        className={statusMark}
+      >
         <AlarmClock aria-hidden />
-        {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
+        <span className="sr-only">{run.resumeAt ? "Resumes" : "Waiting"}</span>
+        {run.resumeAt && <> {resumeTime(run.resumeAt)}</>}
       </span>
     ) : attention === "settled" ? (
       drafted ? (
@@ -3444,7 +3456,7 @@ function ThreadRow({
         age(at)
       )
     ) : (
-      <AttentionBadge attention={attention} since={lastUserPrompt(thread)} />
+      <AttentionBadge attention={attention} since={lastUserPrompt(thread)} iconOnly />
     ));
   const titleText = renaming ? (
     <input
@@ -3480,7 +3492,7 @@ function ThreadRow({
       <Marked text={title} words={words} />
     </span>
   );
-  // A pinned thread's pin, in its top-right whether hovered or not; clicking it unpins.
+  // A pinned thread's pin, after its status whether hovered or not; clicking it unpins.
   const pin =
     thread.pinned &&
     (onPin ? (
@@ -3507,7 +3519,7 @@ function ThreadRow({
       </span>
     ));
   return (
-    // A card (PLX-1043): where it is and its status, its title, then its branch and details, or one
+    // A card (PLX-1043): its title, where it is and its status, then its branch and details, or one
     // line of its repo's icon, title, and status. Under its repo's heading, it leaves out the repo.
     // A draft outlines it in the warning color, as a New Thread draft's row is (PLX-887); an open
     // thread holds its own draft, so that doesn't show while it's open.

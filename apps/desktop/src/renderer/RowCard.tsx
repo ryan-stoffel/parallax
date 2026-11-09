@@ -18,10 +18,12 @@ function watchTools(el: HTMLElement | null) {
 }
 
 /**
- * A sidebar row. A card's top line is `place` (where it is) with `status` at its end, then its
- * `title`, then `details`; a `compact` row is one line of `place` (an icon), the title, and the
- * status, as is a card's first line with no place (under its repo's heading). In the top-right, `actions` show while it's hovered or focused, in place of the status,
- * and `trailing` (a pin) always shows. The line under them keeps clear of their measured width, and
+ * A sidebar row. A card's first line is its `title`, at the row's full width, then `place` (where
+ * it is) with `status` at its end, then `details` (PLX-1496); a `compact` row is one line of
+ * `place` (an icon), the title, and the status, as is a card's first line with no place (under its
+ * repo's heading). At the end of the status's line, `actions` show while it's hovered or focused,
+ * in place of the status, and `trailing` (a pin) always shows, so neither shortens a card's title.
+ * That line keeps clear of their measured width, and
  * nothing changes size on hover, so the row never reflows. `rowKey` is its `data-flip`, so it
  * slides and fades as the list changes (flip.ts), and its `data-row`, which the arrow keys and
  * focus after a change move through. `main` goes on the button that opens it, a plain box while
@@ -101,8 +103,15 @@ export function RowCard({
   const statusLook = `shrink-0 ${actions ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : ""}`;
   const titleColor =
     selected || !dim ? "text-foreground" : "text-foreground/70 group-hover/row:text-foreground";
-  // A compact row, or a card with no place (under its repo's heading), leads with its title.
+  // A compact row, or a card with no place (under its repo's heading), is one line.
   const oneLine = compact || !place;
+  // The tools sit over the status: on a card's second line, one title line (`1lh` at the title's
+  // size) under its padding.
+  const toolsTop = oneLine
+    ? framed
+      ? "top-2"
+      : "top-1"
+    : `text-body ${framed ? "top-[calc(0.625rem+1lh)]" : dense ? "top-[calc(0.375rem+1lh)]" : "top-[calc(0.5rem+1lh)]"}`;
   const titleText = (
     <span
       data-title
@@ -145,12 +154,6 @@ export function RowCard({
           </span>
         ) : (
           <>
-            <span
-              className={`flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground ${clear}`}
-            >
-              <span className="flex min-w-0 flex-1 items-center">{place}</span>
-              {statusText}
-            </span>
             {aside ? (
               <span className="flex w-full items-center gap-2">
                 {titleText}
@@ -161,6 +164,14 @@ export function RowCard({
             ) : (
               titleText
             )}
+            <span
+              className={`flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground ${clear}`}
+            >
+              <span className="flex min-w-0 flex-1 items-center text-muted-foreground">
+                {place}
+              </span>
+              {statusText}
+            </span>
           </>
         )}
         {details}
@@ -168,7 +179,7 @@ export function RowCard({
       {(actions || trailing) && (
         <div
           ref={watchTools}
-          className={`absolute ${framed ? "top-2 right-2" : "top-1 right-1"} flex items-center gap-0.5 [&_button]:cursor-pointer ${editing ? "hidden" : ""}`}
+          className={`absolute ${toolsTop} ${framed ? "right-2" : "right-1"} flex items-center gap-0.5 [&_button]:cursor-pointer ${editing ? "hidden" : ""}`}
         >
           {actions && (
             <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">
