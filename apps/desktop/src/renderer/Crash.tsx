@@ -73,16 +73,14 @@ export function CrashScreen({
       });
   return (
     // Opaque, as the splash is, since index.css thins `.bg-background` in a clear window. Escape
-    // is Continue anyway where there is one.
+    // is Continue anyway where there is one. Chromium lets Escape close a modal whatever its
+    // cancel handler does after the first time, so a close with nothing to continue to reopens it.
     <dialog
       ref={dialog}
       role="alertdialog"
       aria-labelledby="crash-title"
       aria-describedby="crash-message"
-      onCancel={(e) => {
-        e.preventDefault();
-        onDismiss?.();
-      }}
+      onClose={() => (onDismiss ? onDismiss() : dialog.current?.showModal())}
       className="m-0 h-full max-h-none w-full max-w-none flex-col border-0 bg-[var(--background)] p-0 text-foreground backdrop:bg-transparent open:flex"
     >
       {/* Something to drag the window by, since the page draws the title bar. */}
