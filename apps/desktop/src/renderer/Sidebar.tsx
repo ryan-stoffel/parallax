@@ -166,7 +166,6 @@ import {
 } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
 import {
-  Button,
   ConfirmDialog,
   IconButton,
   Menu,
@@ -184,8 +183,6 @@ import {
   useModHeld,
 } from "./ui";
 import { PanelResize } from "./PanelResize";
-import { ErrorDetails } from "./Crash";
-import { icons } from "./icons";
 import { numberOf } from "./github";
 import { majorityLook, usePullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
@@ -1868,8 +1865,6 @@ export function ThreadList({
     </>
   );
 
-  // Each host whose list couldn't load or stopped updating, which is the list's own state.
-  const failedHosts = hosts.filter((h) => h.view.error);
   const nothingShown =
     !pool.length && !snoozedItems.length && !archived.length && !draftRows.length;
 
@@ -1972,14 +1967,6 @@ export function ThreadList({
         data-flip-scroll
         className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 *:shrink-0 ${fadeBottom}`}
       >
-        {failedHosts.map(({ host, view }) => (
-          <LoadError
-            key={host.id}
-            host={hosts.length > 1 ? host.name : undefined}
-            error={view.error!}
-            onRetry={view.retry}
-          />
-        ))}
         {words.length > 0 && nothingShown && !searching ? (
           <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
             Nothing matches “{query.trim()}”.
@@ -2109,46 +2096,6 @@ function EmptyCard({ title, children }: { title: string; children: ReactNode }) 
     <div className="mx-1 my-3.5 flex flex-col items-center rounded-xl border border-dashed border-border px-4 py-5 text-center text-body leading-normal text-faint-foreground">
       <p className="text-body font-semibold text-foreground">{title}</p>
       <div className="mt-0.75">{children}</div>
-    </div>
-  );
-}
-
-/**
- * In place of a host's list when it couldn't load: plain words and Try again, with plxd's own
- * message under Details (PLX-1482). `host` names the host when the sidebar lists several.
- */
-function LoadError({
-  host,
-  error,
-  onRetry,
-}: {
-  host?: string;
-  error: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div
-      role="alert"
-      className="mx-1 my-2 flex flex-col gap-2.5 rounded-xl bg-surface p-3 ring-1 ring-border"
-    >
-      <div className="flex items-start gap-2">
-        <icons.error aria-hidden className="mt-px size-4 shrink-0 text-danger" />
-        <div className="min-w-0">
-          <p className="text-body font-semibold text-foreground">
-            Couldn't load threads{host && ` on ${host}`}
-          </p>
-          <p className="mt-0.5 text-meta leading-normal text-muted-foreground">
-            Parallax ran into a problem reading this computer's threads.
-          </p>
-        </div>
-      </div>
-      <div className="flex flex-col items-start gap-2 pl-6">
-        <Button variant="outline" size="sm" onClick={onRetry}>
-          <icons.refresh aria-hidden />
-          Try again
-        </Button>
-        <ErrorDetails text={error} />
-      </div>
     </div>
   );
 }
