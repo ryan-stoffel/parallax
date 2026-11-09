@@ -1,10 +1,12 @@
 //! Parallax Relay end to end (PLX-652, 0068): plxd behind a local relay (`wrangler dev`), a client
 //! pairing and connecting through it with TLS to plxd's pinned certificate, and webhooks
-//! forwarded with plxd's signature check and held while plxd is away.
+//! forwarded with plxd's signature check and held while plxd is away. Then two plxds working
+//! across it with only their host keys (0101).
 //!
 //! Runs only when `relay/scripts/e2e.mjs` starts a relay and passes its URL and a Clerk token in
-//! `PLXD_TEST_RELAY_URL` and `PLXD_TEST_RELAY_TOKEN`. Elsewhere it passes without doing anything,
-//! but for the older relay's test, whose relay is its own.
+//! `PLXD_TEST_RELAY_URL`, `PLXD_TEST_RELAY_TOKEN`, `PLXD_TEST_RELAY_CHECK_TOKEN`, and
+//! `PLXD_TEST_RELAY_PEERS_TOKEN`. Elsewhere it passes without doing anything, but for the older
+//! relay's test, whose relay is its own.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -13,29 +15,35 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::jsonrpc::Message;
 use parallax_protocol::methods::{
-    AccessGet, AccessMerge, AccessRemove, HostAnnounceUpdate, HostSettingsGet, HostSettingsSet,
-    OrchestratorCreate, RelayCheck, RelayHosts, RelayRegister, RelayRemove, RelaySign,
-    RemoteRevoke, RemoteSessions, ScheduleList, ScheduleSave,
+    AccessGet, AccessMerge, AccessRemove, AgentEvents, AgentList, HostAnnounceUpdate,
+    HostSettingsGet, HostSettingsSet, OrchestratorCreate, RelayCheck, RelayHosts, RelayId,
+    RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
+    ScheduleSave, ThreadStart,
 };
 use parallax_protocol::{
-    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice,
-    HostAnnounceUpdateParams, HostSettingsGetParams, HostSettingsSetParams, RelayCheckParams,
-    RelayCheckPart, RelayHostsParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
-    RelayStatus, RemoteRevokeParams, RemoteSessionsParams, Schedule, ScheduleListParams,
+    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice, AgentEventsParams,
+    AgentListParams, AgentOutputItem, HostAnnounceUpdateParams, HostSettingsGetParams,
+    HostSettingsSetParams, ParallaxEvent, RelayCheckParams, RelayCheckPart, RelayHostsParams,
+    RelayIdParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelayStatus,
+    RemoteRevokeParams, RemoteSessionsParams, RunId, Schedule, ScheduleListParams,
     ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
+use plxd::backend::fake::Step;
 use plxd::{relay, remote};
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::time::{Instant, sleep};
 
-use crate::agents::fake;
+use crate::agents::{end_turn, fake, git, init, real_repo};
 use crate::connect::free_port;
+use crate::mcp::{Mcp, mcp_command};
 use crate::remote::{App, LOOPBACK, new_code, open, open_account, set_remote, wait_listening};
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 use crate::thread_tools::Keys;
+use crate::threads::start_params;
 
 #[cfg(feature = "host-routing-proof")]
 mod host_proof;
@@ -663,6 +671,399 @@ async fn the_connection_check_says_an_older_relay_needs_updating() {
         .unwrap();
     assert_eq!(older.failed, Some(RelayCheckPart::Relay), "{older:?}");
     assert!(older.fix.unwrap().contains("relay needs updating"));
+}
+
+/// One computer on the account: its plxd behind the relay, and a repository cloned from `origin`.
+struct Computer {
+    dir: tempfile::TempDir,
+    port: u16,
+    url: String,
+    server: Option<InProcess>,
+    client: Client,
+    id: String,
+}
+
+impl Computer {
+    fn config(dir: &std::path::Path, port: u16, url: &str) -> plxd::server::Config {
+        let mut config = InProcess::config(dir);
+        config.remote_address = Some(LOOPBACK);
+        config.remote_port = port;
+        url.clone_into(&mut config.relay_url);
+        config.backends = Some(fake(vec![
+            init("work"),
+            Step::EchoPrompt,
+            Step::SleepMs(3000),
+            end_turn("Done there."),
+        ]));
+        config
+    }
+
+    /// A computer named `name`, registered with `token` and connected to the relay at `url`.
+    async fn start(name: &str, url: &str, token: &str) -> Self {
+        let (dir, port) = (temp_dir(), free_port());
+        let server = InProcess::start(Self::config(dir.path(), port, url));
+        let mut client = Client::ready(&server.socket).await;
+        client
+            .call::<HostSettingsSet>(HostSettingsSetParams {
+                device_name: Some(name.to_owned()),
+                ..HostSettingsSetParams::default()
+            })
+            .await
+            .unwrap();
+        set_remote(&mut client, true).await;
+        wait_listening(port, true).await;
+        let registered = client.call::<RelayRegister>(RelayRegisterParams {
+            token: token.to_owned(),
+            signed: None,
+        });
+        registered.await.unwrap();
+        relay_status(&mut client, |s| s.connected).await;
+        let id = client
+            .call::<RelayId>(RelayIdParams {})
+            .await
+            .unwrap()
+            .host_id;
+        Self {
+            dir,
+            port,
+            url: url.to_owned(),
+            server: Some(server),
+            client,
+            id,
+        }
+    }
+
+    async fn trust(&mut self, other: &str) {
+        self.client
+            .call::<AccessMerge>(AccessMergeParams {
+                approved_hosts: vec![other.to_owned()],
+                ..AccessMergeParams::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn set_agent_work(&mut self, on: bool) {
+        self.client
+            .call::<HostSettingsSet>(HostSettingsSetParams {
+                agent_work: Some(on),
+                ..HostSettingsSetParams::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn stop(&mut self) {
+        self.server.take().unwrap().stop().await;
+    }
+
+    /// Starts plxd again on the same data folder.
+    async fn start_again(&mut self) {
+        let server = InProcess::start(Self::config(self.dir.path(), self.port, &self.url));
+        self.client = Client::ready(&server.socket).await;
+        self.server = Some(server);
+        relay_status(&mut self.client, |s| s.connected).await;
+    }
+
+    /// Whether `run`'s transcript has a message holding `text`, once it does.
+    async fn message_with(&mut self, run: RunId, text: &str) {
+        let deadline = Instant::now() + 3 * PATIENCE;
+        loop {
+            let events = self
+                .client
+                .call::<AgentEvents>(AgentEventsParams {
+                    before: None,
+                    run_id: run,
+                    after: 0,
+                    limit: Some(1000),
+                })
+                .await
+                .unwrap()
+                .events;
+            let found = events.iter().any(|logged| match &logged.event {
+                ParallaxEvent::AgentOutput { items, .. } => items.iter().any(|item| {
+                    matches!(item, AgentOutputItem::TurnStarted { text: Some(said), .. }
+                        if said.contains(text))
+                }),
+                _ => false,
+            });
+            if found {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no message with {text:?}: {events:?}"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+}
+
+/// `linked_computers`' entry for the computer `id`.
+async fn linked(mcp: &mut Mcp, id: &str) -> Value {
+    let listed = mcp.ok("linked_computers", json!({})).await;
+    let computers = listed["computers"].as_array().unwrap();
+    let found = computers.iter().find(|computer| computer["id"] == id);
+    found.unwrap_or_else(|| panic!("{listed}")).clone()
+}
+
+/// Two plxds on one account, through the relay with only their host keys (0101): what an agent
+/// sees with `agentWork` off, without the repository, and with both, a task on the other computer
+/// that wakes its parent across a restart of the caller, and the thread tools' `computer`.
+#[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one walk across two computers")]
+async fn an_agent_works_on_another_computer_through_the_relay() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_PEERS_TOKEN"),
+    ) else {
+        return;
+    };
+    let mut here = Computer::start("Here", &url, &token).await;
+    let mut there = Computer::start("There", &url, &token).await;
+    let (here_id, there_id) = (here.id.clone(), there.id.clone());
+
+    // One repository, pushed to an origin, on the caller.
+    let repos = temp_dir();
+    let origin = repos.path().join("origin.git");
+    git(
+        repos.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "--initial-branch=main",
+            "origin.git",
+        ],
+    );
+    let repo = real_repo(repos.path());
+    let origin_url = origin.to_str().unwrap();
+    git(&repo, &["remote", "add", "origin", origin_url]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let entry = here
+        .client
+        .call::<parallax_protocol::methods::RepoAdd>(parallax_protocol::RepoAddParams {
+            id: parallax_protocol::RepoId::generate(),
+            path: repo.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+    let caller = here
+        .client
+        .call::<ThreadStart>(start_params(Some(entry.id), "Plan the work."))
+        .await
+        .unwrap()
+        .run
+        .id;
+    let mut mcp = Mcp::spawn(mcp_command(
+        here.dir.path(),
+        &["--thread", &caller.to_string()],
+    ))
+    .await;
+    let task = json!({"task": "Do the work.", "target": {"computer": there_id}});
+
+    // The caller refuses until it approved the other computer itself.
+    let (said, failed) = mcp.tool("delegate_task", task.clone()).await;
+    assert!(failed && said.contains("hasn't approved"), "{said}");
+    here.trust(&there_id).await;
+
+    // Approved here, but the other computer hasn't approved this one, and has `agentWork` off.
+    let shown = linked(&mut mcp, &there_id).await;
+    assert_eq!(shown["takesAgentWork"], false, "{shown}");
+    assert!(shown["whyNot"].as_str().unwrap().contains("off"), "{shown}");
+    let (said, failed) = mcp.tool("delegate_task", task.clone()).await;
+    assert!(failed && said.contains("off"), "{said}");
+    there.set_agent_work(true).await;
+    relay_status(&mut there.client, |s| s.connected).await;
+    let (said, failed) = mcp.tool("delegate_task", task.clone()).await;
+    assert!(failed && said.contains("hasn't approved"), "{said}");
+    there.trust(&here_id).await;
+
+    // Now it takes work, but has no copy of the repository.
+    let shown = linked(&mut mcp, &there_id).await;
+    assert_eq!(shown["takesAgentWork"], true, "{shown}");
+    assert!(
+        shown["runningAgents"].is_number() && shown["load"].is_object(),
+        "{shown}"
+    );
+    let (said, failed) = mcp.tool("delegate_task", task.clone()).await;
+    assert!(failed && said.contains("no copy"), "{said}");
+    let nothing = there
+        .client
+        .call::<AgentList>(AgentListParams { project: None });
+    assert!(
+        nothing.await.unwrap().runs.is_empty(),
+        "nothing ran there yet"
+    );
+    let copy = repos.path().join("copy");
+    let copied = copy.to_str().unwrap();
+    git(repos.path(), &["clone", "-q", origin_url, copied]);
+    let copy_entry = there
+        .client
+        .call::<parallax_protocol::methods::RepoAdd>(parallax_protocol::RepoAddParams {
+            id: parallax_protocol::RepoId::generate(),
+            path: copied.to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo;
+
+    // A task by the computer's name, running there and not here.
+    let task = json!({"task": "Do the work.", "target": {"computer": "There"}});
+    let started = mcp.ok("delegate_task", task).await;
+    assert_eq!(started["computer"]["id"], there_id.as_str(), "{started}");
+    let task_id = started["taskId"].as_str().unwrap().to_owned();
+    let runs = there
+        .client
+        .call::<AgentList>(AgentListParams { project: None });
+    let run = runs.await.unwrap().runs.into_iter().next().unwrap();
+    assert_eq!(run.id.to_string(), task_id);
+    assert!(
+        run.prompt.contains("started by an agent on Here"),
+        "{}",
+        run.prompt
+    );
+    assert!(run.branch.is_some(), "a new worktree: {run:?}");
+
+    // The caller dies between the start and the answer: its row brings the follower back, for a
+    // thread that started and for one that never did.
+    here.stop().await;
+    let stored = parallax_store::Store::open(here.dir.path().join("plxd.sqlite3")).unwrap();
+    let row = |id: uuid::Uuid, title: &str, created_at| parallax_store::RemoteRun {
+        id,
+        host_id: there_id.clone(),
+        host_name: "There".to_owned(),
+        parent: caller.into(),
+        title: title.to_owned(),
+        task: true,
+        completion_wake: "always".to_owned(),
+        delivery: "pending".to_owned(),
+        status: "running".to_owned(),
+        summary: None,
+        reason: None,
+        ended_at: None,
+        created_at,
+    };
+    let never: RunId = RunId::generate();
+    let long_ago = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(10);
+    assert!(
+        stored
+            .add_remote_run(&row(never.into(), "Never", long_ago))
+            .unwrap()
+    );
+    let unknown: RunId = task_id.parse().unwrap();
+    // Forget the real task's row, then record it as the crash left it: recorded, never answered.
+    stored.delete_remote_run(unknown.into()).unwrap();
+    let now = jiff::Timestamp::now();
+    assert!(
+        stored
+            .add_remote_run(&row(unknown.into(), "Real", now))
+            .unwrap()
+    );
+    drop(stored);
+    here.start_again().await;
+    here.message_with(caller, &format!("Delegated task {never}"))
+        .await;
+    here.message_with(caller, "never started").await;
+
+    // The caller restarted during the task, and its end still wakes the parent.
+    here.message_with(caller, &format!("Delegated task {task_id}"))
+        .await;
+    let status = mcp.ok("task_status", json!({"taskId": task_id})).await;
+    assert_eq!(status["status"], "completed", "{status}");
+    assert!(
+        status["summary"].as_str().unwrap().contains("Done there"),
+        "{status}"
+    );
+
+    // The thread tools take the computer too, and never fall back to this one.
+    let listed = mcp.ok("thread_list", json!({"computer": there_id})).await;
+    assert_eq!(listed["threads"].as_array().unwrap().len(), 1, "{listed}");
+    let (read, failed) = mcp
+        .tool(
+            "thread_read",
+            json!({"runId": task_id, "computer": there_id}),
+        )
+        .await;
+    assert!(!failed && read.contains("Done there"), "{read}");
+    let (said, failed) = mcp.tool("thread_read", json!({"runId": task_id})).await;
+    assert!(failed && said.contains("no thread"), "{said}");
+    let launched = mcp
+        .ok(
+            "thread_launch",
+            json!({"prompt": "More work.", "computer": there_id, "backend": "fake"}),
+        )
+        .await;
+    let thread = launched["runId"].as_str().unwrap().to_owned();
+    mcp.ok(
+        "thread_wait",
+        json!({"runId": thread, "computer": there_id, "timeoutSeconds": 20}),
+    )
+    .await;
+    here.message_with(caller, &format!("Run {thread}")).await;
+    let sent = json!({"runId": thread, "computer": there_id, "text": "And this."});
+    mcp.ok("thread_send", sent).await;
+    let there_run: RunId = thread.parse().unwrap();
+    there.message_with(there_run, "From an agent on Here").await;
+    mcp.ok(
+        "thread_interrupt",
+        json!({"runId": thread, "computer": there_id}),
+    )
+    .await;
+
+    // A message can't drive a thread there that needs less approval than the caller.
+    let bypass = there
+        .client
+        .call::<ThreadStart>(parallax_protocol::ThreadStartParams {
+            permission: Some(parallax_protocol::AgentPermission::Bypass),
+            ..start_params(Some(copy_entry.id), "Without asking.")
+        })
+        .await
+        .unwrap()
+        .run
+        .id;
+    let sent = json!({"runId": bypass.to_string(), "computer": there_id, "text": "Do this."});
+    let (said, failed) = mcp.tool("thread_send", sent).await;
+    assert!(failed && said.contains("needs less approval"), "{said}");
+
+    // A branch pushed after the other computer cloned, which it has never fetched, is a base.
+    git(&repo, &["branch", "first-push"]);
+    git(&repo, &["push", "-q", "origin", "first-push"]);
+    let launched = mcp
+        .ok(
+            "thread_launch",
+            json!({
+                "prompt": "From the new branch.",
+                "computer": there_id,
+                "backend": "fake",
+                "base": "origin/first-push",
+            }),
+        )
+        .await;
+    assert!(launched["runId"].is_string(), "{launched}");
+
+    // Off closes the session, and the next call says why.
+    there.set_agent_work(false).await;
+    let sessions = there.client.call::<RemoteSessions>(RemoteSessionsParams {});
+    assert!(sessions.await.unwrap().sessions.is_empty());
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let (said, failed) = mcp.tool("thread_list", json!({"computer": there_id})).await;
+        if failed && said.contains("off") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{said}");
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    for id in [here_id, there_id] {
+        let removed = here.client.call::<RelayRemove>(RelayRemoveParams {
+            token: token.clone(),
+            host_id: id,
+        });
+        removed.await.unwrap();
+    }
 }
 
 /// How many connections the relay benchmark times.

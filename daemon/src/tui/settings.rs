@@ -1267,6 +1267,7 @@ mod tests {
                 remote: None,
                 remote_web: None,
                 relay: None,
+                agent_work: None,
                 device_name: None,
                 device_icon: None,
             }),

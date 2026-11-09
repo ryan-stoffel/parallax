@@ -554,6 +554,10 @@ pub(crate) async fn scratch_dir(
 }
 
 /// `thread/start`: see the module documentation. Idempotent on the run id.
+#[expect(
+    clippy::too_many_lines,
+    reason = "its params, then its steps, in order"
+)]
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
     params: ThreadStartParams,
@@ -579,6 +583,8 @@ pub(crate) async fn start(
         base,
         checkout_ref,
         threads,
+        computers,
+        remote_threads,
         notify,
         naming,
     } = params;
@@ -610,7 +616,11 @@ pub(crate) async fn start(
         scope,
         prompt,
         images,
-        threads,
+        attachments: agents::attached::Attachments {
+            threads,
+            computers,
+            remote_threads,
+        },
         account,
         orchestrator_thread: None,
         notify: notify.unwrap_or(true),
@@ -800,7 +810,7 @@ pub(crate) async fn fork(
         scope,
         prompt: fields.prompt.clone(),
         images: Vec::new(),
-        threads: Vec::new(),
+        attachments: agents::attached::Attachments::default(),
         account: Some(
             account.unwrap_or_else(|| agents::session_account(&parent.run.state.account_id)),
         ),

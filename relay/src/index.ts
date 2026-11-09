@@ -12,6 +12,9 @@
  *   (0065), so the relay carries only ciphertext. Clients from before 0091 get a ticket first
  *   (`POST /v1/hosts/<id>/tickets`) and open `/connect?ticket=<ticket>`. plxd's connection check
  *   gets a ticket to itself over its WebSocket and opens the same URL (PLX-1356).
+ * - A plxd reaches another of its user's plxds, with no token, on the same two routes a client
+ *   uses to find and open one: `GET /v1/hosts` and `/v1/hosts/<id>/connect` take a proof signed by
+ *   its host key in `x-parallax-peer` instead (0101). Both hosts must have one owner.
  * - `/v1/hooks/<id>/<hookId>/<token>` goes to plxd over its WebSocket, or is held while it's away.
  * - A plxd's statement that a device is removed goes, unread and unkept, to its user's other online
  *   plxds over their WebSockets, and they check its signature (0091).
@@ -19,12 +22,21 @@
  *   as `removed` in `GET /v1/hosts` until it registers under them again (PLX-1351).
  * - Mobile devices register for push at `/v1/devices`.
  *
- * Every route but the WebSockets plxd opens and the webhooks needs a Clerk session token.
+ * Every route but the WebSockets plxd opens, the webhooks, and a plxd's proof above needs a Clerk
+ * session token.
  */
 import { verifySession } from "./clerk";
 import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
-import { forwarded, HOOK_METHODS, type HookReply, HostRelay, readCapped } from "./host";
+import {
+  forwarded,
+  HOOK_METHODS,
+  type HookReply,
+  HostRelay,
+  PEER_HEADER,
+  readCapped,
+  TIME_HEADER,
+} from "./host";
 import { logged, scrub, short } from "./log";
 import { streamObject, StreamRelay } from "./stream";
 import { UserAccount } from "./user";
@@ -85,9 +97,38 @@ export function json(status: number, body: unknown, headers?: Record<string, str
 }
 
 /**
+ * The user of the plxd whose proof this request carries for `route` (0101), or the answer refusing
+ * it. Anonymous until its object checks it, so it counts per address and caller first.
+ */
+async function peerUser(env: Env, request: Request, route: string): Promise<string | Response> {
+  const [caller = "", at = "", signature = ""] = (request.headers.get(PEER_HEADER) ?? "").split(".");
+  if (!HOST_ID.test(caller)) return json(401, { error: "unauthorized" });
+  const address = network(request.headers.get("cf-connecting-ip") ?? "");
+  if (!(await env.ANON.limit({ key: `${address}:${caller}` })).success)
+    return json(429, { error: "rate_limited" }, { "retry-after": "60" });
+  const proven = await env.HOSTS.get(env.HOSTS.idFromName(caller)).provePeer(route, at, signature);
+  if ("user" in proven) return proven.user;
+  const { status, error, now } = proven;
+  return now === undefined
+    ? json(status, { error })
+    : json(status, { error, now }, { [TIME_HEADER]: String(now) });
+}
+
+/** The hosts of `user`, as their list shows them. */
+async function listHosts(env: Env, user: string) {
+  const account = env.USERS.get(env.USERS.idFromName(user));
+  const ids = await account.hosts();
+  const hosts = await Promise.all(
+    ids.map((hostId) => env.HOSTS.get(env.HOSTS.idFromName(hostId)).status(user)),
+  );
+  return json(200, { hosts: hosts.filter(Boolean), removed: await account.removed() });
+}
+
+/**
  * A WebSocket to host `hostId`: plxd's control socket goes to the host's object; a client's
  * stream, once the host's object admits it, and plxd's side of a stream, to that stream's object.
- * A client's Clerk token is read only from the `Authorization` header, never the URL.
+ * A client's Clerk token is read only from the `Authorization` header, never the URL. Another
+ * plxd's proof stands in for it, and `HostRelay.open` still requires the same owner (0101).
  */
 async function relayed(env: Env, request: Request, hostId: string, action: string, stream: string) {
   const host = env.HOSTS.get(env.HOSTS.idFromName(hostId));
@@ -109,6 +150,10 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   let opened: Awaited<ReturnType<HostRelay["open"]>>;
   if (ticket !== null) {
     opened = await host.redeem(ticket);
+  } else if (request.headers.has(PEER_HEADER)) {
+    const user = await peerUser(env, request, `connect/${hostId}`);
+    if (user instanceof Response) return user;
+    opened = await host.open(user);
   } else {
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
     // Clerk being down refuses this stream as a bad sign-in does. The account's list tells them apart.
@@ -171,6 +216,14 @@ const routes = {
       return json(answer.status, answer.body);
     }
 
+    if (request.method === "GET" && kind === "hosts" && !id && request.headers.has(PEER_HEADER)) {
+      const user = await peerUser(env, request, "hosts");
+      if (user instanceof Response) return user;
+      if (!(await env.USERS.get(env.USERS.idFromName(user)).allow()))
+        return json(429, { error: "rate_limited" }, { "retry-after": "60" });
+      return listHosts(env, user);
+    }
+
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
     let user: string | null;
     try {
@@ -203,11 +256,8 @@ const routes = {
         await account.joined(hostId);
         return json(200, result);
       }
-      case "GET /hosts": {
-        const ids = await account.hosts();
-        const hosts = await Promise.all(ids.map((hostId) => host(hostId).status(user)));
-        return json(200, { hosts: hosts.filter(Boolean), removed: await account.removed() });
-      }
+      case "GET /hosts":
+        return listHosts(env, user);
       case "DELETE /hosts/:id": {
         if (!HOST_ID.test(id)) return json(404, { error: "not_found" });
         const removed = await host(id).unregister(user);

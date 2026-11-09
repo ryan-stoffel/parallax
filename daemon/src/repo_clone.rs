@@ -1,7 +1,8 @@
 //! `repo/clone`, `repo/cloneProgress`, and `repo/remote` (PLX-905): cloning a repository onto
 //! this host, for New Thread on a computer that lacks the repository it picked, and for Clone from
 //! GitHub. git never waits on a prompt here: one it would show fails the clone instead. And
-//! `repo/match` (0057): the repo entry that is this host's copy of another plxd's repository.
+//! `repo/match` (0057): the repo entry that is this host's copy of another plxd's repository, and
+//! `repo/fetchBase` (0101), which brings a ref up to date before another computer starts from it.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -12,8 +13,8 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
-    RepoCloneProgressResult, RepoId, RepoMatchParams, RepoMatchResult, RepoRemoteParams,
-    RepoRemoteResult,
+    RepoCloneProgressResult, RepoFetchBaseParams, RepoFetchBaseResult, RepoId, RepoMatchParams,
+    RepoMatchResult, RepoRemoteParams, RepoRemoteResult,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -164,6 +165,22 @@ pub(crate) async fn matching(
     Ok(RepoMatchResult {
         repo: with_origin(daemon, &params.origin).await?,
     })
+}
+
+/// `repo/fetchBase` (0101): the commit `params.base` names in entry `params.repo`, a
+/// remote-tracking branch fetched first.
+pub(crate) async fn fetch_base(
+    daemon: &Arc<Daemon>,
+    params: RepoFetchBaseParams,
+) -> Result<RepoFetchBaseResult, ErrorObject> {
+    let entry = threads::start_entry(daemon, Some(params.repo)).await?;
+    let commit = daemon
+        .agents
+        .worktrees()
+        .fetch_base(Path::new(&entry.fields.path), &params.base)
+        .await
+        .map_err(|error| ErrorObject::invalid_params(error.to_string()))?;
+    Ok(RepoFetchBaseResult { commit })
 }
 
 /// The registered repository whose `origin` names the same repository as `url`, whatever its
@@ -367,7 +384,7 @@ fn repo_key(url: &str) -> String {
 }
 
 /// `url` without the user name and password an HTTP(S) URL can carry.
-fn without_userinfo(url: &str) -> String {
+pub(crate) fn without_userinfo(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_owned();
     };

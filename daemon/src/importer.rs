@@ -384,7 +384,7 @@ async fn create(
         scope,
         prompt,
         images: Vec::new(),
-        threads: Vec::new(),
+        attachments: crate::agents::attached::Attachments::default(),
         // The session's own app's agent, unless the caller picked one.
         account: account.or_else(|| {
             Some(AccountChoice::Subscription {
@@ -681,6 +681,8 @@ fn transcript(
         from: None,
         images: Vec::new(),
         threads: Vec::new(),
+        computers: Vec::new(),
+        remote_threads: Vec::new(),
     };
     let mut items = vec![
         AgentOutputItem::Notice {

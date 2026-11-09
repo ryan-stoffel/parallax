@@ -25,6 +25,8 @@ import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import "./markdownTest";
 import { Notifications } from "./notifications";
+import { ThreadLinksContext } from "./threadContext";
+import { emptyThreads, type ThreadsState } from "./threads";
 import type { Item } from "./transcript";
 import { fakeWatch } from "./fakeWatch";
 
@@ -987,4 +989,22 @@ test("a message a finished run couldn't take goes back in the box", async () => 
   await send("Also mention the tests.");
   expect(composer().textContent).toBe("Also mention the tests.");
   expect(transcriptText()).not.toContain("Also mention the tests.");
+});
+
+test("a message of images alone still shows the threads it attached", () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const state = {
+    ...emptyThreads,
+    threads: [{ id: "t", title: "Attached thread", repo: "r", createdAt: "2026-10-04T10:00:00Z" }],
+  } as ThreadsState;
+  const rows: Item[] = [{ kind: "user", key: "p", text: "", images: ["i"], threads: ["t"] }];
+  render(
+    <ThreadLinksContext value={{ hostId: "local", state, open: () => {} }}>
+      <TranscriptView rows={rows} sent={new Map()} live={false} />
+    </ThreadLinksContext>,
+  );
+  expect(document.querySelector('[title="Open Attached thread"]')).not.toBeNull();
 });

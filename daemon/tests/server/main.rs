@@ -35,6 +35,7 @@ mod orchestrator_computer;
 mod orchestrator_threads;
 mod orchestrators;
 mod peer;
+mod peers;
 mod pull_requests;
 mod questions;
 mod queue;

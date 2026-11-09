@@ -623,6 +623,19 @@ test("a revert drops the turns it undid, from their first message on (0062)", ()
   expect(build(turn(kept, "one"), reverted(0, [kept])).items).toEqual([]);
 });
 
+test("a first message and a follow-up keep the computers and remote threads they name (0101)", () => {
+  const named = {
+    computers: ["box"],
+    remoteThreads: [{ computer: "box", runId: uuidv7(), title: "Upload test" }],
+  };
+  const turn = (turnId: string | undefined) =>
+    output({ kind: "turnStarted", turnId, wake: false, images: [], threads: [], ...named });
+  const started = at({ kind: "agent.started", runId, run: { prompt: "Compare" } } as ParallaxEvent);
+  const first = build(started, turn(undefined)).items.find((i) => i.kind === "user");
+  expect(first).toMatchObject({ text: "Compare", ...named });
+  expect(build(turn("t1")).items[0]).toMatchObject({ kind: "user", turnId: "t1", ...named });
+});
+
 test("a hidden turn keeps its row, so a revert still finds it (PLX-1247)", () => {
   const turn = (turnId: string, hidden: boolean) =>
     output({

@@ -146,13 +146,14 @@ const [command, ...args] = process.argv.length > 2
 const test = spawn(command, args, {
   cwd: dirname(relayDir),
   stdio: "inherit",
-  // Two accounts, since the tests together register more computers than one account holds.
+  // Three accounts, since the tests together register more computers than one account holds.
   env: {
     ...process.env,
     ...(ca ? {SSL_CERT_FILE:ca} : {}),
     PLXD_TEST_RELAY_URL: url,
     PLXD_TEST_RELAY_TOKEN: sessionToken("user_e2e"),
     PLXD_TEST_RELAY_CHECK_TOKEN: sessionToken("user_e2e_check"),
+    PLXD_TEST_RELAY_PEERS_TOKEN: sessionToken("user_e2e_peers"),
   },
 });
 test.on("exit", (code) => {

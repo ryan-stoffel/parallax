@@ -1451,6 +1451,7 @@ function deviceHosts(): DeviceHost[] {
         routes: routeList(a.hostId, a),
         addedRoutes: a.addedRoutes ?? [],
         route: accountRoutes.get(accountId(a.hostId))?.route,
+        ...(allowedAlone.has(a.hostId) && { addedWithAllow: true }),
         ...(access && { access }),
       };
     });
@@ -2773,6 +2774,16 @@ const ACCESS_WAIT_MS = 60 * 60_000;
 
 const accessRequests = (): AccessPrompt[] => [...prompts.values()].map((p) => p.prompt);
 
+/** The relay ids this computer's plxd lists in `allowedHosts` alone, which agent work doesn't trust. */
+let allowedAlone = new Set<string>();
+
+function noteAllowedAlone({ approvedHosts, allowedHosts = [] }: AccessState): void {
+  const next = new Set(allowedHosts.filter((id) => !approvedHosts.includes(id)));
+  if ([...next].join() === [...allowedAlone].join()) return;
+  allowedAlone = next;
+  broadcast("parallax:devices", deviceHosts());
+}
+
 /**
  * Keeps one `access/get {after}` waiting on connected host `hostId` (0091), which answers when
  * who may sign in there changes, so a new device's request shows here at once.
@@ -2800,6 +2811,7 @@ function watchAccess(hostId: string): void {
       after = answer.result.version;
       showRequest(hostId, answer.result.pending);
       void readKeyStanding(hostId, answer.result);
+      if (hostId === "local") noteAllowedAlone(answer.result);
       // Another of the user's computers vouched for one waiting on its code, as the computer it
       // just joined does (`syncAccess`), so it signs in with no code asked for.
       for (const vouched of [

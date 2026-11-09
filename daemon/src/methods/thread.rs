@@ -26,6 +26,7 @@ pub(super) async fn start(
 ) -> Result<ThreadStartResult, ErrorObject> {
     super::agent::check_message("prompt", &params.prompt, &params.images)?;
     params.threads = agents::attached::check(&context.daemon, params.threads).await?;
+    agents::attached::check_mentions(&params.computers, &params.remote_threads)?;
     context
         .detached(|daemon| threads::start(daemon, params))
         .await

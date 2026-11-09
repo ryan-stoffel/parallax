@@ -28,6 +28,12 @@
 //! ([`remove`], [`receive_removal`]). Read-only keys (`access/setReadOnly`) are a list of their
 //! own that merges the same way: nothing takes a key off, so no merge, removal, or compromised
 //! host can raise a device.
+//!
+//! - `POST /api/auth/peer` (0101): another of the user's computers, with a `DPoP` proof from its
+//!   host key and no Clerk token, only while `agentWork` is on, when the key's thumbprint is in the
+//!   approved hosts and neither removed nor refused here. It gets an ordinary session named
+//!   "`<name>` agents", replacing its earlier one, so Settings lists one per computer and revokes
+//!   it there. plxd keeps the token in memory, and asks again after a restart.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Mutex;
@@ -43,8 +49,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::{
-    HOUR, Request, clean_name, host_key, host_name, lock, new_session, read_sessions, refused,
-    routes, write_sessions,
+    HOUR, Request, StoredSession, clean_name, host_key, host_name, lock, new_session,
+    read_sessions, refused, routes, write_sessions,
 };
 use crate::agents::store_error;
 use crate::clerk;
@@ -67,6 +73,10 @@ pub(super) struct Lists {
     /// The read-only keys. Any other has full access. Nothing takes a key off, a removal included.
     #[serde(default)]
     pub read_only_clients: BTreeSet<String>,
+    /// The computers whose agents' session the user revoked here (0101). This host's alone, so
+    /// merges leave it, and turning `agentWork` off forgets it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    refused_peers: BTreeSet<String>,
 }
 
 impl Lists {
@@ -501,8 +511,14 @@ pub(crate) async fn record_account(daemon: &Daemon, user: &str) -> Result<(), St
     Ok(())
 }
 
-/// Changes the stored lists with `change`, ends the sessions of every removed key, and closes the
-/// connections of every key that just became read-only, which reconnect read-only.
+/// Whether the account approved the computer with relay id `host_id` (0091).
+pub(crate) async fn approved_host(daemon: &Daemon, host_id: &str) -> Result<bool, ErrorObject> {
+    Ok(lists(daemon).await?.approved_hosts.contains(host_id))
+}
+
+/// Changes the stored lists with `change`, ends the sessions of every removed key and of each
+/// computer no longer approved, and closes the connections of every key that just became read-only,
+/// which reconnect read-only.
 async fn update(
     daemon: &Daemon,
     cancel: &CancellationToken,
@@ -519,9 +535,10 @@ async fn update(
             db.set_account_access(&json).map_err(|e| store_error(&e))?;
             // A removed device's session works only until its host learns of the removal.
             let mut sessions = read_sessions(db)?;
-            let (ended, kept) = sessions
-                .drain(..)
-                .partition::<Vec<_>, _>(|s| lists.removed_clients.contains(&s.thumbprint));
+            let (ended, kept) = sessions.drain(..).partition::<Vec<_>, _>(|s| {
+                lists.removed_clients.contains(&s.thumbprint)
+                    || (s.peer && !lists.approved_hosts.contains(&s.thumbprint))
+            });
             if !ended.is_empty() {
                 write_sessions(db, &kept)?;
             }
@@ -622,6 +639,7 @@ pub(crate) async fn merge(
         approved_hosts: params.approved_hosts.into_iter().collect(),
         allowed_hosts: params.allowed_hosts.into_iter().collect(),
         read_only_clients: params.read_only_clients.into_iter().collect(),
+        refused_peers: BTreeSet::new(),
     };
     update(daemon, cancel, move |lists| {
         lists.merge(other);
@@ -891,6 +909,145 @@ pub(super) async fn sign_in(
             )
         }
         Err(why) => limited(why),
+    }
+}
+
+/// Why a computer with key `thumbprint` gets no session for its agents here now, if it doesn't:
+/// the words its agent reads.
+fn peer_refusal(db: &Store, thumbprint: &str) -> Result<Option<&'static str>, ErrorObject> {
+    if !db.agent_work().map_err(|e| store_error(&e))? {
+        return Ok(Some(
+            "it has \"Let agents on my other computers work here\" off",
+        ));
+    }
+    let lists = read_lists(db)?;
+    Ok(if lists.removed_clients.contains(thumbprint) {
+        Some("it removed this computer")
+    } else if lists.refused_peers.contains(thumbprint) {
+        Some("its user revoked this computer's agents there")
+    } else if lists.approved_hosts.contains(thumbprint) {
+        None
+    } else {
+        Some("it hasn't approved this computer")
+    })
+}
+
+/// `POST /api/auth/peer`: see the module documentation. Everything is checked again in the write
+/// that keeps the session, so a change of `agentWork` or the lists can't land in between.
+pub(super) async fn peer(daemon: &Daemon, request: &Request) -> (u16, serde_json::Value) {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Peer {
+        #[serde(default)]
+        client_label: String,
+    }
+    let Ok(body) = serde_json::from_slice::<Peer>(&request.body) else {
+        return (400, json!({ "error": "invalid_request" }));
+    };
+    let proven = match request.proof(None) {
+        Ok(proven) => proven,
+        Err(why) => return refused(why),
+    };
+    let key = proven.thumbprint.clone();
+    let checked = daemon
+        .reader
+        .run(&CancellationToken::new(), move |db| peer_refusal(db, &key))
+        .await;
+    match checked {
+        Ok(None) => {}
+        Ok(Some(why)) => return removed(why),
+        Err(_) => return (500, json!({ "error": "server_error" })),
+    }
+    // Only a computer that passed gets its proof remembered, so strangers can't grow the map.
+    if !daemon.remote.first_use(&proven) {
+        return refused("a replayed DPoP proof");
+    }
+    let token = remote::random_token(32);
+    let session = StoredSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: clean_name(&format!("{} agents", clean_name(&body.client_label))),
+        token_hash: remote::hex(&remote::sha256(token.as_bytes())),
+        thumbprint: proven.thumbprint.clone(),
+        created_at: jiff::Timestamp::now().to_string(),
+        browser: false,
+        peer: true,
+    };
+    let name = session.name.clone();
+    let stored = daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            if let Some(why) = peer_refusal(db, &session.thumbprint)? {
+                return Ok(Err(why));
+            }
+            let mut sessions = read_sessions(db)?;
+            let replaced: Vec<String> = sessions
+                .iter()
+                .filter(|s| s.peer && s.thumbprint == session.thumbprint)
+                .map(|s| s.id.clone())
+                .collect();
+            sessions.retain(|s| !replaced.contains(&s.id));
+            sessions.push(session);
+            write_sessions(db, &sessions)?;
+            Ok(Ok(replaced))
+        })
+        .await;
+    match stored {
+        Ok(Ok(replaced)) => {
+            for id in replaced {
+                daemon.remote.revoke(&id);
+            }
+            info!(%name, "another computer's agents got a session");
+            (
+                200,
+                json!({
+                    "accessToken": token,
+                    "tokenType": "DPoP",
+                    "name": host_name(daemon).await,
+                }),
+            )
+        }
+        Ok(Err(why)) => removed(why),
+        Err(error) => {
+            warn!(error = %error.message, "could not keep a computer's session");
+            (500, json!({ "error": "server_error" }))
+        }
+    }
+}
+
+/// Refuses the computer with key `thumbprint` here until `agentWork` turns off (0101).
+pub(super) fn refuse_peer(db: &Store, thumbprint: &str) -> Result<(), ErrorObject> {
+    let mut lists = read_lists(db)?;
+    lists.refused_peers.insert(thumbprint.to_owned());
+    let json =
+        serde_json::to_string(&lists).map_err(|e| ErrorObject::internal_error(e.to_string()))?;
+    db.set_account_access(&json).map_err(|e| store_error(&e))
+}
+
+/// Ends every session other computers' agents have here, and forgets which were refused, as
+/// `agentWork` turns off (0101).
+pub(crate) async fn close_peers(daemon: &Daemon) {
+    let closed = daemon
+        .store
+        .run(&CancellationToken::new(), |db| {
+            let mut sessions = read_sessions(db)?;
+            let (closed, kept) = sessions.drain(..).partition::<Vec<_>, _>(|s| s.peer);
+            write_sessions(db, &kept)?;
+            let mut lists = read_lists(db)?;
+            lists.refused_peers.clear();
+            let json = serde_json::to_string(&lists)
+                .map_err(|e| ErrorObject::internal_error(e.to_string()))?;
+            db.set_account_access(&json).map_err(|e| store_error(&e))?;
+            Ok(closed)
+        })
+        .await;
+    match closed {
+        Ok(closed) => {
+            for session in closed {
+                info!(session = %session.id, "ended a computer's agents' session");
+                daemon.remote.revoke(&session.id);
+            }
+        }
+        Err(error) => warn!(error = %error.message, "could not end computers' sessions"),
     }
 }
 

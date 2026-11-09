@@ -61,6 +61,7 @@ import type {
   JsonValue,
   PromptImage,
   ThreadRun,
+  RemoteThreadRef,
 } from "../protocol/generated/protocol";
 import {
   ApprovalDetails,
@@ -108,7 +109,7 @@ import {
 import { locale } from "./locale";
 import { ClaudeLogo, GitHubLogo, ParallaxGlyph } from "./logos";
 import { codeRuns, markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
-import { mentionsOf, PullRequestsContext, withMentions } from "./Mention";
+import { mentionsOf, PullRequestsContext } from "./Mention";
 import { isHttps, prNumber } from "./github";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
@@ -117,7 +118,13 @@ import { PlanStrip, PlanLine, ProposedPlan } from "./Plan";
 import { latestPlan, withPlans, type PlanRow, type ProposedPlanRow } from "./plans";
 import { searchText, useFind } from "./Find";
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
-import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
+import {
+  attachThreads,
+  SentText,
+  ThreadLinksContext,
+  type Mentions,
+  type ThreadLinks,
+} from "./threadContext";
 import { GoalStrip } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
 import { ComposerTabs, type ComposerTab } from "./ComposerTabs";
@@ -192,6 +199,8 @@ type Row =
       text: string;
       images?: PromptImage[];
       threads?: string[];
+      computers?: string[];
+      remoteThreads?: RemoteThreadRef[];
       turnId?: string;
     };
 /**
@@ -415,15 +424,17 @@ export function AgentChat({
   const resend = useCallback(
     (turnId: string, message: SentMessage) => {
       setResent((prev) => new Set(prev).add(turnId));
-      void send(message.text, undefined, message.images, message.threads).then((failed) => {
-        sendFailed(failed?.message);
-        if (failed)
-          setResent((prev) => {
-            const next = new Set(prev);
-            next.delete(turnId);
-            return next;
-          });
-      });
+      void send(message.text, undefined, message.images, message.threads, undefined, message).then(
+        (failed) => {
+          sendFailed(failed?.message);
+          if (failed)
+            setResent((prev) => {
+              const next = new Set(prev);
+              next.delete(turnId);
+              return next;
+            });
+        },
+      );
     },
     [send, sendFailed],
   );
@@ -469,19 +480,22 @@ export function AgentChat({
     images: PromptImage[],
     threads: string[],
     delivery?: AgentDelivery,
-  ) => (await send(text, options, images, threads, delivery))?.message;
+    mentions?: Mentions,
+  ) => (await send(text, options, images, threads, delivery, mentions))?.message;
 
   // Sent from here, but no turnStarted (or followUpDropped) for it yet.
   const rows = useMemo<Row[]>(() => {
     const seen = new Set(items.flatMap((i) => ("turnId" in i && i.turnId ? [i.turnId] : [])));
     const pending = [...sent]
       .filter(([turnId]) => !seen.has(turnId) && !queue.some((m) => m.id === turnId))
-      .map(([turnId, { text, images, threads }]) => ({
+      .map(([turnId, { text, images, threads, computers, remoteThreads }]) => ({
         kind: "pending" as const,
         key: `pending:${turnId}`,
         text,
         images,
         threads,
+        computers,
+        remoteThreads,
         turnId,
       }));
     const shown = items.filter(
@@ -555,11 +569,16 @@ export function AgentChat({
       return [...atHand, ...got.flatMap((a) => (a && "result" in a ? [a.result] : []))];
     };
     const threads = row.threads ?? mine?.threads;
+    const mentions = {
+      computers: row.computers ?? mine?.computers,
+      remoteThreads: row.remoteThreads ?? mine?.remoteThreads,
+    };
     // Only one still on its way can be dropped, and so offer Send again.
     return {
       text,
       images,
       threads,
+      mentions,
       turnId: row.kind === "pending" ? row.turnId : undefined,
       row: { key: row.key, turnId: row.turnId },
     };
@@ -585,7 +604,13 @@ export function AgentChat({
     const failed = await drop();
     if (failed) return notify({ tone: "error", title: "Couldn't stop the thread", body: failed });
     if (back.row.turnId) setCancelled((prev) => new Set(prev).add(back.row!.turnId!));
-    setEditing({ row: back.row, text: back.text, images: await images, threads: back.threads });
+    setEditing({
+      row: back.row,
+      text: back.text,
+      images: await images,
+      threads: back.threads,
+      mentions: back.mentions,
+    });
   };
   // Cancel leaves the run stopped. A message plxd dropped gets its notice and Send again back.
   const cancelEdit = () => {
@@ -615,7 +640,14 @@ export function AgentChat({
         return setEditing({ ...was, ready: false });
       }
       const text = withFiles(was.text, images);
-      const failed = await sendText(text, {}, was.images, [...(was.threads ?? [])]);
+      const failed = await sendText(
+        text,
+        {},
+        was.images,
+        [...(was.threads ?? [])],
+        undefined,
+        was.mentions,
+      );
       if (failed === undefined) return;
       sendFailed(failed);
       setEditing({ ...was, ready: false });
@@ -920,15 +952,22 @@ export function AgentChat({
           top={<ComposerTabs tabs={tabs} short={back} />}
           voiceFocused={voiceFocused}
           // One sent before the transcript loads stays in the box.
-          onSend={(text, options, images, threads) =>
+          onSend={(text, options, images, threads, mentions) =>
             run
-              ? sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
+              ? sendText(
+                  text,
+                  options,
+                  images,
+                  threads,
+                  queueEnabled ? "queue" : undefined,
+                  mentions,
+                )
               : Promise.resolve("")
           }
           onSteer={
             queueEnabled && running && !remote
-              ? (text, options, images, threads) =>
-                  sendText(text, options, images, threads, "steer")
+              ? (text, options, images, threads, mentions) =>
+                  sendText(text, options, images, threads, "steer", mentions)
               : undefined
           }
           history={history}
@@ -1880,6 +1919,8 @@ export const RowView = memo(function RowView({
       // Images sent from here are at hand; the log's come from plxd by id.
       const images = row.kind === "pending" ? row.images : (sent?.images ?? row.images);
       const threads = row.threads ?? sent?.threads;
+      const computers = row.computers ?? sent?.computers;
+      const remoteThreads = row.remoteThreads ?? sent?.remoteThreads;
       return (
         <div className="group/prompt flex flex-col items-end gap-1.5">
           {files.length > 0 && (
@@ -1896,20 +1937,22 @@ export const RowView = memo(function RowView({
               ))}
             </MessageImages>
           )}
-          {/* The threads attached as context, which open from here (PLX-378). */}
-          {threads && threads.length > 0 && (
-            <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
-              {threads.map((id) => (
-                <SentThread key={id} runId={id} />
-              ))}
-            </div>
-          )}
-          {/* A message of images or files alone has no bubble. */}
-          {((!images?.length && !files.length) || said?.trim() !== "") && (
+          {/* A message of images or files alone has no bubble, unless it attached something. */}
+          {((!images?.length && !files.length) ||
+            said?.trim() !== "" ||
+            !!threads?.length ||
+            !!computers?.length ||
+            !!remoteThreads?.length) && (
             <div className="max-w-[85%] rounded-xl bg-selected px-3.5 py-2 text-reading leading-relaxed wrap-break-word whitespace-pre-wrap">
               {/* A follow-up from an older log, which has no text for it. */}
               {said !== undefined ? (
-                withMentions(said, known)
+                <SentText
+                  text={said}
+                  threads={threads}
+                  computers={computers}
+                  remoteThreads={remoteThreads}
+                  known={known}
+                />
               ) : (
                 <span className="text-muted-foreground italic">Follow-up message</span>
               )}
@@ -2927,6 +2970,7 @@ interface Editing {
   text: string;
   images: PromptImage[];
   threads?: readonly string[];
+  mentions?: Mentions;
   /** Sent, and waiting for the run to stop. */
   ready?: boolean;
 }

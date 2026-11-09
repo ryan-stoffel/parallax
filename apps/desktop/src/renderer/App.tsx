@@ -44,7 +44,12 @@ import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
 import { ClaudeLogo } from "./logos";
 import type { Asked } from "./Approval";
-import { offlineReason, useShownConnection, useForgetRemoved } from "./ConnectionStatus";
+import {
+  offlineReason,
+  useRealConnections,
+  useForgetRemoved,
+  useShownConnection,
+} from "./ConnectionStatus";
 import { FilesPanel } from "./FilesPanel";
 import { useInbox } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
@@ -112,7 +117,7 @@ import {
 } from "./Sidebar";
 import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
-import type { ThreadLinks } from "./threadContext";
+import type { OtherComputer, ThreadLinks } from "./threadContext";
 import { currentAppearance, setAppearance, uiSizes, useAppearanceEffects } from "./appearance";
 import { folderOf, runInDrawer, TerminalDrawer, TerminalPool, useDeleted } from "./ThreadTerminal";
 import {
@@ -188,7 +193,7 @@ export type Selection =
       subagent?: string;
       pr?: { url?: string };
     }
-  | { kind: "new"; groupId?: string; draft?: string };
+  | { kind: "new"; groupId?: string; draft?: string; stay?: boolean };
 
 export type SettingsSection =
   | "general"
@@ -442,14 +447,40 @@ export function App() {
     [],
   );
   const threads = views[host.id] ?? idleThreads;
+  // The account's computers, which a message can name by relay id (0101).
+  const accountHosts = useMemo(() => hosts.filter((h) => h.id.startsWith("account:")), [hosts]);
+  const accountStates = useRealConnections(accountHosts.map((h) => h.id));
+  const others = useMemo(
+    () =>
+      accountHosts.flatMap((h, i): OtherComputer[] => {
+        if (h.id === host.id) return [];
+        const state = accountStates[i];
+        return [
+          {
+            host: h,
+            relayId: h.id.slice("account:".length),
+            connected: state?.status === "connected",
+            capable: state?.status === "connected" && "agentWork" in state.capabilities,
+            state: (views[h.id] ?? idleThreads).state,
+          },
+        ];
+      }),
+    [accountHosts, accountStates, views, host.id],
+  );
   // The open host's threads, which a message attaches and its chips open (PLX-378).
   const threadLinks = useMemo<ThreadLinks>(
     () => ({
       hostId: host.id,
       state: threads.state,
       open: (threadId) => setSelection({ kind: "thread", threadId }),
+      others,
+      openOther: (hostId, threadId) => {
+        setSettings(null);
+        setWorkspace((state) => navigate(state, hostId, { kind: "thread", threadId }));
+        setOpening(undefined);
+      },
     }),
-    [host.id, threads.state],
+    [host.id, threads.state, others],
   );
   const listed = useMemo(
     () => hosts.map((h) => ({ host: h, view: views[h.id] ?? idleThreads })),
@@ -903,7 +934,7 @@ export function App() {
   // that host is open.
   const openOrchestrator = (hostId: string, orchestratorId: string) => {
     if (hostId === host.id) return setSelection({ kind: "orchestrator", orchestratorId });
-    setWorkspace((state) => navigate(state, hostId, { kind: "new" }));
+    setWorkspace((state) => navigate(state, hostId, { kind: "new", stay: true }));
     setOpening({ hostId, orchestratorId });
   };
 
@@ -965,10 +996,9 @@ export function App() {
     return moved;
   };
 
-  // Opens New Thread on another computer with one of its repositories.
-  // Mod+N's pick of another computer's repository, a plain New thread as `newThread` is.
+  // Mod+N's pick of another computer's repository, on purpose, so the Load Balancer leaves it there.
   const pickRepoOn = (hostId: string, groupId: string) => {
-    openOnHost(hostId, { kind: "new", groupId });
+    openOnHost(hostId, { kind: "new", groupId, stay: true });
   };
 
   // A New thread. It opens on the computer new threads start on, in the repository of the same
@@ -984,6 +1014,10 @@ export function App() {
     setSettings(null);
     setSelection({ kind: "new", groupId });
   };
+  // A pick of a repository on the computer new threads start on, by its entry there: a plain New
+  // thread, which the Load Balancer places.
+  const pickStartRepo = (groupId: string) =>
+    start.id === host.id ? newThread(groupId) : openOnHost(start.id, { kind: "new", groupId });
   // Mod+N's picker of the repository a new thread goes in.
   const picker = useRef<NewThreadPickerHandle>(null);
   // Mod+K's command menu (PLX-993), and the sidebar's add palette, which its New orchestrator and
@@ -1036,7 +1070,7 @@ export function App() {
           keywords: repo?.path,
           hint: repo && `${start.name} · ${repo.path}`,
           icon: <RepoIcon repo={repo} />,
-          run: () => (start.id === host.id ? newThread(g.id) : pickRepoOn(start.id, g.id)),
+          run: () => pickStartRepo(g.id),
         };
       }),
     ...startElsewhere.map((o): MenuItem => ({
@@ -1561,6 +1595,18 @@ export function App() {
         elsewhere={elsewhere}
         onPickElsewhere={(hostId, groupId) => openOnHost(hostId, { kind: "new", groupId, draft })}
         missing={new Set(hosts.filter((h) => lacksRepo(views[h.id], group.name)).map((h) => h.id))}
+        listing={
+          new Set(
+            hosts
+              .filter((h) =>
+                views[h.id]?.state.repos.some((r) => isRepository(r) && r.name === group.name),
+              )
+              .map((h) => h.id),
+          )
+        }
+        balanced={!selection.draft && !selection.stay}
+        listed={!threads.loading}
+        onOpenLoadBalancer={() => openSettings("connections")}
         shared={hosts.some(
           (h) =>
             h.id !== host.id &&
@@ -1755,9 +1801,7 @@ export function App() {
         hostName={listed.length > 1 ? start.name : undefined}
         elsewhere={startElsewhere}
         lastUsed={repoLastUsed}
-        onPick={(groupId) =>
-          start.id === host.id ? newThread(groupId) : pickRepoOn(start.id, groupId)
-        }
+        onPick={pickStartRepo}
         onPickElsewhere={pickRepoOn}
         orchestrators={pickerOrchestrators}
         onNewOrchestrator={(workspace) => openAdd("orchestrator", workspace)}
@@ -1929,6 +1973,7 @@ export function App() {
                           setWorkspace((w) => ({ ...w, focused: paneId }));
                           openOnHost(tab.hostId, {
                             kind: "new",
+                            stay: true,
                             groupId: thread
                               ? groupOf(state, thread)
                               : tab.selection.kind === "new"

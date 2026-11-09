@@ -17,6 +17,7 @@ import type {
   OrchestratorStartParams,
   OrchestratorUpdateParams,
   PromptImage,
+  RemoteThreadRef,
   Repo,
   RepoUpdateParams,
   RunWaiting,
@@ -31,6 +32,12 @@ import { newThreadPrefs } from "./prefs";
 import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
 import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
+
+/** What a message names beyond its host (0101), beside its attached threads. */
+export interface Mentions {
+  computers?: string[];
+  remoteThreads?: RemoteThreadRef[];
+}
 
 /** A host's orchestrators, repo entries, and normal threads (0017), and each thread's title and run. */
 export interface ThreadsState {
@@ -348,11 +355,19 @@ function withThreadTitles(titles: Record<string, string>, threads: Thread[]) {
 }
 
 /**
- * A run's title: the generated title this app kept for it, or else its prompt's first line, or
- * "Image" for a prompt of images alone. A thread's own title from plxd comes first (`titles`).
+ * A run's title: the generated title this app kept for it, or else its prompt's first line, with
+ * an attached thread's or computer's `@"Name"` as its name, or "Image" for a prompt of images alone.
+ * A thread's own title from plxd comes first (`titles`).
  */
 export function titleOf(run: AgentRun): string {
-  return readTitle(run.id) ?? (run.prompt.trim().split("\n")[0] || "Image");
+  return (
+    readTitle(run.id) ??
+    (run.prompt
+      .trim()
+      .split("\n")[0]
+      ?.replace(/@"([^"]*)"/g, "$1") ||
+      "Image")
+  );
 }
 
 // A thread's generated title, which earlier versions kept in this app for a plxd without
@@ -675,6 +690,8 @@ export interface ThreadStart {
   images: PromptImage[];
   /** The run ids of the threads attached to the prompt as context (0047). */
   threads: string[];
+  /** The computers and their threads the prompt names (0101). */
+  mentions?: Mentions;
   options: RunOptions;
   checkout: boolean;
   /** The ref the worktree starts from, or with `checkout`, the branch the checkout switches to. */
@@ -930,6 +947,7 @@ export function useThreads(
         prompt,
         images,
         threads,
+        mentions,
         options,
         checkout,
         gitRef,
@@ -941,6 +959,8 @@ export function useThreads(
           prompt,
           ...(images.length > 0 && { images }),
           ...(threads.length > 0 && { threads }),
+          ...(!!mentions?.computers?.length && { computers: mentions.computers }),
+          ...(!!mentions?.remoteThreads?.length && { remoteThreads: mentions.remoteThreads }),
           ...(groupId !== noRepo && { repo: groupId }),
           ...options,
           // The checkout keeps its own branch, so a name gives it none.

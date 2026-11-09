@@ -61,6 +61,7 @@ mod memory;
 pub mod methods;
 mod orchestration;
 mod orchestrator;
+mod peer;
 mod pr_media;
 mod preview;
 mod provider;
@@ -161,10 +162,11 @@ pub use handshake::{
 };
 pub use host::{
     HostAnnounceUpdateParams, HostAnnounceUpdateResult, HostFolder, HostFoldersParams,
-    HostFoldersResult, HostHealthParams, HostHealthResult, HostQueues, HostReadUploadParams,
-    HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
-    HostUpdateParams, HostUpdateRestart, HostUpdateResult, HostUpdatingParams, HostUploadParams,
-    HostUploadResult, HostVersionParams, HostVersionResult, QueueStats, StoreState, UploadId,
+    HostFoldersResult, HostHealthParams, HostHealthResult, HostLoad, HostQueues,
+    HostReadUploadParams, HostReadUploadResult, HostSettings, HostSettingsGetParams,
+    HostSettingsSetParams, HostUpdateParams, HostUpdateRestart, HostUpdateResult,
+    HostUpdatingParams, HostUploadParams, HostUploadResult, HostVersionParams, HostVersionResult,
+    QueueStats, StoreState, UploadId,
 };
 pub use hub::{
     Hub, HubAccount, HubAccountRemoveParams, HubAccountSetEnabledParams, HubService, HubSignIn,
@@ -204,6 +206,11 @@ pub use orchestrator::{
     OrchestratorFreshParams, OrchestratorFromThreadsParams, OrchestratorFromThreadsResult,
     OrchestratorListParams, OrchestratorListResult, OrchestratorPermission,
     OrchestratorStartParams, OrchestratorUpdateParams, OrchestratorUpdateResult, ScopeId,
+};
+pub use peer::{
+    LinkedComputer, PeerCallParams, PeerCallResult, PeerComputersParams, PeerComputersResult,
+    PeerStartParams, PeerStartResult, PeerTaskParams, PeerTaskResult, PeerWorkspace, RemoteTask,
+    RemoteThreadRef,
 };
 pub use pr_media::{PrMediaFile, PrMediaUploaded, PrUploadMediaParams, PrUploadMediaResult};
 pub use preview::{
@@ -273,13 +280,13 @@ pub use thread::{
     ForkedFrom, MAX_PROJECT_FILES, MAX_PROJECT_INSTRUCTIONS_BYTES, MAX_PROJECT_NAME_BYTES,
     MAX_THREAD_TITLE_BYTES, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
     ProjectDeleteResult, Repo, RepoAddParams, RepoAddResult, RepoCloneParams,
-    RepoCloneProgressParams, RepoCloneProgressResult, RepoId, RepoLogo, RepoLogoParams,
-    RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRef, RepoRefsParams, RepoRefsResult,
-    RepoRemoteParams, RepoRemoteResult, RepoUpdateParams, RepoUpdateResult, Thread,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming, ThreadSearchParams,
-    ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult, ThreadStartParams,
-    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, WakeReason,
+    RepoCloneProgressParams, RepoCloneProgressResult, RepoFetchBaseParams, RepoFetchBaseResult,
+    RepoId, RepoLogo, RepoLogoParams, RepoLogoResult, RepoMatchParams, RepoMatchResult, RepoRef,
+    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams,
+    RepoUpdateResult, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming,
+    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, WakeReason,
 };
 pub use usage::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,

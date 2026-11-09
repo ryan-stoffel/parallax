@@ -465,6 +465,18 @@ export const settingsIndex: SettingEntry[] = [
     ["Reach from anywhere", "Through Parallax Relay", "relay internet remote"],
     ["Tailscale", "Find computers on your Tailscale network", "tailnet vpn"],
   ]),
+  ...entries("connections", undefined, [
+    [
+      "Agents can work here",
+      "Agents on your other computers can run commands on the ones you turn on",
+      "agent work delegate remote peer",
+    ],
+    [
+      "Load Balancer",
+      "Start new threads on the computer with the most room",
+      "auto balance load busy cpu memory new thread computers",
+    ],
+  ]),
   ...entries("connections", "Same network", [
     ["Same network", "Pair computers on this network", "lan local network wifi"],
     ["Pair computers on this network", undefined, "lan pair wifi"],

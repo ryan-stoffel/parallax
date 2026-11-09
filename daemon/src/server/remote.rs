@@ -940,6 +940,7 @@ impl Serving {
                         ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
                         ("POST", "/api/auth/account") => access::sign_in(&daemon, &key, &request).await,
                         ("POST", "/api/auth/approval") => access::approval(&daemon, &key, &request).await,
+                        ("POST", "/api/auth/peer") => access::peer(&daemon, &request).await,
                         _ if request.too_large => (413, json!({ "error": "body_too_large" })),
                         (method, hook) if hook.starts_with("/api/hooks/") => {
                             let Request { path, headers, body, .. } = &request;
@@ -1091,6 +1092,7 @@ async fn new_session(
         thumbprint: proven.thumbprint.clone(),
         created_at: jiff::Timestamp::now().to_string(),
         browser,
+        peer: false,
     };
     let name = session.name.clone();
     let stored = daemon
@@ -1401,6 +1403,7 @@ async fn serve_socket(
         false,
         read_only,
         over_relay,
+        true,
     );
     let pumped = pump(socket, local_in, local_out, over_relay.then_some(&ended));
     let (mut closed, (pumped, socket_end)) = tokio::join!(serve, pumped);
@@ -1626,6 +1629,10 @@ struct StoredSession {
     /// Made by `/api/pair/browser`, so it works only while `remoteWeb` is on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     browser: bool,
+    /// Made by `/api/auth/peer` for another computer's agents (0101), so it ends when `agentWork`
+    /// turns off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    peer: bool,
 }
 
 fn read_sessions(db: &Store) -> Result<Vec<StoredSession>, ErrorObject> {
@@ -1717,7 +1724,8 @@ pub(crate) async fn sessions(
 
 /// Revokes the session `id` and closes its connections. Answers with the sessions left. A session
 /// whose key the account approved also removes that key (0091), so the device can't sign straight
-/// back in.
+/// back in. Another computer's agents' session refuses that computer here instead, until `agentWork`
+/// turns off (0101): its host key can't be replaced, so it stays out of what hosts copy.
 pub(crate) async fn revoke(
     daemon: &Daemon,
     cancel: &CancellationToken,
@@ -1728,12 +1736,14 @@ pub(crate) async fn revoke(
         .store
         .run(cancel, move |db| {
             let mut sessions = read_sessions(db)?;
-            let thumbprint = sessions
-                .iter()
-                .find(|s| s.id == gone)
-                .map(|s| s.thumbprint.clone());
+            let found = sessions.iter().find(|s| s.id == gone);
+            let thumbprint = found.map(|s| s.thumbprint.clone());
+            let peer = found.is_some_and(|s| s.peer);
             sessions.retain(|s| s.id != gone);
             write_sessions(db, &sessions)?;
+            if peer && let Some(key) = &thumbprint {
+                access::refuse_peer(db, key)?;
+            }
             let lists = access::read_lists(db)?;
             let approved = thumbprint.filter(|key| lists.approved_clients.contains(key));
             Ok((listed(sessions, &lists), approved))

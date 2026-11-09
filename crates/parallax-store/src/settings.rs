@@ -42,6 +42,9 @@ const REMOTE_WEB: &str = "remote_web";
 /// The `host_settings` key for whether plxd keeps a connection to Parallax Relay (PLX-652, 0068).
 const RELAY: &str = "relay";
 
+/// The `host_settings` key for whether agents on the user's other computers may work here (0101).
+const AGENT_WORK: &str = "agent_work";
+
 /// The `host_settings` key for the remote clients' sessions, as plxd's JSON (PLX-641).
 const REMOTE_SESSIONS: &str = "remote_sessions";
 
@@ -323,6 +326,24 @@ impl Store {
     /// A database error.
     pub fn relay_chosen(&self) -> Result<bool, StoreError> {
         Ok(self.text(RELAY)?.is_some())
+    }
+
+    /// Whether agents on the user's other computers may work here (0101). Off unless set on.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn agent_work(&self) -> Result<bool, StoreError> {
+        self.flag_default_off(AGENT_WORK)
+    }
+
+    /// Sets whether agents on the user's other computers may work here.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_agent_work(&self, on: bool) -> Result<(), StoreError> {
+        self.set_flag(AGENT_WORK, on)
     }
 
     /// The remote clients' sessions, as plxd stored them, if any.

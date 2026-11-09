@@ -150,6 +150,8 @@ pub(crate) fn send_params(run_id: RunId, turn_id: TurnId, text: &str) -> AgentSe
         account: None,
         images: Vec::new(),
         threads: Vec::new(),
+        computers: Vec::new(),
+        remote_threads: Vec::new(),
         from: None,
         delivery: None,
     }
@@ -655,6 +657,8 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
             from: None,
             images: Vec::new(),
             threads: Vec::new(),
+            computers: Vec::new(),
+            remote_threads: Vec::new(),
         },
         AgentOutputItem::SessionStarted {
             session_id: "hang-1".to_owned(),

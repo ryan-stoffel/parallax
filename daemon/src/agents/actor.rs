@@ -72,7 +72,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::approvals::{self, Approvals, Lookup, ended};
-use super::attached;
+use super::attached::{self, Attachments};
 use super::convert::{
     self, WORKSPACE_WRITE, agent_run, item_bytes, option_name, option_value, output_item,
 };
@@ -363,8 +363,8 @@ pub(super) struct Queued {
     pub text: String,
     /// Its images, already checked (PLX-191).
     pub images: Vec<PromptImage>,
-    /// The threads attached to it, already checked (PLX-372).
-    pub threads: Vec<RunId>,
+    /// What is attached to it, already checked (PLX-372).
+    pub attachments: Attachments,
     /// New options for the run (PLX-161, PLX-163).
     pub options: RunOptions,
     /// A new account for the run, perhaps on another backend.
@@ -385,7 +385,8 @@ pub(super) struct Queued {
 #[serde(default)]
 struct QueuedExtra {
     images: Vec<PromptImage>,
-    threads: Vec<RunId>,
+    #[serde(flatten)]
+    attachments: Attachments,
     options: RunOptions,
     account: Option<AccountChoice>,
     from: Option<RunId>,
@@ -398,7 +399,7 @@ impl Queued {
     fn row(&self, held: bool) -> QueuedRow {
         let extra = QueuedExtra {
             images: self.images.clone(),
-            threads: self.threads.clone(),
+            attachments: self.attachments.clone(),
             options: self.options.clone(),
             account: self.account.clone(),
             from: self.from,
@@ -423,7 +424,7 @@ impl Queued {
                 turn_id,
                 text: row.text,
                 images: extra.images,
-                threads: extra.threads,
+                attachments: extra.attachments,
                 options: extra.options,
                 account: extra.account,
                 from: extra.from,
@@ -441,7 +442,7 @@ impl Queued {
         daemon: &Daemon,
         target: RunId,
     ) -> Result<(FollowUp, Vec<(Uuid, u64)>), ErrorObject> {
-        let prompt = attached::prompt(daemon, target, &self.threads, &self.text).await?;
+        let prompt = attached::prompt(daemon, target, &self.attachments, &self.text).await?;
         Ok((
             FollowUp {
                 turn_id: self.turn_id,
@@ -460,7 +461,7 @@ impl Queued {
             id: self.turn_id,
             text: self.text.clone(),
             images: u32::try_from(self.images.len()).unwrap_or(u32::MAX),
-            threads: self.threads.clone(),
+            threads: self.attachments.threads.clone(),
         }
     }
 }
@@ -579,7 +580,7 @@ pub(super) struct Actor {
     images: HashMap<Option<TurnId>, Vec<ImageId>>,
     /// The threads attached to messages a CLI took, by turn id as `images`, until their
     /// `TurnStarted` lists them (PLX-372).
-    attached: HashMap<Option<TurnId>, Vec<RunId>>,
+    attached: HashMap<Option<TurnId>, Attachments>,
     /// The latest prompt or message, for the commit message.
     last_message: String,
     /// Messages waiting for the run's CLI, first to be sent first (PLX-370).
@@ -2190,7 +2191,7 @@ impl Actor {
             turn_id,
             text,
             images,
-            threads,
+            attachments,
             options,
             account,
             from: _,
@@ -2198,7 +2199,7 @@ impl Actor {
             hidden: _,
         } = queued;
         let changes = self.changes(options);
-        self.resume(turn_id, text, images, threads, changes, account)
+        self.resume(turn_id, text, images, attachments, changes, account)
             .await
     }
 
@@ -2261,11 +2262,18 @@ impl Actor {
             turn_id,
             text,
             images,
-            threads,
+            attachments,
             ..
         } = queued;
-        self.resume(turn_id, text, images, threads, RunOptions::default(), None)
-            .await
+        self.resume(
+            turn_id,
+            text,
+            images,
+            attachments,
+            RunOptions::default(),
+            None,
+        )
+        .await
     }
 
     /// Refuses a `/compact` (PLX-638) on a backend that can't compact its context: only Claude
@@ -2355,7 +2363,7 @@ impl Actor {
         self.record_turn(queued.turn_id, queued.text.clone(), seen)
             .await;
         self.keep_images(Some(queued.turn_id), queued.images).await;
-        self.attach(Some(queued.turn_id), queued.threads);
+        self.attach(Some(queued.turn_id), queued.attachments);
         self.last_message = queued.text;
     }
 
@@ -2523,7 +2531,7 @@ impl Actor {
                 turn_id,
                 text,
                 images,
-                threads,
+                attachments,
                 options,
                 account,
                 from: _,
@@ -2532,7 +2540,7 @@ impl Actor {
             } = next;
             let changes = self.changes(options);
             let why = match self
-                .resume(turn_id, text, images, threads, changes, account)
+                .resume(turn_id, text, images, attachments, changes, account)
                 .await
             {
                 Ok(_) if self.live.is_some() => None,
@@ -2796,7 +2804,7 @@ impl Actor {
         Ok(())
     }
 
-    /// Starts a new CLI process for the run with `text`, after the summaries of `threads`, and
+    /// Starts a new CLI process for the run with `text`, after what `attachments` says, and
     /// `images`, after storing `changes` to its options, which the new process runs with. It
     /// resumes the run's vendor session, on `account` if that's another of the same backend's. On
     /// another backend's account, or with no session to resume, a new session starts, told the
@@ -2807,14 +2815,14 @@ impl Actor {
         turn_id: TurnId,
         text: String,
         images: Vec<PromptImage>,
-        threads: Vec<RunId>,
+        attachments: Attachments,
         changes: RunOptions,
         account: Option<AccountChoice>,
     ) -> Result<AgentRun, ErrorObject> {
         let moving = self.moves(account.as_ref());
         let changing = moving || changes != RunOptions::default();
-        let message = self.in_session(turn_id, text, images, threads, changing);
-        let (text, images, threads) = match message.await? {
+        let message = self.in_session(turn_id, text, images, attachments, changing);
+        let (text, images, attachments) = match message.await? {
             Ok(run) => return Ok(run),
             Err(message) => message,
         };
@@ -2834,7 +2842,7 @@ impl Actor {
         let from = self.row.fields.backend.clone();
         let session_id = session_id.filter(|_| backend == from && epoch_end.is_none());
         let paths = self.checkout_paths(repo_path.as_deref()).await?;
-        let attached = attached::prompt(&self.daemon, self.id, &threads, &text).await?;
+        let attached = attached::prompt(&self.daemon, self.id, &attachments, &text).await?;
         let (mut sent, seen) = (attached.text, attached.seen);
         // The run's fields before it moves, to move it back if its new CLI doesn't start.
         let moved_from = self
@@ -2879,7 +2887,7 @@ impl Actor {
             // Only a turn that reached a CLI counts as sent: a retry after a failed start
             // tries again.
             self.record_turn(turn_id, message.clone(), seen).await;
-            self.attach(Some(turn_id), threads);
+            self.attach(Some(turn_id), attachments);
             self.last_message = message;
         } else {
             self.row.state.session_id = old_session;
@@ -2970,8 +2978,15 @@ impl Actor {
         text: String,
     ) -> Result<AgentRun, ErrorObject> {
         let changes = RunOptions::default();
-        self.resume(turn_id, text, Vec::new(), Vec::new(), changes, None)
-            .await
+        self.resume(
+            turn_id,
+            text,
+            Vec::new(),
+            Attachments::default(),
+            changes,
+            None,
+        )
+        .await
     }
 
     /// Hands a message to the idle live session as its next turn (0060), or gives it back once
@@ -2981,14 +2996,14 @@ impl Actor {
         turn_id: TurnId,
         text: String,
         images: Vec<PromptImage>,
-        threads: Vec<RunId>,
+        attachments: Attachments,
         changing: bool,
-    ) -> Result<Result<AgentRun, (String, Vec<PromptImage>, Vec<RunId>)>, ErrorObject> {
+    ) -> Result<Result<AgentRun, (String, Vec<PromptImage>, Attachments)>, ErrorObject> {
         let queued = Queued {
             turn_id,
             text,
             images,
-            threads,
+            attachments,
             options: RunOptions::default(),
             account: None,
             from: None,
@@ -3008,7 +3023,7 @@ impl Actor {
         if self.live.is_some() {
             self.end_session().await;
         }
-        Ok(Err((queued.text, queued.images, queued.threads)))
+        Ok(Err((queued.text, queued.images, queued.attachments)))
     }
 
     /// Stores `changes` to the run's options, checked against `backend`. When `backend` isn't the
@@ -3427,11 +3442,11 @@ impl Actor {
         *ids = self.store_images(images.clone()).await;
     }
 
-    /// Keeps the threads attached to `turn_id`'s message, which its CLI has now taken, for its
+    /// Keeps what is attached to `turn_id`'s message, which its CLI has now taken, for its
     /// `TurnStarted` to list (PLX-372).
-    pub(super) fn attach(&mut self, turn_id: Option<TurnId>, threads: Vec<RunId>) {
-        if !threads.is_empty() {
-            self.attached.insert(turn_id, threads);
+    pub(super) fn attach(&mut self, turn_id: Option<TurnId>, attachments: Attachments) {
+        if attachments != Attachments::default() {
+            self.attached.insert(turn_id, attachments);
         }
     }
 
@@ -3801,12 +3816,17 @@ impl Actor {
             from,
             images,
             threads,
+            computers,
+            remote_threads,
         } = item
         else {
             return;
         };
         *images = self.images.remove(turn_id).unwrap_or_default();
-        *threads = self.attached.remove(turn_id).unwrap_or_default();
+        let attachments = self.attached.remove(turn_id).unwrap_or_default();
+        *threads = attachments.threads;
+        *computers = attachments.computers;
+        *remote_threads = attachments.remote_threads;
         if let Some(turn_id) = turn_id {
             *hidden = self.hidden_turns.contains(turn_id);
             // An orchestrator's wake-up, a usage limit's resume, or a hidden message: plxd's own
@@ -4837,7 +4857,7 @@ mod tests {
             turn_id: TurnId::generate(),
             text: text.to_owned(),
             images: Vec::new(),
-            threads: Vec::new(),
+            attachments: super::Attachments::default(),
             options: super::RunOptions::default(),
             account: None,
             from: None,
@@ -4979,6 +4999,8 @@ mod tests {
             from: None,
             images: Vec::new(),
             threads: Vec::new(),
+            computers: Vec::new(),
+            remote_threads: Vec::new(),
         };
         // An account fallback starts the same turn again, which stays hidden.
         for _ in 0..2 {
