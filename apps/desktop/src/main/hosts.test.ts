@@ -1053,6 +1053,43 @@ test("a computer the relay says is offline reads as Offline, asks nothing, and s
   }
 });
 
+test("a computer that dropped off the relay between two list reads signs in at the next read", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { local, second } = await usingBoth();
+    dialRuns(
+      {
+        lines: [],
+        stderr: "plxd dial: could not sign in: the relay's WebSocket failed: HTTP 503\n",
+        code: 4,
+      },
+      { lines: [], code: 0 },
+    );
+    // The list says it's online throughout, so it never changes.
+    fake.answers.set("relay/hosts", {
+      result: {
+        hosts: [{ hostId: buildBox, name: "build-box", online: true, thisComputer: false }],
+      },
+    });
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    second.set(refused);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(listed(buildBox)?.access).toEqual({ step: "offline" });
+    expect(signInRuns()).toHaveLength(1);
+
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(signInRuns()).toHaveLength(2);
+    expect(listed(buildBox)?.access).toBeUndefined();
+  } finally {
+    fake.visible = false;
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
 test("once one computer lets a new key in, the rest sign in, and a read-only mark is noticed", async () => {
   vi.useFakeTimers();
   fake.answers.clear();

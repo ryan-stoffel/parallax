@@ -2045,7 +2045,8 @@ let lastListed: string | undefined;
  * A computer set up elsewhere changes nothing here, so its code prompt would wait for a focus
  * change. This reads the list every `LOOK_MS` while a window is on screen, well within the relay's
  * 120 requests a minute per user, and runs discovery, with its dials, only when the list changed.
- * The only other dial is the probe of a new computer that's online but hasn't answered yet.
+ * The only other dials are the probe of a new computer that's online but hasn't answered yet, and
+ * the sign-in of one the relay refused as offline that the list says is online.
  */
 async function lookForNewComputers(): Promise<void> {
   const list = await readAccountList();
@@ -2055,6 +2056,11 @@ async function lookForNewComputers(): Promise<void> {
   for (const [id, access] of accountAccess)
     if (access.step === "needsCode" && access.offline && !offlineAccounts.has(id))
       void askForCode(id);
+  // A computer can drop off the relay and come back between two reads, so a sign-in's 503 left it
+  // `offline` while the list never changed.
+  if (list)
+    for (const [id, access] of accountAccess)
+      if (access.step === "offline" && !offlineAccounts.has(id)) void beginAccess(id);
 }
 
 /** Focus or a network change: the account's computers again, and each relay route's re-check. */
