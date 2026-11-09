@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { ConnectionState, DeviceHost } from "../../preload/bridge";
 import { isRelay } from "../../preload/routeList";
 import type { ProviderInfo } from "../../protocol/generated/protocol";
 import { statusLabel, useRealConnections } from "../ConnectionStatus";
-import { localId, useHosts, type Host } from "../hosts";
+import type { Host } from "../hosts";
 import {
   askComputer,
   assess,
@@ -19,75 +19,33 @@ import {
 } from "../loadBalancer";
 import { notify } from "../notifications";
 import { newThreadPrefs } from "../prefs";
-import { connection, hostIcon } from "../RunTargetMenu";
 import { Picker } from "../ui";
-import { Row, Section, settingRow, Switch } from "./parts";
+import { AccessRow, badge, ComputerSetting } from "./connectionParts";
+import { Section, Switch } from "./parts";
+
+// Agents across computers (0101) in Settings > Connections: whether agents on the user's other
+// computers can work on one, and the Load Balancer. Each computer's part is one of its own
+// settings, in its row (PLX-1492).
+
+/** How an account computer is reached, in words: over the relay, or directly for another route. */
+export const reachOf = (route: string | undefined) =>
+  route === undefined
+    ? "Parallax Connect"
+    : isRelay(route)
+      ? "Over Parallax Relay"
+      : "Over your network";
 
 /**
- * A computer as a settings row: its own icon, its name over `detail`, and `children`, its controls,
- * at the end, in the page's row (`settingRow`). `quiet` dims what it says about the computer.
+ * `agentWork` on account computer `host`, on a plxd that has it, as one of its settings, with why
+ * it can't take part as its note: not connected, an older plxd, or added with Allow alone
+ * (PLX-1402).
  */
-function ComputerRow({
+export function AgentWorkSetting({
   host,
-  badge,
-  detail,
-  quiet,
-  next,
-  children,
+  device,
 }: {
   host: Host;
-  badge?: ReactNode;
-  detail: ReactNode;
-  quiet?: boolean;
-  next?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div data-computer={host.id} data-next={next || undefined} className={settingRow}>
-      <div className={`flex min-w-0 flex-1 items-center gap-3 ${quiet ? "opacity-50" : ""}`}>
-        <span className="shrink-0 text-muted-foreground [&_svg]:size-5">{hostIcon(host)}</span>
-        <div className="min-w-0 flex-1">
-          <span className="flex items-center gap-2 text-body font-medium">
-            <span className="truncate">{host.name}</span>
-            {badge}
-          </span>
-          <span className="mt-0.5 block truncate text-meta text-muted-foreground">{detail}</span>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">{children}</div>
-    </div>
-  );
-}
-
-/** A small label after a computer's name, as Settings draws one. */
-const label = "rounded-sm bg-hover px-1.5 py-px text-caption font-normal";
-
-/** The account's computers and tailnet devices, kept current. */
-function useDevices() {
-  const [devices, setDevices] = useState<DeviceHost[]>([]);
-  useEffect(() => window.parallax.onDevices(setDevices), []);
-  return devices;
-}
-
-/** How `host` is reached, in words: over the relay, or directly for a route of another kind. */
-function reachOf(host: Host, devices: readonly DeviceHost[]) {
-  const route = devices.find((d) => d.id === host.id)?.route;
-  if (route === undefined) return connection(host);
-  return isRelay(route) ? "Over Parallax Relay" : "Over your network";
-}
-
-/**
- * `agentWork` on an account computer, on a plxd that has it, with why it can't take part as its
- * note: not connected, an older plxd, or added with Allow alone (PLX-1402).
- */
-function OtherAgentWork({
-  host,
-  reach,
-  allowedOnly,
-}: {
-  host: Host;
-  reach: string;
-  allowedOnly: boolean;
+  device: Pick<DeviceHost, "addedWithAllow">;
 }) {
   const [state] = useRealConnections([host.id]);
   const able = state?.status === "connected" && "agentWork" in state.capabilities;
@@ -123,14 +81,13 @@ function OtherAgentWork({
         : "Connecting…"
       : !able
         ? "Needs updating"
-        : allowedOnly
+        : device.addedWithAllow
           ? "Added with Allow, so agents can't work with it yet"
           : undefined;
   return (
-    <ComputerRow
-      host={host}
-      quiet={!!why}
-      detail={why ?? (read?.on && !read.relay ? "Needs Reach from anywhere" : reach)}
+    <ComputerSetting
+      title="Agents can work here"
+      note={why ?? (read?.on && !read.relay ? "Needs Reach from anywhere" : undefined)}
     >
       <Switch
         label={`Let agents on my other computers work on ${host.name}`}
@@ -138,51 +95,7 @@ function OtherAgentWork({
         disabled={!!why || !read}
         onChange={(next) => void toggle(next)}
       />
-    </ComputerRow>
-  );
-}
-
-/**
- * Settings > Connections' Agents can work here (0101): this computer and each account computer on
- * one list, each with its `agentWork`. `local` is this computer's, which LanSettings holds, since
- * it and pairing change each other.
- */
-export function AgentWorkSettings({
-  local,
-}: {
-  local?: { on: boolean; relay: boolean; toggle: (next: boolean) => void };
-}) {
-  const hosts = useHosts();
-  const devices = useDevices();
-  const here = hosts.find((h) => h.id === localId);
-  const others = hosts.filter((h) => h.id.startsWith("account:"));
-  if (!here || (!local && others.length === 0)) return null;
-  return (
-    <Section title="Agents can work here">
-      <p className="border-b border-border/40 px-4 py-3 text-meta text-muted-foreground">
-        Agents on your other computers can run commands on these as you. This also turns on pairing.
-      </p>
-      {local && (
-        <ComputerRow
-          host={here}
-          detail={local.on && !local.relay ? "Needs Reach from anywhere" : "This computer"}
-        >
-          <Switch
-            label="Let agents on my other computers work here"
-            checked={local.on}
-            onChange={local.toggle}
-          />
-        </ComputerRow>
-      )}
-      {others.map((h) => (
-        <OtherAgentWork
-          key={h.id}
-          host={h}
-          reach={reachOf(h, devices)}
-          allowedOnly={!!devices.find((d) => d.id === h.id)?.addedWithAllow}
-        />
-      ))}
-    </Section>
+    </ComputerSetting>
   );
 }
 
@@ -269,70 +182,142 @@ function Meter({ label, used, title }: { label: string; used?: number; title: st
   );
 }
 
-/** One computer in the Load Balancer: what it's doing now, its preference, and whether it takes part. */
-function BalancedRow({
-  host,
-  candidate,
-  next,
-  read,
-  connection: state,
-}: {
-  host: Host;
+/** One computer's place in the Load Balancer, or nothing for a computer it doesn't list. */
+interface Balanced {
   candidate: Candidate;
-  next: boolean;
+  /** Whether it has answered, or doesn't need to: it's left out or offline. */
   read: boolean;
   connection?: ConnectionState;
+}
+
+/** The Load Balancer as Settings > Connections shows it: its pick, and each computer's place. */
+export interface Balancer {
+  /** On, with two or more computers to balance. */
+  on: boolean;
+  /** The computer the next thread goes to. */
+  pick?: string;
+  /** Still waiting for a computer's first answer. */
+  reading: boolean;
+  everyOneOut: boolean;
+  of: (hostId: string) => Balanced | undefined;
+}
+
+/**
+ * The Load Balancer over `hosts` (0101): where the next thread goes and what each computer is doing
+ * now. Its pick comes from the same scoring a new draft uses, with the default provider. It can't
+ * know the next thread's repository. The computers are read only while `seen` is on screen.
+ */
+export function useBalancer(hosts: Host[], seen: { current: Element | null }): Balancer {
+  const settings = loadBalancer.use();
+  const provider = newThreadPrefs.use().model?.provider;
+  const connections = useRealConnections(hosts.map((h) => h.id));
+  const on = settings.on && hosts.length >= 2;
+  const asked = hosts.filter(
+    (h, i) => connections[i]?.status === "connected" && !settings.leftOut.includes(h.id),
+  );
+  const readings = useReadings(
+    asked.map((h) => h.id),
+    on,
+    seen,
+  );
+  const candidates = hosts.map((h, i): Candidate => ({
+    id: h.id,
+    preference: settings.preferences[h.id] ?? "normal",
+    barred: settings.leftOut.includes(h.id)
+      ? "left-out"
+      : connections[i]?.status !== "connected"
+        ? "offline"
+        : undefined,
+    ...readings[h.id],
+    provider,
+  }));
+  return {
+    on,
+    pick: on ? pickComputer(candidates) : undefined,
+    reading: asked.some((h) => !readings[h.id]),
+    everyOneOut: hosts.every((h) => settings.leftOut.includes(h.id)),
+    of: (hostId) => {
+      const i = hosts.findIndex((h) => h.id === hostId);
+      const candidate = candidates[i];
+      return candidate
+        ? {
+            candidate,
+            read: candidate.barred ? true : !!readings[hostId],
+            connection: connections[i],
+          }
+        : undefined;
+    },
+  };
+}
+
+/** What the Load Balancer says of computer `hostId` beside its name, while it's on. */
+export function balancerBadge(balancer: Balancer, hostId: string): ReactNode {
+  const row = balancer.on ? balancer.of(hostId) : undefined;
+  if (!row) return null;
+  if (hostId === balancer.pick)
+    return <span className={`${badge} text-muted-foreground`}>Next</span>;
+  if (row.candidate.barred === "left-out")
+    return <span className={`${badge} text-faint-foreground`}>Left out</span>;
+  const verdict = assess(row.candidate);
+  return "why" in verdict && verdict.why === "full" ? (
+    <span className={`${badge} text-warning`}>Full</span>
+  ) : null;
+}
+
+/**
+ * One computer in the Load Balancer, as one of its settings while the balancer is on: what it's
+ * doing now, how often it takes new threads, and whether it takes part.
+ */
+export function BalancerSetting({
+  host,
+  balancer,
+  card,
+}: {
+  host: Host;
+  balancer: Balancer;
+  /** Draws it as a row of a card, as this computer's is, not as a setting in an opened row. */
+  card?: boolean;
 }) {
   const settings = loadBalancer.use();
+  const row = balancer.on ? balancer.of(host.id) : undefined;
+  if (!row) return null;
+  const { candidate, read, connection } = row;
   const leftOut = settings.leftOut.includes(host.id);
   const verdict = assess(candidate);
   const why = "why" in verdict ? verdict.why : undefined;
   const load = candidate.health?.load;
   const agents = candidate.health?.runningAgents;
-  // Anything but a load to show says so in place of its meters, so a row's columns stay put.
+  // Anything but a load to show says so in place of its meters.
   const instead =
     !read || !why || why === "full"
       ? undefined
-      : why === "offline" && state
-        ? statusLabel(state)
+      : why === "offline" && connection
+        ? statusLabel(connection)
         : whyText[why];
-  return (
-    <ComputerRow
-      host={host}
-      quiet={leftOut}
-      next={next}
-      badge={
-        next ? (
-          <span className={`${label} text-muted-foreground`}>Next</span>
-        ) : why === "full" ? (
-          <span className={`${label} text-warning`}>Full</span>
-        ) : undefined
-      }
-      detail={
-        // Anything but a load says so in place of it.
-        instead || (leftOut && !read) ? (
-          (instead ?? whyText["left-out"])
-        ) : (
-          <span className="flex items-center gap-3">
-            <Meter
-              label="CPU"
-              used={load?.cpu}
-              title={load ? `CPU ${load.cpu}% in use, across ${load.cores} cores` : "CPU"}
-            />
-            <Meter
-              label="Memory"
-              used={load?.memory}
-              title={load ? `Memory ${load.memory}% in use` : "Memory"}
-            />
-            {agents !== undefined && (
-              <span>
-                {agents} {agents === 1 ? "agent" : "agents"}
-              </span>
-            )}
+  const note =
+    instead || (leftOut && !read) ? (
+      (instead ?? whyText["left-out"])
+    ) : (
+      <span className="flex flex-wrap items-center gap-x-3">
+        <Meter
+          label="CPU"
+          used={load?.cpu}
+          title={load ? `CPU ${load.cpu}% in use, across ${load.cores} cores` : "CPU"}
+        />
+        <Meter
+          label="Memory"
+          used={load?.memory}
+          title={load ? `Memory ${load.memory}% in use` : "Memory"}
+        />
+        {agents !== undefined && (
+          <span>
+            {agents} {agents === 1 ? "agent" : "agents"}
           </span>
-        )
-      }
-    >
+        )}
+      </span>
+    );
+  const controls = (
+    <>
       <Picker
         field
         label={`How often ${host.name} takes new threads`}
@@ -360,86 +345,56 @@ function BalancedRow({
           })
         }
       />
-    </ComputerRow>
+    </>
+  );
+  return card ? (
+    <AccessRow title="Load Balancer" anchor="this-computer-load-balancer" description={note}>
+      {controls}
+    </AccessRow>
+  ) : (
+    <ComputerSetting title="Load Balancer" note={note}>
+      {controls}
+    </ComputerSetting>
   );
 }
 
 /**
- * Settings > Connections' Load Balancer (0101), with two or more computers: where the next thread
- * goes, what each computer is doing now, and whether it takes part. Its pick comes from the same
- * scoring a new draft uses, with the default provider. It can't know the next thread's repository.
+ * Settings > Connections' Load Balancer (0101), with two or more computers: its switch, and where
+ * the next thread goes. Each computer's part is in its own row (`BalancerSetting`).
  */
-export function LoadBalancerSettings() {
-  const hosts = useHosts();
+export function LoadBalancerSettings({ hosts, balancer }: { hosts: Host[]; balancer: Balancer }) {
   const settings = loadBalancer.use();
-  const provider = newThreadPrefs.use().model?.provider;
-  const connections = useRealConnections(hosts.map((h) => h.id));
-  const section = useRef<HTMLDivElement>(null);
-  const asked = hosts.filter(
-    (h, i) => connections[i]?.status === "connected" && !settings.leftOut.includes(h.id),
-  );
-  const readings = useReadings(
-    asked.map((h) => h.id),
-    settings.on,
-    section,
-  );
   if (hosts.length < 2) return null;
-  const candidates = hosts.map((h, i): Candidate => ({
-    id: h.id,
-    preference: settings.preferences[h.id] ?? "normal",
-    barred: settings.leftOut.includes(h.id)
-      ? "left-out"
-      : connections[i]?.status !== "connected"
-        ? "offline"
-        : undefined,
-    ...readings[h.id],
-    provider,
-  }));
-  const pick = pickComputer(candidates);
-  const reading = asked.some((h) => !readings[h.id]);
-  const everyOneOut = hosts.every((h) => settings.leftOut.includes(h.id));
+  const { pick } = balancer;
   return (
-    <div ref={section}>
-      <Section title="Load Balancer">
-        <Row
-          title="Balance new threads"
-          description={
-            <span aria-live="polite" title={pick && "If it has the thread's repository"}>
-              {!settings.on ? (
-                "Start each new thread on the computer with the most free CPU and memory."
-              ) : pick ? (
-                <>
-                  Next thread goes to{" "}
-                  <span className="text-foreground">{hosts.find((h) => h.id === pick)?.name}</span>
-                </>
-              ) : reading ? (
-                "Checking your computers…"
-              ) : everyOneOut ? (
-                <span className="text-warning">Every computer is left out. Turn one on.</span>
-              ) : (
-                <span className="text-warning">No computer can take a thread right now.</span>
-              )}
-            </span>
-          }
-        >
-          <Switch
-            label="Balance new threads across my computers"
-            checked={settings.on}
-            onChange={(on) => loadBalancer.set({ ...settings, on })}
-          />
-        </Row>
-        {settings.on &&
-          hosts.map((h, i) => (
-            <BalancedRow
-              key={h.id}
-              host={h}
-              candidate={candidates[i]!}
-              next={h.id === pick}
-              read={!candidates[i]!.barred ? !!readings[h.id] : true}
-              connection={connections[i]}
-            />
-          ))}
-      </Section>
-    </div>
+    <Section title="Load Balancer">
+      <AccessRow
+        title="Balance new threads"
+        description={
+          <span aria-live="polite" title={pick && "If it has the thread's repository"}>
+            {!settings.on ? (
+              "Start each new thread on the computer with the most free CPU and memory."
+            ) : pick ? (
+              <>
+                Next thread goes to{" "}
+                <span className="text-foreground">{hosts.find((h) => h.id === pick)?.name}</span>
+              </>
+            ) : balancer.reading ? (
+              "Checking your computers…"
+            ) : balancer.everyOneOut ? (
+              <span className="text-warning">Every computer is left out. Turn one on.</span>
+            ) : (
+              <span className="text-warning">No computer can take a thread right now.</span>
+            )}
+          </span>
+        }
+      >
+        <Switch
+          label="Balance new threads across my computers"
+          checked={settings.on}
+          onChange={(on) => loadBalancer.set({ ...settings, on })}
+        />
+      </AccessRow>
+    </Section>
   );
 }

@@ -1,222 +1,106 @@
-import { Plus, Server } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { KeyRound } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import { olderVersion, type ConnectionError, type ConnectionState } from "../../preload/bridge";
-import { statusLabel, useShownConnection } from "../ConnectionStatus";
-import { useHosts, type Host } from "../hosts";
+import type { DeviceHost } from "../../preload/bridge";
+import { SetupCodeDialog } from "../ConnectWizard";
+import { localId, useConnect, useHosts } from "../hosts";
 import { notify } from "../notifications";
-import { ConnectSettings } from "./ConnectSettings";
-import { LanSettings } from "./LanSettings";
-import { SshHostDialog } from "./SshHostDialog";
-import { PageTitle, primaryButton, quietButton, Section, settingRow, StatusDot } from "./parts";
+import { useProfile } from "../profile";
+import { BalancerSetting, LoadBalancerSettings, useBalancer } from "./AgentsAcrossComputers";
+import { Computers, ThisComputerNotices, ThisComputerRow } from "./ConnectSettings";
+import {
+  AdvancedSettings,
+  DevicesWithAccess,
+  ThisComputerAccess,
+  useLocalAccess,
+} from "./LanSettings";
+import { PageTitle, quietButton, Section } from "./parts";
 
-// xterm.js is large, so it loads when a sign-in first opens.
-const SignInTerminal = lazy(() =>
-  import("../SignInTerminal").then((m) => ({ default: m.SignInTerminal })),
-);
-
-/**
- * Whether a master can fix `error`: ssh was refused for lack of a login, or doesn't trust the
- * host's key yet, which the master's terminal asks about. Not a changed host key, which needs
- * known_hosts edited, or the other `sshSetup` failures.
- */
-const signInFixes = ({ reason, exitCode, stderr = "" }: ConnectionError) =>
-  reason === "sshSetup" &&
-  exitCode === 255 &&
-  !stderr.includes("REMOTE HOST IDENTIFICATION HAS CHANGED") &&
-  /Permission denied|Host key verification failed/.test(stderr);
+export { plxdFix } from "./ConnectSettings";
 
 /**
- * What Parallax can do about an SSH host's plxd (PLX-642): install it where none was found (exit
- * 127, after `LOCATE_PLXD`), or update one older than this app (`appVersion`), connected or not.
- * Nothing for a development build, which has no release to install.
- */
-export function plxdFix(
-  state: ConnectionState | undefined,
-  appVersion: string | undefined,
-): "install" | "update" | undefined {
-  if (!appVersion || !/^\d+\.\d+\.\d+(-nightly)?$/.test(appVersion)) return undefined;
-  if (state?.status === "failed" && state.error.exitCode === 127) return "install";
-  const running = runningPlxd(state);
-  return running !== undefined && olderVersion(running, appVersion) ? "update" : undefined;
-}
-
-/** The host's plxd version, when it answered or refused the handshake. */
-const runningPlxd = (state?: ConnectionState) =>
-  state?.status === "connected"
-    ? state.plxd
-    : state?.status === "failed"
-      ? state.error.plxd
-      : undefined;
-
-const tone = (state?: ConnectionState) =>
-  state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
-
-/**
- * Settings > Connections: Parallax Connect, with this computer and the others on the account
- * (0091); then how they reach each other and pairing on the same network (PLX-641); then the SSH
- * hosts, which can be added, edited, and removed.
+ * Settings > Connections, by computer (PLX-1492). This computer: its name, who can reach it, and
+ * Show setup code for another computer to add it with.
+ * Your computers: every other one once, however it was added, each with its status, the one thing
+ * it needs, and its own settings under its row. Then the Load Balancer over them (0101), the
+ * devices with access to this computer, and the ways to connect that few need.
  */
 export function ConnectionSettings() {
   const hosts = useHosts();
-  const remote = hosts.filter((h) => h.destination);
-  // The host whose Add host dialog is open: its id, "new", or none.
-  const [editing, setEditing] = useState<string>();
+  const connect = useConnect();
+  const profile = useProfile();
+  const access = useLocalAccess();
+  const page = useRef<HTMLDivElement>(null);
+  const balancer = useBalancer(hosts, page);
+  const [devices, setDevices] = useState<DeviceHost[]>([]);
+  useEffect(() => window.parallax.onDevices(setDevices), []);
   const [appVersion, setAppVersion] = useState<string>();
-  // Bumped when Show setup code changes this computer's settings, so LanSettings reads them again.
-  const [lanRead, setLanRead] = useState(0);
   useEffect(() => void window.parallax.version().then(setAppVersion), []);
-  const remove = async (host: Host) => {
-    const failed = await window.parallax.removeHost(host.id);
-    if (failed) notify({ tone: "error", title: `Couldn't remove ${host.name}`, body: failed });
-  };
-
-  return (
-    <>
-      <PageTitle title="Connections">
-        Where your agents run: this computer, your other computers through Parallax Connect or on
-        the same network, and machines you reach over SSH.
-      </PageTitle>
-      <ConnectSettings onSettingsChanged={() => setLanRead((n) => n + 1)} />
-      <LanSettings key={lanRead} />
-
-      <Section
-        title="SSH hosts"
-        action={
-          <button
-            type="button"
-            onClick={() => setEditing("new")}
-            className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
-          >
-            <Plus aria-hidden />
-            Add host
-          </button>
-        }
-      >
-        {remote.map((h) => (
-          <RemoteHost
-            key={h.id}
-            host={h}
-            appVersion={appVersion}
-            onEdit={() => setEditing(h.id)}
-            onRemove={() => void remove(h)}
-          />
-        ))}
-        {editing && (
-          <SshHostDialog
-            {...(editing !== "new" && { host: remote.find((h) => h.id === editing) })}
-            onDone={() => setEditing(undefined)}
-          />
-        )}
-        {!remote.length && (
-          <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
-            <Server aria-hidden className="size-6 text-faint-foreground" />
-            <p className="text-body font-medium">No SSH hosts yet</p>
-            <p className="max-w-sm text-body text-muted-foreground">
-              Add a machine you reach over SSH, such as a Mac mini, to run agents there. Parallax
-              can install plxd on it.
-            </p>
-          </div>
-        )}
-      </Section>
-    </>
-  );
-}
-
-/**
- * A saved SSH host: its connection, destination, and Edit and Remove. A host that failed for want
- * of a login or a trusted host key (`signInFixes`) has Sign in, which opens the terminal where ssh
- * asks for a password or the key (0007), then connects it. Windows' OpenSSH can't share a login,
- * so it has none. A host without plxd, or with one older than the app, has Install or Update
- * plxd (`plxdFix`), which installs this app's plxd there in one click.
- */
-function RemoteHost({
-  host,
-  appVersion,
-  onEdit,
-  onRemove,
-}: {
-  host: Host;
-  appVersion: string | undefined;
-  onEdit: () => void;
-  onRemove: () => void;
-}) {
-  const state = useShownConnection(host.id);
+  const [showingCode, setShowingCode] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
-  const fix = plxdFix(state, appVersion);
-  const [installing, setInstalling] = useState(false);
-  const install = async () => {
-    setInstalling(true);
-    const failed = await window.parallax.installPlxd(host.id);
-    setInstalling(false);
-    if (failed)
-      notify({
-        tone: "error",
-        title: `Couldn't ${fix === "update" ? "update" : "install"} plxd on ${host.name}`,
-        body: failed,
-      });
+  const signIn = async () => {
+    setSigningIn(true);
+    const failed = await window.parallax.signIn(false);
+    setSigningIn(false);
+    if (failed) notify({ tone: "error", title: "Couldn't sign in", body: failed });
   };
-  const canSignIn =
-    window.parallax.platform !== "win32" && state?.status === "failed" && signInFixes(state.error);
-  if (signingIn && state?.status === "connected") setSigningIn(false);
+  const here = hosts.find((h) => h.id === localId)!;
+  const account = { signedOut: profile === null, signingIn, onSignIn: () => void signIn() };
+  // The account's computers this app has no device for, which only their relay entry can remove.
+  const accountOnly = (access.relayHosts ?? []).filter(
+    (h) => !h.thisComputer && !devices.some((d) => d.id === `account:${h.hostId}`),
+  );
+
   return (
-    <>
-      <div className={settingRow}>
-        <div className="min-w-0">
-          <span className="flex items-center gap-2 text-body font-medium">
-            <StatusDot tone={tone(state)} />
-            <span className="truncate">{host.name}</span>
-          </span>
-          <span className="block truncate text-body text-muted-foreground">
-            <span className="font-mono">{host.destination}</span>
-            {state && ` · ${statusLabel(state)}`}
-            {state?.status === "connected" && ` · plxd ${state.plxd}`}
-          </span>
-          {fix && (
-            <p className="mt-1 text-body text-muted-foreground">
-              {fix === "install"
-                ? `plxd isn't on ${host.name}. `
-                : `${host.name} runs plxd ${runningPlxd(state)}, older than this app. `}
-              {fix === "install" ? "Install" : "Update"} downloads plxd {appVersion} there from
-              GitHub, checks its SHA256, and puts it in ~/.parallax-plxd
-              {fix === "update" && ", then restarts plxd, which stops its running agents"}.
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 gap-1">
-          {fix && (
+    <div ref={page}>
+      <PageTitle title="Connections">
+        The computers your agents run on, and what can reach this one.
+      </PageTitle>
+      <Section
+        title="This computer"
+        action={
+          // Its side of being added from another computer (0091), which Add a computer and the
+          // phone send people here for.
+          profile && (
             <button
               type="button"
-              className={primaryButton}
-              disabled={installing}
-              onClick={() => void install()}
+              title="A one-time code to type on another computer that's adding this one."
+              onClick={() => setShowingCode(true)}
+              className={`${quietButton} flex items-center gap-1 whitespace-nowrap [&_svg]:size-3.5`}
             >
-              {installing ? "Installing…" : fix === "install" ? "Install plxd" : "Update plxd"}
+              <KeyRound aria-hidden />
+              Show setup code
             </button>
-          )}
-          {canSignIn && !signingIn && (
-            <button type="button" className={quietButton} onClick={() => setSigningIn(true)}>
-              Sign in
-            </button>
-          )}
-          <button type="button" className={quietButton} onClick={onEdit}>
-            Edit
-          </button>
-          <button type="button" className={quietButton} onClick={onRemove}>
-            Remove
-          </button>
-        </div>
-      </div>
-      {signingIn && (
-        <Suspense>
-          <SignInTerminal
-            target={{ hostId: host.id, login: true }}
-            name={host.name}
-            onExit={() => void window.parallax.retry(host.id)}
-            onClose={() => setSigningIn(false)}
-          />
-        </Suspense>
+          )
+        }
+      >
+        <ThisComputerNotices />
+        <ul aria-label="This computer" className="border-b border-border/40">
+          <ThisComputerRow host={here} connect={connect} balancer={balancer} />
+        </ul>
+        <ThisComputerAccess access={access} {...account} />
+        <BalancerSetting host={here} balancer={balancer} card />
+      </Section>
+      <Computers
+        hosts={hosts}
+        devices={devices}
+        connect={connect}
+        {...account}
+        balancer={balancer}
+        appVersion={appVersion}
+        accountOnly={accountOnly}
+        removeAccountOnly={access.removeRelayHost}
+      />
+      <LoadBalancerSettings hosts={hosts} balancer={balancer} />
+      <DevicesWithAccess access={access} />
+      <AdvancedSettings access={access} connect={connect} />
+      {showingCode && (
+        <SetupCodeDialog
+          name={here.name}
+          onReady={access.reload}
+          onClose={() => setShowingCode(false)}
+        />
       )}
-    </>
+    </div>
   );
 }

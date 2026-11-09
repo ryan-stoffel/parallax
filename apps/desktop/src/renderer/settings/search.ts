@@ -509,44 +509,73 @@ export const settingsIndex: SettingEntry[] = [
       "intensity contrast legibility",
     ],
   ]),
-  // Connections
-  ...entries("connections", "Parallax Connect", [
-    [
-      "Parallax Connect",
-      "Your computers, wherever they are",
-      "add computer relay remote devices account sync setup code",
-    ],
+  // Connections, by computer (PLX-1492). Titles that aren't on the page any more, such as SSH
+  // hosts, still find the card that holds them.
+  ...entries("connections", "This computer", [
     ["This computer", "Its name and plxd", "rename computer name local daemon status version plxd"],
-  ]),
-  ...entries("connections", "Reach from anywhere", [
-    ["Reach from anywhere", "Through Parallax Relay", "relay internet remote"],
-    ["Tailscale", "Find computers on your Tailscale network", "tailnet vpn"],
-  ]),
-  ...entries("connections", undefined, [
+    ["Reach from anywhere", "Through Parallax Relay", "relay internet remote check connection"],
+    ["Pair computers on this network", undefined, "lan pair wifi same network"],
     [
       "Agents can work here",
       "Agents on your other computers can run commands on the ones you turn on",
       "agent work delegate remote peer",
+    ],
+  ]),
+  ...entries("connections", undefined, [
+    [
+      "Your computers",
+      "Every other computer, with its status",
+      "add computer devices hosts machines remove routes",
     ],
     [
       "Load Balancer",
       "Start new threads on the computer with the most room",
       "auto balance load busy cpu memory new thread computers",
     ],
+    [
+      "Devices with access",
+      "What's paired with or signed in to this computer",
+      "revoke read-only phone browser paired sessions",
+    ],
   ]),
-  ...entries("connections", "Same network", [
-    ["Same network", "Pair computers on this network", "lan local network wifi"],
-    ["Pair computers on this network", undefined, "lan pair wifi"],
+  ...[
+    [
+      "Parallax Connect",
+      "Your computers, wherever they are",
+      "add computer relay remote devices account sync setup code",
+    ],
+    [
+      "Computers on this network",
+      "Pair a computer with a code",
+      "lan nearby devices pair computer",
+    ],
+    ["SSH hosts", "Machines you reach over SSH", "ssh remote server add host install plxd"],
+  ].map(([title, description, keywords]) => ({
+    section: "connections" as const,
+    group: "Your computers",
+    title: title!,
+    description,
+    keywords,
+    anchor: "your-computers",
+  })),
+  {
+    section: "connections",
+    group: "This computer",
+    title: "Same network",
+    description: "Pair computers on this network",
+    keywords: "lan local network wifi",
+    anchor: "pair-computers-on-this-network",
+  },
+  ...entries("connections", "Devices with access", [
+    ["Pair a device", "With a pairing code", "pairing code phone"],
+  ]),
+  ...entries("connections", "Advanced", [
+    ["Tailscale", "Find computers on your Tailscale network", "tailnet vpn"],
     [
       "Open in a browser",
       "Use Parallax from a browser on this network",
       "web phone mobile certificate",
     ],
-    ["Pair a device", "With a pairing code", "pairing code phone"],
-    ["Computers on this network", undefined, "lan nearby devices"],
-  ]),
-  ...entries("connections", undefined, [
-    ["SSH hosts", "Machines you reach over SSH", "ssh remote server add host"],
   ]),
   // Storage
   ...entries("storage", undefined, [

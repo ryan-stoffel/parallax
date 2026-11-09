@@ -397,6 +397,8 @@ test("the setting, naming a computer and its thread, and the Load Balancer", asy
   await pairing.click();
   await expect(pairing).not.toBeChecked();
   await expect(here).not.toBeChecked();
+  // build-box's own settings open under its row.
+  await page.getByRole("button", { name: "build-box settings" }).click();
   const there = page.getByRole("switch", {
     name: "Let agents on my other computers work on build-box",
   });

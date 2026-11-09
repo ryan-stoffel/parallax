@@ -112,7 +112,7 @@ test("a read-only device reads the thread and is told why a message and a termin
   await expect(host.getByText(/This can't be undone/)).toBeVisible();
   await shot(host, "settings-confirm");
   await host.getByRole("button", { name: "Make read-only" }).click();
-  await expect(host.getByText(/Read-only: it reads threads/)).toBeVisible();
+  await expect(host.getByText(/It reads threads and can't change anything/)).toBeVisible();
   await expect(host.getByRole("button", { name: "Make read-only" })).toHaveCount(0);
   await shot(host, "settings-read-only");
 

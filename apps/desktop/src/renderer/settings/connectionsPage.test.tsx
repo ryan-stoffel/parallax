@@ -3,17 +3,31 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, DeviceHost, ParallaxBridge, SavedHost } from "../../preload/bridge";
+import type {
+  ConnectionState,
+  DeviceHost,
+  ParallaxBridge,
+  Profile,
+  SavedHost,
+} from "../../preload/bridge";
 import type {
   RelayCheckResult,
   RemoteSession,
   RemoteSessionsResult,
 } from "../../protocol/generated/protocol";
 import { Notifications } from "../notifications";
-import { LanSettings } from "./LanSettings";
+import { ConnectionSettings } from "./ConnectionSettings";
+import { searchSettings } from "./search";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.showPopover = () => {};
+HTMLElement.prototype.hidePopover = () => {};
+HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+  this.setAttribute("open", "");
+};
+HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+  this.removeAttribute("open");
+};
 
 const connected: ConnectionState = {
   status: "connected",
@@ -24,12 +38,20 @@ const connected: ConnectionState = {
 let remote = false;
 let remoteWeb = false;
 let relay = false;
+// Absent on a plxd without agent work.
+let agentWork: boolean | undefined;
 let sessions: RemoteSession[] = [];
 let hosts: SavedHost[] = [];
 type Set = { remote?: boolean; remoteWeb?: boolean; relay?: boolean };
 const request = vi.fn(async (_host: string, method: string, params: Set) => {
   const settings = () => ({
-    result: { autoResume: true, remote, remoteWeb, relay },
+    result: {
+      autoResume: true,
+      remote,
+      remoteWeb,
+      relay,
+      ...(agentWork !== undefined && { agentWork }),
+    },
     logId: "log",
   });
   if (method === "host/settings/get") return settings();
@@ -71,13 +93,19 @@ const removeRelayHost = vi.fn(async (hostId: string) => {
   return relayHosts;
 });
 const discoverLan = vi.fn(async () => [{ id: "0", name: "studio" }]);
+const signedIn = { name: "Ryan", firstName: "Ryan", lastName: "", email: "ryan@example.com" };
+let profile: Profile | null = signedIn;
+const signIn = vi.fn(async (): Promise<string | undefined> => undefined);
 
 beforeEach(() => {
   remote = false;
   remoteWeb = false;
   relay = false;
+  agentWork = undefined;
   sessions = [];
   hosts = [{ id: `lan:${"ab".repeat(32)}`, name: "studio", routes: ["192.168.1.20"] }];
+  profile = signedIn;
+  signIn.mockClear();
   request.mockClear();
   pairLan.mockClear();
   registerRelay.mockClear();
@@ -95,6 +123,16 @@ beforeEach(() => {
     onConnect: () => () => {},
     onDevices: () => () => {},
     onLocalName: () => () => {},
+    onProfile: (listener) => {
+      listener(profile);
+      return () => {};
+    },
+    signIn,
+    version: async () => "0.4.0",
+    discoverAccount: async () => {},
+    onKeyStanding: () => () => {},
+    onConnectNotice: () => () => {},
+    onRelayUsage: () => () => {},
     connectionState: async () => connected,
     onConnectionState: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
@@ -137,7 +175,7 @@ test("making a device read-only asks first, says it's for good, and a failure sa
   act(() =>
     root.render(
       <>
-        <LanSettings />
+        <ConnectionSettings />
         <Notifications />
       </>,
     ),
@@ -148,6 +186,11 @@ test("making a device read-only asks first, says it's for good, and a failure sa
   };
   await settle();
 
+  // The devices' card, since other cards have a Cancel and a Remove of their own.
+  const button = (name: string) =>
+    [...document.querySelectorAll('section[aria-label="Devices with access"] button')].find(
+      (b) => b.textContent === name,
+    )!;
   // The first click only asks. Cancel leaves it as it was.
   await click(button("Make read-only"));
   expect(makeDeviceReadOnly).not.toHaveBeenCalled();
@@ -165,9 +208,10 @@ test("making a device read-only asks first, says it's for good, and a failure sa
   await click(button("Make read-only"));
   await click(button("Make read-only"));
   expect(makeDeviceReadOnly).toHaveBeenCalledWith("s1");
+  // It's marked, and says how to get full access back.
   const said = document.body.textContent;
-  expect(said).toContain("Read-only: it reads threads");
-  expect(said).toContain("Start over with a new key");
+  expect(said).toContain("phoneRead-only");
+  expect(said).toContain("For full access, revoke it and pair it again.");
   // Nothing offers to undo it, only Revoke.
   expect(button("Make read-only")).toBeUndefined();
   expect(button("Revoke")).toBeDefined();
@@ -184,7 +228,7 @@ test("Check connection names the part that failed and copies the report", async 
   }));
   window.parallax.checkRelay = checkRelay;
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<LanSettings />));
+  act(() => root.render(<ConnectionSettings />));
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
@@ -192,18 +236,18 @@ test("Check connection names the part that failed and copies the report", async 
   await settle();
   expect(button("Copy diagnostics")).toBeUndefined();
 
-  await click(button("Check"));
+  await click(button("Check connection"));
   expect(document.body.textContent).toContain("Listener failed. The listener is off. Turn it on.");
   await click(button("Copy diagnostics"));
   expect(writeText).toHaveBeenCalledWith("Result: failed at listener");
 
   checkRelay.mockResolvedValueOnce({ roundTripMs: 42, diagnostics: "Result: passed" });
-  await click(button("Check"));
+  await click(button("Check connection"));
   expect(document.body.textContent).toContain("Working. The connection took 42 ms.");
 
   // Signed out, or plxd out of reach: only the reason, and nothing to copy.
   checkRelay.mockResolvedValueOnce("Sign in first.");
-  await click(button("Check"));
+  await click(button("Check connection"));
   expect(document.body.textContent).toContain("Sign in first.");
   expect(button("Copy diagnostics")).toBeUndefined();
 });
@@ -214,7 +258,7 @@ test("Reach from anywhere registers this computer with the relay before turning 
   act(() =>
     root.render(
       <>
-        <LanSettings />
+        <ConnectionSettings />
         <Notifications />
       </>,
     ),
@@ -241,25 +285,40 @@ test("Reach from anywhere registers this computer with the relay before turning 
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(document.body.textContent).toContain("Connected to the relay.");
 
-  // The account's computers on the relay, each other one with Remove, which frees its place.
-  expect(document.body.textContent).toContain("On the relay, this computer. Connected.");
-  await click(document.querySelectorAll('[aria-label="Remove macbook from your account"]')[0]!);
+  // How many of the account's computers are on the relay.
+  expect(document.body.textContent).toContain("2 of 10 computers on your account.");
+  // One this app has no device for is listed once, and its menu's Remove frees its place.
+  const row = document.querySelector('li[data-device="relay:b"]')!;
+  expect(row.textContent).toContain("On your account");
+  await click(row.querySelector('[role="menuitem"]')!);
   // It asks first, and Cancel keeps the computer.
-  expect(document.body.textContent).toContain("None of your computers or devices reach it anymore");
+  const dialog = row.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("none of your computers or devices reach it anymore");
   expect(removeRelayHost).not.toHaveBeenCalled();
-  await click(button("Cancel"));
+  const inDialog = (name: string) =>
+    [...dialog.querySelectorAll("button")].find((b) => b.textContent === name)!;
+  await click(inDialog("Cancel"));
   expect(removeRelayHost).not.toHaveBeenCalled();
-  await click(document.querySelectorAll('[aria-label="Remove macbook from your account"]')[0]!);
-  // The confirming Remove is the one without the row's label.
-  const confirmRemove = [...document.querySelectorAll("button")].find(
-    (b) => b.textContent === "Remove" && !b.hasAttribute("aria-label"),
-  )!;
-  await click(confirmRemove);
+  await click(inDialog("Remove"));
   expect(removeRelayHost).toHaveBeenCalledWith("b");
-  // This computer has no Remove: it can only be removed from another one.
-  expect(document.querySelectorAll('[aria-label="Remove macbook from your account"]')).toHaveLength(
-    0,
-  );
+  expect(document.querySelector('li[data-device="relay:b"]')).toBeNull();
+  // This computer is never in the list of the others.
+  expect(document.querySelector('li[data-device="relay:a"]')).toBeNull();
+});
+
+test("signed out, Reach from anywhere offers Sign in where its switch can't turn on", async () => {
+  profile = null;
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(<ConnectionSettings />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+  expect(document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')).toBeNull();
+  await click(button("Sign in"));
+  expect(signIn).toHaveBeenCalledWith(false);
+  expect(registerRelay).not.toHaveBeenCalled();
 });
 
 test("a computer that can't take agent work says why, with its switch off", async () => {
@@ -283,14 +342,46 @@ test("a computer that can't take agent work says why, with its switch off", asyn
   window.parallax.connectionState = async (id) =>
     id === "account:old" ? connected : { ...connected, capabilities: { agentWork: {} } };
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<LanSettings />));
-  unmount = () => root.unmount();
+  act(() => root.render(<ConnectionSettings />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
   await settle();
-  const row = (id: string) => document.querySelector(`[data-computer="account:${id}"]`)!;
-  const toggle = (id: string) => row(id).querySelector<HTMLButtonElement>('[role="switch"]')!;
+  const row = (id: string) => document.querySelector(`li[data-device="account:${id}"]`)!;
+  // Each computer's own settings open under its row.
+  for (const name of ["old-box", "allow-box", "fine-box"])
+    await click(document.querySelector(`[aria-label="${name} settings"]`)!);
+  const toggle = (id: string, name: string) =>
+    row(id).querySelector<HTMLButtonElement>(
+      `[role="switch"][aria-label="Let agents on my other computers work on ${name}"]`,
+    )!;
   expect(row("old").textContent).toContain("Needs updating");
-  expect(toggle("old").disabled).toBe(true);
+  expect(toggle("old", "old-box").disabled).toBe(true);
   expect(row("allow").textContent).toContain("Added with Allow");
-  expect(toggle("allow").disabled).toBe(true);
-  expect(toggle("fine").disabled).toBe(false);
+  expect(toggle("allow", "allow-box").disabled).toBe(true);
+  expect(toggle("fine", "fine-box").disabled).toBe(false);
+});
+
+test("every Connections setting a search finds is on the page to scroll to", async () => {
+  remote = true;
+  relay = true;
+  agentWork = false;
+  window.parallax.connectionState = async () => ({
+    ...connected,
+    capabilities: { agentWork: {} },
+  });
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(<ConnectionSettings />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+  const found = searchSettings("").filter((r) => r.section === "connections" && r.anchor);
+  expect(found.map((r) => r.title)).toEqual(
+    expect.arrayContaining(["SSH hosts", "Same network", "Tailscale", "Pair a device"]),
+  );
+  for (const { title, anchor } of found)
+    expect(document.querySelector(`[data-setting="${anchor}"]`), title).not.toBeNull();
 });
