@@ -66,7 +66,9 @@ const page = 5;
  * Shift+Tab moves focus as usual.
  * Up and Down move and wrap, Home, End, Page Up, and Page Down jump, Enter picks, Mod+1 to Mod+9
  * pick that row, Escape closes. The footer's menu sets the order, row size, and whether Thread
- * lists orchestrators (`pickerPrefs`). Picking closes it and calls `onPick` with the group's id,
+ * lists orchestrators (`pickerPrefs`). A repository on one computer shows that computer and its
+ * path; one that several computers list (`several`) shows as one project, since the computer is
+ * chosen after it (PLX-1498). Picking closes it and calls `onPick` with the group's id,
  * for one of the other computers' repositories `onPickElsewhere` with its computer and entry, an
  * orchestrator's `open`, or `onNewOrchestrator` with the repository to start it in.
  */
@@ -77,6 +79,7 @@ export function NewThreadPicker({
   hostId,
   hostName,
   elsewhere,
+  several,
   lastUsed,
   onPick,
   onPickElsewhere,
@@ -93,6 +96,8 @@ export function NewThreadPicker({
   hostName?: string;
   /** The other computers' repositories, listed among the host's own. */
   elsewhere: OtherRepo[];
+  /** The names of the repositories more than one computer lists (`reposOnSeveral`). */
+  several?: ReadonlySet<string>;
   /** When a repository last had a thread, in ms, by `<host>/<entry>`. */
   lastUsed: ReadonlyMap<string, number>;
   onPick: (groupId: string) => void;
@@ -176,9 +181,8 @@ export function NewThreadPicker({
     value: p.hostId === hostId ? p.repo.id : `${p.hostId}/${p.repo.id}`,
     name: p.name,
     icon: <RepoIcon repo={p.repo} />,
-    computer: p.computer,
-    hint: p.repo.path,
-    path: true,
+    // One computer's copy says where it is; a repository on several is just the project.
+    ...(!several?.has(p.repo.name) && { computer: p.computer, hint: p.repo.path, path: true }),
     pick,
   });
   const repoRows: Row[] =

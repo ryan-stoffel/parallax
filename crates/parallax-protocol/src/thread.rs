@@ -63,6 +63,13 @@ pub struct Repo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub icon: Option<ChosenIcon>,
+    /// When the user last picked `icon`, in RFC 3339 UTC, so an app that lists a repository's
+    /// copies on several computers draws the newest pick on all of them (PLX-1498). Absent with
+    /// no icon, for an icon picked on a plxd from before it, and for a logo set with
+    /// `iconIfUnset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub icon_at: Option<Timestamp>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// A Project's instructions, which plxd pins to the system prompt of every thread in it (0090),
@@ -254,7 +261,8 @@ pub struct RepoUpdateParams {
     #[ts(optional)]
     pub icon: Option<ChosenIcon>,
     /// True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
-    /// replace one the user picked meanwhile. Behind the `repoLogo` capability.
+    /// replace one the user picked meanwhile. Behind the `repoLogo` capability. It isn't a pick,
+    /// so it sets no `iconAt`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub icon_if_unset: bool,
     /// A Project's new name, trimmed, 1 to 128 bytes.

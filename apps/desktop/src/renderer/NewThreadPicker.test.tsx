@@ -28,7 +28,11 @@ let handle: { current: NewThreadPickerHandle | null };
 const onPick = vi.fn();
 const onNewOrchestrator = vi.fn();
 
-function render(lastUsed: [string, number][] = [], elsewhere: OtherRepo[] = []) {
+function render(
+  lastUsed: [string, number][] = [],
+  elsewhere: OtherRepo[] = [],
+  several?: ReadonlySet<string>,
+) {
   handle = createRef();
   root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
@@ -41,7 +45,9 @@ function render(lastUsed: [string, number][] = [], elsewhere: OtherRepo[] = []) 
         ]}
         repos={repos}
         hostId="local"
+        hostName="mini"
         elsewhere={elsewhere}
+        several={several}
         lastUsed={new Map(lastUsed)}
         onPick={onPick}
         onPickElsewhere={vi.fn()}
@@ -144,6 +150,16 @@ test("Date added mixes other computers' repositories in by when they were added"
   const older = { ...repo("dune"), createdAt: "2025-06-01T00:00:00Z" };
   render([], [{ host: { id: "mini", name: "mini" } as OtherRepo["host"], repo: older }]);
   expect(names()).toEqual(["dune", "atlas", "beacon", "cobalt", "No repo", "photon"]);
+});
+
+test("a repository on several computers shows as one project, with no computer or path (PLX-1498)", () => {
+  render([], [], new Set(["beacon"]));
+  const rows = [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent);
+  expect(rows.slice(0, 3)).toEqual([
+    "atlasmini · /code/atlas",
+    "beacon",
+    "cobaltmini · /code/cobalt",
+  ]);
 });
 
 test("a repository used while the picker is open keeps its place until it opens again", () => {

@@ -441,6 +441,22 @@ export function otherRepos(
 }
 
 /**
+ * The names of the repositories that more than one of `hosts` lists, which count as one project
+ * wherever the computer is chosen later (PLX-1498). Matched by name, as `otherRepos` matches.
+ */
+export function reposOnSeveral(
+  hosts: Host[],
+  views: Readonly<Record<string, ThreadsView>>,
+): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const several = new Set<string>();
+  for (const host of hosts)
+    for (const name of new Set(views[host.id]?.state.repos.filter(isRepository).map((r) => r.name)))
+      (seen.has(name) ? several : seen).add(name);
+  return several;
+}
+
+/**
  * Whether `view`'s computer has no repository named `name`. False until its first list is in (a
  * computer that never connected still has `emptyThreads`), since that can't be told yet.
  */
@@ -451,24 +467,39 @@ export const lacksRepo = (view: ThreadsView | undefined, name: string) =>
   !view.error &&
   !view.state.repos.some((r) => isRepository(r) && r.name === name);
 
+/** When a repo's icon was picked, or the earliest time for one with no pick time. */
+const pickedAt = (repo: Repo) => (repo.iconAt ? Date.parse(repo.iconAt) : -Infinity);
+
 /**
- * Each repository's icon by name, from the first of `hosts` whose entry has one, so a computer's
- * copy with no icon of its own draws its namesake's. Matched by name, as `otherRepos` matches.
+ * Each repository's icon by name, among `repos` from every computer: the one picked most recently
+ * (`iconAt`), or with no pick time, as icons from before plxd kept it and logos the app found have
+ * none, the one on the entry created first. Matched by name, as `otherRepos` matches.
  */
-export function sharedRepoIcons(
-  hosts: Host[],
-  views: Readonly<Record<string, ThreadsView>>,
-): ReadonlyMap<string, ChosenIcon> {
-  const icons = new Map<string, ChosenIcon>();
-  for (const host of hosts)
-    for (const repo of views[host.id]?.state.repos ?? [])
-      if (isRepository(repo) && repo.icon && !icons.has(repo.name)) icons.set(repo.name, repo.icon);
-  return icons;
+export function repoIconsByName(repos: Iterable<Repo>): ReadonlyMap<string, ChosenIcon> {
+  const winners = new Map<string, Repo>();
+  for (const repo of repos) {
+    if (!isRepository(repo) || !repo.icon) continue;
+    const held = winners.get(repo.name);
+    const wins =
+      !held ||
+      (pickedAt(repo) !== pickedAt(held)
+        ? pickedAt(repo) > pickedAt(held)
+        : Date.parse(repo.createdAt) < Date.parse(held.createdAt));
+    if (wins) winners.set(repo.name, repo);
+  }
+  return new Map([...winners].map(([name, repo]) => [name, repo.icon!]));
 }
 
-/** A repo's icon: its own, or else its namesake's on another computer (`sharedRepoIcons`). */
+/** Every computer's repository icons by name (`repoIconsByName`), so each copy draws the same one. */
+export const sharedRepoIcons = (hosts: Host[], views: Readonly<Record<string, ThreadsView>>) =>
+  repoIconsByName(hosts.flatMap((host) => views[host.id]?.state.repos ?? []));
+
+/**
+ * A repo's icon: its repository's on every computer (`sharedRepoIcons`), so a copy whose own icon
+ * is older draws the newest pick (PLX-1498), or else its own.
+ */
 export const repoIconOf = (repo: Repo, shared: ReadonlyMap<string, ChosenIcon>) =>
-  repo.icon ?? (isRepository(repo) ? shared.get(repo.name) : undefined);
+  (isRepository(repo) ? shared.get(repo.name) : undefined) ?? repo.icon;
 
 /**
  * Sets `icon` on the repository named `name` on each of `views`' computers that keeps repo icons

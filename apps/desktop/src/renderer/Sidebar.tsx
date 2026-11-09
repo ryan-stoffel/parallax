@@ -351,14 +351,14 @@ export function ProjectIcon({ icon, className = "" }: { icon?: ChosenIcon; class
 }
 
 /**
- * Every computer's repository icons by name (`sharedRepoIcons`), which App provides, so a repo
- * with no icon of its own draws its namesake's.
+ * Every computer's repository icons by name (`sharedRepoIcons`), which App provides, so every copy
+ * of a repository draws the same icon.
  */
 export const SharedRepoIcons = createContext<ReadonlyMap<string, ChosenIcon>>(new Map());
 
 /**
- * A repo's color: `icon`'s, its own or its namesake's (`repoIconOf`), or else one picked from its
- * name, as its initials' tile shows.
+ * A repo's color: `icon`'s, its repository's on every computer (`repoIconOf`), or else one picked
+ * from its name, as its initials' tile shows.
  */
 function repoColor(repo: Repo, icon: ChosenIcon | undefined) {
   const palette = iconColors.slice(1);
@@ -371,8 +371,8 @@ function repoColor(repo: Repo, icon: ChosenIcon | undefined) {
 
 /**
  * A repo's icon: the one the user chose or the app took from the repository (`useRepoLogos`), in an
- * orchestrator's shape (0033), or its namesake's on another computer, or else its initials on a
- * tile in a color picked from its name. No repo is a
+ * orchestrator's shape (0033), the same on every computer's copy (`repoIconOf`), or else its
+ * initials on a tile in a color picked from its name. No repo is a
  * dashed square, and a Project with no icon of its own two speech bubbles (0090).
  */
 export function RepoIcon({ repo, size = "size-4" }: { repo?: Repo; size?: string }) {

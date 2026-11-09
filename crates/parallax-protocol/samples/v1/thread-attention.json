@@ -72,6 +72,7 @@
         "name": "app",
         "path": "/Users/me/src/app",
         "icon": { "name": "flame", "color": "orange" },
+        "iconAt": "2026-10-01T12:31:00Z",
         "createdAt": "2026-10-01T12:00:00Z"
       }
     }
@@ -90,6 +91,7 @@
           "name": "app",
           "path": "/Users/me/src/app",
           "icon": { "name": "flame", "color": "orange" },
+          "iconAt": "2026-10-01T12:31:00Z",
           "createdAt": "2026-10-01T12:00:00Z"
         }
       }

@@ -181,7 +181,8 @@ pub(crate) async fn create(
         };
         db.add_repo(key, &fields).map_err(|e| store_error(&e))?;
         if let Some(icon) = &icon {
-            db.set_repo_icon(key, icon).map_err(|e| store_error(&e))?;
+            db.set_repo_icon(key, icon, false)
+                .map_err(|e| store_error(&e))?;
         }
         let row = db
             .get_repo(key)
@@ -373,6 +374,7 @@ mod tests {
                 project: true,
             },
             icon: None,
+            icon_at: None,
             created_at: jiff::Timestamp::now(),
             instructions: None,
             files: Vec::new(),

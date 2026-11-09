@@ -1087,7 +1087,11 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "repo/update": (p) => {
     const repo = db.repos.find((r) => r.id === p.repo);
     if (!repo) return fail("no such repo");
-    if (p.icon) repo.icon = p.icon;
+    if (p.icon) {
+      repo.icon = p.icon;
+      // A pick records when (PLX-1498).
+      if (!p.iconIfUnset) repo.iconAt = now();
+    }
     if (p.name) repo.name = p.name;
     if (p.instructions !== undefined) {
       const text = p.instructions.trim();

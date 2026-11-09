@@ -20,6 +20,8 @@ Ryan wants to upload an image as a Project's icon and as a repo's icon, the init
 
 Amended 2026-11-03 (PLX-1272): a repo with no icon, its own or a namesake's, takes the repository's own favicon or logo. `repo/logo`, behind the `repoLogo` capability, finds the file by name and folder among those git doesn't ignore and answers with its bytes, and the app redraws it whole as the same 128 px WebP and stores it with `repo/update` and `iconIfUnset`, which leaves an icon the user picked meanwhile. So it is an ordinary icon: a user's pick replaces it, and the app never replaces an icon that's set, even when the repository's logo later changes.
 
+Amended 2026-11-09 (PLX-1498): a repository cloned on several computers has one icon. `Repo` gains `iconAt`, when its icon was last picked: `repo/update` sets it on every pick, also of the icon the entry already has, and leaves it absent for a logo set with `iconIfUnset` (migration 62, `repos.icon_at`). On every copy of a repository, matched by name, the app draws the icon picked most recently, or among icons with no pick time the one on the entry created first. plxds still don't sync icons. A pick goes to each connected copy (PLX-927), and the pick time settles the copies that were offline.
+
 ## Consequences
 
 - Lists and `*.updated` events stay self-contained: a client draws an image icon with no extra request.
