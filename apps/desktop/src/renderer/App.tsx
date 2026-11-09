@@ -60,7 +60,7 @@ import { DocumentView } from "./DocumentView";
 import type { DocRef } from "./documents";
 import { doctorDraft, drafts, freshDraftId } from "./drafts";
 import { OpenDocumentContext } from "./FileCards";
-import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
+import { panelMax, panelSizes, panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import {
   NewThreadPicker,
   type NewThreadPickerHandle,
@@ -1394,7 +1394,7 @@ export function App() {
     </IconButton>
   );
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
-  const [requestedWidths, setRequestedWidths] = useState<[number, number]>([288, 416]);
+  const requestedWidths = panelSizes.use();
   useEffect(() => {
     const resize = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", resize);
@@ -1411,15 +1411,13 @@ export function App() {
     const other =
       side === 0 ? (sidePanelOpen && !expanded ? rightWidth : 0) : sidebarOpen ? leftWidth : 0;
     const maximum = Math.max(0, viewportWidth - Math.min(400, viewportWidth / 2) - other);
-    setRequestedWidths((widths) => {
-      const next: [number, number] = [...widths];
-      next[side] = Math.max(
-        Math.min(side === 0 ? SIDEBAR_MIN : 200, maximum),
-        Math.min(side === 0 ? 400 : 640, maximum, value),
-      );
-      if (other) next[side === 0 ? 1 : 0] = other;
-      return next;
-    });
+    const next: [number, number] = [...panelSizes.get()];
+    next[side] = Math.max(
+      Math.min(side === 0 ? SIDEBAR_MIN : 200, maximum),
+      Math.min(panelMax(viewportWidth)[side], maximum, value),
+    );
+    if (other) next[side === 0 ? 1 : 0] = other;
+    panelSizes.set(next);
   };
   // A page's top row meets the traffic lights without the sidebar, and Windows' window buttons
   // without the side panel.
