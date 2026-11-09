@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { close, launch, printFailure, type Launched } from "./launch";
 
 // PLX-1484: a presented HTML file opens in the side panel rendered, its inline script running
-// under the frame's own policy, and shows its source a click away.
+// under the frame's own policy, and shows its source, highlighted, a click away.
 
 let launched: Launched;
 
@@ -48,7 +48,10 @@ test("opens a presented HTML file rendered, and as its source", async () => {
 
   await panel.getByRole("button", { name: "Source" }).click();
   await expect(panel.locator("iframe")).toHaveCount(0);
-  await expect(panel.getByText('<div class="bars" id="bars"></div>')).toBeVisible();
+  // Highlighted as HTML, in the transcript's code block.
+  const source = panel.locator("pre code.language-html");
+  await expect(source).toContainText('<div class="bars" id="bars"></div>');
+  await expect(source.locator(".hljs-tag").first()).toBeVisible();
   await shot("html-source");
 
   await panel.getByRole("button", { name: "Preview" }).click();

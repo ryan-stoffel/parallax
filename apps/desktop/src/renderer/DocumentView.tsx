@@ -7,8 +7,9 @@ import {
   type RefObject,
 } from "react";
 import { Code, Eye } from "lucide-react";
+import Markdown from "react-markdown";
 
-import { MarkdownText } from "./AgentChat";
+import { codeComponents, highlight, MarkdownText } from "./AgentChat";
 
 import { pagesOf, type Docx } from "./docx";
 import {
@@ -77,7 +78,10 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
       ) : opened.kind === "media" ? (
         <Media doc={doc} bytes={loaded.bytes} />
       ) : (markdown || html) && (source || (html && !page)) ? (
-        <SourceText text={new TextDecoder().decode(loaded.bytes)} />
+        <SourceText
+          text={new TextDecoder().decode(loaded.bytes)}
+          language={html ? "html" : "markdown"}
+        />
       ) : markdown ? (
         <MarkdownFile text={new TextDecoder().decode(loaded.bytes)} />
       ) : html && page ? (
@@ -181,13 +185,19 @@ function MarkdownFile({ text }: { text: string }) {
 }
 
 /**
- * A Markdown or HTML file's source (PLX-931, PLX-1484). An HTML file shows only this on a host
- * whose plxd can't stream it to a frame.
+ * A Markdown or HTML file's source (PLX-931, PLX-1484), highlighted as `language` in a code block
+ * as the transcript draws one, with Copy. An HTML file shows only this on a host whose plxd can't
+ * stream it to a frame.
  */
-function SourceText({ text }: { text: string }) {
+function SourceText({ text, language }: { text: string; language: string }) {
+  // A fence longer than any run of backticks in the file, so none of them ends it.
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-      <pre className="font-mono text-body whitespace-pre-wrap text-foreground">{text}</pre>
+      <Markdown rehypePlugins={highlight} components={codeComponents}>
+        {`${fence}${language}\n${text}\n${fence}`}
+      </Markdown>
     </div>
   );
 }
