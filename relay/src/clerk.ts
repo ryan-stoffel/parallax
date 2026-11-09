@@ -72,3 +72,13 @@ export async function verifySession(env: Env, token: string): Promise<string | n
     return null;
   }
 }
+
+/**
+ * Whether `ALLOWED_USERS` lets the relay account `user` (from [`verifySession`]) in. Unset, every
+ * user is let in, as on production. Set, only the Clerk user ids it lists, comma-separated, so a
+ * set but empty list lets in nobody. Staging sets it to the relay probe's test account (PLX-1495).
+ */
+export function allowedUser(env: Env, user: string): boolean {
+  if (env.ALLOWED_USERS === undefined) return true;
+  return list(env.ALLOWED_USERS).includes(user.slice(user.lastIndexOf("|") + 1));
+}

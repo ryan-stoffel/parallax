@@ -25,7 +25,7 @@
  * Every route but the WebSockets plxd opens, the webhooks, and a plxd's proof above needs a Clerk
  * session token.
  */
-import { verifySession } from "./clerk";
+import { allowedUser, verifySession } from "./clerk";
 import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
 import {
@@ -66,6 +66,10 @@ export interface Env {
   /** The origins a browser session token's `azp` may name, comma-separated. Unset accepts no
    *  browser. Native apps' tokens carry no `azp`. */
   CLERK_AUTHORIZED_PARTIES?: string;
+  /** The only Clerk user ids the relay serves, comma-separated. Every other signed-in request gets
+   *  403 `user_not_allowed` before any object runs. Unset, as on production, serves everyone.
+   *  Staging's secret (PLX-1495). */
+  ALLOWED_USERS?: string;
   /** The APNs auth key (.p8, PEM), its key id, and the Apple team id, as secrets. Unset, pushes
    *  only log. */
   APNS_KEY?: string;
@@ -161,6 +165,7 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
     const user = token ? await verifySession(env, token).catch(() => null) : null;
     if (timed) record("auth", authStart);
     if (!user) return json(401, { error: "unauthorized" });
+    if (!allowedUser(env, user)) return json(403, { error: "user_not_allowed" });
     const openStart = performance.now();
     opened = await host.open(user, timed);
     if (timed) record("host_open", openStart);
@@ -232,6 +237,7 @@ const routes = {
       return json(503, { error: "clerk_unreachable" }, { "retry-after": "60" });
     }
     if (!token || !user) return json(401, { error: "unauthorized" });
+    if (!allowedUser(env, user)) return json(403, { error: "user_not_allowed" });
     const account = env.USERS.get(env.USERS.idFromName(user));
     if (!(await account.allow()))
       return json(429, { error: "rate_limited" }, { "retry-after": "60" });
