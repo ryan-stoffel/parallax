@@ -1644,7 +1644,7 @@ test("Inbox has a Projects button beside its search and Pull requests in the Pro
 
   await act(async () => sidebarMode.set("traditional"));
   expect(menuPages()).toEqual([]);
-  // Under its repo's folder, it's the folder's thread row: no first line.
+  // Under its repo's folder, it's the folder's thread row: no repo line.
   expect(rows()).toEqual(["photon3hmain", "ember3dmain"]);
   expect(sidebarButton("Projects")).toBeDefined();
 });
