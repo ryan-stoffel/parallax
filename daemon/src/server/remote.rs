@@ -2208,6 +2208,39 @@ mod tests {
         drop(sent);
     }
 
+    /// PLX-1447: once the connection takes a client's request, the window waits again, so a
+    /// client that sent requests and then stopped reading is still held.
+    #[tokio::test]
+    async fn the_window_holds_again_once_the_connection_takes_the_request() {
+        // Room for everything, so only the window holds `pump` back.
+        let (client, server) = tokio::io::duplex(64 * 1024 * 1024);
+        let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let (input, local_in) = tokio::io::duplex(64 * 1024);
+        let (local_out, mut requests) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            let closing = CancellationToken::new();
+            let _ = super::pump(server, local_in, local_out, Some(&closing)).await;
+        });
+        answer_once(&mut client).await;
+        client.send(Message::text("request")).await.unwrap();
+        let mut taken = [0; 8];
+        time::timeout(PATIENCE, requests.read_exact(&mut taken))
+            .await
+            .expect("the connection never got the request")
+            .unwrap();
+        assert_eq!(&taken, b"request\n");
+
+        // The client reads nothing more.
+        let written = feed(input, 32);
+        time::sleep(Duration::from_millis(500)).await;
+        let held = written.load(Ordering::Relaxed);
+        assert!(
+            held <= 1024 * 1024,
+            "{held} bytes went past a stopped client after its request was taken"
+        );
+    }
+
     #[tokio::test]
     async fn a_client_that_never_answers_is_never_waited_for() {
         // The client stays open, and never answers.
