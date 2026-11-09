@@ -390,6 +390,24 @@ fn a_recorded_migrations_missing_column_is_added_at_open() {
     assert!(store.list_threads().unwrap().is_empty());
 }
 
+/// A column the repair can't add, `NOT NULL` with no default, is left out rather than failing the
+/// open (PLX-1482).
+#[test]
+fn a_column_the_repair_cant_add_doesnt_fail_the_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallax.sqlite3");
+    drop(Store::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE threads RENAME COLUMN repo_id TO repo;
+        INSERT INTO threads (id, repo, archived, created_at) VALUES ('t', 'r', 0, 'then');",
+    )
+    .unwrap();
+    drop(conn);
+
+    Store::open(&path).unwrap();
+}
+
 /// Migration 23 (decision record 0041): a run an orchestrator started gets the orchestrator's
 /// thread as its parent, the orchestrator itself (whose thread is its own id) and a client's run
 /// get none, and existing threads have no fork origin, no title, and aren't settled.

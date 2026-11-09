@@ -1023,7 +1023,8 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
 /// Adds each column a fresh store has that this one lacks, with its type, `NOT NULL`, and
 /// default, as every `ADD COLUMN` migration gives one. A store can record a migration without
 /// its column, as one a branch build migrated under the same number would, and every query naming
-/// the column then fails (PLX-1482). A table the store lacks entirely isn't added.
+/// the column then fails (PLX-1482). A table the store lacks entirely isn't added, and a column
+/// that can't be added is logged and left out, so the repair never fails the open.
 fn add_missing_columns(conn: &mut Connection) -> Result<(), StoreError> {
     let mut fresh = Connection::open_in_memory()?;
     let tx = fresh.transaction()?;
@@ -1053,7 +1054,7 @@ fn add_missing_columns(conn: &mut Connection) -> Result<(), StoreError> {
     // Whether `table` exists in `conn` without `column`.
     let lacks = |conn: &Connection, table: &str, column: &str| -> Result<bool, StoreError> {
         let (exists, has): (bool, bool) = conn.query_row(
-            "SELECT COUNT(*) > 0, COALESCE(SUM(name = ?2), 0) > 0 FROM pragma_table_info(?1)",
+            "SELECT COUNT(*) > 0, COALESCE(SUM(name = ?2 COLLATE NOCASE), 0) > 0 FROM pragma_table_info(?1)",
             params![table, column],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -1080,14 +1081,21 @@ fn add_missing_columns(conn: &mut Connection) -> Result<(), StoreError> {
             .default
             .as_ref()
             .map_or(String::new(), |default| format!(" DEFAULT {default}"));
-        tx.execute_batch(&format!(
+        // One SQLite can't add, as `NOT NULL` with no default to a table with rows, stays missing:
+        // the queries naming it fail, but the store still opens.
+        match tx.execute_batch(&format!(
             "ALTER TABLE \"{table}\" ADD COLUMN \"{}\" {}{not_null}{default}",
             column.name, column.kind
-        ))?;
-        eprintln!(
-            "plxd: the store recorded its migrations but had no {table}.{}, so it was added",
-            column.name
-        );
+        )) {
+            Ok(()) => eprintln!(
+                "plxd: the store recorded its migrations but had no {table}.{}, so it was added",
+                column.name
+            ),
+            Err(error) => eprintln!(
+                "plxd: the store has no {table}.{}, and adding it failed: {error}",
+                column.name
+            ),
+        }
     }
     tx.commit()?;
     Ok(())
