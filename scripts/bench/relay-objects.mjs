@@ -14,7 +14,8 @@
 // Clerk token in PLXD_TEST_RELAY_TOKEN it also opens real streams on a throwaway host, which it
 // removes at the end: a client's stream with no spare waiting makes a new object, and one with a
 // spare waiting takes an existing object. That host uses one of the account's computer slots while
-// it runs. A local run gets a local Clerk from the relay's e2e script, which also sets the URL:
+// it runs. Those streams ask for the relay's own stage times (`x-parallax-timing`), and each stage
+// gets a row too, so they're read on any relay with no plxd in between (PLX-1493). A local run gets a local Clerk from the relay's e2e script, which also sets the URL:
 //
 //     cd relay && pnpm install
 //     node scripts/e2e.mjs node scripts/bench/relay-objects.mjs
@@ -42,7 +43,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Sends one request on a new connection, and answers its status and milliseconds, up to the status
- * line. A WebSocket that opens is dropped at once, which closes the relay's side of it.
+ * line, with the relay's `Server-Timing` when a WebSocket opened with one. A WebSocket that opens
+ * is dropped at once, which closes the relay's side of it.
  */
 function timed(path, headers = {}) {
   const url = new URL(path, relay);
@@ -55,7 +57,7 @@ function timed(path, headers = {}) {
       response.destroy();
     });
     sent.on("upgrade", (response, socket) => {
-      done(response.statusCode);
+      resolve({ status: response.statusCode, ms: performance.now() - start, timing: response.headers["server-timing"] });
       socket.destroy();
     });
     sent.on("error", reject);
@@ -70,14 +72,24 @@ const upgrade = {
   "sec-websocket-key": base64url(getRandomValues(new Uint8Array(16))),
 };
 
-/** Runs one warm-up of `steps`, then `samples` of each in turn, so drift hits them all alike. */
+/** The relay's stages a stream's row is split into, in the order they're printed. `jwks` is there
+ *  only when that connect read Clerk's keys, so its samples say how often. */
+const STAGES = ["limit", "auth", "jwks", "host_open", "host_hop", "stream_join", "worker"];
+
+/**
+ * Runs one warm-up of `steps`, then `samples` of each in turn, so drift hits them all alike. A step
+ * with a third entry, a short name, also gets a row for each of the relay's stages it answered.
+ */
 async function run(steps) {
   const times = Object.fromEntries(Object.keys(steps).map((name) => [name, []]));
   for (let round = 0; round <= samples; round++) {
-    for (const [name, [expected, step]] of Object.entries(steps)) {
-      const { status, ms } = await step();
+    for (const [name, [expected, step, short]] of Object.entries(steps)) {
+      const { status, ms, timing } = await step();
       if (status !== expected) throw new Error(`${name}: expected ${expected}, got ${status}`);
-      if (round > 0) times[name].push(ms);
+      if (round === 0) continue;
+      times[name].push(ms);
+      for (const [, stage, value] of (short && timing ? timing : "").matchAll(/(\w+);dur=([\d.]+)/g))
+        if (STAGES.includes(stage)) (times[`${short}: relay ${stage}`] ??= []).push(Number(value));
     }
   }
   for (const [name, values] of Object.entries(times)) {
@@ -143,6 +155,8 @@ const known = randomUUID();
 const refused = (stream) => timed(`/v1/hosts/${stranger}/streams/${stream}?token=bench`, upgrade);
 await run({
   "Worker alone (no object)": [404, () => timed("/bench")],
+  // A client's open with no WebSocket: the anonymous limit answers, and then nothing else runs.
+  "anonymous limit alone (no object)": [426, () => timed(`/v1/hosts/${stranger}/connect`)],
   "existing named object": [404, () => refused(known)],
   "new named object": [404, () => refused(randomUUID())],
 });
@@ -150,7 +164,7 @@ await run({
 if (token) {
   console.log();
   const { host, control, next } = await online();
-  const connect = () => timed(`/v1/hosts/${host.id}/connect`, { ...upgrade, ...bearer });
+  const connect = () => timed(`/v1/hosts/${host.id}/connect`, { ...upgrade, ...bearer, "x-parallax-timing": "1" });
   try {
     await run({
       "stream, existing object (spare)": [
@@ -162,6 +176,7 @@ if (token) {
           await sleep(250);
           return connect();
         },
+        "spare",
       ],
       "stream, new object (no spare)": [
         101,
@@ -171,6 +186,7 @@ if (token) {
           await next("open");
           return answer;
         },
+        "no spare",
       ],
     });
   } finally {
