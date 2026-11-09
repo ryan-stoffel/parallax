@@ -374,6 +374,22 @@ fn a_missing_migration_below_the_newest_still_applies() {
     assert_eq!(restored, 1);
 }
 
+/// A store that records migration 45 without its column (PLX-1482) gets the column when it opens,
+/// so listing threads works again.
+#[test]
+fn a_recorded_migrations_missing_column_is_added_at_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallax.sqlite3");
+    drop(Store::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE threads DROP COLUMN unarchived_at;")
+        .unwrap();
+    drop(conn);
+
+    let store = Store::open(&path).unwrap();
+    assert!(store.list_threads().unwrap().is_empty());
+}
+
 /// Migration 23 (decision record 0041): a run an orchestrator started gets the orchestrator's
 /// thread as its parent, the orchestrator itself (whose thread is its own id) and a client's run
 /// get none, and existing threads have no fork origin, no title, and aren't settled.

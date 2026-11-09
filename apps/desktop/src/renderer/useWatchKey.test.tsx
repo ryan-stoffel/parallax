@@ -31,9 +31,10 @@ function renderWatch() {
   } as Partial<ParallaxBridge> as ParallaxBridge;
   let key: string | undefined;
   let fail = () => {};
+  let retry = () => {};
   const opened = vi.fn();
   function Watch({ online }: { online: boolean }) {
-    [key, fail] = useWatchKey("local\nthread", online, "local");
+    [key, fail, retry] = useWatchKey("local\nthread", online, "local");
     opened(online);
     return null;
   }
@@ -44,7 +45,7 @@ function renderWatch() {
   const emit = (host: string, state: ConnectionState) => {
     for (const listener of listeners) listener(host, state);
   };
-  return { key: () => key, fail: () => fail(), emit, render, opened };
+  return { key: () => key, fail: () => fail(), retry: () => retry(), emit, render, opened };
 }
 
 test("a failed watch reopens after reconnect even when React never renders offline", () => {
@@ -83,5 +84,14 @@ test("healthy watches keep their keys and another host cannot reopen a failed wa
     watch.emit("local", connected);
     watch.render(true);
   });
+  expect(watch.key()).not.toBe(first);
+});
+
+test("retry reopens a failed watch without a reconnect", () => {
+  const watch = renderWatch();
+  const first = watch.key();
+  act(watch.fail);
+  act(watch.retry);
+  expect(watch.key()).toBeDefined();
   expect(watch.key()).not.toBe(first);
 });
