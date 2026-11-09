@@ -376,11 +376,10 @@ async fn you_lock(
     }
 }
 
-/// Refuses a sync method on a connection that came from neither another computer's Connect nor the
-/// remote listener, where another computer's peer session arrives (0082, PLX-1362). Any session
-/// there may already read You with `memory/read`, and a read-only device is refused both.
+/// Refuses a sync method on a connection that isn't another of the user's computers
+/// ([`Context::over_connect`]): a device's or a browser's session gets none (0082, 0101).
 fn connect_only(context: &Context, method: &str) -> Result<(), ErrorObject> {
-    if context.over_connect || context.over_remote {
+    if context.over_connect {
         return Ok(());
     }
     Err(ErrorObject::new(

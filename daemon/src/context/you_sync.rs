@@ -13,7 +13,8 @@
 //! relay lists while `relay` is on, through [`crate::peer::RelayPeers`]' clients: host-key proof,
 //! TLS pinned to the computer's relay id, and no account token (0101, PLX-1362). Such a computer
 //! answers only when it approved this one and has `agentWork` on, since its peer session is the
-//! only way in. A computer on both is pulled twice, which changes nothing the second time.
+//! only way in, and one that refused waits [`REFUSED_PULLS`] pulls before the next try. A computer
+//! on both is pulled twice, which changes nothing the second time.
 //!
 //! A machine's id in the version vectors is its tailnet node ID while Tailscale answers, else its
 //! relay id. Only that machine counts under either, so a clock stays right across a change.
@@ -492,6 +493,10 @@ pub(crate) async fn run(daemon: Arc<Daemon>, every: Duration, port: u16, stop: C
     }
 }
 
+/// How many pulls a computer that refused this one a session for good, such as one with `agentWork`
+/// off, waits out before it's dialed again: ten minutes at the default minute.
+const REFUSED_PULLS: u32 = 10;
+
 /// A peer's versions, and the texts read for them, by path.
 type Fetched = (Vec<MemorySyncEntry>, HashMap<String, String>);
 
@@ -523,8 +528,11 @@ async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers, every: Duration) -> Resul
         match daemon.relay_peers.hosts(daemon).await {
             Ok(hosts) => {
                 for host in hosts {
-                    if host.online && !host.this_computer {
-                        let (client, _) = daemon.relay_peers.client(daemon, &host.host_id);
+                    if !host.online || host.this_computer {
+                        continue;
+                    }
+                    let (client, link) = daemon.relay_peers.client(daemon, &host.host_id);
+                    if !link.session_refused_within(every * REFUSED_PULLS) {
                         clients.push((host.name, client));
                     }
                 }

@@ -19,6 +19,7 @@ use plxd::tailnet::{Node, NotRunning, Status, Tailnet, Whois};
 use tokio::time::{Instant, sleep};
 
 use crate::connect::{ME, free_port, set_connect, whois};
+use crate::remote::{new_code, open, refusal, set_remote, wait_listening};
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -210,6 +211,39 @@ async fn only_another_device_over_connect_may_sync() {
     let read = local.call::<MemorySyncRead>(read).await.unwrap_err();
     assert_eq!(read.code, INVALID_REQUEST, "{read:?}");
     a.stop().await;
+}
+
+/// A paired device's session on the remote listener is refused the sync methods: only another
+/// computer's peer session gets them there (0101).
+#[tokio::test]
+async fn a_paired_device_may_not_sync() {
+    let (dir, port) = (temp_dir(), free_port());
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let (device, code) = (temp_dir(), new_code(&mut client).await);
+    let route = format!("127.0.0.1:{port}");
+    let routes = std::slice::from_ref(&route);
+    let paired = plxd::remote::pair(routes, &code, "phone", device.path())
+        .await
+        .unwrap();
+    let mut app = open(routes, &paired.fingerprint, device.path())
+        .await
+        .unwrap();
+    app.initialize().await;
+    let read = format!(r#"{{"path":"{TABS}"}}"#);
+    for (id, method, params) in [(2, "memory/syncList", "{}"), (3, "memory/syncRead", &read)] {
+        let refused = refusal(&mut app, id, method, params).await.unwrap();
+        assert!(
+            refused.contains("only for another of your computers"),
+            "{refused}"
+        );
+    }
+    server.stop().await;
 }
 
 #[tokio::test]

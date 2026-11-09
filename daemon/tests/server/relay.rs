@@ -17,16 +17,16 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::jsonrpc::Message;
 use parallax_protocol::methods::{
     AccessGet, AccessMerge, AccessRemove, AgentEvents, AgentList, HostAnnounceUpdate,
-    HostSettingsGet, HostSettingsSet, OrchestratorCreate, RelayCheck, RelayHosts, RelayId,
-    RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
+    HostSettingsGet, HostSettingsSet, OrchestratorCreate, PeerComputers, RelayCheck, RelayHosts,
+    RelayId, RelayRegister, RelayRemove, RelaySign, RemoteRevoke, RemoteSessions, ScheduleList,
     ScheduleSave, ThreadStart,
 };
 use parallax_protocol::{
     AccessGetParams, AccessMergeParams, AccessRemoveParams, AccountChoice, AgentEventsParams,
     AgentListParams, AgentOutputItem, HostAnnounceUpdateParams, HostSettingsGetParams,
-    HostSettingsSetParams, ParallaxEvent, RelayCheckParams, RelayCheckPart, RelayHostsParams,
-    RelayIdParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelayStatus,
-    RemoteRevokeParams, RemoteSessionsParams, RunId, Schedule, ScheduleListParams,
+    HostSettingsSetParams, ParallaxEvent, PeerComputersParams, RelayCheckParams, RelayCheckPart,
+    RelayHostsParams, RelayIdParams, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
+    RelayStatus, RemoteRevokeParams, RemoteSessionsParams, RunId, Schedule, ScheduleListParams,
     ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
 use plxd::backend::fake::Step;
@@ -1184,13 +1184,23 @@ async fn you_memory_syncs_through_the_relay_with_tailscale_stopped() {
     }
     write(&mut here.client, TABS, "Tabs", "Use tabs.").await;
 
-    // There approved Here, but Here hasn't approved There, so Here gives it nothing.
+    // There approved Here, but Here hasn't approved There, so Here gives it nothing, and says why
+    // to There's own client of it, the one its pulls use.
     there.trust(&here_id).await;
     sleep(every * 3).await;
     assert_eq!(body(&mut there.client, TABS).await, None);
+    let listed = there.client.call::<PeerComputers>(PeerComputersParams {});
+    let listed = listed.await.unwrap().computers;
+    let shown = listed
+        .iter()
+        .find(|computer| computer.id == here_id)
+        .unwrap();
+    let why = shown.why_not.as_deref().unwrap_or_default();
+    assert!(why.contains("hasn't approved"), "{shown:?}");
 
+    // Once it has, the entry arrives after There's wait for a computer that refused it.
     here.trust(&there_id).await;
-    let deadline = Instant::now() + PATIENCE;
+    let deadline = Instant::now() + every * 10 + PATIENCE;
     while body(&mut there.client, TABS).await.as_deref() != Some("Use tabs.") {
         assert!(Instant::now() < deadline, "the entry never reached There");
         sleep(Duration::from_millis(200)).await;

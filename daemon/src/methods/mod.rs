@@ -95,8 +95,9 @@ pub(crate) struct Context {
     /// The connection's writer, for notifications that aren't events, such as a terminal's
     /// output.
     pub replies: tokio::sync::mpsc::Sender<Reply>,
-    /// The connection came through Parallax Connect's listener from another of the user's
-    /// devices, which `tailscale whois` checked (0056). Only such a connection syncs You (0082).
+    /// The connection is another of the user's computers: through Parallax Connect's listener,
+    /// which `tailscale whois` checked (0056), or another computer's peer session on the remote
+    /// listener, proven by its host key (0101). Only such a connection syncs You (0082).
     pub over_connect: bool,
     /// The connection's device is read-only. [`dispatch`] refuses it anything [`read_only`]
     /// doesn't allow.
