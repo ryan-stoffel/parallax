@@ -2624,14 +2624,17 @@ mod tests {
             .unwrap()
     }
 
-    /// Dials the stand-in host at `route` as `plxd dial` does, with two lines and an empty one
-    /// already on its input and a third written once it's connected.
-    async fn dial_with_lines(key: &HostKey, route: String) {
+    /// Two lines with an empty one between them.
+    const WAITING: &[u8] = b"one\n\ntwo\n";
+
+    /// Dials the stand-in host at `route` as `plxd dial` does, with `waiting` already on its input
+    /// and the line `three` written once it's connected.
+    async fn dial_with_lines(key: &HostKey, route: String, waiting: &[u8]) {
         let dir = tempfile::tempdir().unwrap();
         let pin = fingerprint(&key.certificate);
         save_credential(dir.path(), &pin, "token", &DpopKey::generate()).unwrap();
         let (mut app, stdin) = tokio::io::duplex(64 * 1024);
-        app.write_all(b"one\n\ntwo\n").await.unwrap();
+        app.write_all(waiting).await.unwrap();
         let mut input = Input::new(stdin);
         let dialed = dial_with_input(&[route], &pin, dir.path(), &mut input)
             .await
@@ -2652,14 +2655,14 @@ mod tests {
         // A host from before this, or rolled back to one: nothing goes before its 101, and every
         // line arrives after it.
         let (route, served) = stand_in(&key, false, &[Answer::Accept(3)]).await;
-        dial_with_lines(&key, route).await;
+        dial_with_lines(&key, route, WAITING).await;
         let seen = within(served).await;
         assert!(seen[0].0.is_empty(), "sent behind the request: {seen:?}");
         assert_eq!(seen[0].1, lines);
 
         // A host that keeps them had the waiting lines before it answered, once and in order.
         let (route, served) = stand_in(&key, true, &[Answer::Accept(3)]).await;
-        dial_with_lines(&key, route).await;
+        dial_with_lines(&key, route, WAITING).await;
         let seen = within(served).await;
         assert!(!seen[0].0.is_empty(), "nothing went behind the request");
         assert_eq!(seen[0].1, lines);
@@ -2671,11 +2674,25 @@ mod tests {
         let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
         let answers = [Answer::Refuse, Answer::Ticket, Answer::Accept(3)];
         let (route, served) = stand_in(&key, true, &answers).await;
-        dial_with_lines(&key, route).await;
+        dial_with_lines(&key, route, WAITING).await;
         let seen = within(served).await;
         assert!(!seen[0].0.is_empty(), "nothing went behind the request");
         assert!(seen[2].0.is_empty(), "a ticket's socket has no early lines");
         assert_eq!(seen[2].1, ["one", "two", "three"]);
+    }
+
+    #[tokio::test]
+    async fn lines_past_the_early_limit_wait_for_the_101_and_arrive_once_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = HostKey::load_or_create(&dir.path().join("key")).unwrap();
+        let long = "x".repeat(MAX_EARLY_FRAMES + 1024);
+        let waiting = format!("a\n{long}\nb\n");
+        let (route, served) = stand_in(&key, true, &[Answer::Accept(4)]).await;
+        dial_with_lines(&key, route, waiting.as_bytes()).await;
+        let seen = within(served).await;
+        // Only `a` went behind the request: a masked one-byte text frame is 7 bytes.
+        assert_eq!(seen[0].0.len(), 7);
+        assert_eq!(seen[0].1, ["a", long.as_str(), "b", "three"]);
     }
 
     /// What ALPN protocol the listener's TLS picks for a client that offers `offered`.

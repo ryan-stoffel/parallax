@@ -41,7 +41,9 @@ use tokio::time::{Instant, sleep};
 use crate::agents::{end_turn, fake, git, init, real_repo};
 use crate::connect::free_port;
 use crate::mcp::{Mcp, mcp_command};
-use crate::remote::{App, LOOPBACK, new_code, open, open_account, set_remote, wait_listening};
+use crate::remote::{
+    App, INITIALIZE, LOOPBACK, new_code, open, open_account, set_remote, wait_listening,
+};
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 use crate::thread_tools::Keys;
 use crate::threads::start_params;
@@ -1667,12 +1669,15 @@ async fn a_client_stream_carries_data_through_a_control_drop_and_a_silent_link_i
     let paired = remote::pair(routes, &code, "phone", phone.path())
         .await
         .unwrap();
-    let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+    // The app's `initialize` waits on `plxd dial`'s input, so it goes behind the upgrade
+    // (PLX-1483), and through the relay it's answered as one sent after the 101 is.
+    let first = format!("{INITIALIZE}\n");
+    let (mut app, over) = App::dialed_with(routes, &paired.fingerprint, phone.path(), &first)
         .await
         .unwrap();
-    assert_eq!(dialed.route, route);
-    let mut app = App::bridged(dialed.socket);
-    assert!(app.initialize().await["result"].is_object());
+    assert_eq!(over, route);
+    let initialized: Value = serde_json::from_str(&app.next().await).unwrap();
+    assert!(initialized["result"].is_object(), "{initialized}");
     assert!(answers(&mut app).await);
 
     // The control connection drops, and stays down for a while: the client's connection is the

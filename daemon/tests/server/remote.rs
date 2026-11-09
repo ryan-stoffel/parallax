@@ -118,6 +118,25 @@ impl App {
         }
     }
 
+    /// An app that wrote `first` as it started `plxd dial`, so those lines wait on its input and
+    /// go behind the upgrade to a host that keeps them (PLX-1483): the app, and the route.
+    pub(crate) async fn dialed_with(
+        routes: &[String],
+        fingerprint: &str,
+        data_dir: &Path,
+        first: &str,
+    ) -> Result<(Self, String), remote::Error> {
+        let (app, stdio) = duplex(64 * 1024);
+        let (input, output) = tokio::io::split(stdio);
+        let (reader, mut writer) = tokio::io::split(app);
+        writer.write_all(first.as_bytes()).await.unwrap();
+        let mut input = remote::Input::new(input);
+        let dialed = remote::dial_with_input(routes, fingerprint, data_dir, &mut input).await?;
+        tokio::spawn(remote::bridge(dialed.socket, input, output));
+        let lines = BufReader::new(reader).lines();
+        Ok((App { lines, writer }, dialed.route))
+    }
+
     pub(crate) async fn initialize(&mut self) -> Value {
         let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"test","version":"0"},"capabilities":{}}}"#;
         self.writer
@@ -1186,6 +1205,9 @@ async fn client_frames(lines: &[String]) -> Vec<u8> {
     frames
 }
 
+/// The header a WebSocket upgrade names its key in, as a line.
+const WS_KEY: &str = "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+
 /// A `/ws` upgrade with `token` and the proof `dpop`, and `behind` in the same write, from a client
 /// that doesn't wait for the answer (PLX-1483): the socket, or a refusal's status and everything
 /// the host sent before it closed.
@@ -1195,13 +1217,25 @@ async fn upgrade_with(
     dpop: &str,
     behind: &[u8],
 ) -> Result<WebSocket, (u16, Vec<u8>)> {
+    let headers = format!("{WS_KEY}Authorization: DPoP {token}\r\nDPoP: {dpop}\r\n");
+    upgrade_request(port, "/ws", &headers, behind).await
+}
+
+/// [`upgrade_with`], for a `GET` of `path` with these `headers` beside the upgrade's own, each a
+/// line.
+async fn upgrade_request(
+    port: u16,
+    path: &str,
+    headers: &str,
+    behind: &[u8],
+) -> Result<WebSocket, (u16, Vec<u8>)> {
     use tokio_tungstenite::tungstenite::protocol::Role;
     let (mut tls, _) = remote::open(&format!("127.0.0.1:{port}"), None)
         .await
         .unwrap();
     assert_eq!(tls.get_ref().1.alpn_protocol(), Some(remote::EARLY_WS));
     let mut flight = format!(
-        "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: DPoP {token}\r\nDPoP: {dpop}\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n{headers}\r\n"
     )
     .into_bytes();
     flight.extend_from_slice(behind);
@@ -1248,7 +1282,18 @@ async fn next_answer(socket: &mut WebSocket) -> Value {
     }
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"t","version":"0"},"capabilities":{}}}"#;
+/// A refused upgrade's status and JSON answer, which is all the host sent.
+fn refused_upgrade(answer: Result<WebSocket, (u16, Vec<u8>)>) -> (u16, Value) {
+    let Err((status, answer)) = answer else {
+        panic!("the host accepted the upgrade");
+    };
+    let answer = String::from_utf8(answer).unwrap();
+    let (_, body) = answer.split_once("\r\n\r\n").unwrap();
+    let body = serde_json::from_str(body).expect("the refusal and nothing behind it");
+    (status, body)
+}
+
+pub(crate) const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"t","version":"0"},"capabilities":{}}}"#;
 
 /// A request that names this computer `name`, which a client with full access may.
 fn rename(id: u32, name: &str) -> String {
@@ -1320,13 +1365,8 @@ async fn frames_behind_the_ws_upgrade_are_handled_once_it_passes_and_dropped_whe
     // The same write behind each kind of refused upgrade: a 401 and nothing else, and no effect.
     let behind = client_frames(&[INITIALIZE.to_owned(), rename(2, "refused")]).await;
     let refused = |answer: Result<WebSocket, (u16, Vec<u8>)>| {
-        let Err((status, answer)) = answer else {
-            panic!("the host accepted the upgrade");
-        };
+        let (status, body) = refused_upgrade(answer);
         assert_eq!(status, 401);
-        let answer = String::from_utf8(answer).unwrap();
-        let (_, body) = answer.split_once("\r\n\r\n").unwrap();
-        let body: Value = serde_json::from_str(body).expect("the refusal and nothing behind it");
         body["error_description"].as_str().unwrap().to_owned()
     };
     let other = remote::DpopKey::generate().proof("GET", &url, Some(&token));
@@ -1386,6 +1426,59 @@ async fn a_read_only_devices_write_behind_the_ws_upgrade_is_refused_as_one_sent_
     let late = next_answer(&mut socket).await;
     assert_eq!(early["error"]["data"]["kind"], "readOnly", "{early}");
     assert_eq!(early["error"], late["error"]);
+    assert_eq!(device_name(&mut client).await, before);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn frames_behind_a_ws_upgrade_refused_for_its_ticket_key_or_origin_are_dropped() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    let (key, token, _) = paired_laptop(port, &mut client).await;
+    let url = format!("https://127.0.0.1:{port}/ws");
+    let before = device_name(&mut client).await;
+    let behind = client_frames(&[INITIALIZE.to_owned(), rename(2, "refused")]).await;
+    let no_ticket = serde_json::json!({
+        "error": "invalid_grant",
+        "error_description": "a wrong, used, or expired ticket",
+    });
+
+    let wrong = upgrade_request(port, "/ws?wsTicket=wrong", WS_KEY, &behind).await;
+    assert_eq!(refused_upgrade(wrong), (401, no_ticket.clone()));
+
+    // A ticket opens the socket once, with what came behind it, and is refused the second time.
+    let (status, ticket) = web_ticket(port, &key, &token).await;
+    assert_eq!(status, 200, "{ticket}");
+    let path = format!("/ws?wsTicket={}", ticket["ticket"].as_str().unwrap());
+    let first = client_frames(&[INITIALIZE.to_owned()]).await;
+    let mut socket = upgrade_request(port, &path, WS_KEY, &first).await.unwrap();
+    let initialized = next_answer(&mut socket).await;
+    assert!(initialized["result"]["logId"].is_string(), "{initialized}");
+    let used = upgrade_request(port, &path, WS_KEY, &behind).await;
+    assert_eq!(refused_upgrade(used), (401, no_ticket));
+
+    // A proof that would pass, on an upgrade with no key.
+    let proof = key.proof("GET", &url, Some(&token));
+    let headers = format!("Authorization: DPoP {token}\r\nDPoP: {proof}\r\n");
+    let keyless = upgrade_request(port, "/ws", &headers, &behind).await;
+    let invalid = serde_json::json!({ "error": "invalid_request" });
+    assert_eq!(refused_upgrade(keyless), (400, invalid));
+
+    // And one from another origin.
+    let proof = key.proof("GET", &url, Some(&token));
+    let headers = format!(
+        "{WS_KEY}Authorization: DPoP {token}\r\nDPoP: {proof}\r\nOrigin: https://elsewhere.example\r\n"
+    );
+    let elsewhere = upgrade_request(port, "/ws", &headers, &behind).await;
+    let forbidden =
+        serde_json::json!({ "error": "forbidden", "error_description": "another origin" });
+    assert_eq!(refused_upgrade(elsewhere), (403, forbidden));
+
     assert_eq!(device_name(&mut client).await, before);
     server.stop().await;
 }
