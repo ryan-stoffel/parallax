@@ -4518,7 +4518,12 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * The follow-up's turn id.
 	 */
-	turnId: TurnId, } | { "kind": "interrupted",
+	turnId: TurnId,
+	/**
+	 * True when someone took it back with `queue/cancel` (PLX-1485), which clients show
+	 * nothing for. False when plxd dropped it.
+	 */
+	cancelled?: boolean, } | { "kind": "interrupted",
 	/**
 	 * The thread that stopped it.
 	 */

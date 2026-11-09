@@ -443,7 +443,8 @@ export function AgentChat({
     if (compose.send) void send(compose.text).then((failed) => sendFailed(failed?.message));
     onComposed?.();
   }, [compose, send, sendFailed, onComposed]);
-  // Queued messages the user cancelled from here, whose followUpDropped notice is left out.
+  // Messages the user took back from here: queued ones, which leave no pending row, and the one
+  // being edited, whose followUpDropped notice is left out.
   const [cancelled, setCancelled] = useState<ReadonlySet<string>>(new Set());
   // The sent message being edited in place, with its row, which it hides.
   const [editing, setEditing] = useState<Editing>();
@@ -487,7 +488,10 @@ export function AgentChat({
   const rows = useMemo<Row[]>(() => {
     const seen = new Set(items.flatMap((i) => ("turnId" in i && i.turnId ? [i.turnId] : [])));
     const pending = [...sent]
-      .filter(([turnId]) => !seen.has(turnId) && !queue.some((m) => m.id === turnId))
+      .filter(
+        ([turnId]) =>
+          !seen.has(turnId) && !cancelled.has(turnId) && !queue.some((m) => m.id === turnId),
+      )
       .map(([turnId, { text, images, threads, computers, remoteThreads }]) => ({
         kind: "pending" as const,
         key: `pending:${turnId}`,
