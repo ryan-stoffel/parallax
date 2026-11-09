@@ -993,7 +993,7 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
     }
 
     if MIGRATIONS.iter().all(|m| applied.contains(&m.version)) {
-        return Ok(());
+        return add_missing_columns(conn);
     }
 
     // One write lock for every missing migration, so connections opening a new store at once
@@ -1017,7 +1017,96 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
     tx.execute_batch("DROP TABLE temp.migrating_from")?;
     tx.commit()?;
 
+    add_missing_columns(conn)
+}
+
+/// Adds each column a fresh store has that this one lacks, with its type, `NOT NULL`, and
+/// default, as every `ADD COLUMN` migration gives one. A store can record a migration without
+/// its column, as one a branch build migrated under the same number would, and every query naming
+/// the column then fails (PLX-1482). A table the store lacks entirely isn't added, and a column
+/// that can't be added is logged and left out, so the repair never fails the open.
+fn add_missing_columns(conn: &mut Connection) -> Result<(), StoreError> {
+    let mut fresh = Connection::open_in_memory()?;
+    let tx = fresh.transaction()?;
+    tx.execute_batch("CREATE TEMP TABLE migrating_from AS SELECT 0 AS version;")?;
+    for migration in MIGRATIONS {
+        tx.execute_batch(migration.sql)?;
+    }
+    tx.commit()?;
+    let expected: Vec<(String, Column)> = fresh
+        .prepare(
+            "SELECT m.name, c.name, c.type, c.\"notnull\", c.dflt_value
+             FROM sqlite_master AS m, pragma_table_info(m.name) AS c
+             WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'",
+        )?
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                Column {
+                    name: row.get(1)?,
+                    kind: row.get(2)?,
+                    not_null: row.get(3)?,
+                    default: row.get(4)?,
+                },
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    // Whether `table` exists in `conn` without `column`.
+    let lacks = |conn: &Connection, table: &str, column: &str| -> Result<bool, StoreError> {
+        let (exists, has): (bool, bool) = conn.query_row(
+            "SELECT COUNT(*) > 0, COALESCE(SUM(name = ?2 COLLATE NOCASE), 0) > 0 FROM pragma_table_info(?1)",
+            params![table, column],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(exists && !has)
+    };
+    let mut missing = Vec::new();
+    for (table, column) in &expected {
+        if lacks(conn, table, &column.name)? {
+            missing.push((table, column));
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    // Another connection opening the store at once may add them first: check again under the
+    // write lock.
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (table, column) in missing {
+        if !lacks(&tx, table, &column.name)? {
+            continue;
+        }
+        let not_null = if column.not_null { " NOT NULL" } else { "" };
+        let default = column
+            .default
+            .as_ref()
+            .map_or(String::new(), |default| format!(" DEFAULT {default}"));
+        // One SQLite can't add, as `NOT NULL` with no default to a table with rows, stays missing:
+        // the queries naming it fail, but the store still opens.
+        match tx.execute_batch(&format!(
+            "ALTER TABLE \"{table}\" ADD COLUMN \"{}\" {}{not_null}{default}",
+            column.name, column.kind
+        )) {
+            Ok(()) => eprintln!(
+                "plxd: the store recorded its migrations but had no {table}.{}, so it was added",
+                column.name
+            ),
+            Err(error) => eprintln!(
+                "plxd: the store has no {table}.{}, and adding it failed: {error}",
+                column.name
+            ),
+        }
+    }
+    tx.commit()?;
     Ok(())
+}
+
+/// A column as `pragma_table_info` describes it.
+struct Column {
+    name: String,
+    kind: String,
+    not_null: bool,
+    default: Option<String>,
 }
 
 /// The versions `schema_version` records.

@@ -37,6 +37,7 @@ import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/ge
 import { type RepoAction } from "./Actions";
 import type { AddDialogHandle } from "./AddDialog";
 import type { Workspace } from "./WorkspaceMenu";
+import { CrashScreen } from "./Crash";
 import { CommandMenu, type CommandMenuHandle, type MenuItem } from "./CommandMenu";
 import { AgentChat } from "./AgentChat";
 import { AccountPrompts } from "./AccountPrompts";
@@ -455,6 +456,10 @@ export function App() {
     () => hosts.map((h) => ({ host: h, view: views[h.id] ?? idleThreads })),
     [hosts, views],
   );
+  // A host whose list failed takes the whole window until it loads, or until Continue anyway
+  // sets that error aside (PLX-1482).
+  const [setAside, setSetAside] = useState<ReadonlySet<string>>(new Set());
+  const failedList = listed.find(({ view }) => view.error && !setAside.has(view.error));
   const groups = groupThreads(threads.state);
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
@@ -1703,6 +1708,15 @@ export function App() {
           connection?.status === "failed"
         }
       />
+      {failedList && (
+        <CrashScreen
+          title={`Couldn't load your threads${listed.length > 1 ? ` on ${failedList.host.name}` : ""}`}
+          message="Parallax couldn't read this computer's thread list."
+          details={failedList.view.error!}
+          action={{ label: "Try again", onClick: failedList.view.retry }}
+          onDismiss={() => setSetAside((now) => new Set(now).add(failedList.view.error!))}
+        />
+      )}
       <CommandMenu
         ref={commandMenu}
         hosts={listed}

@@ -1865,8 +1865,6 @@ export function ThreadList({
     </>
   );
 
-  // Why a host's list couldn't load or stopped updating, which is the list's own state.
-  const errors = [...new Set(hosts.map((h) => h.view.error).filter(Boolean))];
   const nothingShown =
     !pool.length && !snoozedItems.length && !archived.length && !draftRows.length;
 
@@ -1969,11 +1967,6 @@ export function ThreadList({
         data-flip-scroll
         className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 *:shrink-0 ${fadeBottom}`}
       >
-        {errors.map((e) => (
-          <p key={e} role="alert" className="px-2 pb-1 text-meta text-danger">
-            {e}
-          </p>
-        ))}
         {words.length > 0 && nothingShown && !searching ? (
           <EmptyCard title={`No matches${scopeLabel ? ` in ${scopeLabel.name}` : ""}`}>
             Nothing matches “{query.trim()}”.

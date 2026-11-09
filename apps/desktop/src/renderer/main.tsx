@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { preloadParser } from "react-native-enriched-markdown";
 
 import { App } from "./App";
+import { CrashBoundary } from "./Crash";
 import { applyTheme } from "./theme";
 import { Tooltips } from "./ui";
 import "katex/dist/katex.min.css";
@@ -59,7 +60,9 @@ void window.parallax
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <CrashBoundary>
+      <App />
+    </CrashBoundary>
     <Tooltips />
   </StrictMode>,
 );

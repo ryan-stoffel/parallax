@@ -685,6 +685,8 @@ export interface ThreadsView {
   state: ThreadsState;
   /** Why the list couldn't load or stopped updating, for people. */
   error?: string;
+  /** Opens the list's subscription again after `error`. */
+  retry: () => void;
   /**
    * The host's plxd predates the subscriptions this app uses (0059), so its lists can't load. A
    * notification says so (alarms.ts), not the sidebar.
@@ -847,7 +849,7 @@ export function useThreads(
     needsYou.current = onNeedsYou;
     lineageNow.current = lineage;
   });
-  const [watchKey, failed] = useWatchKey(hostId, connected, hostId);
+  const [watchKey, failed, reopen] = useWatchKey(hostId, connected, hostId);
 
   useEffect(() => {
     if (!watchKey) return;
@@ -1118,6 +1120,10 @@ export function useThreads(
     () => ({
       state,
       error,
+      retry: () => {
+        setError(undefined);
+        reopen();
+      },
       ...(outdated && { outdated }),
       loading,
       hostId,
@@ -1125,7 +1131,7 @@ export function useThreads(
       iconImageBytes,
       ...actions,
     }),
-    [hostId, state, error, outdated, loading, capabilities, iconImageBytes, actions],
+    [hostId, state, error, reopen, outdated, loading, capabilities, iconImageBytes, actions],
   );
 }
 
@@ -1138,6 +1144,7 @@ export const idleThreads: ThreadsView = {
   hostId: "",
   state: emptyThreads,
   capabilities: noCapabilities,
+  retry: () => {},
   addRepo: async () => notConnected,
   start: async () => ({ code: -32000, message: notConnected }),
   fork: async () => ({ code: -32000, message: notConnected }),
