@@ -243,7 +243,7 @@ const listOrder = () =>
     r.getAttribute("data-flip")!.split("/").at(-1),
   );
 
-test("a card leads with its title, and its status is a mark with its word as a tooltip (PLX-1496)", async () => {
+test("a card leads with its title, and its status is a mark with its word for screen readers (PLX-1496)", async () => {
   // Finished since it was last seen.
   threads = [thread("fresh", 10, { seenAt: ago(8) })];
   runs = [run("fresh", "completed", 5)];
@@ -254,7 +254,7 @@ test("a card leads with its title, and its status is a mark with its word as a t
   expect(title.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // The repo's line holds the status, so nothing shares the title's line.
   expect(status.parentElement!.textContent).toBe("parallaxDone");
-  expect(status.querySelector('[title="Done"] .sr-only')!.textContent).toBe("Done");
+  expect(status.querySelector(".sr-only")!.textContent).toBe("Done");
 });
 
 test("a thread that wakes from a snooze rises to the top of the list and stays (PLX-1322)", async () => {

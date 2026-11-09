@@ -3182,7 +3182,7 @@ const statusMark = "flex items-center gap-1 text-meta font-medium text-warning [
  */
 function DraftStatus() {
   return (
-    <span title="Draft" className={statusMark}>
+    <span className={statusMark}>
       <PencilLine aria-hidden />
       <span className="sr-only">Draft</span>
     </span>
@@ -3436,15 +3436,12 @@ function ThreadRow({
   const status =
     badge ??
     (!thread.archived && snoozed(thread, attention) ? (
-      <span title={`Wakes ${resumeTime(thread.snoozedUntil!)}`} className={statusMark}>
+      <span className={statusMark}>
         <RingingAlarmMark />
         <span className="sr-only">Wakes</span> {resumeTime(thread.snoozedUntil!)}
       </span>
     ) : run?.status === "waiting" && attention === "settled" && !thread.archived ? (
-      <span
-        title={run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
-        className={statusMark}
-      >
+      <span className={statusMark}>
         <AlarmClock aria-hidden />
         <span className="sr-only">{run.resumeAt ? "Resumes" : "Waiting"}</span>
         {run.resumeAt && <> {resumeTime(run.resumeAt)}</>}

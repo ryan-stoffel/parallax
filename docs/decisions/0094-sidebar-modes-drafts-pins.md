@@ -20,7 +20,7 @@ Only one New Thread draft could exist, because a second New thread reused the fi
 - **Pins under the drafts.** Pinned threads are ordinary thread rows, under the drafts and favorites, with a thin line under them. A permanent pin sits in each one's top-right, and clicking it unpins. The pin is no longer a detail, so pinning doesn't change a row's height.
 - **One row card.** Thread, Project, and draft rows share `RowCard`: place and status, title, details, hover actions, and a `trailing` slot that stays visible on hover. The title keeps its weight on hover, and the line under the actions keeps clear of their measured width. A card under its repo's heading leads with its title and status.
 
-Amended 2026-11-09 (PLX-1496): a card leads with its title, at the row's full width, then its place and status, then its details. A status is its mark alone, with its word as a tooltip, and keeps a time where it has one: how long it has worked, when it wakes or resumes, or its age. The pin and the hover actions sit at the end of the status's line, so nothing shortens or moves a card's title. A pinned card in Traditional gets that second line back, not a first line.
+Amended 2026-11-09 (PLX-1496): a card leads with its title, at the row's full width, then its place and status, then its details. A status is its mark alone in every row, with its word kept for screen readers, and keeps a time where it has one: how long it has worked, when it wakes or resumes, or its age. The pin and the hover actions sit at the end of the status's line, so nothing shortens or moves a card's title. A pinned card in Traditional gets that second line back, not a first line.
 
 ## Rejected
 

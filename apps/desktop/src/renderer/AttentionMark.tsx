@@ -100,7 +100,7 @@ function Clock({ since }: { since: string }) {
  * A row's status, as its mark and a word: Working for how long since `since`, Monitoring or Waiting (PLX-777),
  * Needs you, Done, or Failed. Settled shows nothing. Done animates only when this row saw the thread finish,
  * and a status that changed rises into place. `iconOnly`, as a sidebar row's is (PLX-1496), draws
- * the mark and Working's clock alone: the word is its tooltip, and still there for a screen reader.
+ * the mark and Working's clock alone, with the word still there for a screen reader.
  */
 export function AttentionBadge({
   attention,
@@ -124,7 +124,7 @@ export function AttentionBadge({
 
   const look = `flex items-center gap-1 text-meta font-medium [&_svg]:size-3.5 ${changed ? "rise-in" : ""}`;
   const badge = (color: string, mark: ReactNode, word: string, clock?: ReactNode) => (
-    <span key={attention} title={iconOnly ? word : undefined} className={`${look} ${color}`}>
+    <span key={attention} className={`${look} ${color}`}>
       {mark}
       <span className={iconOnly ? "sr-only" : undefined}>{word}</span>
       {clock && <> {clock}</>}
