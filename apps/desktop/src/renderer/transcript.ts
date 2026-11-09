@@ -819,6 +819,8 @@ function applyOutput(
       items.push({ kind: "notice", key, tone: "warning", text: item.detail });
       break;
     case "followUpDropped":
+      // A message taken back from the queue (PLX-1485) shows nothing.
+      if (item.cancelled) break;
       items.push({
         kind: "notice",
         key,

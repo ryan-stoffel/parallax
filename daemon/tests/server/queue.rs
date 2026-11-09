@@ -94,7 +94,10 @@ async fn reorder_cancel_and_edit(client: &mut Conn, run_id: RunId, [a, b, c]: [T
     assert_eq!(cancelled.messages.len(), 2);
     until(
         client,
-        has_item(AgentOutputItem::FollowUpDropped { turn_id: b }),
+        has_item(AgentOutputItem::FollowUpDropped {
+            turn_id: b,
+            cancelled: true,
+        }),
     )
     .await;
     let gone = client

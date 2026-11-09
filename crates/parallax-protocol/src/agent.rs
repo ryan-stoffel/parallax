@@ -689,6 +689,10 @@ pub enum AgentOutputItem {
     FollowUpDropped {
         /// The follow-up's turn id.
         turn_id: TurnId,
+        /// True when someone took it back with `queue/cancel` (PLX-1485), which clients show
+        /// nothing for. False when plxd dropped it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cancelled: bool,
     },
     /// Another thread stopped the run through its Parallax tools, with `agent/cancel`'s `from`
     /// (0041). The run's `agent.finished` follows.

@@ -402,9 +402,10 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             cursor: None,
             session_id: None,
         },
-        Event::FollowUpDropped { turn_id } => {
-            AgentOutputItem::FollowUpDropped { turn_id: *turn_id }
-        }
+        Event::FollowUpDropped { turn_id } => AgentOutputItem::FollowUpDropped {
+            turn_id: *turn_id,
+            cancelled: false,
+        },
         Event::Warning { detail, .. } => AgentOutputItem::Warning {
             detail: truncate(detail, MAX_TEXT_ITEM_BYTES),
         },
