@@ -32,6 +32,12 @@ Deploy with this one command, from `relay/`, on a computer where `wrangler` is l
 corepack pnpm deploy:staging
 ```
 
+Then check it answers, which should print `401`:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' https://parallax-relay-staging.stoffel-thomas-ryan.workers.dev/v1/hosts
+```
+
 `scripts/deploy-staging.mjs` takes no arguments and passes none to wrangler. It stops unless `[env.staging]` is still that Worker with no route, `ALLOWED_USERS` is set, and the type-check and tests pass, then prints the URL and the version id. Agents deploy with nothing else: never `wrangler deploy` on its own, and never `--env=""`, which are production. A staging deploy drops only staging's connections, so it needs no quiet time.
 
 Measure it with the relay probe, dispatched on your branch with staging's URL and a nightly's tag. Check first that no Relay probe run is in progress or waiting: they run one at a time because they share the test account's refresh token, and GitHub keeps only one waiting run, so a new one replaces it.
@@ -42,7 +48,7 @@ gh run watch <run id> --interval 300
 gh run download <run id> --name relay-probe --dir relay-probe
 ```
 
-The job summary and `relay-probe.md` have the checks and the medians. A run with `relay` also passes `--timings`, so `relay-probe.json` has `metrics.stages`: one list per timed connect, each entry a stage's name and its milliseconds. `connect-timing` stages are plxd's own, and `connect-server-timing` stages are the relay's (`auth`, `host_open`, `stream_join`, and the host object's `admit` and `take`). The median of each stage across the connects:
+The job summary and `relay-probe.md` have the checks and the medians. A run with `relay` also passes `--timings`, so `relay-probe.json` has `metrics.stages`: one list per timed connect, each entry a stage's `kind`, name, and `ms`. A `connect-timing` stage is plxd's, and its `ms` is the time since the dial started when plxd reached it, so a step's cost is the difference from the stage before. A `connect-server-timing` stage is the relay's own time in one step of the connect request, such as `auth`, `host_open`, and `stream_join`, except `spare`, which is 1 when the connect took a waiting spare stream. The middle value of each stage across the connects:
 
 ```sh
 jq -r '[.metrics.stages[][]] | group_by(.kind + " " + .stage)[] | "\(.[0].kind) \(.[0].stage) \(map(.ms) | sort | .[length / 2 | floor]) ms"' relay-probe/relay-probe.json
