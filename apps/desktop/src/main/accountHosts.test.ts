@@ -14,6 +14,7 @@ import {
   listedKey,
   NoticeWatch,
   parseSignIn,
+  relayOffline,
   RECHECK_MS,
   Routes,
   tokenSubject,
@@ -325,6 +326,21 @@ test("only plxd's outage kinds count as an outage", () => {
   expect(outageOf({ data: { kind: "clerkUnreachable" } })).toBe("clerk");
   expect(outageOf({ data: { kind: "idConflict" } })).toBeUndefined();
   expect(outageOf({})).toBeUndefined();
+});
+
+test("the relay's 503 on a stream reads as offline, and Clerk being down as its own outage", () => {
+  expect(
+    relayOffline("plxd dial: could not sign in: the relay's WebSocket failed: HTTP 503\n"),
+  ).toBe(true);
+  // Clerk being down refuses the stream with 401, and the list's 503 `clerk_unreachable` is the
+  // sign-in service's outage.
+  expect(relayOffline("plxd dial: could not sign in: the relay refused this host's proof")).toBe(
+    false,
+  );
+  expect(outageOf({ data: { kind: "clerkUnreachable" } })).toBe("clerk");
+  expect(relayOffline("plxd dial: could not sign in: the relay's WebSocket failed: HTTP 502")).toBe(
+    false,
+  );
 });
 
 test("a computer takes 5 typed codes an hour", () => {

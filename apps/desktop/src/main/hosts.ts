@@ -63,6 +63,7 @@ import {
   listedKey,
   NoticeWatch,
   outageOf,
+  relayOffline,
   tokenSubject,
   unionLists,
   type SavedAccount,
@@ -2228,7 +2229,8 @@ async function saveRestrictions(allowedHosts: string[]): Promise<boolean> {
  * What an account computer that refused this app for want of a session needs: a sign-in when the
  * user's computers vouch for it, else the setup code it shows. One sign-in runs on its
  * own after each time the computer answered; after that, a denied or lapsed request waits for
- * the user to ask again, since a new request starts only when the user asks (0091).
+ * the user to ask again, since a new request starts only when the user asks (0091). One the relay
+ * refused as offline never reached it, so it runs again once the relay lists that computer online.
  */
 async function beginAccess(id: string): Promise<void> {
   if (typedOnly.has(id) && accountAccess.get(id)?.step !== "pairing")
@@ -2236,12 +2238,13 @@ async function beginAccess(id: string): Promise<void> {
   if (startingOver) return;
   const step = accountAccess.get(id)?.step;
   if (step === "signingIn" || step === "pairing" || step === "pending" || step === "ask") return;
+  if (step === "offline" && offlineAccounts.has(id)) return;
   const relayId = relayIdOf(id);
   const vouched = await vouchedHosts();
   if (startingOver) return;
   if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
   if (!vouched.has(relayId) || allowing.has(id)) return askForCode(id);
-  if (signedIn.has(id))
+  if (signedIn.has(id) && step !== "offline")
     return setAccess(id, { step: "ask", why: "It hasn't let this computer in. Ask again." });
   await signIn(id);
 }
@@ -2615,6 +2618,10 @@ async function signIn(id: string): Promise<number | null | undefined> {
   if (code === 0) {
     setAccess(id, undefined);
     connections.get(id)?.retry();
+    return code;
+  }
+  if (code === EXIT_UNAVAILABLE && relayOffline(stderr)) {
+    setAccess(id, { step: "offline" });
     return code;
   }
   const removed = code === EXIT_REMOVED && (await believes(id));
