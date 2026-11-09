@@ -87,7 +87,12 @@ export function AgentWorkSetting({
   return (
     <ComputerSetting
       title="Agents can work here"
-      note={why ?? (read?.on && !read.relay ? "Needs Reach from anywhere" : undefined)}
+      note={
+        why ??
+        (read?.on && !read.relay
+          ? "Needs Reach from anywhere"
+          : "Agents on your other computers can run commands there as you. Also turns on pairing there.")
+      }
     >
       <Switch
         label={`Let agents on my other computers work on ${host.name}`}

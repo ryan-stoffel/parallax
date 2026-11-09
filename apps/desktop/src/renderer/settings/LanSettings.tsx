@@ -62,6 +62,10 @@ export function useLocalAccess() {
   const [status, setStatus] = useState<RemoteSessionsResult>();
   // Bumped to read this computer's settings again, after something else changed them.
   const [read, setRead] = useState(0);
+  // Bumped to read the account's computers again, after one joined or left.
+  const [listRead, setListRead] = useState(0);
+  // A sign-in is turning `relay` on, some seconds after it's done: read until it shows.
+  const [settling, setSettling] = useState(false);
   // What a switch or button here couldn't do. One replaces the last, and trying again closes it.
   const failed = (title: string, body: string) =>
     notify({ key: "same-network", tone: "error", title, body });
@@ -89,7 +93,17 @@ export function useLocalAccess() {
     void window.parallax.relayHosts().then((hosts) => {
       if (typeof hosts !== "string") setRelayHosts(hosts);
     });
-  }, [connected, connectedNow, relay]);
+  }, [connected, connectedNow, relay, listRead]);
+  useEffect(() => {
+    if (!settling) return;
+    if (relay) return setSettling(false);
+    const timer = setInterval(() => setRead((n) => n + 1), 1500);
+    const giveUp = setTimeout(() => setSettling(false), 30_000);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(giveUp);
+    };
+  }, [settling, relay]);
   // While a code is up, a device that pairs shows up here, and the code goes, as it does once plxd
   // ends the pairing: used, locked, or expired. A bind that failed shows up too.
   const showing =
@@ -114,6 +128,19 @@ export function useLocalAccess() {
     relayHosts,
     showing,
     reload: () => setRead((n) => n + 1),
+    /**
+     * Signing in registers this computer, and plxd then turns `relay` on, which nothing tells the
+     * app (PLX-1146). Reads the settings now, and again until it shows or half a minute passes.
+     */
+    expectRelay: () => {
+      setRead((n) => n + 1);
+      setSettling(true);
+    },
+    /** Reads the account's computers again. */
+    refreshRelayHosts: () => setListRead((n) => n + 1),
+    /** Drops a computer being removed from the list held here, ahead of the next read. */
+    forgetRelayHost: (hostId: string) =>
+      setRelayHosts((hosts) => hosts?.filter((h) => h.hostId !== hostId)),
     toggle: async (next: boolean) => {
       retry();
       const answer = await window.parallax.request(localId, "host/settings/set", { remote: next });
@@ -350,14 +377,14 @@ export function ThisComputerAccess(props: {
  * Settings > Connections' Devices with access: the phones, browsers, and computers paired with or
  * signed in to this computer, each with Revoke and Make read-only (PLX-1364), shown with pairing
  * off too. Pair a device shows a short one-time code while this computer advertises itself by name
- * over mDNS, with what a paired computer can do beside it.
+ * over mDNS, with what a paired computer can do beside it. With pairing off, the card says how to
+ * pair one, and is where a search for Pair a device lands.
  */
 export function DevicesWithAccess({ access }: { access: LocalAccess }) {
   const { sessions, showing } = access;
   // The session whose Make read-only is waiting for a second click.
   const [confirming, setConfirming] = useState<string>();
   const canPair = !!access.on && !!access.status?.listening;
-  if (!sessions.length && !canPair) return null;
   return (
     <Section
       title="Devices with access"
@@ -376,85 +403,93 @@ export function DevicesWithAccess({ access }: { access: LocalAccess }) {
         )
       }
     >
-      {showing && (
-        <AccessRow
-          title="Pair a device"
-          description={
-            <>
-              On the other computer, choose Add computer, then On this network, pick{" "}
-              <span className="text-foreground">{showing.name}</span>, and enter this code. It works
-              once, for 5 minutes. {GRANTS}
-            </>
-          }
-        >
-          <span
-            aria-label="Pairing code"
-            className="font-mono text-heading font-semibold tracking-widest"
+      {/* Where a search for Pair a device lands while its button isn't there. */}
+      <div data-setting={canPair || showing ? undefined : "pair-a-device"}>
+        {showing && (
+          <AccessRow
+            title="Pair a device"
+            description={
+              <>
+                On the other computer, choose Add computer, then On this network, pick{" "}
+                <span className="text-foreground">{showing.name}</span>, and enter this code. It
+                works once, for 5 minutes. {GRANTS}
+              </>
+            }
           >
-            {showing.code}
-          </span>
-          <button type="button" className={quietButton} onClick={() => void access.pair()}>
-            New code
-          </button>
-        </AccessRow>
-      )}
-      {sessions.map((s) => {
-        const paired = `Paired ${new Date(s.createdAt).toLocaleDateString()}`;
-        return (
-          <div
-            key={s.id}
-            className="flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-2 border-border/40 px-4 py-3 not-last:border-b"
-          >
-            <div className="min-w-[min(14rem,100%)] flex-1">
-              <span className="flex items-center gap-2 text-body font-medium">
-                <span className="truncate">{s.name || "Unnamed computer"}</span>
-                {s.readOnly && <span className={`${badge} text-muted-foreground`}>Read-only</span>}
-              </span>
-              <span className="mt-0.5 block text-meta text-muted-foreground">
-                {confirming === s.id
-                  ? `Make this computer read-only on all your computers? It can read threads but not change anything. ${READ_ONLY_FOR_GOOD}`
-                  : s.readOnly
-                    ? `${paired}. It reads threads and can't change anything. For full access, revoke it and pair it again.`
-                    : paired}
-              </span>
-            </div>
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              {confirming === s.id ? (
-                <ConfirmRemove
-                  label="Make read-only"
-                  onRemove={() => {
-                    setConfirming(undefined);
-                    void access.makeReadOnly(s.id);
-                  }}
-                  onCancel={() => setConfirming(undefined)}
-                />
-              ) : (
-                <>
-                  {access.canMakeReadOnly && !s.readOnly && (
+            <span
+              aria-label="Pairing code"
+              className="font-mono text-heading font-semibold tracking-widest"
+            >
+              {showing.code}
+            </span>
+            <button type="button" className={quietButton} onClick={() => void access.pair()}>
+              New code
+            </button>
+          </AccessRow>
+        )}
+        {sessions.map((s) => {
+          const paired = `Paired ${new Date(s.createdAt).toLocaleDateString()}`;
+          return (
+            <div
+              key={s.id}
+              className="flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-2 border-border/40 px-4 py-3 not-last:border-b"
+            >
+              <div className="min-w-[min(14rem,100%)] flex-1">
+                <span className="flex items-center gap-2 text-body font-medium">
+                  <span className="truncate">{s.name || "Unnamed computer"}</span>
+                  {s.readOnly && (
+                    <span className={`${badge} text-muted-foreground`}>Read-only</span>
+                  )}
+                </span>
+                <span className="mt-0.5 block text-meta text-muted-foreground">
+                  {confirming === s.id
+                    ? `Make this computer read-only on all your computers? It can read threads but not change anything. ${READ_ONLY_FOR_GOOD}`
+                    : s.readOnly
+                      ? `${paired}. It reads threads and can't change anything. For full access, revoke it, then pair it again or choose Start over with a new key on that device.`
+                      : paired}
+                </span>
+              </div>
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                {confirming === s.id ? (
+                  <ConfirmRemove
+                    label="Make read-only"
+                    onRemove={() => {
+                      setConfirming(undefined);
+                      void access.makeReadOnly(s.id);
+                    }}
+                    onCancel={() => setConfirming(undefined)}
+                  />
+                ) : (
+                  <>
+                    {access.canMakeReadOnly && !s.readOnly && (
+                      <button
+                        type="button"
+                        className={quietButton}
+                        onClick={() => setConfirming(s.id)}
+                      >
+                        Make read-only
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={quietButton}
-                      onClick={() => setConfirming(s.id)}
+                      onClick={() => void access.revoke(s.id)}
                     >
-                      Make read-only
+                      Revoke
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className={quietButton}
-                    onClick={() => void access.revoke(s.id)}
-                  >
-                    Revoke
-                  </button>
-                </>
-              )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })}
-      {!sessions.length && !showing && (
-        <p className="px-4 py-3 text-body text-muted-foreground">Nothing has access yet.</p>
-      )}
+          );
+        })}
+        {!sessions.length && !showing && (
+          <p className="px-4 py-3 text-body text-muted-foreground">
+            Nothing has access yet.
+            {!canPair && " Turn on Pair computers on this network to pair a device."}
+          </p>
+        )}
+      </div>
     </Section>
   );
 }
@@ -505,8 +540,9 @@ export function AdvancedSettings({
                 Open <span className="font-mono text-foreground">{addresses}</span> and pair with a
                 code from Pair a device. Use the Tailscale address where you can. On this network
                 the browser warns about this computer's certificate: continue only if it shows this
-                SHA-256 fingerprint, or someone on the network could pose as this computer. Turning
-                this off disconnects paired browsers.
+                SHA-256 fingerprint, or trust the certificate in your OS first. Otherwise someone on
+                the network could pose as this computer. Turning this off disconnects paired
+                browsers.
               </>
             )
           }

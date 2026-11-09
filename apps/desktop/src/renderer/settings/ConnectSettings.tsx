@@ -121,6 +121,8 @@ export interface ComputerStatus {
   /** The whole error behind `text`, for a tooltip and the opened row. */
   detail?: string;
   need?: Need;
+  /** Read out as it appears: a warning that took the status's place. */
+  alert?: boolean;
 }
 
 /** What a computer still joining the account needs, and how loudly its dot says so. */
@@ -273,7 +275,8 @@ function factsOf(
 ): string {
   return [
     ...lead,
-    state?.status === "connected" && state.plxd && `plxd ${state.plxd}`,
+    // Also the plxd that refused the handshake for being too old.
+    runningPlxd(state) && `plxd ${runningPlxd(state)}`,
     health && !here && `${health.latency} ms`,
     health && `up ${uptime(health.uptimeSeconds)}`,
     health &&
@@ -309,6 +312,7 @@ function ComputerRow({
   icon,
   badges,
   status,
+  error,
   dim,
   renaming,
   action,
@@ -323,7 +327,9 @@ function ComputerRow({
   name: string;
   icon: ReactNode;
   badges?: ReactNode;
-  status: Pick<ComputerStatus, "tone" | "text" | "detail">;
+  status: Pick<ComputerStatus, "tone" | "text" | "detail" | "alert">;
+  /** What went wrong, printed under the status, for a row that can't open to say it. */
+  error?: string;
   dim?: boolean;
   /** The form that renames it, in its name's place. */
   renaming?: ReactNode;
@@ -362,9 +368,16 @@ function ComputerRow({
               <span className="flex h-4 shrink-0 items-center">
                 <StatusDot tone={status.tone} />
               </span>
-              {/* Never cut short: it can hold a code to compare. */}
-              <span className="min-w-0">{status.text}</span>
+              {/* Never cut short: it can hold a code to compare. Remounted as an alert, so it's read. */}
+              <span
+                key={status.alert ? "alert" : "status"}
+                role={status.alert ? "alert" : undefined}
+                className="min-w-0"
+              >
+                {status.text}
+              </span>
             </p>
+            {error && <p className="mt-0.5 text-meta text-danger">{error}</p>}
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -380,6 +393,8 @@ function ComputerRow({
                 label={`${name} options`}
                 align="end"
                 className="min-w-52 p-1"
+                // Icon and Rename are off for a computer out of reach, and can't take the focus.
+                focus='[role="menuitem"]:not(:disabled)'
               >
                 {menu.items}
               </Menu>
@@ -389,7 +404,8 @@ function ComputerRow({
             <IconButton
               label={`${name} settings`}
               aria-expanded={!!open}
-              aria-controls={settingsId}
+              // Its settings are only there while open.
+              aria-controls={open ? settingsId : undefined}
               onClick={onToggle}
             >
               <ChevronDown
@@ -627,9 +643,9 @@ export function ThisComputerRow({
           : {
               tone: state?.status === "failed" ? "error" : "off",
               text: state ? statusLabel(state) : "Connecting…",
-              ...(state?.status === "failed" && { detail: state.error.message }),
             }
       }
+      {...(state?.status === "failed" && { error: state.error.message })}
       menu={{ state: menu, items: look.items }}
       after={look.icons}
     />
@@ -648,12 +664,15 @@ function DeviceRow({
   host,
   balancer,
   onEnterCode,
+  onRemove,
 }: {
   device: DeviceHost;
   host?: Host;
   balancer: Balancer;
   /** Opens the code dialog, for a new account computer. */
   onEnterCode: () => void;
+  /** Removes it: off the account, or off this app's list. Resolves to why not. */
+  onRemove: () => Promise<string | undefined>;
 }) {
   const { enabled, access } = device;
   const kind: Kind = device.id.startsWith("account:") ? "account" : "tailnet";
@@ -760,11 +779,7 @@ function DeviceRow({
           {device.routes && (
             <RoutesDialog ref={routesDialog} device={device} connected={connected} />
           )}
-          <RemoveDialog
-            ref={removeDialog}
-            name={device.name}
-            remove={() => window.parallax.removeDevice(device.id)}
-          >
+          <RemoveDialog ref={removeDialog} name={device.name} remove={onRemove}>
             {kind === "account" ? REMOVED_FROM_ACCOUNT : removedHere(device.name)}
           </RemoveDialog>
         </>
@@ -847,6 +862,8 @@ function SavedHostRow({
     ...(fix && { fix }),
     canSignIn,
   });
+  // The question goes with what it asked about: a host that no longer needs an update isn't asked.
+  if (confirming && status.need !== "update") setConfirming(false);
 
   return (
     <ComputerRow
@@ -856,7 +873,11 @@ function SavedHostRow({
       badges={balancerBadge(balancer, host.id)}
       status={
         confirming
-          ? { tone: "warn", text: "Updating restarts plxd there, which stops its running agents." }
+          ? {
+              tone: "warn",
+              text: "Updating restarts plxd there, which stops its running agents.",
+              alert: true,
+            }
           : status
       }
       action={
@@ -1127,6 +1148,7 @@ export function Computers({
   appVersion,
   accountOnly,
   removeAccountOnly,
+  removeDevice,
 }: {
   hosts: Host[];
   devices: DeviceHost[];
@@ -1138,11 +1160,15 @@ export function Computers({
   appVersion: string | undefined;
   accountOnly: RelayHost[];
   removeAccountOnly: (hostId: string) => Promise<string | undefined>;
+  /** Removes a device by its id, and keeps the account's list in step. Resolves to why not. */
+  removeDevice: (deviceId: string) => Promise<string | undefined>;
 }) {
   const { notice, usage } = useNotices();
   // The way to add a computer that's open, or the SSH host being edited, by id.
   const [adding, setAdding] = useState<"account" | "lan" | "ssh" | { edit: string }>();
-  const [entering, setEntering] = useState<DeviceHost>();
+  // The computer whose code dialog is open, by id, so the dialog follows what the app learns of it.
+  const [enteringId, setEnteringId] = useState<string>();
+  const entering = devices.find((d) => d.id === enteringId);
   useEffect(() => void window.parallax.discoverAccount(), []);
   const addMenu = useRowMenu();
   const saved = hosts.filter((h) => h.destination || h.routes);
@@ -1155,7 +1181,8 @@ export function Computers({
           device={d}
           {...(hosts.some((h) => h.id === d.id) && { host: hosts.find((h) => h.id === d.id)! })}
           balancer={balancer}
-          onEnterCode={() => setEntering(d)}
+          onEnterCode={() => setEnteringId(d.id)}
+          onRemove={() => removeDevice(d.id)}
         />
       ),
     })),
@@ -1258,7 +1285,7 @@ export function Computers({
         <NewComputerDialog
           key={entering.id}
           computer={entering}
-          onClose={() => setEntering(undefined)}
+          onClose={() => setEnteringId(undefined)}
         />
       )}
     </>

@@ -44,6 +44,34 @@ export function ConnectionSettings() {
     setSigningIn(false);
     if (failed) notify({ tone: "error", title: "Couldn't sign in", body: failed });
   };
+  // Signing in from anywhere turns Reach from anywhere on here, so its row reads it again.
+  const signedOut = useRef(false);
+  useEffect(() => {
+    if (profile === null) signedOut.current = true;
+    else if (profile && signedOut.current) {
+      signedOut.current = false;
+      access.expectRelay();
+    }
+  }, [profile]);
+  // The account's list follows its computers: one that joins or leaves changes the list.
+  const onAccount = devices
+    .filter((d) => d.id.startsWith("account:"))
+    .map((d) => d.id)
+    .join(" ");
+  const listed = useRef(onAccount);
+  useEffect(() => {
+    if (listed.current === onAccount) return;
+    listed.current = onAccount;
+    access.refreshRelayHosts();
+  }, [onAccount]);
+  // A removed account computer leaves the list held here at once, not at the next read, so it
+  // can't show again as a computer this app has no device for.
+  const removeDevice = async (deviceId: string) => {
+    if (deviceId.startsWith("account:")) access.forgetRelayHost(deviceId.slice("account:".length));
+    const failed = await window.parallax.removeDevice(deviceId);
+    access.refreshRelayHosts();
+    return failed;
+  };
   const here = hosts.find((h) => h.id === localId)!;
   const account = { signedOut: profile === null, signingIn, onSignIn: () => void signIn() };
   // The account's computers this app has no device for, which only their relay entry can remove.
@@ -90,6 +118,7 @@ export function ConnectionSettings() {
         appVersion={appVersion}
         accountOnly={accountOnly}
         removeAccountOnly={access.removeRelayHost}
+        removeDevice={removeDevice}
       />
       <LoadBalancerSettings hosts={hosts} balancer={balancer} />
       <DevicesWithAccess access={access} />
