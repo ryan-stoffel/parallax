@@ -13,7 +13,7 @@ const rendererDir = path.join(__dirname, "../renderer");
 
 /**
  * Registers the app scheme, `plx-render`, which serves html_render pages, and `plx-file`, which
- * streams a run's videos (hosts.ts). Must run before the app is ready.
+ * streams a run's videos and HTML files (hosts.ts). Must run before the app is ready.
  */
 export function registerAppScheme(): void {
   protocol.registerSchemesAsPrivileged([
