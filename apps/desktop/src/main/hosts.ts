@@ -734,8 +734,11 @@ function byteRange(
   return Number(to) >= start ? { start, end: Number(to) } : "invalid";
 }
 
-// A streamed file's Content-Type, by its extension. Anything else is bytes.
+// A streamed file's Content-Type, by its extension. Anything else is bytes. An HTML file is one
+// the side panel shows in a frame (PLX-1484).
 const streamTypes: Record<string, string> = {
+  html: "text/html; charset=utf-8",
+  htm: "text/html; charset=utf-8",
   mp4: "video/mp4",
   m4v: "video/mp4",
   webm: "video/webm",
@@ -750,7 +753,8 @@ const streamTypes: Record<string, string> = {
  * request gets 206 and the bytes it asks for, and one without gets 200 and the whole file, read a
  * slice each time the player wants more, so a player that pauses or seeks away reads no further.
  * Each answer runs to the range's end: Chromium takes a non-http response's length as the file's,
- * so a shorter one would end the video there.
+ * so a shorter one would end the video there. An HTML file is served as a page under
+ * `renderPolicy`, for the side panel's frame (PLX-1484).
  */
 export async function streamFile(url: string, range: string | null): Promise<Response> {
   const refuse = (status: number, why: string) => new Response(why, { status });
@@ -825,6 +829,8 @@ export async function streamFile(url: string, range: string | null): Promise<Res
       "Accept-Ranges": "bytes",
       "Content-Type": streamTypes[extension] ?? "application/octet-stream",
       "Content-Length": String(end - start),
+      // A page served here, such as a presented HTML file, runs as html_render's do.
+      "Content-Security-Policy": renderPolicy,
       ...(asked && { "Content-Range": `bytes ${start}-${end - 1}/${size}` }),
     },
   });

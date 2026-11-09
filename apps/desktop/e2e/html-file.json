@@ -1,0 +1,41 @@
+[
+  {
+    "init": {
+      "sessionId": "e2e-html-file",
+      "model": "fake-model"
+    }
+  },
+  {
+    "writeFile": {
+      "path": "report.html",
+      "content": "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>Weekly report</title>\n<style>\n  body { font: 15px system-ui, sans-serif; margin: 32px; color: #1f2933; }\n  h1 { font-size: 22px; margin: 0 0 16px; }\n  .bars { display: flex; gap: 12px; align-items: flex-end; height: 140px; }\n  .bar { width: 40px; background: #0d9488; border-radius: 6px 6px 0 0; }\n</style>\n</head>\n<body>\n<h1>Weekly report</h1>\n<div class=\"bars\" id=\"bars\"></div>\n<p id=\"status\">Waiting for the script.</p>\n<script>\n  for (const h of [60, 90, 45, 120, 80]) {\n    const bar = document.createElement(\"div\");\n    bar.className = \"bar\";\n    bar.style.height = h + \"px\";\n    document.getElementById(\"bars\").append(bar);\n  }\n  document.getElementById(\"status\").textContent = \"Drawn by the page's own script.\";\n</script>\n</body>\n</html>\n"
+    }
+  },
+  {
+    "emit": {
+      "kind": "toolCall",
+      "callId": "toolu_e2e_present",
+      "name": "mcp__plxd__present_files",
+      "input": {
+        "paths": ["report.html"]
+      }
+    }
+  },
+  {
+    "emit": {
+      "kind": "toolResult",
+      "callId": "toolu_e2e_present",
+      "status": "ok",
+      "output": "{\"presentedFiles\": [{\"path\": \"report.html\", \"name\": \"report.html\", \"kind\": \"file\"}], \"message\": \"Shown to the reader above your reply.\"}"
+    }
+  },
+  {
+    "emit": {
+      "kind": "text",
+      "text": "Here's the weekly report."
+    }
+  },
+  {
+    "endTurn": {}
+  }
+]

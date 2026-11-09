@@ -330,12 +330,16 @@ test("streamFile answers ranges in agent/file slices, and refuses what isn't a f
 
     const some = await read("bytes=2-5");
     expect(some.response.status).toBe(206);
-    expect(Object.fromEntries(some.response.headers)).toEqual({
+    const { "content-security-policy": policy, ...headers } = Object.fromEntries(
+      some.response.headers,
+    );
+    expect(headers).toEqual({
       "accept-ranges": "bytes",
       "content-length": "4",
       "content-range": "bytes 2-5/20",
       "content-type": "video/mp4",
     });
+    expect(policy).toMatch(/^sandbox allow-scripts allow-forms;/);
     expect(some.text).toBe("2345");
     expect(some.reads).toEqual(slices(2));
 
@@ -360,6 +364,11 @@ test("streamFile answers ranges in agent/file slices, and refuses what isn't a f
     expect(whole.response.headers.has("content-range")).toBe(false);
     expect(whole.text).toBe(file.toString());
     expect(whole.reads).toEqual(slices(0, 4, 8, 12, 16));
+
+    // An HTML file is a page, which the side panel frames (PLX-1484), sandboxed by its policy.
+    const page = await streamFile("plx-file://file/local/run-1/report.html", null);
+    expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(page.headers.get("content-security-policy")).toBe(policy);
 
     const past = await read("bytes=25-");
     expect(past.response.status).toBe(416);
