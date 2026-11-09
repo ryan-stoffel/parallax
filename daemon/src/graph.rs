@@ -228,7 +228,7 @@ impl<'a> Fold<'a> {
                 session_id,
                 ..
             } => self.finish_turn(*turn_id, cursor.as_ref(), session_id.as_ref()),
-            AgentOutputItem::FollowUpDropped { turn_id } => {
+            AgentOutputItem::FollowUpDropped { turn_id, .. } => {
                 let at = self.open.iter().position(|run| run.id == *turn_id);
                 self.end_at(at, ThreadRunStatus::Cancelled)
             }

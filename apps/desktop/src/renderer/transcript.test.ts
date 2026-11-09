@@ -522,6 +522,11 @@ test("a compaction shows under way, then done in its place, and a finished turn 
     output({ kind: "followUpDropped", turnId: uuidv7() }),
   );
   expect(dropped.turnDone).toBe(false);
+  expect(dropped.items.at(-1)).toMatchObject({ kind: "notice", tone: "warning" });
+
+  // One taken back from the queue shows nothing, after a reload too (PLX-1485).
+  const taken = build(output({ kind: "followUpDropped", turnId: uuidv7(), cancelled: true }));
+  expect(taken.items.some((i) => i.kind === "notice")).toBe(false);
 
   // A stopped turn logs no turnFinished, but its CLI's end closes it: a later turn's end is the end.
   const resumed = build(

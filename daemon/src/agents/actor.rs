@@ -2570,8 +2570,11 @@ impl Actor {
         self.senders.remove(&turn_id);
         // Clients show this as a message of theirs that wasn't sent, and a hidden one isn't theirs.
         if !self.hidden_turns.contains(&turn_id) {
-            self.push(AgentOutputItem::FollowUpDropped { turn_id })
-                .await;
+            self.push(AgentOutputItem::FollowUpDropped {
+                turn_id,
+                cancelled: false,
+            })
+            .await;
         }
         self.flush().await;
     }
@@ -2590,8 +2593,11 @@ impl Actor {
             info!(run = %self.id, turn = %queued.turn_id, "dropping a waiting message");
             let turn_id = queued.turn_id;
             self.senders.remove(&turn_id);
-            self.push(AgentOutputItem::FollowUpDropped { turn_id })
-                .await;
+            self.push(AgentOutputItem::FollowUpDropped {
+                turn_id,
+                cancelled: false,
+            })
+            .await;
         }
         self.queue_held = !kept.is_empty();
         self.queued = kept;
@@ -2649,8 +2655,11 @@ impl Actor {
                 remaining.remove(at);
                 info!(run = %self.id, turn = %id, "cancelling a waiting message");
                 // Staged in the same job as the queue, so the two commit together.
-                self.push(AgentOutputItem::FollowUpDropped { turn_id: id })
-                    .await;
+                self.push(AgentOutputItem::FollowUpDropped {
+                    turn_id: id,
+                    cancelled: true,
+                })
+                .await;
                 self.store_queue(&remaining, command_id).await?;
                 self.queued = remaining;
                 self.senders.remove(&id);
@@ -5056,7 +5065,7 @@ mod tests {
             })
             .flatten()
             .filter_map(|item| match item {
-                AgentOutputItem::FollowUpDropped { turn_id } => Some(turn_id),
+                AgentOutputItem::FollowUpDropped { turn_id, .. } => Some(turn_id),
                 _ => None,
             })
             .collect()
