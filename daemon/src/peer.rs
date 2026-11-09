@@ -758,12 +758,20 @@ pub(crate) struct RelayLink {
     /// Why the computer won't take this one, set by a refusal that lasts until its user changes
     /// something, and cleared by a connection.
     refused: Mutex<Option<String>>,
+    /// When the computer itself last refused this one a session for good, cleared by a connection.
+    session_refused: Mutex<Option<Instant>>,
 }
 
 impl RelayLink {
     /// Why the computer won't take this one, when it said so for good.
     pub(crate) fn refused(&self) -> Option<String> {
         lock(&self.refused).clone()
+    }
+
+    /// Whether the computer refused this one a session for good within the last `wait`, so a
+    /// caller that tries on a schedule, such as You memory sync, can wait before dialing again.
+    pub(crate) fn session_refused_within(&self, wait: Duration) -> bool {
+        lock(&self.session_refused).is_some_and(|at| at.elapsed() < wait)
     }
 }
 
@@ -789,6 +797,7 @@ async fn dial_relay(
     match opened {
         Ok(stream) => {
             *lock(&link.refused) = None;
+            *lock(&link.session_refused) = None;
             let client = ClientInfo {
                 name: "plxd".to_owned(),
                 version: crate::version().to_owned(),
@@ -852,7 +861,10 @@ async fn open_relay(
             let token = remote::peer_session(stream, id, &key, &label)
                 .await
                 .map_err(|refusal| match refusal {
-                    PeerRefusal::ForGood(why) => RelayFailure::ForGood(why),
+                    PeerRefusal::ForGood(why) => {
+                        *lock(&link.session_refused) = Some(Instant::now());
+                        RelayFailure::ForGood(why)
+                    }
                     PeerRefusal::Failed(error) => failed(&error),
                 })?;
             *lock(&link.token) = Some(token.clone());

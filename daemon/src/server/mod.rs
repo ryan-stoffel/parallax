@@ -159,8 +159,8 @@ pub struct Config {
     /// The largest bundle `bundle/prepare` and `bundle/begin` take (0057). 64 MiB by default;
     /// tests shrink it.
     pub max_bundle_bytes: u64,
-    /// How often plxd pulls You memory from the user's other Connect devices (0082). 60 s by
-    /// default.
+    /// How often plxd pulls You memory from the user's other computers, over Connect and the relay
+    /// (0082, PLX-1362). 60 s by default.
     pub you_sync_interval: Duration,
     /// The port of the other devices' Connect listeners, for that pull. `None`, the default, is
     /// `connect_port`; tests run two plxds on one loopback.

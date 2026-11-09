@@ -34,8 +34,8 @@ Not chosen:
 
 ### Identity and access
 
-- **A machine is its Tailscale node ID.** Its name is its `deviceName` (0056), or its Tailscale host name when that is unset, as of the write.
-- **Who may sync:** the dialing plxd runs 0056's device filter. The answering plxd serves `memory/syncList` and `memory/syncRead` only on a connection that arrived over its Connect listener and passed 0056's `tailscale whois` check. It refuses them on every other connection: the local socket, `plxd attach` over SSH, and paired remote and relay sessions.
+- **A machine is its Tailscale node ID.** Its name is its `deviceName` (0056), or its Tailscale host name when that is unset, as of the write. Amended 2026-11-09 (PLX-1362): while Tailscale doesn't answer, a machine is its relay id instead, and its name falls back to its host name. Only that machine counts under either id, so clocks stay right when it changes.
+- **Who may sync:** the dialing plxd runs 0056's device filter. The answering plxd serves `memory/syncList` and `memory/syncRead` only on a connection that arrived over its Connect listener and passed 0056's `tailscale whois` check. It refuses them on every other connection: the local socket, `plxd attach` over SSH, and paired remote and relay sessions. Amended 2026-11-09 (PLX-1362): [0101](0101-agents-work-across-computers.md) adds another computer's peer session over the relay, which the answering plxd gives only to a computer it approved while its `agentWork` is on. It serves both methods there too, and still refuses every device's and browser's session.
 - **Pull only.** A plxd reads its peers and writes only its own folder.
 
 ### Entry versions
@@ -76,7 +76,7 @@ In each concurrent case the kept row takes the merged clock (pointwise maximum).
 ### What the user sees
 
 - `MemoryFile` gains `machine` (`{ id, name }`) for a You entry whose file matches its row: the computer that last wrote it. The Memory panel shows "Written on {name}" beside its source.
-- There is no new setting. You syncs while `connect` is on.
+- There is no new setting. You syncs while `connect` is on. Amended 2026-11-09 (PLX-1362): also while `relay` is on, with each online computer the relay lists, through 0101's peer sessions. `agentWork` decides whether a computer gives its You memory over the relay.
 
 ### Protocol
 
@@ -90,7 +90,7 @@ In each concurrent case the kept row takes the merged clock (pointwise maximum).
 - Server tests with two plxds on loopback and a fake tailnet:
   - **Conflict:** an entry written on A reaches B, showing A as its machine. Both edit it while apart. Once they reconnect, both hold the later edit, and the other edit is a proposal, at most one per host, which more pulls don't add to.
   - **Offline catch-up:** B stops. A adds, edits, and deletes entries. B restarts on its data folder and matches A after a pull, the deletion included, and A still matches after more pulls.
-  - **Connect only:** a client on the local socket is refused `memory/syncList` and `memory/syncRead`.
+  - **Connect only:** a client on the local socket is refused `memory/syncList` and `memory/syncRead`. Amended 2026-11-09 (PLX-1362): so is a paired device's session on the remote listener, and two plxds under `wrangler dev` with Tailscale stopped sync through 0101's peer sessions only once each approved the other.
 
 ## Consequences
 
