@@ -314,11 +314,25 @@ async fn output_over_the_relay_doesnt_pile_up_behind_a_slow_client() {
     let terminals = Terminals::default();
     let stopped = CancellationToken::new();
     let (replies, mut output) = over_relay(&terminals, "yes", &stopped);
-    // Nothing reads what's queued, as with a client slower than the pace.
-    tokio::time::sleep(3 * FLOOD_PAUSE).await;
-    let queued = replies.max_capacity() - replies.capacity();
-    let skip = FLOOD_TAIL.div_ceil(RELAY_CHUNK);
-    assert!(queued <= QUEUE_BEHIND + skip, "{queued} messages queued");
+    let waiting = || replies.max_capacity() - replies.capacity();
+    // Nothing reads what's queued, as with a client slower than the pace, so it falls behind.
+    let fell_behind = async {
+        while !behind(&replies) {
+            tokio::time::sleep(BATCH_WINDOW).await;
+        }
+    };
+    timeout(PATIENCE, fell_behind)
+        .await
+        .expect("the flood never got ahead of the client");
+    // What the stream was sending as the client fell behind is the last it queues: at most a
+    // burst, which a busy machine's slower `yes` fits in one batch (PLX-1464), or a skip's tail.
+    tokio::time::sleep(FLOOD_PAUSE).await;
+    let queued = waiting();
+    #[expect(clippy::cast_precision_loss, reason = "a few messages")]
+    let fits = queued as f64 <= QUEUE_BEHIND as f64 + (PACE_BURST / RELAY_CHUNK as f64).ceil();
+    assert!(fits, "{queued} messages queued");
+    tokio::time::sleep(2 * FLOOD_PAUSE).await;
+    assert_eq!(waiting(), queued, "more was queued behind a slow client");
 
     // It goes on once the client reads again, adding to what the client shows.
     let (_, replay) = next(&mut output).await.expect("it exited first");
