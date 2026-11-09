@@ -8,6 +8,9 @@ name: Relay probe
 # before registering anything. Only a failed check fails a run: a slow number doesn't. A call from
 # release.yml passes advisory, so a failed check shows on this job and in the notes but leaves the
 # Release run's conclusion to the release itself (PLX-1431). PLX-1385 has how to add them.
+#
+# A manual run picks the relay, production or staging (PLX-1495, relay/README.md), and also keeps
+# each connect's stages. The schedule and release.yml's call can't, so they test production.
 on:
   schedule:
     # Away from minute zero, when scheduled jobs pile up.
@@ -18,11 +21,14 @@ on:
         description: "Release to test. Empty tests the newest nightly."
         required: false
         type: string
-      timings:
-        description: "Keep each connect's stage times in the artifact (PLX-1493)."
+      relay:
+        description: "Relay to test. Staging is relay/README.md's."
         required: false
-        type: boolean
-        default: false
+        type: choice
+        default: production
+        options:
+          - production
+          - staging
       connects:
         description: "Connects to time. Empty times 5."
         required: false
@@ -63,7 +69,8 @@ jobs:
     # use (PLX-1460). The group is a fixed name, not one built from github.*, which a call from
     # release.yml fills with the caller's values, so the schedule, a manual run, and release.yml's
     # call all wait in this one group. A run waiting here isn't cancelled by the one running, but
-    # GitHub keeps one waiting run per group, so a newer one replaces it.
+    # GitHub keeps one waiting run per group, so a newer one replaces it. A run against another
+    # relay signs in with the same token, so it waits here too (PLX-1495).
     concurrency:
       group: relay-probe
       cancel-in-progress: false
@@ -104,18 +111,21 @@ jobs:
             echo "skip=stale" >> "$GITHUB_OUTPUT"
           fi
 
-      # The test account's token reaches only this step.
+      # The test account's token reaches only this step. RELAY is a manual run's only, and puts each
+      # connect's stages in relay-probe.json (--timings). Staging's URL is the only other relay a
+      # run can name, so the account's token goes nowhere else.
       - name: Test the relay
         env:
           TAG: ${{ inputs.tag }}
-          TIMINGS: ${{ inputs.timings == true && '1' || '' }}
+          RELAY: ${{ inputs.relay }}
+          STAGING: ${{ inputs.relay == 'staging' && 'https://parallax-relay-staging.stoffel-thomas-ryan.workers.dev' || '' }}
           CONNECTS: ${{ inputs.connects }}
           GITHUB_TOKEN: ${{ github.token }}
           PROBE_CLERK_REFRESH_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN }}
           PROBE_CLERK_USER_ID: ${{ vars.PROBE_CLERK_USER_ID }}
           PROBE_ROTATED_FILE: ${{ runner.temp }}/rotated-token
           PROBE_SKIP_SIGNIN: ${{ steps.token.outputs.skip }}
-        run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"} ${TIMINGS:+--timings} ${CONNECTS:+--connects "$CONNECTS"}
+        run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"} ${STAGING:+--relay "$STAGING"} ${RELAY:+--timings} ${CONNECTS:+--connects "$CONNECTS"}
 
       # Clerk replaces the refresh token on each use, so this keeps the next run signed in. The
       # writer reaches only this step and the check above.
