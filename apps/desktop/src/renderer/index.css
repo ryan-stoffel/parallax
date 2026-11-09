@@ -435,22 +435,6 @@
   filter: grayscale(1);
   opacity: 0.5;
 }
-:root.nightly:not(.reduce-motion) .night-sky .twinkle {
-  animation: twinkle 4s ease-in-out infinite;
-}
-:root.nightly:not(.reduce-motion) .night-sky .drift {
-  animation: drift 30s ease-in-out infinite alternate;
-}
-@keyframes twinkle {
-  50% {
-    opacity: 0.2;
-  }
-}
-@keyframes drift {
-  to {
-    transform: translateX(16px);
-  }
-}
 
 /* A theme's orb, its icon in Settings > Appearance where its extension has none: its own
    background and sidebar, glowing with its accent and, smaller, its string color, under a sheen.

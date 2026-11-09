@@ -3,6 +3,8 @@ import { useId } from "react";
 // A nightly build's stars, glow, and clouds in the sidebar's top row (index.css shows them only
 // under .nightly, which main.tsx sets). Drawn 640 by 56 and cropped to the sidebar, so they never
 // scale. The sky behind them is the sidebar's own background (.night-sky-host in index.css).
+// Nothing here animates: Chromium repaints an animated SVG on every frame, which cost an idle
+// window about half a CPU core.
 
 // Stars: x, y, radius, opacity, from a fixed seed so every window draws the same sky.
 const stars = (() => {
@@ -79,19 +81,11 @@ export function NightSky() {
         </defs>
         <rect width="640" height="56" fill={`url(#${id}-glow)`} />
         {stars.map(([x, y, r, opacity], i) => (
-          <circle
-            key={i}
-            cx={x}
-            cy={y}
-            r={r}
-            opacity={opacity}
-            className={i % 4 === 0 ? "twinkle" : undefined}
-            style={{ fill: "var(--star)", animationDelay: `${(i * 0.7) % 4}s` }}
-          />
+          <circle key={i} cx={x} cy={y} r={r} opacity={opacity} style={{ fill: "var(--star)" }} />
         ))}
         <g mask={`url(#${id}-clouds)`}>
           {([0, 1, 2] as const).map((layer) => (
-            <g key={layer} className={layer === 0 ? "drift" : undefined}>
+            <g key={layer}>
               {clouds
                 .filter((c) => c[3] === layer)
                 .map(([x, y, scale]) => (
