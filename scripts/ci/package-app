@@ -89,7 +89,18 @@ node --version
 pnpm --version
 pnpm install --frozen-lockfile
 pnpm build
-pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version" "$@"
+# electron-builder downloads its packaging tools without retrying, so one 5xx there failed
+# a whole build (PLX-1489). Runs it up to three times, again only after a 5xx.
+log=$(mktemp)
+for attempt in 1 2 3; do
+  { pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version" "$@" 2>&1 &&
+    echo 0 > "$log.status" || echo $? > "$log.status"; } | tee "$log"
+  status=$(cat "$log.status")
+  if [ "$status" = 0 ]; then break; fi
+  if [ "$attempt" = 3 ] || ! grep -q 'Response code 5[0-9][0-9]' "$log"; then exit "$status"; fi
+  sleep 30
+done
+rm -f "$log" "$log.status"
 
 # plxd on its own, which the app installs on an SSH host (PLX-642) and plx
 # installs, and its SHA256, which those installs check, beside the installer so publish-build
