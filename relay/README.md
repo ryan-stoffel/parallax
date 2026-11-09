@@ -24,7 +24,7 @@ Point a plxd at a local relay with `PLXD_RELAY_URL=http://127.0.0.1:8787`. Plain
 
 `https://parallax-relay-staging.stoffel-thomas-ryan.workers.dev` is a second Worker, `parallax-relay-staging`, on the same Cloudflare account (PLX-1495). It is for what only shows on real Cloudflare, such as where objects run and how long one holds messages behind a storage write. It has its own Durable Objects and rate-limit namespace, so it shares no storage with production, and no route on `parallax.codes`.
 
-Agents may deploy to it and measure it without asking. It serves one account: its `ALLOWED_USERS` secret holds the relay probe's test account's Clerk user id, and every other account, Ryan's included, gets `403 user_not_allowed`.
+Agents may deploy to it and measure it without asking. It serves one account: its `ALLOWED_USERS` secret holds the relay probe's test account's Clerk user id, and every other account, Ryan's included, gets `403 user_not_allowed`. `REQUIRE_ALLOWED_USERS` in `[env.staging.vars]` is what makes the relay read that secret. With it, a missing or empty secret refuses everyone, so deleting the secret can't open staging. Without it, as on production, the relay ignores `ALLOWED_USERS`, so the secret landing on production by mistake locks nobody out.
 
 Deploy with this one command, from `relay/`, on a computer where `wrangler` is logged in to the account:
 
@@ -38,23 +38,23 @@ Then check it answers, which should print `401`:
 curl -s -o /dev/null -w '%{http_code}\n' https://parallax-relay-staging.stoffel-thomas-ryan.workers.dev/v1/hosts
 ```
 
-`scripts/deploy-staging.mjs` takes no arguments and passes none to wrangler. It stops unless `[env.staging]` is still that Worker with no route, `ALLOWED_USERS` is set, and the type-check and tests pass, then prints the URL and the version id. Agents deploy with nothing else: never `wrangler deploy` on its own, and never `--env=""`, which are production. A staging deploy drops only staging's connections, so it needs no quiet time.
+`scripts/deploy-staging.mjs` takes no arguments and passes none to wrangler. It gives wrangler only a short list of your shell's variables and no `.env` file, since wrangler reads some variables as where to deploy. It stops unless `[env.staging]` is still that Worker with no route and with `REQUIRE_ALLOWED_USERS`, wrangler's own dry run says the deploy goes to `parallax-relay-staging`, `ALLOWED_USERS` is set, and the type-check and tests pass. Then it prints the URL and the version id. Agents deploy with nothing else: never `wrangler deploy` on its own, and never `--env=""`, which are production. A staging deploy drops only staging's connections, so it needs no quiet time.
 
-Measure it with the relay probe, dispatched on your branch with staging's URL and a nightly's tag. Check first that no Relay probe run is in progress or waiting: they run one at a time because they share the test account's refresh token, and GitHub keeps only one waiting run, so a new one replaces it.
+Measure it with the relay probe, dispatched on your branch with `relay=staging` and a nightly's tag. Check first that no Relay probe run is in progress or waiting: they run one at a time because they share the test account's refresh token, and GitHub keeps only one waiting run, so a new one replaces it.
 
 ```sh
-gh workflow run relay-probe.yml --ref <branch> -f relay=https://parallax-relay-staging.stoffel-thomas-ryan.workers.dev -f tag=<nightly tag>
+gh workflow run relay-probe.yml --ref <branch> -f relay=staging -f tag=<nightly tag>
 gh run watch <run id> --interval 300
 gh run download <run id> --name relay-probe --dir relay-probe
 ```
 
-The job summary and `relay-probe.md` have the checks and the medians. A run with `relay` also passes `--timings`, so `relay-probe.json` has `metrics.stages`: one list per timed connect, each entry a stage's `kind`, name, and `ms`. A `connect-timing` stage is plxd's, and its `ms` is the time since the dial started when plxd reached it, so a step's cost is the difference from the stage before. A `connect-server-timing` stage is the relay's own time in one step of the connect request, such as `auth`, `host_open`, and `stream_join`, except `spare`, which is 1 when the connect took a waiting spare stream. The middle value of each stage across the connects:
+The job summary and `relay-probe.md` have the checks and the medians. A manual run also passes `--timings`, so `relay-probe.json` has `metrics.stages`: one list per timed connect, each entry a stage's `kind`, name, and `ms`. A `connect-timing` stage is plxd's, and its `ms` is the time since the dial started when plxd reached it, so a step's cost is the difference from the stage before. A `connect-server-timing` stage is the relay's own time in one step of the connect request, such as `auth`, `host_open`, and `stream_join`, except `spare`, which is 1 when the connect took a waiting spare stream. The middle value of each stage across the connects:
 
 ```sh
 jq -r '[.metrics.stages[][]] | group_by(.kind + " " + .stage)[] | "\(.[0].kind) \(.[0].stage) \(map(.ms) | sort | .[length / 2 | floor]) ms"' relay-probe/relay-probe.json
 ```
 
-Dispatch the same command with `relay=https://relay.parallax.codes` for production's stages to compare. The schedule and each nightly's run pass no `relay`, so they test production.
+Dispatch the same command with `relay=production` for production's stages to compare. The schedule and each nightly's run can't pick a relay, so they test production and keep no stages.
 
 Set once, before the first deploy, and again only if the test account changes. The id goes from the repo variable to the secret without being printed or written anywhere:
 

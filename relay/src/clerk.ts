@@ -74,11 +74,13 @@ export async function verifySession(env: Env, token: string): Promise<string | n
 }
 
 /**
- * Whether `ALLOWED_USERS` lets the relay account `user` (from [`verifySession`]) in. Unset, every
- * user is let in, as on production. Set, only the Clerk user ids it lists, comma-separated, so a
- * set but empty list lets in nobody. Staging sets it to the relay probe's test account (PLX-1495).
+ * Whether the relay serves the account `user` (from [`verifySession`]). Without
+ * `REQUIRE_ALLOWED_USERS`, as on production, it serves everyone and never reads `ALLOWED_USERS`,
+ * so that secret landing there by mistake locks nobody out. With it, as on staging (PLX-1495), it
+ * serves only the Clerk user ids `ALLOWED_USERS` lists, comma-separated, so a missing or empty
+ * list serves nobody and deleting the secret can't open staging.
  */
 export function allowedUser(env: Env, user: string): boolean {
-  if (env.ALLOWED_USERS === undefined) return true;
+  if (!env.REQUIRE_ALLOWED_USERS) return true;
   return list(env.ALLOWED_USERS).includes(user.slice(user.lastIndexOf("|") + 1));
 }

@@ -11,8 +11,8 @@ function untouched<T extends Rpc.DurableObjectBranded | undefined>(namespace: Du
 }
 
 /** The relay as staging runs it: only `allowed` may sign in, and a refusal may not reach an object. */
-const staging = (allowed: string): Env => ({ ...testEnv, ALLOWED_USERS: allowed });
-const sealed = (allowed: string): Env => ({
+const staging = (allowed?: string): Env => ({ ...testEnv, REQUIRE_ALLOWED_USERS: "1", ALLOWED_USERS: allowed });
+const sealed = (allowed?: string): Env => ({
   ...staging(allowed),
   HOSTS: untouched(testEnv.HOSTS),
   STREAMS: untouched(testEnv.STREAMS),
@@ -26,19 +26,24 @@ function send(env: Env, path: string, token?: string, init: { method?: string; b
   return worker.fetch(new Request(`${BASE}${path}`, { method: init.method, body: init.body, headers }), env);
 }
 
-describe("ALLOWED_USERS (PLX-1495)", () => {
-  it("unset, serves every signed-in user, as production does", async () => {
-    expect(testEnv.ALLOWED_USERS).toBeUndefined();
+describe("the allowlist (PLX-1495)", () => {
+  it("not required, serves every signed-in user, as production does", async () => {
+    expect(testEnv.REQUIRE_ALLOWED_USERS).toBeUndefined();
     expect((await send(testEnv, "/v1/hosts", await session("user_anyone"))).status).toBe(200);
   });
 
-  it("set, serves a listed user from either Clerk instance", async () => {
+  it("not required, ignores a list that landed there by mistake", async () => {
+    const env: Env = { ...testEnv, ALLOWED_USERS: "user_probe" };
+    expect((await send(env, "/v1/hosts", await session("user_anyone"))).status).toBe(200);
+  });
+
+  it("required, serves a listed user from either Clerk instance", async () => {
     const env = staging("user_other, user_probe");
     expect((await send(env, "/v1/hosts", await session("user_probe"))).status).toBe(200);
     expect((await send(env, "/v1/hosts", await session("user_probe", { iss: DEVELOPMENT }))).status).toBe(200);
   });
 
-  it("set, refuses any other user with 403 before any object runs", async () => {
+  it("required, refuses any other user with 403 before any object runs", async () => {
     const env = sealed("user_probe");
     const token = await session("user_ryan");
     const host = await newHost();
@@ -55,13 +60,15 @@ describe("ALLOWED_USERS (PLX-1495)", () => {
     }
   });
 
-  it("set, still answers 401 to a request that isn't signed in", async () => {
+  it("required, still answers 401 to a request that isn't signed in", async () => {
     const env = sealed("user_probe");
     expect((await send(env, "/v1/hosts")).status).toBe(401);
     expect((await send(env, "/v1/hosts", "not-a-jwt")).status).toBe(401);
   });
 
-  it("set but empty, refuses everyone", async () => {
-    expect((await send(sealed(""), "/v1/hosts", await session("user_probe"))).status).toBe(403);
+  it("required with a missing or empty list, refuses everyone", async () => {
+    for (const list of [undefined, "", " , "]) {
+      expect((await send(sealed(list), "/v1/hosts", await session("user_probe"))).status).toBe(403);
+    }
   });
 });

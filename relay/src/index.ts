@@ -66,9 +66,11 @@ export interface Env {
   /** The origins a browser session token's `azp` may name, comma-separated. Unset accepts no
    *  browser. Native apps' tokens carry no `azp`. */
   CLERK_AUTHORIZED_PARTIES?: string;
-  /** The only Clerk user ids the relay serves, comma-separated. Every other signed-in request gets
-   *  403 `user_not_allowed` before any object runs. Unset, as on production, serves everyone.
-   *  Staging's secret (PLX-1495). */
+  /** Set to anything, the relay serves only the Clerk user ids in `ALLOWED_USERS`, and every other
+   *  signed-in request gets 403 `user_not_allowed` before any object runs. Unset, as on
+   *  production, it serves everyone and ignores `ALLOWED_USERS`. Staging's var (PLX-1495). */
+  REQUIRE_ALLOWED_USERS?: string;
+  /** Those user ids, comma-separated. Missing or empty lists nobody. Staging's secret. */
   ALLOWED_USERS?: string;
   /** The APNs auth key (.p8, PEM), its key id, and the Apple team id, as secrets. Unset, pushes
    *  only log. */
