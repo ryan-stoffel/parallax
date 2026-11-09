@@ -191,7 +191,7 @@ function MarkdownFile({ text }: { text: string }) {
  */
 function SourceText({ text, language }: { text: string; language: string }) {
   // A fence longer than any run of backticks in the file, so none of them ends it.
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const longest = (text.match(/`+/g) ?? []).reduce((most, run) => Math.max(most, run.length), 0);
   const fence = "`".repeat(Math.max(3, longest + 1));
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
