@@ -423,9 +423,10 @@ async function openStream(dial, token, stages = []) {
   exited.catch(() => {});
   let app;
   try {
-    app = await within(30_000, "the stream's first answer", Promise.race([attach(child), exited]));
+    // The first subscription goes behind `initialize`, as the apps send it (PLX-1480).
+    app = await within(30_000, "the stream's first answer", Promise.race([attach(child, { subscribe: { after: 0 } }), exited]));
     const connectMs = await within(30_000, "connecting", Promise.race([connected, exited]));
-    await app.call("events/subscribe", { after: 0 });
+    await app.subscribed;
     const firstEventMs = await within(30_000, "the first event", Promise.race([firstEvent, exited]));
     return { app, connectMs, firstEventMs, stages };
   } catch (error) {

@@ -54,6 +54,7 @@ The editor and `plxd` need one protocol, whether `plxd` runs on this Mac or on a
 ### Handshake and versioning
 
 - **`initialize` comes first**, and anything sent before it fails with `notInitialized`.
+  - A client may send requests right behind `initialize`, before its answer. plxd reads them in order after it, so they see the session when it succeeds and fail with `notInitialized`, making nothing, when it doesn't. The apps send their subscriptions this way and check each answer against `initialize`'s `logId` (PLX-1480).
   - It sends `protocol: {min, max}`, `client: {name, version, machineId?}`, and `capabilities`.
   - It returns `protocol`, `plxd` (the release version), `startId` (new each time plxd starts), `logId`, `capabilities`, and `maxFrameBytes`.
   - `capabilities` is an object map such as `{"agents": {}}`, as in LSP and MCP.

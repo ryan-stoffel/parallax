@@ -1015,6 +1015,87 @@ mod tests {
         assert_eq!(ended(serve).await, Reason::Shutdown);
     }
 
+    /// The next frame's request id, method, and subscription, whichever it has.
+    async fn summary(frames: &mut Frames) -> (Option<Value>, Option<String>, Value) {
+        match next(frames).await.expect("a message") {
+            Message::Response(r) => {
+                let id = r.id.map(|id| serde_json::to_value(id).unwrap());
+                let subscription = r.result.map_or(Value::Null, |v| v["subscription"].clone());
+                (id, None, subscription)
+            }
+            Message::Notification(n) => {
+                let subscription = n.params.map_or(Value::Null, |p| p["subscription"].clone());
+                (None, Some(n.method), subscription)
+            }
+            request @ Message::Request(_) => panic!("unexpected {request:?}"),
+        }
+    }
+
+    // The apps send their subscriptions right behind `initialize` (PLX-1480).
+    #[tokio::test]
+    async fn a_subscription_sent_behind_initialize_is_answered_after_it_then_replays() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = daemon(dir.path(), 5);
+        append(&daemon, 1).await;
+        let (mut frames, _write) = connect(daemon, &requests_with(0, &json!({}))[..2]).await;
+        assert_eq!(summary(&mut frames).await.0, Some(json!(1)));
+        let (id, _, subscription) = summary(&mut frames).await;
+        assert_eq!(id, Some(json!(2)));
+        assert!(subscription.is_string());
+        let event = summary(&mut frames).await;
+        assert_eq!(
+            (event.1.as_deref(), event.2),
+            (Some("events/event"), subscription)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_subscription_behind_a_failed_initialize_fails_and_makes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = daemon(dir.path(), 5);
+        append(&daemon, 1).await;
+        let [mut initialize, subscribe, mut health] = requests_with(0, &json!({}));
+        let mut incompatible = initialize.clone();
+        incompatible["params"]["protocol"] = json!({"min": 99, "max": 99});
+        initialize["id"] = json!(3);
+        health["id"] = json!(4);
+        let mut again = subscribe.clone();
+        again["id"] = json!(5);
+        let requests = [incompatible, subscribe, initialize, health, again];
+        let (mut frames, _write) = connect(daemon, &requests).await;
+        for id in 1..=2 {
+            let Some(Message::Response(refused)) = next(&mut frames).await else {
+                panic!("expected an answer");
+            };
+            assert_eq!(refused.id, Some(id.into()));
+            assert!(refused.result.is_err());
+        }
+        // Only the subscription made after a good `initialize` replays the log's event.
+        let mut seen = Vec::new();
+        let mut made = Value::Null;
+        loop {
+            let (id, method, subscription) = summary(&mut frames).await;
+            if id == Some(json!(5)) {
+                made = subscription;
+            } else if method.is_some() {
+                assert_eq!(
+                    subscription, made,
+                    "an event for a subscription that failed"
+                );
+                break;
+            }
+            seen.push(id.and_then(|id| id.as_u64()));
+        }
+        // `health` and the new subscription run concurrently, so either may answer first.
+        seen.sort_unstable();
+        assert_eq!(seen, [Some(3), Some(4), Some(5)]);
+        assert!(
+            timeout(Duration::from_millis(300), frames.next())
+                .await
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn a_lagging_subscriber_with_resync_notice_gets_events_resync_and_keeps_its_connection() {
         let dir = tempfile::tempdir().unwrap();

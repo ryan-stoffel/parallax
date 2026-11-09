@@ -14,6 +14,7 @@ export const VERSION = JSON.parse(readFileSync(new URL("../package.json", import
  * @property {(method: string, params?: object) => Promise<any>} call Sends a request and resolves
  *   to its result, or rejects with plxd's error message.
  * @property {() => void} close Ends `plxd attach`.
+ * @property {Promise<any>} [subscribed] With `subscribe`, `events/subscribe`'s answer.
  */
 
 /** How often an open connection sends `host/health`, well under plxd's 90 s idle limit. */
@@ -26,10 +27,12 @@ const STDERR_WAIT_MS = 100;
  * Speaks JSON-RPC with `child`, a `plxd attach`, and sends `initialize` first. Resolves once plxd
  * answered it.
  * @param {import("node:child_process").ChildProcess} child
- * @param {{ keepaliveMs?: number }} [options] `keepaliveMs` is shorter in tests.
+ * @param {{ keepaliveMs?: number, subscribe?: object }} [options] `keepaliveMs` is shorter in
+ *   tests. `subscribe` sends `events/subscribe` with these params right behind `initialize`, as the
+ *   apps do (PLX-1480): plxd reads them in order and refuses it if `initialize` fails.
  * @returns {Promise<Plxd>}
  */
-export async function attach(child, { keepaliveMs = KEEPALIVE_MS } = {}) {
+export async function attach(child, { keepaliveMs = KEEPALIVE_MS, subscribe } = {}) {
   /** @type {Map<number, { resolve: (value: any) => void, reject: (error: Error) => void }>} */
   const waiting = new Map();
   let next = 1;
@@ -86,8 +89,12 @@ export async function attach(child, { keepaliveMs = KEEPALIVE_MS } = {}) {
       child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     });
 
+  const initialized = call("initialize", { protocol: { min: 1, max: 1 }, client: { name: "plx", version: VERSION }, capabilities: {} });
+  const subscribed = subscribe && call("events/subscribe", subscribe);
+  // Rejected with `initialize` when that fails, which already reports why.
+  subscribed?.catch(() => {});
   try {
-    await call("initialize", { protocol: { min: 1, max: 1 }, client: { name: "plx", version: VERSION }, capabilities: {} });
+    await initialized;
   } catch (error) {
     child.kill();
     throw error;
@@ -95,6 +102,7 @@ export async function attach(child, { keepaliveMs = KEEPALIVE_MS } = {}) {
   if (!ended) keepalive = setInterval(() => call("host/health").catch(() => {}), keepaliveMs).unref();
   return {
     call,
+    ...(subscribed && { subscribed }),
     close() {
       clearInterval(keepalive);
       child.stdin?.end();

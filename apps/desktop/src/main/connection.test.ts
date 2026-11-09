@@ -413,10 +413,20 @@ test("a watch starts from its snapshot, and resumes after its last seq on a reco
   });
   expect(messages.at(-1)).toMatchObject({ type: "snapshot", snapshot: { seq: 90 } });
 
-  // A new log numbers from scratch, so the next one starts from a snapshot.
+  // A new log numbers from scratch. The watch went behind `initialize` after its old seq, so its
+  // answer and events are dropped, and it starts again from a snapshot.
   child().emit("close", 0, null);
   vi.advanceTimersByTime(1000);
+  const early = child().request("orchestration/subscribeThread");
+  expect(early.params).toEqual({ threadId: "t-1", afterSeq: 90 });
   child().handshake("log-2");
+  const heard = messages.length;
+  child().reply(
+    { id: early.id, result: { subscription: "sub-4" } },
+    { ...event(91), params: { ...event(91).params, subscription: "sub-4" } },
+  );
+  expect(messages).toHaveLength(heard);
+  expect(child().request("events/unsubscribe").params).toEqual({ subscription: "sub-4" });
   expect(child().request("orchestration/subscribeThread").params).toEqual({ threadId: "t-1" });
 });
 
@@ -571,9 +581,55 @@ test("a new logId after a reconnect ends every subscription with a resync", () =
   connection.subscribe({ after: 5, logId: "log-1" }, listener);
   child().emit("close", 0, null);
   vi.advanceTimersByTime(1000);
+  // It went behind `initialize`, before the answer said the log is new: its answer and events
+  // are dropped, and it's ended once, unsubscribed.
+  const early = child().request("events/subscribe");
   child().handshake("log-2");
-  expect(listener).toHaveBeenCalledWith({ type: "resync" });
-  expect(child().sent.some((message) => message.method === "events/subscribe")).toBe(false);
+  expect(listener).not.toHaveBeenCalled();
+  child().reply(
+    { id: early.id, result: { subscription: "sub-9" } },
+    { method: "events/event", params: { subscription: "sub-9", seq: 6, time: "", event: {} } },
+  );
+  expect(listener.mock.calls).toEqual([[{ type: "resync" }]]);
+  expect(child().request("events/unsubscribe").params).toEqual({ subscription: "sub-9" });
+  expect(child().sent.filter((message) => message.method === "events/subscribe")).toHaveLength(1);
+});
+
+test("subscriptions and watches go behind initialize, before its answer, once (PLX-1480)", () => {
+  const connection = connect("host");
+  child().handshake();
+  connection.subscribe({ after: 0, logId: "log-1" }, () => {});
+  connection.watch({ threadId: "t-1" }, () => {});
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  const methods = () => child().sent.map((message) => message.method);
+  const early = ["initialize", "events/subscribe", "orchestration/subscribeThread"];
+  expect(methods()).toEqual(early);
+  child().handshake();
+  expect(methods()).toEqual(early);
+});
+
+test("what went behind a failed initialize is dropped, and the next connection sends it", () => {
+  const connection = connect("host");
+  child().handshake();
+  const listener = vi.fn();
+  connection.subscribe({ after: 3, logId: "log-1" }, listener);
+  child().emit("close", 0, null);
+  vi.advanceTimersByTime(1000);
+  const failed = child();
+  failed.reply(
+    { id: failed.request("initialize").id, error: { code: -32603, message: "broken" } },
+    {
+      id: failed.request("events/subscribe").id,
+      error: { code: -32002, message: "initialize must be the first request" },
+    },
+  );
+  expect(listener).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(10_000);
+  expect(child()).not.toBe(failed);
+  child().handshake();
+  expect(child().request("events/subscribe").params).toEqual({ after: 3 });
+  expect(listener).not.toHaveBeenCalled();
 });
 
 test("a mutating request sends commandId and its timeout retry reuses it", async () => {

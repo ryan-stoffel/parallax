@@ -1,22 +1,22 @@
-import { Transform } from "node:stream";
-
-/** Forward ordered bytes then EOF in each direction, preserving the opposite half-connection.
- * Both sockets must use allowHalfOpen. Only errors/abrupt closes abort the peer. */
+/** Forward each chunk `delayMs` after it arrives, in order, then EOF `delayMs` after the end, in
+ * each direction, preserving the opposite half-connection. Chunks don't queue behind each other's
+ * delay, so the delay is added latency, not a per-chunk cost. Both sockets must use allowHalfOpen.
+ * Only errors/abrupt closes abort the peer. */
 export function delayDuplex(left, right, delayMs) {
-  const delayed = () => new Transform({
-    transform(chunk, _encoding, done) {
-      setTimeout(() => done(null, chunk), delayMs);
-    },
-  });
-  const forward = delayed(), backward = delayed();
-  const abort = error => {
-    forward.destroy(); backward.destroy();
+  const abort = () => {
     left.destroy(); right.destroy();
   };
-  for (const stream of [left, right, forward, backward]) stream.on("error", abort);
-  for (const socket of [left, right]) socket.on("close", () => {
-    if (!socket.readableEnded) abort();
-  });
-  left.pipe(forward).pipe(right);
-  right.pipe(backward).pipe(left);
+  // Timers of one duration fire in the order they were set, so bytes keep their order.
+  const forward = (from, to) => {
+    from.on("data", chunk => setTimeout(() => to.write(chunk), delayMs));
+    from.on("end", () => setTimeout(() => to.end(), delayMs));
+  };
+  forward(left, right);
+  forward(right, left);
+  for (const socket of [left, right]) {
+    socket.on("error", abort);
+    socket.on("close", () => {
+      if (!socket.readableEnded) abort();
+    });
+  }
 }

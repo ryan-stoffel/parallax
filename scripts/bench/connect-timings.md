@@ -13,7 +13,7 @@ This enrolls disposable hosts as before. Do not run it against a personal accoun
 | T3 connect | Immediately before ticket request | WebSocket open event | New HTTPS ticket POST, then WebSocket connection, within existing Node process. Excludes issuing the saved session, provisioning tunnel, sign-in. |
 | Parallax connect | Immediately before spawning `plxd dial` | Observer receives stderr `connected over relay:` | Process launch, CLI/runtime, credential read, outer connection/relay admission, readiness, pinned inner TLS, DPoP WebSocket upgrade. Excludes sign-in/approval, registration and downloading binary. |
 | T3 first event | Same start as connect | First `Chunk` for `subscribeServerLifecycle` | Subscription after open. No AI work. |
-| Parallax first event | Same start as connect | Stdout observer sees first `events/event` | Includes `attach` initialize RPC before events/subscribe and replay of a precreated orchestrator event. This is not the lifecycle subscription T3 uses. |
+| Parallax first event | Same start as connect | Stdout observer sees first `events/event` | Includes `attach` sending initialize with events/subscribe right behind it (PLX-1480), one round trip, and replay of a precreated orchestrator event. This is not the lifecycle subscription T3 uses. |
 | T3 round trip | Before `server.probe` send | Successful `Exit` | Open socket, Effect RPC framing/ack semantics. |
 | Parallax round trip | Before `host/health` call | JSON-RPC result | Open socket, different method and framing. |
 
