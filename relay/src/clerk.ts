@@ -43,9 +43,14 @@ export const accountOf = (issuer: string, userId: string) =>
  * counts only with its own instance's applications. The JWKS is `CLERK_JWKS` inline (tests and
  * `wrangler dev`), else its `CLERK_JWKS_URL` entry, else its issuer's `/.well-known/jwks.json`.
  * Throws `KeysUnavailable` when those keys can't be read, so an outage isn't taken for a bad token
- * (PLX-1351).
+ * (PLX-1351). `fetched` hears how long reading the JWKS took, when this check had to read it: the
+ * keys are otherwise this isolate's cached ones.
  */
-export async function verifySession(env: Env, token: string): Promise<string | null> {
+export async function verifySession(
+  env: Env,
+  token: string,
+  fetched?: (ms: number) => void,
+): Promise<string | null> {
   // An issuer that isn't listed is refused before any key is fetched, and with none configured a
   // deploy trusts no instance.
   const issuer = claimedIssuer(token);
@@ -53,18 +58,26 @@ export async function verifySession(env: Env, token: string): Promise<string | n
   if (issuer === undefined || at < 0) return null;
   const inline = env.CLERK_JWKS;
   const url = list(env.CLERK_JWKS_URL)[at];
-  const jwks: typeof fetch | undefined = inline
+  const read: typeof fetch = inline
     ? async () => new Response(inline)
     : url
       ? () => fetch(url)
-      : undefined;
+      : (...args) => fetch(...args);
+  const jwks: typeof fetch = async (...args) => {
+    const start = performance.now();
+    try {
+      return await read(...args);
+    } finally {
+      fetched?.(performance.now() - start);
+    }
+  };
   try {
     const verified = await verifyClerkToken(token, {
       issuer,
       // Several for one instance are separated by spaces.
       clientIds: (list(env.CLERK_CLIENT_IDS)[at] ?? "").split(/\s+/).filter(Boolean),
       authorizedParties: list(env.CLERK_AUTHORIZED_PARTIES),
-      ...(jwks && { fetch: jwks }),
+      fetch: jwks,
     });
     return accountOf(issuer, verified.userId);
   } catch (error) {

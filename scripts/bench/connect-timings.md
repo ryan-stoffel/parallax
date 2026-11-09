@@ -27,6 +27,10 @@ The probe records each stage's value and `observedMs` from the external spawn ti
 
 Clients cannot split relay authentication from host object admission and spare selection. When opted in, they request `x-parallax-timing: 1`; a successful authenticated upgrade returns six numeric `Server-Timing` entries: `auth` (Clerk verification, including any JWKS fetch), `host_open` (host RPC including admission and selection), `stream_join` (stream-object client upgrade RPC), `admit`, `take` (inside host_open), and `spare` (1 or 0, a flag, not a duration). These overlap: do not sum host_open with admit/take. They use local durations, not synchronized clocks. Worker routing/rate-limit time before the handler, transit and scheduling remain in the client/server difference. No persisted logs or IDs are added. The client prints only allowlisted finite numeric entries in 0..60000 ms, within the same 64-line cap.
 
+Since PLX-1493 the upgrade also returns `limit` (the anonymous rate limit's answer), `jwks` (the JWKS read, present only when this request made one), `host_hop` (a call to the host object that does nothing, made beside the stream's join) and `worker` (the request's start through the stream's 101). `limit` and `auth` both start with the request and run side by side, so they overlap, and the time before `host_open` is the longer of the two. `host_open` minus `host_hop` is the host object's own work, with its claim write's confirmation. The client's relay upgrade minus `worker` is one round trip plus what Cloudflare spends outside the Worker. Cloudflare's timers advance only after I/O, so a stage with no I/O reads 0: an `auth` of 0 means the isolate had the keys.
+
+After a relay deploy, a manual run of the Relay probe workflow with `timings` on and `connects` at 30 keeps these per connect in its artifact, from a GitHub runner, with no token on anyone's computer.
+
 Local proof (build first):
 
 ```

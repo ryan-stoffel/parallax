@@ -16,6 +16,16 @@ export const REPORT_AFTER = 5 * 60_000;
  *  client, before the stream closes. */
 export const JOIN_TIMEOUT = 30_000;
 
+/**
+ * How this object writes an alarm on a path a client waits on: a spare's claim, a join, and a
+ * frame. Cloudflare holds what an object sends, a 101 and a WebSocket message included, until
+ * each write before it is confirmed, and setting an alarm also waits for the alarm's scheduler,
+ * behind the one a deletion left in flight (PLX-1493). These alarms only bound a wait or time a
+ * report, so nothing a client gets depends on one. A write that then fails resets the object,
+ * which drops both ends, and the stream ends as any whose object reset does.
+ */
+const UNCONFIRMED = { allowUnconfirmed: true } as const;
+
 /** What the host's object armed this stream with. */
 type Armed = { hostId: string; stream: string; tokenHash: string };
 
@@ -142,7 +152,7 @@ export class StreamRelay extends DurableObject<Env> {
       return;
     }
     const alarmStart = timed ? performance.now() : 0;
-    await this.ctx.storage.setAlarm(deadline);
+    await this.ctx.storage.setAlarm(deadline, UNCONFIRMED);
     if (timing) {
       timing.taken_alarm = performance.now() - alarmStart;
       timing.taken_outcome = 1; // Alarm set.
@@ -213,10 +223,10 @@ export class StreamRelay extends DurableObject<Env> {
       other.send("ready");
       if (timed) timing.join_ready = performance.now() - start;
       const alarmStart = timed ? performance.now() : 0;
-      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.deleteAlarm(UNCONFIRMED);
       if (timed) timing.join_delete_alarm = performance.now() - alarmStart;
     } else if (side === "client") {
-      await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT);
+      await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT, UNCONFIRMED);
     }
     const headers = new Headers();
     if (timed) {
@@ -252,7 +262,7 @@ export class StreamRelay extends DurableObject<Env> {
     if (this.reportDue) return;
     this.reportDue = true;
     if ((await this.ctx.storage.getAlarm()) === null)
-      await this.ctx.storage.setAlarm(Date.now() + REPORT_AFTER);
+      await this.ctx.storage.setAlarm(Date.now() + REPORT_AFTER, UNCONFIRMED);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, clean: boolean) {

@@ -35,7 +35,7 @@ pub fn mark(stage: &'static str) {
 /// Relay durations are untrusted: emit only known names and bounded finite numbers.
 /// These are durations, unlike the cumulative client checkpoints.
 pub fn server(value: &str) {
-    for item in value.split(',').take(16) {
+    for item in value.split(',').take(24) {
         let Some((name, duration)) = item.trim().split_once(";dur=") else {
             continue;
         };
@@ -55,6 +55,10 @@ pub fn server(value: &str) {
             "taken_alarm",
             "taken_outcome",
             "taken_total",
+            "limit",
+            "jwks",
+            "host_hop",
+            "worker",
         ]
         .contains(&name)
         {
@@ -116,6 +120,10 @@ mod tests {
             "taken_alarm",
             "taken_outcome",
             "taken_total",
+            "limit",
+            "jwks",
+            "host_hop",
+            "worker",
         ];
         let header = names.map(|name| format!("{name};dur=1")).join(", ");
         assert!(capture(&header, false).is_empty());
@@ -129,7 +137,7 @@ mod tests {
         assert_eq!(output.lines().count(), 16);
         assert!(output.contains("join_read 0.000\n"));
         assert!(output.contains("join_total 60000.000\n"));
-        let header = format!("{}join_total;dur=1", "unknown;dur=1,".repeat(16));
+        let header = format!("{}join_total;dur=1", "unknown;dur=1,".repeat(24));
         assert!(capture(&header, true).is_empty());
     }
 }

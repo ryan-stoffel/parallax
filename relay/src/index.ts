@@ -102,6 +102,9 @@ export function json(status: number, body: unknown, headers?: Record<string, str
   return Response.json(body, { status, headers });
 }
 
+/** What a request past a per-minute limit gets. */
+const limited = () => json(429, { error: "rate_limited" }, { "retry-after": "60" });
+
 /**
  * The user of the plxd whose proof this request carries for `route` (0101), or the answer refusing
  * it. Anonymous until its object checks it, so it counts per address and caller first.
@@ -110,8 +113,7 @@ async function peerUser(env: Env, request: Request, route: string): Promise<stri
   const [caller = "", at = "", signature = ""] = (request.headers.get(PEER_HEADER) ?? "").split(".");
   if (!HOST_ID.test(caller)) return json(401, { error: "unauthorized" });
   const address = network(request.headers.get("cf-connecting-ip") ?? "");
-  if (!(await env.ANON.limit({ key: `${address}:${caller}` })).success)
-    return json(429, { error: "rate_limited" }, { "retry-after": "60" });
+  if (!(await env.ANON.limit({ key: `${address}:${caller}` })).success) return limited();
   const proven = await env.HOSTS.get(env.HOSTS.idFromName(caller)).provePeer(route, at, signature);
   if ("user" in proven) return proven.user;
   const { status, error, now } = proven;
@@ -135,12 +137,29 @@ async function listHosts(env: Env, user: string) {
  * stream, once the host's object admits it, and plxd's side of a stream, to that stream's object.
  * A client's Clerk token is read only from the `Authorization` header, never the URL. Another
  * plxd's proof stands in for it, and `HostRelay.open` still requires the same owner (0101).
+ *
+ * `limit` is the anonymous limit's answer, already asked for. Nothing here reaches an object
+ * before it allows the request. A client's token is checked while it answers, since neither needs
+ * the other (PLX-1493).
  */
-async function relayed(env: Env, request: Request, hostId: string, action: string, stream: string) {
+async function relayed(
+  env: Env,
+  request: Request,
+  hostId: string,
+  action: string,
+  stream: string,
+  limit: Promise<RateLimitOutcome>,
+) {
+  const start = performance.now();
   const host = env.HOSTS.get(env.HOSTS.idFromName(hostId));
-  if (action === "host") return host.fetch(request);
-  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
-    return json(426, { error: "upgrade_required" });
+  const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+  const ticket = new URL(request.url).searchParams.get("ticket");
+  const byToken = action === "connect" && upgrade && ticket === null && !request.headers.has(PEER_HEADER);
+  if (!byToken) {
+    if (!(await limit).success) return limited();
+    if (action === "host") return host.fetch(request);
+    if (!upgrade) return json(426, { error: "upgrade_required" });
+  }
   if (action === "streams") {
     const token = new URL(request.url).searchParams.get("token") ?? "";
     const object = streamObject(env, hostId, stream);
@@ -151,8 +170,12 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   // Only a successful authenticated client open exposes numeric durations, never logs or IDs.
   const timed = request.headers.get("x-parallax-timing") === "1";
   const times: string[] = [];
-  const record = (name: string, start: number) => times.push(`${name};dur=${(performance.now() - start).toFixed(3)}`);
-  const ticket = new URL(request.url).searchParams.get("ticket");
+  const since = (from: number) => `dur=${(performance.now() - from).toFixed(3)}`;
+  const record = (name: string, from: number) => times.push(`${name};${since(from)}`);
+  // Stages that overlap others, by name. They go after the older fields, which a plxd from before
+  // PLX-1493 reads the first 16 of.
+  const beside: Record<string, string> = {};
+  let hop: Promise<void> | undefined;
   let opened: Awaited<ReturnType<HostRelay["open"]>>;
   if (ticket !== null) {
     opened = await host.redeem(ticket);
@@ -163,14 +186,37 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   } else {
     const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
     // Clerk being down refuses this stream as a bad sign-in does. The account's list tells them apart.
-    const authStart = performance.now();
-    const user = token ? await verifySession(env, token).catch(() => null) : null;
-    if (timed) record("auth", authStart);
+    const checked = token
+      ? verifySession(env, token, (ms) => (beside.jwks = `dur=${ms.toFixed(3)}`)).catch(() => null)
+      : Promise.resolve(null);
+    const [allowed, user] = await Promise.all([
+      limit.then((outcome) => {
+        beside.limit = since(start);
+        return outcome.success;
+      }),
+      checked.then((user) => {
+        if (timed) record("auth", start);
+        return user;
+      }),
+    ]);
+    // The limit's refusal comes first, as when it was asked first.
+    if (!allowed) return limited();
     if (!user) return json(401, { error: "unauthorized" });
     if (!allowedUser(env, user)) return json(403, { error: "user_not_allowed" });
     const openStart = performance.now();
     opened = await host.open(user, timed);
     if (timed) record("host_open", openStart);
+    // The trip to the host's object and back with nothing to do there, made beside the stream's
+    // join. What `host_open` takes over this is the object's own work, with the confirmation of
+    // the claim's write, which its answer waits for. The object's own timers can't show that,
+    // since Cloudflare's advance only after I/O.
+    if (timed && !("error" in opened)) {
+      const hopStart = performance.now();
+      hop = host.hop().then(
+        () => void (beside.host_hop = since(hopStart)),
+        () => {},
+      );
+    }
   }
   if ("error" in opened) return json(opened.status, { error: opened.error });
   const object = streamObject(env, hostId, opened.stream);
@@ -185,6 +231,9 @@ async function relayed(env: Env, request: Request, hostId: string, action: strin
   const headers = new Headers(response.headers);
   const local = response.headers.get("server-timing");
   if (local) times.push(local);
+  await hop;
+  for (const name of ["limit", "jwks", "host_hop"]) if (beside[name]) times.push(`${name};${beside[name]}`);
+  record("worker", start);
   headers.set("server-timing", times.join(", "));
   return new Response(null, { status: 101, webSocket: response.webSocket, headers });
 }
@@ -202,9 +251,9 @@ const routes = {
     if (open) {
       if (!HOST_ID.test(id)) return json(404, { error: "not_found" });
       const address = network(request.headers.get("cf-connecting-ip") ?? "");
-      if (!(await env.ANON.limit({ key: `${address}:${id}` })).success)
-        return json(429, { error: "rate_limited" }, { "retry-after": "60" });
-      if (kind !== "hooks") return relayed(env, request, id, action!, parts[4] ?? "");
+      const limit = env.ANON.limit({ key: `${address}:${id}` });
+      if (kind !== "hooks") return relayed(env, request, id, action!, parts[4] ?? "", limit);
+      if (!(await limit).success) return limited();
       // A webhook's body is read here, after the host's object admits it, and never streamed
       // to the object, which can't answer before reading a stream without breaking.
       if (!HOOK_METHODS.has(request.method))

@@ -452,6 +452,10 @@ export class HostRelay extends DurableObject<Env> {
     return { stream: taken.stream, timing: { admitMs: admitted - start, takeMs: performance.now() - admitted, spare: taken.spare === true } };
   }
 
+  /** Answers at once and does nothing: a timed connect measures the trip here and back with it,
+   *  after [`open`] admitted it (PLX-1493). */
+  async hop() {}
+
   /**
    * A ticket for one stream to this host, for its own user only. Clients from before 0091, and
    * plxd's own connection check, which asks over its control socket (PLX-1356).
