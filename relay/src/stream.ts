@@ -152,7 +152,7 @@ export class StreamRelay extends DurableObject<Env> {
       return;
     }
     const alarmStart = timed ? performance.now() : 0;
-    await this.ctx.storage.setAlarm(deadline, UNCONFIRMED);
+    if (!this.env.PLX1493_EXPERIMENT?.includes("no-alarms")) await this.ctx.storage.setAlarm(deadline, UNCONFIRMED);
     if (timing) {
       timing.taken_alarm = performance.now() - alarmStart;
       timing.taken_outcome = 1; // Alarm set.
@@ -223,10 +223,10 @@ export class StreamRelay extends DurableObject<Env> {
       other.send("ready");
       if (timed) timing.join_ready = performance.now() - start;
       const alarmStart = timed ? performance.now() : 0;
-      await this.ctx.storage.deleteAlarm(UNCONFIRMED);
+      if (!this.env.PLX1493_EXPERIMENT?.includes("no-alarms")) await this.ctx.storage.deleteAlarm(UNCONFIRMED);
       if (timed) timing.join_delete_alarm = performance.now() - alarmStart;
     } else if (side === "client") {
-      await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT, UNCONFIRMED);
+      if (!this.env.PLX1493_EXPERIMENT?.includes("no-alarms")) await this.ctx.storage.setAlarm(Date.now() + JOIN_TIMEOUT, UNCONFIRMED);
     }
     const headers = new Headers();
     if (timed) {
@@ -261,6 +261,7 @@ export class StreamRelay extends DurableObject<Env> {
   private async reportSoon() {
     if (this.reportDue) return;
     this.reportDue = true;
+    if (this.env.PLX1493_EXPERIMENT?.includes("no-alarms")) return;
     if ((await this.ctx.storage.getAlarm()) === null)
       await this.ctx.storage.setAlarm(Date.now() + REPORT_AFTER, UNCONFIRMED);
   }

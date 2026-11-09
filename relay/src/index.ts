@@ -72,6 +72,8 @@ export interface Env {
   REQUIRE_ALLOWED_USERS?: string;
   /** Those user ids, comma-separated. Missing or empty lists nobody. Staging's secret. */
   ALLOWED_USERS?: string;
+  /** Staging measurements only (PLX-1493), never set in production: which experiment runs. */
+  PLX1493_EXPERIMENT?: string;
   /** The APNs auth key (.p8, PEM), its key id, and the Apple team id, as secrets. Unset, pushes
    *  only log. */
   APNS_KEY?: string;

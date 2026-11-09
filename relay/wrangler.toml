@@ -98,6 +98,7 @@ routes = []
 
 [env.staging.vars]
 REQUIRE_ALLOWED_USERS = "1"
+PLX1493_EXPERIMENT = "no-alarms"
 CLERK_ISSUER = "https://clerk.parallax.codes,https://adjusted-mastodon-8705.clerk.accounts.dev"
 CLERK_JWKS_URL = "https://clerk.parallax.codes/.well-known/jwks.json,https://adjusted-mastodon-8705.clerk.accounts.dev/.well-known/jwks.json"
 CLERK_CLIENT_IDS = "mp9Q72aAbB0LC83O,SXDueyOLOJ2v4Vmq"
