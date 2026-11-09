@@ -110,7 +110,7 @@ impl App {
     ) -> Self {
         let (app, stdio) = duplex(64 * 1024);
         let (input, output) = tokio::io::split(stdio);
-        tokio::spawn(remote::bridge(socket, input, output));
+        tokio::spawn(remote::bridge(socket, remote::Input::new(input), output));
         let (reader, writer) = tokio::io::split(app);
         App {
             lines: BufReader::new(reader).lines(),
@@ -1158,5 +1158,234 @@ async fn the_ws_upgrade_takes_a_sessions_proof_once_from_its_own_key() {
         refused(proved_socket(port, "guess", &fresh).await),
         "an unknown token"
     );
+    server.stop().await;
+}
+
+/// The session `remote::pair` saved in `dir` for the host with `fingerprint`, as `plxd dial` reads
+/// it: its key and token.
+fn saved_session(dir: &Path, fingerprint: &str) -> (remote::DpopKey, String) {
+    let saved = std::fs::read(dir.join("remote-hosts").join(fingerprint)).unwrap();
+    let saved: Value = serde_json::from_slice(&saved).unwrap();
+    let key = remote::base64url_decode(saved["key"].as_str().unwrap()).unwrap();
+    let token = saved["token"].as_str().unwrap().to_owned();
+    (remote::DpopKey::from_pkcs8(&key).unwrap(), token)
+}
+
+/// `lines` as the masked text frames a WebSocket client sends.
+async fn client_frames(lines: &[String]) -> Vec<u8> {
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    let (near, mut far) = duplex(1024 * 1024);
+    let mut socket =
+        tokio_tungstenite::WebSocketStream::from_raw_socket(near, Role::Client, None).await;
+    for line in lines {
+        socket.send(Message::text(line.clone())).await.unwrap();
+    }
+    drop(socket);
+    let mut frames = Vec::new();
+    far.read_to_end(&mut frames).await.unwrap();
+    frames
+}
+
+/// A `/ws` upgrade with `token` and the proof `dpop`, and `behind` in the same write, from a client
+/// that doesn't wait for the answer (PLX-1483): the socket, or a refusal's status and everything
+/// the host sent before it closed.
+async fn upgrade_with(
+    port: u16,
+    token: &str,
+    dpop: &str,
+    behind: &[u8],
+) -> Result<WebSocket, (u16, Vec<u8>)> {
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    let (mut tls, _) = remote::open(&format!("127.0.0.1:{port}"), None)
+        .await
+        .unwrap();
+    assert_eq!(tls.get_ref().1.alpn_protocol(), Some(remote::EARLY_WS));
+    let mut flight = format!(
+        "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: DPoP {token}\r\nDPoP: {dpop}\r\n\r\n"
+    )
+    .into_bytes();
+    flight.extend_from_slice(behind);
+    tls.write_all(&flight).await.unwrap();
+    let mut answer = Vec::new();
+    let head = loop {
+        let mut chunk = [0; 4096];
+        let read = timeout(PATIENCE, tls.read(&mut chunk))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(read > 0, "the host closed without an answer");
+        answer.extend_from_slice(&chunk[..read]);
+        if let Some(at) = answer.windows(4).position(|four| four == b"\r\n\r\n") {
+            break at + 4;
+        }
+    };
+    let status: u16 = std::str::from_utf8(&answer[9..12])
+        .unwrap()
+        .parse()
+        .unwrap();
+    if status == 101 {
+        let rest = answer.split_off(head);
+        let socket =
+            tokio_tungstenite::WebSocketStream::from_partially_read(tls, rest, Role::Client, None);
+        return Ok(socket.await);
+    }
+    let _ = timeout(PATIENCE, tls.read_to_end(&mut answer))
+        .await
+        .unwrap();
+    Err((status, answer))
+}
+
+/// The next answer on `socket`, past any notification.
+async fn next_answer(socket: &mut WebSocket) -> Value {
+    loop {
+        let frame = timeout(PATIENCE, socket.next()).await.unwrap().unwrap();
+        if let Message::Text(text) = frame.unwrap() {
+            let message: Value = serde_json::from_str(&text).unwrap();
+            if !message["id"].is_null() {
+                return message;
+            }
+        }
+    }
+}
+
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"t","version":"0"},"capabilities":{}}}"#;
+
+/// A request that names this computer `name`, which a client with full access may.
+fn rename(id: u32, name: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"host/settings/set","params":{{"deviceName":"{name}"}}}}"#
+    )
+}
+
+async fn device_name(client: &mut Client) -> Option<String> {
+    client
+        .call::<HostSettingsSet>(HostSettingsSetParams::default())
+        .await
+        .unwrap()
+        .device_name
+}
+
+/// A listening host and a laptop paired with it: the session's key, token, and id.
+async fn paired_laptop(port: u16, client: &mut Client) -> (remote::DpopKey, String, String) {
+    set_remote(client, true).await;
+    wait_listening(port, true).await;
+    let laptop = temp_dir();
+    let code = new_code(client).await;
+    let route = format!("127.0.0.1:{port}");
+    let paired = remote::pair(&[route], &code, "laptop", laptop.path())
+        .await
+        .unwrap();
+    let (key, token) = saved_session(laptop.path(), &paired.fingerprint);
+    let sessions = client
+        .call::<RemoteSessions>(RemoteSessionsParams {})
+        .await
+        .unwrap()
+        .sessions;
+    (key, token, sessions[0].id.clone())
+}
+
+#[tokio::test]
+async fn frames_behind_the_ws_upgrade_are_handled_once_it_passes_and_dropped_when_refused() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    let (key, token, id) = paired_laptop(port, &mut client).await;
+    let url = format!("https://127.0.0.1:{port}/ws");
+
+    // `initialize`, a write, and enough reads that most arrive after what plxd holds with the
+    // request. Each is answered, so none was lost or read before `initialize`.
+    let mut lines = vec![INITIALIZE.to_owned(), rename(2, "behind")];
+    lines.extend((3..=40).map(|id| {
+        format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"thread/list","params":{{}}}}"#)
+    }));
+    let behind = client_frames(&lines).await;
+    assert!(behind.len() > 2048, "{}", behind.len());
+    let proof = key.proof("GET", &url, Some(&token));
+    let mut socket = upgrade_with(port, &token, &proof, &behind).await.unwrap();
+    let mut answered = Vec::new();
+    for _ in 1..=40 {
+        let answer = next_answer(&mut socket).await;
+        assert!(answer["error"].is_null(), "{answer}");
+        answered.push(answer["id"].as_u64().unwrap());
+    }
+    assert_eq!(answered[0], 1, "initialize goes first");
+    answered.sort_unstable();
+    assert_eq!(answered, (1..=40).collect::<Vec<u64>>());
+    assert_eq!(device_name(&mut client).await.as_deref(), Some("behind"));
+
+    // The same write behind each kind of refused upgrade: a 401 and nothing else, and no effect.
+    let behind = client_frames(&[INITIALIZE.to_owned(), rename(2, "refused")]).await;
+    let refused = |answer: Result<WebSocket, (u16, Vec<u8>)>| {
+        let Err((status, answer)) = answer else {
+            panic!("the host accepted the upgrade");
+        };
+        assert_eq!(status, 401);
+        let answer = String::from_utf8(answer).unwrap();
+        let (_, body) = answer.split_once("\r\n\r\n").unwrap();
+        let body: Value = serde_json::from_str(body).expect("the refusal and nothing behind it");
+        body["error_description"].as_str().unwrap().to_owned()
+    };
+    let other = remote::DpopKey::generate().proof("GET", &url, Some(&token));
+    assert_eq!(
+        refused(upgrade_with(port, &token, &other, &behind).await),
+        "a DPoP proof from another key"
+    );
+    assert_eq!(
+        refused(upgrade_with(port, &token, &proof, &behind).await),
+        "a replayed DPoP proof"
+    );
+    // A device with no session, as one that isn't approved yet.
+    let guess = key.proof("GET", &url, Some("guess"));
+    assert_eq!(
+        refused(upgrade_with(port, "guess", &guess, &behind).await),
+        "an unknown or revoked session"
+    );
+    client
+        .call::<RemoteRevoke>(RemoteRevokeParams { id })
+        .await
+        .unwrap();
+    let fresh = key.proof("GET", &url, Some(&token));
+    assert_eq!(
+        refused(upgrade_with(port, &token, &fresh, &behind).await),
+        "an unknown or revoked session"
+    );
+    assert_eq!(device_name(&mut client).await.as_deref(), Some("behind"));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_read_only_devices_write_behind_the_ws_upgrade_is_refused_as_one_sent_later_is() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    let (key, token, id) = paired_laptop(port, &mut client).await;
+    client
+        .call::<AccessSetReadOnly>(AccessSetReadOnlyParams { id })
+        .await
+        .unwrap();
+    let before = device_name(&mut client).await;
+
+    let behind = client_frames(&[INITIALIZE.to_owned(), rename(2, "behind")]).await;
+    let proof = key.proof("GET", &format!("https://127.0.0.1:{port}/ws"), Some(&token));
+    let mut socket = upgrade_with(port, &token, &proof, &behind).await.unwrap();
+    let initialized = next_answer(&mut socket).await;
+    assert!(initialized["result"]["logId"].is_string(), "{initialized}");
+    let early = next_answer(&mut socket).await;
+    socket
+        .send(Message::text(rename(3, "later")))
+        .await
+        .unwrap();
+    let late = next_answer(&mut socket).await;
+    assert_eq!(early["error"]["data"]["kind"], "readOnly", "{early}");
+    assert_eq!(early["error"], late["error"]);
+    assert_eq!(device_name(&mut client).await, before);
     server.stop().await;
 }
