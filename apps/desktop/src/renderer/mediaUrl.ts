@@ -5,12 +5,17 @@ import { download, load, type DocRef } from "./documents";
 import { isVideo } from "./transcript";
 
 /**
- * Where main streams a presented video from (main/hosts.ts's `streamFile`, PLX-836), so it plays
- * while it loads and seeks without being read whole first: for a host whose plxd reads files in
- * slices (`fileChunks`, 0074). Null for an image or other file, and for an older host, which read
- * it whole as before. Undefined for a video until the host's capabilities are known.
+ * Where main streams a presented file from (main/hosts.ts's `streamFile`, PLX-836): a video, so it
+ * plays while it loads and seeks without being read whole first, or with `stream` set, any file,
+ * such as an HTML file the side panel shows in a frame (PLX-1484). For a host whose plxd reads
+ * files in slices (`fileChunks`, 0074). Null for a file not streamed, and for an older host, which
+ * reads it whole as before. Undefined until the host's capabilities are known.
  */
-export function useStreamUrl(hostId: string, doc: DocRef): string | null | undefined {
+export function useStreamUrl(
+  hostId: string,
+  doc: DocRef,
+  stream = isVideo(doc.kind),
+): string | null | undefined {
   const connection = useShownConnection(hostId);
   // Kept through a reconnect, so a video that's playing stays.
   const [known, setKnown] = useState<{ hostId: string; chunks: boolean }>();
@@ -18,7 +23,7 @@ export function useStreamUrl(hostId: string, doc: DocRef): string | null | undef
     if (connection?.status === "connected")
       setKnown({ hostId, chunks: connection.capabilities["fileChunks"] !== undefined });
   }, [hostId, connection]);
-  if (!isVideo(doc.kind)) return null;
+  if (!stream) return null;
   if (known?.hostId !== hostId) return undefined;
   return known.chunks
     ? `plx-file://file/${[hostId, doc.runId, doc.path].map(encodeURIComponent).join("/")}`

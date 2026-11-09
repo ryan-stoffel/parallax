@@ -32,9 +32,10 @@ const csp = (dev: boolean) =>
     // crx: is the side panel browser's extension icons (Extensions.tsx).
     "img-src 'self' data: blob: crx: https:",
     "connect-src 'self' blob: https://open-vsx.org https://openvsx.eclipsecontent.org",
-    // html_render pages (PLX-639), which main serves with a policy of their own, and browser
-    // recordings. plx-file: is presented videos, which main streams from their host (PLX-836).
-    "frame-src plx-render:",
+    // html_render pages (PLX-639) and presented HTML files (PLX-1484), which main serves with a
+    // policy of their own, and browser recordings. plx-file: is presented files, such as videos,
+    // which main streams from their host (PLX-836).
+    "frame-src plx-render: plx-file:",
     "media-src plx-render: plx-file: blob:",
     "object-src 'none'",
     "base-uri 'none'",

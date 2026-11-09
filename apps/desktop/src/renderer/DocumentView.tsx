@@ -30,8 +30,8 @@ import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
  * A presented file in the side panel (PLX-755), view-only, as Claude shows one: its title and
  * type and Download over its pages, which sit on a gray backdrop with the page in view counted at
  * the bottom right. The panel's own button takes it full screen. A spreadsheet shows as its
- * sheets' grids instead, an image or video as itself, a Markdown file rendered or as its source
- * (PLX-931), and any other file as its size, to download (PLX-834). A video its host streams (PLX-836) isn't read whole first.
+ * sheets' grids instead, an image or video as itself, a Markdown or HTML file rendered or as its
+ * source (PLX-931, PLX-1484), and any other file as its size, to download (PLX-834). A video its host streams (PLX-836) isn't read whole first.
  */
 export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const src = useStreamUrl(hostId, doc);
@@ -46,6 +46,8 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
 function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const { loaded, error } = useDocument(hostId, doc);
   const markdown = doc.kind === "file" && /\.(md|markdown)$/i.test(doc.name);
+  const html = doc.kind === "file" && /\.html?$/i.test(doc.name);
+  const page = useStreamUrl(hostId, doc, html);
   const [source, setSource] = useState(false);
 
   let body: ReactNode;
@@ -74,8 +76,18 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
         </Paged>
       ) : opened.kind === "media" ? (
         <Media doc={doc} bytes={loaded.bytes} />
+      ) : (markdown || html) && (source || (html && !page)) ? (
+        <SourceText text={new TextDecoder().decode(loaded.bytes)} />
       ) : markdown ? (
-        <MarkdownFile text={new TextDecoder().decode(loaded.bytes)} source={source} />
+        <MarkdownFile text={new TextDecoder().decode(loaded.bytes)} />
+      ) : html && page ? (
+        <iframe
+          key={readId(loaded.bytes)}
+          title={doc.name}
+          src={page}
+          sandbox="allow-scripts allow-forms"
+          className="min-h-0 w-full flex-1 border-0 bg-white"
+        />
       ) : (
         <p className="p-6 text-body text-muted-foreground">
           {sizeOf(loaded.bytes.length)}. Parallax can't show this kind of file, but you can download
@@ -89,12 +101,22 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
       doc={doc}
       disabled={!loaded}
       onDownload={() => loaded && download(doc.name, loaded.bytes)}
-      toggle={markdown && <SourceToggle source={source} onChange={setSource} />}
+      toggle={(markdown || (html && page)) && <SourceToggle source={source} onChange={setSource} />}
     >
       {body}
     </Framed>
   );
 }
+
+// A number for each read of a file, so a frame loads its page again when a newer presentation
+// rereads it, though its URL is the same.
+const readIds = new WeakMap<Uint8Array, number>();
+let reads = 0;
+const readId = (bytes: Uint8Array) => {
+  let id = readIds.get(bytes);
+  if (id === undefined) readIds.set(bytes, (id = reads++));
+  return id;
+};
 
 /** A video its host streams (PLX-836), whose Download reads it whole only when clicked. */
 function StreamedView({ hostId, doc, src }: { hostId: string; doc: DocRef; src?: string }) {
@@ -147,22 +169,30 @@ function Framed({
   );
 }
 
-/** A Markdown file (PLX-931), rendered as the transcript renders an agent's, or as its `source`. */
-function MarkdownFile({ text, source }: { text: string; source: boolean }) {
+/** A Markdown file (PLX-931), rendered as the transcript renders an agent's. */
+function MarkdownFile({ text }: { text: string }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-      {source ? (
-        <pre className="font-mono text-body whitespace-pre-wrap text-foreground">{text}</pre>
-      ) : (
-        <div className="mx-auto max-w-[760px]">
-          <MarkdownText text={text} />
-        </div>
-      )}
+      <div className="mx-auto max-w-[760px]">
+        <MarkdownText text={text} />
+      </div>
     </div>
   );
 }
 
-/** Preview and Source buttons, as one control, for a Markdown file. */
+/**
+ * A Markdown or HTML file's source (PLX-931, PLX-1484). An HTML file shows only this on a host
+ * whose plxd can't stream it to a frame.
+ */
+function SourceText({ text }: { text: string }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      <pre className="font-mono text-body whitespace-pre-wrap text-foreground">{text}</pre>
+    </div>
+  );
+}
+
+/** Preview and Source buttons, as one control, for a Markdown or HTML file. */
 function SourceToggle({
   source,
   onChange,
