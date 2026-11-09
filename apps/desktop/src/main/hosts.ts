@@ -63,6 +63,7 @@ import {
   listedKey,
   NoticeWatch,
   outageOf,
+  relayOffline,
   tokenSubject,
   unionLists,
   type SavedAccount,
@@ -2045,7 +2046,8 @@ let lastListed: string | undefined;
  * A computer set up elsewhere changes nothing here, so its code prompt would wait for a focus
  * change. This reads the list every `LOOK_MS` while a window is on screen, well within the relay's
  * 120 requests a minute per user, and runs discovery, with its dials, only when the list changed.
- * The only other dial is the probe of a new computer that's online but hasn't answered yet.
+ * The only other dials are the probe of a new computer that's online but hasn't answered yet, and
+ * the sign-in of one the relay refused as offline that the list says is online.
  */
 async function lookForNewComputers(): Promise<void> {
   const list = await readAccountList();
@@ -2055,6 +2057,11 @@ async function lookForNewComputers(): Promise<void> {
   for (const [id, access] of accountAccess)
     if (access.step === "needsCode" && access.offline && !offlineAccounts.has(id))
       void askForCode(id);
+  // A computer can drop off the relay and come back between two reads, so a sign-in's 503 left it
+  // `offline` while the list never changed.
+  if (list)
+    for (const [id, access] of accountAccess)
+      if (access.step === "offline" && !offlineAccounts.has(id)) void beginAccess(id);
 }
 
 /** Focus or a network change: the account's computers again, and each relay route's re-check. */
@@ -2229,7 +2236,8 @@ async function saveRestrictions(allowedHosts: string[]): Promise<boolean> {
  * What an account computer that refused this app for want of a session needs: a sign-in when the
  * user's computers vouch for it, else the setup code it shows. One sign-in runs on its
  * own after each time the computer answered; after that, a denied or lapsed request waits for
- * the user to ask again, since a new request starts only when the user asks (0091).
+ * the user to ask again, since a new request starts only when the user asks (0091). One the relay
+ * refused as offline never reached it, so it runs again once the relay lists that computer online.
  */
 async function beginAccess(id: string): Promise<void> {
   if (typedOnly.has(id) && accountAccess.get(id)?.step !== "pairing")
@@ -2237,12 +2245,13 @@ async function beginAccess(id: string): Promise<void> {
   if (startingOver) return;
   const step = accountAccess.get(id)?.step;
   if (step === "signingIn" || step === "pairing" || step === "pending" || step === "ask") return;
+  if (step === "offline" && offlineAccounts.has(id)) return;
   const relayId = relayIdOf(id);
   const vouched = await vouchedHosts();
   if (startingOver) return;
   if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
   if (!vouched.has(relayId) || allowing.has(id)) return askForCode(id);
-  if (signedIn.has(id))
+  if (signedIn.has(id) && step !== "offline")
     return setAccess(id, { step: "ask", why: "It hasn't let this computer in. Ask again." });
   await signIn(id);
 }
@@ -2616,6 +2625,10 @@ async function signIn(id: string): Promise<number | null | undefined> {
   if (code === 0) {
     setAccess(id, undefined);
     connections.get(id)?.retry();
+    return code;
+  }
+  if (code === EXIT_UNAVAILABLE && relayOffline(stderr)) {
+    setAccess(id, { step: "offline" });
     return code;
   }
   const removed = code === EXIT_REMOVED && (await believes(id));

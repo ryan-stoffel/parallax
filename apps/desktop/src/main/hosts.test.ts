@@ -55,6 +55,8 @@ const fake = vi.hoisted(() => {
     dialOutput: { lines: [] as string[], code: 0 } as {
       lines: string[];
       code: number;
+      /** What it writes to stderr, as plxd says why it failed. */
+      stderr?: string;
       /** With this, a `--compare` run: it answers these and ends only on "allow" or "deny". */
       afterAllow?: string[];
     },
@@ -114,12 +116,13 @@ vi.mock("node:child_process", async (actual) => {
     return { record, ...fake.dialOutput };
   };
   const spawn = (_file: string, args: string[]) => {
-    const { record, lines, afterAllow, code } = run(args);
+    const { record, lines, afterAllow, stderr, code } = run(args);
     const child = Object.assign(new EventEmitter(), {
       stdin: new PassThrough(),
       stdout: new PassThrough(),
       stderr: new PassThrough(),
     });
+    if (stderr) child.stderr.write(stderr);
     const end = (exit: number | null) => {
       child.stdout.end();
       child.emit("close", exit);
@@ -765,13 +768,18 @@ function ownPlxd(local: unknown, others: (connection: unknown) => object = () =>
 }
 
 /** `plxd dial` answers with each of `runs` in turn, staying on the last. */
-function dialRuns(...runs: { lines: string[]; afterAllow?: string[]; code: number }[]) {
+function dialRuns(
+  ...runs: { lines: string[]; afterAllow?: string[]; stderr?: string; code: number }[]
+) {
   fake.dialOutput = {
     get lines() {
       return runs[0]!.lines;
     },
     get afterAllow() {
       return runs[0]!.afterAllow;
+    },
+    get stderr() {
+      return runs[0]!.stderr;
     },
     get code() {
       return (runs.length > 1 ? runs.shift()! : runs[0]!).code;
@@ -999,6 +1007,84 @@ test("starting over removes the old key, then asks one computer at a time, and a
     expect(listed(buildBox)?.access?.step).toBe("ask");
     expect(listed(studio)?.access?.step).toBe("ask");
   } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a computer the relay says is offline reads as Offline, asks nothing, and signs in once it's online", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { local, second } = await usingBoth();
+    dialRuns(
+      {
+        lines: [],
+        stderr: "plxd dial: could not sign in: the relay's WebSocket failed: HTTP 503\n",
+        code: 4,
+      },
+      { lines: [], code: 0 },
+    );
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    second.set(refused);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(listed(buildBox)?.access).toEqual({ step: "offline" });
+    expect(signInRuns()).toHaveLength(1);
+
+    // While the relay lists it offline, nothing runs again.
+    const listing = (online: boolean) => ({
+      result: { hosts: [{ hostId: buildBox, name: "build-box", online, thisComputer: false }] },
+    });
+    const discover = fake.handlers.get("parallax:discoverAccount")!;
+    fake.answers.set("relay/hosts", listing(false));
+    await discover();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(signInRuns()).toHaveLength(1);
+
+    fake.answers.set("relay/hosts", listing(true));
+    await discover();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(signInRuns()).toHaveLength(2);
+    expect(listed(buildBox)?.access).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a computer that dropped off the relay between two list reads signs in at the next read", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const { local, second } = await usingBoth();
+    dialRuns(
+      {
+        lines: [],
+        stderr: "plxd dial: could not sign in: the relay's WebSocket failed: HTTP 503\n",
+        code: 4,
+      },
+      { lines: [], code: 0 },
+    );
+    // The list says it's online throughout, so it never changes.
+    fake.answers.set("relay/hosts", {
+      result: {
+        hosts: [{ hostId: buildBox, name: "build-box", online: true, thisComputer: false }],
+      },
+    });
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(1);
+    second.set(refused);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(listed(buildBox)?.access).toEqual({ step: "offline" });
+    expect(signInRuns()).toHaveLength(1);
+
+    fake.visible = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(signInRuns()).toHaveLength(2);
+    expect(listed(buildBox)?.access).toBeUndefined();
+  } finally {
+    fake.visible = false;
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
   }

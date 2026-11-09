@@ -412,6 +412,8 @@ export function accessLabel({ access }: Pick<DeviceHost, "access">): string | un
       return `Allow this computer on another device · ${spacedCode(access.code)}`;
     case "ask":
       return access.why;
+    case "offline":
+      return "Offline";
     default:
       return undefined;
   }

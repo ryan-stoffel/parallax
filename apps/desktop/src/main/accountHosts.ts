@@ -122,6 +122,14 @@ export function outageOf(error: { data?: unknown }): Outage | undefined {
   return kind === "relayUnreachable" ? "relay" : kind === "clerkUnreachable" ? "clerk" : undefined;
 }
 
+/**
+ * Whether `plxd dial`'s stderr says Parallax Relay refused its stream with 503, which on a stream
+ * is only `host_offline`: that computer's plxd isn't connected to the relay. Clerk being down
+ * refuses a stream with 401, and shows as the account list's `clerkUnreachable` (`outageOf`).
+ */
+export const relayOffline = (stderr: string) =>
+  /the relay's WebSocket failed: HTTP 503\b/.test(stderr);
+
 /** Reads of the account's list that must fail in a row before the app says so, so a blip doesn't. */
 const OUTAGE_READS = 2;
 

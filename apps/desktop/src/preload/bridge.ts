@@ -818,7 +818,8 @@ export type DeviceHost = {
  * Where this device's access to an account computer stands (0091), while it has no session there:
  * a new computer shows a code to compare, or takes the setup code `plx connect` shows; a known one
  * signs in, and may wait for one of the user's devices to allow this one, showing the same code; a
- * denied or lapsed request waits for the user to ask again.
+ * denied or lapsed request waits for the user to ask again, and one the relay says is offline waits
+ * for it to answer.
  */
 export type AccountAccess =
   /**
@@ -834,7 +835,9 @@ export type AccountAccess =
   | { step: "confirm"; code: string }
   | { step: "signingIn" }
   | { step: "pending"; code: string }
-  | { step: "ask"; why: string };
+  | { step: "ask"; why: string }
+  /** The relay refused the sign-in's stream as offline. It signs in again once that computer answers. */
+  | { step: "offline" };
 
 /** A setup code from `showSetupCode`, and when it lapses, as an RFC 3339 time. */
 export type SetupCode = { code: string; expiresAt: string };
