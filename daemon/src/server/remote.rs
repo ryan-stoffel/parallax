@@ -1482,13 +1482,17 @@ const RELAY_WINDOW: u64 = 512 * 1024;
 /// answered once and then stops is a client that stopped reading: its replies stall, and the
 /// connection closes after the stall timeout as any such connection does ([`connection`]), which
 /// ends the wait. Only that connection waits: its terminals skip ahead instead of queueing
-/// ([`crate::terminals`]), and nothing else on plxd waits for its queue.
+/// ([`crate::terminals`]), and nothing else on plxd waits for its queue. Nor does it wait while the
+/// connection hasn't taken a request plxd read: the pong may be behind that request, and the
+/// connection takes it only once its replies go out (PLX-1447).
 #[derive(Default)]
 struct Window {
     sent: AtomicU64,
     answered: AtomicU64,
     /// A client has answered, and hasn't closed. One that never answers is never waited for.
     paced: AtomicBool,
+    /// A request is waiting for the connection to take it, so no frame behind it is read.
+    handing: AtomicBool,
     heard: Notify,
 }
 
@@ -1507,9 +1511,18 @@ impl Window {
         self.heard.notify_one();
     }
 
+    /// Whether a request is waiting for the connection to take it.
+    fn handing(&self, handing: bool) {
+        self.handing.store(handing, Ordering::Relaxed);
+        if handing {
+            self.heard.notify_one();
+        }
+    }
+
     fn full(&self) -> bool {
         let sent = self.sent.load(Ordering::Relaxed);
         self.paced.load(Ordering::Relaxed)
+            && !self.handing.load(Ordering::Relaxed)
             && sent.saturating_sub(self.answered.load(Ordering::Relaxed)) >= RELAY_WINDOW
     }
 
@@ -1544,8 +1557,14 @@ where
         while let Some(frame) = frames.next().await {
             match frame {
                 Ok(Message::Text(text)) => {
-                    local_out.write_all(text.as_bytes()).await?;
-                    local_out.write_all(b"\n").await?;
+                    window.handing(true);
+                    let handed = async {
+                        local_out.write_all(text.as_bytes()).await?;
+                        local_out.write_all(b"\n").await
+                    };
+                    let handed = handed.await;
+                    window.handing(false);
+                    handed?;
                 }
                 Ok(Message::Pong(payload)) if over_relay => window.pong(&payload),
                 Ok(Message::Close(_)) => {
@@ -1892,7 +1911,7 @@ mod tests {
     use std::time::Duration;
 
     use futures_util::{SinkExt as _, StreamExt as _};
-    use tokio::io::{AsyncWriteExt as _, DuplexStream};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};
     use tokio_util::sync::CancellationToken;
 
     use super::{
@@ -2127,6 +2146,66 @@ mod tests {
         time::timeout(PATIENCE, texts)
             .await
             .expect("the rest never came");
+    }
+
+    /// PLX-1447: a client that answered once, then sent more requests than the connection takes
+    /// while its replies wait, and reads again. The pong for the window is behind those requests,
+    /// and the connection takes them only once its replies are out, so the window mustn't wait
+    /// for it then. Before, both waited until the stall closed the connection.
+    #[tokio::test]
+    async fn a_pong_behind_requests_the_connection_hasnt_taken_doesnt_hold_the_window() {
+        // As a relay stream and `remote::serve` have them: neither holds the requests.
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let (mut input, local_in) = tokio::io::duplex(64 * 1024);
+        let (local_out, mut requests) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            let closing = CancellationToken::new();
+            let _ = super::pump(server, local_in, local_out, Some(&closing)).await;
+        });
+        answer_once(&mut client).await;
+
+        let (mut sink, mut frames) = client.split();
+        let request = "r".repeat(16 * 1024);
+        let sent = tokio::spawn(async move {
+            for _ in 0..32 {
+                sink.send(Message::text(request.clone())).await.unwrap();
+            }
+            sink
+        });
+        time::sleep(Duration::from_millis(100)).await;
+        // The connection, with every request slot taken: its replies, past the window, go out
+        // before it reads another request, as `connection::serve`'s do.
+        let lines = 8;
+        let connection = tokio::spawn(async move {
+            let line = format!("{}\n", "x".repeat(LINE - 1));
+            for _ in 0..lines {
+                input.write_all(line.as_bytes()).await.unwrap();
+            }
+            let mut read = vec![0; 32 * (16 * 1024 + 1)];
+            requests.read_exact(&mut read).await.unwrap();
+            input
+        });
+
+        let texts = async {
+            let mut texts = 0;
+            while texts < lines {
+                match frames.next().await.expect("the socket ended early") {
+                    Ok(Message::Text(_)) => texts += 1,
+                    Ok(_) => {}
+                    Err(error) => panic!("after {texts} lines: {error}"),
+                }
+            }
+        };
+        time::timeout(PATIENCE, texts)
+            .await
+            .expect("the replies waited on a pong behind requests");
+        time::timeout(PATIENCE, connection)
+            .await
+            .expect("the connection never got its requests")
+            .unwrap();
+        drop(sent);
     }
 
     #[tokio::test]
