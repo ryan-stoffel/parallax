@@ -18,6 +18,15 @@ on:
         description: "Release to test. Empty tests the newest nightly."
         required: false
         type: string
+      timings:
+        description: "Keep each connect's stage times in the artifact (PLX-1493)."
+        required: false
+        type: boolean
+        default: false
+      connects:
+        description: "Connects to time. Empty times 5."
+        required: false
+        type: string
   workflow_call:
     inputs:
       tag:
@@ -99,12 +108,14 @@ jobs:
       - name: Test the relay
         env:
           TAG: ${{ inputs.tag }}
+          TIMINGS: ${{ inputs.timings == true && '1' || '' }}
+          CONNECTS: ${{ inputs.connects }}
           GITHUB_TOKEN: ${{ github.token }}
           PROBE_CLERK_REFRESH_TOKEN: ${{ secrets.PROBE_CLERK_REFRESH_TOKEN }}
           PROBE_CLERK_USER_ID: ${{ vars.PROBE_CLERK_USER_ID }}
           PROBE_ROTATED_FILE: ${{ runner.temp }}/rotated-token
           PROBE_SKIP_SIGNIN: ${{ steps.token.outputs.skip }}
-        run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"}
+        run: node scripts/bench/relay-probe.mjs --out relay-probe ${TAG:+--tag "$TAG"} ${TIMINGS:+--timings} ${CONNECTS:+--connects "$CONNECTS"}
 
       # Clerk replaces the refresh token on each use, so this keeps the next run signed in. The
       # writer reaches only this step and the check above.
