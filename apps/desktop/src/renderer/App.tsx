@@ -2399,9 +2399,11 @@ function HostLoader({
 }) {
   const connection = useShownConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
+  const opening = connection?.status === "connecting" || !!capabilities;
   const view = useThreads(
     hostId,
     capabilities,
+    opening,
     iconImageBytes(connection),
     (orchestratorId, item) => onNeedsYou(hostId, orchestratorId, item),
   );

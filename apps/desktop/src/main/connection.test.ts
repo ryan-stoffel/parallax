@@ -632,6 +632,39 @@ test("what went behind a failed initialize is dropped, and the next connection s
   expect(listener).not.toHaveBeenCalled();
 });
 
+test("on a cold connect, a watch opened before initialize answers goes right behind it (PLX-1480)", () => {
+  const connection = connect("host");
+  expect(state()).toEqual({ status: "connecting" });
+  const messages: WatchMessage[] = [];
+  connection.watch({ shell: true }, (message) => messages.push(message));
+  const shell = child().request("orchestration/subscribeShell");
+  expect(child().sent.map((message) => message.method)).toEqual([
+    "initialize",
+    "orchestration/subscribeShell",
+  ]);
+  expect(shell.params).toEqual({});
+  child().handshake();
+  expect(child().sent).toHaveLength(2);
+  child().reply({ id: shell.id, result: { subscription: "sub-1", snapshot: { seq: 4 } } });
+  expect(messages).toMatchObject([{ type: "snapshot", snapshot: { seq: 4 } }]);
+});
+
+test("a watch opened during a refused initialize gets initialize's error, not its own", () => {
+  const connection = connect("host");
+  const listener = vi.fn();
+  connection.watch({ shell: true }, listener);
+  const refused = child();
+  refused.reply(
+    { id: refused.request("initialize").id, error: incompatible },
+    {
+      id: refused.request("orchestration/subscribeShell").id,
+      error: { code: -32002, message: "initialize must be the first request" },
+    },
+  );
+  expect(state()).toMatchObject({ status: "failed", error: { reason: "incompatibleProtocol" } });
+  expect(listener).not.toHaveBeenCalled();
+});
+
 test("a mutating request sends commandId and its timeout retry reuses it", async () => {
   const connection = connect();
   child().handshake();

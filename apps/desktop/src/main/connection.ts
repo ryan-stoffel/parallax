@@ -278,6 +278,8 @@ export class Connection {
   private readonly watches = new Set<Watch>();
   /** The subscriptions and watches sent behind this connection's `initialize` (PLX-1480). */
   private readonly early = new Set<Subscription | Watch>();
+  /** `initialize` is sent and unanswered, and what opens now goes right behind it (PLX-1480). */
+  private pipelining = false;
   private readonly terminals = new Map<string, Terminal>();
   /** The device streams this connection opened (PLX-886), by plxd's id for each. */
   private readonly deviceStreams = new Map<string, (message: DeviceStreamMessage) => void>();
@@ -412,6 +414,7 @@ export class Connection {
     const subscription: Subscription = { params, logId, listener };
     this.subscriptions.add(subscription);
     if (this.state.status === "connected") this.sendSubscribe(subscription);
+    else if (this.pipelining) this.sendSubscribe(subscription, true);
     return () => {
       if (this.subscriptions.delete(subscription) && subscription.id) {
         this.client?.send(
@@ -429,6 +432,7 @@ export class Connection {
     const watch: Watch = { params, listener };
     this.watches.add(watch);
     if (this.state.status === "connected") this.sendWatch(watch);
+    else if (this.pipelining) this.sendWatch(watch, true);
     return () => {
       if (this.watches.delete(watch) && watch.id) {
         this.client?.send(
@@ -691,14 +695,17 @@ export class Connection {
     // Behind `initialize`, without waiting for its answer, which saves a round trip (PLX-1480).
     // plxd reads a connection's requests in order until `initialize` succeeds and refuses any
     // before it, so these see the session or make nothing. Each answer, after `initialize`'s,
-    // checks the log it assumed. Not for the local plxd, which may be replaced first.
+    // checks the log it assumed. Those opened before `initialize` answers go the same way, so a
+    // cold connect's first watches save it too. Not for the local plxd, which may be replaced first.
     if (!this.options.replaceDaemon) {
+      this.pipelining = true;
       for (const subscription of this.subscriptions) this.sendSubscribe(subscription, true);
       for (const watch of this.watches) this.sendWatch(watch, true);
     }
   }
 
   private onInitialized(client: RpcClient, result: InitializeResult): void {
+    this.pipelining = false;
     client.maxFrameBytes = Math.min(MAX_FRAME_BYTES, result.maxFrameBytes);
     this.logId = result.logId;
     this.legacy = isLegacy(result.capabilities);
@@ -908,6 +915,7 @@ export class Connection {
     clearTimeout(this.livenessTimer);
     this.livenessTimer = undefined;
     client?.close("the connection to plxd ended");
+    this.pipelining = false;
     this.early.clear();
     for (const subscription of this.subscriptions) subscription.id = undefined;
     // plxd ends a command with the connection that opened it.

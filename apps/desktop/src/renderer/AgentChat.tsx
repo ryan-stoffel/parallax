@@ -386,6 +386,9 @@ export function AgentChat({
   const connected = connection?.status === "connected";
   const catalog = useCatalog(hostId);
   const queueEnabled = connected && "queue" in connection.capabilities;
+  // From when the host starts connecting, so a thread open at launch subscribes right behind
+  // `initialize` (PLX-1480).
+  const opening = connected || connection?.status === "connecting";
   const {
     transcript,
     error,
@@ -399,7 +402,7 @@ export function AgentChat({
     runs,
     older,
     loadOlder,
-  } = useAgentRun(hostId, runId, connected);
+  } = useAgentRun(hostId, runId, opening);
   // Permission requests (PLX-196): those answered here read as answered at once.
   const { answers, answer, dismiss } = useAnswers(hostId);
   // The box's unsent prompt (PLX-887): out of the store while the thread is open, and back in as

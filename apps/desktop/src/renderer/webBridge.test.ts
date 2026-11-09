@@ -86,6 +86,80 @@ test("the phone sends subscriptions behind initialize, and drops one a new log m
   }
 });
 
+/** A phone `WebHost` on a socket whose sent lines the test reads and whose answers it gives. */
+async function phoneHost() {
+  const sent: { id?: number; method: string; params?: unknown }[] = [];
+  const socket = {
+    readyState: WebSocket.OPEN,
+    send: (line: string) => sent.push(JSON.parse(line)),
+    close: () => {},
+  } as unknown as WebSocket;
+  const host = new WebHost(async () => socket);
+  await host.connect();
+  socket.onopen!({} as Event);
+  const receive = (...messages: unknown[]) => {
+    for (const message of messages)
+      socket.onmessage!({
+        data: JSON.stringify({ jsonrpc: "2.0", ...(message as object) }),
+      } as MessageEvent);
+  };
+  return { host, sent, receive };
+}
+
+test("on a cold connect, the phone sends a watch opened before initialize answers right behind it (PLX-1480)", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("window", globalThis);
+  try {
+    const { host, sent, receive } = await phoneHost();
+    expect(host.state.status).toBe("connecting");
+    const listener = vi.fn();
+    host.watch({ shell: true }, listener);
+    expect(sent.map((message) => message.method)).toEqual([
+      "initialize",
+      "orchestration/subscribeShell",
+    ]);
+    const handshake = JSON.parse(
+      readFileSync(
+        new URL("../../../../crates/parallax-protocol/samples/v1/handshake.json", import.meta.url),
+        "utf8",
+      ),
+    )[1].result;
+    receive({ id: sent[0]!.id, result: handshake });
+    expect(sent).toHaveLength(2);
+    receive({ id: sent[1]!.id, result: { subscription: "sub-1", snapshot: { seq: 4 } } });
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "snapshot", snapshot: { seq: 4 } }),
+    );
+    host.close();
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
+
+test("a phone watch opened during a refused initialize gets initialize's error, not its own", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("window", globalThis);
+  try {
+    const { host, sent, receive } = await phoneHost();
+    const listener = vi.fn();
+    host.watch({ shell: true }, listener);
+    receive(
+      { id: sent[0]!.id, error: { code: -32600, message: "refused" } },
+      { id: sent[1]!.id, error: { code: -32002, message: "initialize must be the first request" } },
+    );
+    expect(host.state).toMatchObject({
+      status: "failed",
+      error: { message: "initialize failed: refused" },
+    });
+    expect(listener).not.toHaveBeenCalled();
+    host.close();
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
+
 // webBridge.ts copies these so the web chunk shares no module with the app's.
 test("the web bridge's protocol constants match the generated protocol", () => {
   expect(WEB_PROTOCOL).toBe(PROTOCOL_VERSION);

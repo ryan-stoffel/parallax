@@ -165,7 +165,9 @@ function Threads({
   state: ConnectionState;
   onView: (id: string, view: ThreadsView) => void;
 }) {
-  const view = useThreads(id, state.status === "connected" ? state.capabilities : undefined, undefined, () => {});
+  const capabilities = state.status === "connected" ? state.capabilities : undefined;
+  const opening = state.status === "connecting" || !!capabilities;
+  const view = useThreads(id, capabilities, opening, undefined, () => {});
   const latest = useRef(view);
   latest.current = view;
   useEffect(

@@ -76,9 +76,13 @@ const run = (args, input) => new Promise((resolve, reject) => {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const initialize = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocol: { min: 1, max: 1 }, client: { name: "round-trips", version: "0" }, capabilities: {} } });
 const subscribe = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "events/subscribe", params: { after: 0 } });
+// The apps' first watch on a cold connect, the shell's thread list, done at its snapshot.
+const shell = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "orchestration/subscribeShell", params: {} });
 
-/** One fresh `plxd dial`: stage marks, and when initialize's answer and the first event came. */
-async function sample(route, fingerprint, clientDir, pipelined) {
+/** One fresh `plxd dial`: stage marks, and when initialize's answer and the first event came,
+ *  or, `app`, the shell watch's snapshot. */
+async function sample(route, fingerprint, clientDir, pipelined, app = false) {
+  const first = app ? shell : subscribe;
   const started = performance.now();
   const child = start(["dial", route, "--remote", fingerprint, "--data-dir", clientDir], { PLXD_CONNECT_TIMINGS: "1" });
   let err = "", buffer = "";
@@ -87,7 +91,7 @@ async function sample(route, fingerprint, clientDir, pipelined) {
     err += b;
     if (at.connected === undefined && err.includes("connected over")) at.connected = performance.now() - started;
   });
-  child.stdin.write(`${initialize}\n${pipelined ? `${subscribe}\n` : ""}`);
+  child.stdin.write(`${initialize}\n${pipelined ? `${first}\n` : ""}`);
   await new Promise((resolve, reject) => {
     child.once("exit", () => reject(new Error(`dial exited early: ${err}`)));
     child.stdout.on("data", b => {
@@ -99,9 +103,11 @@ async function sample(route, fingerprint, clientDir, pipelined) {
         if (message.id === 1) {
           assert(message.result, "initialize failed");
           at.initialized = performance.now() - started;
-          if (!pipelined) child.stdin.write(`${subscribe}\n`);
+          if (!pipelined) child.stdin.write(`${first}\n`);
         }
-        if (message.method === "events/event" && at.event === undefined) {
+        if (app && message.id === 2) assert(message.result?.snapshot, "no shell snapshot");
+        const done = app ? message.id === 2 : message.method === "events/event";
+        if (done && at.event === undefined) {
           at.event = performance.now() - started;
           resolve();
         }
@@ -152,17 +158,20 @@ try {
   // One uncounted warm-up, then alternate modes. The gap lets the host's spare refill and keeps
   // opens under the relay's 30 a minute.
   await sample(route, paired.fingerprint, clientDir, false);
-  const rows = { sequential: [], pipelined: [] };
-  for (let i = 0; i < 2 * count; i++) {
+  const modes = ["sequential", "pipelined", "app sequential", "app pipelined"];
+  const rows = Object.fromEntries(modes.map(mode => [mode, []]));
+  for (let i = 0; i < modes.length * count; i++) {
     await sleep(2100);
-    const mode = i % 2 ? "pipelined" : "sequential";
-    rows[mode].push(await sample(route, paired.fingerprint, clientDir, mode === "pipelined"));
+    const mode = modes[i % modes.length];
+    rows[mode].push(await sample(route, paired.fingerprint, clientDir, mode.endsWith("pipelined"), mode.startsWith("app")));
   }
   const medians = {};
   for (const name of Object.keys(rows.sequential[0])) medians[name] = median(rows.sequential.map(r => r[name]));
   for (const name of ["connected to initialize answer", "connected to first event", "spawn to first event"]) {
     medians[`${name} (pipelined)`] = median(rows.pipelined.map(r => r[name]));
   }
+  medians["app: connected to shell snapshot"] = median(rows["app sequential"].map(r => r["connected to first event"]));
+  medians["app: connected to shell snapshot (pipelined)"] = median(rows["app pipelined"].map(r => r["connected to first event"]));
   console.log(JSON.stringify({ medians }));
 } finally {
   host?.close();

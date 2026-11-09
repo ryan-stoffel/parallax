@@ -216,6 +216,8 @@ export class WebHost {
   private readonly watches = new Set<Watch>();
   /** The subscriptions and watches sent behind this socket's `initialize` (PLX-1480). */
   private readonly early = new Set<Subscription | Watch>();
+  /** `initialize` is sent and unanswered, and what opens now goes right behind it (PLX-1480). */
+  private pipelining = false;
   private readonly updateNotice = new UpdateNotice(() => {
     if (this.state.updating) this.setState(this.state);
   });
@@ -274,7 +276,9 @@ export class WebHost {
       // Behind `initialize`, without waiting for its answer, which saves a round trip (PLX-1480).
       // plxd reads a connection's requests in order until `initialize` succeeds and refuses any
       // before it, so these see the session or make nothing. Each answer, after `initialize`'s,
-      // checks the log it assumed.
+      // checks the log it assumed. Those opened before `initialize` answers go the same way, so
+      // a cold connect's first watches save it too.
+      this.pipelining = true;
       for (const subscription of this.subscriptions) this.sendSubscribe(subscription, true);
       for (const watch of this.watches) this.sendWatch(watch, true);
     };
@@ -317,6 +321,7 @@ export class WebHost {
     const subscription: Subscription = { params, logId, listener };
     this.subscriptions.add(subscription);
     if (this.state.status === "connected") this.sendSubscribe(subscription);
+    else if (this.pipelining) this.sendSubscribe(subscription, true);
     return () => {
       if (this.subscriptions.delete(subscription) && subscription.id)
         this.send("events/unsubscribe", { subscription: subscription.id });
@@ -328,6 +333,7 @@ export class WebHost {
     const watch: Watch = { params, listener };
     this.watches.add(watch);
     if (this.state.status === "connected") this.sendWatch(watch);
+    else if (this.pipelining) this.sendWatch(watch, true);
     return () => {
       if (this.watches.delete(watch) && watch.id)
         this.send("events/unsubscribe", { subscription: watch.id });
@@ -433,6 +439,7 @@ export class WebHost {
   }
 
   private initialized(result: InitializeResult): void {
+    this.pipelining = false;
     this.logId = result.logId;
     this.failures = 0;
     clearInterval(this.heartbeatTimer);
@@ -591,6 +598,7 @@ export class WebHost {
       done({ error: { code: INTERNAL_ERROR, message } });
     }
     this.pending.clear();
+    this.pipelining = false;
     this.early.clear();
     for (const subscription of this.subscriptions) subscription.id = undefined;
     for (const watch of this.watches) watch.id = undefined;
