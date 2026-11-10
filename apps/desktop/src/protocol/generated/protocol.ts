@@ -7821,6 +7821,11 @@ export type PullRequest = {
 	 * It has older review threads than `review_threads` holds (the newest 100).
 	 */
 	reviewThreadsTruncated?: boolean,
+	/**
+	 * Its GitHub node id, for `pr/write`'s writes that take one. Absent from a plxd that doesn't
+	 * read it.
+	 */
+	nodeId?: string,
 };
 
 /**
@@ -7956,7 +7961,16 @@ export type PrFile = {
 	 * Lines removed.
 	 */
 	deletions: number,
+	/**
+	 * Whether the signed-in reviewer marked it viewed. Absent from a plxd that doesn't read it.
+	 */
+	viewed?: PrFileViewed,
 };
+
+/**
+ * Where a file of a pull request is in the signed-in reviewer's reading of it.
+ */
+export type PrFileViewed = "viewed" | "unviewed" | "dismissed";
 
 /**
  * A label and its color.
@@ -11339,7 +11353,19 @@ export type PrWrite = { "kind": "comment",
 	/**
 	 * Whether to resolve the thread, after the reply.
 	 */
-	resolve?: boolean,
+	resolve?: boolean, } | { "kind": "setFileViewed",
+	/**
+	 * The pull request's node id, as `pr/view` gives it.
+	 */
+	pullRequestId: string,
+	/**
+	 * The file's path in the repository.
+	 */
+	path: string,
+	/**
+	 * Whether it is viewed now.
+	 */
+	viewed: boolean,
 };
 
 /**

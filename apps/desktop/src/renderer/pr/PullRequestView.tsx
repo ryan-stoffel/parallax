@@ -4,6 +4,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -51,6 +52,7 @@ import {
   guideView,
   lineBreakdown,
   threadsOf,
+  more,
   type Check,
   type PrActExtra,
   type PrActionMore,
@@ -58,6 +60,7 @@ import {
 } from "./model";
 import { ago, Avatar, BranchChips, DiffStat, StateBadge } from "./parts";
 import { ReviewThread } from "./ReviewThread";
+import { useViewedFiles } from "./viewedFiles";
 
 /** How long a read stays fresh enough that opening the view doesn't read it again. */
 const FRESH_MS = 15_000;
@@ -102,7 +105,6 @@ export function PullRequestView({
   const [tab, setTab] = useState<Tab>("summary");
   const [shots, setShots] = useState<{ images: { src: string; name: string }[]; index: number }>();
   const [diff, setDiff] = useState<{ for: string; result?: PrDiffResult; error?: string }>();
-  const [viewed, setViewed] = useState<ReadonlySet<string>>(new Set());
   const [codeFocus, setCodeFocus] = useState<DiffFocus>();
   const [guide, setGuide] = useState<{ url: string; result?: PrGuideResult; error?: string }>();
   // The guide's page, kept here so a trip to Code comes back to it. A new pull request or a new
@@ -219,7 +221,26 @@ export function PullRequestView({
           return failed;
         }, "Couldn't write to the pull request")
     : undefined;
-  const refresh = () => void run(() => prs.refresh(url), "Couldn't read the pull request");
+  const viewedFiles = useViewedFiles({
+    url,
+    files: pr?.files,
+    nodeId: pr && more(pr).nodeId,
+    send: useMemo(() => prs.write && ((w: PrWrite) => prs.write!(url, w)), [prs.write, url]),
+    onFailed: useCallback(
+      (path: string, on: boolean, error: RpcError) =>
+        notify({
+          key: `pr/${url}/viewed`,
+          tone: "error",
+          title: `Couldn't mark ${path.split("/").pop()} as ${on ? "viewed" : "not viewed"}`,
+          body: describeError(error),
+        }),
+      [url],
+    ),
+  });
+  const refresh = () => {
+    viewedFiles.reread();
+    void run(() => prs.refresh(url), "Couldn't read the pull request");
+  };
   const compose = (text: string, send: boolean) => {
     menu.current?.hidePopover();
     onCompose(text, send);
@@ -464,13 +485,9 @@ export function PullRequestView({
             <ChangesDiff
               diff={diff.result!.diff}
               truncated={diff.result!.truncated}
-              viewed={viewed}
-              onViewed={(path, on) => {
-                const next = new Set(viewed);
-                if (on) next.add(path);
-                else next.delete(path);
-                setViewed(next);
-              }}
+              viewed={viewedFiles.viewed}
+              changedSinceViewed={viewedFiles.changed}
+              onViewed={(path, on) => void viewedFiles.set(path, on)}
               focus={codeFocus}
               threads={threads}
               renderThread={(t) => <ReviewThread bare {...threadProps(t)} />}

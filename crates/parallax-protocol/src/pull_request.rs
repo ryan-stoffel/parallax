@@ -421,6 +421,22 @@ pub struct PrFile {
     pub additions: u64,
     /// Lines removed.
     pub deletions: u64,
+    /// Whether the signed-in reviewer marked it viewed. Absent from a plxd that doesn't read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub viewed: Option<PrFileViewed>,
+}
+
+/// Where a file of a pull request is in the signed-in reviewer's reading of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PrFileViewed {
+    /// Marked viewed.
+    Viewed,
+    /// Not marked viewed.
+    Unviewed,
+    /// Marked viewed, then changed by a later commit.
+    Dismissed,
 }
 
 /// Result of `pr/diff`: a pull request's changes as one unified diff, as `gh pr diff` prints it.
@@ -634,6 +650,11 @@ pub struct PullRequest {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub review_threads_truncated: bool,
+    /// Its GitHub node id, for `pr/write`'s writes that take one. Absent from a plxd that doesn't
+    /// read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub node_id: Option<String>,
 }
 
 /// Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's
@@ -691,6 +712,15 @@ pub enum PrWrite {
         /// Whether to resolve the thread, after the reply.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         resolve: bool,
+    },
+    /// Marks a file viewed by the signed-in reviewer, or takes that back.
+    SetFileViewed {
+        /// The pull request's node id, as `pr/view` gives it.
+        pull_request_id: String,
+        /// The file's path in the repository.
+        path: String,
+        /// Whether it is viewed now.
+        viewed: bool,
     },
     /// A write this version does not know yet.
     #[serde(other)]

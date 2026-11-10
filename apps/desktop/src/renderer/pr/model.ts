@@ -41,6 +41,7 @@ export interface PullRequestMore {
   headSha?: string;
   mergeMethods?: PrMergeMethod[];
   reviewThreads?: ReviewThreadData[];
+  nodeId?: string;
 }
 
 /** A check with whether branch protection requires it and its Actions run and job. */
