@@ -109,8 +109,8 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
 enum Rule {
     /// `inactiveWorktreeDays`.
     Inactive,
-    /// `archivedWorktreeDays`.
-    Archived,
+    /// `archivedWorktreeDays`, with when the thread was archived as the sweep read it.
+    Archived(Timestamp),
     /// `unchangedWorktrees`, which also needs git to find no commits beyond the default branch.
     Unchanged,
 }
@@ -164,7 +164,7 @@ async fn sweep_rules(
                 continue;
             }
         }
-        if !still_as_read(daemon, &run).await {
+        if !still_as_read(daemon, &run, rule).await {
             continue;
         }
         // Only when the host keeps edited tracked files alone do untracked files go.
@@ -206,8 +206,10 @@ fn due(db: &Store, now: Timestamp) -> Result<(WorktreeKeep, Vec<Due>), ErrorObje
         let quiet = |wait| quiet_for(run.updated_at, wait, now);
         let rule = if inactive.is_some_and(|days| quiet(day(days))) {
             Rule::Inactive
-        } else if archived.is_some_and(|days| archived_for(&thread, &run, days, now)) {
-            Rule::Archived
+        } else if let Some(at) = thread.archived_at
+            && archived.is_some_and(|days| archived_for(&thread, &run, days, now))
+        {
+            Rule::Archived(at)
         } else if unchanged && quiet(UNCHANGED_AFTER) {
             Rule::Unchanged
         } else {
@@ -263,7 +265,7 @@ async fn may_go(
     }
     match rule {
         Rule::Unchanged => worktrees.in_default_branch(repo, folder).await,
-        Rule::Inactive | Rule::Archived => Ok(true),
+        Rule::Inactive | Rule::Archived(_) => Ok(true),
     }
 }
 
@@ -285,14 +287,24 @@ async fn kept(
 }
 
 /// Whether `run` is idle and unchanged since the sweep read it, read again from the store so a
-/// message sent mid-sweep keeps its worktree.
-async fn still_as_read(daemon: &Daemon, run: &Run) -> bool {
+/// message sent mid-sweep keeps its worktree. Under the archived `rule`, its thread must also be
+/// archived still, since the same time, as unarchiving changes the thread and not the run.
+async fn still_as_read(daemon: &Daemon, run: &Run, rule: Rule) -> bool {
     let (id, at) = (run.id, run.updated_at);
     store(daemon, move |db| {
-        Ok(db
+        let error = |e| store_error(&e);
+        let run_as_read = db
             .get_run(id)
-            .map_err(|e| store_error(&e))?
-            .is_some_and(|run| idle(&run) && run.updated_at == at))
+            .map_err(error)?
+            .is_some_and(|run| idle(&run) && run.updated_at == at);
+        let Rule::Archived(archived_at) = rule else {
+            return Ok(run_as_read);
+        };
+        Ok(run_as_read
+            && db
+                .get_thread(id)
+                .map_err(error)?
+                .is_some_and(|thread| thread.archived && thread.archived_at == Some(archived_at)))
     })
     .await
     .unwrap_or(false)
@@ -731,7 +743,7 @@ mod tests {
         use tokio_util::sync::CancellationToken;
         use uuid::Uuid;
 
-        use super::super::sweep_rules;
+        use super::super::{Rule, still_as_read, sweep_rules};
         use crate::agents::tests::run_fields;
         use crate::agents::{convert, store, store_error};
         use crate::backend::process::{Environment, Launcher};
@@ -992,6 +1004,28 @@ mod tests {
             .await
             .unwrap();
             assert!(thread.is_some_and(|thread| thread.archived));
+
+            // Unarchived after the sweep chose it, before the re-read right before removal: the
+            // run is unchanged, but the worktree stays.
+            let late = f.idle().await;
+            archive(&late, true).await;
+            let id = late.id;
+            let (run, read) = store(&f.daemon, move |db| {
+                let run = db.get_run(id).map_err(|e| store_error(&e))?;
+                let thread = db.get_thread(id).map_err(|e| store_error(&e))?;
+                Ok((run.unwrap(), thread.unwrap()))
+            })
+            .await
+            .unwrap();
+            let rule = Rule::Archived(read.archived_at.unwrap());
+            assert!(still_as_read(&f.daemon, &run, rule).await);
+            archive(&late, false).await;
+            assert!(!still_as_read(&f.daemon, &run, rule).await);
+            // Archived again, it counts from then, not from when the sweep read it.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            archive(&late, true).await;
+            assert!(!still_as_read(&f.daemon, &run, rule).await);
+            assert!(late.path.is_dir());
         }
 
         #[tokio::test]
