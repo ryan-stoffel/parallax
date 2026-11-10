@@ -29,7 +29,7 @@ Clients cannot split relay authentication from host object admission and spare s
 
 Since PLX-1493 the upgrade also returns `limit` (the anonymous rate limit's answer), `jwks` (the JWKS read, present only when this request made one), `host_hop` (a call to the host object that does nothing, made beside the stream's join) and `worker` (the request's start through the stream's 101). `limit` and `auth` both start with the request and run side by side, so they overlap, and the time before `host_open` is the longer of the two. `host_open` minus `host_hop` is the host object's own work, with its claim write's confirmation. The client's relay upgrade minus `worker` is one round trip plus what Cloudflare spends outside the Worker. Cloudflare's timers advance only after I/O, so a stage with no I/O reads 0: an `auth` of 0 means the isolate had the keys.
 
-After a relay deploy, a manual run of the Relay probe workflow with `timings` on and `connects` at 30 keeps these per connect in its artifact, from a GitHub runner, with no token on anyone's computer.
+A manual run of the Relay probe workflow keeps each connect's stages in its artifact, from a GitHub runner, with no token on anyone's computer. Its `relay` input picks production or staging, and `connects` set to 30 gives enough samples to compare two runs. The older fields come from plxd's output, so they need no new plxd. The four new ones need a plxd from after PLX-1493 there, and until then the probe's object rows (`relay-objects.mjs`) carry them for its own timed streams, as `spare: relay limit` and the like.
 
 Local proof (build first):
 
