@@ -146,7 +146,8 @@ function HostOption({
  * no repo, it picks only the computer. `checkoutUnavailable`, when set, says why Local checkout
  * can't be picked. `missing` names the computers, by id, that lack the picked
  * repository, which say picking them clones it. `busy` while the picked computer is set up, which
- * the button shows with a spinner. Each computer shows whether it's connected, the list scrolls,
+ * the button shows with a spinner. The button reads the computer's icon and name, then the
+ * workspace's. Each computer shows whether it's connected, the list scrolls,
  * and past a handful of computers a search box filters them. With `balancer`, the Load Balancer
  * (0101) is on: `on` while it holds the choice, which marks its pick, `checking` while it chooses,
  * and `none` when no computer could take the thread. `why` says why it passed over each computer,
@@ -224,12 +225,11 @@ export function RunTargetMenu({
         )}
         <span className="composer-host truncate">{chosen}</span>
         {picked && !busy && <Scale aria-hidden className="size-3.5! text-faint-foreground" />}
+        {/* A pair of its own, set apart from the computer's. Its label hides in a narrow box. */}
         {workspace && (
-          <span className="composer-detail flex shrink-0 items-center gap-1.5">
-            <span aria-hidden className="text-faint-foreground">
-              ·
-            </span>
-            {workspace.label}
+          <span className="ml-2.5 flex shrink-0 items-center gap-1.5">
+            {workspace.icon}
+            <span className="composer-detail">{workspace.label}</span>
           </span>
         )}
         <ChevronDown aria-hidden className="opacity-70" />
