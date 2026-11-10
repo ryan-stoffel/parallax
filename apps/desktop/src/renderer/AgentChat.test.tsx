@@ -122,19 +122,34 @@ test("an assistant message renders Markdown, but never raw HTML or images", asyn
 });
 
 test("with Render math off, LaTeX shows as its source (PLX-1519)", () => {
-  row({ kind: "assistant", key: "a", text: "So $x^2$ and \\(y^2\\), for $5:\n\n\\[\nz = 1\n\\]" });
+  const display = "$$\na &= b \\\\\nc &= d_1 * d_2\n$$";
+  row({
+    kind: "assistant",
+    key: "a",
+    text: `As \`$a*b$\` in *code*, so $a*b*c$ in $\\{x\\}$ and \\(y^2\\,z\\), for $5:\n\n${display}\n\n\\[\nz = 1\n\\]`,
+  });
   const math = () =>
     [...document.querySelectorAll('[role="math"]')].map((m) =>
       m.getAttribute("aria-label")?.trim(),
     );
-  expect(math()).toEqual(["x^2", "y^2", "z = 1"]);
-  // An open thread's messages follow the setting at once. Each delimiter reads as dollars.
+  expect(math()).toEqual(["a*b*c", "\\{x\\}", "y^2\\,z", "a &= b \\\\ c &= d_1 * d_2", "z = 1"]);
+  // An open thread's messages follow the setting at once: the math exactly as written, with
+  // \(...\) and \[...\] in dollars, and the text and code around it read as Markdown still.
   act(() => setChatPrefs({ math: false }));
   expect(math()).toEqual([]);
-  expect([...document.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
-    "So $x^2$ and $y^2$, for $5:",
-    "$$ z = 1 $$",
+  // Each paragraph's text, a line for each of its line breaks.
+  const lines = [...document.querySelectorAll("p")].map((p) => {
+    const copy = p.cloneNode(true) as HTMLElement;
+    for (const br of copy.querySelectorAll("br")) br.replaceWith("\n");
+    return copy.textContent;
+  });
+  expect(lines).toEqual([
+    "As $a*b$ in code, so $a*b*c$ in $\\{x\\}$ and $y^2\\,z$, for $5:",
+    display,
+    "$$\nz = 1\n$$",
   ]);
+  expect(document.querySelector("code")?.textContent).toBe("$a*b$");
+  expect(document.querySelector("em")?.textContent).toBe("code");
   act(() => setChatPrefs(chatDefaults));
 });
 

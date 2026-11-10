@@ -111,7 +111,7 @@ import { ClaudeLogo, GitHubLogo, ParallaxGlyph } from "./logos";
 import { codeRuns, markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { mentionsOf, PullRequestsContext } from "./Mention";
 import { isHttps, prNumber } from "./github";
-import { dollarMath } from "./math";
+import { dollarMath, mathSource } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
 import { PlanStrip, PlanLine, ProposedPlan } from "./Plan";
@@ -2799,8 +2799,8 @@ function SiteIcon({ site }: { site: string }) {
 /** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */
 const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; images: Images }) {
   const openFile = useOpenFile();
-  // Settings > Appearance > Chat's Render math (PLX-1519). Off, the renderer reads no math, so
-  // what `dollarMath` leaves shows as its source: `$x$`, and `$$x$$` on a line of its own.
+  // Settings > Appearance > Chat's Render math (PLX-1519). Off, the renderer reads no math, and
+  // the math `dollarMath` left in `text` is plain text, which shows as its source (`mathSource`).
   const { math } = chatPrefs.use();
   const remote = (url: string) => images === "github" && isHttps(url);
   // A thread's own file shows, as FileImage reads it, where it's a paragraph of its own, which
@@ -2808,10 +2808,10 @@ const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; 
   const markdown = useMemo(
     () =>
       unloadedImages(
-        text,
+        math ? text : mathSource(text),
         (url, alone) => remote(url) || (alone && !!openFile && linkedPath(url) !== undefined),
       ),
-    [text, images, !!openFile],
+    [text, math, images, !!openFile],
   );
   return (
     <EnrichedMarkdownText

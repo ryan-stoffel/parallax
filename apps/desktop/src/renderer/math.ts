@@ -3,24 +3,32 @@
 // Text up to a blank line, which ends a paragraph and so any inline math or code span in it.
 const INLINE = String.raw`(?:(?!\n[ \t]*\n)[^])`;
 
-// What dollarMath reads, in order at each position. Kept as they are, since Markdown doesn't
-// process escapes in them: a fenced code block at any indent (to its closing fence or the end), an
-// indented code block, a URL, or a code span. Then $$...$$ (one opening a line may run to the end,
-// as a streaming one does), \[...\], \(...\), an escaped character, a $...$ pair as Pandoc reads
-// one (no space just inside either dollar, no digit right after the closing one), or a lone dollar.
+// What's kept as it is, since Markdown doesn't process escapes in it: a fenced code block at any
+// indent (to its closing fence or the end), an indented code block, a URL, or a code span.
 // ponytail: an indented block after a blank line counts as code even when it's a list item's
 // paragraph, which then keeps remark-math's own reading of its dollars.
+const KEPT = [
+  String.raw`(?:^|\n)[ \t]*(\`{3,}|~{3,})[^]*?(?:\n[ \t]*\1|$)`,
+  String.raw`(?:^|\n[ \t]*\n)(?: {4}|\t)(?:[^\n]|\n(?:[ \t]*\n)*(?: {4}|\t))*`,
+  String.raw`(?:https?:\/\/|www\.)[^\s<>]*|<[A-Za-z][\w+.-]*:[^\s<>]*>`,
+  String.raw`(\`+)${INLINE}*?\2(?!\`)`,
+];
+
+// \(...\). It reads a backslash with the character after it, and doesn't run past another of its
+// openers, which keeps unclosed ones from rescanning a paragraph.
+const PARENS = String.raw`\\\(((?:\\[^()\n]|(?!\n[ \t]*\n)[^\\])+?)\\\)`;
+
+// What dollarMath reads, in order at each position: what's kept, then $$...$$ (one opening a line
+// may run to the end, as a streaming one does), \[...\], \(...\), an escaped character, a $...$
+// pair as Pandoc reads one (no space just inside either dollar, no digit right after the closing
+// one), or a lone dollar.
 const TOKENS = new RegExp(
   [
-    String.raw`(?:^|\n)[ \t]*(\`{3,}|~{3,})[^]*?(?:\n[ \t]*\1|$)`,
-    String.raw`(?:^|\n[ \t]*\n)(?: {4}|\t)(?:[^\n]|\n(?:[ \t]*\n)*(?: {4}|\t))*`,
-    String.raw`(?:https?:\/\/|www\.)[^\s<>]*|<[A-Za-z][\w+.-]*:[^\s<>]*>`,
-    String.raw`(\`+)${INLINE}*?\2(?!\`)`,
+    ...KEPT,
     String.raw`(?:^|\n)[ \t]*\$\$[^]*?(?:\$\$|$)|\$\$${INLINE}*?\$\$`,
-    // Each reads a backslash with the character after it, so \\[2pt] is a line break, and neither
-    // runs past another of its openers, which keeps unclosed ones from rescanning a paragraph.
+    // As PARENS reads its own, so \\[2pt] is a line break.
     String.raw`\\\[((?:\\[^[\]\n]|(?!\n[ \t]*\n)[^\\])+?)\\\]`,
-    String.raw`\\\(((?:\\[^()\n]|(?!\n[ \t]*\n)[^\\])+?)\\\)`,
+    PARENS,
     String.raw`\\[^]`,
     String.raw`\$(?=[^\s$])(?:\\[^]|(?!\n[ \t]*\n)[^\\$])*?(?<=[^\s\\])\$(?!\d)`,
     String.raw`\$`,
@@ -46,5 +54,37 @@ export const dollarMath = (text: string): string =>
             : match === "$"
               ? "\\$"
               : match,
+      )
+    : text;
+
+// What mathSource reads in what dollarMath returns: what's kept, then the math. That's a \(...\)
+// left for the dollar in it, `$$...$$` (to the end, while one is still arriving), or `$...$`: by
+// then every dollar left unescaped is math's. A pair never takes in a backtick, since a code
+// span comes before math, as in "$5 and `$x`". An escaped character stays as it is.
+const MATH = new RegExp(
+  [
+    ...KEPT,
+    `(${PARENS}|${String.raw`\$\$[^]*?(?:\$\$|$)|\$(?:\\[^]|(?!\n[ \t]*\n)[^\\$\`])*\$`})`,
+    String.raw`\\[^]`,
+  ].join("|"),
+  "g",
+);
+
+/**
+ * What `dollarMath` returns with its math as plain text, for when math isn't typeset (Settings >
+ * Appearance > Chat's Render math, PLX-1519): each `$...$` and `$$...$$` shows as written, dollars
+ * included, since every character Markdown could read as syntax is escaped (`$a*b*c$` keeps its
+ * asterisks, `\{` and `\\` their backslashes) and its lines break where the source's do. Code,
+ * URLs, and the text around the math stay as they are.
+ */
+export const mathSource = (text: string): string =>
+  /[$\\]/.test(text)
+    ? text.replace(MATH, (match, _fence, _ticks, math?: string) =>
+        math === undefined
+          ? match
+          : math
+              .replace(/[!-/:-@[-`{-~]/g, "\\$&")
+              // A hard line break, which a paragraph's last line can't end with.
+              .replace(/\n(?![ \t]*(?:\n|$))/g, "\\\n"),
       )
     : text;
