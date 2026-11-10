@@ -47,8 +47,10 @@ export function ConnectionSettings() {
   // Signing in from anywhere turns Reach from anywhere on here, so its row reads it again.
   const signedOut = useRef(false);
   useEffect(() => {
-    if (profile === null) signedOut.current = true;
-    else if (profile && signedOut.current) {
+    if (profile === null) {
+      signedOut.current = true;
+      access.stopExpectingRelay();
+    } else if (profile && signedOut.current) {
       signedOut.current = false;
       access.expectRelay();
     }

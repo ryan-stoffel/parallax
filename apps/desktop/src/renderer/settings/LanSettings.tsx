@@ -136,6 +136,8 @@ export function useLocalAccess() {
       setRead((n) => n + 1);
       setSettling(true);
     },
+    /** Signed out: nothing is turning `relay` on, and the next sign-in waits its own half minute. */
+    stopExpectingRelay: () => setSettling(false),
     /** Reads the account's computers again. */
     refreshRelayHosts: () => setListRead((n) => n + 1),
     /** Drops a computer being removed from the list held here, ahead of the next read. */

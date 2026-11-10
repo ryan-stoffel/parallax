@@ -183,6 +183,7 @@ afterEach(() => {
   ))
     act(() => close.click());
   act(() => unmount());
+  vi.useRealTimers();
 });
 
 const settle = async () => {
@@ -402,17 +403,14 @@ test("every Connections setting a search finds is on the page to scroll to", asy
       ...connected,
       capabilities: { agentWork: {} },
     });
-    const root = createRoot(document.body.appendChild(document.createElement("div")));
-    act(() => root.render(<ConnectionSettings />));
-    await settle();
+    await show();
     const found = searchSettings("").filter((r) => r.section === "connections" && r.anchor);
     expect(found.map((r) => r.title)).toEqual(
       expect.arrayContaining(["SSH hosts", "Same network", "Devices with access", "Pair a device"]),
     );
     for (const { title, anchor } of found)
       expect(document.querySelector(`[data-setting="${anchor}"]`), title).not.toBeNull();
-    act(() => root.unmount());
-    document.body.innerHTML = "";
+    act(() => unmount());
   }
 });
 
@@ -475,6 +473,12 @@ test("the code dialog a row opens follows the computer to its next step", async 
   // Allowed here, it waits on newbox, and says what to do there.
   await act(async () => showDevices([newbox("confirm")]));
   expect(dialog().textContent).toContain("Press Enter in newbox's terminal");
+
+  // It connects another way, so there's no code to take. Asking again later opens nothing by itself.
+  await act(async () => showDevices([device("account:new", "newbox")]));
+  expect(dialog()).toBeUndefined();
+  await act(async () => showDevices([newbox("compare")]));
+  expect(dialog()).toBeUndefined();
 });
 
 test("signing in from Reach from anywhere shows it on once plxd turns it on", async () => {
@@ -492,6 +496,68 @@ test("signing in from Reach from anywhere shows it on once plxd turns it on", as
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(document.body.textContent).toContain("Connected to the relay.");
   expect(button("Check connection")).toBeDefined();
+});
+
+/** Signs in from the row, with plxd turning the relay on `after` ms later, or never. */
+async function signInSlowly(after?: number) {
+  signIn.mockImplementation(async () => {
+    if (after !== undefined) setTimeout(() => (relay = true), after);
+    profile = signedIn;
+    for (const listener of profileListeners) listener(profile);
+    return undefined;
+  });
+  await click(button("Sign in"));
+}
+const settingsReads = () =>
+  request.mock.calls.filter(([, method]) => method === "host/settings/get").length;
+/** Lets `ms` pass half a second at a time, so each timer's update renders before the next. */
+const pass = async (ms: number) => {
+  for (let t = 0; t < ms; t += 500)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(500)));
+};
+
+test("after a sign-in, the page reads the settings until Reach from anywhere is on, then stops", async () => {
+  vi.useFakeTimers();
+  profile = null;
+  await show();
+  await signInSlowly(2000);
+  const toggle = () => document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
+  // The read at the sign-in and the one 1.5 s later are both too early.
+  await pass(1500);
+  expect(toggle().getAttribute("aria-checked")).toBe("false");
+  await pass(1500);
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
+  const reads = settingsReads();
+  await pass(10_000);
+  expect(settingsReads()).toBe(reads);
+});
+
+test("the reads after a sign-in stop after half a minute, and at a sign-out", async () => {
+  vi.useFakeTimers();
+  profile = null;
+  await show();
+  await signInSlowly();
+  await pass(30_000);
+  const reads = settingsReads();
+  expect(reads).toBeGreaterThan(10);
+  await pass(10_000);
+  expect(settingsReads()).toBe(reads);
+
+  // Signed in again, it reads again, and a sign-out stops it.
+  const signOut = () =>
+    act(async () => {
+      for (const listener of profileListeners) listener(null);
+    });
+  await signOut();
+  await act(async () => {
+    for (const listener of profileListeners) listener(signedIn);
+  });
+  await pass(3000);
+  expect(settingsReads()).toBeGreaterThan(reads);
+  await signOut();
+  const after = settingsReads();
+  await pass(10_000);
+  expect(settingsReads()).toBe(after);
 });
 
 test("removing an SSH host or a paired computer asks first", async () => {

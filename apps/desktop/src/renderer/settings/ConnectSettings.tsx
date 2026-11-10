@@ -1169,6 +1169,8 @@ export function Computers({
   // The computer whose code dialog is open, by id, so the dialog follows what the app learns of it.
   const [enteringId, setEnteringId] = useState<string>();
   const entering = devices.find((d) => d.id === enteringId);
+  // A computer that's gone, or in some other way, has no code to take: its dialog closes for good.
+  if (enteringId && !entering?.access) setEnteringId(undefined);
   useEffect(() => void window.parallax.discoverAccount(), []);
   const addMenu = useRowMenu();
   const saved = hosts.filter((h) => h.destination || h.routes);
