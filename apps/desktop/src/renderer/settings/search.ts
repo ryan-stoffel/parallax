@@ -419,6 +419,11 @@ export const settingsIndex: SettingEntry[] = [
   ...entries("about", undefined, [
     ["Version", "This copy of Parallax, to copy", "about build release number"],
     [
+      "Check for updates",
+      "Ask now whether a newer Parallax is out",
+      "updater upgrade download install latest new version release",
+    ],
+    [
       "Get involved",
       "Report a bug, share an idea, star the repo, or support on Ko-fi",
       "feedback issue discussion github kofi donate",

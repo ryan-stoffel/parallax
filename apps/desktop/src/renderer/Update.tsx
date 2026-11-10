@@ -37,6 +37,15 @@ function useUpdateState(): UpdateState {
   return state;
 }
 
+// The Update button on screen opens its review dialog through this.
+let review: (() => boolean) | undefined;
+
+/**
+ * Opens the Update button's review dialog, as a click on it does, for Settings > About's button
+ * (PLX-1522), whose restart it guards. False when it can't, such as with the sidebar hidden.
+ */
+export const reviewUpdates = () => review?.() ?? false;
+
 /** The version of a packaged app's release that finished downloading, if one has. */
 const downloadedVersion = ({ available, ready }: UpdateState) =>
   available && ready !== undefined ? available.version : undefined;
@@ -153,7 +162,7 @@ function Changelog({ available }: { available: NonNullable<UpdateState["availabl
  * is a restart icon with a check (`useUpdateAlarms` says so). `updatePrefs` can download releases
  * and update providers as soon as they're found. Under `pnpm dev` it offers the commits main has,
  * a click takes them, and the card shows the answer. Its label carries the updater's note, such
- * as an error.
+ * as an error. Settings > About's button opens the dialog too, to restart (`reviewUpdates`).
  */
 export function UpdateButton() {
   const id = useId();
@@ -224,7 +233,7 @@ export function UpdateButton() {
     ...new Set(chosen.filter((item) => item.kind !== "provider").map((item) => item.hostId)),
   ].reduce((n, hostId) => n + (restart.running[hostId] ?? 0), 0);
 
-  const click = async (source: HTMLElement) => {
+  const click = async (source?: HTMLElement) => {
     if (items.length > 0 || busy) {
       card.current?.togglePopover(false);
       confirm.current?.showModal();
@@ -239,6 +248,18 @@ export function UpdateButton() {
     setAnswer("Updating…");
     setAnswer(await window.parallax.update());
   };
+  // `reviewUpdates` clicks only when the dialog would list the app's release and would show.
+  useEffect(() => {
+    review = () => {
+      const listed = items.some((item) => item.kind === "app");
+      if (!listed || !confirm.current?.parentElement?.checkVisibility()) return false;
+      void click();
+      return true;
+    };
+    return () => {
+      review = undefined;
+    };
+  });
   const start = () => {
     const keys = new Set(chosen.map((item) => item.key));
     updateRun.set({ statuses: {}, taken: chosen });

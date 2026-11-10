@@ -1960,7 +1960,57 @@ let localName = "macbook";
 const localNameListeners = new Set<(name: string) => void>();
 const connectionListeners = new Set<(hostId: string, state: ConnectionState) => void>();
 
-const updateState: UpdateState = {};
+// `#update` makes the app one that updates, for Settings > About's updates card (PLX-1522): a
+// check takes a second and finds nothing. `#update=available` finds a release, which the next
+// press downloads; `#update=failed` fails the check; `#update=unsupported` is a build that can't
+// update; `#update=dev` is a `pnpm dev` checkout behind main, which Update refuses to move.
+const updateDemo = new URLSearchParams(location.hash.slice(1)).get("update");
+let updateState: UpdateState =
+  updateDemo === "unsupported"
+    ? { note: "Updates work only in the AppImage.", unsupported: true }
+    : updateDemo === "dev"
+      ? { ready: "3 commits to apply" }
+      : {};
+const updateListeners = new Set<(state: UpdateState) => void>();
+function setUpdateState(state: UpdateState) {
+  updateState = state;
+  for (const listener of updateListeners) listener(state);
+}
+
+/** `update` as main's updater answers it: installs, else downloads, else checks. */
+async function demoUpdate(): Promise<string> {
+  const { available, ready, progress } = updateState;
+  if (updateDemo === "dev")
+    return delay("Update follows main, but this checkout is on feature/PLX-1522.", 1000);
+  if (ready) return `Restarting to install Parallax ${available?.version}…`;
+  if (available) {
+    if (progress === undefined)
+      void (async () => {
+        for (let percent = 0; percent < 100; percent += 20) {
+          setUpdateState({ available, progress: percent });
+          await delay(undefined, 400);
+        }
+        setUpdateState({ available, ready: `Parallax ${available.version} to install` });
+      })();
+    return `Downloading Parallax ${available.version}…`;
+  }
+  await delay(undefined, 1000);
+  if (updateDemo === "failed") {
+    const note = "Can't reach GitHub to check for updates.";
+    setUpdateState({ note });
+    return note;
+  }
+  if (updateDemo !== "available") return "Up to date";
+  const version = "2611.20000.10000-nightly";
+  setUpdateState({
+    available: {
+      version,
+      notes: "• Check for updates from Settings > About",
+      url: `https://github.com/ryan-stoffel/parallax/releases/tag/v${version}`,
+    },
+  });
+  return `Parallax ${version} is available`;
+}
 
 function setCursor(id: string, signedIn: boolean) {
   db.providers = db.providers.map((x) =>
@@ -2032,13 +2082,14 @@ export const mockBridge: ParallaxBridge = {
   onGoogleAccount: () => () => {},
   downloadAction: () => {},
   setDownloadPrefs: () => {},
-  updatable: false,
+  updatable: updateDemo !== null,
   firstRun: onboarding,
   locale: undefined,
-  update: () => delay("Up to date"),
+  update: demoUpdate,
   onUpdateState: (listener) => {
     listener(updateState);
-    return noop;
+    updateListeners.add(listener);
+    return () => updateListeners.delete(listener);
   },
 
   request<M extends RendererMethod>(

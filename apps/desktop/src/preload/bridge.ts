@@ -671,7 +671,7 @@ export type Profile = {
   picture?: string;
 };
 
-/** What the sidebar's Update button shows. */
+/** What the sidebar's Update button and Settings > About's updates card show. */
 export type UpdateState = {
   /**
    * A packaged app's newer release: its version, its notes as plain lines, and its GitHub page.
@@ -684,6 +684,8 @@ export type UpdateState = {
   ready?: string;
   /** One line on the button about the last check, such as a download or an error. */
   note?: string;
+  /** Set when this build can never update, such as Linux outside the AppImage. `note` says why. */
+  unsupported?: true;
 };
 
 /**

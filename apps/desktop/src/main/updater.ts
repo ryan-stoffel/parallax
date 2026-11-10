@@ -72,7 +72,9 @@ function updateError(error: Error & { code?: string; statusCode?: number }): str
  * installs it, which also happens when Parallax quits. `publish` gets what the Update button
  * shows on every change. It checks at start, every 30 min, and on `checkSoon` at most every 10 s,
  * until a download starts. The checks read github.com's releases feed and download URLs, not the
- * REST API, so they spend no API quota (PLX-211).
+ * REST API, so they spend no API quota (PLX-211). Settings > About's updates card (PLX-1522) runs
+ * `update` too, and has no button in a build that can't update, which `publish` hears as
+ * `unsupported`.
  */
 export function startUpdater(publish: (state: UpdateState) => void) {
   // Updates replace the AppImage file; an unpacked Linux build has nothing to replace.
@@ -136,7 +138,7 @@ export function startUpdater(publish: (state: UpdateState) => void) {
     if ("domain" in error) downloaded = undefined;
     show(updateError(error));
   });
-  if (unsupported) publish({ note: unsupported });
+  if (unsupported) publish({ note: unsupported, unsupported: true });
   void app.whenReady().then(check);
   setInterval(check, 30 * 60_000);
 
