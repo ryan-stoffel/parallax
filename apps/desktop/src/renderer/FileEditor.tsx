@@ -8,7 +8,7 @@ import {
   Eye,
   File,
   Folder,
-  FolderTree,
+  PanelLeft,
   LoaderCircle,
   Lock,
   TriangleAlert,
@@ -111,8 +111,17 @@ export function FileEditor({
   );
   return (
     <section aria-label={file.path} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      {/* T3 Code's file header: the path from the project's folder, then quiet icon toggles. */}
-      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border/60 pr-2 pl-3">
+      {/* T3 Code's file header: the path from the project's folder, then quiet icon toggles. The
+          files toggle leads, on the side the tree opens on. */}
+      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border/60 pr-2 pl-1.5">
+        <IconButton
+          size="sm"
+          label={treeOpen ? "Hide files" : "Show files"}
+          aria-pressed={treeOpen}
+          onClick={wide ? onToggleTree : () => store.showHome(true)}
+        >
+          <PanelLeft aria-hidden />
+        </IconButton>
         <Breadcrumb
           root={folder ? nameOf(folder.replace(/[\\/]+$/, "").replaceAll("\\", "/")) : undefined}
           path={file.path}
@@ -152,14 +161,6 @@ export function FileEditor({
             <WrapText aria-hidden />
           </IconButton>
         )}
-        <IconButton
-          size="sm"
-          label={treeOpen ? "Hide files" : "Show files"}
-          aria-pressed={treeOpen}
-          onClick={wide ? onToggleTree : () => store.showHome(true)}
-        >
-          <FolderTree aria-hidden />
-        </IconButton>
       </div>
       {/* Room under the text for the notice, so it never covers the last lines. */}
       <div
