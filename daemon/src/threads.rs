@@ -98,6 +98,7 @@ pub(crate) fn repo_entry(row: parallax_store::Repo) -> Result<Repo, ErrorObject>
         scratch: row.fields.scratch,
         project: row.fields.project,
         icon: row.icon.map(crate::store::protocol_icon),
+        icon_at: row.icon_at,
         created_at: row.created_at,
         instructions: row.instructions,
         files: row.files,
@@ -1350,8 +1351,9 @@ pub(crate) fn prompted(db: &mut crate::store::Tx, run_id: Uuid) -> Result<(), Er
     Ok(())
 }
 
-/// `repo/update`: sets a repo entry's icon (0033), renames a Project (0069), or sets a Project's
-/// instructions and files (0090), appending `repo.updated` when something changed.
+/// `repo/update`: sets a repo entry's icon (0033) and when it was picked (PLX-1498), renames a
+/// Project (0069), or sets a Project's instructions and files (0090), appending `repo.updated`
+/// when something changed.
 pub(crate) async fn update_repo(
     daemon: &Arc<Daemon>,
     params: RepoUpdateParams,
@@ -1419,7 +1421,11 @@ pub(crate) async fn update_repo(
                     .map_err(|e| store_error(&e))?
                     .is_some_and(|current| current.icon.is_some());
             if !keep {
-                changed |= db.set_repo_icon(repo.into(), icon).map_err(not_found)?.1;
+                // A logo the app found isn't a pick, so it gets no time (PLX-1498).
+                changed |= db
+                    .set_repo_icon(repo.into(), icon, !icon_if_unset)
+                    .map_err(not_found)?
+                    .1;
             }
         }
         let row = db

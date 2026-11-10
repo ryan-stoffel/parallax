@@ -27,6 +27,9 @@ pub struct Repo {
     pub fields: RepoFields,
     /// Its icon, in a project's shape (decision record 0033), stored as the client sent it.
     pub icon: Option<ChosenIcon>,
+    /// When the user last picked `icon` (PLX-1498). None for no icon, and for one that wasn't a
+    /// pick or was picked before the column.
+    pub icon_at: Option<Timestamp>,
     pub created_at: Timestamp,
     /// A Project's instructions for every thread in it (decision record 0090).
     pub instructions: Option<String>,
@@ -100,7 +103,8 @@ pub struct ThreadUpdate {
 }
 
 const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
-    icon_name, icon_color, icon_image_type, icon_image_data, project, instructions, files";
+    icon_name, icon_color, icon_image_type, icon_image_data, project, instructions, files, \
+    icon_at";
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
@@ -120,6 +124,7 @@ type RawRepo = (
     bool,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
@@ -133,11 +138,12 @@ fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
         row.get(9)?,
         row.get(10)?,
         row.get(11)?,
+        row.get(12)?,
     ))
 }
 
 fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
-    let (id, name, path, scratch, created_at, icon, project, instructions, files) = raw;
+    let (id, name, path, scratch, created_at, icon, project, instructions, files, icon_at) = raw;
     Ok(Repo {
         id: Uuid::parse_str(&id)?,
         fields: RepoFields {
@@ -147,6 +153,7 @@ fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
             project,
         },
         icon,
+        icon_at: icon_at.as_deref().map(timestamp::parse).transpose()?,
         created_at: timestamp::parse(&created_at)?,
         instructions,
         files: files
@@ -758,22 +765,35 @@ impl Store {
         Ok((thread, changed > 0))
     }
 
-    /// Sets repo entry `id`'s icon, replacing the whole icon. Returns the entry and whether it
-    /// changed.
+    /// Sets repo entry `id`'s icon, replacing the whole icon. `picked` marks it picked by the user
+    /// now, which a pick of the icon the entry already has does too (PLX-1498); an icon that isn't
+    /// a pick has no time. Returns the entry and whether it changed.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
-    pub fn set_repo_icon(&self, id: Uuid, icon: &ChosenIcon) -> Result<(Repo, bool), StoreError> {
+    pub fn set_repo_icon(
+        &self,
+        id: Uuid,
+        icon: &ChosenIcon,
+        picked: bool,
+    ) -> Result<(Repo, bool), StoreError> {
         let before = existing_repo(&self.conn, id)?;
-        if before.icon.as_ref() == Some(icon) {
+        if before.icon.as_ref() == Some(icon) && !picked {
             return Ok((before, false));
         }
         let (name, color, image_type, image_data) = icon_columns(Some(icon));
         self.conn.execute(
             "UPDATE repos SET icon_name = ?2, icon_color = ?3, icon_image_type = ?4, \
-             icon_image_data = ?5 WHERE id = ?1",
-            params![id.to_string(), name, color, image_type, image_data],
+             icon_image_data = ?5, icon_at = ?6 WHERE id = ?1",
+            params![
+                id.to_string(),
+                name,
+                color,
+                image_type,
+                image_data,
+                picked.then(timestamp::now)
+            ],
         )?;
         Ok((existing_repo(&self.conn, id)?, true))
     }

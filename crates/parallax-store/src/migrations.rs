@@ -976,6 +976,13 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX remote_runs_open ON remote_runs (ended_at);
         CREATE INDEX remote_runs_parent ON remote_runs (parent);",
     },
+    // When the user last picked a repo entry's icon (PLX-1498), so the app draws the newest pick
+    // on every computer's copy of a repository. NULL for the icons already there: plxd doesn't
+    // know when they were picked, or whether one is a logo the app found (PLX-1272).
+    Migration {
+        version: 62,
+        sql: "ALTER TABLE repos ADD COLUMN icon_at TEXT;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

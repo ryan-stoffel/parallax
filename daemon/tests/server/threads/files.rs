@@ -325,3 +325,42 @@ async fn repo_logo_reads_the_best_regular_file_git_does_not_ignore() {
     let second = client.call::<RepoUpdate>(set("folder")).await.unwrap();
     assert_eq!(second.repo.icon.unwrap().name, "rocket");
 }
+
+/// A pick records when it was made (PLX-1498), again when it is the icon already there, so an app
+/// can draw the newest pick on every computer's copy of a repository. A logo set only if unset
+/// isn't a pick.
+#[tokio::test]
+async fn picking_a_repo_icon_records_when() {
+    let host = Host::start(fake(editing()));
+    let path = real_repo(host.work.path(), "app");
+    let mut client = host.client().await;
+    let repo = client.add(&path).await.id;
+    let set = |name: &str, icon_if_unset: bool| RepoUpdateParams {
+        repo,
+        icon: Some(ChosenIcon {
+            name: name.to_owned(),
+            color: None,
+            image: None,
+        }),
+        icon_if_unset,
+        name: None,
+        instructions: None,
+        files: None,
+    };
+    let logo = client
+        .call::<RepoUpdate>(set("rocket", true))
+        .await
+        .unwrap();
+    assert_eq!(logo.repo.icon_at, None);
+
+    let picked = client
+        .call::<RepoUpdate>(set("flame", false))
+        .await
+        .unwrap();
+    let first = picked.repo.icon_at.expect("a pick has a time");
+    let again = client
+        .call::<RepoUpdate>(set("flame", false))
+        .await
+        .unwrap();
+    assert!(again.repo.icon_at.unwrap() > first);
+}

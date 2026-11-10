@@ -5,15 +5,20 @@ import type {
   AgentBackgroundTask,
   AgentRun,
   EventsEventParams,
+  Repo,
   ThreadStartResult,
   ParallaxEvent,
 } from "../protocol/generated/protocol";
+import type { Host } from "./hosts";
 import {
   addToProject,
   asksOf,
   emptyThreads,
   holdQuiet,
   orchestratorRuns,
+  repoIconOf,
+  repoIconsByName,
+  reposOnSeveral,
   threadOrchestrators,
   threadsReducer,
   type ThreadsState,
@@ -383,4 +388,45 @@ test("addToProject waits for a copy already listed but still setting its instruc
 test("a title from a prompt shows what it attached by name, not as a token", () => {
   const started = { id: "plain-title", prompt: '@"build-box" @"Fix the test" compare' } as AgentRun;
   expect(titleOf(started)).toBe("build-box Fix the test compare");
+});
+
+// A repository's copy on one computer, for the icon each copy draws (PLX-1498).
+const copy = (icon: string, extra: Partial<Repo> = {}): Repo => ({
+  id: icon,
+  name: "parallax",
+  path: "/src/parallax",
+  createdAt: "2026-10-01T00:00:00Z",
+  icon: { name: icon },
+  ...extra,
+});
+
+test("every copy of a repository draws the icon picked most recently, on whichever computer", () => {
+  const older = copy("rocket", { iconAt: "2026-11-01T00:00:00Z" });
+  const newer = copy("flame", { iconAt: "2026-11-05T00:00:00Z" });
+  // A pick beats an icon with no pick time, as a logo the app found has none.
+  const logo = copy("folder-git-2", { createdAt: "2026-09-01T00:00:00Z" });
+  for (const copies of [
+    [older, newer, logo],
+    [logo, newer, older],
+  ]) {
+    const shared = repoIconsByName(copies);
+    expect(copies.map((c) => repoIconOf(c, shared)?.name)).toEqual(["flame", "flame", "flame"]);
+  }
+});
+
+test("with no pick times, a repository's copies draw the icon of the copy added first", () => {
+  const first = copy("rocket", { createdAt: "2026-09-01T00:00:00Z" });
+  const second = copy("flame", { createdAt: "2026-10-23T00:00:00Z" });
+  expect(repoIconsByName([second, first]).get("parallax")?.name).toBe("rocket");
+  // A Project keeps its own icon, whatever a repository of its name has.
+  const project = copy("brain", { project: true });
+  expect(repoIconOf(project, repoIconsByName([first, project]))?.name).toBe("brain");
+});
+
+test("reposOnSeveral names the repositories more than one computer lists", () => {
+  const hosts = [{ id: "a" }, { id: "b" }] as Host[];
+  const view = (...names: string[]) =>
+    ({ state: { repos: names.map((name) => copy("rocket", { name })) } }) as ThreadsView;
+  const views = { a: view("parallax", "docs", "docs"), b: view("parallax", "notes") };
+  expect([...reposOnSeveral(hosts, views)]).toEqual(["parallax"]);
 });

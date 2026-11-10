@@ -1,14 +1,14 @@
 // Repository and orchestrator icons, as the desktop's Sidebar.tsx draws them (0032, 0033, 0038): an
 // uploaded image, else the chosen lucide glyph in its palette color, else for a repository its
-// initials on a tile in a color picked from its name. A repository with no icon of its own wears
-// its namesake's from another computer (`sharedRepoIcons`).
+// initials on a tile in a color picked from its name. Every computer's copy of a repository wears
+// the same icon (`repoIconsByName`).
 import * as Lucide from "lucide-react-native";
 import { useMemo } from "react";
 import { Image, Text, View } from "react-native";
 
 import type { ChosenIcon, Repo } from "../../desktop/src/protocol/generated/protocol";
 import { initials } from "../../desktop/src/renderer/attention";
-import { isRepository, repoIconOf } from "../../desktop/src/renderer/threads";
+import { repoIconOf, repoIconsByName } from "../../desktop/src/renderer/threads";
 import { useFleet } from "./fleet";
 import type { Colors } from "./theme";
 import { useColors } from "./ui";
@@ -36,7 +36,10 @@ export function OrchestratorGlyph({ icon, size = 18 }: { icon?: ChosenIcon; size
   return <Glyph size={size} color={tone(c, icon?.color) ?? c.accent} strokeWidth={2} />;
 }
 
-/** A repository's icon, its namesake's, or its initials on a tile. No repo is a dashed square. */
+/**
+ * A repository's icon, the same on every computer's copy, or its initials on a tile. No repo is a
+ * dashed square.
+ */
 export function RepoIcon({
   repo,
   shared,
@@ -73,11 +76,5 @@ export function RepoIcon({
 /** Every computer's repository icons by name, as the desktop's `sharedRepoIcons` gathers them. */
 export function useSharedIcons() {
   const { computers } = useFleet();
-  return useMemo(() => {
-    const icons = new Map<string, ChosenIcon>();
-    for (const m of computers)
-      for (const repo of m.view.state.repos)
-        if (isRepository(repo) && repo.icon && !icons.has(repo.name)) icons.set(repo.name, repo.icon);
-    return icons;
-  }, [computers]);
+  return useMemo(() => repoIconsByName(computers.flatMap((m) => m.view.state.repos)), [computers]);
 }

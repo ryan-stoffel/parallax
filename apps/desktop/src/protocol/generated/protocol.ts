@@ -5020,6 +5020,13 @@ export type Repo = {
 	 */
 	icon?: ChosenIcon,
 	/**
+	 * When the user last picked `icon`, in RFC 3339 UTC, so an app that lists a repository's
+	 * copies on several computers draws the newest pick on all of them (PLX-1498). Absent with
+	 * no icon, for an icon picked on a plxd from before it, and for a logo set with
+	 * `iconIfUnset`.
+	 */
+	iconAt?: string,
+	/**
 	 * When the entry was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
@@ -7239,7 +7246,8 @@ export type RepoUpdateParams = {
 	icon?: ChosenIcon,
 	/**
 	 * True to leave an icon the entry already has, so a logo the app found (PLX-1272) can't
-	 * replace one the user picked meanwhile. Behind the `repoLogo` capability.
+	 * replace one the user picked meanwhile. Behind the `repoLogo` capability. It isn't a pick,
+	 * so it sets no `iconAt`.
 	 */
 	iconIfUnset?: boolean,
 	/**
