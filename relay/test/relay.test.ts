@@ -2,7 +2,7 @@ import { SELF } from "cloudflare:test";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
-import { accountOf, DEVELOPMENT } from "../src/clerk";
+import { accountOf, DEVELOPMENT, verifySession } from "../src/clerk";
 import { sha256 } from "../src/crypto";
 import {
   hookKey,
@@ -99,6 +99,19 @@ describe("sign-in", () => {
     expect((await call("/v1/hosts", { token: await session("user_a") })).status).toBe(200);
     const desktop = await session("user_a", { sid: undefined, client_id: "mp9Q72aAbB0LC83O" });
     expect((await call("/v1/hosts", { token: desktop })).status).toBe(200);
+  });
+
+  it("says how long reading the JWKS took only when a token's check had to read it", async () => {
+    const issuer = `https://clerk-${crypto.randomUUID()}.test`;
+    const env = { ...testEnv, CLERK_ISSUER: issuer } as Env;
+    const reads: number[] = [];
+    const check = async () => verifySession(env, await session("user_keys", { iss: issuer }), (ms) => reads.push(ms));
+    expect(await check()).toBe(accountOf(issuer, "user_keys"));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toBeGreaterThanOrEqual(0);
+    // The isolate keeps the keys, so the next check reads nothing.
+    expect(await check()).toBe(accountOf(issuer, "user_keys"));
+    expect(reads).toHaveLength(1);
   });
 
   it("takes two Clerk instances at once, each checked against its own JWKS (PLX-1049)", async () => {
@@ -467,6 +480,8 @@ describe("streams", () => {
       const timing = response.headers.get("server-timing");
       if (timed) {
         expect(timing).toMatch(/^auth;dur=[\d.]+, host_open;dur=[\d.]+, stream_join;dur=[\d.]+, admit;dur=[\d.]+, take;dur=[\d.]+, spare;dur=1, join_read;dur=[\d.]+, join_ready;dur=[\d.]+, join_delete_alarm;dur=[\d.]+, join_total;dur=[\d.]+/);
+        // What runs beside those comes last, so a plxd from before PLX-1493 reads what it did.
+        expect(timing).toMatch(/, limit;dur=[\d.]+, (jwks;dur=[\d.]+, )?host_hop;dur=[\d.]+, worker;dur=[\d.]+$/);
       } else expect(timing).toBeNull();
       response.webSocket!.accept();
       expect(await side.next()).toBe("ready");
@@ -732,6 +747,143 @@ describe("streams", () => {
       spy.mockRestore();
     }
   });
+
+  it("holds no 101, ready or frame behind an alarm write (PLX-1493)", async () => {
+    const { host, token, control } = await online();
+    // Every alarm write of every stream object, from before its first one.
+    const writes: { call: string; options: unknown }[] = [];
+    const watched = new WeakSet<object>();
+    const watch = (relay: StreamRelay) => {
+      const { storage } = (relay as unknown as { ctx: DurableObjectState }).ctx;
+      if (watched.has(storage)) return;
+      watched.add(storage);
+      const [set, remove] = [storage.setAlarm.bind(storage), storage.deleteAlarm.bind(storage)];
+      vi.spyOn(storage, "setAlarm").mockImplementation((at, options) => {
+        writes.push({ call: "set", options });
+        return set(at, options);
+      });
+      vi.spyOn(storage, "deleteAlarm").mockImplementation((options) => {
+        writes.push({ call: "delete", options });
+        return remove(options);
+      });
+    };
+    const [fetch, taken] = [StreamRelay.prototype.fetch, StreamRelay.prototype.taken];
+    const spies = [
+      vi.spyOn(StreamRelay.prototype, "fetch").mockImplementation(function (this: StreamRelay, request) {
+        watch(this);
+        return fetch.call(this, request);
+      }),
+      vi.spyOn(StreamRelay.prototype, "taken").mockImplementation(function (this: StreamRelay, at, timed) {
+        watch(this);
+        return taken.call(this, at, timed);
+      }),
+    ];
+    try {
+      // A spare: its claim sets the alarm, the client's join deletes it, a frame sets the report's.
+      // The host's object sends the claim beside the client, so it's made here first too.
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, spare));
+      await streamObject(spare.stream).taken();
+      const client = opened(await connect(host, token));
+      expect(await client.next()).toBe("ready");
+      expect(await side.next()).toBe("ready");
+      client.ws.send(new Uint8Array([1]));
+      await side.next();
+      await expect.poll(() => writes.map((write) => write.call).join()).toMatch(/^set,(set,)?delete,set$/);
+      const claimed = writes.length;
+
+      // No spare: the client's join sets the alarm, plxd's deletes it, a frame sets the report's.
+      const waiting = opened(await connect(host, token));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      const joined = opened(await join(host, open));
+      expect(await waiting.next()).toBe("ready");
+      expect(await joined.next()).toBe("ready");
+      joined.ws.send(new Uint8Array([2]));
+      await waiting.next();
+      await expect.poll(() => writes.slice(claimed).map((write) => write.call)).toEqual(["set", "delete", "set"]);
+
+      for (const write of writes) expect(write.options).toEqual({ allowUnconfirmed: true });
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it("gives the spare to one of two clients that connect at once, and the other a new stream", async () => {
+    const { host, token, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, spare));
+
+    const [first, second] = (await Promise.all([connect(host, token), connect(host, token)])).map(opened);
+    // plxd is asked to join one new stream, for whichever client didn't get the spare.
+    const open = JSON.parse((await control.next()) as string) as Open;
+    expect(open.spare).toBeUndefined();
+    expect(open.stream).not.toBe(spare.stream);
+    const other = opened(await join(host, open));
+    expect(await first!.next()).toBe("ready");
+    expect(await second!.next()).toBe("ready");
+    expect(await side.next()).toBe("ready");
+    expect(await other.next()).toBe("ready");
+    expect(await openStreams(host)).toEqual({ [spare.stream]: {}, [open.stream]: {} });
+    const clients = (stream: string) =>
+      runInDurableObject(streamObject(stream), (_: StreamRelay, state) => state.getWebSockets("client").length);
+    expect([await clients(spare.stream), await clients(open.stream)]).toEqual([1, 1]);
+    // Each client's frame reaches its own stream's plxd end and no other.
+    first!.ws.send(new Uint8Array([1]));
+    second!.ws.send(new Uint8Array([1]));
+    expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(new Uint8Array([1]));
+    expect(new Uint8Array((await other.next()) as ArrayBuffer)).toEqual(new Uint8Array([1]));
+  });
+
+  // A stream's alarm writes aren't confirmed before its client goes on (PLX-1493). A write that
+  // then fails resets the object, which drops both ends, and its alarm is whatever last reached
+  // disk: none, or the claim's with the join's deletion lost.
+  it.each(["no alarm", "the claim's alarm"] as const)(
+    "frees a stream whose object reset after its client joined, left with %s",
+    async (left) => {
+      const { host, token, control } = await online();
+      control.ws.send(JSON.stringify({ t: "spare" }));
+      const spare = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, spare));
+      const client = opened(await connect(host, token));
+      expect(await client.next()).toBe("ready");
+      expect(await side.next()).toBe("ready");
+      client.ws.send(new Uint8Array([1]));
+      await side.next();
+      expect(await openStreams(host)).toEqual({ [spare.stream]: {} });
+
+      // The reset. Its sockets drop with no close for the object to handle, and a stub that saw
+      // it stays broken, so each call below makes its own.
+      const dropped = [client, side].map(({ ws }) => new Promise((resolve) => {
+        ws.addEventListener("error", resolve);
+        ws.addEventListener("close", resolve);
+      }));
+      await expect(
+        runInDurableObject(streamObject(spare.stream), (_: StreamRelay, state) => state.abort("a write failed")),
+      ).rejects.toThrow("a write failed");
+      await Promise.all(dropped);
+      const object = () => streamObject(spare.stream);
+      await runInDurableObject(object(), async (_: StreamRelay, state) => {
+        expect(state.getWebSockets()).toHaveLength(0);
+        if (left === "no alarm") await state.storage.deleteAlarm();
+        else await state.storage.setAlarm(Date.now() + 30_000);
+      });
+      expect(await openStreams(host)).toEqual({ [spare.stream]: {} });
+
+      if (left === "no alarm") {
+        // Nothing wakes the object, so plxd, whose end dropped, says so.
+        expect(await runDurableObjectAlarm(object())).toBe(false);
+        control.ws.send(JSON.stringify({ t: "gone", stream: spare.stream }));
+      } else expect(await runDurableObjectAlarm(object())).toBe(true);
+      await expect.poll(() => openStreams(host)).toEqual({});
+      expect(await runInDurableObject(object(), async (_: StreamRelay, state) => (await state.storage.list()).size)).toBe(0);
+      expect(await runDurableObjectAlarm(object())).toBe(false);
+      // The host's count is right again, so the next client gets a stream.
+      opened(await connect(host, token));
+      expect(JSON.parse((await control.next()) as string)).toMatchObject({ t: "open" });
+    },
+  );
 
   it("closes a stream plxd says is gone, counting its frames, and only plxd's own", async () => {
     const { host, token, control } = await online();
@@ -1145,6 +1297,50 @@ describe("rate limits", () => {
     expect((await call("/v1/hosts", { token: await session("user_calm") })).status).toBe(200);
   });
 
+  it("lets no client reach a host's object before the anonymous limit answers, whatever its token", async () => {
+    const { host, token, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, spare));
+    const open = vi.spyOn(HostRelay.prototype, "open");
+    // The limit answers when the test says, long after the token's check is done.
+    const attempt = (bearer: string) => {
+      let answer!: (outcome: { success: boolean }) => void;
+      const ANON = { limit: () => new Promise<{ success: boolean }>((resolve) => (answer = resolve)) };
+      const response = worker.fetch(
+        new Request(`${BASE}/v1/hosts/${host.id}/connect`, { headers: { upgrade: "websocket", authorization: `Bearer ${bearer}` } }),
+        { ...testEnv, ANON } as Env,
+      );
+      return { response, answer };
+    };
+    try {
+      const held = attempt(token);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(open).not.toHaveBeenCalled();
+      held.answer({ success: false });
+      expect((await held.response).status).toBe(429);
+      // A bad token within the limit is refused as before, and the limit's refusal comes first.
+      const forged = attempt(`${token}x`);
+      forged.answer({ success: true });
+      expect((await forged.response).status).toBe(401);
+      const both = attempt(`${token}x`);
+      both.answer({ success: false });
+      expect((await both.response).status).toBe(429);
+      expect(open).not.toHaveBeenCalled();
+      expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
+
+      const allowed = attempt(token);
+      allowed.answer({ success: true });
+      const response = await allowed.response;
+      expect(response.status).toBe(101);
+      expect(open).toHaveBeenCalledTimes(1);
+      response.webSocket!.accept();
+      expect(await side.next()).toBe("ready");
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it("count only control connections with a valid proof, so strangers can't lock plxd out", async () => {
     const { host } = await online();
     // Strangers who know the host id, from a webhook URL, get no socket at all.
@@ -1301,6 +1497,25 @@ describe("cost ceilings", () => {
     const over = await connect(host, token);
     expect(over instanceof Response && over.status).toBe(429);
     expect(Object.keys(await openStreams(host))).toHaveLength(MAX_STREAMS);
+  });
+
+  it("cap a host's open streams at 16 when clients connect at once, its spare included", async () => {
+    const { host, token, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    opened(await join(host, spare));
+    const results = await Promise.all(Array.from({ length: MAX_STREAMS + 4 }, () => connect(host, token)));
+    const refused = results.filter((result): result is Response => result instanceof Response);
+    expect(results.length - refused.length).toBe(MAX_STREAMS);
+    for (const response of refused) {
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual({ error: "too_many_streams" });
+    }
+    const counted = await openStreams(host);
+    expect(Object.keys(counted)).toHaveLength(MAX_STREAMS);
+    // One client has the spare, and no stream is left marked as one.
+    expect(counted[spare.stream]).toEqual({});
+    expect(Object.values(counted).filter((entry) => entry.spare)).toEqual([]);
   });
 
   it("cap a host's open streams at 16 across a reconnect, and free only those plxd no longer holds", async () => {
