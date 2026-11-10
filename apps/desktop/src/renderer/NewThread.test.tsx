@@ -328,7 +328,8 @@ test("leaving New Thread keeps its prompt as a draft atop the list, which reopen
   const draft = () => document.querySelector<HTMLElement>('#sidebar li[data-kind="draft"] button');
   const rows = document.querySelectorAll("#sidebar [data-row]");
   expect(rows[0]!.getAttribute("data-kind")).toBe("draft");
-  expect(draft()!.textContent).toBe('parallaxDraft@"Fix the flaky test" Tidy the README');
+  // Its first line, then its repo and its status (PLX-1496).
+  expect(draft()!.textContent).toBe('@"Fix the flaky test" Tidy the READMEparallaxDraft');
 
   await act(async () => draft()!.click());
   await settle();

@@ -245,12 +245,12 @@ export function ProjectsPage({
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
- * A Project's card (0093), the row card a thread's is: its icon and "Project", then its name. It
- * opens the Project's page. A pinned one keeps its pin in its top-right, which unpins it; hovering
- * shows Pin, for one that isn't, and its menu, which a right-click opens too. Traditional's Pinned
- * draws it `dense`, with nothing more, the size of a pinned thread's card; the Projects page draws
- * it `framed`, with its age at its first line's end and its threads, files, and instructions under
- * its name.
+ * A Project's card (0093), the row card a thread's is: its name, then its icon and "Project". It
+ * opens the Project's page. A pinned one keeps its pin at its second line's end, which unpins it;
+ * hovering shows Pin, for one that isn't, and its menu, which a right-click opens too. Traditional's
+ * Pinned draws it `dense`, with nothing more, the size of a pinned thread's card; the Projects page
+ * draws it `framed`, with its age at its second line's end and its threads, files, and instructions
+ * under that.
  */
 export function ProjectCard({
   entry,
