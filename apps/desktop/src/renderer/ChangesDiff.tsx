@@ -25,7 +25,7 @@ import {
   linesInRange,
 } from "./diffRows";
 import { parseDiff, type DiffFile, type DiffLine } from "./parseDiff";
-import type { ThreadView } from "./pr/model";
+import { kindsOf, type ThreadView } from "./pr/model";
 import { DiffStat } from "./pr/parts";
 import { fileTree, FileIcon, type TreeNode } from "./TurnChanges";
 import { Checkbox, IconButton, Segmented } from "./ui";
@@ -187,6 +187,7 @@ export function ChangesDiff({
   useEffect(() => {
     top.current = rows[virtualizer.range?.startIndex ?? 0];
   });
+  const kinds = useMemo(() => kindsOf(files), [files]);
   const added = files.reduce((n, f) => n + f.added, 0);
   const removed = files.reduce((n, f) => n + f.removed, 0);
   const toggle = (path: string) => {
@@ -312,6 +313,16 @@ export function ChangesDiff({
           <>
             {files.length} {files.length === 1 ? "file" : "files"} changed
             <DiffStat added={added} removed={removed} />
+            {kinds.length > 1 && (
+              <span className="flex flex-wrap items-center gap-x-3 pl-1 text-meta text-faint-foreground">
+                {kinds.map((k) => (
+                  <span key={k.kind} className="flex items-center gap-1.5">
+                    {k.kind}
+                    <DiffStat added={k.added} removed={k.removed} />
+                  </span>
+                ))}
+              </span>
+            )}
           </>
         )}
         {truncated && (
